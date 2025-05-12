@@ -165,35 +165,39 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # authentication stuff
 
 SOCIALACCOUNT_LOGIN_ON_GET=True
+LOGIN_REDIRECT_URL = '/'
+LOGOUT_REDIRECT_URL = '/'
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
-    'allauth.account.auth_backends.AuthenticationBackend'
+    ]
+if not DEBUG:
+    AUTHENTICATION_BACKENDS += [
+        'allauth.account.auth_backends.AuthenticationBackend',
     ]
 
-LOGIN_REDIRECT_URL = '/'
-LOGOUT_REDIRECT_URL = '/'
-ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https'
-ACCOUNT_ADAPTER = 'aquillm.adapters.NoDefaultAccounts'
-SOCIALACCOUNT_ADAPTER = 'aquillm.adapters.RestrictDomains'
-SOCIALACCOUNT_PROVIDERS = {
-    'google': {
-        'APP': {
-            'client_id': os.environ["GOOGLE_OAUTH2_CLIENT_ID"],
-            'secret': os.environ["GOOGLE_OAUTH2_CLIENT_SECRET"],
-            'key': ''
-        },
-        'SCOPE': [
-            'profile',
-            'email',
-        ],
-        'AUTH_PARAMS': {
-            'access_type': 'offline',
-        },
-        'OAUTH_PKCE_ENABLED': True,
-        'FETCH_USERINFO' : True
+
+    ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https'
+    ACCOUNT_ADAPTER = 'aquillm.adapters.NoDefaultAccounts'
+    SOCIALACCOUNT_ADAPTER = 'aquillm.adapters.RestrictDomains'
+    SOCIALACCOUNT_PROVIDERS = {
+        'google': {
+            'APP': {
+                'client_id': os.environ["GOOGLE_OAUTH2_CLIENT_ID"],
+                'secret': os.environ["GOOGLE_OAUTH2_CLIENT_SECRET"],
+                'key': ''
+            },
+            'SCOPE': [
+                'profile',
+                'email',
+            ],
+            'AUTH_PARAMS': {
+                'access_type': 'offline',
+            },
+            'OAUTH_PKCE_ENABLED': True,
+            'FETCH_USERINFO' : True
+        }
     }
-}
 
 SITE_ID = 1
 
