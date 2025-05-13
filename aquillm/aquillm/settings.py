@@ -230,8 +230,8 @@ STORAGES = {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     }
 }
-
-CSRF_TRUSTED_ORIGINS =['https://' + os.environ["HOST_NAME"]]
+if not DEBUG:
+    CSRF_TRUSTED_ORIGINS =['https://' + os.environ["HOST_NAME"]]
 
 
 CHANNEL_LAYERS = {
