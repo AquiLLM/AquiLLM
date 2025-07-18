@@ -1,0 +1,64 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}AquiLLM -- Gemini API Cost Monitor{% endblock %}
+
+{% block content %}
+<div class="container mx-auto p-4 text-text-normal">
+    <h1 class="text-3xl font-bold mb-6">Gemini API Cost Monitor</h1>
+    
+    <div class="shadow-md rounded-lg p-6 mb-8 bg-scheme-shade_3 element-border">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="p-6 rounded-lg flex flex-col items-center justify-center">
+                <h2 class="text-lg font-semibold mb-1">Total Cost</h2>
+                <p class="text-3xl font-bold text-deep-secondary">${{ stats.total_cost_usd|floatformat:6 }}</p>
+            </div>
+            
+            <div class="p-6 rounded-lg flex flex-col items-center justify-center">
+                <h2 class="text-lg font-semibold mb-1">API Calls</h2>
+                <p class="text-3xl font-bold text-deep-secondary">{{ stats.api_calls }}</p>
+            </div>
+        </div>
+        
+        <div class="mt-8">
+            <h2 class="text-xl font-semibold mb-3">Token Usage</h2>
+            <table class="w-full">
+                <thead>
+                    <tr class="">
+                        <th class="p-2 text-left">Token Type</th>
+                        <th class="p-2 text-right">Count</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="border-b">
+                        <td class="p-2">Input Tokens</td>
+                        <td class="p-2 text-right">{{ stats.input_tokens }}</td>
+                    </tr>
+                    <tr class="border-b">
+                        <td class="p-2">Output Tokens</td>
+                        <td class="p-2 text-right">{{ stats.output_tokens }}</td>
+                    </tr>
+                    <tr class="font-bold">
+                        <td class="p-2">Total Tokens</td>
+                        <td class="p-2 text-right">{{ stats.input_tokens|add:stats.output_tokens }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="mt-8 text-sm">
+            <h3 class="font-semibold mb-2">Pricing Information</h3>
+            <p>Gemini Pro 1.5 pricing (as of March 2025):</p>
+            <ul class="list-disc pl-6 mt-1">
+                <li>Input: $0.0005 per 1,000 tokens</li>
+                <li>Output: $0.0015 per 1,000 tokens</li>
+            </ul>
+        </div>
+    </div>
+    
+    <div class="text-center">
+        <button class="bg-accent hover:bg-accent-dark text-white font-bold py-2 px-4 rounded" onclick="location.reload()">
+            Refresh Stats
+        </button>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}AquiLLM -- Insert from arXiv{% endblock %}
+
+{% block content %}
+    <h1>Insert from arXiv</h1>
+    {% if status_message %}
+        <div class="status_message">
+            {{ status_message}}
+        </div>
+    {% endif %}
+
+
+    <form action="/insert_arxiv/" method="post">
+        {% csrf_token %}
+        {{ form }}
+        <input type="submit" value="Submit">
+    </form>
+
+{% endblock %}

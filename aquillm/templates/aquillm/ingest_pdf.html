@@ -1,0 +1,20 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}AquiLLM -- Ingest PDF{% endblock %}
+
+{% block content %}
+    <h1>Ingest PDF</h1>
+    {% if status_message %}
+        <div class="status_message">
+            {{ status_message}}
+        </div>
+    {% endif %}
+
+
+    <form action="{% url 'ingest_pdf' %}" method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {{ form }}
+        <input class="w-full bg-deep-secondary hover:bg-lighter-secondary text-white font-bold p-2 rounded" type="submit" value="Submit">
+    </form>
+
+{% endblock %}

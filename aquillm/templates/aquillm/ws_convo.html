@@ -1,0 +1,19 @@
+{% extends "aquillm/base.html" %}
+{% block title %}AquiLLM -- Chat{% endblock %}
+
+{% block content %}
+<div id="chat-mount" class="h-full"></div>
+{% endblock %}
+
+
+
+
+{% block scripts %}
+<script>
+    mountReactComponent('chat-mount', 'ChatComponent', {
+        convoId: {{ convo_id }},
+        collectionsUrl: window.apiUrls.api_collections,
+
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,6 @@
+venv/
+test-results.txt
+react/node_modules/
+react/npm-debug.log
+aquillm/aquillm/static/js/dist/
+aquillm/aquillm/static/index.css

@@ -1,0 +1,39 @@
+#id_collections div label {
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    align-items: center;
+    align-content: center;
+    justify-content: left;
+    border-radius: 8px;
+    transition: 0.25s;
+    cursor: pointer;
+}
+
+#id_collections div label input{
+    margin-bottom: 0 !important;
+}
+
+#id_collections div label:hover{
+    background-color: #444444;
+}
+
+#id_collection div label {
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    align-items: center;
+    align-content: center;
+    justify-content: left;
+    border-radius: 8px;
+    transition: 0.25s;
+    cursor: pointer;
+}
+
+#id_collection div label input{
+    margin-bottom: 0 !important;
+}
+
+#id_collection div label:hover{
+    background-color: #555555;
+}

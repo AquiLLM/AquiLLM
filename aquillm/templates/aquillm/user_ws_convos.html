@@ -1,0 +1,68 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Your Conversations{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="font-black text-3xl">Your Conversations</h1>
+    {% if conversations %}
+        <table class="w-full mt-6">
+            <thead>
+
+            </thead>
+            <tbody>
+            {% for conversation in conversations %}
+                <tr id="convo-{{ conversation.id }}">
+                    <td class="py-4">
+                        <a href="{% url 'ws_convo' convo_id=conversation.pk %}" class="font-black">
+                            {% if conversation.name %}
+                                {{ conversation.name }}
+                            {% else %}
+                                Untitled Conversation
+                            {% endif %}
+                        </a>
+                    </td>
+                    <td>
+                        <div id="delete-{{ conversation.id }}" class="flex items-center gap-2">
+                            <button id="delete-button-{{ conversation.id }}" type="button" class="font-black text-red-700" 
+                                onclick="document.getElementById('yes-no-{{ conversation.id }}').classList.toggle('hidden');
+                                         document.getElementById('delete-button-{{ conversation.id }}').classList.toggle('hidden');">
+                                Delete
+                            </button>
+                            <div id="yes-no-{{ conversation.id }}" class="hidden">
+                                <form action="{% url 'delete_ws_convo' conversation.id %}"
+                                    onsubmit="event.preventDefault(); fetch(this.action, {
+                                        method: 'DELETE',
+                                        headers: {
+                                            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                                        },
+                                        credentials: 'same-origin'
+                                    })
+                                    .then(r => { 
+                                        if(r.status === 200)
+                                            document.getElementById('convo-{{ conversation.id }}').classList.add('hidden')
+                                    })">
+                                    {% csrf_token %}
+                                    <button type="submit" class="text-red-700" >
+                                        Yes, Really
+                                    </button>
+                                </form>
+                                <button type="button" class="text-blue-700" 
+                                    onclick="document.getElementById('yes-no-{{ conversation.id }}').classList.toggle('hidden');
+                                    document.getElementById('delete-button-{{ conversation.id }}').classList.toggle('hidden');">
+                                No, Not Really
+                                </button>
+                        </div>
+                    </td>
+                    <td class="py-2 text-right">
+                        {{ conversation.created_at|date:"F j, Y, g:i a" }}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="no-conversations">You don't have any conversations yet.</p>
+    {% endif %}
+</div>
+{% endblock %}

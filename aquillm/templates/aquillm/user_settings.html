@@ -1,0 +1,11 @@
+{% extends "aquillm/base.html" %}
+
+{% block content %}
+  <div id="user-settings-root"></div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    mountReactComponent('user-settings-root', 'UserSettings', {});
+  </script>
+{% endblock %}

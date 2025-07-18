@@ -1,0 +1,54 @@
+
+server {
+	listen 80;
+	listen [::]:80;
+	listen 443 ssl;
+	listen [::]:443 ssl;
+	server_name _;
+	ssl_certificate /etc/letsencrypt/live/${HOST_NAME}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/${HOST_NAME}/privkey.pem;
+	return 444;
+}
+
+server {
+	listen 80;
+	listen [::]:80;
+	server_name ${HOST_NAME};
+	location /health {
+		resolver 127.0.0.11;
+		set $backend "web:8080";
+		proxy_pass http://$backend;
+		proxy_set_header Host $host;
+		proxy_set_header X-Real-IP $remote_addr;
+		proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+		proxy_set_header X-Forwarded-Proto $scheme;
+	}
+
+	location / {
+		client_max_body_size 200M;
+		return 301 https://$server_name$request_uri;
+	}
+}
+
+server {
+	listen 443 ssl;
+	listen [::]:443 ssl;
+	server_name ${HOST_NAME};
+	ssl_certificate /etc/letsencrypt/live/${HOST_NAME}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/${HOST_NAME}/privkey.pem;
+	location / {
+		client_max_body_size 200M;
+		resolver 127.0.0.11;
+		set $backend "web:8080";
+		proxy_pass http://$backend;
+		proxy_set_header Host $host;
+		proxy_set_header X-Real-IP $remote_addr;
+		proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+		proxy_set_header X-Forwarded-Proto $scheme;
+		proxy_http_version 1.1;
+		proxy_set_header Upgrade $http_upgrade;
+    	proxy_set_header Connection "upgrade";
+	}
+
+}
+

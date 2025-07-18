@@ -1,0 +1,19 @@
+{% load allauth %}
+{% setvar variant %}
+    {% if "warning" in attrs.tags %}
+        bg-yellow-500
+    {% elif "danger" in attrs.tags %}
+        bg-red-500
+    {% elif "secondary" in attrs.tags %}
+        bg-gray-500
+    {% elif "success" in attrs.tags %}
+        bg-green-500
+    {% else %}
+        bg-blue-500
+    {% endif %}
+{% endsetvar %}
+<span {% if attrs.title %}title="{{ attrs.title }}"{% endif %}
+      class="text-white {{ variant }} px-2 py-1 rounded">
+    {% slot %}
+    {% endslot %}
+</span>

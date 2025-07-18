@@ -1,0 +1,16 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}AquiLLM -- PDF Ingestion Monitor{% endblock %}
+
+{% block content %}
+    <h1>PDF Ingestion</h1>
+    <div id="pdf-ingest"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    mountReactComponent('pdf-ingest', 'PDFIngestionMonitor', {
+        websocketUrl: protocol + window.location.host + '/ingest/monitor/' + "{{ doc_id }}" + '/'   });
+</script>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Email Whitelist{% endblock %}
+
+{% block content %}
+    <div id="react-test"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    mountReactComponent('react-test', 'WhitelistEmails', {
+
+    });
+</script>
+{% endblock %}

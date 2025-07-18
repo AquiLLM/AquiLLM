@@ -1,0 +1,14 @@
+{% load allauth %}
+{% for err in attrs.form.non_field_errors %}<div role="alert" class="bg-red-500 text-white p-2 mb-2">{{ err }}</div>{% endfor %}
+<form class="{% block form_class %}{% if not attrs.no_visible_fields %}bg-white shadow-md rounded{% endif %}{% endblock %}"
+      method="{{ attrs.method }}"
+      action="{{ attrs.action }}">
+    {% if not attrs.no_visible_fields %}<div class="">{% endif %}
+        {% slot body %}
+        {% endslot %}
+        {% if not attrs.no_visible_fields %}</div>{% endif %}
+    {% if not attrs.no_visible_fields %}<div class="mx-[32px]">{% endif %}
+        {% slot actions %}
+        {% endslot %}
+        {% if not attrs.no_visible_fields %}</div>{% endif %}
+</form>

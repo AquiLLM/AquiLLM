@@ -1,0 +1,23 @@
+{% load humanize %}
+<div class="flex flex-col max-w-full h-full mx-auto overflow-y-auto">
+    {% for message in conversation.messages.all %}
+        <div class="w-4/5 mb-5 p-2.5 rounded-lg shadow-md {% if message.sender == 'user' %}user-message self-end bg-lighter-primary border border-dashed border-black border-2{% else %}assistant-message bg-deep-secondary text-white{% endif %}">
+            <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
+            {% if message.context_chunks.exists %}
+            <div class="mt-2.5 text-sm">
+                <strong>Related Context:</strong>
+                {% for chunk in message.context_chunks.all %}
+                    <div class="mt-1.5">
+                        <details>
+                            <summary class="cursor-pointer text-blue-600">{{ chunk.document.title|default:"Untitled Document" }} ({{ chunk.start_position }}-{{ chunk.end_position }})</summary>
+                            <p class="mt-1.5 pl-2.5 border-l-2 border-gray-300 whitespace-pre-wrap break-words">{{ chunk.content }}</p>
+                        </details>
+                    </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            <p class="text-xs mt-1.5 {% if message.sender == 'user' %}text-right{% endif %}">{{ message.timestamp|date:"Y-m-d H:i:s" }}</p>
+        </div>
+    {% endfor %}
+    <div id="token-counter">{{ conversation.tokens|intcomma }} out of 200,000 tokens used</div>
+</div>

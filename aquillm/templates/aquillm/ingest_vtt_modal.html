@@ -1,0 +1,96 @@
+<!-- aquillm/ingest_vtt_modal.html -->
+
+<div class="bg-scheme-shade_4 flex items-center justify-center h-[80px]">
+    <span class="font-sans text-text-normal text-2xl font-bold">
+        Ingest VTT
+    </span>
+</div>
+
+{% if status_message %}
+    <div class="status_message">
+        {{ status_message }}
+    </div>
+{% endif %}
+
+<form action="{% url 'ingest_vtt' %}" method="post" enctype="multipart/form-data" class="flex flex-col justify-center p-[32px] text-text-normal font-sans h-full">
+
+    {% csrf_token %}
+    <div class="form-group w-full">
+        {{ form.title }} 
+        {% if form.title.errors %}
+            <p class="text-red-500 text-sm">{{ form.title.errors }}</p>
+        {% endif %}
+    </div>
+
+    <div class="flex-grow border-t h-[0px] border-border-higher_contrast my-[32px]"></div>
+
+    <div class="flex">
+
+        <div class="form-group w-full flex flex-col items-center justify-center">
+            <span style="transform: translateY(-4px)" class="text-xl">
+                VTT File:
+            </span>
+
+            <div class="mt-4 w-full flex flex-col items-center justify-center">
+
+                <label for="vtt-file-input" 
+                    class="text-center cursor-pointer inline-block bg-accent text-white px-4 py-2 rounded-[20px] w-full h-[40px] hover:bg-blue-600 transition-colors">
+                    Browse...
+                </label>
+                
+                <span id="vtt-file-name" class="text-text-less_contrast">No file chosen</span>
+                
+                {{ form.vtt_file }}
+                
+                {% if form.vtt_file.errors %}
+                    <p class="text-red-500 text-sm">{{ form.vtt_file.errors }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="flex-grow border-r border-border-higher_contrast mx-[32px]"></div>
+
+        <div class="form-group w-full flex flex-col items-center justify-center">
+            <div>
+                <span style="transform: translateY(-4px)" class="text-xl">
+                    Audio File:
+                </span>
+                <span class="text-md text-text-less_contrast">
+                    (optional)
+                </span>
+            </div>
+
+            <div class="mt-4 w-full flex flex-col items-center justify-center">           
+                <label for="vtt-file-input" 
+                    class="text-center cursor-pointer inline-block bg-accent text-white px-4 py-2 rounded-[20px] w-full h-[40px] hover:bg-blue-600 transition-colors">
+                    Browse...
+                </label>
+                
+                <span id="vtt-file-name" class="text-text-less_contrast">No file chosen</span>
+                
+                {{ form.audio_file }}
+                
+                {% if form.audio_file.errors %}
+                    <p class="text-red-500 text-sm">{{ form.audio_file.errors }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+    </div>
+
+    <div class="flex-grow border-t h-[0px] border-border-higher_contrast my-[32px]"></div>
+
+    <div class="form-group">
+        <label class="block font-medium">Collection</label>
+
+        {{ form.collection }}
+        {% if form.collection.errors %}
+            <p class="text-red-500 text-sm">{{ form.collection.errors }}</p>
+        {% endif %}
+    </div>
+
+    <div class="flex-grow border-t h-[0px] border-border-higher_contrast my-[32px]"></div>
+
+    {% csrf_token %}
+    <input type="submit" value="Submit" class="w-full bg-accent hover:bg-blue-600 h-[40px] text-white font-bold p-2 rounded-[20px] transition-colors">
+</form>

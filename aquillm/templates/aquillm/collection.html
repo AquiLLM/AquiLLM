@@ -1,0 +1,17 @@
+{# templates/collection_view.html #}
+{% extends "aquillm/base.html" %}
+
+{% block title %}AquiLLM -- Collection View{% endblock %}
+
+{% block content %}
+  <div id="collection-view"></div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    // You might pass the collection id or other props via the Django context
+    mountReactComponent('collection-view', 'CollectionView', {
+      collectionId: "{{ collection.id }}"
+    });
+  </script>
+{% endblock %}

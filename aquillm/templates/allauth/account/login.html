@@ -1,0 +1,45 @@
+{% extends "account/base_entrance.html" %}
+{% load allauth account %}
+{% block head_title %}
+    Sign In
+{% endblock head_title %}
+{% block content %}
+    {% element h1 %}
+        Sign In
+    {% endelement %}
+
+    {% url 'account_login' as login_url %}
+    {% element form form=form method="post" action=login_url tags="entrance,login" %}
+        {% slot body %}
+            {% csrf_token %}
+            {% element fields form=form unlabeled=True %}
+            {% endelement %}
+            {{ redirect_field }}
+        {% endslot %}
+        {% slot actions %}
+            {% element button type="submit" tags="prominent,login" %}
+                Sign In
+            {% endelement %}
+        {% endslot %}
+    {% endelement %}
+
+    <div class="relative flex items-center justify-center mt-[20px]"> 
+        <div class="flex-grow border-t border-border-higher_contrast"></div>
+            <span class="font-sans text-sm px-[8px] bg-dark-mode-background text-text-less_contrast">Or</span>
+        <div class="flex-grow border-t border-border-higher_contrast"></div>
+    </div>
+
+    <div class="text-text-less_contrast text-sm mt-[12px] mb-[16px] w-full text-center">
+        Use a Third Party    
+    </div>
+
+    {% if SOCIALACCOUNT_ENABLED %}
+        {% include "socialaccount/snippets/login.html" with page_layout="entrance" %}
+    {% endif %}
+
+    <div class="text-text-less_contrast text-xs mt-[12px] mb-[16px] w-full text-center">
+        At present, only users at the domains sou.edu and g.ucla.edu can use AquiLLM. Inquire for your own deployment.
+    </div>
+
+{% endblock content %}
+

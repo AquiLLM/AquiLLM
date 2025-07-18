@@ -1,0 +1,34 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Your Conversations{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="font-black text-3xl">Your Conversations</h1>
+    {% if conversations %}
+        <table class="w-full mt-6">
+            <thead>
+
+            </thead>
+            <tbody>
+            {% for conversation in conversations %}
+                <tr>
+                    <td class="py-2">
+                        <a href="{% url 'convo' convo_id=conversation.pk %}" class="font-black">
+                            {% if conversation.name %}
+                                {{ conversation.name }}
+                            {% else %}
+                                Untitled Conversation
+                            {% endif %}
+                        </a>
+                    </td>
+                    <td class="py-2 text-right">{{ conversation.created_at|date:"F j, Y, g:i a" }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="no-conversations">You don't have any conversations yet.</p>
+    {% endif %}
+</div>
+{% endblock %}

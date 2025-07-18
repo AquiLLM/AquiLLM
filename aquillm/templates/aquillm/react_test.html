@@ -1,0 +1,18 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}AquiLLM -- React Test Page{% endblock %}
+
+{% block content %}
+    <h1 class="text-orange-400">React Test Page</h1>
+    <div id="react-test"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    mountReactComponent('react-test', 'ChatFileUpload', {
+        onFileUpload: function(files) {
+            console.log('File uploaded:');
+        },
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,123 @@
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PORT=8080
+      - POSTGRES_HOST=db
+      - STORAGE_HOST=storage:9000
+      - STORAGE_ACCESS_KEY=dev
+      - STORAGE_SECRET_KEY=rickbailey
+      - C_FORCE_ROOT=1
+    depends_on:
+      db:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+
+    volumes:
+      - .:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+  
+  nginx:
+      image: nginx:stable-bookworm
+      restart: unless-stopped
+      env_file:
+        - .env
+      ports:
+        - "443:443"
+        - "80:80"
+      volumes:
+        - ./deployment/nginx.conf:/etc/nginx/nginx.conf
+        - ./deployment/aquillm.conf.template:/etc/nginx/templates/aquillm.conf.template
+        - certs:/etc/letsencrypt
+      healthcheck:
+        test: ["CMD", "service", "nginx", "status"]
+        interval: 30s
+        timeout: 10s
+        retries: 3
+        start_period: 6s
+      depends_on:
+        web:
+          condition: service_healthy
+        get_certs:
+          condition: service_completed_successfully
+
+  get_certs:
+    image: debian:bookworm-slim
+    ports:
+      - "80:80"
+    env_file:
+      - .env
+    volumes:
+      - ./deployment/get_certs.sh:/get_certs.sh
+      - certs:/etc/letsencrypt
+      - ./deployment/get_certs.cron:/etc/cron.d/get_certs
+    entrypoint: /get_certs.sh
+
+  db:
+    image: pgvector/pgvector:0.8.0-pg17
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  storage:
+    image: minio/minio
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - MINIO_ROOT_USER=dev
+      - MINIO_ROOT_PASSWORD=rickbailey
+      - MINIO_DEFAULT_BUCKETS=aquillm
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', '-I', 'localhost:9000/minio/health/live']
+      interval: 5s
+      timeout: 10s
+      start_period: 15s
+    command: minio server /data --console-address ":9001"
+
+  redis:
+    image: redis:7.4-bookworm
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set aquillm http://storage:9000 dev rickbailey;
+      /usr/bin/mc mb aquillm/aquillm;
+      exit 0;"
+  
+volumes:
+  postgres_data:
+  minio_data:
+  certs:

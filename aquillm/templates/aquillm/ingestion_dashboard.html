@@ -1,0 +1,17 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}AquiLLM -- Ingestion Dashboard{% endblock %}
+
+{% block content %}
+    <h1>Ingestion Dashboard</h1>
+    <div id="pdf-ingest"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsUrl = `${wsProtocol}//${window.location.host}/ingest/dashboard/`;
+    mountReactComponent('pdf-ingest', 'IngestionDashboard', {
+        wsUrl: wsUrl});
+</script>
+{% endblock %}

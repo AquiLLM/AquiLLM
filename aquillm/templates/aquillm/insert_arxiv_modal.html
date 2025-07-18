@@ -1,0 +1,38 @@
+
+<div class="bg-scheme-shade_4 flex items-center justify-center h-[80px]">
+    <span class="font-sans text-text-normal text-2xl font-bold">
+        Insert arXiv
+    </span>
+</div>
+
+{% if status_message %}
+    <div class="status_message">
+        {{ status_message }}
+    </div>
+{% endif %}
+
+<form action="{% url 'insert_arxiv' %}" method="post" enctype="multipart/form-data" class="flex flex-col justify-center p-[32px] text-text-normal font-sans flex-grow">
+    {% csrf_token %}
+    <div class="form-group w-full">
+        {{ form.arxiv_id }} 
+        {% if form.arxiv_id.errors %}
+            <p class="text-red-500 text-sm">{{ form.arxiv_id.errors }}</p>
+        {% endif %}
+    </div>
+
+    <div class="w-full border-t h-[0px] border-border-higher_contrast my-[32px]"></div>
+
+    <div class="form-group">
+        <label class="block font-medium">Collection</label>
+
+        {{ form.collection }}
+        {% if form.collection.errors %}
+            <p class="text-red-500 text-sm">{{ form.collection.errors }}</p>
+        {% endif %}
+    </div>
+
+    <div class="w-full border-t h-[0px] border-border-higher_contrast my-[32px]"></div>
+
+    {% csrf_token %}
+    <input type="submit" value="Submit" class="w-full bg-accent hover:bg-blue-600 h-[40px] text-white font-bold p-2 rounded-[20px] transition-colors">
+</form>

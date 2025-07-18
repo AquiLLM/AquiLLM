@@ -1,0 +1,639 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="en" class="max-h-screen h-screen overflow-hidden">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}AquiLLM{% endblock %}</title>
+
+    <script src="{% static 'js/dist/main.js' %}"></script>
+    <link rel="icon" type="image/png" href="{% static 'images/aquila-small-light.ico' %}" media="(prefers-color-scheme: dark)"/>
+    <link rel="icon" type="image/png" href="{% static 'images/aquila-small-dark.ico' %}" media="(prefers-color-scheme: light)"/>
+
+    <link rel="stylesheet" href="https://lalten.github.io/lmweb/style/latinmodern-mono.css" type="text/css" charset="utf-8" />
+    <link rel="stylesheet" href="{% static 'index.css' %}" type="text/css" charset="utf-8" />
+{% block head %}
+    <link rel="stylesheet" href="{% static 'scrollbar.css' %}" type="text/css" charset="utf-8" />
+    <link rel="stylesheet" href="{% static 'search_styling.css' %}" type="text/css" charset="utf-8" />
+    <link rel="stylesheet" href="{% static 'circular_progress_bar.css' %}" type="text/css" charset="utf-8" />
+    <link rel="stylesheet" href="{% static 'theme.css' %}" type="text/css" charset="utf-8" />
+    <link rel="stylesheet" href="{% static 'fonts.css' %}" type="text/css" charset="utf-8" />
+{% endblock %}
+</head>
+<body class="
+  {% if user_theme_settings %}
+    theme-{{ user_theme_settings.color_scheme }} font-{{ user_theme_settings.font_family }}
+  {% endif %} ">
+
+    <div id="delete-confirm-modal" class="fixed inset-0 flex items-center backdrop-blur justify-center bg-black bg-opacity-50 hidden z-[200] transition-all">
+        <div class="bg-scheme-shade_3 p-6 rounded shadow-md text-center border border-border-mid_contrast">
+            <p class="mb-4 text-text-normal">Are you sure you want to delete this conversation? <strong>This action cannot be undone.</strong></p>
+            <div class="flex justify-around">
+                <button id="confirm-delete-btn" class="px-4 py-2 bg-red text-text-normal rounded">Yes, Delete</button>
+                <button id="cancel-delete-btn" class="px-4 py-2 bg-scheme-shade_8 text-text-normal rounded">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ingest modal container (hidden by default) -->
+    <div id="modal-overlay" class="z-50 opacity-0 pointer-events-none fixed inset-0 bg-black bg-opacity-50 backdrop-blur flex items-center justify-center transition-all">
+        <div id="modal-content" class="bg-scheme-shade_3 border border-border-mid_contrast rounded-[32px] shadow-lg relative overflow-hidden h-[80%] w-[500px]">
+            
+            <button id="modal-close" class="absolute top-[20px] right-[20px] h-[40px] w-[40px] rounded-[20px] text-xl text-text-normal bg-scheme-shade_5 hover:bg-scheme-shade_3 transition-colors">&times;</button>
+
+            <div id="modal-body" class="flex flex-col h-full"></div>
+        </div>
+    </div>
+
+    <div id="account-menu-modal" class="flex z-50 flex-col items-left gap-[16px] absolute top-[10%] right-[5%] p-[16px] rounded-[12px] bg-scheme-shade_4 border border-border-mid_contrast hidden text-text-normal">
+        <p class="w-full text-center border-b border-border-mid_contrast">
+            <strong>{{ user.username }}</strong>
+        </p>
+
+        <a href="/user-settings/">
+            Manage Account
+        </a>
+
+        <form method="post" action="{% url 'account_logout' %}">
+            {% csrf_token %}
+            <button class="text-red" type="submit">
+                Logout
+            </button>
+        </form>
+    </div>
+
+    <div class="flex flex-col max-h-screen h-screen" id="wrapper">
+        <!-- Nav bar -->
+        <nav class="bg-scheme-shade_4 h-[80px] text-text-normal flex-shrink-0 element-border">
+            <div class="mx-auto flex justify-between items-center max-w-full h-full">
+                <!-- <button class="bg-deep-secondary my-2 hover:bg-lighter-secondary px-3 py-1 rounded-lg" id="menu-toggle">
+                    <img id="menu-open-icon" class="h-6 hidden" src="{% static 'images/latex-implies.svg' %}" alt="Open Menu" class="">
+                    <img id="menu-close-icon" class="h-6 -scale-x-100" src="{% static 'images/latex-implies.svg' %}" alt="Close Menu" class="hidden">
+                </button> -->
+
+                <a href="{% url 'index' %}" class="flex items-center justify-center ml-[16px]" style="gap: 24px">
+                    <svg width="48" height="57" viewBox="0 0 48 57" fill="none" xmlns="http://www.w3.org/2000/svg" id="nav-logo">
+                        <g clip-path="url(#clip0_42_32)">
+                        <path d="M46.3775 56.5333C47.0216 56.5333 47.5439 56.0056 47.5439 55.3546C47.5439 54.7036 47.0216 54.1759 46.3775 54.1759C45.7333 54.1759 45.2111 54.7036 45.2111 55.3546C45.2111 56.0056 45.7333 56.5333 46.3775 56.5333Z" fill="var(--color-contrast)"/>
+                        <path d="M43.4601 54.697C44.2962 54.697 44.974 54.012 44.974 53.167C44.974 52.3221 44.2962 51.6371 43.4601 51.6371C42.6239 51.6371 41.9461 52.3221 41.9461 53.167C41.9461 54.012 42.6239 54.697 43.4601 54.697Z" fill="var(--color-contrast)"/>
+                        <path d="M46.3775 55.3546L43.4601 53.167" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M31.0638 34.1019C31.9227 34.1019 32.619 33.3982 32.619 32.5302C32.619 31.6623 31.9227 30.9586 31.0638 30.9586C30.2049 30.9586 29.5086 31.6623 29.5086 32.5302C29.5086 33.3982 30.2049 34.1019 31.0638 34.1019Z" fill="var(--color-contrast)"/>
+                        <path d="M43.4601 53.1671L31.0638 32.5303" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M43.3496 6.19438C44.3288 6.19438 45.1227 5.39213 45.1227 4.40249C45.1227 3.41285 44.3288 2.6106 43.3496 2.6106C42.3703 2.6106 41.5764 3.41285 41.5764 4.40249C41.5764 5.39213 42.3703 6.19438 43.3496 6.19438Z" fill="var(--color-contrast)"/>
+                        <path d="M31.0638 32.5302L43.3496 4.40247" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M17.798 15.032C18.8652 15.032 19.7303 14.1577 19.7303 13.0793C19.7303 12.0009 18.8652 11.1267 17.798 11.1267C16.7309 11.1267 15.8658 12.0009 15.8658 13.0793C15.8658 14.1577 16.7309 15.032 17.798 15.032Z" fill="var(--color-contrast)"/>
+                        <path d="M43.3496 4.40247L17.798 13.0793" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M14.91 20.7189C16.6148 20.7189 17.9968 19.3222 17.9968 17.5994C17.9968 15.8766 16.6148 14.48 14.91 14.48C13.2052 14.48 11.8232 15.8766 11.8232 17.5994C11.8232 19.3222 13.2052 20.7189 14.91 20.7189Z" fill="var(--color-contrast)"/>
+                        <path d="M17.798 13.0793L14.91 17.5994" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M11.9766 25.3327C12.7217 25.3327 13.3256 24.7224 13.3256 23.9695C13.3256 23.2166 12.7217 22.6062 11.9766 22.6062C11.2316 22.6062 10.6276 23.2166 10.6276 23.9695C10.6276 24.7224 11.2316 25.3327 11.9766 25.3327Z" fill="var(--color-contrast)"/>
+                        <path d="M14.91 17.5994L11.9766 23.9694" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M1.6259 40.0229C2.52385 40.0229 3.25179 39.2873 3.25179 38.3799C3.25179 37.4724 2.52385 36.7368 1.6259 36.7368C0.727938 36.7368 0 37.4724 0 38.3799C0 39.2873 0.727938 40.0229 1.6259 40.0229Z" fill="var(--color-contrast)"/>
+                        <path d="M11.9766 23.9694L1.62589 38.3799" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M13.7297 39.2813C14.4227 39.2813 14.9845 38.7136 14.9845 38.0133C14.9845 37.3129 14.4227 36.7452 13.7297 36.7452C13.0367 36.7452 12.4749 37.3129 12.4749 38.0133C12.4749 38.7136 13.0367 39.2813 13.7297 39.2813Z" fill="var(--color-contrast)"/>
+                        <path d="M1.62589 38.3799L13.7297 38.0132" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M13.7297 38.0132L31.0638 32.5303" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M46.8336 2.35744C47.4778 2.35744 48 1.82971 48 1.17872C48 0.527731 47.4778 0 46.8336 0C46.1894 0 45.6672 0.527731 45.6672 1.17872C45.6672 1.82971 46.1894 2.35744 46.8336 2.35744Z" fill="var(--color-contrast)"/>
+                        <path d="M46.8336 1.17871L43.3495 4.40247" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                        <path d="M9.34055 13.2751V13.1985L9.33845 13.122L9.33424 13.0497L9.33003 12.9774L9.31531 12.8371L9.29847 12.7053L9.27322 12.5777L9.24587 12.4565L9.21432 12.3417L9.17645 12.2333L9.13647 12.1312L9.09019 12.0334L9.0439 11.942L8.9913 11.8548L8.9366 11.774L8.8798 11.6975L8.81878 11.6273L8.75567 11.5614L8.69255 11.4998L8.62522 11.4445L8.55579 11.3935L8.48426 11.3467L8.41273 11.3042L8.3412 11.2659L8.26545 11.2319L8.19182 11.2021L8.11608 11.1745L8.04033 11.1532L7.9646 11.1341L7.88885 11.1192L7.81312 11.1086L7.73738 11.1001L7.66374 11.0958L7.5901 11.0937L7.57959 11.3276C8.61681 11.3276 8.61681 12.7159 8.61681 13.5408C8.61681 13.9321 8.61681 14.5465 8.63785 14.7272C7.71634 15.5415 6.90844 15.6585 6.48976 15.6585C5.86069 15.6585 5.54721 15.1822 5.54721 14.504C5.54721 13.9852 5.81861 12.8414 6.15524 12.3013C6.64755 11.5274 7.21351 11.3276 7.57959 11.3276L7.5901 11.0937C6.15524 11.0937 4.77087 12.6096 4.77087 14.1021C4.77087 15.0865 5.39994 15.8923 6.46872 15.8923C7.12934 15.8923 7.88465 15.6478 8.67992 15.0015C8.81668 15.5628 9.16172 15.8923 9.6351 15.8923C10.1905 15.8923 10.5145 15.3098 10.5145 15.1397C10.5145 15.0653 10.4514 15.0334 10.3883 15.0334C10.3147 15.0334 10.2831 15.0653 10.2515 15.1397C10.0643 15.6585 9.68769 15.6585 9.66455 15.6585C9.34055 15.6585 9.34055 14.8335 9.34055 14.5784C9.34055 14.3552 9.34055 14.336 9.44575 14.2085C10.4304 12.9583 10.6513 11.7294 10.6513 11.7188C10.6513 11.6975 10.6408 11.6125 10.525 11.6125C10.4199 11.6125 10.4199 11.6443 10.3673 11.8357C10.18 12.5033 9.83286 13.307 9.34055 13.9321V13.2751Z" fill="var(--color-contrast)"/>
+                        </g>
+                    </svg>
+                    
+                    <span class="font-serif text-2xl" >AquiLLM</span>
+                </a>
+
+                <!-- <a id="navbar-aquillm-button-container" href="{% url 'index' %}" class="text-2xl text-lightest-primary px-2 rounded-lg font-bold hover:bg-lighter-primary flex justify-center items-center hover:underline hidden">
+                    <div class="flex justify-center items-center">
+                        <img class="h-6 object-scale-down" src="{% static 'images/aquila-small-lightest.svg' %}" alt="AquiLLM Logo">
+                        <span class="pl-2">AquiLLM</span>
+                    </div>
+                </a> -->
+
+                <div class="flex items-center my-2 text-lightest-primary">
+                    {% if user.is_authenticated %}
+                    
+                        <button id="account-management-toggle-button">
+                            <!-- border radius is half of svg size (20) + padding (12) / 2 to make a circle -->
+                            <div class="my-[12px] mr-[24px] hover:bg-scheme-shade_6 transition-all rounded-[24px] p-[12px] outline outline-scheme-contrast outline-2 cursor-pointer">
+                                <svg width="20" height="20" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <g clip-path="url(#clip0_42_68)">
+                                    <path d="M16 16C17.5823 16 19.129 15.5308 20.4446 14.6518C21.7602 13.7727 22.7855 12.5233 23.391 11.0615C23.9965 9.59966 24.155 7.99113 23.8463 6.43928C23.5376 4.88743 22.7757 3.46197 21.6569 2.34315C20.538 1.22433 19.1126 0.462403 17.5607 0.153721C16.0089 -0.15496 14.4003 0.00346629 12.9385 0.608967C11.4767 1.21447 10.2273 2.23985 9.34824 3.55544C8.46919 4.87103 8 6.41775 8 8C8.00212 10.1211 8.84565 12.1547 10.3455 13.6545C11.8453 15.1544 13.8789 15.9979 16 16ZM16 2.66667C17.0548 2.66667 18.086 2.97946 18.963 3.5655C19.8401 4.15153 20.5237 4.98449 20.9274 5.95903C21.331 6.93357 21.4366 8.00592 21.2309 9.04049C21.0251 10.0751 20.5171 11.0254 19.7712 11.7712C19.0254 12.5171 18.075 13.0251 17.0405 13.2309C16.0059 13.4366 14.9336 13.331 13.959 12.9274C12.9845 12.5237 12.1515 11.8401 11.5655 10.963C10.9795 10.086 10.6667 9.05484 10.6667 8C10.6667 6.58552 11.2286 5.22896 12.2288 4.22877C13.229 3.22857 14.5855 2.66667 16 2.66667Z" fill="var(--color-contrast)"/>
+                                    <path d="M16 18.6666C12.8185 18.6702 9.76829 19.9356 7.51862 22.1852C5.26894 24.4349 4.00353 27.4851 4 30.6666C4 31.0202 4.14048 31.3594 4.39052 31.6094C4.64057 31.8595 4.97971 32 5.33333 32C5.68696 32 6.02609 31.8595 6.27614 31.6094C6.52619 31.3594 6.66667 31.0202 6.66667 30.6666C6.66667 28.1913 7.65 25.8173 9.40034 24.067C11.1507 22.3166 13.5246 21.3333 16 21.3333C18.4754 21.3333 20.8493 22.3166 22.5997 24.067C24.35 25.8173 25.3333 28.1913 25.3333 30.6666C25.3333 31.0202 25.4738 31.3594 25.7239 31.6094C25.9739 31.8595 26.313 32 26.6667 32C27.0203 32 27.3594 31.8595 27.6095 31.6094C27.8595 31.3594 28 31.0202 28 30.6666C27.9965 27.4851 26.7311 24.4349 24.4814 22.1852C22.2317 19.9356 19.1815 18.6702 16 18.6666Z" fill="var(--color-contrast)"/>
+                                    </g>
+                                </svg>
+                            </div>
+                        </button>
+
+                    {% else %}
+                    <form method="post" action="{% url 'account_login' %}">
+                        {% csrf_token %}
+                        <button class="text-sm px-3 h-[40px] mr-[24px] text-accent-light underline transition-colors py-1 rounded-[20px]" type="submit">Log In</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </nav>
+
+        <!-- Primary content -->
+        <div class="flex flex-grow min-h-0" id="primary-content">
+            <!-- Sidebar -->
+            <div id= "aq-sidebar" style="overflow-x: visible;" class="element-border flex flex-col aq-sidebar transition-all pl-[8px] max-w-[260px] min-w-[260px] flex-grow bg-scheme-shade_3 text-text-normal h-full max-h-full">
+
+                <div class="flex justify-between items-center my-[26px]" style="overflow-x: visible;" id="sidebar-header">
+                    <span class="text-lg pl-[8px]">Menu</span>
+                    <button id="menu-toggle" class="p-[8px] mr-[8px] hover:bg-scheme-shade_5 transition-all rounded-[8px] cursor-pointer">
+                        <svg xmlns="http://www.w3.org/2000/svg" id="Outline" viewBox="0 0 24 24" width="20" height="20">
+                            <path d="M7,6H23a1,1,0,0,0,0-2H7A1,1,0,0,0,7,6Z" fill="var(--color-contrast)"/>
+                            <path d="M23,11H7a1,1,0,0,0,0,2H23a1,1,0,0,0,0-2Z" fill="var(--color-contrast)"/>
+                            <path d="M23,18H7a1,1,0,0,0,0,2H23a1,1,0,0,0,0-2Z" fill="var(--color-contrast)"/>
+                            <circle cx="2" cy="5" r="2" fill="var(--color-contrast)"/>
+                            <circle cx="2" cy="12" r="2" fill="var(--color-contrast)"/>
+                            <circle cx="2" cy="19" r="2" fill="var(--color-contrast)"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- transform is for proper spacing with the element above it -->
+                <!-- bottom margin of 8 is the balance spacing between elements beneath this and above it -->
+                <div class="relative flex items-center pr-[8px]" style="transform: translateY(-8px);"> 
+                    <div class="flex-grow border-t border-border-low_contrast"></div>
+                    <span class="text-xs px-[8px] bg-dark-mode-background text-text-lower_contrast">AquiLLM</span>
+                    <div class="flex-grow border-t border-border-low_contrast"></div>
+                </div>
+
+                <!-- <a href="{% url 'index' %}" class="text-2xl font-bold flex justify-center items-center p-6 hover:underline">
+                    <div class="flex justify-center items-center">
+                        <img class="h-20 object-scale-down" src="{% static 'images/aquila-medium.svg' %}" alt="AquiLLM Logo">
+                        <span class="py-2">AquiLLM</span>
+                    </div>
+                </a> -->
+
+                <div style="overflow-y: auto;" class="max-h-full h-full flex-grow-1 pr-[8px]">
+                    <div class="flex flex-col">
+                        {% if user.is_authenticated %}
+                            {% for link in nav_links %}
+                                {% if "ingest" in link.url or "insert" in link.url %}
+                                    <a href="#" data-url="{% url link.url %}" class="open-modal my-[5px] pl-[8px] py-[3px]text-lg w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all">
+                                        {{ link.text }}
+                                    </a>
+                                {% elif "user_ws_convo" in link.url %}
+                                    <!-- Dropdown for conversations -->
+                                    <div class="dropdown">
+                                        <div id="conversation-dropdown-btn" class="flex justify-between items-center w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all cursor-pointer h-[34px] my-[5px]" onclick="toggleDropdown()">
+
+                                            <span class="text-left my-[5px] pl-[8px] py-[3px] text-lg">
+                                                Your Conversations
+                                            </span>
+                                            
+                                            <svg id="dropdown-indicator" class="transition-all mr-[8px]" width="12" height="9" viewBox="0 0 12 9" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M6 9L0.803847 -2.51245e-08L11.1962 8.834e-07L6 9Z" fill="#EEEEEE"/>
+                                            </svg>
+
+                                        </div>
+                                        <div id="conversation-dropdown" class="dropdown-content transition-all overflow-y-hidden max-h-[300px]" style="height: 0px;">
+                                            {% include "partials/conversation_list.html" %}
+                                        </div>
+                                    </div>
+                                {% else %}
+                                    <a href="{% url link.url %}" class="my-[5px] pl-[8px] py-[3px] text-lg w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all">
+                                        {{ link.text }}
+                                    </a>
+                                {% endif %}
+                    
+                                {% if forloop.counter == 4 %}
+                                    <div class="relative flex items-center"> 
+                                        <div class="flex-grow border-t border-border-low_contrast"></div>
+                                        <span class="text-xs px-[8px] bg-dark-mode-background text-text-lower_contrast">Utilities</span>
+                                        <div class="flex-grow border-t border-border-low_contrast"></div>
+                                    </div>
+                                {% endif %}
+                            {% endfor %} 
+                            <div id="ingestion-monitor" class="cursor-pointer"></div>
+                            {% if user.is_staff %}
+                            <a href="{% url 'email_whitelist' %}" class="my-[5px] pl-[8px] py-[3px] text-lg w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all">
+                                Email Whitelist
+                            </a>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page Content -->
+            <div class="bg-scheme-shade_2 max-h-full h-full w-full" id="page-content-wrapper">
+                <div class="h-full max-h-full text-text-normal overflow-y-auto">
+                    {% block content %}
+                    <!-- Your page content goes here -->
+                    {% endblock %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const menuToggle = document.getElementById("menu-toggle");
+    const sidebar = document.getElementById("aq-sidebar");
+    const conversationDropdown = document.getElementById("conversation-dropdown");
+    const dropdownIndicator = document.getElementById("dropdown-indicator");
+    const conversationDropdownButton = document.getElementById("conversation-dropdown-btn");
+
+    var searchInput = document.getElementById("conversation-search");
+
+    menuToggle.addEventListener("click", function(e) {
+        e.preventDefault();
+        sidebar.classList.toggle("ml-[-260px]");
+        menuToggle.classList.toggle("bg-accent");
+        menuToggle.classList.toggle("pl-[24px]");
+        
+        if (sidebar.classList.contains("ml-[-260px]")) {
+            setTimeout(() => {
+                menuToggle.classList.remove("hover:bg-scheme-shade_5");
+                menuToggle.classList.add("hover:bg-accent-light");
+                menuToggle.style.transform = "translateX(52px)";
+            }, 100);
+        } else {
+            menuToggle.style.transform = "translateX(0px)";
+            menuToggle.classList.remove("hover:bg-accent-light");
+            menuToggle.classList.add("hover:bg-scheme-shade_5");
+        }
+        
+        // Save the sidebar and conversation dropdown state in localStorage
+        localStorage.setItem("sidebarClosed", sidebar.classList.contains("ml-[-260px]"));
+    });
+
+    function calculateDropdownHeight() {
+        const computedStyle = window.getComputedStyle(conversationDropdown);
+        const isClosed = computedStyle.height === "0px";
+
+        let totalHeight = 0;
+        conversationDropdown.childNodes.forEach(child => {
+            if (child.nodeType === 1) { // Ensure it's an element node
+                totalHeight += child.offsetHeight;
+            }
+        });
+
+        // Add padding
+        const padding = parseFloat(computedStyle.paddingTop) + parseFloat(computedStyle.paddingBottom);
+        totalHeight += padding;
+
+        // Ensure it doesn't exceed the max height of 296px
+        const finalHeight = Math.min(totalHeight, 296);
+
+        return finalHeight;
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // use localStorage to have the sidebar state persist.
+        const sidebarClosed = localStorage.getItem("sidebarClosed");
+        const conversationDropdownClosed = localStorage.getItem("conversationDropdownClosed");
+        const conversationDropdownIndicatorRotated = localStorage.getItem("conversationDropdownIndicatorRotated");
+
+        if (conversationDropdownClosed === "true")
+        {
+            conversationDropdown.style.transition = "none";
+            dropdownIndicator.style.transition = "none";
+
+            conversationDropdown.style.height = "0px";
+            conversationDropdown.style.marginTop = "0px";
+            conversationDropdownButton.classList.remove("bg-scheme-shade_5");
+            dropdownIndicator.style.transform = "rotate(0deg)";
+
+            setTimeout(() => {
+                dropdownIndicator.style.transition = "";
+                conversationDropdown.style.transition = "";
+            }, 50);
+        }
+
+        else {
+            conversationDropdown.style.transition = "none";
+            dropdownIndicator.style.transition = "none";
+
+            conversationDropdown.style.height = `${calculateDropdownHeight()}px`;
+            conversationDropdown.style.marginTop = "10px";
+            conversationDropdownButton.classList.add("bg-scheme-shade_5");
+            dropdownIndicator.style.transform = "rotate(180deg)";
+
+            setTimeout(() => {
+                dropdownIndicator.style.transition = "";
+                conversationDropdown.style.transition = "";
+            }, 50);
+        }
+    
+        if (sidebarClosed === "true") {
+            // Temporarily disable transitions
+            sidebar.style.transition = "none";
+
+            sidebar.classList.add("ml-[-260px]");
+
+            menuToggle.style.transform = "translateX(52px)";
+            menuToggle.classList.add("bg-accent");
+            menuToggle.classList.add("pl-[24px]");
+            menuToggle.classList.remove("hover:bg-scheme-shade_5");
+            menuToggle.classList.add("hover:bg-accent-light");
+
+            // Re-enable transitions after a short delay (50ms seems to work well)
+            setTimeout(() => {
+                sidebar.style.transition = "";
+            }, 50);
+
+        } else {
+            sidebar.classList.remove("ml-[-260px]");
+            menuToggle.style.transform = "translateX(0px)";
+            menuToggle.classList.remove("bg-accent");
+            menuToggle.classList.remove("pl-[24px]");
+            menuToggle.classList.remove("hover:bg-accent-light");
+            menuToggle.classList.add("hover:bg-scheme-shade_5");
+        }
+
+        // Add highlighting for which link you're currently on
+        const sidebarLinks = document.querySelectorAll(".aq-sidebar a");
+        const currentPath = window.location.pathname; // Get the current URL path
+
+        sidebarLinks.forEach(link => {  
+            // Check if the link matches the current page URL
+            if (link.getAttribute("href") === currentPath && link.classList.contains("no-highlight") === false) {
+                link.classList.add("bg-scheme-shade_5"); 
+            }
+
+            // the link on the element and the browser are different, so check for this specific case
+            if (link.getAttribute("href") === "/new_ws_convo/" && currentPath.includes("/ws_convo") && link.classList.contains("no-highlight") === false){
+                link.classList.add("bg-scheme-shade_5");
+            }
+        });
+
+        // Modal functionality
+
+        // Function to open the modal
+        function openModal(htmlContent) {
+            document.getElementById('modal-body').innerHTML = htmlContent;
+            document.getElementById('modal-overlay').classList.remove('opacity-0');
+            document.getElementById('modal-overlay').classList.remove('pointer-events-none');
+            document.getElementById('modal-overlay').classList.add('opacity-100');
+            document.getElementById('modal-overlay').classList.add('pointer-events-all');
+        }
+
+        // Function to close the modal
+        function closeModal() {
+            document.getElementById('modal-overlay').classList.add('opacity-0');
+            document.getElementById('modal-overlay').classList.add('pointer-events-none');
+            document.getElementById('modal-overlay').classList.remove('opacity-100');
+            document.getElementById('modal-overlay').classList.remove('pointer-events-all');
+            document.getElementById('modal-body').innerHTML = '';
+        }
+
+        // Listen for clicks on elements with class 'open-modal'
+        document.querySelectorAll('.open-modal').forEach(link => {
+            link.addEventListener('click', function (e) {
+            
+            e.preventDefault();
+            const url = this.getAttribute('data-url');
+
+            console.log(url);
+
+            if (url === "/insert_arxiv/"){
+                console.log("here");
+                document.getElementById('modal-content').classList.remove("h-[80%]");
+                document.getElementById('modal-content').classList.add("h-[60%]");
+            }
+            else {
+                document.getElementById('modal-content').classList.remove("h-[60%]");
+                document.getElementById('modal-content').classList.add("h-[80%]");
+            }
+
+            fetch(url, {
+                headers: {
+                'X-Requested-With': 'XMLHttpRequest' // Tell Django this is an AJAX request so the page doesnt reload upon form submission
+                }
+            })
+            .then(response => response.text())
+            .then(html => {
+                openModal(html);
+            })
+            .catch(error => {
+                console.error('Error loading modal content:', error);
+            });
+            });
+        });
+
+        // Close the modal when the close button is clicked
+        document.getElementById('modal-close').addEventListener('click', closeModal);
+
+        // Close the modal when clicking outside the modal content:
+        document.getElementById('modal-overlay').addEventListener('click', function (e) {
+            if (e.target === this) {
+                closeModal();
+            }
+        });
+
+        document.getElementById('modal-body').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
+        
+        fetch(form.action, {
+            method: form.method,
+            body: formData,
+            headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(response => response.text())
+        .then(html => {
+            // Optionally check if the form submission was successful
+            // For now, just update the modal with the response (which might include errors)
+            document.getElementById('modal-body').innerHTML = html;
+            // Or if successful, close the modal:
+            // closeModal();
+        })
+        .catch(error => console.error('Form submission error:', error));
+        });
+    });
+
+    searchInput.addEventListener("keyup", function() {
+        var filter = searchInput.value.toLowerCase();
+        var items = document.querySelectorAll(".conversation-item");
+
+        items.forEach(function(item) {
+            // Get the conversation name text
+            var conversationText = item.querySelector(".conversation-link").textContent.toLowerCase();
+
+            // If the text contains the filter string, show the item; otherwise, hide it.
+            if (conversationText.indexOf(filter) > -1) {
+                item.style.display = "";
+            } else {
+                item.style.display = "none";
+            }
+        });
+    });
+
+    // Toggle the conversation dropdown
+    function toggleDropdown() {
+        // Get computed styles and references
+        const computedStyle = window.getComputedStyle(conversationDropdown);
+        const isClosed = computedStyle.height === "0px";
+
+        if (isClosed) {
+            // Apply styles
+            conversationDropdownButton.classList.add("bg-scheme-shade_5");
+            conversationDropdown.style.height = `${calculateDropdownHeight()}px`;
+            conversationDropdown.style.marginTop = "10px";
+            dropdownIndicator.style.transform = "rotate(180deg)";
+        } else {
+            // Close dropdown
+            conversationDropdownButton.classList.remove("bg-scheme-shade_5");
+            conversationDropdown.style.height = "0px";
+            conversationDropdown.style.marginTop = "0px";
+            dropdownIndicator.style.transform = "rotate(0deg)";
+        }
+
+        // Save state to localStorage
+        localStorage.setItem("conversationDropdownClosed", conversationDropdown.style.height === "0px");
+        localStorage.setItem("conversationDropdownIndicatorRotated", dropdownIndicator.style.transform === "rotate(180deg)");
+    }
+
+
+    // Keep track of the currently open modal (if any)
+    let activeModal = null;
+
+    /**
+     * Opens the modal for a given conversation.
+     * @param {Event} event - The click event.
+     * @param {number} convoId - The ID of the conversation.
+     */
+    function openConversationModal(event, convoId) {
+        event.stopPropagation();
+        // Close any active modal first
+        closeActiveConversationModal();
+        
+        const modal = document.getElementById('modal-' + convoId);
+        const conversationItem = document.getElementById('convo-' + convoId);
+        const rect = conversationItem.getBoundingClientRect();
+
+        // Append modal to body so it's not clipped by the dropdown container
+        document.body.appendChild(modal);
+        
+        // Position the modal near the conversation item
+        modal.style.position = 'absolute';
+        modal.style.top = rect.top + 'px';
+        modal.style.left = (rect.right + 10) + 'px'; // 10px gap
+        modal.classList.remove('hidden');
+        
+        activeModal = modal;
+    }
+
+    /**
+     * Closes the active modal (if one is open).
+     */
+    function closeActiveConversationModal() {
+        if (activeModal) {
+            activeModal.classList.add('hidden');
+            activeModal = null;
+        }
+    }
+
+    // When clicking anywhere on the document, close the modal if the click is outside of it.
+    document.addEventListener('click', function(event) {
+        // If there's an active modal and the clicked target is not inside it, close it.
+        if (activeModal && !activeModal.contains(event.target)) {
+            closeActiveConversationModal();
+        }
+    });
+
+    // Delete conversation via AJAX
+    function deleteConversation(convoId) {
+        var url = "{% url 'delete_ws_convo' 0 %}".replace("0", convoId);
+        fetch(url, {
+            method: 'DELETE',
+            headers: {
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                'Content-Type': 'application/json'
+            },
+            credentials: 'same-origin'
+        })
+        .then(response => {
+            if(response.ok) {
+                // Remove the conversation from the sidebar list
+                document.getElementById("convo-" + convoId).remove();
+            } else {
+                // Handle error as needed
+                alert("Error deleting conversation.");
+            }
+        });
+    }
+
+    // Store the conversation id to delete
+    let pendingDeletionId = null;
+
+    // Opens the deletion confirmation modal
+    function openDeleteConfirm(convoId) {
+        pendingDeletionId = convoId;
+        const confirmModal = document.getElementById("delete-confirm-modal");
+        confirmModal.classList.toggle("hidden");
+    }
+
+    // Close the deletion confirmation modal
+    function closeDeleteConfirm() {
+        pendingDeletionId = null;
+        const confirmModal = document.getElementById("delete-confirm-modal");
+        confirmModal.classList.toggle("hidden");
+    }
+
+    // When the "Yes, Delete" button is clicked, call the deletion function.
+    document.getElementById("confirm-delete-btn").addEventListener("click", function() {
+        if (pendingDeletionId !== null) {
+            deleteConversation(pendingDeletionId);
+            closeDeleteConfirm();
+        }
+    });
+
+    // When the "Cancel" button is clicked, just close the modal.
+    document.getElementById("cancel-delete-btn").addEventListener("click", function() {
+        closeDeleteConfirm();
+    });
+
+    document.getElementById("delete-confirm-modal").addEventListener("click", function(event) {
+        if (event.target === this) {
+            closeDeleteConfirm();
+        }
+    });
+
+    document.getElementById("account-management-toggle-button").addEventListener("click", function(event){
+        event.stopPropagation();
+        document.getElementById("account-menu-modal").classList.remove("hidden");
+    });
+
+    function closeAccountManagementModal() {
+        document.getElementById("account-menu-modal").classList.add("hidden");
+    }
+
+    document.addEventListener('click', function(event) {
+        const accountManagementModal = document.getElementById("account-menu-modal");
+
+        if (accountManagementModal && !accountManagementModal.contains(event.target)) {
+            closeAccountManagementModal();
+        }
+    });
+
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}/ingest/dashboard/`;
+    mountReactComponent('ingestion-monitor', 'IngestionDashboardLauncher', {
+        wsUrl: wsUrl});
+
+</script>
+    </script>
+
+
+{% if user.is_authenticated%}
+    {{ api_urls|json_script:"api_urls" }}
+    {{ page_urls|json_script:"page_urls" }}
+    <script type="text/javascript">
+        window.apiUrls = JSON.parse(document.getElementById('api_urls').textContent);
+        window.pageUrls = JSON.parse(document.getElementById('page_urls').textContent);
+    </script>
+{% endif %}
+
+
+    {% block scripts %}{% endblock %}
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

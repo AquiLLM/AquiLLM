@@ -1,0 +1,62 @@
+
+services:
+
+
+  web_test:
+    build: 
+      context: .
+      dockerfile: Dockerfile.test
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=db_test
+      - STORAGE_HOST=storage_test:4566
+      - DJANGO_DEBUG=1
+    depends_on:
+      db_test:
+        condition: service_healthy
+      storage_test:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+
+
+  db_test:
+    image: pgvector/pgvector:0.8.0-pg17
+    env_file:
+      - .env
+    volumes:
+      - postgres_data_test:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  storage:
+    image: localstack/localstack:4.0.3
+    env_file:
+      - .env
+    volumes:
+      - ./aws:/etc/localstack/init/ready.d
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - awslocal dynamodb list-tables
+          && awslocal es list-domain-names
+          && awslocal s3 ls
+          && awslocal sqs list-queues
+      interval: 5s
+      timeout: 10s
+      start_period: 20s
+
+
+
+volumes:
+  postgres_data_test:
+  localstack_data_test:

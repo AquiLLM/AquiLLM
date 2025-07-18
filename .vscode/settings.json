@@ -1,0 +1,14 @@
+{
+    "python.testing.pytestArgs": [
+        "."
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "python.analysis.typeCheckingMode": "standard",
+    "python.analysis.packageIndexDepths": [
+    {
+        "name": "django",
+        "depth": 5
+    }
+]
+}

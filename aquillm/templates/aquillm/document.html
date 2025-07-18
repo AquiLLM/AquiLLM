@@ -1,0 +1,327 @@
+{% extends "aquillm/base.html" %}
+{% load static %}
+{% load tz %}
+
+{% block title %}AquiLLM {{ document.title }}{% endblock %}
+
+{% block head %}
+{{ block.super }}
+{% if document.has_latex %}
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['$', '$']],
+      displayMath: [['$$', '$$']]
+    },
+    startup: {
+      ready: function() {
+        MathJax.startup.defaultReady();
+        try {
+          document.getElementById('show-latex-btn').addEventListener('click', function() {
+            setTimeout(function() {
+              MathJax.typeset();
+            }, 100);
+          });
+        } catch (e) {
+          console.error("Error setting up LaTeX button: ", e);
+        }
+      }
+    }
+  };
+</script>
+<style>
+  .raw-latex-toggle {
+    background-color: #4F46E5;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    display: inline-block;
+    margin-bottom: 1rem;
+    font-weight: 500;
+    transition: background-color 0.2s;
+  }
+  
+  .raw-latex-toggle:hover {
+    background-color: #4338CA;
+  }
+  
+  .raw-latex-code {
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    font-family: monospace;
+    white-space: pre-wrap;
+    margin-top: 1rem;
+    display: none;
+    overflow-x: auto;
+    box-shadow: none;
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+  
+  .latex-section {
+    margin-top: 2rem;
+  }
+  
+  .latex-header {
+    font-weight: bold;
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem 0.5rem 0 0;
+  }
+  
+  .latex-content {
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    box-shadow: none;
+    overflow-x: auto;
+    font-family: monospace;
+    font-size: 0.9rem;
+    white-space: pre;
+    tab-size: 8;
+  }
+  
+  .formula-columns-container {
+    display: flex;
+    flex-direction: column;
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    box-shadow: none;
+    overflow-x: auto;
+    font-family: monospace;
+    font-size: 0.9rem;
+  }
+  
+  .formula-intro {
+    margin-bottom: 2rem;
+    white-space: pre-wrap;
+  }
+  
+  .formula-pairs-container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+  }
+  
+  .formula-row {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 1rem;
+    width: 100%;
+  }
+  
+  .formula-item {
+    flex: 1;
+    white-space: pre-wrap;
+    min-width: 300px;
+    padding: 0.5rem;
+    border: none;
+  }
+</style>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="w-full h-full text-text-normal">
+<h1 class="text-2xl">{{ document.title|default:"Untitled Document" }}</h1>
+<details>
+    <summary class="font-black">Details</summary>
+    <ul>
+        <li><span class="font-black">Collection:</span> {{ document.collection.name }}</li>
+        <li><span class="font-black">Ingested By:</span> {{ document.ingested_by }}</li>
+        <li><span class="font-black">Date Ingested:</span> {{ document.ingestion_date|localtime|date:"F j, Y, g:i a e" }}</li>
+    </ul>
+</details>
+{% if document.pdf_file %}
+<iframe src="{% url 'pdf' document.id %}" class="w-full h-full"></iframe>
+{% else %}
+<h1 class ="text-xl w-full">Full Text:</h1>
+<div>{{ document.original_text|linebreaks }}</div>
+
+{% if document.has_latex %}
+  <style>
+    .formula-container {
+      display: block;
+      margin: 0;
+      padding: 0;
+      border: none;
+      box-shadow: none;
+    }
+    
+    .no-box {
+      border: none;
+      box-shadow: none;
+      outline: none;
+      background: transparent;
+    }
+    
+    .latex-main-box {
+      border-radius: 0.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+      margin-top: 1rem;
+      margin-bottom: 1rem;
+      overflow: hidden;
+    }
+  </style>
+  
+  <div class="latex-header bg-scheme-shade_3 text-text-normal">==== LATEX VERSION ====</div>
+  
+  <div class="latex-main-box bg-scheme-shade_3 text-text-normal element-border">
+    <div class="latex-content bg-scheme-shade_3 text-text-normal element-border" id="latex-content" style="display: none;">{{ document.latex_content }}</div>
+    <div id="formula-columns" class="formula-columns-container bg-scheme-shade_3 text-text-normal"></div>
+  </div> 
+
+  <button id="show-latex-btn" class="raw-latex-toggle" onclick="toggleRawLatex()">Show/Hide Raw LaTeX</button>
+  
+  <div id="raw-latex" class="raw-latex-code latex-main-box bg-scheme-shade_3 text-text-normal" style="display: none;"><pre>{{ document.latex_content|escape }}</pre></div>
+  
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      detectAndProcessFormulas();
+    });
+    
+    function toggleRawLatex() {
+      const rawLatex = document.getElementById('raw-latex');
+      if (!rawLatex) {
+        return;
+      }
+      
+      if (rawLatex.style.display === 'none') {
+        rawLatex.style.display = 'block';
+        setTimeout(() => {
+          rawLatex.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 50);
+      } else {
+        rawLatex.style.display = 'none';
+      }
+    }
+    
+    function detectAndProcessFormulas() {
+      const formulaColumnContainer = document.getElementById('formula-columns');
+      formulaColumnContainer.innerHTML = '';
+      
+      const content = document.getElementById('latex-content');
+      const text = content.textContent;
+      
+      const hasNumberedFormulas = /\d+\.\s*\$/.test(text);
+      
+      if (hasNumberedFormulas) {
+        const lines = text.split('\n');
+        const formulas = [];
+        const introContent = [];
+        
+        let currentFormula = '';
+        let inFormula = false;
+        let pastIntro = false;
+        
+        for (const line of lines) {
+          if (line.trim() === '') continue;
+          
+          if (/^\d+\.\s*\$/.test(line)) {
+            pastIntro = true;
+            
+            if (inFormula && currentFormula) {
+              formulas.push(currentFormula);
+              currentFormula = '';
+            }
+            
+            currentFormula = line;
+            inFormula = true;
+          } 
+          else if (inFormula) {
+            currentFormula += '\n' + line;
+          }
+          else if (!pastIntro) {
+            introContent.push(line);
+          }
+        }
+        
+        if (inFormula && currentFormula) {
+          formulas.push(currentFormula);
+        }
+        
+        const numberedFormulas = [];
+        
+        for (const formula of formulas) {
+          const match = formula.match(/^(\d+)\.\s*/);
+          if (match) {
+            const number = parseInt(match[1], 10);
+            numberedFormulas.push({ number, formula });
+          }
+        }
+        
+        numberedFormulas.sort((a, b) => a.number - b.number);
+        
+        if (introContent.length > 0) {
+          const introSection = document.createElement('div');
+          introSection.className = 'formula-intro';
+          introSection.textContent = introContent.join('\n');
+          formulaColumnContainer.appendChild(introSection);
+        }
+        
+        const formulaPairsContainer = document.createElement('div');
+        formulaPairsContainer.className = 'formula-pairs-container';
+        
+        const totalFormulas = numberedFormulas.length;
+        const columnsNeeded = 2;
+        const formulasPerColumn = Math.ceil(totalFormulas / columnsNeeded);
+        
+        const rows = [];
+        
+        for (let i = 0; i < formulasPerColumn; i++) {
+          const row = document.createElement('div');
+          row.className = 'formula-row no-box';
+          row.style.border = 'none';
+          row.style.boxShadow = 'none';
+          row.style.background = 'transparent';
+          
+          if (i < numberedFormulas.length) {
+            const leftFormulaDiv = document.createElement('div');
+            leftFormulaDiv.className = 'formula-item no-box';
+            leftFormulaDiv.style.border = 'none';
+            leftFormulaDiv.style.boxShadow = 'none';
+            leftFormulaDiv.style.background = 'transparent';
+            leftFormulaDiv.textContent = numberedFormulas[i].formula;
+            row.appendChild(leftFormulaDiv);
+          }
+          
+          const rightIndex = i + formulasPerColumn;
+          if (rightIndex < numberedFormulas.length) {
+            const rightFormulaDiv = document.createElement('div');
+            rightFormulaDiv.className = 'formula-item no-box';
+            rightFormulaDiv.style.border = 'none';
+            rightFormulaDiv.style.boxShadow = 'none';
+            rightFormulaDiv.style.background = 'transparent';
+            rightFormulaDiv.textContent = numberedFormulas[rightIndex].formula;
+            row.appendChild(rightFormulaDiv);
+          }
+          
+          rows.push(row);
+        }
+        
+        rows.forEach(row => {
+          formulaPairsContainer.appendChild(row);
+        });
+        
+        formulaColumnContainer.appendChild(formulaPairsContainer);
+        
+        if (window.MathJax) {
+          MathJax.typeset([formulaColumnContainer]);
+        }
+      } else {
+        const standardContent = document.getElementById('latex-content');
+        standardContent.style.display = 'block';
+        standardContent.style.boxShadow = 'none';
+        standardContent.style.border = 'none';
+        standardContent.parentElement.style.boxShadow = 'none';
+        standardContent.parentElement.style.border = 'none';
+      }
+    }
+  </script>
+{% endif %}
+{% endif %}
+</div>
+{% endblock %}

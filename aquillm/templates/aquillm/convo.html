@@ -1,0 +1,138 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Conversation{% endblock %}
+
+{% block content %}
+<div class="flex flex-col h-full">
+    <div id="error-container" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" style="display: none;" role="alert">
+        <span class="block sm:inline" id="error-message"></span>
+    </div>
+    <div id="conversation-container" class="flex-grow overflow-y-auto"></div>
+    <div id="form-container" class="bg-lighter-primary rounded-lg p-6 sticky bottom-0">
+        <form id="message-form" action="{% url 'send_message' convo_id %}" method="post" class="flex gap-2">
+            {% csrf_token %}
+            {{ form.non_field_errors }}
+            <div class="w-9/12">
+                {{ form.query.errors }}
+                {{ form.query }}
+            </div>
+            <div class="w-3/12 flex flex-col">
+                <div id="collection-modal" class="hidden target:relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+                    <!--
+                    Background backdrop, show/hide based on modal state.
+                    
+                    Entering: "ease-out duration-300"
+                    From: "opacity-0"
+                    To: "opacity-100"
+                    Leaving: "ease-in duration-200"
+                    From: "opacity-100"
+                    To: "opacity-0"
+                    -->
+                    <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
+                    
+                    <div class="fixed inset-0 z-10 w-screen overflow-y-auto">
+                        <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+
+                            <!--
+                            Modal panel, show/hide based on modal state.
+                            
+                            Entering: "ease-out duration-300"
+                            From: "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+                            To: "opacity-100 translate-y-0 sm:scale-100"
+                            Leaving: "ease-in duration-200"
+                            From: "opacity-100 translate-y-0 sm:scale-100"
+                            To: "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+                            -->
+
+                            <div class="relative transform overflow-hidden rounded-lg bg-lightest-primary text-left shadow-xl transition-all p-6 sm:my-8 sm:w-full sm:max-w-lg">
+                                <h1 class="text-2xl font-bold">Collections</h1>
+                                {{ form.collections }}
+                                <button id="collection-modal-done" type="button" class="w-full p-2 rounded-md bg-deep-primary text-white">Done</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button id="toggle-collection-modal" type="button" class="w-full font-black p-2 rounded-md bg-deep-primary text-white">Collections</button>
+
+                {{ form.top_k.errors }}
+                <div class="flex items-center"><div class="text-nowrap flex-shring-0">{{ form.top_k.label }}</div><div class="w-full gap-2 px-2">{{ form.top_k }}</div></div>
+
+                
+                <button type="submit" class="w-full bg-deep-secondary hover:bg-lighter-secondary text-white font-bold p-2 rounded">
+                    Send
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function loadConversation() {
+        fetch("{% url 'raw_convo' convo_id %}")
+        .then(response => response.text())
+        .then(data => {
+            document.getElementById("conversation-container").innerHTML = data;
+        });
+    }
+    
+    function scrollToBottom() {
+        const conversationContainer = document.getElementById("conversation-container");
+        conversationContainer.scrollTop = conversationContainer.scrollHeight;
+    }
+    
+    document.addEventListener("DOMContentLoaded", function() {
+        const conversationContainer = document.getElementById("conversation-container");
+        const observer = new MutationObserver(scrollToBottom);
+        observer.observe(conversationContainer, { childList: true, subtree: true });
+        const form = document.getElementById('message-form');
+        const errorDiv = document.getElementById('error-container');
+        const errorMessage = document.getElementById('error-message');
+        const toggleCollectionModal = document.getElementById('toggle-collection-modal')
+        const collectionModal = document.getElementById('collection-modal')
+        const collectionModalDone = document.getElementById('collection-modal-done')
+        loadConversation();
+        
+        form.addEventListener("submit", function(e) {
+            e.preventDefault();
+            const formData = new FormData(form);
+            
+            fetch(form.action, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadConversation();
+                    form.reset();
+                } else {
+                    console.error('Error', data);
+                    errorMessage.textContent = 'An error occurred. Please try again.';
+                    errorDiv.style.display = 'block';
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                errorMessage.textContent = 'An error occurred. Please reload the page or try again later.';
+                errorDiv.style.display = 'block';
+            });
+        });
+
+        toggleCollectionModal.addEventListener('click', function() {
+            collectionModal.classList.toggle('hidden')
+        });
+
+        collectionModalDone.addEventListener('click', function() {
+            collectionModal.classList.toggle('hidden')
+        });
+    });
+</script>
+{% endblock %}

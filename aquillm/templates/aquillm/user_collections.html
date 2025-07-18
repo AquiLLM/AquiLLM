@@ -1,0 +1,13 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}AquiLLM -- Collections{% endblock %}
+
+{% block content %}
+  <div id="collections-page"></div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    mountReactComponent('collections-page', 'CollectionsPage', {});
+  </script>
+{% endblock %}

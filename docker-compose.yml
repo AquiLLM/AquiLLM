@@ -1,0 +1,100 @@
+x-common-variables: &db-variables
+  POSTGRES_NAME: postgres
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: jacksonmadden
+  STORAGE_ACCESS_KEY: dev
+  STORAGE_SECRET_KEY: rickbailey
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+      - "5678:5678"
+    env_file:
+      - .env
+    environment:
+      PORT: ${PORT:-8080}
+      POSTGRES_HOST: db
+      STORAGE_HOST: storage:9000
+      DJANGO_DEBUG: 1
+      C_FORCE_ROOT: 1
+      <<: *db-variables
+    restart: on-failure
+    depends_on:
+      db:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+    volumes:
+      - .:/app
+
+
+
+  db:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      <<: *db-variables
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+
+
+  storage:
+    image: minio/minio
+    restart: unless-stopped
+    ports: 
+      - "9001:9001"
+    env_file:
+      - .env
+    environment:
+      MINIO_ROOT_USER: dev
+      MINIO_ROOT_PASSWORD: rickbailey
+
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', '-I', 'localhost:9000/minio/health/live']
+      interval: 5s
+      timeout: 10s
+      start_period: 15s
+    command: minio server /data --console-address ":9001"
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set aquillm http://storage:9000 dev rickbailey;
+      /usr/bin/mc mb aquillm/aquillm;
+      exit 0;"
+
+  redis:
+    image: redis:7.4-bookworm
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+
+
+volumes:
+  postgres_data:
+  minio_data:

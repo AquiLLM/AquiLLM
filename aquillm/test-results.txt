@@ -1,0 +1,64 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.8, pytest-8.3.4, pluggy-1.5.0
+django: version: 5.1.4, settings: aquillm.settings (from option)
+rootdir: /app
+configfile: pytest.ini
+plugins: cov-6.0.0, anyio-4.7.0, django-4.9.0, typeguard-4.4.1
+collected 0 items
+
+=============================== warnings summary ===============================
+../../usr/local/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:297: 11 warnings
+  /usr/local/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:297: PydanticDeprecatedSince20: `json_encoders` is deprecated. See https://docs.pydantic.dev/2.10/concepts/serialization/#custom-serializers for alternatives. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.10/migration/
+    warnings.warn(
+
+../../usr/local/lib/python3.12/site-packages/pydantic/_internal/_config.py:295
+  /usr/local/lib/python3.12/site-packages/pydantic/_internal/_config.py:295: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.10/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+
+---------- coverage: platform linux, python 3.12.8-final-0 -----------
+Name                                                                                     Stmts   Miss  Cover   Missing
+----------------------------------------------------------------------------------------------------------------------
+aquillm/__init__.py                                                                          0      0   100%
+aquillm/admin.py                                                                            32      0   100%
+aquillm/apps.py                                                                             43      4    91%   39-46
+aquillm/asgi.py                                                                              9      9     0%   10-25
+aquillm/context_processors.py                                                                2      2     0%   3-4
+aquillm/forms.py                                                                            69     69     0%   1-135
+aquillm/llm.py                                                                             260    132    49%   34, 38, 60, 67-75, 85, 96, 98, 124-128, 139-140, 144, 162-165, 182-184, 189-192, 203, 206, 209, 212-216, 220-229, 235, 240-248, 258, 262, 269-294, 300-360, 363-371, 386, 393, 409-412
+aquillm/migrations/0001_initial.py                                                          12     12     0%   3-21
+aquillm/migrations/0002_pdfdocument_ingested_by_pdfdocument_ingestion_date_and_more.py       7      7     0%   3-16
+aquillm/migrations/0003_textchunk_chunk_embedding_index.py                                   5      5     0%   3-13
+aquillm/migrations/0004_textchunk_uniqe_chunk_per_document.py                                4      4     0%   3-12
+aquillm/migrations/0005_alter_textchunk_options.py                                           4      4     0%   3-12
+aquillm/migrations/0006_alter_pdfdocument_options_and_more.py                                4      4     0%   3-12
+aquillm/migrations/0007_llmconversation_tokens_alter_pdfdocument_pdf_file.py                 5      5     0%   3-13
+aquillm/migrations/0008_vttdocument_delete_sttdocument_and_more.py                           7      7     0%   3-16
+aquillm/migrations/0009_alter_pdfdocument_pdf_file_and_more.py                               5      5     0%   3-13
+aquillm/migrations/0010_alter_llmconversation_system_prompt_wsconversation.py                6      6     0%   3-15
+aquillm/migrations/0011_add_su.py                                                           10     10     0%   1-19
+aquillm/migrations/0012_alter_wsconversation_convo.py                                        5      5     0%   3-13
+aquillm/migrations/__init__.py                                                               0      0   100%
+aquillm/models.py                                                                          272    129    53%   45-55, 66, 69, 77, 80, 83, 88-93, 97, 118-127, 153, 156-177, 187-188, 192-210, 213, 273-274, 282-283, 286-291, 307-308, 324-325, 334-339, 343, 378-383, 387, 391-402, 407-424, 454-456, 459, 463, 466-471, 474-490, 493-517, 538-539
+aquillm/settings.py                                                                         42      0   100%
+aquillm/urls.py                                                                              7      7     0%   18-25
+aquillm/utils.py                                                                            11      7    36%   12-22
+aquillm/views.py                                                                           251    251     0%   1-380
+aquillm/vtt.py                                                                             101    101     0%   1-179
+aquillm/wsgi.py                                                                              4      4     0%   10-16
+chat/__init__.py                                                                             0      0   100%
+chat/admin.py                                                                                1      0   100%
+chat/apps.py                                                                                 4      0   100%
+chat/consumers.py                                                                          123    123     0%   1-179
+chat/migrations/__init__.py                                                                  0      0   100%
+chat/models.py                                                                               1      0   100%
+chat/routing.py                                                                              3      3     0%   1-5
+chat/tests.py                                                                                1      1     0%   1
+chat/urls.py                                                                                 0      0   100%
+chat/views.py                                                                               10     10     0%   1-15
+manage.py                                                                                   11     11     0%   3-22
+----------------------------------------------------------------------------------------------------------------------
+TOTAL                                                                                     1331    937    30%
+
+============================= 12 warnings in 0.42s =============================

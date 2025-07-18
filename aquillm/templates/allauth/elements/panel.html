@@ -1,0 +1,17 @@
+{% load allauth %}
+<div class="bg-white shadow-md rounded-lg mb-4">
+    <div class="p-4">
+        <h5 class="text-lg font-semibold">
+            {% slot title %}
+            {% endslot %}
+        </h5>
+        {% slot body %}
+        {% endslot %}
+    </div>
+    {% if slots.actions %}
+        <div class="bg-gray-100 p-4">
+            {% slot actions %}
+            {% endslot %}
+        </div>
+    {% endif %}
+</div>
