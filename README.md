@@ -26,19 +26,16 @@
 ## Tech Stack
 
 *   **Backend**: Python, Django
-*   **Frontend**: React, TypeScript
-*   **Database**: PostgreSQL on AWS (using `psycopg2-binary`)
-*   **Vector Store**: `pgvector` (PostgreSQL extension)
-*   **AI/LLM Integration**: Anthropic Claude (Primary RAG LLM, `anthropic`), Google Gemini (`google-generativeai`), potentially others (`openai`, `cohere`)
+*   **Frontend**: React
+*   **Database**: PostgreSQL
+*   **Vector Store**: pgvector (PostgreSQL extension)
+*   **LLM Integration**: Claude, OpenAI, Gemini as desired
 *   **Asynchronous Tasks**: Celery, Redis, Django Channels
-*   **PDF Handling**: `pypdf`, `pdf2image`
-*   **Web Scraping**: `trafilatura`, `BeautifulSoup4`, `Selenium`
-*   **OCR**: `pytesseract` (requires Tesseract installation)
-*   **Cloud Storage**: AWS S3 (`django-storages[s3]`, `boto3`)
-*   **Authentication**: `django-allauth`
+
+*   **Authentication**: django-allauth
 *   **Containerization**: Docker, Docker Compose
 
-## Quick Start
+## Quick start (development and local use):
 
 This assumes you have Docker and Docker Compose installed.
 
@@ -55,9 +52,6 @@ This assumes you have Docker and Docker Compose installed.
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
     - Set LLM_CHOICE to your preferred provider (CLAUDE, OPENAI, GEMINI)
-    - Optional: Google OAuth credentials (GOOGLE_OAUTH2_CLIENT_ID, GOOGLE_OAUTH2_CLIENT_SECRET)
-    - Optional: Email access permissions (ALLOWED_EMAIL_DOMAINS, ALLOWED_EMAIL_ADDRESSES)
-    - Set HOST_NAME for your domain or use 'localhost' for development
 
 4.  **Build and run using Docker Compose:**
     ```bash
@@ -70,12 +64,44 @@ This assumes you have Docker and Docker Compose installed.
    ```
 
 5.  **Access the application:**
-    Open your browser to `http://localhost:8080`
+
+    Open your browser to `http://localhost:8080`, sign in with superuser account.
 
 7.  **Stop the application:**
     ```bash
     docker compose down
     ```
+
+## Small-scale deployment:
+
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/AquiLLM/AquiLLM.git # Replace with your repo URL
+    cd AquiLLM
+    ```
+2.  **Copy the environment template:**
+    ```bash
+    cp .env.example .env
+    ```
+3.  **Edit the .env file with your specific configuration:**
+    - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
+    - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
+    - Set LLM_CHOICE to your preferred provider (CLAUDE, OPENAI, GEMINI)
+    - Optional: Google OAuth credentials (GOOGLE_OAUTH2_CLIENT_ID, GOOGLE_OAUTH2_CLIENT_SECRET)
+    - Optional: Email access permissions (ALLOWED_EMAIL_DOMAINS, ALLOWED_EMAIL_ADDRESSES). Required if OAuth is to be used.
+    - Set HOST_NAME for your domain or use 'localhost' for development
+
+4.  **Build and run using Docker Compose:**
+    ```bash
+    docker compose -f docker-compose-prod.yml up  -d 
+    ```
+    This will automatically use letsencrypt to get TLS certificates.
+
+4. **Add a superuser for administration:**
+   ```bash
+   docker compose -f docker-compose-prod.yml exec web ./manage.py addsuperuser
+   ```
+
 
 ## Using AquiLLM
 
