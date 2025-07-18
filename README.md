@@ -39,7 +39,7 @@ This assumes you have Docker and Docker Compose installed.
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/AquiLLM/AquiLLM.git # Replace with your repo URL
+    git clone https://github.com/AquiLLM/AquiLLM.git 
     cd AquiLLM
     ```
 2.  **Copy the environment template:**
@@ -74,7 +74,7 @@ This assumes you have Docker and Docker Compose installed.
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/AquiLLM/AquiLLM.git # Replace with your repo URL
+    git clone https://github.com/AquiLLM/AquiLLM.git 
     cd AquiLLM
     ```
 2.  **Copy the environment template:**
