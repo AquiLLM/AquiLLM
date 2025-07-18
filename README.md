@@ -20,8 +20,6 @@
 *   **Versatile Document Ingestion**: Upload PDFs, fetch arXiv papers by ID, import VTT transcripts, scrape webpages, and process handwritten notes (with OCR).
 *   **Intelligent Organization**: Group documents into logical `Collections` for focused research projects.
 *   **AI-Powered Chat**: Engage in context-aware conversations with your documents, ask follow-up questions, and get answers with source references.
-*   **Customization**: Personalize the UI with themes (including accessible options) and various fonts.
-*   **Admin Utilities**: Monitor Gemini API costs, track document ingestion status, and manage user access via an email whitelist.
 
 ## Tech Stack
 
