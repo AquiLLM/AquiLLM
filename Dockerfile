@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:0.6.4-python3.12-bookworm
+FROM astral/uv:0.8.17-python3.12-bookworm
 
 # Set environment variables
 

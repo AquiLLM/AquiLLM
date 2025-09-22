@@ -751,22 +751,38 @@ class WSConversation(models.Model):
     
         
     def set_name(self):
+        import asyncio
+        from asgiref.sync import async_to_sync
+
         system_prompt="""
         This is a conversation between a large langauge model and a user.
         Come up with a brief, roughly 3 to 10 word title for the conversation capturing what the user asked.
-        Respond only with the title. 
+        Respond only with the title.
         As an example, if the conversation begins 'What is apple pie made of?', your response should be 'Apple Pie Ingredients'.
         The title should capture what is being asked, not what the assistant responded with.
         If there is not enough information to name the conversation, simply return 'Conversation'.
         """
-        anthropic_client = apps.get_app_config('aquillm').anthropic_client # type: ignore
+
+        # Use the configured LLM interface instead of hardcoded Anthropic client
+        llm_interface = apps.get_app_config('aquillm').llm_interface # type: ignore
         first_two_messages = str(self.convo['messages'][:2])
-        claude_args = {'model': 'claude-3-5-sonnet-20240620',
+
+        # Build kwargs compatible with the LLM interface
+        llm_args = {
+            **llm_interface.base_args,  # Include base args (model, etc.)
             'max_tokens': 30,
             'system': system_prompt,
-            'messages': [{'role': 'user', 'content': first_two_messages}]}
-        message = anthropic_client.messages.create(**claude_args)
-        self.name = message.content[0].text
+            'messages': [{'role': 'user', 'content': first_two_messages}]
+        }
+
+        # Run the async method synchronously
+        @async_to_sync
+        async def get_title():
+            response = await llm_interface.get_message(**llm_args)
+            return response.text
+
+        title_text = get_title()
+        self.name = title_text if title_text else 'Conversation'
         self.save()
 
 

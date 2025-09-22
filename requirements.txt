@@ -12,6 +12,7 @@ django-debug-toolbar
 mypy
 django-stubs
 anthropic
+anthropic[bedrock]
 tenacity
 uvicorn
 whitenoise

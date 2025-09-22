@@ -346,9 +346,9 @@ class LLMInterface(ABC):
                                                     {'system': system_prompt,
                                                     'messages': message_dicts,
                                                     'max_tokens': max_tokens})}
-            if DEBUG:
-                print("LLM called with the following args:")
-                pp(sdk_args)
+            #if DEBUG:
+                #print("LLM called with the following args:")
+                #pp(sdk_args)
             
             response = await self.get_message(**sdk_args)
             new_msg = AssistantMessage(
@@ -382,12 +382,14 @@ class LLMInterface(ABC):
 
 
 class ClaudeInterface(LLMInterface):
-    
+
     base_args: dict = {'model': 'claude-3-7-sonnet-latest'}
 
     @override
-    def __init__(self, anthropic_client):
+    def __init__(self, anthropic_client, model_override=None):
         self.client = anthropic_client
+        if model_override:
+            self.base_args = {'model': model_override}
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
