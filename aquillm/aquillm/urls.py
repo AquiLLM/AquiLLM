@@ -27,6 +27,7 @@ from .views import urlpatterns as page_urlpatterns
 from .settings import DEBUG
 from .api_views import urlpatterns as api_urlpatterns
 from .views import UserSettingsPageView
+from . import zotero_views
 
 urlpatterns = [
     path("", views.index, name="index"),
@@ -42,8 +43,16 @@ urlpatterns = [
     path("ready/", views.health_check, name="ready"),
     path("health", views.health_check),
     path("ready", views.health_check),
- 
+
     path('user-settings/', UserSettingsPageView.as_view(), name='user-settings-page'),
+
+    # Zotero integration URLs
+    path('zotero/settings/', zotero_views.zotero_settings, name='zotero_settings'),
+    path('zotero/connect/', zotero_views.zotero_connect, name='zotero_connect'),
+    path('zotero/callback/', zotero_views.zotero_callback, name='zotero_callback'),
+    path('zotero/disconnect/', zotero_views.zotero_disconnect, name='zotero_disconnect'),
+    path('zotero/sync/', zotero_views.zotero_sync, name='zotero_sync'),
+    path('zotero/sync/status/', zotero_views.zotero_sync_status, name='zotero_sync_status'),
 ] + debug_toolbar_urls()
 
 if DEBUG:
