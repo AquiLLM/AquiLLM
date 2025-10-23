@@ -45,14 +45,16 @@ def zotero_settings(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET"])
 def zotero_connect(request: HttpRequest) -> HttpResponse:
     """
-    Initiate OAuth flow to connect Zotero account (OOB flow).
+    Initiate OAuth flow to connect Zotero account.
 
     Step 1: Get authorization URL and redirect user to Zotero.
-    User will receive a verification code to copy/paste back.
     """
     try:
         # Create OAuth client
         oauth_client = ZoteroOAuthClient()
+
+        # Build callback URL
+        callback_url = request.build_absolute_uri(reverse('zotero_callback'))
 
         # Define permissions to request
         permissions = {
@@ -63,21 +65,18 @@ def zotero_connect(request: HttpRequest) -> HttpResponse:
             'all_groups': 'read'    # Read access to groups
         }
 
-        # Get authorization URL with OOB callback
+        # Get authorization URL
         auth_url, oauth_token, oauth_token_secret = oauth_client.get_authorization_url(
-            callback_url='oob',  # Out-of-band for client apps
+            callback_url=callback_url,
             permissions=permissions
         )
 
-        # Store token and secret in session for verification step
+        # Store token secret in session for callback
         request.session['zotero_oauth_token'] = oauth_token
         request.session['zotero_oauth_token_secret'] = oauth_token_secret
 
-        # Store the auth URL to display to user
-        request.session['zotero_auth_url'] = auth_url
-
-        # Redirect to verification page instead of directly to Zotero
-        return redirect('zotero_verify')
+        # Redirect user to Zotero authorization page
+        return redirect(auth_url)
 
     except Exception as e:
         logger.error(f"Error initiating Zotero OAuth: {str(e)}")
@@ -86,75 +85,58 @@ def zotero_connect(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
-@require_http_methods(["GET", "POST"])
-def zotero_verify(request: HttpRequest) -> HttpResponse:
+@require_http_methods(["GET"])
+def zotero_callback(request: HttpRequest) -> HttpResponse:
     """
-    Handle OOB verification code entry.
+    Handle OAuth callback from Zotero.
 
-    GET: Display form with Zotero authorization link and verification code input
-    POST: Process verification code and complete OAuth flow
+    Step 2: Exchange authorization code for access token and store credentials.
     """
-    if request.method == "GET":
-        # Show verification page with link to Zotero and input for code
-        auth_url = request.session.get('zotero_auth_url')
-        if not auth_url:
-            messages.error(request, "OAuth session expired. Please try connecting again.")
-            return redirect('zotero_settings')
+    try:
+        # Get OAuth verifier from query parameters
+        oauth_verifier = request.GET.get('oauth_verifier')
+        oauth_token = request.GET.get('oauth_token')
 
-        context = {
-            'auth_url': auth_url
-        }
-        return render(request, 'zotero/verify.html', context)
+        if not oauth_verifier or not oauth_token:
+            raise ValueError("Missing OAuth verifier or token")
 
-    else:  # POST
-        try:
-            # Get verification code from form
-            oauth_verifier = request.POST.get('verification_code', '').strip()
+        # Get token secret from session
+        oauth_token_secret = request.session.get('zotero_oauth_token_secret')
+        if not oauth_token_secret:
+            raise ValueError("OAuth token secret not found in session")
 
-            if not oauth_verifier:
-                messages.error(request, "Please enter the verification code from Zotero")
-                return redirect('zotero_verify')
+        # Exchange for access token
+        oauth_client = ZoteroOAuthClient()
+        credentials = oauth_client.get_access_token(
+            oauth_token=oauth_token,
+            oauth_token_secret=oauth_token_secret,
+            oauth_verifier=oauth_verifier
+        )
 
-            # Get token and secret from session
-            oauth_token = request.session.get('zotero_oauth_token')
-            oauth_token_secret = request.session.get('zotero_oauth_token_secret')
+        # Store credentials in database
+        connection, created = ZoteroConnection.objects.update_or_create(
+            user=request.user,
+            defaults={
+                'api_key': credentials['api_key'],
+                'zotero_user_id': credentials['user_id']
+            }
+        )
 
-            if not oauth_token or not oauth_token_secret:
-                raise ValueError("OAuth session expired. Please try connecting again.")
+        # Clean up session
+        request.session.pop('zotero_oauth_token', None)
+        request.session.pop('zotero_oauth_token_secret', None)
 
-            # Exchange for access token
-            oauth_client = ZoteroOAuthClient()
-            credentials = oauth_client.get_access_token(
-                oauth_token=oauth_token,
-                oauth_token_secret=oauth_token_secret,
-                oauth_verifier=oauth_verifier
-            )
+        if created:
+            messages.success(request, f"Successfully connected Zotero account: {credentials['username']}")
+        else:
+            messages.success(request, f"Zotero account reconnected: {credentials['username']}")
 
-            # Store credentials in database
-            connection, created = ZoteroConnection.objects.update_or_create(
-                user=request.user,
-                defaults={
-                    'api_key': credentials['api_key'],
-                    'zotero_user_id': credentials['user_id']
-                }
-            )
+        return redirect('zotero_settings')
 
-            # Clean up session
-            request.session.pop('zotero_oauth_token', None)
-            request.session.pop('zotero_oauth_token_secret', None)
-            request.session.pop('zotero_auth_url', None)
-
-            if created:
-                messages.success(request, f"Successfully connected Zotero account: {credentials['username']}")
-            else:
-                messages.success(request, f"Zotero account reconnected: {credentials['username']}")
-
-            return redirect('zotero_settings')
-
-        except Exception as e:
-            logger.error(f"Error completing Zotero OAuth: {str(e)}")
-            messages.error(request, f"Failed to complete Zotero connection: {str(e)}")
-            return redirect('zotero_settings')
+    except Exception as e:
+        logger.error(f"Error completing Zotero OAuth: {str(e)}")
+        messages.error(request, f"Failed to complete Zotero connection: {str(e)}")
+        return redirect('zotero_settings')
 
 
 @login_required

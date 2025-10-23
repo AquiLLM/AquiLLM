@@ -40,14 +40,12 @@ class ZoteroOAuthClient:
                 "or passed as parameters. Register your app at https://www.zotero.org/oauth/apps"
             )
 
-    def get_authorization_url(self, callback_url: str = 'oob', permissions: Dict[str, str] = None) -> Tuple[str, str, str]:
+    def get_authorization_url(self, callback_url: str, permissions: Dict[str, str] = None) -> Tuple[str, str, str]:
         """
         Step 1 & 2: Get request token and build authorization URL.
 
         Args:
-            callback_url: URL where Zotero will redirect after authorization.
-                         Use 'oob' (out-of-band) for client applications where
-                         user manually copies verification code. Default: 'oob'
+            callback_url: URL where Zotero will redirect after authorization
             permissions: Optional dict of permissions to request:
                 - name: Key description
                 - library_access: Read access to library (1 or 0)
@@ -58,7 +56,7 @@ class ZoteroOAuthClient:
         Returns:
             Tuple of (authorization_url, oauth_token, oauth_token_secret)
         """
-        # Create OAuth session with OOB callback for client apps
+        # Create OAuth session
         oauth = OAuth1Session(
             self.client_key,
             client_secret=self.client_secret,
@@ -83,10 +81,7 @@ class ZoteroOAuthClient:
                     separator = '&' if '?' in auth_url else '?'
                     auth_url = f"{auth_url}{separator}{'&'.join(permission_params)}"
 
-            if callback_url == 'oob':
-                logger.info("Generated Zotero authorization URL for OOB (out-of-band) flow")
-            else:
-                logger.info(f"Generated Zotero authorization URL for callback: {callback_url}")
+            logger.info(f"Generated Zotero authorization URL for callback: {callback_url}")
             return auth_url, oauth_token, oauth_token_secret
 
         except Exception as e:
