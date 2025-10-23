@@ -156,24 +156,161 @@ def zotero_disconnect(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
-@require_http_methods(["POST"])
+@require_http_methods(["GET", "POST"])
 def zotero_sync(request: HttpRequest) -> HttpResponse:
     """
-    Trigger background sync of Zotero library.
+    Display library selection page (GET) or trigger background sync (POST).
 
-    Starts a Celery task to sync collections and items from Zotero.
+    GET: Show available libraries for user to select
+    POST: Start sync task with selected libraries
     """
     try:
         # Check if user has Zotero connection
         connection = ZoteroConnection.objects.get(user=request.user)
 
-        # Trigger background sync task
-        task = sync_zotero_library.delay(user_id=request.user.id)
+        if request.method == "GET":
+            # Fetch available libraries and their collections
+            from .zotero_client import ZoteroAPIClient
+            client = ZoteroAPIClient(
+                api_key=connection.api_key,
+                user_id=connection.zotero_user_id
+            )
 
-        messages.info(request, "Zotero sync started. This may take a few minutes depending on your library size.")
-        logger.info(f"Started Zotero sync for user {request.user.id} (task: {task.id})")
+            try:
+                # Helper function to flatten collection tree for template rendering
+                def flatten_collections(collections, items):
+                    """
+                    Flatten hierarchical collections into a list with depth information.
+                    Returns list of dicts with 'key', 'name', 'depth', 'parent', 'item_count'
+                    """
+                    collection_dict = {}
+                    flattened = []
 
-        return redirect('zotero_settings')
+                    # Build a map of collection key -> item count
+                    collection_item_counts = {}
+                    for item in items:
+                        item_collections = item['data'].get('collections', [])
+                        for col_key in item_collections:
+                            collection_item_counts[col_key] = collection_item_counts.get(col_key, 0) + 1
+
+                    # First pass: create dict of all collections
+                    for col in collections:
+                        col_key = col['key']
+                        col_data = col['data']
+                        collection_dict[col_key] = {
+                            'key': col_key,
+                            'name': col_data['name'],
+                            'parent': col_data.get('parentCollection'),
+                            'item_count': collection_item_counts.get(col_key, 0)
+                        }
+
+                    # Helper to calculate depth
+                    def get_depth(col_key, visited=None):
+                        if visited is None:
+                            visited = set()
+                        if col_key in visited:
+                            return 0  # Prevent circular references
+                        visited.add(col_key)
+
+                        col = collection_dict.get(col_key)
+                        if not col or not col['parent'] or col['parent'] not in collection_dict:
+                            return 0
+                        return 1 + get_depth(col['parent'], visited)
+
+                    # Helper to recursively add collections in order (parents before children)
+                    def add_collections_recursive(parent_key, depth):
+                        for col_key, col_info in collection_dict.items():
+                            if col_info['parent'] == parent_key:
+                                flattened.append({
+                                    'key': col_key,
+                                    'name': col_info['name'],
+                                    'depth': depth,
+                                    'parent': parent_key,
+                                    'item_count': col_info['item_count']
+                                })
+                                # Recursively add children
+                                add_collections_recursive(col_key, depth + 1)
+
+                    # Add root collections first (no parent)
+                    for col_key, col_info in collection_dict.items():
+                        if not col_info['parent'] or col_info['parent'] not in collection_dict:
+                            flattened.append({
+                                'key': col_key,
+                                'name': col_info['name'],
+                                'depth': 0,
+                                'parent': None,
+                                'item_count': col_info['item_count']
+                            })
+                            # Add children recursively
+                            add_collections_recursive(col_key, 1)
+
+                    return flattened
+
+                # Build library list with collections
+                libraries = []
+
+                # Personal library
+                personal_collections = client.get_collections(since_version=0, group_id=None)
+                personal_items, _ = client.get_top_level_items(since_version=0, group_id=None)
+                libraries.append({
+                    'id': 'personal',
+                    'name': 'Personal Library',
+                    'type': 'user',
+                    'collections': flatten_collections(personal_collections, personal_items)
+                })
+
+                # Group libraries
+                groups = client.get_user_groups()
+                for group in groups:
+                    group_id = str(group['id'])
+                    group_collections = client.get_collections(since_version=0, group_id=group_id)
+                    group_items, _ = client.get_top_level_items(since_version=0, group_id=group_id)
+                    libraries.append({
+                        'id': group_id,
+                        'name': group['data']['name'],
+                        'type': 'group',
+                        'collections': flatten_collections(group_collections, group_items)
+                    })
+
+                context = {
+                    'libraries': libraries,
+                    'connection': connection
+                }
+                return render(request, 'zotero/sync.html', context)
+
+            except Exception as e:
+                logger.error(f"Error fetching Zotero libraries: {str(e)}")
+                messages.error(request, f"Failed to fetch libraries: {str(e)}")
+                return redirect('zotero_settings')
+
+        else:  # POST
+            # Get selected collection keys from form
+            # Format: "library_id:collection_key" or "library_id:ALL" for entire library
+            selected_items = request.POST.getlist('collections')
+
+            if not selected_items:
+                messages.warning(request, "Please select at least one collection to sync")
+                return redirect('zotero_sync')
+
+            # Parse selections into library_config
+            # Format: {'personal': ['col1', 'col2'], 'group_123': ['ALL'], ...}
+            library_config = {}
+            for item in selected_items:
+                lib_id, col_key = item.split(':', 1)
+                if lib_id not in library_config:
+                    library_config[lib_id] = []
+                library_config[lib_id].append(col_key)
+
+            # Trigger background sync task with collection selection
+            task = sync_zotero_library.delay(
+                user_id=request.user.id,
+                library_config=library_config
+            )
+
+            messages.info(request, "Zotero sync started. This may take a few minutes depending on your library size.")
+            logger.info(f"Started Zotero sync for user {request.user.id} with collections: {library_config} (task: {task.id})")
+
+            return redirect('zotero_settings')
 
     except ZoteroConnection.DoesNotExist:
         messages.error(request, "Please connect your Zotero account first")
