@@ -49,7 +49,7 @@ urlpatterns = [
     # Zotero integration URLs
     path('zotero/settings/', zotero_views.zotero_settings, name='zotero_settings'),
     path('zotero/connect/', zotero_views.zotero_connect, name='zotero_connect'),
-    path('zotero/verify/', zotero_views.zotero_verify, name='zotero_verify'),
+    path('zotero/callback/', zotero_views.zotero_callback, name='zotero_callback'),
     path('zotero/disconnect/', zotero_views.zotero_disconnect, name='zotero_disconnect'),
     path('zotero/sync/', zotero_views.zotero_sync, name='zotero_sync'),
     path('zotero/sync/status/', zotero_views.zotero_sync_status, name='zotero_sync_status'),
