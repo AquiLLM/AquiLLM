@@ -90,6 +90,12 @@ class AquillmConfig(AppConfig):
             self.llm_interface = OpenAIInterface(self.openai_client, "gpt-4o")
         elif llm_choice == 'BEDROCK-CLAUDE':
             self.llm_interface = ClaudeInterface(self.async_anthropic_bedrock_client, model_override='arn:aws:bedrock:us-east-1:744423739991:inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0')
+        elif llm_choice == 'GEMMA3':
+            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "ebdm/gemma3-enhanced:12b")
+        elif llm_choice == 'LLAMA3.2':
+            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "llama3.2")
+        elif llm_choice == 'GPT-OSS':
+            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "gpt-oss:120b")
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 

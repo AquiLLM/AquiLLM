@@ -1,3 +1,4 @@
+from os import getenv
 from typing import Optional
 from json import loads, dumps
 from uuid import UUID
@@ -13,7 +14,7 @@ from django.apps import apps
 from pydantic import ValidationError
 from pydantic_core import to_jsonable_python
 import aquillm.llm
-from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, test_function, ToolChoice, llm_tool, ToolResultDict
+from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, test_function, ToolChoice, llm_tool, ToolResultDict, message_to_user
 from aquillm.settings import DEBUG
 
 from aquillm.models import ConversationFile, TextChunk, Collection, CollectionPermission, WSConversation, Document, DocumentChild
@@ -78,7 +79,10 @@ def get_whole_document_func(user: User, chat_ref: ChatRef) -> LLMTool:
         """
         Get the full text of a document. Use when a user asks you to get a full document. Depending on the size of the document, this will not always be possible. 
         """
-        doc_uuid = UUID(doc_id)
+        try:
+            doc_uuid = UUID(doc_id)
+        except Exception as e:
+            return {"exception": f"Invalid document ID: {doc_id}"}
         doc: Optional[DocumentChild] = Document.get_by_id(doc_uuid)
         if doc is None:
             return {"exception": f"Document {doc_id} does not exist!"}
@@ -236,7 +240,7 @@ def get_flat_fielding_func(chat_consumer: 'ChatConsumer') -> LLMTool:
         except Exception as e:
             return {"exception": f"An error occurred during flat-fielding: {str(e)}"}
     return flat_fielding
-    
+
 
 def get_point_source_detection_func(chat_consumer: 'ChatConsumer') -> LLMTool:
     @llm_tool(
@@ -265,7 +269,7 @@ def get_point_source_detection_func(chat_consumer: 'ChatConsumer') -> LLMTool:
                 return {"exception": f"The file does not exist!"}
             if image.conversation != convo:
                 return {"exception": f"The file does not belong to this conversation!"}
-            
+
             image_file = image.file
             data = fits.getdata(image_file.open('rb'))
 
@@ -296,7 +300,8 @@ def get_point_source_detection_func(chat_consumer: 'ChatConsumer') -> LLMTool:
         except Exception as e:
             return {"exception": f"An error occurred during source detection: {str(e)}"}
     return detect_point_sources
-    
+
+
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -347,15 +352,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.user = self.scope['user']
         assert self.user is not None
         await self.__get_all_user_collections()
-        self.tools = [test_function,
+        self.tools = [
                       get_vector_search_func(self.user, self.col_ref),
                       get_more_context_func(self.user),
                       get_document_ids_func(self.user, self.col_ref),
                       get_whole_document_func(self.user, ChatRef(self)),
                       get_search_single_document_func(self.user),
-                      get_sky_subtraction_func(self), 
+                      get_sky_subtraction_func(self),
                       get_flat_fielding_func(self),
                       get_point_source_detection_func(self)]
+        if getenv('LLM_CHOICE') == 'GEMMA3':
+            self.tools.append(message_to_user)
         convo_id = self.scope['url_route']['kwargs']['convo_id']
         self.db_convo = await self.__get_convo(convo_id, self.user)
         if self.db_convo is None:

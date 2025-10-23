@@ -376,11 +376,11 @@ class Document(models.Model):
         #    raise ValidationError("The full text of a document must be at least 100 characters long.")
         
         self.full_text_hash = self.hash_fn(self.full_text)
-        
+
         # TEMPORARY FIX: Skip duplicate check to allow documents through
         # if Document.filter(collection=self.collection, full_text_hash=self.full_text_hash):
         #    raise DuplicateDocumentError(f"Document with title `{self.title}` has the same contents as another document in the same collection.")
-        
+
         is_new = (not (d := Document.get_by_id(doc_id=self.id))) or (self.full_text_hash != d.full_text_hash)
         super().save(*args, **kwargs)
         

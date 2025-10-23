@@ -430,6 +430,20 @@ class ClaudeInterface(LLMInterface):
 
 gpt_enc = encoding_for_model('gpt-4o')
 
+
+@llm_tool(
+    for_whom='user',
+    required=['message'],
+    param_descs={'message': 'The message to send to the user.'}
+)
+def message_to_user(message: str) -> ToolResultDict:
+    """
+    Send a message to the user. This is used by the LLM to communicate with the user.
+    """
+    return {"result": message}
+
+
+
 class OpenAIInterface(LLMInterface):
 
 
@@ -466,7 +480,14 @@ class OpenAIInterface(LLMInterface):
             print("OpenAI SDK Response:")
             pp(response)
         tool_call = response.choices[0].message.tool_calls[0] if response.choices[0].message.tool_calls else None
-        return LLMResponse(text=response.choices[0].message.content,
+        text = response.choices[0].message.content
+        if tool_call and tool_call.function.name == 'message_to_user':
+            # this is a special tool that just sends a message to the user, so we don't need to return it.
+            # this is necessary because local models feel the need to call a tool every time. 
+            tool_call = None
+            text = tool_call.function.arguments['message']
+
+        return LLMResponse(text=text,
                            tool_call={"tool_call_id": tool_call.id,
                                         "tool_call_name": tool_call.function.name,
                                         "tool_call_input": loads(tool_call.function.arguments)} 
