@@ -92,6 +92,19 @@ class UserSettings(models.Model):
     def __str__(self):
         return f"{self.user.username}'s settings"
 
+
+class ZoteroConnection(models.Model):
+    """Stores Zotero OAuth credentials for a user"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='zotero_connection')
+    api_key = models.CharField(max_length=255, help_text="Zotero API key from OAuth")
+    zotero_user_id = models.CharField(max_length=100, help_text="Zotero user ID")
+    last_sync_version = models.IntegerField(default=0, help_text="Last synced version number for incremental sync")
+    connected_at = models.DateTimeField(auto_now_add=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True, help_text="Last time a sync was performed")
+
+    def __str__(self):
+        return f"{self.user.username}'s Zotero connection (User ID: {self.zotero_user_id})"
+
 from .ocr_utils import extract_text_from_image
 
 from django.core.files.storage import default_storage
@@ -272,6 +285,53 @@ def create_chunks(self, doc_id:str): #naive method, just number of characters
             'documentId': str(doc.id),
             'documentName': doc.title,
         })
+
+        # Check if there's an existing document with the same full_text_hash
+        existing_doc_with_same_hash = None
+        for doc_type in DESCENDED_FROM_DOCUMENT:
+            existing_doc_with_same_hash = doc_type.objects.filter(
+                full_text_hash=doc.full_text_hash,
+                ingestion_complete=True
+            ).exclude(id=doc.id).first()
+            if existing_doc_with_same_hash:
+                break
+
+        # If we found a duplicate, copy its chunks instead of regenerating
+        if existing_doc_with_same_hash:
+            logger.info(f"Found duplicate document {existing_doc_with_same_hash.id} with same content hash. Copying chunks...")
+            existing_chunks = TextChunk.objects.filter(doc_id=existing_doc_with_same_hash.id)
+
+            # Delete any existing chunks for this document
+            TextChunk.objects.filter(doc_id=doc.id).delete()
+
+            # Copy chunks from the existing document
+            new_chunks = []
+            for chunk in existing_chunks:
+                new_chunks.append(TextChunk(
+                    content=chunk.content,
+                    start_position=chunk.start_position,
+                    end_position=chunk.end_position,
+                    doc_id=doc.id,
+                    chunk_number=chunk.chunk_number,
+                    embedding=chunk.embedding  # Reuse the same embedding
+                ))
+
+            # Bulk create the copied chunks
+            TextChunk.objects.bulk_create(new_chunks)
+
+            # Mark document as complete
+            doc.ingestion_complete = True
+            doc.save(dont_rechunk=True)
+
+            async_to_sync(channel_layer.group_send)(f'document-ingest-{doc.id}', {
+                'type': 'document.ingest.complete',
+                'complete': True
+            })
+
+            logger.info(f"Copied {len(new_chunks)} chunks from document {existing_doc_with_same_hash.id} to {doc.id}")
+            return
+
+        # No duplicate found, create chunks normally
         chunk_size = apps.get_app_config('aquillm').chunk_size # type: ignore
         overlap = apps.get_app_config('aquillm').chunk_overlap # type: ignore
         chunk_pitch = chunk_size - overlap
@@ -571,12 +631,13 @@ class HandwrittenNotesDocument(Document):
 
 class PDFDocument(Document):
     pdf_file = models.FileField(upload_to= 'pdfs/', max_length=500, validators=[FileExtensionValidator(['pdf'])])
+    zotero_item_key = models.CharField(max_length=100, null=True, blank=True, db_index=True, help_text="Zotero item key to prevent duplicate syncing")
 
-    def save(self, dont_rechunk=False, *args, **kwargs):
-        
+    def save(self, *args, dont_rechunk=False, **kwargs):
+
         if not dont_rechunk:
             self.extract_text()
-        super().save(*args, **kwargs)
+        super().save(*args, dont_rechunk=dont_rechunk, **kwargs)
 
     def extract_text(self):
         text = ""

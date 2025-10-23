@@ -90,6 +90,20 @@ const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
 
   return (
     <div className="p-[30px]">
+      <h2 className="mb-6 text-2xl font-bold">User Settings</h2>
+
+      {/* Zotero Integration Section */}
+      <div className="mb-8 p-6 bg-scheme-shade_3 border border-border-mid_contrast rounded-lg">
+        <h3 className="text-lg font-semibold mb-2">Zotero Integration</h3>
+        <p className="text-text-dimmed mb-4">Connect your Zotero account to sync your research library with AquiLLM</p>
+        <a
+          href="/zotero/settings/"
+          className="inline-block bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-6 rounded transition-colors"
+        >
+          Manage Zotero Connection
+        </a>
+      </div>
+
       <h2 className="mb-4 text-xl font-bold">Select Your Theme</h2>
       {/* Flex container: form on left, description on right */}
       <form onSubmit={handleSubmit} className="flex">

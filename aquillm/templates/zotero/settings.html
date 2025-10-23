@@ -1,0 +1,134 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Zotero Settings - AquiLLM{% endblock %}
+
+{% block content %}
+<div class="flex flex-col items-center justify-center min-h-screen p-8 bg-scheme-shade_1">
+    <div class="w-full max-w-2xl bg-scheme-shade_3 border border-border-mid_contrast rounded-lg shadow-lg p-8">
+        <h1 class="text-3xl font-bold text-text-normal mb-6">Zotero Integration</h1>
+
+        {% if messages %}
+            <div class="mb-6">
+                {% for message in messages %}
+                    <div class="p-4 rounded-lg mb-2 {% if message.tags == 'error' %}bg-red-500 text-white{% elif message.tags == 'success' %}bg-green-500 text-white{% elif message.tags == 'warning' %}bg-yellow-500 text-black{% else %}bg-blue-500 text-white{% endif %}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if connected %}
+            <!-- Connected State -->
+            <div class="mb-8">
+                <div class="flex items-center mb-4">
+                    <svg class="w-8 h-8 text-green-500 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <div>
+                        <h2 class="text-xl font-semibold text-text-normal">Connected to Zotero</h2>
+                        <p class="text-text-dimmed text-sm">User ID: {{ connection.zotero_user_id }}</p>
+                    </div>
+                </div>
+
+                <div class="bg-scheme-shade_5 border border-border-low_contrast rounded-lg p-4 mb-6">
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                            <p class="text-text-dimmed">Connected Since</p>
+                            <p class="text-text-normal font-medium">{{ connection.connected_at|date:"M d, Y" }}</p>
+                        </div>
+                        <div>
+                            <p class="text-text-dimmed">Last Synced</p>
+                            <p class="text-text-normal font-medium">
+                                {% if connection.last_synced_at %}
+                                    {{ connection.last_synced_at|date:"M d, Y g:i A" }}
+                                {% else %}
+                                    Never
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="space-y-3">
+                    <a href="{% url 'zotero_sync' %}" class="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors flex items-center justify-center">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                        Sync from Zotero
+                    </a>
+
+                    <form method="post" action="{% url 'zotero_disconnect' %}" class="inline" onsubmit="return confirm('Are you sure you want to disconnect your Zotero account?');">
+                        {% csrf_token %}
+                        <button type="submit" class="w-full px-6 py-3 bg-scheme-shade_6 hover:bg-scheme-shade_8 text-text-normal font-semibold rounded-lg border border-border-mid_contrast transition-colors">
+                            Disconnect Zotero
+                        </button>
+                    </form>
+                </div>
+
+                <div class="mt-6 p-4 bg-scheme-shade_4 border border-border-low_contrast rounded-lg">
+                    <h3 class="text-sm font-semibold text-text-normal mb-2">About Syncing</h3>
+                    <ul class="text-sm text-text-dimmed space-y-1 list-disc list-inside">
+                        <li>Syncing imports your Zotero collections and PDF attachments</li>
+                        <li>Only new or modified items will be downloaded</li>
+                        <li>Syncing may take a few minutes depending on library size</li>
+                        <li>PDFs will be processed and made searchable automatically</li>
+                    </ul>
+                </div>
+            </div>
+
+        {% else %}
+            <!-- Disconnected State -->
+            <div class="text-center mb-8">
+                <svg class="w-24 h-24 mx-auto mb-4 text-text-dimmed" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                </svg>
+                <h2 class="text-2xl font-semibold text-text-normal mb-2">Connect Your Zotero Library</h2>
+                <p class="text-text-dimmed mb-6">Sync your research papers and PDFs from Zotero to AquiLLM</p>
+
+                <a href="{% url 'zotero_connect' %}" class="inline-flex items-center px-8 py-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition-colors text-lg">
+                    <svg class="w-6 h-6 mr-3" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
+                    </svg>
+                    Connect Zotero Account
+                </a>
+            </div>
+
+            <div class="bg-scheme-shade_4 border border-border-low_contrast rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-text-normal mb-3">What happens when you connect?</h3>
+                <ul class="space-y-2 text-text-dimmed">
+                    <li class="flex items-start">
+                        <svg class="w-5 h-5 mr-2 mt-0.5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                        <span>You'll be redirected to Zotero to authorize AquiLLM</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-5 h-5 mr-2 mt-0.5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                        <span>AquiLLM will request <strong>read-only</strong> access to your library</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-5 h-5 mr-2 mt-0.5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                        <span>After authorization, you can sync your library anytime</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-5 h-5 mr-2 mt-0.5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                        <span>You can disconnect at any time</span>
+                    </li>
+                </ul>
+            </div>
+        {% endif %}
+
+        <div class="mt-6 text-center">
+            <a href="{% url 'index' %}" class="text-text-dimmed hover:text-text-normal transition-colors">
+                ← Back to Home
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,142 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Select Collections to Sync - AquiLLM{% endblock %}
+
+{% block content %}
+<div class="flex flex-col items-center justify-center min-h-screen p-8 bg-scheme-shade_1">
+    <div class="w-full max-w-4xl bg-scheme-shade_3 border border-border-mid_contrast rounded-lg shadow-lg p-8">
+        <h1 class="text-3xl font-bold text-text-normal mb-6">Select Collections to Sync</h1>
+
+        {% if messages %}
+            <div class="mb-6">
+                {% for message in messages %}
+                    <div class="p-4 rounded-lg mb-2 {% if message.tags == 'error' %}bg-red-500 text-white{% elif message.tags == 'success' %}bg-green-500 text-white{% elif message.tags == 'warning' %}bg-yellow-500 text-black{% else %}bg-blue-500 text-white{% endif %}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        <form method="post" action="{% url 'zotero_sync' %}">
+            {% csrf_token %}
+
+            <div class="mb-6">
+                <p class="text-text-dimmed mb-4">Choose which collections you want to import into AquiLLM:</p>
+
+                <div class="space-y-4">
+                    {% for library in libraries %}
+                        <div class="border border-border-mid_contrast rounded-lg p-4 bg-scheme-shade_5">
+                            <!-- Library header with "Select All" checkbox -->
+                            <div class="flex items-center mb-3 pb-3 border-b border-border-low_contrast">
+                                <input
+                                    type="checkbox"
+                                    id="lib_{{ library.id }}_all"
+                                    name="collections"
+                                    value="{{ library.id }}:ALL"
+                                    class="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-3 library-checkbox"
+                                    data-library-id="{{ library.id }}"
+                                >
+                                <label for="lib_{{ library.id }}_all" class="flex-1 cursor-pointer">
+                                    <div class="flex items-center">
+                                        <span class="text-text-normal font-bold text-lg">{{ library.name }}</span>
+                                        {% if library.type == 'user' %}
+                                            <span class="ml-2 px-2 py-0.5 text-xs bg-blue-600 text-white rounded">Personal</span>
+                                        {% else %}
+                                            <span class="ml-2 px-2 py-0.5 text-xs bg-green-600 text-white rounded">Group</span>
+                                        {% endif %}
+                                    </div>
+                                    <span class="text-text-dimmed text-sm">Select all collections in this library</span>
+                                </label>
+                            </div>
+
+                            <!-- Collection tree -->
+                            {% if library.collections %}
+                                <div class="space-y-1">
+                                    {% for collection in library.collections %}
+                                        <div class="collection-item" style="margin-left: {{ collection.depth|add:2 }}rem;">
+                                            <label class="flex items-center py-1 cursor-pointer hover:bg-scheme-shade_6 rounded px-2">
+                                                {% if collection.depth > 0 %}
+                                                    <span class="text-text-dimmed mr-2">└─</span>
+                                                {% endif %}
+                                                <input
+                                                    type="checkbox"
+                                                    name="collections"
+                                                    value="{{ library.id }}:{{ collection.key }}"
+                                                    class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-2 collection-checkbox"
+                                                    data-library-id="{{ library.id }}"
+                                                >
+                                                <span class="text-text-normal flex-1">{{ collection.name }}</span>
+                                                <span class="text-text-dimmed text-sm ml-2">({{ collection.item_count }} item{% if collection.item_count != 1 %}s{% endif %})</span>
+                                            </label>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                <p class="text-text-dimmed text-sm italic ml-8">No collections in this library</p>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="flex gap-3">
+                <button
+                    type="submit"
+                    class="flex-1 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors flex items-center justify-center"
+                >
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                    </svg>
+                    Start Sync
+                </button>
+
+                <a
+                    href="{% url 'zotero_settings' %}"
+                    class="flex-1 px-6 py-3 bg-scheme-shade_6 hover:bg-scheme-shade_8 text-text-normal font-semibold rounded-lg border border-border-mid_contrast transition-colors text-center"
+                >
+                    Cancel
+                </a>
+            </div>
+        </form>
+
+        <div class="mt-6 p-4 bg-scheme-shade_4 border border-border-low_contrast rounded-lg">
+            <h3 class="text-sm font-semibold text-text-normal mb-2">About Syncing</h3>
+            <ul class="text-sm text-text-dimmed space-y-1 list-disc list-inside">
+                <li>Select individual collections or entire libraries</li>
+                <li>Collection hierarchy will be preserved in AquiLLM</li>
+                <li>Empty collections will be skipped automatically</li>
+                <li>Duplicate documents (same content) will reuse existing chunks</li>
+                <li>Only new or modified items since last sync will be downloaded</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Handle "Select All" library checkboxes
+    document.querySelectorAll('.library-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            const libraryId = this.dataset.libraryId;
+            const isChecked = this.checked;
+
+            // Find all collection checkboxes for this library
+            document.querySelectorAll(`.collection-checkbox[data-library-id="${libraryId}"]`).forEach(colCheckbox => {
+                colCheckbox.checked = isChecked;
+            });
+        });
+    });
+
+    // Handle individual collection checkboxes
+    document.querySelectorAll('.collection-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            const libraryId = this.dataset.libraryId;
+            const libraryCheckbox = document.getElementById(`lib_${libraryId}_all`);
+
+            // If any collection is unchecked, uncheck the library "All" checkbox
+            if (!this.checked) {
+                libraryCheckbox.checked = false;
+            }
+        });
+    });
+</script>
+{% endblock %}
