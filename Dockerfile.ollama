@@ -1,0 +1,7 @@
+FROM ollama/ollama
+
+COPY ./deployment/ollama_start.sh /ollama_start.sh
+
+RUN chmod +x ollama_start.sh && ./ollama_start.sh
+
+EXPOSE 11434

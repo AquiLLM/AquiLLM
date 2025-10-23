@@ -117,6 +117,28 @@ services:
       /usr/bin/mc mb aquillm/aquillm;
       exit 0;"
   
+  ollama:
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+    restart: unless-stopped
+    profiles:
+      - ollama
+    env_file:
+      - .env
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1
+    healthcheck:
+      test: ["CMD", "ollama --version && ollama ps || exit 1"]
+      interval: 10s
+      start_period: 10s
+
 volumes:
   postgres_data:
   minio_data:

@@ -9,12 +9,13 @@ class NoDefaultAccounts(DefaultAccountAdapter):
 class RestrictDomains(DefaultSocialAccountAdapter):
     def is_open_for_signup(self, request, sociallogin):
         user = sociallogin.user
+        print(f"ATTEMPTED SIGNUP: {user.email}")
         allowed_domains = getenv("ALLOWED_EMAIL_DOMAINS")
         if allowed_domains is None:
             return False
-        allowed_emails = getenv("ALLOWED_EMAIL_ADDRESSES")
-        if allowed_emails is None:
-            return False
-        return (user.email.split('@')[1] in allowed_domains.split(',') or
+        allowed_emails = getenv("ALLOWED_EMAIL_ADDRESSES", default="")
+        allow = (user.email.split('@')[1] in allowed_domains.split(',') or
                 user.email in allowed_emails.split(",") or 
                 user.email in EmailWhitelist.objects.values_list('email', flat=True))
+        print(f"ALLOWED={allow}")
+        return allow

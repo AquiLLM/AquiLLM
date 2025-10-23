@@ -1,3 +1,4 @@
+from os import getenv
 from typing import Optional
 from json import loads, dumps
 from uuid import UUID
@@ -13,7 +14,7 @@ from django.apps import apps
 from pydantic import ValidationError
 from pydantic_core import to_jsonable_python
 import aquillm.llm
-from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, test_function, ToolChoice, llm_tool, ToolResultDict
+from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, test_function, ToolChoice, llm_tool, ToolResultDict, message_to_user
 from aquillm.settings import DEBUG
 
 from aquillm.models import TextChunk, Collection, CollectionPermission, WSConversation, Document, DocumentChild
@@ -78,7 +79,10 @@ def get_whole_document_func(user: User, chat_ref: ChatRef) -> LLMTool:
         """
         Get the full text of a document. Use when a user asks you to get a full document. Depending on the size of the document, this will not always be possible. 
         """
-        doc_uuid = UUID(doc_id)
+        try:
+            doc_uuid = UUID(doc_id)
+        except Exception as e:
+            return {"exception": f"Invalid document ID: {doc_id}"}
         doc: Optional[DocumentChild] = Document.get_by_id(doc_uuid)
         if doc is None:
             return {"exception": f"Document {doc_id} does not exist!"}
@@ -147,8 +151,6 @@ def get_more_context_func(user: User) -> LLMTool:
 
 
 
-
-
 class ChatConsumer(AsyncWebsocketConsumer):
     llm_if: LLMInterface = apps.get_app_config('aquillm').llm_interface
     db_convo: Optional[WSConversation] = None
@@ -197,12 +199,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.user = self.scope['user']
         assert self.user is not None
         await self.__get_all_user_collections()
-        self.tools = [test_function,
+        self.tools = [
                       get_vector_search_func(self.user, self.col_ref),
                       get_more_context_func(self.user),
                       get_document_ids_func(self.user, self.col_ref),
                       get_whole_document_func(self.user, ChatRef(self)),
                       get_search_single_document_func(self.user)]
+        if getenv('LLM_CHOICE') == 'GEMMA3':
+            self.tools.append(message_to_user)
         convo_id = self.scope['url_route']['kwargs']['convo_id']
         self.db_convo = await self.__get_convo(convo_id, self.user)
         if self.db_convo is None:
