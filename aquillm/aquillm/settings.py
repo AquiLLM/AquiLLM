@@ -248,6 +248,12 @@ CELERY_BROKER_URL = "redis://redis:6379"
 CELERY_RESULT_BACKEND = "redis://redis:6379"
 CELERY_ACCEPT_CONTENT = ['pickle', 'json']
 
+# Zotero Integration Settings
+# OAuth credentials should be set in environment variables:
+# - ZOTERO_CLIENT_KEY: Your Zotero OAuth client key
+# - ZOTERO_CLIENT_SECRET: Your Zotero OAuth client secret
+# Register your app at https://www.zotero.org/oauth/apps
+
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
 os.makedirs(LOGS_DIR, exist_ok=True)
 

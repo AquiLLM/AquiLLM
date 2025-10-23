@@ -92,6 +92,19 @@ class UserSettings(models.Model):
     def __str__(self):
         return f"{self.user.username}'s settings"
 
+
+class ZoteroConnection(models.Model):
+    """Stores Zotero OAuth credentials for a user"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='zotero_connection')
+    api_key = models.CharField(max_length=255, help_text="Zotero API key from OAuth")
+    zotero_user_id = models.CharField(max_length=100, help_text="Zotero user ID")
+    last_sync_version = models.IntegerField(default=0, help_text="Last synced version number for incremental sync")
+    connected_at = models.DateTimeField(auto_now_add=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True, help_text="Last time a sync was performed")
+
+    def __str__(self):
+        return f"{self.user.username}'s Zotero connection (User ID: {self.zotero_user_id})"
+
 from .ocr_utils import extract_text_from_image
 
 from django.core.files.storage import default_storage
@@ -571,6 +584,7 @@ class HandwrittenNotesDocument(Document):
 
 class PDFDocument(Document):
     pdf_file = models.FileField(upload_to= 'pdfs/', max_length=500, validators=[FileExtensionValidator(['pdf'])])
+    zotero_item_key = models.CharField(max_length=100, null=True, blank=True, db_index=True, help_text="Zotero item key to prevent duplicate syncing")
 
     def save(self, dont_rechunk=False, *args, **kwargs):
         
