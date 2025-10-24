@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MessageCircle, Send, ChevronDown, Search, Loader2 } from 'lucide-react';
 import { CircularProgressbar } from 'react-circular-progressbar';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ChatFileUpload, { ProcessedFile } from './ChatFileUpload';
 import formatUrl from '../utils/formatUrl';
 
@@ -448,7 +451,28 @@ const MessageBubble: React.FC<{ message: Message, onRate: (uuid: string | undefi
         )}
         {message.role === 'assistant' && !message.tool_call_input && (
           <div className="prose prose-invert max-w-none compact-prose leading-tight [&>*]:my-1 [&_ol>li>p]:inline">
-            <ReactMarkdown>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                code({ node, inline, className, children, ...props }: any) {
+                  const match = /language-(\w+)/.exec(className || '');
+                  return !inline && match ? (
+                    <SyntaxHighlighter
+                      style={oneDark}
+                      language={match[1]}
+                      PreTag="div"
+                      {...props}
+                    >
+                      {String(children).replace(/\n$/, '')}
+                    </SyntaxHighlighter>
+                  ) : (
+                    <code className={className} {...props}>
+                      {children}
+                    </code>
+                  );
+                },
+              }}
+            >
               {message.content}
             </ReactMarkdown>
           </div>

@@ -472,9 +472,12 @@ class OpenAIInterface(LLMInterface):
     async def get_message(self, *args, **kwargs) -> LLMResponse:
 
         arguments = {"model": self.base_args['model'],
-                    "messages": [{"role": "developer", "content": kwargs.pop('system')}] + kwargs.pop('messages'),
-                     "tools": await self._transform_tools(kwargs.pop('tools')),}
-        
+                    "messages": [{"role": "developer", "content": kwargs.pop('system')}] + kwargs.pop('messages')}
+
+        # Only add tools if they're provided
+        if 'tools' in kwargs:
+            arguments["tools"] = await self._transform_tools(kwargs.pop('tools'))
+
         response = await self.client.chat.completions.create(**arguments)
         if DEBUG:
             print("OpenAI SDK Response:")

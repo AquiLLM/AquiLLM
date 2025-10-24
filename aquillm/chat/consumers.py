@@ -21,6 +21,9 @@ from aquillm.models import ConversationFile, TextChunk, Collection, CollectionPe
 
 from anthropic._exceptions import OverloadedError
 
+import logging
+logger = logging.getLogger(__name__)
+
 import io
 # necessary so that when collections are set inside the consumer, it changes inside the vector_search closure as well. 
 class CollectionsRef:
@@ -342,16 +345,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
     
 
     async def connect(self):
+        logger.debug(f"ChatConsumer.connect() called")
 
         async def send_func(convo: Conversation):
+            logger.debug(f"send_func called in connect()")
             self.convo = convo
             await self.send(text_data=dumps({"conversation": to_jsonable_python(self.convo) }))
             await self.__save()
+            logger.debug(f"send_func completed in connect()")
 
         await self.accept()
+        logger.debug(f"WebSocket accepted")
         self.user = self.scope['user']
         assert self.user is not None
+        logger.debug(f"User: {self.user}")
         await self.__get_all_user_collections()
+        logger.debug(f"Collections loaded: {self.col_ref.collections}")
         self.tools = [
                       get_vector_search_func(self.user, self.col_ref),
                       get_more_context_func(self.user),
@@ -364,33 +373,40 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if getenv('LLM_CHOICE') == 'GEMMA3':
             self.tools.append(message_to_user)
         convo_id = self.scope['url_route']['kwargs']['convo_id']
+        logger.debug(f"Convo ID: {convo_id}")
         self.db_convo = await self.__get_convo(convo_id, self.user)
         if self.db_convo is None:
+            logger.error(f"Invalid conversation ID: {convo_id}")
             self.dead = True
             await self.send('{"exception": "Invalid chat_id"}')
-            
+
             return
         try:
             self.convo = Conversation.model_validate(self.db_convo.convo)
             self.convo.rebind_tools(self.tools)
+            logger.debug(f"About to call llm_if.spin() in connect()")
             await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
-            return 
+            logger.debug(f"llm_if.spin() completed in connect()")
+            return
         except OverloadedError as e:
+            logger.error(f"LLM overloaded: {e}")
             self.dead = True
             await self.send('{"exception": "LLM provider is currently overloaded. Try again later."}')
             return
         except Exception as e:
+            logger.error(f"Exception in connect(): {e}", exc_info=True)
             if DEBUG:
                 raise e
             else:
-                
+
                 await self.send(text_data='{"exception": "A server error has occurred. Try reloading the page"}')
-                
+
                 return
 
 
 
     async def receive(self, text_data):
+        logger.debug(f"ChatConsumer.receive() called with data: {text_data[:100]}...")
 
         @database_sync_to_async
         def _save_files(files: list[ConversationFile]) -> list[ConversationFile]:
@@ -399,13 +415,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return files
 
         async def send_func(convo: Conversation):
+            logger.debug("send_func called in receive()")
             await aclose_old_connections()
             self.convo = convo
             await self.send(text_data=dumps({"conversation": to_jsonable_python(self.convo)}))
             await self.__save()
+            logger.debug("send_func completed in receive()")
 
         async def append(data: dict):
-            
+            logger.debug(f"append() called with collections: {data.get('collections', [])}")
 
             assert self.convo is not None
 
@@ -422,6 +440,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.convo[-1].files = [(file.name, file.id) for file in files]
             self.convo[-1].tool_choice = ToolChoice(type='auto')
             await self.__save()
+            logger.debug("append() completed, message added")
 
         async def rate(data: dict):
             assert self.convo is not None
@@ -433,14 +452,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
             try:
                 data = loads(text_data)
                 action = data.pop('action', None)
+                logger.debug(f"Action: {action}")
                 if action == 'append':
                     await append(data)
                 elif action == 'rate':
                     await rate(data)
                 else:
                     raise ValueError(f'Invalid action "{action}"')
+                logger.debug("About to call llm_if.spin() in receive()")
                 await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
+                logger.debug("llm_if.spin() completed in receive()")
             except Exception as e:
+                logger.error(f"Exception in receive(): {e}", exc_info=True)
                 if DEBUG:
                     raise e
                 else:

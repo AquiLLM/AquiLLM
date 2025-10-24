@@ -20,7 +20,8 @@ services:
         condition: service_healthy
       createbuckets:
         condition: service_completed_successfully
-
+      redis:
+        condition: service_healthy
     volumes:
       - .:/app
     healthcheck:
@@ -55,7 +56,9 @@ services:
           condition: service_completed_successfully
 
   get_certs:
-    image: debian:bookworm-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.certbot
     ports:
       - "80:80"
     env_file:
@@ -64,7 +67,6 @@ services:
       - ./deployment/get_certs.sh:/get_certs.sh
       - certs:/etc/letsencrypt
       - ./deployment/get_certs.cron:/etc/cron.d/get_certs
-    entrypoint: /get_certs.sh
 
   db:
     image: pgvector/pgvector:0.8.0-pg17
