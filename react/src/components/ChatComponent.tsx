@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MessageCircle, Send, ChevronDown, Search, Loader2 } from 'lucide-react';
 import { CircularProgressbar } from 'react-circular-progressbar';
 import ReactMarkdown from 'react-markdown';
-import ChatFileUpload, { ProcessedFile } from './ChatFileUpload';
 import formatUrl from '../utils/formatUrl';
 
 // Define TypeScript interfaces
@@ -50,7 +49,6 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [connectionAttempts, setConnectionAttempts] = useState(0);
   const [showCollections, setShowCollections] = useState(false);
-  const [files, setFiles] = useState<ProcessedFile[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const conversationEndRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
@@ -223,9 +221,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
       action: 'append',
       message: newMessage,
       collections: Array.from(selectedCollections),
-      files: files.map(file => 
-        ({base64: file.base64, 
-         filename: file.name}))
+      files: []
     };
     
     wsRef.current.send(JSON.stringify(payload));
@@ -288,11 +284,11 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
       )}
 
       {/* Conversation Container - Takes all available space and scrolls */}
-      <div 
+      <div
         ref={messageContainerRef}
         className="flex-grow overflow-y-auto w-full px-[32px] pt-[32px]"
       >
-        <div className="w-[80%] mx-auto gap-[32px] flex flex-col">
+        <div className="w-[98%] md:w-[96%] lg:w-[94%] xl:w-[92%] 2xl:max-w-[1800px] mx-auto gap-[32px] flex flex-col">
           {conversation.messages.map((message, index) => (
             <MessageBubble 
               key={`msg-${index}`} 
@@ -310,40 +306,39 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
         </div>
       </div>
 
-      {/* Fixed bottom section for usage bar and input */}
+      {/* Fixed bottom section for input */}
       <div className="sticky bottom-0 w-full bg-scheme-shade_2 border-t border-border-mid_contrast mt-[16px]">
-        {/* Usage Bar */}
-        <div className="w-[80%] bg-gray-shade_1 mx-auto flex gap-4 justify-center pt-3">
-          <div className="text-center mt-1 text-sm text-gray-700">
-            {conversation.usage ? `${conversation.usage.toLocaleString()} / ${MAX_USAGE.toLocaleString()}` : `0 / ${MAX_USAGE.toLocaleString()}`}
-          </div>
-          <div style={{ width: '35px', height: '35px' }}>
-            <CircularProgressbar value={conversation.usage || 0} 
-                                 maxValue={MAX_USAGE}
-                                 strokeWidth={50}
-                                 styles= {{
-                                  path: {
-                                    stroke: getColor(conversation.usage ? conversation.usage / MAX_USAGE : 0),
-                                  }
-                                 }}
-                                 text="" />
-          </div>
-        </div>
-
         {/* Message Input Section */}
-        <div className="w-[80%] mx-auto mb-[32px]">
-          <ChatFileUpload onFileUpload={setFiles} />
-          <div className="flex items-center justify-center mt-[16px] w-full gap-[32px]">
+        <div className="w-[98%] md:w-[96%] lg:w-[94%] xl:w-[92%] 2xl:max-w-[1800px] mx-auto mb-[32px] mt-[16px]">
+          <div className="flex items-center justify-center w-full gap-[32px]">
+            {/* Token Usage */}
+            <div className="flex flex-col items-center gap-1">
+              <div style={{ width: '35px', height: '35px' }}>
+                <CircularProgressbar value={conversation.usage || 0}
+                                     maxValue={MAX_USAGE}
+                                     strokeWidth={50}
+                                     styles= {{
+                                      path: {
+                                        stroke: getColor(conversation.usage ? conversation.usage / MAX_USAGE : 0),
+                                      }
+                                     }}
+                                     text="" />
+              </div>
+              <div className="text-center text-xs text-gray-700 whitespace-nowrap">
+                {conversation.usage ? `${conversation.usage.toLocaleString()} / ${MAX_USAGE.toLocaleString()}` : `0 / ${MAX_USAGE.toLocaleString()}`}
+              </div>
+            </div>
+
             <div className="flex justify-start flex-col gap-[8px] bg-scheme-shade_3 py-2 px-4 rounded-[32px] w-full">
               <div className="flex flex-grow items-center w-full">
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   id="message-input"
                   className="px-2 py-2 mr-[16px] flex-grow w-full rounded-lg bg-scheme-shade_3 focus:border-0 disabled:cursor-not-allowed placeholder:text-text-lower_contrast text-text-normal element-border"
                   placeholder="Type your message here..."
                   value={messageInput}
                   onChange={(e) => setMessageInput(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                  onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
                   disabled={inputDisabled}
                   autoComplete="off"
                 />
@@ -360,47 +355,65 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
 
             {/* Collections Section */}
             <div className="">
-              <details 
-                className="w-full text-text-normal" 
-                open={showCollections}
-                onToggle={() => setShowCollections(!showCollections)}
+              <button
+                onClick={() => setShowCollections(true)}
+                className="cursor-pointer w-[max-content] px-[16px] py-[2px] text-text-normal bg-accent h-[36px] rounded-[18px] flex items-center"
               >
-                <summary className="cursor-pointer w-[max-content] px-[16px] py-[2px] text-text-normal bg-accent h-[36px] rounded-[18px] flex items-center">
-                  <span className="text-white">Select Collections</span>
-                  <span className="ml-2 text-sm text-white">
-                    {selectedCollections.size ? `(${selectedCollections.size} selected)` : ''}
-                  </span>
-                </summary>
-                <div className="search-container mb-2">
-                  <input
-                    type="text"
-                    placeholder="Search..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="text-sm h-[36px] w-full p-2 border rounded-lg text-text-normal bg-scheme-shade_3 border-border-mid_contrast mt-2"
-                  />
-                </div>
-                <div className="mt-2 p-2 border rounded-lg bg-scheme-shade_3 border-border-mid_contrast max-h-[160px] overflow-y-auto">
-                  {filteredCollections.map(collection => (
-                    <div key={collection.id} className="flex items-center p-2 hover:bg-scheme-shade_4 rounded">
-                      <input
-                        type="checkbox"
-                        id={`collection-${collection.id}`}
-                        checked={selectedCollections.has(collection.id)}
-                        onChange={() => handleCollectionToggle(collection.id)}
-                        className="h-4 w-4 text-accent-light rounded border-gray-300 focus:ring-blue-500"
-                      />
-                      <label htmlFor={`collection-${collection.id}`} className="ml-2 text-sm text-accent-light">
-                        {collection.name}
-                      </label>
-                    </div>
-                  ))}
-                </div>
-              </details>
+                <span className="text-white">Select Collections</span>
+                <span className="ml-2 text-sm text-white">
+                  {selectedCollections.size ? `(${selectedCollections.size} selected)` : ''}
+                </span>
+              </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Collections Modal */}
+      {showCollections && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" onClick={() => setShowCollections(false)}>
+          <div className="bg-scheme-shade_2 rounded-lg p-6 w-[90%] max-w-md max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-text-normal">Select Collections</h2>
+              <button
+                onClick={() => setShowCollections(false)}
+                className="text-text-normal hover:text-text-slightly_less_contrast"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="search-container mb-4">
+              <input
+                type="text"
+                placeholder="Search..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="text-sm h-[36px] w-full p-2 border rounded-lg text-text-normal bg-scheme-shade_3 border-border-mid_contrast"
+              />
+            </div>
+
+            <div className="p-2 border rounded-lg bg-scheme-shade_3 border-border-mid_contrast max-h-[400px] overflow-y-auto">
+              {filteredCollections.map(collection => (
+                <div key={collection.id} className="flex items-center p-2 hover:bg-scheme-shade_4 rounded">
+                  <input
+                    type="checkbox"
+                    id={`collection-${collection.id}`}
+                    checked={selectedCollections.has(collection.id)}
+                    onChange={() => handleCollectionToggle(collection.id)}
+                    className="h-4 w-4 text-accent-light rounded border-gray-300 focus:ring-blue-500"
+                  />
+                  <label htmlFor={`collection-${collection.id}`} className="ml-2 text-sm text-accent-light cursor-pointer">
+                    {collection.name}
+                  </label>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
