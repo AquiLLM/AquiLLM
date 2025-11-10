@@ -58,7 +58,7 @@ const IngestionDashboard: React.FC<IngestionDashboardProps> = ({ wsUrl, onNewDoc
   return (
     <div className="space-y-6">
       {monitors.length === 0 && <div>No documents being ingested</div>}
-      {monitors.map((monitor) => (
+      {[...monitors].reverse().map((monitor) => (
         <PDFIngestionMonitor key={monitor.documentId} {...monitor} />
       ))}
     </div>
