@@ -132,24 +132,11 @@ const CollectionSettingsMenu: React.FC<CollectionSettingsMenuProps> = ({
               onDelete(collection);
               setIsOpen(false);
             }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-start',
-              gap: '0.5rem',
-              width: '100%',
-              textAlign: 'left',
-              padding: '0.5rem 1rem',
-              border: 'none',
-              backgroundColor: 'transparent',
-              color: '#EC3D3D',
-              cursor: 'pointer',
-              borderRadius: '0.25rem',
-            }}
+            className="flex items-center justify-start gap-2 w-full text-left py-2 px-4 border-none bg-transparent text-red hover:text-red-dark cursor-pointer rounded"
           >
-            
+
             <svg width="15" height="17" viewBox="0 0 10 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M0.5 3H1.5M1.5 3H9.5M1.5 3V10C1.5 10.2652 1.60536 10.5196 1.79289 10.7071C1.98043 10.8946 2.23478 11 2.5 11H7.5C7.76522 11 8.01957 10.8946 8.20711 10.7071C8.39464 10.5196 8.5 10.2652 8.5 10V3M3 3V2C3 1.73478 3.10536 1.48043 3.29289 1.29289C3.48043 1.10536 3.73478 1 4 1H6C6.26522 1 6.51957 1.10536 6.70711 1.29289C6.89464 1.48043 7 1.73478 7 2V3M4 5.5V8.5M6 5.5V8.5" stroke="#EC3D3D" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M0.5 3H1.5M1.5 3H9.5M1.5 3V10C1.5 10.2652 1.60536 10.5196 1.79289 10.7071C1.98043 10.8946 2.23478 11 2.5 11H7.5C7.76522 11 8.01957 10.8946 8.20711 10.7071C8.39464 10.5196 8.5 10.2652 8.5 10V3M3 3V2C3 1.73478 3.10536 1.48043 3.29289 1.29289C3.48043 1.10536 3.73478 1 4 1H6C6.26522 1 6.51957 1.10536 6.70711 1.29289C6.89464 1.48043 7 1.73478 7 2V3M4 5.5V8.5M6 5.5V8.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
 
             Delete

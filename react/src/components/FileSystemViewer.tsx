@@ -201,14 +201,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
     if (mode === 'select' && item.type === 'collection') {
       return (
         <button
-          style={{
-            padding: '0.25rem 0.5rem',
-            backgroundColor: '#4b5563',
-            color: 'white',
-            borderRadius: '0.25rem',
-            border: 'none',
-            cursor: 'pointer'
-          }}
+          className="py-1 px-2 bg-scheme-shade_6 hover:bg-scheme-shade_7 text-text-normal rounded border-none cursor-pointer"
           onClick={(e) => {
             e.stopPropagation();
             onSelectCollection?.(item);
@@ -224,7 +217,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
   };
 
   return (
-    <div style={{ backgroundColor: '#292929', borderRadius: '36px' }} className='border border-border-mid_contrast overflow-hidden'>
+    <div className='bg-scheme-shade_4 rounded-[36px] border border-border-mid_contrast overflow-hidden'>
       {/* Top Bar: Search, etc. */}
       <div style={{ display: 'flex', justifyContent: 'space-between'}} className='bg-scheme-shade_4 p-[16px] border-b border-b-scheme-shade_6'>
         <div className="flex gap-[16px]">
@@ -319,7 +312,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
             </span>
             
             <button
-              className="bg-blue-600 hover:bg-blue-700 text-white py-1 px-3 mr-2 rounded flex items-center transition-colors duration-200"
+              className="bg-accent hover:bg-accent-dark text-text-normal py-1 px-3 mr-2 rounded flex items-center transition-colors duration-200"
               onClick={() => onBatchMove?.(selectedItems)}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -379,21 +372,17 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
                       handleToggleSelectAll();
                     }}
                     onClick={(e) => e.stopPropagation()}
+                    className={`ml-4 w-4 h-4 rounded cursor-pointer relative border ${
+                      allDisplayedSelected && filteredItems.length > 0
+                        ? 'bg-accent border-accent after:content-["✓"] after:absolute after:text-text-normal after:text-xs after:top-[-1px] after:left-[3px]'
+                        : 'bg-scheme-shade_5 border-border-mid_contrast'
+                    }`}
                     style={{
                       zIndex: 10,
-                      appearance: 'none',         // Standard
-                      WebkitAppearance: 'none',   // Chrome, Safari
-                      MozAppearance: 'none',      // Firefox
-                      backgroundColor: allDisplayedSelected && filteredItems.length > 0 ? "#3182ce" : "#555555",
-                      border: "1px solid #777777",
-                      borderRadius: "4px",
-                      width: '16px',
-                      height: '16px',
-                      marginLeft: "1rem",
-                      cursor: 'pointer',
-                      position: 'relative',
+                      appearance: 'none',
+                      WebkitAppearance: 'none',
+                      MozAppearance: 'none',
                     }}
-                    className={allDisplayedSelected && filteredItems.length > 0 ? "after:content-['✓'] after:absolute after:text-white after:text-xs after:top-[-1px] after:left-[3px]" : ""}
                   />
                 </div>
               </th>
@@ -411,10 +400,11 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
                   <tr
                       key={item.id}
                       onContextMenu={(e) => handleContextMenu(e, item)}
-                      className={`h-[40px] max-h-[40px] hover:bg-scheme-shade_3 transition-colors border border-border-mid_contrast ${typeToTextColorClass[item.type as keyof typeof typeToTextColorClass] || ''}`}
+                      className={`h-[40px] max-h-[40px] hover:bg-scheme-shade_3 transition-colors border border-border-mid_contrast ${
+                        isSelected ? 'bg-accent bg-opacity-10' : 'bg-transparent'
+                      } ${typeToTextColorClass[item.type as keyof typeof typeToTextColorClass] || ''}`}
                       style={{
-                          cursor: 'pointer',                      
-                          backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'transparent', // Highlight selected rows
+                          cursor: 'pointer',
                       }}
                       onClick={() => {
                           onOpenItem?.(item);
@@ -443,19 +433,16 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
                         >
                           <input
                               type="checkbox"
+                              className={`ml-4 w-4 h-4 rounded cursor-pointer relative border ${
+                                isSelected
+                                  ? 'bg-accent border-accent'
+                                  : 'bg-scheme-shade_5 border-border-mid_contrast'
+                              }`}
                               style={{
                                 zIndex: 10,
-                                appearance: 'none',         // Standard
-                                WebkitAppearance: 'none',   // Chrome, Safari
-                                MozAppearance: 'none',      // Firefox
-                                backgroundColor: isSelected ? "#3182ce" : "#555555",
-                                border: "1px solid #777777",
-                                borderRadius: "4px",
-                                width: '16px',
-                                height: '16px',
-                                marginLeft: "1rem",
-                                cursor: 'pointer',
-                                position: 'relative',
+                                appearance: 'none',
+                                WebkitAppearance: 'none',
+                                MozAppearance: 'none',
                               }}
                               checked={isSelected}
                               onChange={(e) => {

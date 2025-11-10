@@ -278,7 +278,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
     <div className="flex flex-col h-full">
       {/* Exception Alert */}
       {exception && (
-        <div className="sticky top-0 z-50 font-mono text-red-700 p-4 mb-4 bg-red-100 rounded">
+        <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded">
           {exception}
         </div>
       )}
@@ -299,7 +299,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
           
           {shouldShowSpinner(conversation.messages) && (
             <div className="flex justify-center my-4">
-              <div className="animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-4 border-accent border-t-transparent"></div>
             </div>
           )}
           <div ref={conversationEndRef} />
@@ -324,7 +324,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
                                      }}
                                      text="" />
               </div>
-              <div className="text-center text-xs text-gray-700 whitespace-nowrap">
+              <div className="text-center text-xs text-text-low_contrast whitespace-nowrap">
                 {conversation.usage ? `${conversation.usage.toLocaleString()} / ${MAX_USAGE.toLocaleString()}` : `0 / ${MAX_USAGE.toLocaleString()}`}
               </div>
             </div>
@@ -342,13 +342,13 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
                   disabled={inputDisabled}
                   autoComplete="off"
                 />
-                <button 
+                <button
                   onClick={sendMessage}
                   className="p-4 bg-accent text-text-normal rounded-[24px] disabled:cursor-not-allowed mr-[-8px]"
                   title="Send Message"
                   disabled={inputDisabled}
                 >
-                  <Send size={16} className="text-white"/>
+                  <Send size={16} className="text-text-normal"/>
                 </button>
               </div>
             </div>
@@ -359,8 +359,8 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
                 onClick={() => setShowCollections(true)}
                 className="cursor-pointer w-[max-content] px-[16px] py-[2px] text-text-normal bg-accent h-[36px] rounded-[18px] flex items-center"
               >
-                <span className="text-white">Select Collections</span>
-                <span className="ml-2 text-sm text-white">
+                <span className="text-text-normal">Select Collections</span>
+                <span className="ml-2 text-sm text-text-normal">
                   {selectedCollections.size ? `(${selectedCollections.size} selected)` : ''}
                 </span>
               </button>
@@ -460,7 +460,7 @@ const MessageBubble: React.FC<{ message: Message, onRate: (uuid: string | undefi
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
         )}
         {message.role === 'assistant' && !message.tool_call_input && (
-          <div className="prose prose-invert max-w-none compact-prose leading-tight [&>*]:my-1 [&_ol>li>p]:inline">
+          <div className="prose max-w-none compact-prose leading-tight [&>*]:my-1 [&_ol>li>p]:inline">
             <ReactMarkdown>
               {message.content}
             </ReactMarkdown>
@@ -518,8 +518,8 @@ const MessageBubble: React.FC<{ message: Message, onRate: (uuid: string | undefi
           <div className="mt-2">
             <ul className="list-disc list-inside">
               {message.files.map(([filename, id], index) => (
-                <li key={index} className="text-sm text-text-non_user_text_bubble">
-                  <a href={formatUrl(window.apiUrls.api_conversation_file, {convo_file_id: id})} target="_blank" rel="noopener noreferrer">
+                <li key={index} className={`text-sm ${message.role === 'user' ? 'text-text-normal' : 'text-text-non_user_text_bubble'}`}>
+                  <a href={formatUrl(window.apiUrls.api_conversation_file, {convo_file_id: id})} target="_blank" rel="noopener noreferrer" className="hover:underline">
                   {filename}
                   </a>
                 </li>
@@ -554,7 +554,7 @@ const Collapsible: React.FC<{
       <summary className={`cursor-pointer ${summaryTextColor}`}>
         {summary}
       </summary>
-      <div className="mt-1.5 pl-2.5 border-l-2 border-gray-300">
+      <div className="mt-1.5 pl-2.5 border-l-2 border-border-mid_contrast">
         {content}
       </div>
     </details>
@@ -566,8 +566,8 @@ const ToolResult: React.FC<{ result: any, level?: number }> = ({ result, level =
     if (Array.isArray(result)) {
       return (
         <details open={level < 1} className="mt-1">
-          <summary className="cursor-pointer font-mono hover:text-blue-600">Array</summary>
-          <div className="pl-4 border-l-2 border-gray-300 mt-1 text-text-non_user_text_bubble">
+          <summary className="cursor-pointer font-mono hover:text-accent">Array</summary>
+          <div className="pl-4 border-l-2 border-border-mid_contrast mt-1 text-text-non_user_text_bubble">
             {result.map((item, index) => (
               <ToolResult key={index} result={item} level={level + 1} />
             ))}
@@ -577,11 +577,11 @@ const ToolResult: React.FC<{ result: any, level?: number }> = ({ result, level =
     } else {
       return (
         <div>
-          {Object.entries(result).map(([key, value], index) => 
+          {Object.entries(result).map(([key, value], index) =>
             typeof value === 'object' && value !== null ? (
               <details key={index} open={level < 1} className="mt-1">
-                <summary className="cursor-pointer font-mono hover:text-blue-600">{key}</summary>
-                <div className="pl-4 border-l-2 border-gray-300 mt-1 text-text-non_user_text_bubble">
+                <summary className="cursor-pointer font-mono hover:text-accent">{key}</summary>
+                <div className="pl-4 border-l-2 border-border-mid_contrast mt-1 text-text-non_user_text_bubble">
                   <ToolResult result={value} level={level + 1} />
                 </div>
               </details>
@@ -618,7 +618,7 @@ const RatingButtons: React.FC<{
       {emojis.map((emoji, i) => (
         <button
           key={i}
-          className={`p-1 rounded hover:bg-gray-200 ${rating === i + 1 ? 'bg-gray-200' : ''} transition-colors`}
+          className={`p-1 rounded hover:bg-scheme-shade_6 ${rating === i + 1 ? 'bg-scheme-shade_6' : ''} transition-colors`}
           onClick={() => onRate(i + 1)}
         >
           {emoji}

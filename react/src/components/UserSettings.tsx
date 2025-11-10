@@ -157,7 +157,7 @@ const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
           <button
             type="submit"
             data-testid="save-theme-settings"
-            className="bg-blue-600 text-white py-2 px-4 rounded"
+            className="bg-accent hover:bg-accent-dark text-text-normal py-2 px-4 rounded"
           >
             Save Settings
           </button>

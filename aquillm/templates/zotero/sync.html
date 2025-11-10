@@ -10,7 +10,7 @@
         {% if messages %}
             <div class="mb-6">
                 {% for message in messages %}
-                    <div class="p-4 rounded-lg mb-2 {% if message.tags == 'error' %}bg-red-500 text-white{% elif message.tags == 'success' %}bg-green-500 text-white{% elif message.tags == 'warning' %}bg-yellow-500 text-black{% else %}bg-blue-500 text-white{% endif %}">
+                    <div class="p-4 rounded-lg mb-2 {% if message.tags == 'error' %}bg-red text-text-normal{% elif message.tags == 'success' %}bg-green text-text-normal{% elif message.tags == 'warning' %}bg-secondary_accent text-text-normal{% else %}bg-accent text-text-normal{% endif %}">
                         {{ message }}
                     </div>
                 {% endfor %}
@@ -33,14 +33,14 @@
                                     id="lib_{{ library.id }}_all"
                                     name="collections"
                                     value="{{ library.id }}:ALL"
-                                    class="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-3 library-checkbox"
+                                    class="w-5 h-5 text-accent border-border-mid_contrast rounded focus:ring-accent mr-3 library-checkbox"
                                     data-library-id="{{ library.id }}"
                                 >
                                 <label for="lib_{{ library.id }}_all" class="flex-1 cursor-pointer">
                                     <div class="flex items-center">
                                         <span class="text-text-normal font-bold text-lg">{{ library.name }}</span>
                                         {% if library.type == 'user' %}
-                                            <span class="ml-2 px-2 py-0.5 text-xs bg-blue-600 text-white rounded">Personal</span>
+                                            <span class="ml-2 px-2 py-0.5 text-xs bg-accent text-text-normal rounded">Personal</span>
                                         {% else %}
                                             <span class="ml-2 px-2 py-0.5 text-xs bg-green-600 text-white rounded">Group</span>
                                         {% endif %}
@@ -62,7 +62,7 @@
                                                     type="checkbox"
                                                     name="collections"
                                                     value="{{ library.id }}:{{ collection.key }}"
-                                                    class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-2 collection-checkbox"
+                                                    class="w-4 h-4 text-accent border-border-mid_contrast rounded focus:ring-accent mr-2 collection-checkbox"
                                                     data-library-id="{{ library.id }}"
                                                 >
                                                 <span class="text-text-normal flex-1">{{ collection.name }}</span>
@@ -82,7 +82,7 @@
             <div class="flex gap-3">
                 <button
                     type="submit"
-                    class="flex-1 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors flex items-center justify-center"
+                    class="flex-1 px-6 py-3 bg-accent hover:bg-accent-dark text-text-normal font-semibold rounded-lg transition-colors flex items-center justify-center"
                 >
                     <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>

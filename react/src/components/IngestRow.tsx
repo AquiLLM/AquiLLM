@@ -617,7 +617,7 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
   return (
     <div className="space-y-4">
       {rows.map((row, index) => (
-        <div key={row.id} className="bg-gray-shade_1 p-4 rounded-lg shadow">
+        <div key={row.id} className="bg-scheme-shade_1 p-4 rounded-lg shadow">
           <IngestRow
             row={row}
             onDocTypeChange={updateRowDocType}
@@ -639,7 +639,7 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
       ))}
       <button
         onClick={addRow}
-        className="bg-scheme-shade_6 text-normal px-4 py-2 rounded-[20px] hover:bg-blue-dark transition-colors mr-[16px]"
+        className="bg-scheme-shade_6 text-text-normal px-4 py-2 rounded-[20px] hover:bg-scheme-shade_7 transition-colors mr-[16px]"
       >
         Add Another
       </button>
