@@ -63,9 +63,38 @@
         </form>
     </div>
 
+    <!-- Semi-transparent floating logo (shown when sidebar is hidden) -->
+    <a href="{% url 'index' %}" id="floating-logo" class="fixed top-4 right-4 z-50 hidden transition-opacity hover:opacity-100">
+        <svg width="48" height="57" viewBox="0 0 48 57" fill="none" xmlns="http://www.w3.org/2000/svg" class="opacity-30">
+            <g clip-path="url(#clip0_42_32)">
+            <path d="M46.3775 56.5333C47.0216 56.5333 47.5439 56.0056 47.5439 55.3546C47.5439 54.7036 47.0216 54.1759 46.3775 54.1759C45.7333 54.1759 45.2111 54.7036 45.2111 55.3546C45.2111 56.0056 45.7333 56.5333 46.3775 56.5333Z" fill="var(--color-contrast)"/>
+            <path d="M43.4601 54.697C44.2962 54.697 44.974 54.012 44.974 53.167C44.974 52.3221 44.2962 51.6371 43.4601 51.6371C42.6239 51.6371 41.9461 52.3221 41.9461 53.167C41.9461 54.012 42.6239 54.697 43.4601 54.697Z" fill="var(--color-contrast)"/>
+            <path d="M46.3775 55.3546L43.4601 53.167" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M31.0638 34.1019C31.9227 34.1019 32.619 33.3982 32.619 32.5302C32.619 31.6623 31.9227 30.9586 31.0638 30.9586C30.2049 30.9586 29.5086 31.6623 29.5086 32.5302C29.5086 33.3982 30.2049 34.1019 31.0638 34.1019Z" fill="var(--color-contrast)"/>
+            <path d="M43.4601 53.1671L31.0638 32.5303" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M43.3496 6.19438C44.3288 6.19438 45.1227 5.39213 45.1227 4.40249C45.1227 3.41285 44.3288 2.6106 43.3496 2.6106C42.3703 2.6106 41.5764 3.41285 41.5764 4.40249C41.5764 5.39213 42.3703 6.19438 43.3496 6.19438Z" fill="var(--color-contrast)"/>
+            <path d="M31.0638 32.5302L43.3496 4.40247" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M17.798 15.032C18.8652 15.032 19.7303 14.1577 19.7303 13.0793C19.7303 12.0009 18.8652 11.1267 17.798 11.1267C16.7309 11.1267 15.8658 12.0009 15.8658 13.0793C15.8658 14.1577 16.7309 15.032 17.798 15.032Z" fill="var(--color-contrast)"/>
+            <path d="M43.3496 4.40247L17.798 13.0793" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M14.91 20.7189C16.6148 20.7189 17.9968 19.3222 17.9968 17.5994C17.9968 15.8766 16.6148 14.48 14.91 14.48C13.2052 14.48 11.8232 15.8766 11.8232 17.5994C11.8232 19.3222 13.2052 20.7189 14.91 20.7189Z" fill="var(--color-contrast)"/>
+            <path d="M17.798 13.0793L14.91 17.5994" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M11.9766 25.3327C12.7217 25.3327 13.3256 24.7224 13.3256 23.9695C13.3256 23.2166 12.7217 22.6062 11.9766 22.6062C11.2316 22.6062 10.6276 23.2166 10.6276 23.9695C10.6276 24.7224 11.2316 25.3327 11.9766 25.3327Z" fill="var(--color-contrast)"/>
+            <path d="M14.91 17.5994L11.9766 23.9694" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M1.6259 40.0229C2.52385 40.0229 3.25179 39.2873 3.25179 38.3799C3.25179 37.4724 2.52385 36.7368 1.6259 36.7368C0.727938 36.7368 0 37.4724 0 38.3799C0 39.2873 0.727938 40.0229 1.6259 40.0229Z" fill="var(--color-contrast)"/>
+            <path d="M11.9766 23.9694L1.62589 38.3799" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M13.7297 39.2813C14.4227 39.2813 14.9845 38.7136 14.9845 38.0133C14.9845 37.3129 14.4227 36.7452 13.7297 36.7452C13.0367 36.7452 12.4749 37.3129 12.4749 38.0133C12.4749 38.7136 13.0367 39.2813 13.7297 39.2813Z" fill="var(--color-contrast)"/>
+            <path d="M1.62589 38.3799L13.7297 38.0132" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M13.7297 38.0132L31.0638 32.5303" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M46.8336 2.35744C47.4778 2.35744 48 1.82971 48 1.17872C48 0.527731 47.4778 0 46.8336 0C46.1894 0 45.6672 0.527731 45.6672 1.17872C45.6672 1.82971 46.1894 2.35744 46.8336 2.35744Z" fill="var(--color-contrast)"/>
+            <path d="M46.8336 1.17871L43.3495 4.40247" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+            <path d="M9.34055 13.2751V13.1985L9.33845 13.122L9.33424 13.0497L9.33003 12.9774L9.31531 12.8371L9.29847 12.7053L9.27322 12.5777L9.24587 12.4565L9.21432 12.3417L9.17645 12.2333L9.13647 12.1312L9.09019 12.0334L9.0439 11.942L8.9913 11.8548L8.9366 11.774L8.8798 11.6975L8.81878 11.6273L8.75567 11.5614L8.69255 11.4998L8.62522 11.4445L8.55579 11.3935L8.48426 11.3467L8.41273 11.3042L8.3412 11.2659L8.26545 11.2319L8.19182 11.2021L8.11608 11.1745L8.04033 11.1532L7.9646 11.1341L7.88885 11.1192L7.81312 11.1086L7.73738 11.1001L7.66374 11.0958L7.5901 11.0937L7.57959 11.3276C8.61681 11.3276 8.61681 12.7159 8.61681 13.5408C8.61681 13.9321 8.61681 14.5465 8.63785 14.7272C7.71634 15.5415 6.90844 15.6585 6.48976 15.6585C5.86069 15.6585 5.54721 15.1822 5.54721 14.504C5.54721 13.9852 5.81861 12.8414 6.15524 12.3013C6.64755 11.5274 7.21351 11.3276 7.57959 11.3276L7.5901 11.0937C6.15524 11.0937 4.77087 12.6096 4.77087 14.1021C4.77087 15.0865 5.39994 15.8923 6.46872 15.8923C7.12934 15.8923 7.88465 15.6478 8.67992 15.0015C8.81668 15.5628 9.16172 15.8923 9.6351 15.8923C10.1905 15.8923 10.5145 15.3098 10.5145 15.1397C10.5145 15.0653 10.4514 15.0334 10.3883 15.0334C10.3147 15.0334 10.2831 15.0653 10.2515 15.1397C10.0643 15.6585 9.68769 15.6585 9.66455 15.6585C9.34055 15.6585 9.34055 14.8335 9.34055 14.5784C9.34055 14.3552 9.34055 14.336 9.44575 14.2085C10.4304 12.9583 10.6513 11.7294 10.6513 11.7188C10.6513 11.6975 10.6408 11.6125 10.525 11.6125C10.4199 11.6125 10.4199 11.6443 10.3673 11.8357C10.18 12.5033 9.83286 13.307 9.34055 13.9321V13.2751Z" fill="var(--color-contrast)"/>
+            </g>
+        </svg>
+    </a>
+
     <div class="flex flex-col max-h-screen h-screen" id="wrapper">
         <!-- Nav bar -->
-        <nav class="bg-scheme-shade_4 h-[80px] text-text-normal flex-shrink-0 element-border">
+        <nav id="main-nav" class="bg-scheme-shade_4 h-[80px] text-text-normal flex-shrink-0 element-border transition-all">
             <div class="mx-auto flex justify-between items-center max-w-full h-full">
                 <!-- <button class="bg-deep-secondary my-2 hover:bg-lighter-secondary px-3 py-1 rounded-lg" id="menu-toggle">
                     <img id="menu-open-icon" class="h-6 hidden" src="{% static 'images/latex-implies.svg' %}" alt="Open Menu" class="">
@@ -241,22 +270,33 @@
 
     menuToggle.addEventListener("click", function(e) {
         e.preventDefault();
+        const mainNav = document.getElementById("main-nav");
+        const floatingLogo = document.getElementById("floating-logo");
+
         sidebar.classList.toggle("ml-[-260px]");
         menuToggle.classList.toggle("bg-accent");
         menuToggle.classList.toggle("pl-[24px]");
-        
+
         if (sidebar.classList.contains("ml-[-260px]")) {
+            // Hide nav and show floating logo
+            mainNav.classList.add("mt-[-80px]", "h-0", "overflow-hidden");
+            floatingLogo.classList.remove("hidden");
+
             setTimeout(() => {
                 menuToggle.classList.remove("hover:bg-scheme-shade_5");
                 menuToggle.classList.add("hover:bg-accent-light");
                 menuToggle.style.transform = "translateX(52px)";
             }, 100);
         } else {
+            // Show nav and hide floating logo
+            mainNav.classList.remove("mt-[-80px]", "h-0", "overflow-hidden");
+            floatingLogo.classList.add("hidden");
+
             menuToggle.style.transform = "translateX(0px)";
             menuToggle.classList.remove("hover:bg-accent-light");
             menuToggle.classList.add("hover:bg-scheme-shade_5");
         }
-        
+
         // Save the sidebar and conversation dropdown state in localStorage
         localStorage.setItem("sidebarClosed", sidebar.classList.contains("ml-[-260px]"));
     });
@@ -321,9 +361,15 @@
     
         if (sidebarClosed === "true") {
             // Temporarily disable transitions
+            const mainNav = document.getElementById("main-nav");
+            const floatingLogo = document.getElementById("floating-logo");
+
             sidebar.style.transition = "none";
+            mainNav.style.transition = "none";
 
             sidebar.classList.add("ml-[-260px]");
+            mainNav.classList.add("mt-[-80px]", "h-0", "overflow-hidden");
+            floatingLogo.classList.remove("hidden");
 
             menuToggle.style.transform = "translateX(52px)";
             menuToggle.classList.add("bg-accent");
@@ -334,10 +380,17 @@
             // Re-enable transitions after a short delay (50ms seems to work well)
             setTimeout(() => {
                 sidebar.style.transition = "";
+                mainNav.style.transition = "";
             }, 50);
 
         } else {
+            const mainNav = document.getElementById("main-nav");
+            const floatingLogo = document.getElementById("floating-logo");
+
             sidebar.classList.remove("ml-[-260px]");
+            mainNav.classList.remove("mt-[-80px]", "h-0", "overflow-hidden");
+            floatingLogo.classList.add("hidden");
+
             menuToggle.style.transform = "translateX(0px)";
             menuToggle.classList.remove("bg-accent");
             menuToggle.classList.remove("pl-[24px]");
