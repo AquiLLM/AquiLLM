@@ -65,19 +65,19 @@ const PDFIngestionMonitor: React.FC<PDFIngestionMonitorProps> = ({ documentName,
       {/* Progress Section */}
       <div className="space-y-2">
         <a
-          className="font-medium text-blue-600 underline"
+          className="font-medium text-accent underline"
           href={formatUrl(window.pageUrls.document, { doc_id: documentId })}
         >
           {documentName}
         </a>
         <div className="flex items-center gap-2">
           {/* Terminal icon that triggers the modal */}
-          <button onClick={() => setShowModal(true)} className="hover:text-blue-400">
+          <button onClick={() => setShowModal(true)} className="hover:text-accent">
             <Terminal size={18} />
           </button>
-          <div className="flex-grow bg-gray-200 rounded-full h-5">
+          <div className="flex-grow bg-scheme-shade_7 rounded-full h-5">
             <div
-              className="bg-blue-600 h-5 rounded-full transition-all duration-300 ease-in-out"
+              className="bg-accent h-5 rounded-full transition-all duration-300 ease-in-out"
               style={{ width: `${progress}%` }}
             ></div>
           </div>
@@ -94,7 +94,7 @@ const PDFIngestionMonitor: React.FC<PDFIngestionMonitorProps> = ({ documentName,
             onClick={() => setShowModal(false)}
           ></div>
           {/* Modal Content */}
-          <div className="bg-gray-900 text-gray-100 p-4 rounded-lg shadow-lg z-10 w-11/12 max-w-3xl h-[40vh] overflow-y-auto">
+          <div className="bg-scheme-shade_3 text-text-normal p-4 rounded-lg shadow-lg z-10 w-11/12 max-w-3xl h-[40vh] overflow-y-auto">
             <div className="flex justify-between">
               <div className="flex font-mono">
                 <Terminal size={18} className="mr-6" />
@@ -103,14 +103,14 @@ const PDFIngestionMonitor: React.FC<PDFIngestionMonitorProps> = ({ documentName,
 
               <button
                 onClick={() => setShowModal(false)}
-                className="text-gray-400 hover:text-gray-200 text-xl"
+                className="text-text-lower_contrast hover:text-text-normal text-xl"
               >
                 <X />
               </button>
             </div>
             <div className="font-mono text-sm space-y-1">
               {messages.map((message, index) => (
-                <div key={index} className="text-gray-300">
+                <div key={index} className="text-text-low_contrast">
                   {message}
                 </div>
               ))}

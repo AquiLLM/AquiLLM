@@ -46,109 +46,37 @@ const CreateCollectionModal: React.FC<CreateCollectionModalProps> = ({ isOpen, o
     setName('');
   };
 
-  const modalStyles = {
-    overlay: {
-      position: 'fixed' as const,
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.75)',
-      backdropFilter: 'blur(10px)',
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center',
-      zIndex: 1000,
-    },
-    content: {
-      backgroundColor: '#333333',
-      padding: '1.5rem',
-      borderRadius: '32px',
-      border: '1px solid #777777',
-      width: '100%',
-      maxWidth: '400px',
-      position: 'relative' as const,
-      boxShadow: '0 0px 10px rgba(0, 0, 0, 0.5)',
-    },
-    title: {
-      fontSize: '1.5rem',
-      fontWeight: 'bold',
-      marginBottom: '1.5rem',
-    },
-    form: {
-      display: 'flex',
-      flexDirection: 'column' as const,
-      gap: '1rem',
-    },
-    label: {
-      display: 'block',
-      marginBottom: '0.5rem',
-    },
-    input: {
-      width: '100%',
-      padding: '0.75rem',
-      backgound: '#444444',
-      border: '1px solid #777777',
-      borderRadius: '0.375rem',
-      fontSize: '1rem',
-      color: '#eeeeee',
-    },
-    buttonContainer: {
-      display: 'flex',
-      justifyContent: 'flex-end',
-      gap: '0.75rem',
-      marginTop: '1rem',
-    },
-    button: {
-      padding: '0.5rem 1rem',
-      borderRadius: '0.375rem',
-      fontSize: '0.875rem',
-      fontWeight: 500,
-      cursor: 'pointer',
-    },
-    cancelButton: {
-      backgroundColor: '#666666',
-      color: '#eeeeee',
-      border: 'none',
-    },
-    submitButton: {
-      backgroundColor: '#1C79D8',
-      color: '#eeeeee',
-      border: 'none',
-    }
-  };
 
   return (
-    <div style={modalStyles.overlay}>
-      <div style={modalStyles.content}>
-        <h3 style={modalStyles.title}>Create New Collection</h3>
-        <form onSubmit={handleSubmit} style={modalStyles.form}>
+    <div className="fixed inset-0 bg-black bg-opacity-75 backdrop-blur-[10px] flex justify-center items-center z-[1000]">
+      <div className="bg-scheme-shade_3 p-6 rounded-[32px] border border-border-mid_contrast w-full max-w-[400px] relative shadow-lg">
+        <h3 className="text-2xl font-bold mb-6 text-text-normal">Create New Collection</h3>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <label htmlFor="collectionName" style={modalStyles.label}>
+            <label htmlFor="collectionName" className="block mb-2 text-text-low_contrast">
               Collection Name
             </label>
             <input
               id="collectionName"
               type="text"
               value={name}
-              className="bg-scheme-shade_4 border border-border-high_contrast rounded-md p-2 text-gray-shade_1"
+              className="w-full p-3 bg-scheme-shade_4 border border-border-mid_contrast rounded-md text-base text-text-normal focus:outline-none focus:ring-2 focus:ring-accent"
               onChange={(e) => setName(e.target.value)}
-              style={modalStyles.input}
               placeholder="Enter collection name"
               autoFocus
             />
           </div>
-          <div style={modalStyles.buttonContainer}>
+          <div className="flex justify-end gap-3 mt-4">
             <button
               type="button"
               onClick={onClose}
-              style={{ ...modalStyles.button, ...modalStyles.cancelButton }}
+              className="py-2 px-4 rounded bg-scheme-shade_6 hover:bg-scheme-shade_7 text-text-normal text-sm font-medium cursor-pointer border-none"
             >
               Cancel
             </button>
             <button
               type="submit"
-              style={{ ...modalStyles.button, ...modalStyles.submitButton }}
+              className="py-2 px-4 rounded bg-accent hover:bg-accent-dark text-text-normal text-sm font-medium cursor-pointer border-none"
             >
               Create
             </button>

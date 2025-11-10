@@ -497,14 +497,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
       <div style={{ display: 'flex', alignItems: 'end', justifyContent: 'center' }} className='mb-[32px] px-[40px]'>
         <button
           onClick={handleBack}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            color: '#9ca3af',
-          }}
+          className="bg-transparent border-none cursor-pointer flex items-center text-text-lower_contrast"
         >
           ← Back
         </button>
@@ -544,16 +537,16 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
                 {crumb.id !== null ? (
                   <a 
                     href={formatUrl(window.pageUrls.collection, {col_id: crumb.id})}
-                    className={`ml-1 text-sm ${index === breadcrumbs.length - 1 
-                      ? 'text-blue-500 font-medium' 
-                      : 'text-text-slightly_less_contrast hover:text-blue-400'}`}
+                    className={`ml-1 text-sm ${index === breadcrumbs.length - 1
+                      ? 'text-accent font-medium'
+                      : 'text-text-slightly_less_contrast hover:text-accent'}`}
                   >
                     {crumb.name}
                   </a>
                 ) : (
-                  <a 
+                  <a
                     href={window.pageUrls.user_collections}
-                    className="ml-1 text-sm text-text-slightly_less_contrast hover:text-blue-400"
+                    className="ml-1 text-sm text-text-slightly_less_contrast hover:text-accent"
                   >
                     {crumb.name}
                   </a>
@@ -566,7 +559,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
 
       {/* Permission Source Indicator */}
       {permissionSource && !permissionSource.direct && permissionSource.source_collection_name && (
-        <div className="mb-4 p-3 bg-blue-600 bg-opacity-15 text-blue-300 rounded-md flex items-center">
+        <div className="mb-4 p-3 bg-accent bg-opacity-15 text-accent-light rounded-md flex items-center">
           <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>

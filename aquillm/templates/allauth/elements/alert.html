@@ -1,6 +1,6 @@
 {% load allauth %}
 <div role="alert"
-     class="p-4 mb-4 text-sm {% if attrs.level == "error" %}bg-yellow-500 text-white{% else %}bg-blue-500 text-white{% endif %}">
+     class="p-4 mb-4 text-sm {% if attrs.level == "error" %}bg-secondary_accent text-text-normal{% else %}bg-accent text-text-normal{% endif %}">
     {% slot message %}
     {% endslot %}
 </div>

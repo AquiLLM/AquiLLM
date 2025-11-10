@@ -288,7 +288,7 @@ const CollectionsPage: React.FC = () => {
             <h1 className='text-2xl font-bold'>My Collections</h1>
             <button
               onClick={handleOpenCreateModal}
-              className='bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded'
+              className='bg-accent hover:bg-accent-dark text-text-normal px-4 py-2 rounded'
             >
               New Collection
             </button>
