@@ -1,6 +1,5 @@
 from django import forms
-from .models import Collection, CollectionPermission, PDFDocument, HandwrittenNotesDocument
-from django.core.exceptions import ValidationError
+from .models import Collection, CollectionPermission
 from django.contrib.auth import get_user_model
 
 User = get_user_model()

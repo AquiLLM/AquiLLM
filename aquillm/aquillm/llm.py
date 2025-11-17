@@ -1,20 +1,15 @@
-from typing import Callable, Any, get_type_hints, Protocol, Optional, Literal, override, List, Dict, TypeAliasType
+from typing import Callable, Any, get_type_hints, Optional, Literal, override, List, Dict, TypeAliasType
 from pydantic import BaseModel, model_validator, validate_call, Field
-from types import NoneType, GenericAlias
+from types import GenericAlias
 import inspect
 from functools import wraps, partial
 from abc import ABC, abstractmethod
-from pprint import pformat
-from copy import copy
 from concurrent.futures import ThreadPoolExecutor
 
-from anthropic._exceptions import OverloadedError
 from aquillm.settings import DEBUG
 from django.apps import apps
 
-from asgiref.sync import sync_to_async
 
-from django.core import signing
 from json import loads
 
 from tiktoken import encoding_for_model
@@ -45,7 +40,7 @@ class LLMTool(BaseModel):
 
 
 @validate_call
-def llm_tool(for_whom: Literal['user', 'assistant'], description: Optional[str] = None, param_descs: dict[str, str] = {}, required: list[str] = []) -> Callable[..., LLMTool]:
+def llm_tool(for_whom: Literal['user', 'assistant'], description: Optional[str] = None, param_descs: dict[str, str] | None = None, required: list[str] | None = None) -> Callable[..., LLMTool]:
     """
     Decorator to convert a function into an LLM-compatible tool with runtime type checking.
     
@@ -54,6 +49,8 @@ def llm_tool(for_whom: Literal['user', 'assistant'], description: Optional[str] 
         param_descs: Dictionary of parameter descriptions
         required: List of required parameter names
     """
+    param_descs = dict() if param_descs is None else param_descs
+    required = list() if required is None else required
     @validate_call
     def decorator(func: Callable[..., ToolResultDict]) -> LLMTool:
         # First apply typechecking
@@ -87,7 +84,7 @@ def llm_tool(for_whom: Literal['user', 'assistant'], description: Optional[str] 
                 bool: "boolean"
             }
             if isinstance(t, GenericAlias):
-                if t.__origin__ != list or len(t.__args__) != 1 or t.__args__[0] not in allowed_primitives.keys():
+                if t.__origin__ is not list or len(t.__args__) != 1 or t.__args__[0] not in allowed_primitives.keys():
                     raise TypeError("Only lists of primitive types are supported for tool call containers")
                 return {"type": "array", "items": translate_type(t.__args__[0])}
             return {"type": allowed_primitives[t]}
@@ -251,7 +248,7 @@ class Conversation(BaseModel):
         def isUser(m: LLM_Message):
             return isinstance(m, UserMessage) or (isinstance(m, ToolMessage) and m.for_whom == 'assistant')
 
-        for a, b in zip(data.messages, data.messages[1:]):
+        for a, b in zip(data.messages, data.messages[1:], strict=False):
             if isinstance(a, AssistantMessage) and isinstance(b, AssistantMessage):
                 raise ValueError("Conversation has adjacent assistant messages")
             if isUser(a) and isUser(b):

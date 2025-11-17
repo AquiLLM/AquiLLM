@@ -1,12 +1,7 @@
-from typing import Awaitable
 from channels.generic.websocket import AsyncWebsocketConsumer
-from channels.auth import AuthMiddlewareStack
-from channels.db import database_sync_to_async, aclose_old_connections
+from channels.db import database_sync_to_async
 
-from django.contrib.auth.models import User
-from django.apps import apps
 from json import dumps
-from aquillm.settings import DEBUG
 from aquillm.models import DESCENDED_FROM_DOCUMENT
 from functools import reduce
 import logging
@@ -41,7 +36,7 @@ class IngestionDashboardConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def __get_in_progress(self, user):
         querysets = [t.objects.filter(ingested_by=user, ingestion_complete=False).order_by('ingestion_date') for t in DESCENDED_FROM_DOCUMENT]    
-        return reduce(lambda l,r : list(l) + list(r), querysets)
+        return reduce(lambda left, right : list(left) + list(right), querysets)
     
     async def connect(self):
         self.user = self.scope.get('user')

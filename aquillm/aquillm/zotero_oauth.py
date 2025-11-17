@@ -23,7 +23,7 @@ class ZoteroOAuthClient:
     AUTHORIZE_URL = "https://www.zotero.org/oauth/authorize"
     ACCESS_TOKEN_URL = "https://www.zotero.org/oauth/access"
 
-    def __init__(self, client_key: str = None, client_secret: str = None):
+    def __init__(self, client_key: str | None = None, client_secret: str | None = None):
         """
         Initialize OAuth client with credentials from environment or parameters.
 
@@ -40,7 +40,7 @@ class ZoteroOAuthClient:
                 "or passed as parameters. Register your app at https://www.zotero.org/oauth/apps"
             )
 
-    def get_authorization_url(self, callback_url: str, permissions: Dict[str, str] = None) -> Tuple[str, str, str]:
+    def get_authorization_url(self, callback_url: str, permissions: Dict[str, str] | None = None) -> Tuple[str, str, str]:
         """
         Step 1 & 2: Get request token and build authorization URL.
 

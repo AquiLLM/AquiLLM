@@ -17,12 +17,11 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
-from django.contrib.auth import views as auth_views
 from debug_toolbar.toolbar import debug_toolbar_urls
 
 from chat import views as chat_views
 from chat.views import urlpatterns as chat_urlpatterns
-from . import views, api_views
+from . import views
 from .views import urlpatterns as page_urlpatterns
 from .settings import DEBUG
 from .api_views import urlpatterns as api_urlpatterns

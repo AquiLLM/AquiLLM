@@ -1,12 +1,10 @@
 import base64
 import json
 import os
-import configparser
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 import logging
 from dotenv import load_dotenv
 import google.generativeai as genai
-from django.conf import settings
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 import uuid
@@ -80,23 +78,23 @@ def extract_text_from_image(image_input, convert_to_latex=False) -> Dict[str, An
             # Path to a file
             with open(image_input, "rb") as f:
                 file_content = f.read()
-            file_name = os.path.basename(image_input)
+            _ = os.path.basename(image_input)
         
         elif isinstance(image_input, bytes):
             # Direct bytes content
             file_content = image_input
-            file_name = f"image_{uuid.uuid4().hex[:8]}"
+            _ = f"image_{uuid.uuid4().hex[:8]}"
             
         elif hasattr(image_input, 'read'):
             # File-like object
             if hasattr(image_input, 'tell'):
-                position = image_input.tell()
+                _ = image_input.tell()
             
             file_content = image_input.read()
             
             # No need to reset position as the caller should handle this if needed
             
-            file_name = getattr(image_input, 'name', f"image_{uuid.uuid4().hex[:8]}")
+            _ = getattr(image_input, 'name', f"image_{uuid.uuid4().hex[:8]}")
             
         else:
             raise ValueError(f"Unsupported image_input type: {type(image_input)}")
@@ -104,7 +102,7 @@ def extract_text_from_image(image_input, convert_to_latex=False) -> Dict[str, An
         encoded_image = base64.b64encode(file_content).decode('utf-8')
         
     except Exception as e:
-        raise ValueError(f"Could not process image file: {str(e)}")
+        raise ValueError(f"Could not process image file: {str(e)}") from e
     
     try:
         api_key = os.getenv('GEMINI_API_KEY')
@@ -260,7 +258,7 @@ def extract_text_from_image(image_input, convert_to_latex=False) -> Dict[str, An
         return result
             
     except Exception as e:
-        raise ValueError(f"OCR processing failed: {str(e)}")
+        raise ValueError(f"OCR processing failed: {str(e)}") from e
         
 def get_gemini_cost_stats():
     # Import here to avoid circular import

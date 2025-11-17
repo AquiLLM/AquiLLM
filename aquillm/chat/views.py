@@ -13,7 +13,7 @@ from django.urls import path
 def new_ws_convo(request):
     convo = WSConversation(owner=request.user)
     convo.save()
-    return redirect('ws_convo', convo_id=convo.id)
+    return redirect('ws_convo', convo_id=convo.id) # type: ignore
 
 @require_http_methods(['GET'])
 @login_required

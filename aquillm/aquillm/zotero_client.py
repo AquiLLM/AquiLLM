@@ -2,7 +2,7 @@
 Zotero API client for syncing library data
 """
 import requests
-from typing import List, Dict, Optional, BinaryIO
+from typing import List, Dict, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class ZoteroAPIClient:
             'Zotero-API-Version': self.API_VERSION
         })
 
-    def _get(self, endpoint: str, params: Dict = None) -> requests.Response:
+    def _get(self, endpoint: str, params: Dict | None = None) -> requests.Response:
         """
         Make a GET request to the Zotero API.
 
@@ -50,7 +50,7 @@ class ZoteroAPIClient:
             response = self.session.get(url, params=params)
             response.raise_for_status()
             return response
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException as e: # type: ignore
             logger.error(f"Zotero API request failed: {url} - {str(e)}")
             raise
 
@@ -72,7 +72,7 @@ class ZoteroAPIClient:
             logger.error(f"Error fetching Zotero groups: {str(e)}")
             raise
 
-    def get_collections(self, since_version: int = 0, group_id: str = None) -> List[Dict]:
+    def get_collections(self, since_version: int = 0, group_id: str | None = None) -> List[Dict]:
         """
         Fetch all collections from the user's library or a group library.
 
@@ -102,7 +102,7 @@ class ZoteroAPIClient:
             logger.error(f"Error fetching Zotero collections: {str(e)}")
             raise
 
-    def get_items(self, since_version: int = 0, collection_key: str = None, group_id: str = None) -> tuple[List[Dict], int]:
+    def get_items(self, since_version: int = 0, collection_key: str | None = None, group_id: str | None = None) -> tuple[List[Dict], int]:
         """
         Fetch items from the user's library or a group library.
 
@@ -143,7 +143,7 @@ class ZoteroAPIClient:
             logger.error(f"Error fetching Zotero items: {str(e)}")
             raise
 
-    def get_top_level_items(self, since_version: int = 0, group_id: str = None) -> tuple[List[Dict], int]:
+    def get_top_level_items(self, since_version: int = 0, group_id: str | None = None) -> tuple[List[Dict], int]:
         """
         Fetch only top-level items (excludes notes, attachments, etc.).
 
@@ -175,7 +175,7 @@ class ZoteroAPIClient:
             logger.error(f"Error fetching top-level items: {str(e)}")
             raise
 
-    def get_item_children(self, item_key: str, group_id: str = None) -> List[Dict]:
+    def get_item_children(self, item_key: str, group_id: str | None = None) -> List[Dict]:
         """
         Get child items (notes, attachments) for a specific item.
 
@@ -200,7 +200,7 @@ class ZoteroAPIClient:
             logger.error(f"Error fetching children for item {item_key}: {str(e)}")
             raise
 
-    def download_file(self, item_key: str, group_id: str = None) -> Optional[bytes]:
+    def download_file(self, item_key: str, group_id: str | None = None) -> Optional[bytes]:
         """
         Download an attached file (PDF, etc.) from Zotero.
 
@@ -229,7 +229,7 @@ class ZoteroAPIClient:
             else:
                 response.raise_for_status()
                 return None
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException as e: # type: ignore
             logger.error(f"Error downloading file for item {item_key}: {str(e)}")
             return None
 
@@ -249,7 +249,7 @@ class ZoteroAPIClient:
             response = self._get(endpoint)
             fulltext_data = response.json()
             return fulltext_data.get('content', '')
-        except requests.exceptions.HTTPError as e:
+        except requests.exceptions.HTTPError as e: # type: ignore
             if e.response.status_code == 404:
                 logger.info(f"No fulltext available for item {item_key}")
                 return None
@@ -273,7 +273,7 @@ class ZoteroAPIClient:
         try:
             response = self._get(endpoint)
             return response.json()
-        except requests.exceptions.HTTPError as e:
+        except requests.exceptions.HTTPError as e: # type: ignore
             if e.response.status_code == 404:
                 logger.warning(f"Collection {collection_key} not found")
                 return None

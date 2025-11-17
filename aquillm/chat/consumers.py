@@ -2,19 +2,16 @@ from os import getenv
 from typing import Optional
 from json import loads, dumps
 from uuid import UUID
-from base64 import b64decode, b64encode
+from base64 import b64decode
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import AsyncWebsocketConsumer
-from channels.auth import AuthMiddlewareStack
 from channels.db import database_sync_to_async, aclose_old_connections
 from django.core.files.base import ContentFile
 from django.contrib.auth.models import User
 from django.apps import apps
 
-from pydantic import ValidationError
 from pydantic_core import to_jsonable_python
-import aquillm.llm
-from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, test_function, ToolChoice, llm_tool, ToolResultDict, message_to_user
+from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, ToolChoice, llm_tool, ToolResultDict, message_to_user
 from aquillm.settings import DEBUG
 
 from aquillm.models import ConversationFile, TextChunk, Collection, CollectionPermission, WSConversation, Document, DocumentChild
@@ -22,9 +19,10 @@ from aquillm.models import ConversationFile, TextChunk, Collection, CollectionPe
 from anthropic._exceptions import OverloadedError
 
 import logging
+import io
+
 logger = logging.getLogger(__name__)
 
-import io
 # necessary so that when collections are set inside the consumer, it changes inside the vector_search closure as well. 
 class CollectionsRef:
     def __init__(self, collections: list[int]):
@@ -84,7 +82,7 @@ def get_whole_document_func(user: User, chat_ref: ChatRef) -> LLMTool:
         """
         try:
             doc_uuid = UUID(doc_id)
-        except Exception as e:
+        except Exception:
             return {"exception": f"Invalid document ID: {doc_id}"}
         doc: Optional[DocumentChild] = Document.get_by_id(doc_uuid)
         if doc is None:
@@ -137,7 +135,7 @@ def get_more_context_func(user: User) -> LLMTool:
         Use this when a search returned something relevant, but it seemed like the information was cut off.
         """
         if adjacent_chunks < 1 or adjacent_chunks > 10:
-            return {"exception": f"Invalid value for adjacent_chunks!"}
+            return {"exception": "Invalid value for adjacent_chunks!"}
         central_chunk = TextChunk.objects.filter(id=chunk_id).first()
         if central_chunk is None:
             return {"exception": f"Text chunk {chunk_id} does not exist!"}
@@ -172,15 +170,15 @@ def get_sky_subtraction_func(chat_consumer: 'ChatConsumer') -> LLMTool:
             object = ConversationFile.objects.filter(id=object_id).first()
             sky = ConversationFile.objects.filter(id=sky_id).first()
             if object is None or sky is None:
-                return {"exception": f"One or more files do not exist!"}
+                return {"exception": "One or more files do not exist!"}
             if object.conversation != convo or sky.conversation != convo:
-                return {"exception": f"One or more files do not belong to this conversation!"}
+                return {"exception": "One or more files do not belong to this conversation!"}
             object_file = object.file
             sky_file = sky.file
             object_data = fits.getdata(object_file.open('rb'))
             sky_data = fits.getdata(sky_file.open('rb'))
             if object_data.shape != sky_data.shape:
-                return {"exception": f"Wrong dimensions! The object and sky files must have the same dimensions."}
+                return {"exception": "Wrong dimensions! The object and sky files must have the same dimensions."}
             result = object_data - sky_data
             result_io = io.BytesIO()
             fits.writeto(result_io, result, overwrite=True)
@@ -188,7 +186,7 @@ def get_sky_subtraction_func(chat_consumer: 'ChatConsumer') -> LLMTool:
             result_file = ContentFile(result_io.read(), name=f"{object_file.name[:-5]}_sky_subtracted.fits")
             result_conversation_file = ConversationFile(file=result_file, conversation=convo, name=f"{object_file.name[:-5]}_sky_subtracted.fits")
             result_conversation_file.save()
-            return {"result": f"Sky subtracted!", 'files': [(result_conversation_file.name, result_conversation_file.id)]}
+            return {"result": "Sky subtracted!", 'files': [(result_conversation_file.name, result_conversation_file.id)]}
         except Exception as e:
             return {"exception": f"An error occurred while subtracting the sky: {str(e)}"}
     return sky_subtraction
@@ -215,15 +213,15 @@ def get_flat_fielding_func(chat_consumer: 'ChatConsumer') -> LLMTool:
             science = ConversationFile.objects.filter(id=science_id).first()
             flat = ConversationFile.objects.filter(id=flat_id).first()
             if science is None or flat is None:
-                return {"exception": f"One or more files do not exist!"}
+                return {"exception": "One or more files do not exist!"}
             if science.conversation != convo or flat.conversation != convo:
-                return {"exception": f"One or more files do not belong to this conversation!"}
+                return {"exception": "One or more files do not belong to this conversation!"}
             science_file = science.file
             flat_file = flat.file
             science_data = fits.getdata(science_file.open('rb'))
             flat_data = fits.getdata(flat_file.open('rb'))
             if science_data.shape != flat_data.shape:
-                return {"exception": f"Wrong dimensions! Science and flat-field images must have the same shape."}
+                return {"exception": "Wrong dimensions! Science and flat-field images must have the same shape."}
             # Avoid division by zero
             if (flat_data == 0).any():
                 return {"exception": "Flat field image contains zero values, cannot safely divide."}
@@ -263,15 +261,14 @@ def get_point_source_detection_func(chat_consumer: 'ChatConsumer') -> LLMTool:
         from astropy.io import fits
         from astropy.stats import sigma_clipped_stats
         from photutils.detection import DAOStarFinder
-        import pandas as pd
 
         try:
             convo = chat_consumer.db_convo
             image = ConversationFile.objects.filter(id=image_id).first()
             if image is None:
-                return {"exception": f"The file does not exist!"}
+                return {"exception": "The file does not exist!"}
             if image.conversation != convo:
-                return {"exception": f"The file does not belong to this conversation!"}
+                return {"exception": "The file does not belong to this conversation!"}
 
             image_file = image.file
             data = fits.getdata(image_file.open('rb'))
@@ -345,17 +342,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
     
 
     async def connect(self):
-        logger.debug(f"ChatConsumer.connect() called")
+        logger.debug("ChatConsumer.connect() called")
 
         async def send_func(convo: Conversation):
-            logger.debug(f"send_func called in connect()")
+            logger.debug("send_func called in connect()")
             self.convo = convo
             await self.send(text_data=dumps({"conversation": to_jsonable_python(self.convo) }))
             await self.__save()
-            logger.debug(f"send_func completed in connect()")
+            logger.debug("send_func completed in connect()")
 
         await self.accept()
-        logger.debug(f"WebSocket accepted")
+        logger.debug("WebSocket accepted")
         self.user = self.scope['user']
         assert self.user is not None
         logger.debug(f"User: {self.user}")
@@ -384,9 +381,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             self.convo = Conversation.model_validate(self.db_convo.convo)
             self.convo.rebind_tools(self.tools)
-            logger.debug(f"About to call llm_if.spin() in connect()")
+            logger.debug("About to call llm_if.spin() in connect()")
             await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
-            logger.debug(f"llm_if.spin() completed in connect()")
+            logger.debug("llm_if.spin() completed in connect()")
             return
         except OverloadedError as e:
             logger.error(f"LLM overloaded: {e}")

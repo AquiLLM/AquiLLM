@@ -1,16 +1,13 @@
 from django.apps import AppConfig
 
-from django.template import Engine, Context
+from django.template import Engine
 import cohere
 import openai
 import anthropic
-import google.generativeai as genai
 from os import getenv
-from typing import TypedDict
 
 
 from .llm import LLMInterface, ClaudeInterface, OpenAIInterface
-from .settings import DEBUG
 RAG_PROMPT_STRING = """
 <context>
 RAG Search Results:

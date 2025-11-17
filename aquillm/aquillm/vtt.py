@@ -1,8 +1,7 @@
 import re
 from dataclasses import dataclass
 from typing import List, Optional
-from datetime import datetime, timedelta
-from functools import reduce
+from datetime import timedelta
 
 @dataclass
 class Caption:
@@ -58,7 +57,6 @@ def parse_content(text: str) -> tuple[Optional[str], str]:
 
 def parse(file) -> List[Caption]:
     captions = []
-    current_caption = None
 
     lines = [line.decode('UTF-8').strip() for line in file.readlines()]
     # Skip WEBVTT header
@@ -152,15 +150,15 @@ def chunk(captions: List[Caption], chunk_size: int) -> List[List[Caption]]:
         return []
     
     # making each element in captions a list of captions containing only one member
-    captions = [[c,] for c in captions]
+    captions_nested = [[c,] for c in captions]
     
     chunked = []
-    current = captions[0]
+    current = captions_nested[0]
 
-    for next_caption in captions[1:]:
-        total_length = sum(len(c.text) for c in current + next_caption)
+    for next_caption in captions_nested[1:]:
+        total_length = sum(len(c.text) for c in current + next_caption) 
         if  total_length < chunk_size:
-            current = current + next_caption
+            current = current + next_caption 
         else:
             chunked.append(current)
             current = next_caption

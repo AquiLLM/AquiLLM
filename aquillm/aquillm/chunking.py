@@ -1,9 +1,7 @@
 from google import genai
 from google.genai import types as genai_types
-from json import dumps, loads
-from pypdf import PdfReader
-from pprint import pp
-from pydantic import BaseModel, TypeAdapter
+from json import dumps
+from pydantic import BaseModel
 from typing import Optional
 from os import getenv
 from pdf2image import convert_from_path

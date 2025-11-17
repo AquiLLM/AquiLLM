@@ -12,5 +12,5 @@ npx tailwindcss -o /app/aquillm/aquillm/static/index.css
 
 cd /app/aquillm
 
-./manage.py collectstatic --noinput
-exec python -m uvicorn aquillm.asgi:application --host 0.0.0.0 --port ${PORT:-8080}
+uv run manage.py collectstatic --noinput
+exec uv run -m uvicorn aquillm.asgi:application --host 0.0.0.0 --port ${PORT:-8080}

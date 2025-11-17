@@ -1,12 +1,9 @@
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable
 from django.db import models, transaction
-from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.postgres.fields import ArrayField
 from pgvector.django import VectorField, L2Distance, HnswIndex
 from django.apps import apps
 from django.core.exceptions import ValidationError, ObjectDoesNotExist
-from django.db.models import Q
 
 from tenacity import retry, wait_exponential
 import uuid
@@ -19,15 +16,10 @@ import functools
 # for hashing full_text of documents to ensure unique contents
 import hashlib
 
-from django.template import Context
-from django.core.serializers.json import DjangoJSONEncoder
-import json
 import logging
-from django.db.models.query import QuerySet
-from typing import  List, Type, Tuple
+from typing import  List
 import time
 
-from django.core.exceptions import ValidationError
 from django.contrib.postgres.search import TrigramSimilarity
 from django.core.validators import FileExtensionValidator
 import concurrent.futures
@@ -36,11 +28,8 @@ from django.db import DatabaseError
 from django.db.models import Case, When
 from django.utils import timezone
 from .utils import get_embedding
-from .settings import BASE_DIR
 
 from .llm import Conversation as convo_model
-
-logger = logging.getLogger(__name__)
 
 from pydantic_core import to_jsonable_python
 
@@ -49,6 +38,15 @@ from celery.states import state, RECEIVED, STARTED, SUCCESS, FAILURE
 
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+
+from .ocr_utils import extract_text_from_image
+
+from django.core.files.storage import default_storage
+
+logger = logging.getLogger(__name__)
+
+
+
 
 channel_layer = get_channel_layer()
 assert (channel_layer is not None and
@@ -105,9 +103,6 @@ class ZoteroConnection(models.Model):
     def __str__(self):
         return f"{self.user.username}'s Zotero connection (User ID: {self.zotero_user_id})"
 
-from .ocr_utils import extract_text_from_image
-
-from django.core.files.storage import default_storage
 
 class CollectionQuerySet(models.QuerySet):
     def filter_by_user_perm(self, user, perm='VIEW') -> 'CollectionQuerySet':
@@ -153,7 +148,7 @@ class Collection(models.Model):
     # returns a list of documents, not a queryset.
     @property
     def documents(self):
-        return functools.reduce(lambda l, r: l + r, [list(x.objects.filter(collection=self)) for x in DESCENDED_FROM_DOCUMENT])
+        return functools.reduce(lambda left, right: left + right, [list(x.objects.filter(collection=self)) for x in DESCENDED_FROM_DOCUMENT])
 
     def user_has_permission_in(self, user, permissions):
         # First check permissions directly on this collection
@@ -187,7 +182,7 @@ class Collection(models.Model):
             collections = cls.objects.all() # type: ignore
         # pylance doesn't understand custom querysets
         collections = collections.filter_by_user_perm(user, perm) # type: ignore
-        documents = functools.reduce(lambda l, r: l + r, [list(x.objects.filter(collection__in=collections)) for x in DESCENDED_FROM_DOCUMENT])
+        documents = functools.reduce(lambda left, right: left + right, [list(x.objects.filter(collection__in=collections)) for x in DESCENDED_FROM_DOCUMENT])
         return documents
 
     def move_to(self, new_parent=None):
@@ -415,7 +410,7 @@ class Document(models.Model):
 
     @staticmethod
     def filter(*args, **kwargs) -> List[DocumentChild]:
-        return functools.reduce(lambda l, r: l + r, [list(x.objects.filter(*args, **kwargs)) for x in DESCENDED_FROM_DOCUMENT])
+        return functools.reduce(lambda left, right: left + right, [list(x.objects.filter(*args, **kwargs)) for x in DESCENDED_FROM_DOCUMENT])
 
     @staticmethod
     def get_by_id(doc_id: uuid.UUID) -> Optional[DocumentChild]:
@@ -451,7 +446,7 @@ class Document(models.Model):
                 result = create_chunks.delay(str(self.id)) # type: ignore
                 for _ in range(4):
                     if state(result.status) == state(FAILURE):
-                        raise Exception(f"Task failed")
+                        raise Exception("Task failed")
                     if state(result.status) in [state(RECEIVED), state(STARTED), state(SUCCESS)]:
                         return
                     time.sleep(1)
@@ -604,8 +599,8 @@ class HandwrittenNotesDocument(Document):
             if not self.full_text or self.full_text == "NO READABLE TEXT":
                 self.full_text = "No readable text could be extracted from this image."
                 
-        except Exception as e:
-            self.full_text = f"Image text extraction failed. Please try again."
+        except Exception:
+            self.full_text = "Image text extraction failed. Please try again."
             raise
             
     @property
@@ -793,9 +788,9 @@ class WSConversation(models.Model):
     @property
     def convo_object(self) -> convo_model:
         t = type(self.convo)
-        if t == dict:
+        if t is dict:
             return convo_model.model_validate(self.convo)
-        elif t == str:
+        elif t is str:
             return convo_model.model_validate_json(self.convo)
         else: 
             raise ValueError(f"Invalid type for convo from database: {t}")
@@ -812,7 +807,6 @@ class WSConversation(models.Model):
     
         
     def set_name(self):
-        import asyncio
         from asgiref.sync import async_to_sync
 
         system_prompt="""

@@ -1,7 +1,5 @@
 from django.contrib import admin
-from django.contrib.contenttypes.admin import GenericTabularInline
-from django.urls import reverse, path
-from django.utils.html import format_html
+from django.urls import path
 from django.shortcuts import render
 from .models import ConversationFile, RawTextDocument, HandwrittenNotesDocument, PDFDocument, VTTDocument, TeXDocument, TextChunk, Collection, CollectionPermission, WSConversation, GeminiAPIUsage
 from .ocr_utils import get_gemini_cost_stats

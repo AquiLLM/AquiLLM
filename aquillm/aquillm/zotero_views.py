@@ -7,7 +7,6 @@ from django.contrib import messages
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
-from django.core.exceptions import ObjectDoesNotExist
 
 from .models import ZoteroConnection
 from .zotero_oauth import ZoteroOAuthClient

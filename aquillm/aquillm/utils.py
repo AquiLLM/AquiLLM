@@ -1,12 +1,7 @@
 
 import logging
-logger = logging.getLogger(__name__)
-
-
-
-
 from django.apps import apps
-
+logger = logging.getLogger(__name__)
 
 def get_embedding(query: str, input_type: str='search_query'):
     cohere_client = apps.get_app_config('aquillm').cohere_client

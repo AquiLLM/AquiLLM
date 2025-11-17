@@ -13,17 +13,10 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.http import HttpResponse, Http404, HttpResponseForbidden
 from django.shortcuts import get_object_or_404
-from pgvector.django import L2Distance
-from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.core.files.storage import default_storage
-from django.conf import settings
-from django.core.exceptions import ValidationError
-from django.core.exceptions import ObjectDoesNotExist
 
 
 from django.views.decorators.http import require_http_methods
-from django.views.decorators.csrf import requires_csrf_token
 
 from .forms import SearchForm, ArXiVForm, PDFDocumentForm, VTTDocumentForm, NewCollectionForm, HandwrittenNotesForm
 from .models import TextChunk, TeXDocument, PDFDocument, VTTDocument, Collection, CollectionPermission, WSConversation, DESCENDED_FROM_DOCUMENT, HandwrittenNotesDocument
@@ -32,23 +25,17 @@ from .settings import DEBUG
 
 import requests
 from django.http import JsonResponse
-from django.forms.models import model_to_dict
 import json
-import anthropic
-import os
-import base64
-import hashlib
-import uuid
 
-from .forms import HandwrittenNotesForm
-from .models import HandwrittenNotesDocument
-from .ocr_utils import extract_text_from_image, get_gemini_cost_stats
-
-logger = logging.getLogger(__name__)
+from .ocr_utils import get_gemini_cost_stats
 
 from django.views.generic import TemplateView
 
 from .models import UserSettings, COLOR_SCHEME_CHOICES, FONT_FAMILY_CHOICES
+
+
+logger = logging.getLogger(__name__)
+
 
 @require_http_methods(["GET", "POST"])
 @login_required
@@ -522,7 +509,7 @@ if DEBUG:
     @login_required
     def debug_models(request):
         models = apps.get_models()
-        model_instances = {model.__name__ : list(model.objects.all()) for model in models}
+        model_instances = {model.__name__ : list(model.objects.all()) for model in models} # noqa: F841
         breakpoint()
         return HttpResponse(status=200)
 

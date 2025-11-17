@@ -1,9 +1,7 @@
 import logging
-import requests
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
-from celery import shared_task
-from celery.states import state, STARTED, SUCCESS, FAILURE
+from celery.states import STARTED, SUCCESS, FAILURE
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import DatabaseError
 from django.contrib.auth import get_user_model

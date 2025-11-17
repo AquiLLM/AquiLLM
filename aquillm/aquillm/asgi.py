@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """
 ASGI config for aquillm project.
 

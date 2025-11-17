@@ -5,9 +5,8 @@ import tarfile
 import io
 import chardet
 import json
-from uuid import UUID
 from xml.dom import minidom
-from django.urls import path, include
+from django.urls import path
 # Comment out or remove the top-level import if it exists:
 # from trafilatura import fetch_url, extract, extract_metadata # Keep commented or remove if not used elsewhere
 from django.core.files.base import ContentFile
@@ -16,7 +15,7 @@ from django.core.files.base import ContentFile
 from .crawler_tasks import crawl_and_ingest_webpage
 
 from .vtt import parse, to_text, coalesce_captions
-from .models import WSConversation, ConversationFile, Document, PDFDocument, TeXDocument, VTTDocument, Collection, CollectionPermission, EmailWhitelist, DESCENDED_FROM_DOCUMENT, DuplicateDocumentError, RawTextDocument
+from .models import ConversationFile, Document, PDFDocument, TeXDocument, VTTDocument, Collection, CollectionPermission, EmailWhitelist, DESCENDED_FROM_DOCUMENT, DuplicateDocumentError
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth import get_user_model
 
@@ -25,9 +24,8 @@ from django.http import JsonResponse, FileResponse
 
 from django.shortcuts import get_object_or_404
 
-from django.core.files.base import ContentFile
 from django.core.validators import FileExtensionValidator, validate_email
-from django.core.exceptions import ValidationError, ObjectDoesNotExist
+from django.core.exceptions import ValidationError
 from django.db import DatabaseError, transaction
 from django.db.models import Q
 from aquillm.views import user_settings_api
@@ -159,7 +157,7 @@ def ingest_pdf(request):
         return JsonResponse({'error': 'No title provided'}, status=400)
     try:
         FileExtensionValidator(['pdf'])(pdf_file)
-    except ValidationError as e:
+    except ValidationError:
         return JsonResponse({'error': 'Invalid file extension. Only PDF files are allowed.'}, status=400)
     doc = PDFDocument(
         collection = collection,
@@ -194,7 +192,7 @@ def ingest_vtt(request):
         return JsonResponse({'error': 'No title provided'}, status=400)
     try:
         FileExtensionValidator(['vtt'])(vtt_file)
-    except ValidationError as e:
+    except ValidationError:
         return JsonResponse({'error': 'Invalid file extension. Only VTT files are allowed.'}, status=400)
     full_text = to_text(coalesce_captions(parse(vtt_file)))
     
@@ -412,7 +410,6 @@ def move_document(request, doc_id):
 @login_required
 def collection_permissions(request, col_id):
     collection = get_object_or_404(Collection, pk=col_id)
-    User = get_user_model() # Ensure User model is available
 
     def serialize_user_for_permissions(user_obj):
         full_name = f"{user_obj.first_name} {user_obj.last_name}".strip()
