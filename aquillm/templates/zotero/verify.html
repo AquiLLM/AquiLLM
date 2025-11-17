@@ -10,7 +10,7 @@
         {% if messages %}
             <div class="mb-6">
                 {% for message in messages %}
-                    <div class="p-4 rounded-lg mb-2 {% if message.tags == 'error' %}bg-red-500 text-white{% elif message.tags == 'success' %}bg-green-500 text-white{% elif message.tags == 'warning' %}bg-yellow-500 text-black{% else %}bg-blue-500 text-white{% endif %}">
+                    <div class="p-4 rounded-lg mb-2 {% if message.tags == 'error' %}bg-red text-text-normal{% elif message.tags == 'success' %}bg-green text-text-normal{% elif message.tags == 'warning' %}bg-secondary_accent text-text-normal{% else %}bg-accent text-text-normal{% endif %}">
                         {{ message }}
                     </div>
                 {% endfor %}
@@ -52,13 +52,13 @@
                         name="verification_code"
                         placeholder="Enter the code from Zotero"
                         required
-                        class="w-full px-4 py-3 bg-scheme-shade_5 border border-border-mid_contrast rounded-lg text-text-normal placeholder-text-dimmed focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        class="w-full px-4 py-3 bg-scheme-shade_5 border border-border-mid_contrast rounded-lg text-text-normal placeholder-text-dimmed focus:outline-none focus:ring-2 focus:ring-accent"
                     />
                 </div>
 
                 <button
                     type="submit"
-                    class="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors flex items-center justify-center"
+                    class="w-full px-6 py-3 bg-accent hover:bg-accent-dark text-text-normal font-semibold rounded-lg transition-colors flex items-center justify-center"
                 >
                     <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
@@ -70,7 +70,7 @@
 
         <div class="bg-scheme-shade_5 border border-border-low_contrast rounded-lg p-4">
             <h3 class="text-sm font-semibold text-text-normal mb-2 flex items-center">
-                <svg class="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="w-5 h-5 mr-2 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
                 Troubleshooting

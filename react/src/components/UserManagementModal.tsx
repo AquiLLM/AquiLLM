@@ -289,7 +289,7 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
           <h2 className="text-xl font-semibold">
             Manage Collaborators: {collection?.name}
           </h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white">
+          <button onClick={onClose} className="text-text-lower_contrast hover:text-text-normal">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -299,15 +299,15 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
         {/* Help information about permission inheritance */}
         <div className="px-6 py-3 bg-scheme-shade_4 border-b border-border-lower_contrast">
           <div className="flex items-start">
-            <svg className="w-5 h-5 mt-0.5 mr-2 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 mt-0.5 mr-2 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <div>
-              <h3 className="text-sm font-semibold text-blue-400 mb-1">About Permissions</h3>
-              <p className="text-xs text-gray-300 mb-2">
+              <h3 className="text-sm font-semibold text-accent mb-1">About Permissions</h3>
+              <p className="text-xs text-text-low_contrast mb-2">
                 Users with permissions on a collection automatically inherit access to all subcollections:
               </p>
-              <ul className="text-xs text-gray-300 list-disc list-inside ml-2 space-y-1">
+              <ul className="text-xs text-text-low_contrast list-disc list-inside ml-2 space-y-1">
                 <li><span className="font-semibold">Viewer</span> - Can view documents but cannot make changes</li>
                 <li><span className="font-semibold">Editor</span> - Can add, edit, and delete documents</li>
                 <li><span className="font-semibold">Admin</span> - Can manage users and collection settings</li>
@@ -319,14 +319,14 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
         <div className="overflow-y-auto p-6 flex-grow">
           {/* Success message */}
           {successMessage && (
-            <div className="mb-4 bg-green-900 text-white p-3 rounded">
+            <div className="mb-4 bg-green-dark text-text-normal p-3 rounded">
               <p>{successMessage}</p>
             </div>
           )}
 
           {/* Error message */}
           {error && (
-            <div className="mb-4 bg-red-900 text-white p-3 rounded">
+            <div className="mb-4 bg-red-dark text-text-normal p-3 rounded">
               <p>{error}</p>
             </div>
           )}
@@ -334,7 +334,7 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
           {/* Loading indicator */}
           {isLoading ? (
             <div className="flex justify-center items-center py-6">
-              <svg className="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <svg className="animate-spin h-8 w-8 text-text-normal" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
@@ -342,7 +342,7 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
           ) : (
             <>
               <div className="mb-6">
-                <label htmlFor="search-users" className="block text-gray-300 mb-2">
+                <label htmlFor="search-users" className="block text-text-low_contrast mb-2">
                   Search Users
                 </label>
                 <div className="relative">
@@ -352,11 +352,11 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Type to search users..."
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full bg-scheme-shade_5 border border-border-mid_contrast rounded px-4 py-2 text-text-normal focus:outline-none focus:ring-2 focus:ring-accent"
                   />
                   {isSearching && (
                     <div className="absolute right-3 top-2">
-                      <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <svg className="animate-spin h-5 w-5 text-text-normal" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                       </svg>
@@ -365,33 +365,33 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 </div>
 
                 {searchResults.length > 0 && (
-                  <div className="mt-2 bg-gray-700 rounded-md overflow-hidden">
-                    <ul className="divide-y divide-gray-600">
+                  <div className="mt-2 bg-scheme-shade_5 rounded-md overflow-hidden">
+                    <ul className="divide-y divide-border-mid_contrast">
                       {searchResults.map((user) => (
-                        <li key={user.id} className="p-3 hover:bg-gray-600">
+                        <li key={user.id} className="p-3 hover:bg-scheme-shade_6">
                           <div className="flex items-center justify-between">
                             <div>
-                              <p className="text-white">{user.username}</p>
-                              <p className="text-gray-400 text-sm">{user.email?.trim() || 'No email'}</p>
+                              <p className="text-text-normal">{user.username}</p>
+                              <p className="text-text-lower_contrast text-sm">{user.email?.trim() || 'No email'}</p>
                             </div>
                             <div className="mt-2">
                               <div className="flex space-x-2">
                                 <button
-                                  className="bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs"
+                                  className="bg-accent hover:bg-accent-dark text-text-normal px-2 py-1 rounded text-xs"
                                   onClick={() => addUser(user, 'VIEW')}
                                   title="Viewer: Can only view documents - this permission will apply to all subcollections"
                                 >
                                   Viewer
                                 </button>
                                 <button
-                                  className="bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded text-xs"
+                                  className="bg-green hover:bg-green-dark text-text-normal px-2 py-1 rounded text-xs"
                                   onClick={() => addUser(user, 'EDIT')}
                                   title="Editor: Can add, edit and delete documents - this permission will apply to all subcollections"
                                 >
                                   Editor
                                 </button>
                                 <button
-                                  className="bg-purple-600 hover:bg-purple-700 text-white px-2 py-1 rounded text-xs"
+                                  className="bg-secondary_accent hover:bg-secondary_accent-dark text-text-normal px-2 py-1 rounded text-xs"
                                   onClick={() => addUser(user, 'MANAGE')}
                                   title="Admin: Can manage users and collection settings - this permission will apply to all subcollections"
                                 >
@@ -408,24 +408,24 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
               </div>
 
               <div>
-                <h3 className="text-white text-lg font-medium mb-2">Current Collaborators</h3>
+                <h3 className="text-text-normal text-lg font-medium mb-2">Current Collaborators</h3>
                 {currentUsers.length === 0 ? (
-                  <p className="text-gray-400">No collaborators yet.</p>
+                  <p className="text-text-lower_contrast">No collaborators yet.</p>
                 ) : (
-                  <ul className="divide-y divide-gray-700 bg-gray-800 rounded-md overflow-hidden">
+                  <ul className="divide-y divide-border-low_contrast bg-scheme-shade_4 rounded-md overflow-hidden">
                     {currentUsers.map((user) => (
                       <li key={user.id} className="p-3">
                         <div className="flex items-center justify-between">
                           <div>
-                            <p className="text-white">{user.username}</p>
-                            <p className="text-gray-400 text-sm">{user.email?.trim() || 'No email'}</p>
+                            <p className="text-text-normal">{user.username}</p>
+                            <p className="text-text-lower_contrast text-sm">{user.email?.trim() || 'No email'}</p>
                           </div>
                           <div className="flex items-center space-x-2">
                             <button
                               className={`px-2 py-1 rounded text-xs ${
                                 user.permission === 'VIEW'
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                                  ? 'bg-accent text-text-normal'
+                                  : 'bg-scheme-shade_5 text-text-low_contrast hover:bg-scheme-shade_6'
                               }`}
                               onClick={() => changeUserPermission(user.id, 'VIEW')}
                               title="Viewer: Can only view documents - this permission will apply to all subcollections"
@@ -435,8 +435,8 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
                             <button
                               className={`px-2 py-1 rounded text-xs ${
                                 user.permission === 'EDIT'
-                                  ? 'bg-green-600 text-white'
-                                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                                  ? 'bg-green text-text-normal'
+                                  : 'bg-scheme-shade_5 text-text-low_contrast hover:bg-scheme-shade_6'
                               }`}
                               onClick={() => changeUserPermission(user.id, 'EDIT')}
                               title="Editor: Can add, edit and delete documents - this permission will apply to all subcollections"
@@ -446,8 +446,8 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
                             <button
                               className={`px-2 py-1 rounded text-xs ${
                                 user.permission === 'MANAGE'
-                                  ? 'bg-purple-600 text-white'
-                                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                                  ? 'bg-secondary_accent text-text-normal'
+                                  : 'bg-scheme-shade_5 text-text-low_contrast hover:bg-scheme-shade_6'
                               }`}
                               onClick={() => changeUserPermission(user.id, 'MANAGE')}
                               title="Admin: Can manage users and collection settings - this permission will apply to all subcollections"
@@ -456,7 +456,7 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
                             </button>
                             <button
                               onClick={() => removeUser(user.id)}
-                              className="text-red-500 hover:text-red-400"
+                              className="text-red hover:text-red-dark"
                             >
                               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -473,10 +473,10 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
           )}
         </div>
 
-        <div className="border-t border-gray-700 px-6 py-4 flex justify-end space-x-3">
+        <div className="border-t border-border-low_contrast px-6 py-4 flex justify-end space-x-3">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-white bg-gray-600 hover:bg-gray-500 rounded focus:outline-none"
+            className="px-4 py-2 text-text-normal bg-scheme-shade_6 hover:bg-scheme-shade_7 rounded focus:outline-none"
             disabled={isSaving}
           >
             Cancel
@@ -484,7 +484,7 @@ const UserManagementModal: React.FC<UserManagementModalProps> = ({
           <button
             onClick={handleSave}
             disabled={isSaving || isLoading}
-            className="px-4 py-2 text-white bg-blue-600 hover:bg-blue-500 rounded focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2 text-text-normal bg-accent hover:bg-accent-dark rounded focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSaving ? 'Saving...' : 'Save Changes'}
           </button>
