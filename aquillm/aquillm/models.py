@@ -52,7 +52,7 @@ channel_layer = get_channel_layer()
 assert (channel_layer is not None and
     hasattr(channel_layer, 'group_send')) # keeps type checker happy
 
-type DocumentChild = PDFDocument | TeXDocument | RawTextDocument | VTTDocument
+type DocumentChild = PDFDocument | TeXDocument | RawTextDocument | VTTDocument | HandwrittenNotesDocument
 
 
 COLOR_SCHEME_CHOICES = (
@@ -659,8 +659,6 @@ DESCENDED_FROM_DOCUMENT = [
     VTTDocument,
     HandwrittenNotesDocument,
 ]
-
-DocumentChild = PDFDocument | TeXDocument | RawTextDocument | VTTDocument | HandwrittenNotesDocument
 
 class TextChunkQuerySet(models.QuerySet):
     def filter_by_documents(self, docs):

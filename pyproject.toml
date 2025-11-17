@@ -98,3 +98,4 @@ exclude = [
     "migrations",
     "models\\.py$"
 ]
+disable_error_code = ["no-untyped-call"]

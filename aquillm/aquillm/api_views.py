@@ -20,7 +20,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth import get_user_model
 
 from django.views.decorators.http import require_http_methods
-from django.http import JsonResponse, FileResponse
+from django.http import HttpRequest, JsonResponse, FileResponse
 
 from django.shortcuts import get_object_or_404
 
@@ -31,15 +31,19 @@ from django.db.models import Q
 from aquillm.views import user_settings_api
 from django.core.exceptions import PermissionDenied
 
+from typing import Dict, List, Any, Optional, Union
+from uuid import UUID
+from django.contrib.auth.models import User
+
 
 logger = logging.getLogger(__name__)
 
 
 
 # helper func, not a view
-def insert_one_from_arxiv(arxiv_id, collection, user):
+def insert_one_from_arxiv(arxiv_id: str, collection: Collection, user: User) -> Dict[str, Any]:
 
-    def save_pdf_doc(content, title):
+    def save_pdf_doc(content: bytes, title: str) -> None:
         doc = PDFDocument(
             collection=collection,
             title=title,
@@ -48,7 +52,7 @@ def insert_one_from_arxiv(arxiv_id, collection, user):
         doc.pdf_file.save(f'arxiv:{arxiv_id}.pdf', ContentFile(content), save=False)
         doc.save()
 
-    status = {"message": "", "errors": []}
+    status: Dict[str, Any] = {"message": "", "errors": []}
     tex_req = requests.get('https://arxiv.org/src/' + arxiv_id)
     pdf_req = requests.get('https://arxiv.org/pdf/' + arxiv_id)
     metadata_req = requests.get('http://export.arxiv.org/api/query?id_list=' + arxiv_id)
@@ -81,8 +85,8 @@ def insert_one_from_arxiv(arxiv_id, collection, user):
                 save_pdf_doc(tex_req.content, title)
             else:
                 status["message"] += f"Got LaTeX source for {arxiv_id}\n"
-                tgz_io = io.BytesIO(tex_req.content)
-                tex_str = ""
+                tgz_io: io.BytesIO = io.BytesIO(tex_req.content)
+                tex_str: str = ""
                 # Extract the tar.gz archive containing the LaTeX source.
                 with gzip.open(tgz_io, 'rb') as gz:
                     with tarfile.open(fileobj=gz) as tar: # type: ignore
@@ -122,8 +126,8 @@ def insert_one_from_arxiv(arxiv_id, collection, user):
 
 @login_required
 @require_http_methods(["POST"])
-def ingest_arxiv(request):
-    user = request.user
+def ingest_arxiv(request: HttpRequest) -> JsonResponse:
+    user: User = request.user
     arxiv_id = request.POST.get('arxiv_id')
     collection = Collection.objects.filter(pk=request.POST.get('collection')).first()
     if not collection or not collection.user_can_edit(user):
@@ -144,8 +148,8 @@ def ingest_arxiv(request):
 
 @login_required
 @require_http_methods(["POST"])
-def ingest_pdf(request):
-    user = request.user
+def ingest_pdf(request: HttpRequest) -> JsonResponse:
+    user: User = request.user
     pdf_file = request.FILES.get('pdf_file')
     title = request.POST.get('title')
     collection = Collection.objects.filter(pk=request.POST.get('collection')).first()
@@ -178,8 +182,8 @@ def ingest_pdf(request):
 
 @login_required
 @require_http_methods(["POST"])
-def ingest_vtt(request):
-    user = request.user
+def ingest_vtt(request: HttpRequest) -> JsonResponse:
+    user: User = request.user
     vtt_file = request.FILES.get('vtt_file')
     audio_file = request.FILES.get('audio_file')
     title = request.POST.get('title')
@@ -215,17 +219,17 @@ def ingest_vtt(request):
 
 @login_required
 @require_http_methods(["DELETE"])
-def delete_collection(request, collection_id):
-    user = request.user
+def delete_collection(request: HttpRequest, collection_id: int) -> JsonResponse:
+    user: User = request.user
     collection = get_object_or_404(Collection, id=collection_id)
-    
+
     # Check if user has MANAGE permission for this collection
     if not collection.user_can_manage(user):
         return JsonResponse({'error': 'You do not have permission to delete this collection'}, status=403)
-    
+
     # Get children before deletion for notification purposes
-    children_count = collection.children.count()
-    documents_count = sum(len(x.objects.filter(collection=collection)) for x in DESCENDED_FROM_DOCUMENT)
+    children_count: int = collection.children.count()
+    documents_count: int = sum(len(x.objects.filter(collection=collection)) for x in DESCENDED_FROM_DOCUMENT)
     
     try:
         # Django will cascade delete children collections and documents
@@ -240,16 +244,16 @@ def delete_collection(request, collection_id):
 
 @login_required
 @require_http_methods(["DELETE"])
-def delete_document(request, doc_id):
-    user = request.user
-    
+def delete_document(request: HttpRequest, doc_id: UUID) -> JsonResponse:
+    user: User = request.user
+
     # Try to find the document among all document types
-    document = Document.get_by_id(doc_id)
-    
+    document: Optional[Document] = Document.get_by_id(doc_id)
+
     if not document:
         return JsonResponse({'error': 'Document not found'}, status=404)
-    
-    title = document.title
+
+    title: str = document.title
     # Check if user has EDIT permission for the document's collection
     if not document.collection.user_can_edit(user):
         return JsonResponse({'error': 'You do not have permission to delete this document'}, status=403)
@@ -267,10 +271,10 @@ def delete_document(request, doc_id):
 
 @require_http_methods(['GET', 'POST'])
 @login_required
-def collections(request):
+def collections(request: HttpRequest) -> JsonResponse:
     if request.method == 'POST':
-        data = json.loads(request.body)
-        name = data.get('name')
+        data: Dict[str, Any] = json.loads(request.body)
+        name: Optional[str] = data.get('name')
         if not name:
             return JsonResponse({'error': 'Name is required'}, status=400)
 
@@ -314,7 +318,7 @@ def collections(request):
 
     # For GET requests, get all collections where the user has any permission
     colperms = CollectionPermission.objects.filter(user=request.user)
-    collections = []
+    collections: List[Dict[str, Any]] = []
     for colperm in colperms:
         collections.append({
             'id': colperm.collection.id,
@@ -330,13 +334,13 @@ def collections(request):
 
 @require_http_methods(["POST"])
 @login_required
-def move_collection(request, collection_id):
+def move_collection(request: HttpRequest, collection_id: int) -> JsonResponse:
     try:
-        data = json.loads(request.body)
+        data: Dict[str, Any] = json.loads(request.body)
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    new_parent_id = data.get("new_parent_id")  # Can be None
+    new_parent_id: Optional[int] = data.get("new_parent_id")  # Can be None
 
     try:
         collection = Collection.objects.get(id=collection_id)
@@ -348,7 +352,7 @@ def move_collection(request, collection_id):
         return JsonResponse({"error": "You do not have permission to move this collection"}, status=403)
 
     # If a new parent is provided, fetch it.
-    new_parent = None
+    new_parent: Optional[Collection] = None
     if new_parent_id:
         try:
             new_parent = Collection.objects.get(id=new_parent_id)
@@ -372,17 +376,17 @@ def move_collection(request, collection_id):
 
 @require_http_methods(["POST"])
 @login_required
-def move_document(request, doc_id):
+def move_document(request: HttpRequest, doc_id: UUID) -> JsonResponse:
     try:
-        data = json.loads(request.body)
+        data: Dict[str, Any] = json.loads(request.body)
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
-    
-    new_collection_id = data.get("new_collection_id")
+
+    new_collection_id: Optional[int] = data.get("new_collection_id")
     if new_collection_id is None:
         return JsonResponse({"error": "new_collection_id is required"}, status=400)
 
-    document = Document.get_by_id(doc_id)
+    document: Optional[Document] = Document.get_by_id(doc_id)
     if not document:
         return JsonResponse({"error": "Document not found"}, status=404)
 
@@ -408,11 +412,11 @@ def move_document(request, doc_id):
 
 @require_http_methods(['GET', 'POST'])
 @login_required
-def collection_permissions(request, col_id):
+def collection_permissions(request: HttpRequest, col_id: int) -> JsonResponse:
     collection = get_object_or_404(Collection, pk=col_id)
 
-    def serialize_user_for_permissions(user_obj):
-        full_name = f"{user_obj.first_name} {user_obj.last_name}".strip()
+    def serialize_user_for_permissions(user_obj: User) -> Dict[str, Any]:
+        full_name: str = f"{user_obj.first_name} {user_obj.last_name}".strip()
         return {
             'id': user_obj.id,
             'username': user_obj.username,
@@ -428,9 +432,9 @@ def collection_permissions(request, col_id):
         edit_permissions = CollectionPermission.objects.filter(collection=collection, permission='EDIT').select_related('user')
         manage_permissions = CollectionPermission.objects.filter(collection=collection, permission='MANAGE').select_related('user')
 
-        viewers = [serialize_user_for_permissions(perm.user) for perm in view_permissions]
-        editors = [serialize_user_for_permissions(perm.user) for perm in edit_permissions]
-        admins = [serialize_user_for_permissions(perm.user) for perm in manage_permissions]
+        viewers: List[Dict[str, Any]] = [serialize_user_for_permissions(perm.user) for perm in view_permissions]
+        editors: List[Dict[str, Any]] = [serialize_user_for_permissions(perm.user) for perm in edit_permissions]
+        admins: List[Dict[str, Any]] = [serialize_user_for_permissions(perm.user) for perm in manage_permissions]
         
         return JsonResponse({
             'viewers': viewers,
@@ -442,7 +446,7 @@ def collection_permissions(request, col_id):
         return JsonResponse({'error': 'Permission denied'}, status=403)
 
     try:
-        data = json.loads(request.body)
+        data: Dict[str, Any] = json.loads(request.body)
         with transaction.atomic():
             # Remove all existing permissions except the owner's
             CollectionPermission.objects.filter(collection=collection).exclude(user=request.user).delete()
@@ -473,14 +477,14 @@ def collection_permissions(request, col_id):
 
 @login_required
 @require_http_methods(['GET'])
-def collection(request, col_id):
+def collection(request: HttpRequest, col_id: int) -> JsonResponse:
     try:
         collection = get_object_or_404(Collection, pk=col_id)
         if not collection.user_can_view(request.user):
             return JsonResponse({'error': 'Permission denied'}, status=403)
-        
+
         # Get documents from all document types
-        documents = []
+        documents: List[Dict[str, Any]] = []
         for model in DESCENDED_FROM_DOCUMENT:
             docs = model.objects.filter(collection=collection)
             for doc in docs:
@@ -492,14 +496,14 @@ def collection(request, col_id):
                 })
 
         # Get child collections
-        children = [{
+        children: List[Dict[str, Any]] = [{
             'id': child.id,
             'name': child.name,
             'document_count': len([doc for doc in child.documents]) if hasattr(child, 'documents') else 0,
             'created_at': child.created_at.isoformat() if hasattr(child, 'created_at') and child.created_at else None,
         } for child in collection.children.all()]
 
-        response_data = {
+        response_data: Dict[str, Any] = {
             'collection': {
                 'id': collection.id,
                 'name': collection.name,
@@ -520,19 +524,19 @@ def collection(request, col_id):
 
 @login_required
 @require_http_methods(['GET'])
-def ingestion_monitor(request):
+def ingestion_monitor(request: HttpRequest) -> JsonResponse:
     in_progress = PDFDocument.objects.filter(ingestion_complete=False, ingested_by=request.user)
-    protocol = 'wss://' if request.is_secure() else 'ws://'
-    host = request.get_host()
+    protocol: str = 'wss://' if request.is_secure() else 'ws://'
+    host: str = request.get_host()
     return JsonResponse([{"documentName": doc.title,
                           "documentId": doc.id,
                           "websocketUrl": protocol + host + "/ingest/monitor/" + doc.id + "/"}
                           for doc in in_progress])
 
 @login_required
-def search_users(request):
-    query = request.GET.get('query', '').strip()
-    exclude_current = request.GET.get('exclude_current', 'false').lower() == 'true'
+def search_users(request: HttpRequest) -> JsonResponse:
+    query: str = request.GET.get('query', '').strip()
+    exclude_current: bool = request.GET.get('exclude_current', 'false').lower() == 'true'
     
     if not query:
         return JsonResponse({'users': []})
@@ -544,9 +548,9 @@ def search_users(request):
         users = users.exclude(id=request.user.id)
 
     # Create a list with calculated full_name
-    user_list = []
+    user_list: List[Dict[str, Any]] = []
     for user in users:
-        full_name = f"{user.first_name} {user.last_name}".strip()
+        full_name: str = f"{user.first_name} {user.last_name}".strip()
         user_list.append({
             'id': user.id,
             'username': user.username,
@@ -558,14 +562,14 @@ def search_users(request):
 
 @login_required
 @require_http_methods(['GET'])
-def whitelisted_emails(request):
+def whitelisted_emails(request: HttpRequest) -> JsonResponse:
     if not request.user.is_staff:
         return JsonResponse({'error': 'Permission denied'}, status=403)
     return JsonResponse({'whitelisted': list(EmailWhitelist.objects.all().values_list('email', flat=True))})
 
 @login_required
 @require_http_methods(['POST', 'DELETE'])
-def whitelisted_email(request, email):
+def whitelisted_email(request: HttpRequest, email: str) -> JsonResponse:
     if not request.user.is_staff:
         return JsonResponse({'error': 'Permission denied'}, status=403)
     try:
@@ -583,15 +587,16 @@ def whitelisted_email(request, email):
 
 @login_required
 @require_http_methods(["POST"])
-def ingest_webpage(request):
+def ingest_webpage(request: HttpRequest) -> JsonResponse:
     """
     API endpoint to initiate asynchronous webpage crawling and ingestion.
     """
     try:
-        data = json.loads(request.body)
-        url = data.get('url')
-        collection_id = data.get('collection_id')
+        data: Dict[str, Any] = json.loads(request.body)
+        url: Optional[str] = data.get('url')
+        collection_id: Optional[int] = data.get('collection_id')
         # Get depth, default to 1 if not provided or invalid type
+        depth: int
         try:
             depth = int(data.get('depth', 1))
             if depth < 0:
@@ -650,7 +655,7 @@ def ingest_webpage(request):
 
 @login_required
 @require_http_methods(['GET'])
-def conversation_file(request, convo_file_id):
+def conversation_file(request: HttpRequest, convo_file_id: int) -> Union[JsonResponse, FileResponse]:
     convo_file = get_object_or_404(ConversationFile, pk=convo_file_id)
     if not convo_file.conversation.owner == request.user:
         return JsonResponse({'error': 'Permission denied'}, status=403)

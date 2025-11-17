@@ -11,7 +11,7 @@ from django.urls import path
 from xml.dom import minidom
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.http import HttpResponse, Http404, HttpResponseForbidden
+from django.http import HttpRequest, HttpResponse, Http404, HttpResponseForbidden
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.decorators import login_required
 
@@ -33,21 +33,25 @@ from django.views.generic import TemplateView
 
 from .models import UserSettings, COLOR_SCHEME_CHOICES, FONT_FAMILY_CHOICES
 
+from typing import Union, Optional, Dict, Any, List, Set
+from uuid import UUID
+from django.contrib.auth.models import User
+
 
 logger = logging.getLogger(__name__)
 
 
 @require_http_methods(["GET", "POST"])
 @login_required
-def user_settings_api(request):
+def user_settings_api(request: HttpRequest) -> JsonResponse:
     """
     GET:  return {"color_scheme": ..., "font_family": ...}
     POST: accept JSON {"color_scheme": ..., "font_family": ...},
           validate, save, and return same JSON.
     """
     # helper dicts for validation
-    valid_color_schemes = {key for key, _ in COLOR_SCHEME_CHOICES}
-    valid_font_families = {key for key, _ in FONT_FAMILY_CHOICES}
+    valid_color_schemes: Set[str] = {key for key, _ in COLOR_SCHEME_CHOICES}
+    valid_font_families: Set[str] = {key for key, _ in FONT_FAMILY_CHOICES}
 
     # fetch or create
     settings_obj, _ = UserSettings.objects.get_or_create(user=request.user)
@@ -64,10 +68,10 @@ def user_settings_api(request):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    color = data.get("color_scheme")
-    font  = data.get("font_family")
+    color: Optional[str] = data.get("color_scheme")
+    font: Optional[str]  = data.get("font_family")
 
-    errors = {}
+    errors: Dict[str, str] = {}
     if color not in valid_color_schemes:
         errors["color_scheme"] = "Invalid choice"
     if font not in valid_font_families:
@@ -89,23 +93,23 @@ class UserSettingsPageView(TemplateView):
     
 
 @require_http_methods(['GET'])
-def index(request):
+def index(request: HttpRequest) -> HttpResponse:
     return render(request, 'aquillm/index.html')
 
 @login_required
 @require_http_methods(['GET'])
-def react_test(request):
+def react_test(request: HttpRequest) -> HttpResponse:
     return render(request, 'aquillm/react_test.html', {"hello_string": "Hello, world!"})
 
 
 @require_http_methods(['GET', 'POST'])
 @login_required
-def search(request):
+def search(request: HttpRequest) -> HttpResponse:
 
-    vector_results = []
-    trigram_results = []
-    reranked_results = []
-    error_message = None
+    vector_results: List[Any] = []
+    trigram_results: List[Any] = []
+    reranked_results: List[Any] = []
+    error_message: Optional[str] = None
 
     if request.method == 'POST':
         form = SearchForm(request.user, request.POST)
@@ -162,8 +166,8 @@ def search(request):
 
 
 # helper func, not a view
-def get_doc(request, doc_id):
-    doc = None
+def get_doc(request: HttpRequest, doc_id: UUID) -> Union[TeXDocument, PDFDocument, VTTDocument, HandwrittenNotesDocument]:
+    doc: Optional[Union[TeXDocument, PDFDocument, VTTDocument, HandwrittenNotesDocument]] = None
     for t in DESCENDED_FROM_DOCUMENT:
         doc = t.objects.filter(id=doc_id).first()
         if doc:
@@ -176,9 +180,9 @@ def get_doc(request, doc_id):
 
 @require_http_methods(['GET'])
 @login_required
-def pdf(request, doc_id):
+def pdf(request: HttpRequest, doc_id: UUID) -> HttpResponse:
     doc = get_doc(request, doc_id)
-    if doc.pdf_file:
+    if isinstance(doc, PDFDocument) and doc.pdf_file:
         response = HttpResponse(doc.pdf_file, content_type='application/pdf')
         return response
     else:
@@ -187,15 +191,15 @@ def pdf(request, doc_id):
     
 @require_http_methods(['GET'])
 @login_required
-def document(request, doc_id):
+def document(request: HttpRequest, doc_id: UUID) -> HttpResponse:
     doc = get_doc(request, doc_id)
     context = {'document': doc}
     return render(request, 'aquillm/document.html', context)
 
 
 # helper func, not a view
-def insert_one_from_arxiv(arxiv_id, collection, user):
-    status_message = ""
+def insert_one_from_arxiv(arxiv_id: str, collection: Collection, user: User) -> str:
+    status_message: str = ""
     tex_req = requests.get('https://arxiv.org/src/' + arxiv_id)
     pdf_req = requests.get('https://arxiv.org/pdf/' + arxiv_id)
     metadata_req = requests.get('http://export.arxiv.org/api/query?id_list=' + arxiv_id)
@@ -245,8 +249,8 @@ def insert_one_from_arxiv(arxiv_id, collection, user):
 
 @require_http_methods(['GET', 'POST'])
 @login_required
-def insert_arxiv(request):
-    status_message = None
+def insert_arxiv(request: HttpRequest) -> HttpResponse:
+    status_message: Optional[str] = None
     if request.method == 'POST':
         form = ArXiVForm(request.user, request.POST)
         if form.is_valid():
@@ -271,7 +275,7 @@ def insert_arxiv(request):
 #TODO: make this much nicer
 @require_http_methods(['GET', 'POST'])
 @login_required
-def user_collections(request):
+def user_collections(request: HttpRequest) -> HttpResponse:
     if request.method == 'POST':
         form = NewCollectionForm(request.POST, user=request.user)
         if form.is_valid():
@@ -314,7 +318,7 @@ def user_collections(request):
 
 @require_http_methods(['GET'])
 @login_required
-def collection(request, col_id):
+def collection(request: HttpRequest, col_id: int) -> Union[HttpResponse, JsonResponse]:
     """View to display a collection and its contents"""
     try:
         collection = get_object_or_404(Collection, pk=col_id)
@@ -338,8 +342,8 @@ def collection(request, col_id):
 
 @require_http_methods(['GET', 'POST'])
 @login_required
-def ingest_pdf(request):
-    status_message = None
+def ingest_pdf(request: HttpRequest) -> HttpResponse:
+    status_message: Optional[str] = None
     if request.method == 'POST':
         form = PDFDocumentForm(request.user, request.POST, request.FILES)
         if form.is_valid():
@@ -366,8 +370,8 @@ def ingest_pdf(request):
 
 @require_http_methods(['GET', 'POST'])
 @login_required
-def ingest_vtt(request):
-    status_message = None
+def ingest_vtt(request: HttpRequest) -> HttpResponse:
+    status_message: Optional[str] = None
     if request.method == 'POST':
         form = VTTDocumentForm(request.user, request.POST, request.FILES)
         if form.is_valid():
@@ -405,17 +409,17 @@ def ingest_vtt(request):
 # Ingest Notes Function
 @require_http_methods(['GET', 'POST'])
 @login_required
-def ingest_handwritten_notes(request):
+def ingest_handwritten_notes(request: HttpRequest) -> Union[HttpResponse, JsonResponse]:
     """
     View for handling the upload and processing of handwritten notes.
-    
+
     This view performs the following:
     1. Handles the form submission for handwritten notes
     2. Validates and processes the uploaded image
     3. Creates a HandwrittenNotesDocument with the extracted text
     4. Handles LaTeX conversion if requested
     """
-    status_message = None
+    status_message: Optional[str] = None
     if request.method == 'POST':
         form = HandwrittenNotesForm(request.user, request.POST, request.FILES)
         if form.is_valid():
@@ -471,7 +475,7 @@ def ingest_handwritten_notes(request):
 
 
 @require_http_methods(['DELETE'])
-def delete_document(request, doc_id):
+def delete_document(request: HttpRequest, doc_id: UUID) -> HttpResponse:
     doc = get_doc(request, doc_id)
     if not doc.collection.user_can_edit(request.user):
         return HttpResponseForbidden("User does not have permission to delete this item.")
@@ -480,24 +484,24 @@ def delete_document(request, doc_id):
 
 @require_http_methods(['GET'])
 @login_required
-def ws_convo(request, convo_id):
+def ws_convo(request: HttpRequest, convo_id: int) -> HttpResponse:
     return render(request, 'aquillm/ws_convo.html', {'convo_id': convo_id})
 
 @require_http_methods(['DELETE'])
 @login_required
-def delete_ws_convo(request, convo_id):
+def delete_ws_convo(request: HttpRequest, convo_id: int) -> HttpResponse:
     convo = get_object_or_404(WSConversation, pk=convo_id)
     if convo.owner != request.user:
         return HttpResponseForbidden("User does not have permission to delete this conversation.")
     convo.delete()
     return HttpResponse(status=200)
 @require_http_methods(['GET'])
-def health_check(request):
+def health_check(request: HttpRequest) -> HttpResponse:
     return HttpResponse(status=200)
 
 @require_http_methods(['GET'])
 @login_required
-def user_ws_convos(request):
+def user_ws_convos(request: HttpRequest) -> HttpResponse:
     convos = WSConversation.objects.filter(owner=request.user).order_by('-created_at') # this used to be updated-at
     return render(request, 'aquillm/user_ws_convos.html', {'conversations': convos})
 
@@ -507,7 +511,7 @@ def user_ws_convos(request):
 if DEBUG:
     @require_http_methods(['GET'])
     @login_required
-    def debug_models(request):
+    def debug_models(request: HttpRequest) -> HttpResponse:
         models = apps.get_models()
         model_instances = {model.__name__ : list(model.objects.all()) for model in models} # noqa: F841
         breakpoint()
@@ -515,10 +519,10 @@ if DEBUG:
 
 @login_required
 @require_http_methods(['GET'])
-def ingestion_monitor(request):
+def ingestion_monitor(request: HttpRequest) -> JsonResponse:
     in_progress = PDFDocument.objects.filter(ingestion_complete=False, ingested_by=request.user)
-    protocol = 'wss://' if request.is_secure() else 'ws://'
-    host = request.get_host()
+    protocol: str = 'wss://' if request.is_secure() else 'ws://'
+    host: str = request.get_host()
     return JsonResponse([{"documentName": doc.title,
                           "documentId": doc.id,
                           "websocketUrl": protocol + host + "/ingest/monitor/" + doc.id + "/"}
@@ -526,25 +530,25 @@ def ingestion_monitor(request):
 
 @login_required
 @require_http_methods(['GET'])
-def ingestion_dashboard(request):
+def ingestion_dashboard(request: HttpRequest) -> HttpResponse:
     return render(request, 'aquillm/ingestion_dashboard.html')
 
 
 @login_required
 @require_http_methods(['GET'])
-def pdf_ingestion_monitor(request, doc_id):
+def pdf_ingestion_monitor(request: HttpRequest, doc_id: int) -> HttpResponse:
     return render(request, 'aquillm/pdf_ingestion_monitor.html', {'doc_id': doc_id})
 
 @login_required
 @require_http_methods(['GET'])
-def gemini_cost_monitor(request):
+def gemini_cost_monitor(request: HttpRequest) -> HttpResponse:
     """View to display the current Gemini API cost statistics"""
     stats = get_gemini_cost_stats()
     return render(request, 'aquillm/gemini_cost_monitor.html', {'stats': stats})
 
 @login_required
 @require_http_methods(['GET'])
-def email_whitelist(request):
+def email_whitelist(request: HttpRequest) -> HttpResponse:
     return render(request, 'aquillm/email_whitelist.html')
 
 urlpatterns = [
