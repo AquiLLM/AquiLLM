@@ -1,6 +1,8 @@
 """
 Celery tasks for Zotero synchronization
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from celery import shared_task
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
@@ -15,7 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def sync_collections_with_hierarchy(client, user, collection_map, library_id=None, library_type='user', since_version=0):
+def sync_collections_with_hierarchy(client, user, collection_map, library_id=None, library_type='user'):
     """
     Helper function to sync collections while preserving parent/child hierarchy.
 
@@ -28,7 +30,6 @@ def sync_collections_with_hierarchy(client, user, collection_map, library_id=Non
         collection_map: Dictionary to store Zotero key -> AquiLLM Collection mapping
         library_id: Group ID if syncing group library, None for personal library
         library_type: 'user' or 'group'
-        since_version: Only sync collections modified since this version
 
     Returns:
         Tuple of (collections_created, collections_updated, errors)
@@ -38,7 +39,7 @@ def sync_collections_with_hierarchy(client, user, collection_map, library_id=Non
     errors = 0
 
     # Fetch collections from Zotero
-    zotero_collections = client.get_collections(since_version=since_version, group_id=library_id)
+    zotero_collections = client.get_collections(group_id=library_id)
 
     # Sort collections: parents first, then children
     # This ensures parent collections exist before we try to reference them
@@ -104,7 +105,7 @@ def sync_collections_with_hierarchy(client, user, collection_map, library_id=Non
     return collections_created, collections_updated, errors
 
 
-def sync_items_from_library(client, user, collection_map, library_id=None, library_type='user', since_version=0):
+def sync_items_from_library(client, user, collection_map, library_id=None, library_type='user'):
     """
     Helper function to sync items from a library (personal or group).
 
@@ -114,7 +115,6 @@ def sync_items_from_library(client, user, collection_map, library_id=None, libra
         collection_map: Dictionary mapping Zotero keys to AquiLLM Collections
         library_id: Group ID if syncing group library, None for personal library
         library_type: 'user' or 'group'
-        since_version: Only sync items modified since this version
 
     Returns:
         Tuple of (items_synced, pdfs_downloaded, errors)
@@ -125,7 +125,7 @@ def sync_items_from_library(client, user, collection_map, library_id=None, libra
 
     # Fetch items from Zotero
     logger.info(f"Syncing items from {library_type} library...")
-    items, latest_version = client.get_top_level_items(since_version=since_version, group_id=library_id)
+    items = client.get_top_level_items(group_id=library_id)
 
     for item in items:
         try:
@@ -232,7 +232,6 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
        - Check if already synced (via zotero_item_key)
        - Download PDF
        - Create PDFDocument in appropriate collection
-    5. Update last_sync_version
 
     Args:
         user_id: ID of the user to sync
@@ -293,7 +292,7 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
             logger.info(f"Syncing from {library_name}...")
 
             # Fetch all collections from this library
-            all_collections = client.get_collections(since_version=connection.last_sync_version, group_id=group_id)
+            all_collections = client.get_collections(group_id=group_id)
 
             # Filter collections based on user selection
             if 'ALL' in selected_collection_keys:
@@ -369,86 +368,133 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
                     stats['errors'] += 1
 
             # Sync items from selected collections
-            items, latest_version = client.get_top_level_items(since_version=connection.last_sync_version, group_id=group_id)
+            items = client.get_top_level_items(group_id=group_id)
 
+            # Filter items to only those in selected collections
+            items_to_sync = []
             for item in items:
-                try:
-                    item_key = item['key']
-                    item_data = item['data']
+                item_collections = item['data'].get('collections', [])
+                if 'ALL' in selected_collection_keys or any(col_key in collections_to_sync for col_key in item_collections):
+                    items_to_sync.append(item)
 
-                    # Get item's collections
-                    item_collections = item_data.get('collections', [])
+            # Fetch children for all items in parallel
+            logger.info(f"Fetching children for {len(items_to_sync)} items...")
+            item_children_map = {}
+            with ThreadPoolExecutor(max_workers=16) as executor:
+                future_to_item = {
+                    executor.submit(client.get_item_children, item['key'], group_id=group_id): item
+                    for item in items_to_sync
+                }
+                for future in as_completed(future_to_item):
+                    item = future_to_item[future]
+                    try:
+                        item_children_map[item['key']] = future.result()
+                    except Exception as e:
+                        logger.error(f"Error fetching children for {item['key']}: {e}")
+                        item_children_map[item['key']] = []
 
-                    # Check if item belongs to any of our selected collections
-                    if 'ALL' not in selected_collection_keys:
-                        # Only sync items in selected collections (or their descendants)
-                        if not any(col_key in collections_to_sync for col_key in item_collections):
-                            continue
+            # Identify all PDF attachments to download
+            pdf_attachments = []  # List of (item, child) tuples
+            for item in items_to_sync:
+                children = item_children_map.get(item['key'], [])
+                for child in children:
+                    child_data = child['data']
+                    if child_data.get('itemType') == 'attachment' and child_data.get('contentType') == 'application/pdf':
+                        attachment_key = child['key']
+                        if not PDFDocument.objects.filter(zotero_item_key=attachment_key).exists():
+                            pdf_attachments.append((item, child))
 
-                    # Sync this item's PDFs
-                    children = client.get_item_children(item_key, group_id=group_id)
+            # Download all PDFs in parallel
+            logger.info(f"Downloading {len(pdf_attachments)} PDFs...")
+            pdf_content_map = {}
+            with ThreadPoolExecutor(max_workers=16) as executor:
+                future_to_attachment = {
+                    executor.submit(client.download_file, child['key'], group_id=group_id): (item, child)
+                    for item, child in pdf_attachments
+                }
+                for future in as_completed(future_to_attachment):
+                    item, child = future_to_attachment[future]
+                    try:
+                        content = future.result()
+                        if content:
+                            pdf_content_map[(item['key'], child['key'])] = content
+                        else:
+                            logger.warning(f"Could not download PDF for attachment {child['key']}")
+                    except Exception as e:
+                        logger.error(f"Error downloading {child['key']}: {e}")
 
-                    for child in children:
-                        child_data = child['data']
-                        if child_data.get('itemType') == 'attachment' and child_data.get('contentType') == 'application/pdf':
-                            attachment_key = child['key']
+            # Prepare default collection if needed (do this before parallel saves)
+            unfiled_collection = None
+            if any(
+                not (item['data'].get('collections', []) and item['data'].get('collections', [])[0] in collection_map)
+                for item, child in pdf_attachments
+                if pdf_content_map.get((item['key'], child['key']))
+            ):
+                if library_type == 'group':
+                    default_name = f"Zotero ({library_name}): Unfiled"
+                else:
+                    default_name = "Zotero: Unfiled"
+                unfiled_collection, _ = Collection.objects.get_or_create(
+                    name=default_name,
+                    parent=None,
+                    defaults={}
+                )
+                CollectionPermission.objects.get_or_create(
+                    user=user,
+                    collection=unfiled_collection,
+                    defaults={'permission': 'MANAGE'}
+                )
 
-                            # Check if already synced
-                            if PDFDocument.objects.filter(zotero_item_key=attachment_key).exists():
-                                logger.debug(f"Skipping already synced attachment: {attachment_key}")
-                                continue
+            def save_pdf_document(item, child):
+                """Save a single PDF document (runs in thread pool)."""
+                content = pdf_content_map.get((item['key'], child['key']))
+                if not content:
+                    return None
 
-                            # Download PDF
-                            pdf_content = client.download_file(attachment_key, group_id=group_id)
-                            if not pdf_content:
-                                logger.warning(f"Could not download PDF for attachment {attachment_key}")
-                                continue
+                item_data = item['data']
+                child_data = child['data']
+                item_collections = item_data.get('collections', [])
+                attachment_key = child['key']
 
-                            # Determine target collection
-                            target_collection = None
-                            if item_collections and item_collections[0] in collection_map:
-                                target_collection = collection_map[item_collections[0]]
-                            else:
-                                # Create default collection for this library
-                                if library_type == 'group':
-                                    default_name = f"Zotero ({library_name}): Unfiled"
-                                else:
-                                    default_name = "Zotero: Unfiled"
+                # Determine target collection
+                if item_collections and item_collections[0] in collection_map:
+                    target_collection = collection_map[item_collections[0]]
+                else:
+                    target_collection = unfiled_collection
 
-                                target_collection, _ = Collection.objects.get_or_create(
-                                    name=default_name,
-                                    parent=None,
-                                    defaults={}
-                                )
-                                CollectionPermission.objects.get_or_create(
-                                    user=user,
-                                    collection=target_collection,
-                                    defaults={'permission': 'MANAGE'}
-                                )
+                title = item_data.get('title', 'Untitled')
+                filename = child_data.get('filename', f'{attachment_key}.pdf')
 
-                            # Create PDFDocument
-                            title = item_data.get('title', 'Untitled')
-                            filename = child_data.get('filename', f'{attachment_key}.pdf')
+                pdf_doc = PDFDocument(
+                    title=title,
+                    collection=target_collection,
+                    ingested_by=user,
+                    full_text='',
+                    zotero_item_key=attachment_key
+                )
+                pdf_doc.pdf_file.save(filename, ContentFile(content), save=False)
+                pdf_doc.save()
+                return title
 
-                            pdf_file = ContentFile(pdf_content)
-                            pdf_doc = PDFDocument(
-                                title=title,
-                                collection=target_collection,
-                                ingested_by=user,
-                                full_text='',
-                                zotero_item_key=attachment_key
-                            )
-                            pdf_doc.pdf_file.save(filename, pdf_file, save=False)
-                            pdf_doc.save()
-
+            # Create PDFDocuments in parallel
+            logger.info(f"Saving {len(pdf_attachments)} PDF documents...")
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                future_to_child = {
+                    executor.submit(save_pdf_document, item, child): child
+                    for item, child in pdf_attachments
+                }
+                for future in as_completed(future_to_child):
+                    child = future_to_child[future]
+                    try:
+                        title = future.result()
+                        if title:
                             stats['pdfs_downloaded'] += 1
-                            logger.info(f"Downloaded and created document: {title}")
+                            logger.info(f"Created document: {title}")
+                    except Exception as e:
+                        logger.error(f"Error saving document for {child['key']}: {e}")
+                        stats['errors'] += 1
 
-                    stats['items_synced'] += 1
-
-                except Exception as e:
-                    logger.error(f"Error syncing item {item.get('key', 'unknown')}: {str(e)}")
-                    stats['errors'] += 1
+            stats['items_synced'] += len(items_to_sync)
 
         # Update connection with latest sync info
         # Note: We're using the personal library version as the baseline

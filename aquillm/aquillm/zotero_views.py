@@ -1,6 +1,8 @@
 """
 Views for Zotero OAuth and sync functionality
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -12,6 +14,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from .models import ZoteroConnection
 from .zotero_oauth import ZoteroOAuthClient
 from .zotero_tasks import sync_zotero_library
+from .zotero_client import ZoteroAPIClient
 
 import logging
 
@@ -170,7 +173,6 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
 
         if request.method == "GET":
             # Fetch available libraries and their collections
-            from .zotero_client import ZoteroAPIClient
             client = ZoteroAPIClient(
                 api_key=connection.api_key,
                 user_id=connection.zotero_user_id
@@ -204,19 +206,6 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
                             'item_count': collection_item_counts.get(col_key, 0)
                         }
 
-                    # Helper to calculate depth
-                    def get_depth(col_key, visited=None):
-                        if visited is None:
-                            visited = set()
-                        if col_key in visited:
-                            return 0  # Prevent circular references
-                        visited.add(col_key)
-
-                        col = collection_dict.get(col_key)
-                        if not col or not col['parent'] or col['parent'] not in collection_dict:
-                            return 0
-                        return 1 + get_depth(col['parent'], visited)
-
                     # Helper to recursively add collections in order (parents before children)
                     def add_collections_recursive(parent_key, depth):
                         for col_key, col_info in collection_dict.items():
@@ -246,31 +235,49 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
 
                     return flattened
 
-                # Build library list with collections
-                libraries = []
+                def fetch_library_data(lib_id, lib_name, lib_type, group_id):
+                    """Fetch collections and items for a library (runs in thread pool)."""
+                    with ThreadPoolExecutor(max_workers=2) as inner_executor:
+                        collections_future = inner_executor.submit(client.get_collections, group_id=group_id)
+                        items_future = inner_executor.submit(client.get_top_level_items, group_id=group_id)
+                        collections = collections_future.result()
+                        items = items_future.result()
+                    return {
+                        'id': lib_id,
+                        'name': lib_name,
+                        'type': lib_type,
+                        'collections': flatten_collections(collections, items)
+                    }
 
-                # Personal library
-                personal_collections = client.get_collections(since_version=0, group_id=None)
-                personal_items, _ = client.get_top_level_items(since_version=0, group_id=None)
-                libraries.append({
-                    'id': 'personal',
-                    'name': 'Personal Library',
-                    'type': 'user',
-                    'collections': flatten_collections(personal_collections, personal_items)
-                })
-
-                # Group libraries
+                # Fetch groups list first (needed to know what to parallelize)
                 groups = client.get_user_groups()
-                for group in groups:
-                    group_id = str(group['id'])
-                    group_collections = client.get_collections(since_version=0, group_id=group_id)
-                    group_items, _ = client.get_top_level_items(since_version=0, group_id=group_id)
-                    libraries.append({
-                        'id': group_id,
-                        'name': group['data']['name'],
-                        'type': 'group',
-                        'collections': flatten_collections(group_collections, group_items)
-                    })
+
+                # Parallel fetch all libraries (personal + all groups)
+                libraries = []
+                with ThreadPoolExecutor(max_workers=min(8, len(groups) + 1)) as executor:
+                    futures = {}
+
+                    # Submit personal library fetch
+                    futures[executor.submit(
+                        fetch_library_data, 'personal', 'Personal Library', 'user', None
+                    )] = 'personal'
+
+                    # Submit group library fetches
+                    for group in groups:
+                        group_id = str(group['id'])
+                        futures[executor.submit(
+                            fetch_library_data, group_id, group['data']['name'], 'group', group_id
+                        )] = group_id
+
+                    # Collect results as they complete
+                    for future in as_completed(futures):
+                        try:
+                            libraries.append(future.result())
+                        except Exception as e:
+                            logger.error(f"Error fetching library {futures[future]}: {e}")
+
+                # Sort so personal library appears first
+                libraries.sort(key=lambda lib: (0 if lib['id'] == 'personal' else 1, lib['name']))
 
                 context = {
                     'libraries': libraries,
@@ -334,7 +341,6 @@ def zotero_sync_status(request: HttpRequest) -> JsonResponse:
         return JsonResponse({
             'connected': True,
             'last_synced_at': connection.last_synced_at.isoformat() if connection.last_synced_at else None,
-            'last_sync_version': connection.last_sync_version
         })
     except ZoteroConnection.DoesNotExist:
         return JsonResponse({'connected': False})

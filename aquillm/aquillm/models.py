@@ -98,7 +98,6 @@ class ZoteroConnection(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='zotero_connection')
     api_key = models.CharField(max_length=255, help_text="Zotero API key from OAuth")
     zotero_user_id = models.CharField(max_length=100, help_text="Zotero user ID")
-    last_sync_version = models.IntegerField(default=0, help_text="Last synced version number for incremental sync")
     connected_at = models.DateTimeField(auto_now_add=True)
     last_synced_at = models.DateTimeField(null=True, blank=True, help_text="Last time a sync was performed")
 

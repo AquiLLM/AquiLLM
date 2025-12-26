@@ -2,7 +2,8 @@
 Zotero API client for syncing library data
 """
 import requests
-from typing import List, Dict, Optional, BinaryIO
+from requests import Response
+from typing import Tuple, List, Dict, Optional, BinaryIO
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class ZoteroAPIClient:
             'Zotero-API-Version': self.API_VERSION
         })
 
-    def _get(self, endpoint: str, params: Dict = None) -> requests.Response:
+    def _get(self, endpoint: str, full_path: bool = False, params: Dict | None = None) -> requests.Response:
         """
         Make a GET request to the Zotero API.
 
@@ -45,7 +46,7 @@ class ZoteroAPIClient:
         Returns:
             Response object
         """
-        url = f"{self.BASE_URL}{endpoint}"
+        url = endpoint if full_path else f"{self.BASE_URL}{endpoint}"
         try:
             response = self.session.get(url, params=params)
             response.raise_for_status()
@@ -53,6 +54,20 @@ class ZoteroAPIClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"Zotero API request failed: {url} - {str(e)}")
             raise
+
+    def _next_page(self, res: Response, params: Dict | None = None) -> Response | None:
+        if next := res.links.get('next'):
+            return self._get(next['url'], full_path=True, params=params)
+        return None
+
+    def _get_paginated(self, endpoint: str, params: Dict | None = None) -> Tuple[List, Response]:
+        res = self._get(endpoint, params=params)
+        ret = res.json()
+        while next_res := self._next_page(res, params):
+            ret += next_res.json()
+            res = next_res
+        return ret, res
+    
 
     def get_user_groups(self) -> List[Dict]:
         """
@@ -64,20 +79,18 @@ class ZoteroAPIClient:
         endpoint = f"/users/{self.user_id}/groups"
 
         try:
-            response = self._get(endpoint)
-            groups = response.json()
+            groups, _ =  self._get_paginated(endpoint)
             logger.info(f"Fetched {len(groups)} groups from Zotero")
             return groups
         except Exception as e:
             logger.error(f"Error fetching Zotero groups: {str(e)}")
             raise
 
-    def get_collections(self, since_version: int = 0, group_id: str = None) -> List[Dict]:
+    def get_collections(self, group_id: str | None = None) -> List[Dict]:
         """
         Fetch all collections from the user's library or a group library.
 
         Args:
-            since_version: Only return collections modified since this version
             group_id: Optional group ID to fetch group collections instead of user collections
 
         Returns:
@@ -88,13 +101,8 @@ class ZoteroAPIClient:
         else:
             endpoint = f"/users/{self.user_id}/collections"
 
-        params = {}
-        if since_version > 0:
-            params['since'] = since_version
-
         try:
-            response = self._get(endpoint, params=params)
-            collections = response.json()
+            collections, _ = self._get_paginated(endpoint)
             library_type = "group" if group_id else "user"
             logger.info(f"Fetched {len(collections)} collections from Zotero {library_type} library")
             return collections
@@ -102,17 +110,16 @@ class ZoteroAPIClient:
             logger.error(f"Error fetching Zotero collections: {str(e)}")
             raise
 
-    def get_items(self, since_version: int = 0, collection_key: str = None, group_id: str = None) -> tuple[List[Dict], int]:
+    def get_items(self, collection_key: str | None = None, group_id: str | None = None) -> List[Dict]:
         """
         Fetch items from the user's library or a group library.
 
         Args:
-            since_version: Only return items modified since this version
             collection_key: Optional collection key to filter items
             group_id: Optional group ID to fetch group items instead of user items
 
         Returns:
-            Tuple of (items list, latest version number)
+            List of items
         """
         if group_id:
             if collection_key:
@@ -125,57 +132,42 @@ class ZoteroAPIClient:
             else:
                 endpoint = f"/users/{self.user_id}/items"
 
-        params = {}
-        if since_version > 0:
-            params['since'] = since_version
-
         try:
-            response = self._get(endpoint, params=params)
-            items = response.json()
-
-            # Get the latest library version from response headers
-            latest_version = int(response.headers.get('Last-Modified-Version', 0))
+            items, _ = self._get_paginated(endpoint)
 
             library_type = "group" if group_id else "user"
-            logger.info(f"Fetched {len(items)} items from Zotero {library_type} library (version: {latest_version})")
-            return items, latest_version
+            logger.info(f"Fetched {len(items)} items from Zotero {library_type} library")
+            return items
         except Exception as e:
             logger.error(f"Error fetching Zotero items: {str(e)}")
             raise
 
-    def get_top_level_items(self, since_version: int = 0, group_id: str = None) -> tuple[List[Dict], int]:
+    def get_top_level_items(self, group_id: str | None = None) -> List[Dict]:
         """
         Fetch only top-level items (excludes notes, attachments, etc.).
 
         Args:
-            since_version: Only return items modified since this version
             group_id: Optional group ID to fetch group items instead of user items
 
         Returns:
-            Tuple of (items list, latest version number)
+            List of top-level items
         """
         if group_id:
             endpoint = f"/groups/{group_id}/items/top"
         else:
             endpoint = f"/users/{self.user_id}/items/top"
 
-        params = {}
-        if since_version > 0:
-            params['since'] = since_version
-
         try:
-            response = self._get(endpoint, params=params)
-            items = response.json()
-            latest_version = int(response.headers.get('Last-Modified-Version', 0))
+            items, _ = self._get_paginated(endpoint)
 
             library_type = "group" if group_id else "user"
-            logger.info(f"Fetched {len(items)} top-level items from Zotero {library_type} library (version: {latest_version})")
-            return items, latest_version
+            logger.info(f"Fetched {len(items)} top-level items from Zotero {library_type} library")
+            return items
         except Exception as e:
             logger.error(f"Error fetching top-level items: {str(e)}")
             raise
 
-    def get_item_children(self, item_key: str, group_id: str = None) -> List[Dict]:
+    def get_item_children(self, item_key: str, group_id: str | None = None) -> List[Dict]:
         """
         Get child items (notes, attachments) for a specific item.
 
@@ -192,15 +184,14 @@ class ZoteroAPIClient:
             endpoint = f"/users/{self.user_id}/items/{item_key}/children"
 
         try:
-            response = self._get(endpoint)
-            children = response.json()
+            children, response = self._get_paginated(endpoint)
             logger.info(f"Fetched {len(children)} children for item {item_key}")
             return children
         except Exception as e:
             logger.error(f"Error fetching children for item {item_key}: {str(e)}")
             raise
 
-    def download_file(self, item_key: str, group_id: str = None) -> Optional[bytes]:
+    def download_file(self, item_key: str, group_id: str | None = None) -> Optional[bytes]:
         """
         Download an attached file (PDF, etc.) from Zotero.
 
