@@ -287,7 +287,7 @@ LOGGING = {
     'loggers': {
         'django': {
             'handlers': ['file', 'console'],
-            'level': 'DEBUG',
+            'level': 'INFO',
             'propagate': True,
         },
         'django.request': {
@@ -314,6 +314,11 @@ LOGGING = {
             'handlers': ['file', 'console'],
             'level': 'DEBUG',
             'propagate': True,
-        }
+        },
+        'kombu': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }
