@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import IngestionDashboard from './IngestionDashboard';
 import { IngestionDashboardLauncherProps } from '../types';
 import { X } from 'lucide-react';
@@ -36,16 +36,20 @@ const IngestionDashboardModal: React.FC<IngestionDashboardModalProps> = ({ wsUrl
 const IngestionDashboardLauncher: React.FC<IngestionDashboardLauncherProps> = ({ wsUrl }) => {
   const [modalOpen, setModalOpen] = useState(false);
 
+  const handleToggle = useCallback(() => setModalOpen(prev => !prev), []);
+  const handleClose = useCallback(() => setModalOpen(false), []);
+  const handleNewDocument = useCallback(() => setModalOpen(true), []);
+
   return (
     <>
       {/* Clickable div that toggles the modal's visibility */}
-      <div onClick={() => setModalOpen(!modalOpen)} className="my-[5px] pl-[8px] py-[3px] font-sans text-lg w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all">
+      <div onClick={handleToggle} className="my-[5px] pl-[8px] py-[3px] font-sans text-lg w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all">
         Ingestion Monitor
       </div>
 
       {/* The modal is always in the DOM; its visibility is controlled by the 'hidden' class */}
       <div className={`${modalOpen ? '' : 'hidden'}`}>
-        <IngestionDashboardModal wsUrl={wsUrl} onClose={() => setModalOpen(false)} onNewDocument={() => setModalOpen(true)} />
+        <IngestionDashboardModal wsUrl={wsUrl} onClose={handleClose} onNewDocument={handleNewDocument} />
       </div>
     </>
   );

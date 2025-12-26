@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { PDFIngestionMonitorProps, IngestionDashboardProps } from '../types';
 import PDFIngestionMonitor from './PDFIngestionMonitor';
+import ZoteroSyncStatus from './ZoteroSyncStatus';
 
 
 
@@ -17,6 +18,10 @@ const IngestionDashboard: React.FC<IngestionDashboardProps> = ({ wsUrl, onNewDoc
     }
 
     const socket = new WebSocket(wsUrl);
+
+    socket.addEventListener('open', () => {
+      setLoading(false);
+    });
 
     const handleMessage = (event: MessageEvent) => {
       try {
@@ -57,6 +62,7 @@ const IngestionDashboard: React.FC<IngestionDashboardProps> = ({ wsUrl, onNewDoc
 
   return (
     <div className="space-y-6">
+      <ZoteroSyncStatus />
       {monitors.length === 0 && <div>No documents being ingested</div>}
       {[...monitors].reverse().map((monitor) => (
         <PDFIngestionMonitor key={monitor.documentId} {...monitor} />

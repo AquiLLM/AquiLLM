@@ -1,9 +1,12 @@
 """
 Celery tasks for Zotero synchronization
 """
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from asgiref.sync import async_to_sync
 from celery import shared_task
+from channels.layers import get_channel_layer
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.utils import timezone
@@ -15,6 +18,34 @@ from .zotero_client import ZoteroAPIClient
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def send_zotero_sync_status(user_id: int, message: str, message_type: str = 'info'):
+    """
+    Sends a Zotero sync status message to the user via WebSocket.
+
+    Args:
+        user_id: The user ID to send the message to
+        message: The status message text
+        message_type: One of 'info', 'error', 'success'
+    """
+    try:
+        channel_layer = get_channel_layer()
+        group_name = f'zotero-sync-{user_id}'
+        logger.debug(f"Sending Zotero sync message to {group_name}: {message}")
+        async_to_sync(channel_layer.group_send)(
+            group_name,
+            {
+                'type': 'zotero.sync.update',
+                'message_type': message_type,
+                'data': {
+                    'message': message,
+                    'timestamp': int(time.time() * 1000),
+                }
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to send Zotero sync WebSocket message to user {user_id}: {e}")
 
 
 def sync_collections_with_hierarchy(client, user, collection_map, library_id=None, library_type='user'):
@@ -248,6 +279,7 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
         connection = ZoteroConnection.objects.get(user=user)
 
         logger.info(f"Starting Zotero sync for user {user.username} (ID: {user_id})")
+        send_zotero_sync_status(user_id, "Starting Zotero sync...", "info")
 
         # Initialize API client
         client = ZoteroAPIClient(
@@ -290,6 +322,7 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
                 library_name = group['data']['name'] if group else f"Group {library_id}"
 
             logger.info(f"Syncing from {library_name}...")
+            send_zotero_sync_status(user_id, f"Syncing {library_name}...", "info")
 
             # Fetch all collections from this library
             all_collections = client.get_collections(group_id=group_id)
@@ -379,6 +412,7 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
 
             # Fetch children for all items in parallel
             logger.info(f"Fetching children for {len(items_to_sync)} items...")
+            send_zotero_sync_status(user_id, f"Fetching attachments for {len(items_to_sync)} items...", "info")
             item_children_map = {}
             with ThreadPoolExecutor(max_workers=16) as executor:
                 future_to_item = {
@@ -406,6 +440,8 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
 
             # Download all PDFs in parallel
             logger.info(f"Downloading {len(pdf_attachments)} PDFs...")
+            if pdf_attachments:
+                send_zotero_sync_status(user_id, f"Downloading {len(pdf_attachments)} PDFs...", "info")
             pdf_content_map = {}
             with ThreadPoolExecutor(max_workers=16) as executor:
                 future_to_attachment = {
@@ -478,6 +514,8 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
 
             # Create PDFDocuments in parallel
             logger.info(f"Saving {len(pdf_attachments)} PDF documents...")
+            if pdf_content_map:
+                send_zotero_sync_status(user_id, f"Processing {len(pdf_content_map)} downloaded PDFs...", "info")
             with ThreadPoolExecutor(max_workers=8) as executor:
                 future_to_child = {
                     executor.submit(save_pdf_document, item, child): child
@@ -518,14 +556,22 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
         stats['empty_collections_deleted'] = empty_collections_deleted
 
         logger.info(f"Zotero sync completed for user {user.username}. Stats: {stats}")
+        send_zotero_sync_status(
+            user_id,
+            f"Sync complete! Downloaded {stats['pdfs_downloaded']} PDFs, {stats['errors']} errors.",
+            "success" if stats['errors'] == 0 else "info"
+        )
         return stats
 
     except User.DoesNotExist:
         logger.error(f"User {user_id} not found")
+        send_zotero_sync_status(user_id, "Sync failed: User not found", "error")
         raise
     except ZoteroConnection.DoesNotExist:
         logger.error(f"No Zotero connection for user {user_id}")
+        send_zotero_sync_status(user_id, "Sync failed: Zotero not connected", "error")
         raise
     except Exception as e:
         logger.error(f"Unexpected error during Zotero sync: {str(e)}")
+        send_zotero_sync_status(user_id, f"Sync failed: {str(e)}", "error")
         raise

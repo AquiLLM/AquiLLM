@@ -27,6 +27,13 @@ export interface PDFIngestionMonitorProps {
   documentId: string;
 }
 
+export interface ZoteroSyncMessage {
+  id: string;
+  timestamp: number;
+  message: string;
+  type: 'info' | 'error' | 'success';
+}
+
 declare global {
   interface Window {
     mountReactComponent: (
