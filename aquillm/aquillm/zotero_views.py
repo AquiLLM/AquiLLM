@@ -11,10 +11,11 @@ from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 from django.core.exceptions import ObjectDoesNotExist
 
+from pyzotero import zotero
+
 from .models import ZoteroConnection
 from .zotero_oauth import ZoteroOAuthClient
 from .zotero_tasks import sync_zotero_library
-from .zotero_client import ZoteroAPIClient
 
 import logging
 
@@ -172,38 +173,35 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
         connection = ZoteroConnection.objects.get(user=request.user)
 
         if request.method == "GET":
-            # Fetch available libraries and their collections
-            client = ZoteroAPIClient(
-                api_key=connection.api_key,
-                user_id=connection.zotero_user_id
+            # Create pyzotero client for user library
+            user_zot = zotero.Zotero(
+                connection.zotero_user_id,
+                'user',
+                connection.api_key
             )
 
             try:
                 # Helper function to flatten collection tree for template rendering
-                def flatten_collections(collections, items):
+                def flatten_collections(collections):
                     """
                     Flatten hierarchical collections into a list with depth information.
                     Returns list of dicts with 'key', 'name', 'depth', 'parent', 'item_count'
+                    Uses numItems from collection metadata (no need to fetch all items).
                     """
                     collection_dict = {}
                     flattened = []
 
-                    # Build a map of collection key -> item count
-                    collection_item_counts = {}
-                    for item in items:
-                        item_collections = item['data'].get('collections', [])
-                        for col_key in item_collections:
-                            collection_item_counts[col_key] = collection_item_counts.get(col_key, 0) + 1
-
                     # First pass: create dict of all collections
+                    # Item count comes from collection metadata (meta.numItems)
                     for col in collections:
                         col_key = col['key']
                         col_data = col['data']
+                        col_meta = col.get('meta', {})
                         collection_dict[col_key] = {
                             'key': col_key,
                             'name': col_data['name'],
                             'parent': col_data.get('parentCollection'),
-                            'item_count': collection_item_counts.get(col_key, 0)
+                            'item_count': col_meta.get('numItems', 0)
                         }
 
                     # Helper to recursively add collections in order (parents before children)
@@ -235,38 +233,42 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
 
                     return flattened
 
-                def fetch_library_data(lib_id, lib_name, lib_type, group_id):
-                    """Fetch collections and items for a library (runs in thread pool)."""
-                    with ThreadPoolExecutor(max_workers=2) as inner_executor:
-                        collections_future = inner_executor.submit(client.get_collections, group_id=group_id)
-                        items_future = inner_executor.submit(client.get_top_level_items, group_id=group_id)
-                        collections = collections_future.result()
-                        items = items_future.result()
+                def fetch_library_data(lib_id, lib_name, lib_type, group_id, api_key):
+                    """Fetch collections for a library (runs in thread pool)."""
+                    # Create appropriate pyzotero client for this library
+                    if group_id:
+                        zot = zotero.Zotero(group_id, 'group', api_key)
+                    else:
+                        zot = zotero.Zotero(connection.zotero_user_id, 'user', api_key)
+
+                    # Only fetch collections - item counts come from collection metadata
+                    collections = zot.everything(zot.collections())
                     return {
                         'id': lib_id,
                         'name': lib_name,
                         'type': lib_type,
-                        'collections': flatten_collections(collections, items)
+                        'collections': flatten_collections(collections)
                     }
 
                 # Fetch groups list first (needed to know what to parallelize)
-                groups = client.get_user_groups()
+                groups = user_zot.everything(user_zot.groups())
 
                 # Parallel fetch all libraries (personal + all groups)
                 libraries = []
+                api_key = connection.api_key
                 with ThreadPoolExecutor(max_workers=min(8, len(groups) + 1)) as executor:
                     futures = {}
 
                     # Submit personal library fetch
                     futures[executor.submit(
-                        fetch_library_data, 'personal', 'Personal Library', 'user', None
+                        fetch_library_data, 'personal', 'Personal Library', 'user', None, api_key
                     )] = 'personal'
 
                     # Submit group library fetches
                     for group in groups:
                         group_id = str(group['id'])
                         futures[executor.submit(
-                            fetch_library_data, group_id, group['data']['name'], 'group', group_id
+                            fetch_library_data, group_id, group['data']['name'], 'group', group_id, api_key
                         )] = group_id
 
                     # Collect results as they complete

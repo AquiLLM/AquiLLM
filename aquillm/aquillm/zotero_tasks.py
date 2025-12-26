@@ -7,217 +7,32 @@ from celery import shared_task
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.utils import timezone
-from typing import Optional
+from typing import Optional, Literal
+
+from pyzotero import zotero
 
 from .models import ZoteroConnection, Collection, PDFDocument, CollectionPermission
-from .zotero_client import ZoteroAPIClient
 
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def sync_collections_with_hierarchy(client, user, collection_map, library_id=None, library_type='user'):
-    """
-    Helper function to sync collections while preserving parent/child hierarchy.
-
-    NOTE: Collections are created eagerly here, but will be deleted at the end of the sync
-    if they end up empty (no documents).
-
-    Args:
-        client: ZoteroAPIClient instance
-        user: Django User object
-        collection_map: Dictionary to store Zotero key -> AquiLLM Collection mapping
-        library_id: Group ID if syncing group library, None for personal library
-        library_type: 'user' or 'group'
-
-    Returns:
-        Tuple of (collections_created, collections_updated, errors)
-    """
-    collections_created = 0
-    collections_updated = 0
-    errors = 0
-
-    # Fetch collections from Zotero
-    zotero_collections = client.get_collections(group_id=library_id)
-
-    # Sort collections: parents first, then children
-    # This ensures parent collections exist before we try to reference them
-    collections_with_parents = []
-    collections_without_parents = []
-
-    for zotero_col in zotero_collections:
-        col_data = zotero_col['data']
-        if col_data.get('parentCollection'):
-            collections_with_parents.append(zotero_col)
-        else:
-            collections_without_parents.append(zotero_col)
-
-    # Process root collections first, then children
-    for zotero_col in collections_without_parents + collections_with_parents:
-        try:
-            col_key = zotero_col['key']
-            col_data = zotero_col['data']
-            col_name = col_data['name']
-            parent_collection_key = col_data.get('parentCollection')
-
-            # Determine parent collection in AquiLLM
-            parent_collection = None
-            if parent_collection_key and parent_collection_key in collection_map:
-                parent_collection = collection_map[parent_collection_key]
-
-            # Create collection name with library prefix
-            if library_type == 'group':
-                # Get group name from library_id or use generic prefix
-                full_name = f"Zotero Group: {col_name}"
-            else:
-                full_name = f"Zotero: {col_name}"
-
-            # Create or get collection in AquiLLM
-            # Use get_or_create with unique constraints
-            collection, created = Collection.objects.get_or_create(
-                name=full_name,
-                parent=parent_collection,
-                defaults={}
-            )
-
-            # Ensure user has MANAGE permission on this collection
-            CollectionPermission.objects.get_or_create(
-                user=user,
-                collection=collection,
-                defaults={'permission': 'MANAGE'}
-            )
-
-            # Store in map for future reference
-            collection_map[col_key] = collection
-
-            if created:
-                collections_created += 1
-                logger.info(f"Created collection: {full_name} (parent: {parent_collection.name if parent_collection else 'None'})")
-            else:
-                collections_updated += 1
-                logger.debug(f"Collection already exists: {full_name}")
-
-        except Exception as e:
-            logger.error(f"Error syncing collection {zotero_col.get('key', 'unknown')}: {str(e)}")
-            errors += 1
-
-    return collections_created, collections_updated, errors
-
-
-def sync_items_from_library(client, user, collection_map, library_id=None, library_type='user'):
-    """
-    Helper function to sync items from a library (personal or group).
-
-    Args:
-        client: ZoteroAPIClient instance
-        user: Django User object
-        collection_map: Dictionary mapping Zotero keys to AquiLLM Collections
-        library_id: Group ID if syncing group library, None for personal library
-        library_type: 'user' or 'group'
-
-    Returns:
-        Tuple of (items_synced, pdfs_downloaded, errors)
-    """
-    items_synced = 0
-    pdfs_downloaded = 0
-    errors = 0
-
-    # Fetch items from Zotero
-    logger.info(f"Syncing items from {library_type} library...")
-    items = client.get_top_level_items(group_id=library_id)
-
-    for item in items:
-        try:
-            item_key = item['key']
-            item_data = item['data']
-            item_type = item_data.get('itemType', '')
-
-            # Only process items that might have attachments
-            if item_type in ['note', 'attachment']:
-                continue
-
-            # Get item title
-            title = item_data.get('title', 'Untitled')
-
-            # Determine which collection to put this in
-            collections_in_item = item_data.get('collections', [])
-            target_collection = None
-
-            if collections_in_item:
-                # Use first collection if it exists in our map
-                first_col_key = collections_in_item[0]
-                target_collection = collection_map.get(first_col_key)
-
-            if not target_collection:
-                # Create a default uncategorized collection
-                uncategorized_name = f"Zotero {library_type.capitalize()}: Uncategorized"
-                target_collection, _ = Collection.objects.get_or_create(
-                    name=uncategorized_name,
-                    defaults={'parent': None}
-                )
-                CollectionPermission.objects.get_or_create(
-                    user=user,
-                    collection=target_collection,
-                    defaults={'permission': 'MANAGE'}
-                )
-
-            # Check if we've already synced this item
-            existing_doc = PDFDocument.objects.filter(
-                zotero_item_key=item_key,
-                collection=target_collection
-            ).first()
-
-            if existing_doc:
-                logger.debug(f"Item {item_key} already synced, skipping")
-                continue
-
-            # Get children (attachments)
-            children = client.get_item_children(item_key, group_id=library_id)
-
-            # Look for PDF attachments
-            for child in children:
-                child_data = child['data']
-                if child_data.get('itemType') == 'attachment':
-                    content_type = child_data.get('contentType', '')
-                    if 'pdf' in content_type.lower() or child_data.get('filename', '').endswith('.pdf'):
-                        attachment_key = child['key']
-
-                        # Check if this specific attachment was already synced
-                        if PDFDocument.objects.filter(zotero_item_key=attachment_key).exists():
-                            logger.debug(f"PDF attachment {attachment_key} already synced")
-                            continue
-
-                        # Download the PDF
-                        logger.info(f"Downloading PDF: {title}")
-                        pdf_content = client.download_file(attachment_key, group_id=library_id)
-
-                        if pdf_content:
-                            # Create PDFDocument
-                            filename = child_data.get('filename', f"{title}.pdf")
-                            pdf_file = ContentFile(pdf_content, name=filename)
-
-                            pdf_doc = PDFDocument(
-                                title=title,
-                                collection=target_collection,
-                                ingested_by=user,
-                                full_text='',  # Will be extracted on save
-                                zotero_item_key=attachment_key  # Store attachment key
-                            )
-                            pdf_doc.pdf_file.save(filename, pdf_file, save=False)
-                            pdf_doc.save()  # This will trigger text extraction and commit to DB
-
-                            pdfs_downloaded += 1
-                            logger.info(f"Created PDFDocument for: {title}")
-
-            items_synced += 1
-
-        except Exception as e:
-            logger.error(f"Error syncing item {item.get('key', 'unknown')}: {str(e)}")
-            errors += 1
-
-    return items_synced, pdfs_downloaded, errors
-
+# @shared_task(bind=True)
+# def sync_collection(self, user: int | User, type: Literal["user", "group"], zotero_id: str, sync_items: bool = True):
+#     if isinstance(user, int):
+#         user = User.objects.get(id=user)
+#     user_zotero_connection = ZoteroConnection.objects.get(user=user)
+#     zotero_user_id = user_zotero_connection.zotero_user_id
+#     api_key = user_zotero_connection.api_key
+#     user_zot = zotero.Zotero(zotero_user_id, 'user', api_key)
+#     stats = {
+#         'collections_created': 0,
+#         'collections_updated': 0,
+#         'items_synced': 0,
+#         'pdfs_downloaded': 0,
+#         'errors': 0
+#     }
 
 @shared_task(bind=True)
 def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = None):
@@ -249,11 +64,12 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
 
         logger.info(f"Starting Zotero sync for user {user.username} (ID: {user_id})")
 
-        # Initialize API client
-        client = ZoteroAPIClient(
-            api_key=connection.api_key,
-            user_id=connection.zotero_user_id
-        )
+        # Store API credentials for creating pyzotero clients
+        api_key = connection.api_key
+        user_id_zotero = connection.zotero_user_id
+
+        # Create pyzotero client for user library (used for fetching groups)
+        user_zot = zotero.Zotero(user_id_zotero, 'user', api_key)
 
         # Track statistics
         stats = {
@@ -279,20 +95,22 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
         for library_id, selected_collection_keys in library_config.items():
             if library_id == 'personal':
                 library_type = 'user'
-                group_id = None
                 library_name = "Personal Library"
+                # Use user library client
+                zot = zotero.Zotero(user_id_zotero, 'user', api_key)
             else:
                 library_type = 'group'
-                group_id = library_id
                 # Fetch group name
-                all_groups = client.get_user_groups()
+                all_groups = user_zot.everything(user_zot.groups())
                 group = next((g for g in all_groups if str(g['id']) == library_id), None)
                 library_name = group['data']['name'] if group else f"Group {library_id}"
+                # Create group library client
+                zot = zotero.Zotero(library_id, 'group', api_key)
 
             logger.info(f"Syncing from {library_name}...")
 
             # Fetch all collections from this library
-            all_collections = client.get_collections(group_id=group_id)
+            all_collections = zot.everything(zot.collections())
 
             # Filter collections based on user selection
             if 'ALL' in selected_collection_keys:
@@ -368,7 +186,7 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
                     stats['errors'] += 1
 
             # Sync items from selected collections
-            items = client.get_top_level_items(group_id=group_id)
+            items = zot.everything(zot.top())
 
             # Filter items to only those in selected collections
             items_to_sync = []
@@ -382,7 +200,7 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
             item_children_map = {}
             with ThreadPoolExecutor(max_workers=16) as executor:
                 future_to_item = {
-                    executor.submit(client.get_item_children, item['key'], group_id=group_id): item
+                    executor.submit(zot.children, item['key']): item
                     for item in items_to_sync
                 }
                 for future in as_completed(future_to_item):
@@ -409,7 +227,7 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
             pdf_content_map = {}
             with ThreadPoolExecutor(max_workers=16) as executor:
                 future_to_attachment = {
-                    executor.submit(client.download_file, child['key'], group_id=group_id): (item, child)
+                    executor.submit(zot.file, child['key']): (item, child)
                     for item, child in pdf_attachments
                 }
                 for future in as_completed(future_to_attachment):
@@ -505,15 +323,15 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
         # Cleanup: Remove empty collections that were created during sync
         logger.info("Cleaning up empty collections...")
         empty_collections_deleted = 0
-        for collection in collection_map.values():
-            # Check if collection has any documents
-            if not collection.documents:
-                # Also check if it has any children with documents
-                has_content = any(child.documents for child in collection.get_all_children())
-                if not has_content:
-                    logger.info(f"Deleting empty collection: {collection.name}")
-                    collection.delete()
-                    empty_collections_deleted += 1
+        # for collection in collection_map.values():
+        #     # Check if collection has any documents
+        #     if not collection.documents:
+        #         # Also check if it has any children with documents
+        #         has_content = any(child.documents for child in collection.get_all_children())
+        #         if not has_content:
+        #             logger.info(f"Deleting empty collection: {collection.name}")
+        #             collection.delete()
+        #             empty_collections_deleted += 1
 
         stats['empty_collections_deleted'] = empty_collections_deleted
 
