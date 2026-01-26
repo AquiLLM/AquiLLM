@@ -1,111 +1,60 @@
+{% extends 'base.html' %}
 {% load static %}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AquiLLM</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background-color: #1a1a1a;
-            color: #e0e0e0;
-        }
+{% block title %}{{ page_title }}{% endblock %}
 
-        nav {
-            background-color: #2d2d2d;
-            border-bottom: 1px solid #404040;
-            padding: 20px 0;
-        }
+{% block extra_css %}
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 60px 20px;
+}
 
-        nav ul {
-            list-style: none;
-            display: flex;
-            justify-content: center;
-            gap: 40px;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
+header {
+    text-align: center;
+}
 
-        nav a {
-            text-decoration: none;
-            color: #e0e0e0;
-            font-size: 18px;
-            font-weight: 500;
-            transition: color 0.3s;
-        }
+.logo {
+    width: 150px;
+    height: auto;
+    margin-bottom: 20px;
+    filter: brightness(0.9);
+}
 
-        nav a:hover {
-            color: #58a6ff;
-        }
+h1 {
+    font-size: 48px;
+    color: #ffffff;
+    margin-bottom: 30px;
+}
 
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 60px 20px;
-        }
+.description {
+    max-width: 800px;
+    margin: 0 auto;
+    line-height: 1.8;
+    color: #b8b8b8;
+}
 
-        header {
-            text-align: center;
-        }
+.description h2 {
+    font-size: 24px;
+    color: #e0e0e0;
+    margin-bottom: 15px;
+    font-weight: 600;
+}
 
-        .logo {
-            width: 150px;
-            height: auto;
-            margin-bottom: 20px;
-            filter: brightness(0.9);
-        }
+.description p {
+    font-size: 18px;
+}
+{% endblock %}
 
-        h1 {
-            font-size: 48px;
-            color: #ffffff;
-            margin-bottom: 30px;
-        }
-
-        .description {
-            max-width: 800px;
-            margin: 0 auto;
-            line-height: 1.8;
-            color: #b8b8b8;
-        }
-
-        .description h2 {
-            font-size: 24px;
-            color: #e0e0e0;
-            margin-bottom: 15px;
-            font-weight: 600;
-        }
-
-        .description p {
-            font-size: 18px;
-        }
-    </style>
-</head>
-<body>
-    <nav>
-        <ul>
-            <li><a href="#">Team Members</a></li>
-            <li><a href="#">Tools/Technologies</a></li>
-            <li><a href="#">The Problem</a></li>
-        </ul>
-    </nav>
-
-    <div class="container">
-        <header>
-            <img src="{% static 'images/aquila.svg' %}" alt="AquiLLM Logo" class="logo">
-            <h1>AquiLLM</h1>
-            <div class="description">
-                <h2>A Tool for Preserving Knowledge in Research Groups</h2>
-                <p>AquiLLM (pronounced ah-quill-em) is a tool that helps researchers manage, search, and interact with their research documents. The goal is to enable teams to access and preserve their collective knowledge, and to enable new group members to get up to speed quickly.</p>
-            </div>
-        </header>
-    </div>
-</body>
-</html>
+{% block content %}
+<div class="container">
+    <header>
+        <img src="{% static 'images/aquila.svg' %}" alt="AquiLLM Logo" class="logo">
+        <h1>{{ project_name }}</h1>
+        <div class="description">
+            <h2>{{ tagline }}</h2>
+            <p>{{ description }}</p>
+        </div>
+    </header>
+</div>
+{% endblock %}
