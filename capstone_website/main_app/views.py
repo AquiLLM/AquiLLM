@@ -10,3 +10,6 @@ def index(request):
         'description': 'AquiLLM (pronounced ah-quill-em) is a tool that helps researchers manage, search, and interact with their research documents. The goal is to enable teams to access and preserve their collective knowledge, and to enable new group members to get up to speed quickly.',
     }
     return render(request, 'index.html', context)
+
+def team(request):
+    return render(request, "team.html")

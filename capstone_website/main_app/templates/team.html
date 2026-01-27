@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Team Members | AquiLLM{% endblock %}
+
+{% block extra_css %}
+    .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 60px 20px;
+    }
+
+    .page h1 {
+        font-size: 56px;
+        font-weight: 700;
+        color: #ffffff;
+        margin-bottom: 10px;
+        letter-spacing: -0.5px;
+    }
+
+    .subtitle {
+        font-size: 20px;
+        color: #b8b8b8;
+        margin-bottom: 40px;
+    }
+
+    .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 24px;
+    }
+
+    .card {
+        background: #222;
+        border: 1px solid #404040;
+        border-radius: 16px;
+        padding: 22px;
+        transition: transform 0.15s ease, border-color 0.15s ease;
+        min-height: 320px;
+    }
+
+    .card:hover {
+        transform: translateY(-3px);
+        border-color: #58a6ff;
+    }
+
+    .avatar {
+        width: 84px;
+        height: 84px;
+        border-radius: 50%;
+        border: 2px solid #404040;
+        object-fit: cover;
+        margin-bottom: 16px;
+        background: #2d2d2d;
+        display: block;
+    }
+
+    .name {
+        font-size: 24px;
+        font-weight: 700;
+        color: #ffffff;
+        margin-bottom: 6px;
+    }
+
+    .role {
+        font-size: 16px;
+        color: #58a6ff;
+        font-weight: 600;
+        margin-bottom: 12px;
+    }
+
+    .bio {
+        color: #cfcfcf;
+        font-size: 16px;
+        line-height: 1.7;
+    }
+
+    @media (max-width: 950px) {
+        .grid { grid-template-columns: 1fr; }
+        .page h1 { font-size: 44px; }
+    }
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <h1>Team Members</h1>
+    <p class="subtitle">Meet the team behind AquiLLM.</p>
+
+    <div class="grid">
+        <div class="card">
+            <img class="avatar" src="{% static 'images/team1.jpg' %}" alt="Team member 1">
+            <div class="name">Tee Grant</div>
+            <p class="bio">
+                Tee's rocking bio
+            </p>
+        </div>
+
+        <div class="card">
+            <img class="avatar" src="{% static 'images/team2.jpg' %}" alt="Team member 2">
+            <div class="name">Jacob Nowack</div>
+            <p class="bio">
+                Jacob's rocking bio
+            </p>
+        </div>
+
+        <div class="card">
+            <img class="avatar" src="{% static 'images/team3.jpg' %}" alt="Team member 3">
+            <div class="name">Jackson Godsey</div>
+            <p class="bio">
+                Jackson's rocking bio
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}
