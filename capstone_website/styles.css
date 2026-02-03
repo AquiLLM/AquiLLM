@@ -1,0 +1,510 @@
+/* This CSS was taken from aquillm.org and modified for static website use and additional functionality */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Latin Modern Roman', Georgia, serif;
+    line-height: 1.6;
+    color: #eeeeee;
+    background: linear-gradient(135deg, #222222 0%, #111111 50%, #333333 100%);
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+header {
+    background: rgba(34, 34, 34, 0.95);
+    backdrop-filter: blur(10px);
+    position: fixed;
+    top: 0;
+    width: 100%;
+    z-index: 1000;
+    border-bottom: 1px solid #444444;
+}
+
+nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 0;
+}
+ul ul {
+    padding-left: 30px;
+}
+
+
+.logo-container {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    text-decoration: none;
+}
+
+.logo-container:hover {
+    transform: scale(1.1) translateY(-2px);
+    text-shadow: 0 0 8px #7daee0f8;
+    text-decoration: none;
+}
+
+.logo-svg {
+    width: 32px;
+    height: 32px;
+    fill: #1C79D8;
+}
+
+.logo-text {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: #1C79D8;
+}
+
+.nav-links {
+    display: flex;
+    list-style: none;
+    gap: 2rem;
+}
+
+.nav-links a {
+    text-decoration: none;
+    color: #eeeeee;
+    font-weight: 500;
+    transition: color 0.3s;
+}
+
+.nav-links a:hover {
+    color: #1C79D8;
+}
+
+main {
+    margin-top: 80px;
+}
+
+/* General link styling */
+a {
+    color: #5DA3F0;
+    text-decoration: none;
+    transition: color 0.3s;
+}
+
+a:hover {
+    color: #1C79D8;
+    text-decoration: underline;
+}
+
+/* Hero section */
+.hero {
+    text-align: center;
+    padding: 4rem 0;
+    position: relative;
+}
+
+.hero-background {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -40%);
+    width: 450px;
+    height: 450px;
+    max-width: 100%;
+    max-height: 75%;
+    background: url('aquillm_logo.svg');
+    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: brightness(1) contrast(1);
+    opacity: 0.33;
+    z-index: 0;
+}
+
+.hero-content {
+    position: relative;
+    z-index: 2;
+}
+
+.hero .container {
+    position: relative;
+    z-index: 12;
+}
+
+.hero h1 {
+    position: relative;
+    font-size: 4rem;
+    margin-bottom: 1.5rem;
+    color: #1C79D8;
+    font-weight: normal;
+    letter-spacing: -0.02em;
+}
+
+.hero .subtitle {
+    position: relative;
+    font-size: 1.8rem;
+    margin-bottom: 2rem;
+    color: #A5CCF3;
+    font-weight: 300;
+    font-style: italic;
+}
+
+.hero p {
+    position: relative;
+    font-size: 1.3rem;
+    margin-bottom: 3rem;
+    color: #cccccc;
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
+    line-height: 1.7;
+}
+
+/* Buttons */
+.cta-buttons {
+    display: flex;
+    gap: 1.5rem;
+    justify-content: center;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+    margin-bottom: 2rem;
+}
+
+.btn {
+    padding: 1rem 2.5rem;
+    border: none;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 500;
+    transition: all 0.3s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.1rem;
+}
+
+.btn-primary {
+    background: #1C79D8;
+    color: #eeeeee;
+}
+
+.btn-primary:hover {
+    background: #1B4979;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(28, 121, 216, 0.3);
+}
+
+.btn-secondary {
+    background: transparent;
+    color: #1C79D8;
+    border: 2px solid #1C79D8;
+}
+
+.btn-secondary:hover {
+    background: #1C79D8;
+    color: #eeeeee;
+}
+
+/* Funding section */
+.funding-logos {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 4rem;
+    padding: 2rem;
+    background: rgba(68, 68, 68, 0.1);
+    border-radius: 12px;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+}
+
+.funding-item {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    transition: transform 0.3s ease;
+}
+
+.funding-item:hover {
+    transform: scale(1.05);
+}
+
+.funding-logos img {
+    height: 80px;
+    filter: brightness(0.9);
+    transition: filter 0.3s;
+}
+
+.funding-logos img:hover {
+    filter: brightness(1.1);
+}
+
+.funding-name {
+    color: #A5CCF3;
+    font-size: 1.2rem;
+    font-weight: 500;
+}
+
+.funding-text {
+    text-align: center;
+    color: #A5CCF3;
+    font-size: 1.1rem;
+    margin-bottom: 1rem;
+}
+
+/* Sections */
+.section {
+    padding: 3rem 0;
+}
+
+.section-title {
+    text-align: center;
+    font-size: 3rem;
+    margin-bottom: 4rem;
+    color: #1C79D8;
+    font-weight: normal;
+}
+
+/* About content */
+.about-content {
+    max-width: 900px;
+    margin: 0 auto;
+    color: #cccccc;
+    font-size: 1.2rem;
+    line-height: 1.8;
+}
+
+.about-content p {
+    margin-bottom: 2rem;
+}
+
+/* Ideas content (GSOC page) */
+.ideas-content {
+    max-width: 900px;
+    margin: 0 auto;
+    color: #cccccc;
+    font-size: 1.2rem;
+    line-height: 1.8;
+}
+
+/* Technologies section */
+.technologies-section {
+    padding: 3rem 0;
+}
+
+.technologies-section h2 {
+    font-size: 2rem;
+    color: #1C79D8;
+    margin-bottom: 2rem;
+    margin-top: 3rem;
+}
+
+.tech-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 2rem;
+    margin-bottom: 3rem;
+}
+
+.tech-card {
+    background: rgba(68, 68, 68, 0.2);
+    padding: 2rem;
+    border-radius: 10px;
+    border: 1px solid #555555;
+    transition: all 0.3s;
+}
+
+.tech-card:hover {
+    transform: translateY(-3px);
+    border-color: #1C79D8;
+    box-shadow: 0 10px 30px rgba(28, 121, 216, 0.1);
+}
+
+.tech-card h3 {
+    color: #A5CCF3;
+    margin-bottom: 1rem;
+    font-size: 1.3rem;
+}
+
+.tech-card p {
+    color: #cccccc;
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+/* Features grid */
+.features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 2rem;
+    margin-top: 3rem;
+}
+
+.feature-item {
+    background: rgba(68, 68, 68, 0.2);
+    padding: 2rem;
+    border-radius: 10px;
+    border: 1px solid #555555;
+    transition: all 0.3s;
+}
+
+.feature-item:hover {
+    transform: translateY(-3px);
+    border-color: #1C79D8;
+    box-shadow: 0 10px 30px rgba(28, 121, 216, 0.1);
+}
+
+.feature-item h3 {
+    color: #A5CCF3;
+    margin-bottom: 1rem;
+    font-size: 1.3rem;
+}
+
+.feature-item p {
+    color: #cccccc;
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+/* Contributors */
+.contributors {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.contributor-category {
+    margin-bottom: 3rem;
+}
+
+.contributor-category h3 {
+    color: #1C79D8;
+    font-size: 1.5rem;
+    margin-bottom: 1.5rem;
+    text-align: center;
+}
+
+.contributor-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.5rem;
+}
+
+.contributor {
+    background: rgba(68, 68, 68, 0.2);
+    padding: 1.5rem;
+    border-radius: 10px;
+    border: 1px solid #555555;
+    text-align: center;
+    transition: all 0.3s;
+}
+
+.contributor:hover {
+    transform: translateY(-3px);
+    border-color: #1C79D8;
+}
+
+.contributor h4 {
+    color: #A5CCF3;
+    margin-bottom: 0.5rem;
+    font-size: 1.1rem;
+}
+
+.contributor p {
+    color: #cccccc;
+    font-size: 0.9rem;
+}
+
+/* Figures */
+figure {
+    margin: 2rem auto;
+    text-align: center;
+    max-width: 100%;
+}
+
+figure img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+figcaption {
+    margin-top: 1rem;
+    color: #A5CCF3;
+    font-size: 0.95rem;
+    font-style: italic;
+    line-height: 1.5;
+    max-width: 80%;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* Footer */
+footer {
+    background: #111111;
+    color: #eeeeee;
+    text-align: center;
+    padding: 3rem 0;
+    border-top: 1px solid #444444;
+}
+
+.footer-links {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+}
+
+.footer-links a {
+    color: #A5CCF3;
+    text-decoration: none;
+    font-size: 1.1rem;
+    transition: color 0.3s;
+}
+
+.footer-links a:hover {
+    color: #1C79D8;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .hero::before {
+        background-size: 300px 300px;
+    }
+
+    .hero h1 {
+        font-size: 2.5rem;
+    }
+
+    .nav-links {
+        display: none;
+    }
+
+    .cta-buttons {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .funding-logos {
+        flex-direction: column;
+        gap: 2rem;
+    }
+
+    .funding-item {
+        flex-direction: column;
+        text-align: center;
+        gap: 1rem;
+    }
+
+    .section {
+        padding: 4rem 0;
+    }
+
+    .contributor-list {
+        grid-template-columns: 1fr;
+    }
+}
