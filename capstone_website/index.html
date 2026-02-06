@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AquiLLM</title>
+    <link rel="icon" type="image/x-icon" href="images/aquila.svg">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <header>
+        <nav class="container">
+            <a href="index.html" class="logo-container">
+                <span class="logo-text">AquiLLM</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="technologies.html">Technologies</a></li>
+                <li><a href="team.html">Team</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <div class="hero-background"></div>
+            <div class="hero-content">
+                <h1>AquiLLM</h1>
+                <p>A Tool for Preserving Knowledge in Research Groups</p>
+            </div>
+        </section>
+
+        <div class="client-info">
+            <p><strong>Our Client:</strong> Bernie Boscoe, Chandler Campbell, in conjunction with the UCLA Astrophysics Datalab. They have built a promising AI tool called AquiLLM, and they are excited to see us further develop and improve it.</p>
+        </div>
+
+        <div class="problem-section">
+            <h2>What is AquiLLM?</h2>
+            <p>AquiLLM is an Artificial Intelligence chatbot built with research groups in mind. It offers a simple UI that allows users to create collections and upload various different document types that the AquiLLM uses as context. The user can then ask the AquiLLM questions about their documents in natural language, and receive relevant information in response.</p>
+        </div>
+
+        <div class="problem-grid">
+            <div class="problem-section">
+                <h2>Preserving Tacit Knowledge</h2>
+                <p>AquiLLM works with many different document types such as PDFs (great for research papers) but its main goal is helping preserve tacit knowledge in research groups. Tacit knowledge is the informal, experience-based knowledge that often falls through the cracks. These can be things like meeting notes, emails, ad-hoc documentation, code, training materials, etc. These pieces of information are often not formally documented like publications and datasets but are important in understanding why certain decisions were made, how to set up lab environments, etc.</p>
+                <p>By preserving tacit knowledge, and allowing it to be easily accessed through natural language queries, alongside other more formal public documents, AquiLLM helps research groups maintain a vast wealth of knowledge, and in particular helps new group members onboard quicker.</p>
+            </div>
+
+            <div class="problem-section">
+                <h2>Privacy & Security</h2>
+                <p>AquiLLM's robust privacy options makes it appealing for researchers. Research groups often prefer to keep their knowledge from being accessed by outside providers, so AquiLLM offers a solution for fully secure, private use. AquiLLM allows users to either use the faster and more accurate LLMs like Gemini, ChatGPT, and Claude using API calls, or if privacy is a concern, it supports a variety of less powerful but completely offline local models for security purposes.</p>
+            </div>
+        </div>
+
+        <div class="problem-section centered-section">
+            <h2>Technical Foundation</h2>
+            <p>AquiLLM is built on established, reliable technologies including Django and Postgres, and intentionally avoids dependence on emerging AI-centered libraries like Langchain, which ensures long-term stability and maintainability while offering greater flexibility for developers. The flexible future-proof design, easy deployment, and emphasis on support for a variety of file-types, makes AquiLLM a very promising tool for research groups, and stands out from other RAG LLM projects.</p>
+        </div>
+
+        <div class="problem-section highlight-section">
+            <h2>Where We Come In</h2>
+            <p>AquiLLM is a work in progress and is often used with local models which can be prone to hallucinations. Therefore, being able to rate AquiLLM's responses is an important step in understanding which situations the tool falters and what areas could use fine tuning.</p>
+
+            <h3>The Current Challenge</h3>
+            <p>There is an existing rating system in place where users can give numerical ratings from 1-5 on each of AquiLLM's responses, however the system is incomplete. The ratings are not stored anywhere outside the conversation, and there is no other feedback system aside from the basic 1-5 rating scale (no functionality to allow the users to explain which part of the response was wrong).</p>
+
+            <h3>Our Mission</h3>
+            <p>AquiLLM developers are interested in being able to critically evaluate the performance of AquiLLM so that they can figure out how to improve it. In order to evaluate the responses however, the existing rating system needs to be completed and expanded upon to give developers more information to work with. This is step 1 in improving AquiLLM, and later steps in the coming months will include building a system to seamlessly integrate data from the astronomical instrument OSIRIS (OH-Suppressing Infrared Imaging Spectrograph), based in Hawaii.</p>
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="https://github.com/AquiLLM/AquiLLM">GitHub</a>
+            </div>
+            <p>&copy; 2026 AquiLLM. Open-source RAG application for researchers.</p>
+        </div>
+    </footer>
+</body>
+</html>

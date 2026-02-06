@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="images/aquila.svg">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <header>
+        <nav class="container">
+            <a href="index.html" class="logo-container">
+                <span class="logo-text">AquiLLM</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="technologies.html">Technologies</a></li>
+                <li><a href="team.html">Team</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <div class="hero-background"></div>
+            <div class="hero-content">
+            <h1>AquiLLM Technology Stack</h1>
+            <p>A comprehensive RAG application built with modern technologies</p>
+        </section>
+
+        <section class="technologies-section">
+            <h2>Backend Technologies</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>Python</h3>
+                    <p>Core language for backend development, providing server-side logic.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Django</h3>
+                    <p>Web framework for building the  web application with built in ORM, admin panel, and security features.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Django Channels</h3>
+                    <p>Extends Django to handle WebSocket connections for real time bidirectional communication and live chat features.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Daphne</h3>
+                    <p>ASGI server for handling asynchronous protocol servers, enabling WebSocket support with Django Channels.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Celery</h3>
+                    <p>Asynchronous task queue for handling long running operations like document processing, web scraping, and LLM inference.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Redis</h3>
+                    <p>Memory data structure store, used as message broker for Celery and caching layer for performance optimization.</p>
+                </div>
+            </div>
+
+            <h2>Database & Storage</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>PostgreSQL</h3>
+                    <p>Relational database for storing user data, collections, documents, and metadata with ACID compliance.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>pgvector</h3>
+                    <p>PostgreSQL extension for storing and querying vector embeddings, enabling semantic search across documents.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Django Storages</h3>
+                    <p>Provides cloud storage backends for Google Cloud Storage and AWS S3 for scalable file storage.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Boto3</h3>
+                    <p>AWS SDK for Python, enabling integration with S3 for document and media file storage.</p>
+                </div>
+            </div>
+
+            <h2>Frontend Technologies</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>React</h3>
+                    <p>JavaScript library for building interactive user interfaces with component based architecture.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>TypeScript</h3>
+                    <p>Typed superset of JavaScript for improved code quality, better IDE support, and early error detection in frontend code.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Vite</h3>
+                    <p>Next generation build tool and development server providing fast hot module replacement during development.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Tailwind CSS</h3>
+                    <p> CSS framework for UI development with responsive design utilities.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Playwright</h3>
+                    <p>Browser automation testing framework for end-to-end testing of the React frontend.</p>
+                </div>
+            </div>
+
+            <h2>LLM Integration</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>Anthropic Claude</h3>
+                    <p>Integration with Claude API for advanced natural language understanding and generation.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>OpenAI GPT</h3>
+                    <p>Support for OpenAI's GPT models for alternative LLM capabilities and multi model support.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Google Gemini</h3>
+                    <p>Integration with Google's Gemini API for additional LLM options and flexibility.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Cohere</h3>
+                    <p>Cohere API integration for semantic text embeddings and retrieval augmented generation capabilities.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Tenacity</h3>
+                    <p>Retry library for handling transient failures when calling external LLM APIs with exponential backoff.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Tiktoken</h3>
+                    <p>Token encoder for OpenAI models, used for calculating token counts and managing context windows.</p>
+                </div>
+            </div>
+
+            <h2>Document Processing</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>PyPDF</h3>
+                    <p>Python library for reading and extracting text content from PDF documents.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>PDF2Image</h3>
+                    <p>Converts PDF pages to images for OCR processing of scanned documents.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Pytesseract</h3>
+                    <p>Python wrapper for Tesseract OCR engine for extracting text from images and handwritten notes.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Pillow</h3>
+                    <p>Python Imaging Library for image processing and manipulation tasks.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>BeautifulSoup4</h3>
+                    <p>HTML and XML parsing library for web scraping and extracting content from webpages.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Trafilatura</h3>
+                    <p>Web scraping library specifically designed for extracting article content and text from websites.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Selenium</h3>
+                    <p>Browser automation tool for scraping JavaScript rendered webpages and dynamic content.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Chardet</h3>
+                    <p>Character encoding detection library for handling documents with various encoding formats.</p>
+                </div>
+            </div>
+
+            <h2>Authentication & Authorization</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>Django-Allauth</h3>
+                    <p>Authentication framework supporting local accounts and social authentication (Google OAuth).</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Requests-OAuthlib</h3>
+                    <p>OAuth library for handling OAuth 2.0 authentication flows with external providers.</p>
+                </div>
+            </div>
+
+            <h2>Development & Testing</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>pytest</h3>
+                    <p>Testing framework for writing and running unit and integration tests for Python code.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>pytest-cov</h3>
+                    <p>Coverage plugin for pytest to measure code coverage of test suites.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>pytest-django</h3>
+                    <p>Plugin providing Django-specific features and fixtures for testing Django applications.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Django Extensions</h3>
+                    <p>Collection of custom extensions and management commands for Django development.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Django Debug Toolbar</h3>
+                    <p>Development toolbar for debugging queries, performance analysis, and development insights.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Django Stubs</h3>
+                    <p>Type hints for Django framework enabling better static type checking with mypy.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Mypy</h3>
+                    <p>Static type checker for Python to catch type errors before runtime.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>TypeGuard</h3>
+                    <p>Runtime type checking utility for validating type hints at runtime.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Debugpy</h3>
+                    <p>Python debugger for remote debugging and IDE integration during development.</p>
+                </div>
+            </div>
+
+            <h2>Infrastructure & Deployment</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>Docker</h3>
+                    <p>Containerization platform for packaging the application and dependencies into isolated containers.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Docker Compose</h3>
+                    <p>Tool for defining and running multi container Docker applications with orchestration capabilities.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Nginx</h3>
+                    <p>High performance web server and reverse proxy for handling HTTP requests and load balancing.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Gunicorn</h3>
+                    <p>Python WSGI HTTP Server for running Django applications in production environments.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Uvicorn</h3>
+                    <p>ASGI server for running asynchronous Python web applications.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>WhiteNoise</h3>
+                    <p>Middleware for serving static files efficiently from Django without a separate web server.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Certbot</h3>
+                    <p>Tool for automatically provisioning and renewing SSL/TLS certificates from Let's Encrypt.</p>
+                </div>
+            </div>
+
+            <h2>Utilities & Libraries</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>Pydantic</h3>
+                    <p>Data validation and settings management using Python type annotations.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Python-Dotenv</h3>
+                    <p>Loads environment variables from .env files for configuration management.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Werkzeug</h3>
+                    <p>WSGI utility library providing utilities for building web applications.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Psycopg2</h3>
+                    <p>PostgreSQL adapter for Python, enabling database connectivity.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>NumPy</h3>
+                    <p>Numerical computing library for handling arrays and mathematical operations.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Astropy</h3>
+                    <p>Astronomy library for scientific computations and data processing.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Requests-OAuthlib</h3>
+                    <p>OAuth 2.0 implementation for authentication with external services.</p>
+                </div>
+            </div>
+
+            <h2>Special Features</h2>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <h3>WebSockets</h3>
+                    <p>Real time bidirectional communication protocol for live chat and streaming responses.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Channels-Redis</h3>
+                    <p>Redis channel layer backend for Django Channels, enabling distributed WebSocket support.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>arXiv API</h3>
+                    <p>Integration with arXiv API for fetching research papers by ID.</p>
+                </div>
+                <div class="tech-card">
+                    <h3>Zotero API</h3>
+                    <p>Integration with Zotero research library management platform for importing bibliographic data.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="https://github.com/AquiLLM/AquiLLM">GitHub</a>
+            </div>
+            <p>&copy; 2026 AquiLLM. Open-source RAG application for researchers.</p>
+        </div>
+    </footer>
+</body>
+</html>
