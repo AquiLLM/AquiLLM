@@ -846,6 +846,39 @@ class WSConversation(models.Model):
         self.save()
 
 
+class Message(models.Model):
+    ROLE_CHOICES = [('user', 'User'), ('assistant', 'Assistant'), ('tool', 'Tool')]
+    FOR_WHOM_CHOICES = [('user', 'User'), ('assistant', 'Assistant')]
+
+    conversation = models.ForeignKey(WSConversation, on_delete=models.CASCADE, related_name='db_messages')
+    message_uuid = models.UUIDField(default=uuid.uuid4, db_index=True)
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES)
+    content = models.TextField()
+    rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    sequence_number = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    files = models.JSONField(null=True, blank=True)
+
+    # AssistantMessage fields
+    model = models.CharField(max_length=100, null=True, blank=True)
+    stop_reason = models.CharField(max_length=50, null=True, blank=True)
+    tool_call_id = models.CharField(max_length=100, null=True, blank=True)
+    tool_call_name = models.CharField(max_length=100, null=True, blank=True)
+    tool_call_input = models.JSONField(null=True, blank=True)
+    usage = models.PositiveIntegerField(default=0)
+
+    # ToolMessage fields
+    tool_name = models.CharField(max_length=100, null=True, blank=True)
+    arguments = models.JSONField(null=True, blank=True)
+    for_whom = models.CharField(max_length=10, choices=FOR_WHOM_CHOICES, null=True, blank=True)
+    result_dict = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['conversation', 'sequence_number']
+        indexes = [models.Index(fields=['rating'])]
+
+
 class ConversationFile(models.Model):
     file = models.FileField(upload_to='conversation_files/')
     name = models.CharField(max_length=200)
