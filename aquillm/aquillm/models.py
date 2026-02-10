@@ -858,8 +858,6 @@ class Message(models.Model):
     sequence_number = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
 
-    files = models.JSONField(null=True, blank=True)
-
     # AssistantMessage fields
     model = models.CharField(max_length=100, null=True, blank=True)
     stop_reason = models.CharField(max_length=50, null=True, blank=True)
