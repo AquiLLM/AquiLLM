@@ -782,9 +782,14 @@ class TextChunk(models.Model):
             raise e
 
 
+def get_default_system_prompt():
+    return apps.get_app_config('aquillm').system_prompt
+
+
 class WSConversation(models.Model):
     owner = models.ForeignKey(User, related_name='ws_conversations', on_delete=models.CASCADE)
     convo = models.JSONField(blank=True, null=True, default=convo_model.get_empty_conversation)
+    system_prompt = models.TextField(default=get_default_system_prompt, blank=True)
     name = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(editable=False)
     updated_at = models.DateTimeField()
