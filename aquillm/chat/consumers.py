@@ -382,7 +382,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             return
         try:
-            self.convo = load_conversation_from_db(self.db_convo)
+            self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
             self.convo.rebind_tools(self.tools)
             logger.debug(f"About to call llm_if.spin() in connect()")
             await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
