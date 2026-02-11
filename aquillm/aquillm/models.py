@@ -38,11 +38,7 @@ from django.utils import timezone
 from .utils import get_embedding
 from .settings import BASE_DIR
 
-from .llm import Conversation as convo_model
-
 logger = logging.getLogger(__name__)
-
-from pydantic_core import to_jsonable_python
 
 from .celery import app
 from celery.states import state, RECEIVED, STARTED, SUCCESS, FAILURE
@@ -788,25 +784,10 @@ def get_default_system_prompt():
 
 class WSConversation(models.Model):
     owner = models.ForeignKey(User, related_name='ws_conversations', on_delete=models.CASCADE)
-    convo = models.JSONField(blank=True, null=True, default=convo_model.get_empty_conversation)
     system_prompt = models.TextField(default=get_default_system_prompt, blank=True)
     name = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(editable=False)
     updated_at = models.DateTimeField()
-
-    @property
-    def convo_object(self) -> convo_model:
-        t = type(self.convo)
-        if t == dict:
-            return convo_model.model_validate(self.convo)
-        elif t == str:
-            return convo_model.model_validate_json(self.convo)
-        else: 
-            raise ValueError(f"Invalid type for convo from database: {t}")
-
-    @convo_object.setter
-    def convo_object(self, convo: convo_model):
-        self.convo = to_jsonable_python(convo)
 
     def save(self, *args, **kwargs):
         if not self.pk:
