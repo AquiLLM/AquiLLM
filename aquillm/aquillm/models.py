@@ -830,7 +830,8 @@ class WSConversation(models.Model):
 
         # Use the configured LLM interface instead of hardcoded Anthropic client
         llm_interface = apps.get_app_config('aquillm').llm_interface # type: ignore
-        first_two_messages = str(self.convo['messages'][:2])
+        first_two = list(self.db_messages.order_by('sequence_number')[:2].values('role', 'content'))
+        first_two_messages = str(first_two)
 
         # Build kwargs compatible with the LLM interface
         llm_args = {
