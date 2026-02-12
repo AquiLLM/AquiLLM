@@ -778,12 +778,15 @@ class TextChunk(models.Model):
             raise e
 
 
+# Pulls the default system prompt from the app config (set in apps.py)
 def get_default_system_prompt():
     return apps.get_app_config('aquillm').system_prompt
 
 
 class WSConversation(models.Model):
     owner = models.ForeignKey(User, related_name='ws_conversations', on_delete=models.CASCADE)
+    # System prompt for this conversation — previously stored inside the JSON blob,
+    # now its own field so it can be read/updated without touching the messages
     system_prompt = models.TextField(default=get_default_system_prompt, blank=True)
     name = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(editable=False)
@@ -811,6 +814,7 @@ class WSConversation(models.Model):
 
         # Use the configured LLM interface instead of hardcoded Anthropic client
         llm_interface = apps.get_app_config('aquillm').llm_interface # type: ignore
+        # Query the first 2 messages from the Message table (instead of parsing JSON blob)
         first_two = list(self.db_messages.order_by('sequence_number')[:2].values('role', 'content'))
         first_two_messages = str(first_two)
 
@@ -833,35 +837,43 @@ class WSConversation(models.Model):
         self.save()
 
 
+# Stores individual messages — replaces the old JSON blob approach where all messages
+# were stored in a single column on WSConversation. Each message is now its own row,
+# making them individually queryable (e.g. "find all 5-star messages across all conversations").
+#
+# Uses a "wide table" design: all 3 message types (user, assistant, tool) share one table.
+# Role-specific fields are nullable — a user message won't have 'model' or 'tool_name',
+# and those columns will just be NULL for that row.
 class Message(models.Model):
     ROLE_CHOICES = [('user', 'User'), ('assistant', 'Assistant'), ('tool', 'Tool')]
     FOR_WHOM_CHOICES = [('user', 'User'), ('assistant', 'Assistant')]
 
-    conversation = models.ForeignKey(WSConversation, on_delete=models.CASCADE, related_name='db_messages')
-    message_uuid = models.UUIDField(default=uuid.uuid4, db_index=True)
-    role = models.CharField(max_length=10, choices=ROLE_CHOICES)
-    content = models.TextField()
-    rating = models.PositiveSmallIntegerField(null=True, blank=True)
-    sequence_number = models.PositiveIntegerField()
-    created_at = models.DateTimeField(auto_now_add=True)
+    # Core fields (used by all message types)
+    conversation = models.ForeignKey(WSConversation, on_delete=models.CASCADE, related_name='db_messages')  # FK back to the conversation this message belongs to
+    message_uuid = models.UUIDField(default=uuid.uuid4, db_index=True)  # unique ID sent to frontend (not guessable like sequential IDs)
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES)  # 'user', 'assistant', or 'tool'
+    content = models.TextField()  # the actual message text
+    rating = models.PositiveSmallIntegerField(null=True, blank=True)  # user rating 1-5, null if unrated
+    sequence_number = models.PositiveIntegerField()  # position in conversation (0, 1, 2, ...) — determines display order
+    created_at = models.DateTimeField(auto_now_add=True)  # when this message was created
 
-    # AssistantMessage fields
-    model = models.CharField(max_length=100, null=True, blank=True)
-    stop_reason = models.CharField(max_length=50, null=True, blank=True)
-    tool_call_id = models.CharField(max_length=100, null=True, blank=True)
-    tool_call_name = models.CharField(max_length=100, null=True, blank=True)
-    tool_call_input = models.JSONField(null=True, blank=True)
-    usage = models.PositiveIntegerField(default=0)
+    # AssistantMessage-specific fields (NULL for user and tool messages)
+    model = models.CharField(max_length=100, null=True, blank=True)  # which LLM generated this (e.g. 'claude-3-7-sonnet-latest')
+    stop_reason = models.CharField(max_length=50, null=True, blank=True)  # why the LLM stopped ('end_turn' or 'tool_use')
+    tool_call_id = models.CharField(max_length=100, null=True, blank=True)  # ID of tool call if the LLM invoked a tool
+    tool_call_name = models.CharField(max_length=100, null=True, blank=True)  # name of tool called (e.g. 'vector_search')
+    tool_call_input = models.JSONField(null=True, blank=True)  # arguments the LLM passed to the tool
+    usage = models.PositiveIntegerField(default=0)  # token count for this response
 
-    # ToolMessage fields
-    tool_name = models.CharField(max_length=100, null=True, blank=True)
-    arguments = models.JSONField(null=True, blank=True)
-    for_whom = models.CharField(max_length=10, choices=FOR_WHOM_CHOICES, null=True, blank=True)
-    result_dict = models.JSONField(null=True, blank=True)
+    # ToolMessage-specific fields (NULL for user and assistant messages)
+    tool_name = models.CharField(max_length=100, null=True, blank=True)  # which tool produced this result
+    arguments = models.JSONField(null=True, blank=True)  # arguments the tool was called with
+    for_whom = models.CharField(max_length=10, choices=FOR_WHOM_CHOICES, null=True, blank=True)  # who gets the result ('assistant' or 'user')
+    result_dict = models.JSONField(null=True, blank=True)  # the tool's output data
 
     class Meta:
-        ordering = ['conversation', 'sequence_number']
-        indexes = [models.Index(fields=['rating'])]
+        ordering = ['conversation', 'sequence_number']  # default ordering: by conversation, then by position
+        indexes = [models.Index(fields=['rating'])]  # index on rating for fast queries like "find all 5-star messages"
 
 
 class ConversationFile(models.Model):

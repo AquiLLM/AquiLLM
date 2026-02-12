@@ -17,6 +17,7 @@ from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, test_f
 from aquillm.settings import DEBUG
 
 from aquillm.models import ConversationFile, TextChunk, Collection, CollectionPermission, WSConversation, Document, DocumentChild
+# Adapter functions that handle converting between Pydantic (runtime) and Django (database) message formats
 from aquillm.message_adapters import load_conversation_from_db, save_conversation_to_db, build_frontend_conversation_json
 
 from anthropic._exceptions import OverloadedError
@@ -324,6 +325,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def __save(self):
         assert self.db_convo is not None
+        # Converts in-memory Pydantic messages to Django Message rows and saves them to the database
         save_conversation_to_db(self.convo, self.db_convo)
         if len(self.convo) >= 2 and not self.db_convo.name:
             self.db_convo.set_name()
@@ -350,6 +352,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.debug(f"send_func called in connect()")
             self.convo = convo
             await self.__save()
+            # Builds JSON from Message table rows and sends it to the frontend over WebSocket
             frontend_json = await database_sync_to_async(build_frontend_conversation_json)(self.db_convo)
             await self.send(text_data=dumps({"conversation": frontend_json}))
             logger.debug(f"send_func completed in connect()")
@@ -382,6 +385,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             return
         try:
+            # Loads Message rows from the database and converts them to Pydantic objects for runtime use
             self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
             self.convo.rebind_tools(self.tools)
             logger.debug(f"About to call llm_if.spin() in connect()")
@@ -419,6 +423,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await aclose_old_connections()
             self.convo = convo
             await self.__save()
+            # Builds JSON from Message table rows and sends it to the frontend over WebSocket
             frontend_json = await database_sync_to_async(build_frontend_conversation_json)(self.db_convo)
             await self.send(text_data=dumps({"conversation": frontend_json}))
             logger.debug("send_func completed in receive()")
@@ -448,12 +453,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             uuid_str = data['uuid']
             rating = data['rating']
 
-            # Update the database directly (no need to rewrite all messages)
+            # Update just the single Message row in the database (no need to delete + recreate all messages)
             await database_sync_to_async(
                 lambda: self.db_convo.db_messages.filter(message_uuid=uuid_str).update(rating=rating)
             )()
 
-            # Update the in-memory Pydantic model too (keeps UI consistent during session)
+            # Also update the in-memory Pydantic model so the rating stays correct
+            # if the conversation is saved again later during this session
             for msg in self.convo:
                 if str(msg.message_uuid) == uuid_str:
                     msg.rating = rating

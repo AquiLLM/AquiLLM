@@ -1,3 +1,11 @@
+"""
+Unit tests for the message storage redesign.
+
+Tests the adapter functions (Pydantic <-> Django conversion), save/load round-trips,
+rating persistence, and the frontend JSON structure. These tests don't require a browser
+or WebSocket connection — they test the database layer directly.
+"""
+
 from uuid import uuid4
 from django.test import TestCase
 from django.contrib.auth import get_user_model
@@ -16,18 +24,24 @@ User = get_user_model()
 
 
 class MessageAdapterTests(TestCase):
-    """Tests for converting between Pydantic messages and Django Message rows."""
+    """Tests for converting between Pydantic messages and Django Message rows.
+
+    Verifies that each message type (user, assistant, tool) converts correctly
+    in both directions, and that role-specific fields don't bleed across types.
+    """
 
     def setUp(self):
+        # Every test needs a user and conversation to attach messages to
         self.user = User.objects.create_user(username='testuser', password='testpass')
         self.db_convo = WSConversation.objects.create(
             owner=self.user,
             system_prompt='You are a helpful assistant.',
         )
 
-    # -- pydantic_message_to_django --
+    # -- Pydantic to Django --
 
     def test_user_message_to_django(self):
+        """User messages should only have the common fields populated."""
         msg = UserMessage(content='Hello there')
         db_msg = pydantic_message_to_django(msg, self.db_convo, seq_num=0)
 
@@ -36,11 +50,12 @@ class MessageAdapterTests(TestCase):
         self.assertEqual(db_msg.sequence_number, 0)
         self.assertEqual(db_msg.message_uuid, msg.message_uuid)
         self.assertIsNone(db_msg.rating)
-        # Assistant-specific fields should be empty
+        # Assistant-specific fields should be empty for a user message
         self.assertIsNone(db_msg.model)
         self.assertIsNone(db_msg.tool_call_name)
 
     def test_assistant_message_to_django(self):
+        """Assistant messages should have model, stop_reason, and usage populated."""
         msg = AssistantMessage(
             content='Here is my response.',
             model='claude-3-7-sonnet-latest',
@@ -54,11 +69,12 @@ class MessageAdapterTests(TestCase):
         self.assertEqual(db_msg.model, 'claude-3-7-sonnet-latest')
         self.assertEqual(db_msg.stop_reason, 'end_turn')
         self.assertEqual(db_msg.usage, 500)
-        # Tool-specific fields should be empty
+        # Tool-specific fields should be empty for an assistant message
         self.assertIsNone(db_msg.tool_name)
         self.assertIsNone(db_msg.for_whom)
 
     def test_assistant_tool_call_to_django(self):
+        """When an assistant calls a tool, the tool_call fields should be populated."""
         msg = AssistantMessage(
             content='Let me search for that.',
             model='claude-3-7-sonnet-latest',
@@ -75,6 +91,7 @@ class MessageAdapterTests(TestCase):
         self.assertEqual(db_msg.tool_call_input, {'search_string': 'test', 'top_k': 5})
 
     def test_tool_message_to_django(self):
+        """Tool messages should have tool_name, arguments, for_whom, and result_dict populated."""
         msg = ToolMessage(
             content='Search results here',
             tool_name='vector_search',
@@ -90,9 +107,10 @@ class MessageAdapterTests(TestCase):
         self.assertEqual(db_msg.for_whom, 'assistant')
         self.assertEqual(db_msg.result_dict, {'result': 'some data'})
 
-    # -- django_message_to_pydantic --
+    # -- Django to Pydantic --
 
     def test_django_user_to_pydantic(self):
+        """A Django user Message row should convert to a UserMessage Pydantic object."""
         db_msg = Message.objects.create(
             conversation=self.db_convo,
             role='user',
@@ -106,6 +124,7 @@ class MessageAdapterTests(TestCase):
         self.assertEqual(pydantic_msg.message_uuid, db_msg.message_uuid)
 
     def test_django_assistant_to_pydantic(self):
+        """A Django assistant Message row should convert to an AssistantMessage Pydantic object."""
         db_msg = Message.objects.create(
             conversation=self.db_convo,
             role='assistant',
@@ -123,6 +142,7 @@ class MessageAdapterTests(TestCase):
         self.assertEqual(pydantic_msg.usage, 1000)
 
     def test_django_tool_to_pydantic(self):
+        """A Django tool Message row should convert to a ToolMessage Pydantic object."""
         db_msg = Message.objects.create(
             conversation=self.db_convo,
             role='tool',
@@ -141,7 +161,11 @@ class MessageAdapterTests(TestCase):
 
 
 class SaveLoadConversationTests(TestCase):
-    """Tests for saving and loading full conversations."""
+    """Tests for saving and loading full conversations.
+
+    These test the complete flow: Pydantic conversation -> save to DB -> load from DB -> Pydantic conversation.
+    This is the same path that runs when consumers.py calls __save() and connect().
+    """
 
     def setUp(self):
         self.user = User.objects.create_user(username='testuser', password='testpass')
@@ -151,6 +175,7 @@ class SaveLoadConversationTests(TestCase):
         )
 
     def test_save_and_load_round_trip(self):
+        """Save a conversation, load it back, and verify all data is intact."""
         convo = Conversation(
             system='Test system prompt',
             messages=[
@@ -176,6 +201,7 @@ class SaveLoadConversationTests(TestCase):
         self.assertEqual(loaded.messages[1].model, 'claude-3-7-sonnet-latest')
 
     def test_save_creates_correct_number_of_rows(self):
+        """Each message in the conversation should become one row in the Message table."""
         convo = Conversation(
             system='Test',
             messages=[
@@ -191,6 +217,7 @@ class SaveLoadConversationTests(TestCase):
         self.assertEqual(self.db_convo.db_messages.count(), 4)
 
     def test_save_replaces_previous_messages(self):
+        """Saving again should replace old messages, not duplicate them."""
         convo1 = Conversation(
             system='Test',
             messages=[UserMessage(content='First message')],
@@ -198,6 +225,7 @@ class SaveLoadConversationTests(TestCase):
         save_conversation_to_db(convo1, self.db_convo)
         self.assertEqual(self.db_convo.db_messages.count(), 1)
 
+        # Save again with an additional message — should be 2 total, not 3
         convo2 = Conversation(
             system='Test',
             messages=[
@@ -209,6 +237,7 @@ class SaveLoadConversationTests(TestCase):
         self.assertEqual(self.db_convo.db_messages.count(), 2)
 
     def test_save_updates_system_prompt(self):
+        """The system prompt on WSConversation should update when saving."""
         convo = Conversation(system='New system prompt', messages=[])
         save_conversation_to_db(convo, self.db_convo)
 
@@ -216,6 +245,7 @@ class SaveLoadConversationTests(TestCase):
         self.assertEqual(self.db_convo.system_prompt, 'New system prompt')
 
     def test_message_ordering_by_sequence_number(self):
+        """Messages should load in the same order they were saved."""
         convo = Conversation(
             system='Test',
             messages=[
@@ -234,7 +264,11 @@ class SaveLoadConversationTests(TestCase):
 
 
 class RatingTests(TestCase):
-    """Tests for message rating persistence."""
+    """Tests for message rating persistence.
+
+    Ratings are updated via a direct single-row DB update (not the full delete+recreate save),
+    so these tests verify that path works correctly.
+    """
 
     def setUp(self):
         self.user = User.objects.create_user(username='testuser', password='testpass')
@@ -244,6 +278,7 @@ class RatingTests(TestCase):
         )
 
     def test_rating_persists_through_save_and_load(self):
+        """A rating set on a Pydantic message should survive the save/load round-trip."""
         convo = Conversation(
             system='Test',
             messages=[
@@ -263,7 +298,7 @@ class RatingTests(TestCase):
         self.assertEqual(loaded.messages[1].rating, 5)
 
     def test_rating_update_via_queryset(self):
-        """Tests the same pattern used by rate() in consumers.py."""
+        """Tests the same pattern used by rate() in consumers.py — a direct single-row update."""
         msg_uuid = uuid4()
         Message.objects.create(
             conversation=self.db_convo,
@@ -274,13 +309,14 @@ class RatingTests(TestCase):
             sequence_number=0,
         )
 
-        # Update rating the same way consumers.py does
+        # This is exactly how consumers.py updates a rating
         self.db_convo.db_messages.filter(message_uuid=msg_uuid).update(rating=4)
 
         msg = Message.objects.get(message_uuid=msg_uuid)
         self.assertEqual(msg.rating, 4)
 
     def test_rating_change(self):
+        """A rating should be changeable from one value to another."""
         msg_uuid = uuid4()
         Message.objects.create(
             conversation=self.db_convo,
@@ -299,7 +335,11 @@ class RatingTests(TestCase):
 
 
 class BuildFrontendJsonTests(TestCase):
-    """Tests for the JSON structure sent to the frontend."""
+    """Tests for the JSON structure sent to the frontend over WebSocket.
+
+    The frontend expects a specific format — these tests make sure
+    build_frontend_conversation_json() produces exactly that structure.
+    """
 
     def setUp(self):
         self.user = User.objects.create_user(username='testuser', password='testpass')
@@ -309,6 +349,7 @@ class BuildFrontendJsonTests(TestCase):
         )
 
     def test_basic_structure(self):
+        """Output should have 'system' and 'messages' keys with correct values."""
         Message.objects.create(
             conversation=self.db_convo,
             role='user',
@@ -325,6 +366,7 @@ class BuildFrontendJsonTests(TestCase):
         self.assertIn('message_uuid', result['messages'][0])
 
     def test_assistant_with_tool_call(self):
+        """Assistant messages with tool calls should include tool_call fields and usage."""
         Message.objects.create(
             conversation=self.db_convo,
             role='assistant',
@@ -343,6 +385,7 @@ class BuildFrontendJsonTests(TestCase):
         self.assertEqual(msg['usage'], 300)
 
     def test_tool_message(self):
+        """Tool messages should include tool_name, for_whom, and result_dict."""
         Message.objects.create(
             conversation=self.db_convo,
             role='tool',
@@ -361,6 +404,7 @@ class BuildFrontendJsonTests(TestCase):
         self.assertEqual(msg['result_dict'], {'result': 'data'})
 
     def test_message_uuid_is_string(self):
+        """UUID should be serialized as a string for JSON compatibility."""
         Message.objects.create(
             conversation=self.db_convo,
             role='user',
