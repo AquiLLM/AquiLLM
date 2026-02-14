@@ -13,6 +13,8 @@
 
 **AquiLLM is an open-source RAG (Retrieval-Augmented Generation) application designed specifically for researchers.** It helps you manage, search, and interact with your research documents using AI, streamlining your literature review and knowledge discovery process. Upload various document formats, organize them into collections, and chat with an AI that understands your library's content.
 
+More info can be found at [[https://aquillm.org]]
+
 <!-- ![AquiLLM Screenshot](path/to/screenshot.gif) -->
 
 ## Key Features
