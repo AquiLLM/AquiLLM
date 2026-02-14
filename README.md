@@ -67,12 +67,12 @@ This assumes you have Docker and Docker Compose installed.
     docker compose --profile ollama up -d
     ```
 
-4. **Add a superuser:**
+5. **Add a superuser:**
    ```bash
    docker compose exec web ./manage.py addsuperuser
    ```
 
-5.  **Access the application:**
+6.  **Access the application:**
 
     Open your browser to `http://localhost:8080`, sign in with superuser account.
 
@@ -172,14 +172,15 @@ AquiLLM supports running completely offline using local LLM models via Ollama. T
    ```
 
 3. **Available models:**
-   - `GEMMA3`: Google's Gemma 3 model (12B parameters)
+   - `GEMMA3`: Google's Gemma 3 enhanced model (12B parameters)
    - `LLAMA3.2`: Meta's Llama 3.2 model
-   - `GPT-OSS`: Open-source GPT alternative (120B parameters)
+   - `GPT-OSS`: Open-source GPT model (120B parameters variant)
 
 ### Requirements
 
-- **GPU recommended**: Ollama models run best with NVIDIA GPU support
-- **RAM**: At least 16GB recommended for larger models
+- **GPU recommended**: Ollama models run best with NVIDIA GPU support (required for GPT-OSS)
+- **RAM**: At least 16GB recommended for smaller models (GEMMA3, LLAMA3.2), 64GB+ for larger models (GPT-OSS)
+- **Disk Space**: Models are downloaded on first use and can be several GB each
 - The Ollama service will automatically download models on first use
 
 ### Using Custom Ollama Models
