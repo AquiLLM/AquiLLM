@@ -4,6 +4,9 @@ Simple validation script to check LLM configuration logic without requiring full
 This validates that the Ollama model configuration is correct.
 """
 
+import os
+import sys
+
 def validate_ollama_config():
     """Validate that Ollama models are properly configured in apps.py"""
     
@@ -11,8 +14,14 @@ def validate_ollama_config():
     print("Validating Ollama LLM Configuration")
     print("=" * 60)
     
-    # Read apps.py and verify Ollama configuration
-    apps_py_path = '/home/runner/work/AquiLLM/AquiLLM/aquillm/aquillm/apps.py'
+    # Get the script directory and construct path to apps.py
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    apps_py_path = os.path.join(script_dir, 'aquillm', 'aquillm', 'apps.py')
+    
+    if not os.path.exists(apps_py_path):
+        print(f"\n✗ ERROR: Could not find apps.py at {apps_py_path}")
+        print("Make sure you're running this script from the repository root.")
+        return False
     
     with open(apps_py_path, 'r') as f:
         content = f.read()
