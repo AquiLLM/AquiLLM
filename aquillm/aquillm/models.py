@@ -38,11 +38,7 @@ from django.utils import timezone
 from .utils import get_embedding
 from .settings import BASE_DIR
 
-from .llm import Conversation as convo_model
-
 logger = logging.getLogger(__name__)
-
-from pydantic_core import to_jsonable_python
 
 from .celery import app
 from celery.states import state, RECEIVED, STARTED, SUCCESS, FAILURE
@@ -782,26 +778,19 @@ class TextChunk(models.Model):
             raise e
 
 
+# Pulls the default system prompt from the app config (set in apps.py)
+def get_default_system_prompt():
+    return apps.get_app_config('aquillm').system_prompt
+
+
 class WSConversation(models.Model):
     owner = models.ForeignKey(User, related_name='ws_conversations', on_delete=models.CASCADE)
-    convo = models.JSONField(blank=True, null=True, default=convo_model.get_empty_conversation)
+    # System prompt for this conversation — previously stored inside the JSON blob,
+    # now its own field so it can be read/updated without touching the messages
+    system_prompt = models.TextField(default=get_default_system_prompt, blank=True)
     name = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(editable=False)
     updated_at = models.DateTimeField()
-
-    @property
-    def convo_object(self) -> convo_model:
-        t = type(self.convo)
-        if t == dict:
-            return convo_model.model_validate(self.convo)
-        elif t == str:
-            return convo_model.model_validate_json(self.convo)
-        else: 
-            raise ValueError(f"Invalid type for convo from database: {t}")
-
-    @convo_object.setter
-    def convo_object(self, convo: convo_model):
-        self.convo = to_jsonable_python(convo)
 
     def save(self, *args, **kwargs):
         if not self.pk:
@@ -825,7 +814,9 @@ class WSConversation(models.Model):
 
         # Use the configured LLM interface instead of hardcoded Anthropic client
         llm_interface = apps.get_app_config('aquillm').llm_interface # type: ignore
-        first_two_messages = str(self.convo['messages'][:2])
+        # Query the first 2 messages from the Message table (instead of parsing JSON blob)
+        first_two = list(self.db_messages.order_by('sequence_number')[:2].values('role', 'content'))
+        first_two_messages = str(first_two)
 
         # Build kwargs compatible with the LLM interface
         llm_args = {
@@ -844,6 +835,45 @@ class WSConversation(models.Model):
         title_text = get_title()
         self.name = title_text if title_text else 'Conversation'
         self.save()
+
+
+# Stores individual messages — replaces the old JSON blob approach where all messages
+# were stored in a single column on WSConversation. Each message is now its own row,
+# making them individually queryable (e.g. "find all 5-star messages across all conversations").
+#
+# Uses a "wide table" design: all 3 message types (user, assistant, tool) share one table.
+# Role-specific fields are nullable — a user message won't have 'model' or 'tool_name',
+# and those columns will just be NULL for that row.
+class Message(models.Model):
+    ROLE_CHOICES = [('user', 'User'), ('assistant', 'Assistant'), ('tool', 'Tool')]
+    FOR_WHOM_CHOICES = [('user', 'User'), ('assistant', 'Assistant')]
+
+    # Core fields (used by all message types)
+    conversation = models.ForeignKey(WSConversation, on_delete=models.CASCADE, related_name='db_messages')  # FK back to the conversation this message belongs to
+    message_uuid = models.UUIDField(default=uuid.uuid4, db_index=True)  # unique ID sent to frontend (not guessable like sequential IDs)
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES)  # 'user', 'assistant', or 'tool'
+    content = models.TextField()  # the actual message text
+    rating = models.PositiveSmallIntegerField(null=True, blank=True)  # user rating 1-5, null if unrated
+    sequence_number = models.PositiveIntegerField()  # position in conversation (0, 1, 2, ...) — determines display order
+    created_at = models.DateTimeField(auto_now_add=True)  # when this message was created
+
+    # AssistantMessage-specific fields (NULL for user and tool messages)
+    model = models.CharField(max_length=100, null=True, blank=True)  # which LLM generated this (e.g. 'claude-3-7-sonnet-latest')
+    stop_reason = models.CharField(max_length=50, null=True, blank=True)  # why the LLM stopped ('end_turn' or 'tool_use')
+    tool_call_id = models.CharField(max_length=100, null=True, blank=True)  # ID of tool call if the LLM invoked a tool
+    tool_call_name = models.CharField(max_length=100, null=True, blank=True)  # name of tool called (e.g. 'vector_search')
+    tool_call_input = models.JSONField(null=True, blank=True)  # arguments the LLM passed to the tool
+    usage = models.PositiveIntegerField(default=0)  # token count for this response
+
+    # ToolMessage-specific fields (NULL for user and assistant messages)
+    tool_name = models.CharField(max_length=100, null=True, blank=True)  # which tool produced this result
+    arguments = models.JSONField(null=True, blank=True)  # arguments the tool was called with
+    for_whom = models.CharField(max_length=10, choices=FOR_WHOM_CHOICES, null=True, blank=True)  # who gets the result ('assistant' or 'user')
+    result_dict = models.JSONField(null=True, blank=True)  # the tool's output data
+
+    class Meta:
+        ordering = ['conversation', 'sequence_number']  # default ordering: by conversation, then by position
+        indexes = [models.Index(fields=['rating'])]  # index on rating for fast queries like "find all 5-star messages"
 
 
 class ConversationFile(models.Model):
