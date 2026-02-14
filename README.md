@@ -29,7 +29,7 @@ More info can be found at [[https://aquillm.org]]
 *   **Frontend**: React
 *   **Database**: PostgreSQL
 *   **Vector Store**: pgvector (PostgreSQL extension)
-*   **LLM Integration**: Claude, OpenAI, Gemini as desired
+*   **LLM Integration**: Claude, OpenAI, Gemini, or local models via Ollama
 *   **Asynchronous Tasks**: Celery, Redis, Django Channels
 
 *   **Authentication**: django-allauth
@@ -50,20 +50,29 @@ This assumes you have Docker and Docker Compose installed.
     ```
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
-    - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (CLAUDE, OPENAI, GEMINI)
+    - **LLM Provider**: Choose between cloud or local options:
+      - **Cloud providers** (require API keys):
+        - Set LLM_CHOICE to CLAUDE, OPENAI, or GEMINI
+        - Add the corresponding API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
+      - **Local models via Ollama** (no API keys required):
+        - Set LLM_CHOICE to GEMMA3, LLAMA3.2, or GPT-OSS
+        - No API keys needed for local models
 
 4.  **Build and run using Docker Compose:**
     ```bash
+    # For cloud LLM providers (Claude, OpenAI, Gemini)
     docker compose up -d 
+    
+    # For local Ollama models (Gemma3, Llama3.2, GPT-OSS)
+    docker compose --profile ollama up -d
     ```
 
-4. **Add a superuser:**
+5. **Add a superuser:**
    ```bash
    docker compose exec web ./manage.py addsuperuser
    ```
 
-5.  **Access the application:**
+6.  **Access the application:**
 
     Open your browser to `http://localhost:8080`, sign in with superuser account.
 
@@ -85,8 +94,9 @@ This assumes you have Docker and Docker Compose installed.
     ```
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
-    - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (CLAUDE, OPENAI, GEMINI)
+    - **LLM Provider**: Choose between cloud or local options:
+      - **Cloud providers** (require API keys): CLAUDE, OPENAI, or GEMINI
+      - **Local models via Ollama** (no API keys required): GEMMA3, LLAMA3.2, or GPT-OSS
     - Optional: Google OAuth credentials (GOOGLE_OAUTH2_CLIENT_ID, GOOGLE_OAUTH2_CLIENT_SECRET)
     - Optional: Email access permissions (ALLOWED_EMAIL_DOMAINS, ALLOWED_EMAIL_ADDRESSES). Required if OAuth is to be used.
     - Set HOST_NAME for your domain or use 'localhost' for development
@@ -143,6 +153,54 @@ This assumes you have Docker and Docker Compose installed.
    - All conversations are saved automatically
    - Access past conversations from the "Your Conversations" menu in the sidebar
    - Each conversation maintains its collection context
+
+## Using Ollama for Local LLM Models
+
+AquiLLM supports running completely offline using local LLM models via Ollama. This eliminates the need for API keys and allows you to run models on your own hardware.
+
+### Setup
+
+1. **Enable Ollama in your environment:**
+   ```bash
+   # Edit your .env file
+   LLM_CHOICE=GEMMA3  # or LLAMA3.2 or GPT-OSS
+   ```
+
+2. **Start services with Ollama enabled:**
+   ```bash
+   docker compose --profile ollama up -d
+   ```
+
+3. **Available models:**
+   - `GEMMA3`: Google's Gemma 3 enhanced model (12B parameters)
+   - `LLAMA3.2`: Meta's Llama 3.2 model
+   - `GPT-OSS`: Open-source GPT model (120B parameters variant)
+
+### Requirements
+
+- **GPU recommended**: Ollama models run best with NVIDIA GPU support (required for GPT-OSS)
+- **RAM**: At least 16GB recommended for smaller models (GEMMA3, LLAMA3.2), 64GB+ for larger models (GPT-OSS)
+- **Disk Space**: Models are downloaded on first use and can be several GB each
+- The Ollama service will automatically download models on first use
+
+### Using Custom Ollama Models
+
+To use a different Ollama model not listed above, you can modify `aquillm/aquillm/apps.py` to add your preferred model. The Ollama service connects via OpenAI-compatible API at `http://ollama:11434/v1/`.
+
+### Testing Ollama Configuration
+
+To validate that Ollama models are correctly configured:
+
+```bash
+# Quick validation script
+python3 validate_ollama_config.py
+
+# Run full test suite (requires Docker)
+docker compose -f docker-compose-test.yml up --build
+
+# Run specific LLM configuration tests
+pytest aquillm/aquillm/tests/test_llm_config.py -v
+```
 
 ## Contributing
 

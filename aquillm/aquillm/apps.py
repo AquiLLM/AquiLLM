@@ -77,19 +77,12 @@ class AquillmConfig(AppConfig):
         self.openai_client = openai.AsyncOpenAI()
         self.anthropic_client = anthropic.Anthropic()
         self.async_anthropic_client = anthropic.AsyncAnthropic()
-        self.async_anthropic_bedrock_client = anthropic.AsyncAnthropicBedrock(
-            aws_region='us-east-1',
-            aws_access_key=getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_key=getenv('AWS_SECRET_ACCESS_KEY')
-        )
         self.get_embedding = get_embedding_func(self.cohere_client)
         llm_choice = getenv('LLM_CHOICE', self.default_llm)
         if llm_choice == 'CLAUDE':
             self.llm_interface = ClaudeInterface(self.async_anthropic_client)
         elif llm_choice == 'OPENAI':
             self.llm_interface = OpenAIInterface(self.openai_client, "gpt-4o")
-        elif llm_choice == 'BEDROCK-CLAUDE':
-            self.llm_interface = ClaudeInterface(self.async_anthropic_bedrock_client, model_override='arn:aws:bedrock:us-east-1:744423739991:inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0')
         elif llm_choice == 'GEMMA3':
             self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "ebdm/gemma3-enhanced:12b")
         elif llm_choice == 'LLAMA3.2':
