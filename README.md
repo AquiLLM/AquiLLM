@@ -187,6 +187,21 @@ AquiLLM supports running completely offline using local LLM models via Ollama. T
 
 To use a different Ollama model not listed above, you can modify `aquillm/aquillm/apps.py` to add your preferred model. The Ollama service connects via OpenAI-compatible API at `http://ollama:11434/v1/`.
 
+### Testing Ollama Configuration
+
+To validate that Ollama models are correctly configured:
+
+```bash
+# Quick validation script
+python3 validate_ollama_config.py
+
+# Run full test suite (requires Docker)
+docker compose -f docker-compose-test.yml up --build
+
+# Run specific LLM configuration tests
+pytest aquillm/aquillm/tests/test_llm_config.py -v
+```
+
 ## Contributing
 
 We welcome contributions! AquiLLM is an open-source project, and we appreciate help from the community.
