@@ -854,6 +854,7 @@ class Message(models.Model):
     role = models.CharField(max_length=10, choices=ROLE_CHOICES)  # 'user', 'assistant', or 'tool'
     content = models.TextField()  # the actual message text
     rating = models.PositiveSmallIntegerField(null=True, blank=True)  # user rating 1-5, null if unrated
+    feedback_text = models.TextField(null=True, blank=True)  # optional user feedback text
     sequence_number = models.PositiveIntegerField()  # position in conversation (0, 1, 2, ...) — determines display order
     created_at = models.DateTimeField(auto_now_add=True)  # when this message was created
 
