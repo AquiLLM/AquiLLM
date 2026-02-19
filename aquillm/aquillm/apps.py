@@ -96,6 +96,8 @@ class AquillmConfig(AppConfig):
             self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "llama3.2")
         elif llm_choice == 'GPT-OSS':
             self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "gpt-oss:120b")
+        elif llm_choice == 'QWEN3_30B':
+            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "qwen3:30b-a3b-instruct-2507-q4_K_M")
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 
