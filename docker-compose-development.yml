@@ -138,6 +138,8 @@ services:
       - .env
     environment:
       - OLLAMA_KEEP_ALIVE=-1
+      - DJANGO_ALLOWED_HOSTS=aquillm-dev.cis260251.projects.jetstream-cloud.org
+      - DJANGO_CSRF_TRUSTED_ORIGINS=https://aquillm-dev.cis260251.projects.jetstream-cloud.org
     healthcheck:
       test: ["CMD-SHELL", "ollama --version && ollama ps || exit 1"]
       interval: 10s

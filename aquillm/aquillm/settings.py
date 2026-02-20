@@ -209,7 +209,7 @@ INTERNAL_IPS = [
 X_FRAME_OPTIONS = "SAMEORIGIN"
 USE_TZ=True
 DATA_UPLOAD_MAX_MEMORY_SIZE=  268435456
-ALLOWED_HOSTS =['localhost']
+ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "").split(",")
 if host_name := os.environ.get("HOST_NAME"):
     ALLOWED_HOSTS += [host_name]
 ASGI_APPLICATION = "aquillm.asgi.application"
@@ -231,8 +231,10 @@ STORAGES = {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     }
 }
-if not DEBUG:
-    CSRF_TRUSTED_ORIGINS =['https://' + os.environ["HOST_NAME"]]
+
+#This should be not, making if for testing purposes
+if  DEBUG:
+    CSRF_TRUSTED_ORIGINS = os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
 
 
 CHANNEL_LAYERS = {
