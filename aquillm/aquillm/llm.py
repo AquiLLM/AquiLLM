@@ -139,6 +139,7 @@ class __LLMMessage(BaseModel, ABC):
     tools: Optional[list[LLMTool]] = None
     tool_choice: Optional[ToolChoice] = None
     rating: Literal[None, 1,2,3,4,5] = None
+    feedback_text: Optional[str] = None
     files: Optional[list[tuple[str, int]]] = None
     message_uuid: uuid.UUID = Field(default_factory=uuid.uuid4)
     

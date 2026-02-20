@@ -435,7 +435,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
                               type="checkbox"
                               className={`ml-4 w-4 h-4 rounded cursor-pointer relative border ${
                                 isSelected
-                                  ? 'bg-accent border-accent'
+                                  ? "bg-accent border-accent after:content-['✓'] after:absolute after:text-white after:text-xs after:top-[-1px] after:left-[3px]" // merged className
                                   : 'bg-scheme-shade_5 border-border-mid_contrast'
                               }`}
                               style={{
@@ -453,7 +453,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
                                 // Ensure click doesn't propagate either
                                 e.stopPropagation(); 
                               }}
-                              className={isSelected ? "after:content-['✓'] after:absolute after:text-white after:text-xs after:top-[-1px] after:left-[3px]" : ""}
+                              //there was a duplicate className causing a build error, merged them together to fix
                             />
                         </div>
                       </td>

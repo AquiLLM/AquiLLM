@@ -159,6 +159,46 @@ class MessageAdapterTests(TestCase):
         self.assertEqual(pydantic_msg.for_whom, 'assistant')
         self.assertEqual(pydantic_msg.result_dict, {'result': 'data'})
 
+    # -- Feedback text tests --
+
+    def test_feedback_text_pydantic_to_django(self):
+        """Feedback text should be saved to Django model."""
+        msg = AssistantMessage(
+            content='Here is my response.',
+            model='claude-3-7-sonnet-latest',
+            stop_reason='end_turn',
+            rating=5,
+            feedback_text='This was really helpful!',
+        )
+        db_msg = pydantic_message_to_django(msg, self.db_convo, seq_num=0)
+
+        self.assertEqual(db_msg.feedback_text, 'This was really helpful!')
+
+    def test_feedback_text_django_to_pydantic(self):
+        """Feedback text should be loaded from Django model."""
+        db_msg = Message.objects.create(
+            conversation=self.db_convo,
+            role='assistant',
+            content='Test response',
+            sequence_number=0,
+            feedback_text='Great answer!',
+        )
+
+        pydantic_msg = django_message_to_pydantic(db_msg)
+
+        self.assertEqual(pydantic_msg.feedback_text, 'Great answer!')
+
+    def test_feedback_text_null_by_default(self):
+        """Feedback text should be None when not provided."""
+        msg = AssistantMessage(
+            content='Response without feedback',
+            model='claude-3-7-sonnet-latest',
+            stop_reason='end_turn',
+        )
+        db_msg = pydantic_message_to_django(msg, self.db_convo, seq_num=0)
+
+        self.assertIsNone(db_msg.feedback_text)
+
 
 class SaveLoadConversationTests(TestCase):
     """Tests for saving and loading full conversations.

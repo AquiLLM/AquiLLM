@@ -32,6 +32,7 @@ def pydantic_message_to_django(
         'role': msg.role,                    # 'user', 'assistant', or 'tool'
         'content': msg.content,              # the actual message text
         'rating': msg.rating,                # user rating (1-5) or None
+        'feedback_text': msg.feedback_text,  # optional user feedback text
         'sequence_number': seq_num,          # position in the conversation (0, 1, 2, ...)
     }
 
@@ -69,6 +70,7 @@ def django_message_to_pydantic(msg: Message) -> LLM_Message:
     common = {
         'content': msg.content,
         'rating': msg.rating,
+        'feedback_text': msg.feedback_text,
         'message_uuid': msg.message_uuid,
     }
 
