@@ -72,6 +72,15 @@ This assumes you have Docker and Docker Compose installed.
     docker compose down
     ```
 
+## Updating from main:
+
+After pulling updates, rebuild and restart the web container. Migrations run automatically on startup.
+
+```bash
+git pull origin main
+docker compose up --build -d web
+```
+
 ## Small-scale deployment:
 
 1.  **Clone the repository:**
