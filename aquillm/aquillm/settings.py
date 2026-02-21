@@ -17,16 +17,25 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def env_bool(key: str, default: bool = False) -> bool:
+    value = os.environ.get(key)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def env_csv(key: str) -> list[str]:
+    value = os.environ.get(key, "")
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
-if os.environ.get('DJANGO_DEBUG'):
-    print("Debug is enabled.")
-    DEBUG = True
+DEBUG = env_bool("DJANGO_DEBUG", False)
 
 SECRET_KEY = ""
 if DEBUG:
@@ -100,10 +109,10 @@ WSGI_APPLICATION = "aquillm.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
-POSTGRES_USER = os.environ["POSTGRES_USER"]
-POSTGRES_HOST = os.environ["POSTGRES_HOST"]
-POSTGRES_NAME = os.environ["POSTGRES_NAME"]
-POSTGRES_PASSWORD = os.environ["POSTGRES_PASSWORD"]
+POSTGRES_USER = os.environ.get("POSTGRES_USER", "aquillm")
+POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "db")
+POSTGRES_NAME = os.environ.get("POSTGRES_NAME", "aquillm")
+POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "aquillm")
 
 DATABASES = {
     "default": {
@@ -209,9 +218,10 @@ INTERNAL_IPS = [
 X_FRAME_OPTIONS = "SAMEORIGIN"
 USE_TZ=True
 DATA_UPLOAD_MAX_MEMORY_SIZE=  268435456
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "").split(",")
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"] + env_csv("DJANGO_ALLOWED_HOSTS")
 if host_name := os.environ.get("HOST_NAME"):
-    ALLOWED_HOSTS += [host_name]
+    ALLOWED_HOSTS.append(host_name)
+ALLOWED_HOSTS = list(dict.fromkeys(ALLOWED_HOSTS))
 ASGI_APPLICATION = "aquillm.asgi.application"
 
 
@@ -219,9 +229,9 @@ STORAGES = {
     "default": {
         "BACKEND": "storages.backends.s3.S3Storage",
         "OPTIONS": {
-            "endpoint_url": "http://" + os.environ["STORAGE_HOST"],
-            "access_key": os.environ["STORAGE_ACCESS_KEY"],
-            "secret_key": os.environ["STORAGE_SECRET_KEY"],
+            "endpoint_url": "http://" + os.environ.get("STORAGE_HOST", "storage:9000"),
+            "access_key": os.environ.get("STORAGE_ACCESS_KEY", "dev"),
+            "secret_key": os.environ.get("STORAGE_SECRET_KEY", "rickbailey"),
 
             "bucket_name": "aquillm",
             "file_overwrite": False,
@@ -232,9 +242,10 @@ STORAGES = {
     }
 }
 
-#This should be not, making if for testing purposes
-if  DEBUG:
-    CSRF_TRUSTED_ORIGINS = os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
+CSRF_TRUSTED_ORIGINS = env_csv("DJANGO_CSRF_TRUSTED_ORIGINS")
+if host_name:
+    CSRF_TRUSTED_ORIGINS.append("https://" + host_name)
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(CSRF_TRUSTED_ORIGINS))
 
 
 CHANNEL_LAYERS = {

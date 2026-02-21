@@ -9,11 +9,6 @@ services:
     env_file:
       - .env
     environment:
-      - PORT=8080
-      - POSTGRES_HOST=db
-      - STORAGE_HOST=storage:9000
-      - STORAGE_ACCESS_KEY=dev
-      - STORAGE_SECRET_KEY=rickbailey
       - C_FORCE_ROOT=1
     depends_on:
       db:
@@ -138,8 +133,6 @@ services:
       - .env
     environment:
       - OLLAMA_KEEP_ALIVE=-1
-      - DJANGO_ALLOWED_HOSTS=aquillm-dev.cis260251.projects.jetstream-cloud.org
-      - DJANGO_CSRF_TRUSTED_ORIGINS=https://aquillm-dev.cis260251.projects.jetstream-cloud.org
     healthcheck:
       test: ["CMD-SHELL", "ollama --version && ollama ps || exit 1"]
       interval: 10s
