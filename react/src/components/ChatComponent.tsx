@@ -10,6 +10,7 @@ interface Message {
   content: string;
   message_uuid?: string;
   rating?: number;
+  feedback_text?: string;
   tool_call_name?: string;
   tool_call_input?: any;
   tool_name?: string;
@@ -248,6 +249,26 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
     });
   };
 
+  const feedbackMessage = (uuid: string | undefined, feedback_text: string) => {
+    if (!uuid || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    
+    const payload = {
+      action: 'feedback',
+      uuid: uuid,
+      feedback_text: feedback_text
+    };
+    
+    wsRef.current.send(JSON.stringify(payload));
+    
+    // Update the feedback_text in the local state
+    setConversation(prev => {
+      const updatedMessages = prev.messages.map(msg => 
+        msg.message_uuid === uuid ? { ...msg, feedback_text } : msg
+      );
+      return { ...prev, messages: updatedMessages };
+    });
+  };
+
   const handleCollectionToggle = (collectionId: string) => {
     setSelectedCollections(prev => {
       const newSelected = new Set(prev);
@@ -293,7 +314,8 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
             <MessageBubble 
               key={`msg-${index}`} 
               message={message} 
-              onRate={rateMessage} 
+              onRate={rateMessage}
+              onFeedback={feedbackMessage}
             />
           ))}
           
@@ -430,7 +452,11 @@ const shouldShowSpinner = (messages: Message[]) => {
 };
 
 // MessageBubble component
-const MessageBubble: React.FC<{ message: Message, onRate: (uuid: string | undefined, rating: number) => void }> = ({ message, onRate }) => {
+const MessageBubble: React.FC<{ 
+  message: Message, 
+  onRate: (uuid: string | undefined, rating: number) => void,
+  onFeedback: (uuid: string | undefined, feedback_text: string) => void
+}> = ({ message, onRate, onFeedback }) => {
   const getMessageClasses = () => {
     let classes = "w-4/5 p-2.5 rounded-[12px] shadow-md whitespace-pre-wrap break-words element-border";
     
@@ -508,8 +534,10 @@ const MessageBubble: React.FC<{ message: Message, onRate: (uuid: string | undefi
         {/* Rating buttons */}
         {(message.role === 'assistant' || message.role === 'tool') && (
           <RatingButtons 
-            rating={message.rating} 
+            rating={message.rating}
+            feedback_text={message.feedback_text}
             onRate={(rating) => onRate(message.message_uuid, rating)}
+            onFeedback={(text) => onFeedback(message.message_uuid, text)}
           />
         )}
         {/* File attachments */}
@@ -608,22 +636,58 @@ const ToolValue: React.FC<{ value: string | number | boolean }> = ({ value }) =>
 
 const RatingButtons: React.FC<{ 
   rating?: number, 
-  onRate: (rating: number) => void 
-}> = ({ rating, onRate }) => {
+  feedback_text?: string,
+  onRate: (rating: number) => void,
+  onFeedback: (text: string) => void
+}> = ({ rating, feedback_text, onRate, onFeedback }) => {
   const emojis = ['😞', '😕', '😐', '🙂', '😊'];
+  const [localFeedback, setLocalFeedback] = useState(feedback_text || '');
+  const [submitted, setSubmitted] = useState(!!feedback_text);
+
+  const handleSubmit = () => {
+    if (localFeedback.trim()) {
+      onFeedback(localFeedback.trim());
+      setSubmitted(true);
+    }
+  };
   
   return (
-    <div className="flex items-center gap-1 mt-2">
-      <span className="text-sm mr-2">Rate:</span>
-      {emojis.map((emoji, i) => (
-        <button
-          key={i}
-          className={`p-1 rounded hover:bg-scheme-shade_6 ${rating === i + 1 ? 'bg-scheme-shade_6' : ''} transition-colors`}
-          onClick={() => onRate(i + 1)}
-        >
-          {emoji}
-        </button>
-      ))}
+    <div className="flex flex-col gap-2 mt-2">
+      <div className="flex items-center gap-1">
+        <span className="text-sm mr-2">Rate:</span>
+        {emojis.map((emoji, i) => (
+          <button
+            key={i}
+            className={`p-1 rounded hover:bg-scheme-shade_6 ${rating === i + 1 ? 'bg-scheme-shade_6' : ''} transition-colors`}
+            onClick={() => onRate(i + 1)}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-2 items-center">
+        <input
+          type="text"
+          value={localFeedback}
+          onChange={(e) => {
+            setLocalFeedback(e.target.value);
+            setSubmitted(false);
+          }}
+          placeholder="Please enter feedback here..."
+          className="flex-grow px-2 py-1 text-sm rounded bg-scheme-shade_3 text-text-normal border border-border-mid_contrast"
+          onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+        />
+        {submitted ? (
+          <span className="text-sm text-green-500 whitespace-nowrap">Submitted!</span>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            className="px-3 py-1 text-sm bg-accent rounded text-text-normal whitespace-nowrap"
+          >
+            Submit
+          </button>
+        )}
+      </div>
     </div>
   );
 };

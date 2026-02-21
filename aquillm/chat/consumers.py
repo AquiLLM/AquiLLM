@@ -465,6 +465,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     msg.rating = rating
                     break
 
+        async def feedback(data: dict):
+            assert self.convo is not None
+            uuid_str = data['uuid']
+            feedback_text = data['feedback_text']
+
+            # Update just the single Message row in the database
+            await database_sync_to_async(
+                lambda: self.db_convo.db_messages.filter(message_uuid=uuid_str).update(feedback_text=feedback_text)
+            )()
+
+            # Also update the in-memory Pydantic model
+            for msg in self.convo:
+                if str(msg.message_uuid) == uuid_str:
+                    msg.feedback_text = feedback_text
+                    break
+
         if not self.dead:
             try:
                 data = loads(text_data)
@@ -474,6 +490,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     await append(data)
                 elif action == 'rate':
                     await rate(data)
+                elif action == 'feedback':
+                    await feedback(data)
                 else:
                     raise ValueError(f'Invalid action "{action}"')
                 logger.debug("About to call llm_if.spin() in receive()")
