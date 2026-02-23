@@ -4,6 +4,8 @@
     "e2e:report": "playwright show-report"
   },
   "devDependencies": {
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4"
     "@playwright/test": "^1.58.2"
   }
 }
