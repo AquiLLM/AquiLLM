@@ -22,9 +22,12 @@
 {% endblock %}
 </head>
 <body class="
-  {% if user_theme_settings %}
-    theme-{{ user_theme_settings.color_scheme }} font-{{ user_theme_settings.font_family }}
-  {% endif %} ">
+    {% if user_theme_settings %}
+        theme-{{ user_theme_settings.color_scheme }} font-{{ user_theme_settings.font_family }}
+    {% else %}
+        theme-aquillm_default_light font-Lexend
+    {% endif %}
+">
 
     <div id="delete-confirm-modal" class="fixed inset-0 flex items-center backdrop-blur justify-center bg-black bg-opacity-50 hidden z-[200] transition-all">
         <div class="bg-scheme-shade_3 p-6 rounded shadow-md text-center border border-border-mid_contrast">
