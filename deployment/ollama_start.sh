@@ -24,7 +24,7 @@ case "${LLM_CHOICE}" in
     MODEL_TO_PULL="gpt-oss:120b"
     ;;
   QWEN3_30B)
-    MODEL_TO_PULL="qwen3:30b-a3b-instruct-2507-q4_K_M"
+    MODEL_TO_PULL="hf.co/unsloth/Qwen3.5-27B-GGUF:Q4_K_M"
     ;;
   "")
     echo "LLM_CHOICE not set, skipping model pull."
