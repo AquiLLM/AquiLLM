@@ -494,11 +494,12 @@ class OpenAIInterface(LLMInterface):
         return LLMResponse(text=text,
                            tool_call={"tool_call_id": tool_call.id,
                                         "tool_call_name": tool_call.function.name,
-                                        "tool_call_input": loads(tool_call.function.arguments)} 
+                                        "tool_call_input": loads(tool_call.function.arguments)}
                                         if tool_call else {},
                            stop_reason=response.choices[0].finish_reason,
                            input_usage=response.usage.prompt_tokens,
-                           output_usage=response.usage.completion_tokens
+                           output_usage=response.usage.completion_tokens,
+                           model=self.base_args['model']
                            )
                         
     @override 
