@@ -1,7 +1,6 @@
-FROM ollama/ollama
+FROM ollama/ollama:latest
 
-COPY ./deployment/ollama_start.sh /ollama_start.sh
-RUN chmod +x /ollama_start.sh
+COPY --chmod=755 ./deployment/ollama_start.sh /ollama_start.sh
 
 EXPOSE 11434
 ENTRYPOINT ["/ollama_start.sh"]
