@@ -1,13 +1,63 @@
+<!-- 
+    Home/Welcome Page Template
+    Extends base.html layout and displays a welcome screen with the AquiLLM logo.
+    Shows different content based on user authentication status.
+-->
 {% extends "aquillm/base.html" %}
 {% load static %}
 
+<!-- Page title shown in browser tab -->
 {% block title %}AquiLLM Home{% endblock %}
 
-{% block content %}
-    <!-- Add your page-specific content here -->
-    <div class="flex flex-col items-center justify-center h-full w-full text-text-normal">
 
-        <svg width="500" height="500" viewBox="0 0 48 57" fill="none" xmlns="http://www.w3.org/2000/svg" class="fixed">
+{% block content %}
+    <!-- 
+        Theme-specific styles for logo and text readability.
+        Light mode: reduces logo opacity and adds white text shadow for contrast.
+        Dark mode: keeps logo fully visible, no text shadow needed.
+    -->
+    <style>
+        /* Light mode themes - reduce logo opacity, add text outline for readability */
+        body.theme-aquillm_default_light .welcome-logo,
+        body.theme-aquillm_default_light_accessible_chat .welcome-logo {
+            opacity: 0.5 !important;
+        }
+        body.theme-aquillm_default_light .welcome-text,
+        body.theme-aquillm_default_light_accessible_chat .welcome-text {
+            text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff, 0 0 10px #fff, 0 0 20px #fff;
+        }
+        /* Dark mode themes - invert logo color so it shows on dark backgrounds */
+        body.theme-aquillm_default_dark .welcome-logo,
+        body.theme-aquillm_default_dark_accessible_chat .welcome-logo,
+        body.theme-high_contrast .welcome-logo {
+            opacity: .5 !important;
+            filter: invert(1);
+        }
+        body.theme-aquillm_default_dark .welcome-text,
+        body.theme-aquillm_default_dark_accessible_chat .welcome-text,
+        body.theme-high_contrast .welcome-text {
+            text-shadow: -1px -1px 0 #111, 1px -1px 0 #111, -1px 1px 0 #111, 1px 1px 0 #111, 0 0 10px #111, 0 0 20px #111;
+        }
+        /* Responsive logo sizing - shrinks with viewport, stays centered in content area */
+        .welcome-logo {
+            width: min(500px, 70vw);
+            height: auto;
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+    </style>
+
+    <!-- Main content container - centered flexbox layout -->
+    <div class="flex flex-col items-center justify-center h-full w-full text-text-normal relative">
+
+        <!-- 
+            Large decorative AquiLLM logo (Aquila bird constellation).
+            Absolute position within content area, sits behind text as a background watermark.
+            Opacity controlled by theme-specific CSS above.
+        -->
+        <svg viewBox="0 0 48 57" fill="none" xmlns="http://www.w3.org/2000/svg" class="welcome-logo">
             <g clip-path="url(#clip0_42_32)">
             <path d="M46.3775 56.5333C47.0216 56.5333 47.5439 56.0056 47.5439 55.3546C47.5439 54.7036 47.0216 54.1759 46.3775 54.1759C45.7333 54.1759 45.2111 54.7036 45.2111 55.3546C45.2111 56.0056 45.7333 56.5333 46.3775 56.5333Z" fill="#282828"/>
             <path d="M43.4601 54.697C44.2962 54.697 44.974 54.012 44.974 53.167C44.974 52.3221 44.2962 51.6371 43.4601 51.6371C42.6239 51.6371 41.9461 52.3221 41.9461 53.167C41.9461 54.012 42.6239 54.697 43.4601 54.697Z" fill="#282828"/>
@@ -34,17 +84,26 @@
         </svg>
         
 
+        <!-- 
+            Authenticated User View
+            Shows personalized welcome message with username.
+        -->
         {% if user.is_authenticated %}
         {% csrf_token %}
 
-        <h1 class="font-sans text-5xl text-accent-light pb-[24px] mb-[24px] pointer-events-none w-[30%] text-center z-10">Welcome, {{ user.username }}</h1>
+        <h1 class="font-sans text-5xl text-accent-light pb-[24px] mb-[24px] pointer-events-none text-center z-10 welcome-text px-4">Welcome, {{ user.username }}</h1>
             
+        <!-- 
+            Guest/Unauthenticated User View
+            Shows generic welcome and login prompt with form.
+        -->
         {% else %}
         {% csrf_token %}
 
-            <h1 class="font-sans text-5xl border-b border-scheme-shade_14 pb-[24px] mb-[24px] pointer-events-none w-[30%] text-center z-50">Welcome to AquiLLM</h1>
+            <h1 class="font-sans text-5xl border-b border-scheme-shade_14 pb-[24px] mb-[24px] pointer-events-none text-center z-50 welcome-text px-4">Welcome to AquiLLM</h1>
 
-            <div class="font-sans z-50">
+            <!-- Login prompt with form that redirects to login page -->
+            <div class="font-sans z-50 welcome-text">
                 <form method="post" action="{% url 'account_login' %}">
                     {% csrf_token %}
                     <span class="pointer-events-none">Please</span>
