@@ -138,6 +138,44 @@ services:
       interval: 10s
       start_period: 10s
 
+  vllm:
+    container_name: vllm-qwen3_5
+    image: vllm/vllm-openai:latest
+    gpus: all
+    ipc: host
+    restart: unless-stopped
+    profiles:
+      - vllm
+    env_file:
+      - .env
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      - TORCH_CUDA_ARCH_LIST=8.0
+      - PYTORCH_ALLOC_CONF=expandable_segments:True
+      - VLLM_SLEEP_WHEN_IDLE=1
+    ports:
+      - "8000:8000"
+    command: >
+      unsloth/Qwen3.5-27B-GGUF
+      --host 0.0.0.0
+      --port 8000
+      --served-model-name unsloth-qwen3.5-27b
+      --gpu-memory-utilization 0.965
+      --enable-prefix-caching
+      --attention-backend FLASHINFER
+    volumes:
+      - ./root_cache:/root/.cache/
+      - ./models:/models:ro
+      - /dev/null:/etc/ld.so.conf.d/cuda-compat.conf
+      - /dev/null:/etc/ld.so.conf.d/00-cuda-compat.conf
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
 volumes:
   postgres_data:
   minio_data:
