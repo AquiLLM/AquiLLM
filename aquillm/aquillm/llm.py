@@ -319,7 +319,12 @@ class LLMInterface(ABC):
 
     
     @validate_call
-    async def complete(self, conversation: Conversation, max_tokens: int) -> tuple[Conversation, Literal['changed', 'unchanged']]:
+    async def complete(
+        self,
+        conversation: Conversation,
+        max_tokens: int,
+        stream_delta_func: Optional[Callable[[uuid.UUID, str], Any]] = None
+    ) -> tuple[Conversation, Literal['changed', 'unchanged']]:
         if len(conversation) < 1:
             return conversation, 'unchanged'
         system_prompt = conversation.system
@@ -351,7 +356,15 @@ class LLMInterface(ABC):
                 #print("LLM called with the following args:")
                 #pp(sdk_args)
             
-            response = await self.get_message(**sdk_args)
+            message_uuid = uuid.uuid4()
+            async def _on_text_delta(delta: str):
+                if stream_delta_func and delta:
+                    await stream_delta_func(message_uuid, delta)
+
+            response = await self.get_message(
+                **sdk_args,
+                on_text_delta=_on_text_delta if stream_delta_func else None
+            )
             new_msg = AssistantMessage(
                             content=response.text if response.text else "** Empty Message, tool call **",
                             stop_reason=response.stop_reason,
@@ -359,6 +372,7 @@ class LLMInterface(ABC):
                             tool_choice=last_message.tool_choice,
                             usage = response.input_usage + response.output_usage,
                             model=response.model,
+                            message_uuid=message_uuid,
                             **response.tool_call)
             if DEBUG:
                 print("Response from LLM:")
@@ -368,10 +382,17 @@ class LLMInterface(ABC):
 
 
 
-    async def spin(self, convo: Conversation, max_func_calls: int, send_func: Callable[[Conversation], Any], max_tokens: int) -> None:
+    async def spin(
+        self,
+        convo: Conversation,
+        max_func_calls: int,
+        send_func: Callable[[Conversation], Any],
+        max_tokens: int,
+        stream_delta_func: Optional[Callable[[uuid.UUID, str], Any]] = None
+    ) -> None:
         calls = 0
         while calls < max_func_calls:
-            convo, changed = await self.complete(convo, max_tokens)
+            convo, changed = await self.complete(convo, max_tokens, stream_delta_func=stream_delta_func)
             await send_func(convo)
             if changed == 'unchanged':
                 return
@@ -394,7 +415,17 @@ class ClaudeInterface(LLMInterface):
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
-        response = await self.client.messages.create(**kwargs)
+        on_text_delta = kwargs.pop('on_text_delta', None)
+        if on_text_delta:
+            stream_kwargs = dict(kwargs)
+            text_parts: list[str] = []
+            async with self.client.messages.stream(**stream_kwargs) as stream:
+                async for text_chunk in stream.text_stream:
+                    text_parts.append(text_chunk)
+                    await on_text_delta(text_chunk)
+                response = await stream.get_final_message()
+        else:
+            response = await self.client.messages.create(**kwargs)
         if DEBUG:
             print("Claude SDK Response:")
             pp(response)
@@ -413,7 +444,7 @@ class ClaudeInterface(LLMInterface):
             'tool_call_input' : tool_block.input,
         } if tool_block else {}
         
-        return LLMResponse(text=text_block.text,
+        return LLMResponse(text=text_block.text if text_block else None,
                            tool_call=tool_call, 
                            stop_reason=response.stop_reason, 
                            input_usage=response.usage.input_tokens, 
@@ -471,34 +502,88 @@ class OpenAIInterface(LLMInterface):
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
-
+        on_text_delta = kwargs.pop('on_text_delta', None)
         arguments = {"model": self.base_args['model'],
                     "messages": [{"role": "developer", "content": kwargs.pop('system')}] + kwargs.pop('messages')}
 
         # Only add tools if they're provided
         if 'tools' in kwargs:
             arguments["tools"] = await self._transform_tools(kwargs.pop('tools'))
+        if on_text_delta:
+            stream = await self.client.chat.completions.create(**arguments, stream=True)
+            text_parts: list[str] = []
+            finish_reason = "stop"
+            usage_in = 0
+            usage_out = 0
+            tool_call_id = None
+            tool_call_name = None
+            tool_call_arguments_parts: list[str] = []
 
-        response = await self.client.chat.completions.create(**arguments)
-        if DEBUG:
-            print("OpenAI SDK Response:")
-            pp(response)
-        tool_call = response.choices[0].message.tool_calls[0] if response.choices[0].message.tool_calls else None
-        text = response.choices[0].message.content
-        if tool_call and tool_call.function.name == 'message_to_user':
-            # this is a special tool that just sends a message to the user, so we don't need to return it.
-            # this is necessary because local models feel the need to call a tool every time. 
+            async for chunk in stream:
+                if getattr(chunk, "usage", None):
+                    usage_in = getattr(chunk.usage, "prompt_tokens", usage_in) or usage_in
+                    usage_out = getattr(chunk.usage, "completion_tokens", usage_out) or usage_out
+                choice = chunk.choices[0] if chunk.choices else None
+                if not choice:
+                    continue
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+                delta = choice.delta
+                if getattr(delta, "content", None):
+                    text_parts.append(delta.content)
+                    await on_text_delta(delta.content)
+                if getattr(delta, "tool_calls", None):
+                    for tool_delta in delta.tool_calls:
+                        if getattr(tool_delta, "id", None):
+                            tool_call_id = tool_delta.id
+                        fn = getattr(tool_delta, "function", None)
+                        if fn and getattr(fn, "name", None):
+                            tool_call_name = fn.name
+                        if fn and getattr(fn, "arguments", None):
+                            tool_call_arguments_parts.append(fn.arguments)
+
+            text = "".join(text_parts) if text_parts else None
             tool_call = None
-            text = tool_call.function.arguments['message']
+            if tool_call_id and tool_call_name:
+                tool_call = {
+                    "id": tool_call_id,
+                    "function": {
+                        "name": tool_call_name,
+                        "arguments": "".join(tool_call_arguments_parts) if tool_call_arguments_parts else "{}"
+                    }
+                }
+        else:
+            response = await self.client.chat.completions.create(**arguments)
+            if DEBUG:
+                print("OpenAI SDK Response:")
+                pp(response)
+            raw_tool_call = response.choices[0].message.tool_calls[0] if response.choices[0].message.tool_calls else None
+            tool_call = {
+                "id": raw_tool_call.id,
+                "function": {
+                    "name": raw_tool_call.function.name,
+                    "arguments": raw_tool_call.function.arguments
+                }
+            } if raw_tool_call else None
+            text = response.choices[0].message.content
+            finish_reason = response.choices[0].finish_reason
+            usage_in = response.usage.prompt_tokens
+            usage_out = response.usage.completion_tokens
+
+        if tool_call and tool_call["function"]["name"] == 'message_to_user':
+            # This tool is effectively just plain assistant output for the user.
+            tool_args = loads(tool_call["function"]["arguments"])
+            text = tool_args.get('message')
+            tool_call = None
 
         return LLMResponse(text=text,
-                           tool_call={"tool_call_id": tool_call.id,
-                                        "tool_call_name": tool_call.function.name,
-                                        "tool_call_input": loads(tool_call.function.arguments)} 
+                           tool_call={"tool_call_id": tool_call["id"],
+                                        "tool_call_name": tool_call["function"]["name"],
+                                        "tool_call_input": loads(tool_call["function"]["arguments"])}
                                         if tool_call else {},
-                           stop_reason=response.choices[0].finish_reason,
-                           input_usage=response.usage.prompt_tokens,
-                           output_usage=response.usage.completion_tokens
+                           stop_reason=finish_reason,
+                           input_usage=usage_in,
+                           output_usage=usage_out
                            )
                         
     @override 

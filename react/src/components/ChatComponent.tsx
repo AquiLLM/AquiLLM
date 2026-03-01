@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, Send, ChevronDown, Search, Loader2 } from 'lucide-react';
+import { Send } from 'lucide-react';
 import { CircularProgressbar } from 'react-circular-progressbar';
 import ReactMarkdown from 'react-markdown';
 import formatUrl from '../utils/formatUrl';
@@ -33,6 +33,10 @@ interface Conversation {
 interface WebSocketMessage {
   exception?: string;
   conversation?: Conversation;
+  stream?: {
+    message_uuid: string;
+    delta: string;
+  };
 }
 
 interface ChatProps {
@@ -41,7 +45,6 @@ interface ChatProps {
 
 const Chat: React.FC<ChatProps> = ({ convoId }) => {
   const [conversation, setConversation] = useState<Conversation>({ messages: [] });
-  const [isConnected, setIsConnected] = useState(false);
   const [inputDisabled, setInputDisabled] = useState(true);
   const [messageInput, setMessageInput] = useState('');
   const [exception, setException] = useState('');
@@ -93,7 +96,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
       setCollections(data.collections);
       
       // Select all collections by default
-      const allCollectionIds = new Set(data.collections.map((c: Collection) => c.id as string));
+      const allCollectionIds = new Set<string>(data.collections.map((c: Collection) => c.id));
       setSelectedCollections(allCollectionIds);
     } catch (error) {
       console.error('Error fetching collections:', error);
@@ -128,13 +131,39 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
         clearTimeout(timeoutId);
         setConnectionAttempts(0);
         setInputDisabled(false);
-        setIsConnected(true);
         setException('');
       };
       
       ws.onmessage = (event) => {
         try {
           const data: WebSocketMessage = JSON.parse(event.data);
+
+          if (data.stream) {
+            const { message_uuid, delta } = data.stream;
+            if (delta) {
+              setConversation((prev) => {
+                const existingIndex = prev.messages.findIndex(
+                  (msg) => msg.role === 'assistant' && msg.message_uuid === message_uuid
+                );
+                if (existingIndex >= 0) {
+                  const updatedMessages = [...prev.messages];
+                  const existing = updatedMessages[existingIndex];
+                  updatedMessages[existingIndex] = {
+                    ...existing,
+                    content: `${existing.content || ''}${delta}`,
+                  };
+                  return { ...prev, messages: updatedMessages };
+                }
+                const streamedAssistant: Message = {
+                  role: 'assistant',
+                  content: delta,
+                  message_uuid,
+                };
+                return { ...prev, messages: [...prev.messages, streamedAssistant] };
+              });
+            }
+            return;
+          }
           
           if (data.exception) {
             console.error('Server error:', data.exception);
@@ -179,7 +208,6 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
         clearTimeout(timeoutId);
         console.log('Disconnected from chat server', event.code, event.reason);
         setInputDisabled(true);
-        setIsConnected(false);
         
         let message = 'Disconnected from server. ';
         if (event.code === 1006) {

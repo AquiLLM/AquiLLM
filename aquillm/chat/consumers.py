@@ -357,6 +357,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.send(text_data=dumps({"conversation": frontend_json}))
             logger.debug(f"send_func completed in connect()")
 
+        async def stream_delta_func(message_uuid: UUID, delta: str):
+            await self.send(text_data=dumps({
+                "stream": {
+                    "message_uuid": str(message_uuid),
+                    "delta": delta
+                }
+            }))
+
         await self.accept()
         logger.debug(f"WebSocket accepted")
         self.user = self.scope['user']
@@ -389,7 +397,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
             self.convo.rebind_tools(self.tools)
             logger.debug(f"About to call llm_if.spin() in connect()")
-            await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
+            await self.llm_if.spin(
+                self.convo,
+                max_func_calls=5,
+                max_tokens=2048,
+                send_func=send_func,
+                stream_delta_func=stream_delta_func
+            )
             logger.debug(f"llm_if.spin() completed in connect()")
             return
         except OverloadedError as e:
@@ -427,6 +441,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             frontend_json = await database_sync_to_async(build_frontend_conversation_json)(self.db_convo)
             await self.send(text_data=dumps({"conversation": frontend_json}))
             logger.debug("send_func completed in receive()")
+
+        async def stream_delta_func(message_uuid: UUID, delta: str):
+            await self.send(text_data=dumps({
+                "stream": {
+                    "message_uuid": str(message_uuid),
+                    "delta": delta
+                }
+            }))
 
         async def append(data: dict):
             logger.debug(f"append() called with collections: {data.get('collections', [])}")
@@ -495,7 +517,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 else:
                     raise ValueError(f'Invalid action "{action}"')
                 logger.debug("About to call llm_if.spin() in receive()")
-                await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
+                await self.llm_if.spin(
+                    self.convo,
+                    max_func_calls=5,
+                    max_tokens=2048,
+                    send_func=send_func,
+                    stream_delta_func=stream_delta_func
+                )
                 logger.debug("llm_if.spin() completed in receive()")
             except Exception as e:
                 logger.error(f"Exception in receive(): {e}", exc_info=True)
