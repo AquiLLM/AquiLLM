@@ -128,7 +128,7 @@ services:
     profiles:
       - ollama
     volumes:
-      - ollama_data:/root/.ollama
+      - /media/volume/aquillmdev-vol/ollama:/root/.ollama
     env_file:
       - .env
     environment:
