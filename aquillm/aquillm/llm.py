@@ -413,7 +413,7 @@ class ClaudeInterface(LLMInterface):
             'tool_call_input' : tool_block.input,
         } if tool_block else {}
         
-        return LLMResponse(text=text_block.text,
+        return LLMResponse(text=text_block.text if text_block else "",
                            tool_call=tool_call, 
                            stop_reason=response.stop_reason, 
                            input_usage=response.usage.input_tokens, 
