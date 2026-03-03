@@ -53,7 +53,8 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
   const wsRef = useRef<WebSocket | null>(null);
   const conversationEndRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
-  
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
   const MAX_RECONNECTION_ATTEMPTS = 5;
   const CONNECTION_TIMEOUT = 5000;
   const MAX_USAGE = 200000;
@@ -82,6 +83,13 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
       }
     };
   }, [connectionAttempts]);
+
+  const autoResizeTextarea = () => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  };
 
   const fetchCollections = async () => {
     try {
@@ -227,6 +235,9 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
     
     wsRef.current.send(JSON.stringify(payload));
     setMessageInput('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
   };
 
   const rateMessage = (uuid: string | undefined, rating: number) => {
@@ -331,7 +342,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
       {/* Fixed bottom section for input */}
       <div className="sticky bottom-0 w-full bg-scheme-shade_2 border-t border-border-mid_contrast mt-[16px]">
         {/* Message Input Section */}
-        <div className="w-[98%] md:w-[96%] lg:w-[94%] xl:w-[92%] 2xl:max-w-[1800px] mx-auto mb-[32px] mt-[16px]">
+        <div className="w-[98%] md:w-[96%] lg:w-[94%] xl:w-[92%] 2xl:max-w-[1800px] mx-auto mb-[12px] mt-[12px]">
           <div className="flex items-center justify-center w-full gap-[32px]">
             {/* Token Usage */}
             <div className="flex flex-col items-center gap-1">
@@ -351,22 +362,31 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
               </div>
             </div>
 
-            <div className="flex justify-start flex-col gap-[8px] bg-scheme-shade_3 py-2 px-4 rounded-[32px] w-full">
+            <div className="flex justify-start flex-col gap-[8px] bg-scheme-shade_2 border border-border-mid_contrast py-2 px-4 rounded-[8px] w-full transition-colors duration-200 has-[:focus]:bg-scheme-shade_4 has-[:focus]:border-transparent">
               <div className="flex flex-grow items-center w-full">
-                <input
-                  type="text"
+                <textarea
                   id="message-input"
-                  className="px-2 py-2 mr-[16px] flex-grow w-full rounded-lg bg-scheme-shade_3 focus:border-0 disabled:cursor-not-allowed placeholder:text-text-lower_contrast text-text-normal element-border"
-                  placeholder="Type your message here..."
+                  ref={textareaRef}
+                  rows={1}
+                  className="px-2 py-2 mr-[16px] flex-grow w-full rounded-lg bg-transparent border-none outline-none focus:outline-none focus:ring-0 disabled:cursor-not-allowed placeholder:text-text-lower_contrast text-text-normal resize-none overflow-y-auto max-h-[450px]"
+                  placeholder={conversation.messages.length === 0 ? "How can I help you today?" : "Reply..."}
                   value={messageInput}
-                  onChange={(e) => setMessageInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+                  onChange={(e) => {
+                    setMessageInput(e.target.value);
+                    autoResizeTextarea();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
                   disabled={inputDisabled}
                   autoComplete="off"
                 />
                 <button
                   onClick={sendMessage}
-                  className="p-4 bg-accent text-text-normal rounded-[24px] disabled:cursor-not-allowed mr-[-8px]"
+                  className="p-4 bg-scheme-shade_2 border border-border-mid_contrast text-text-normal rounded-[8px] disabled:cursor-not-allowed mr-[-8px] transition-colors duration-200 hover:bg-accent hover:border-transparent"
                   title="Send Message"
                   disabled={inputDisabled}
                 >
@@ -379,9 +399,9 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
             <div className="">
               <button
                 onClick={() => setShowCollections(true)}
-                className="cursor-pointer w-[max-content] px-[16px] py-[2px] text-text-normal bg-accent h-[36px] rounded-[18px] flex items-center"
+                className="cursor-pointer w-[max-content] px-[16px] py-[2px] text-text-normal bg-accent h-[36px] rounded-[8px] flex items-center"
               >
-                <span className="text-text-normal">Select Collections</span>
+                <span className="text-text-normal">Collections</span>
                 <span className="ml-2 text-sm text-text-normal">
                   {selectedCollections.size ? `(${selectedCollections.size} selected)` : ''}
                 </span>
