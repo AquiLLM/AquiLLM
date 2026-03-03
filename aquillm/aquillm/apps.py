@@ -4,12 +4,13 @@ from django.template import Engine, Context
 import cohere
 import openai
 import anthropic
-import google.generativeai as genai
+import google.generativeai as genai  # older google SDK — kept for OCR/image features already using it
+from google import genai as google_genai  # NEW: newer google-genai SDK used by GeminiInterface for chat
 from os import getenv
 from typing import TypedDict
 
 
-from .llm import LLMInterface, ClaudeInterface, OpenAIInterface
+from .llm import LLMInterface, ClaudeInterface, OpenAIInterface, GeminiInterface  # GeminiInterface added for Gemini backend support
 from .settings import DEBUG
 RAG_PROMPT_STRING = """
 <context>
@@ -82,6 +83,7 @@ class AquillmConfig(AppConfig):
             aws_access_key=getenv('AWS_ACCESS_KEY_ID'),
             aws_secret_key=getenv('AWS_SECRET_ACCESS_KEY')
         )
+        self.google_genai_client = google_genai.Client(api_key=getenv('GEMINI_API_KEY'))  # Gemini API client, initialized at startup regardless of LLM_CHOICE so it's available even when not the primary LLM
         self.get_embedding = get_embedding_func(self.cohere_client)
         llm_choice = getenv('LLM_CHOICE', self.default_llm)
         if llm_choice == 'CLAUDE':
@@ -96,6 +98,8 @@ class AquillmConfig(AppConfig):
             self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "llama3.2")
         elif llm_choice == 'GPT-OSS':
             self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "gpt-oss:120b")
+        elif llm_choice == 'GEMINI':  # set LLM_CHOICE=GEMINI in .env to use Google Gemini as the chat backend
+            self.llm_interface = GeminiInterface(self.google_genai_client, model='gemini-2.5-flash')  # gemini-2.5-flash is the faster/cheaper variant; swap model= here to use gemini-2.5-pro etc.
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 

@@ -38,7 +38,7 @@ class ChatRef:
 def get_vector_search_func(user: User, col_ref: CollectionsRef): 
     @llm_tool(
         param_descs={"search_string": "The string to search by. Often it helps to phrase it as a question. ",
-                     "top_k": "The number of results to return. Start low and increase if the desired information is not found. Go no higher than about 15."},
+                     "top_k": "The number of results to return. Start with 5 for simple questions, 8-10 for broad or multi-part questions. Increase if the desired information is not found. Go no higher than 15."},  # updated from vague "start low" to give Gemini/Claude more concrete starting guidance
         required=['search_string', 'top_k'],
         for_whom='assistant'
 
@@ -102,7 +102,7 @@ def get_whole_document_func(user: User, chat_ref: ChatRef) -> LLMTool:
 def get_search_single_document_func(user: User) -> LLMTool:
     @llm_tool(
         for_whom='assistant',
-        required=['doc_id', 'query'],
+        required=['doc_id', 'search_string', 'top_k'],  # bug fix: was ['doc_id', 'query'] — 'query' doesn't match any actual param name so the LLM couldn't satisfy the required constraint
         param_descs={'doc_id': 'UUID (as a string) of the document to search.',
                      'search_string': 'String to search the contents of the document by.',
                      'top_k': 'Number of search results to return.'}
@@ -120,9 +120,7 @@ def get_search_single_document_func(user: User) -> LLMTool:
         _,_,results = TextChunk.text_chunk_search(search_string, top_k, [doc])
         ret = {"result": {f"[Result {i+1}] -- {chunk.document.title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}": chunk.content for i, chunk in enumerate(results)}}
         return ret
-    
-    return search_single_document
-    
+
     return search_single_document
 def get_more_context_func(user: User) -> LLMTool:
     @llm_tool(
@@ -156,7 +154,7 @@ def get_more_context_func(user: User) -> LLMTool:
 def get_sky_subtraction_func(chat_consumer: 'ChatConsumer') -> LLMTool:
     @llm_tool(
         for_whom='assistant',
-        required=['object', 'sky'],
+        required=['object_id', 'sky_id'],  # bug fix: was ['object', 'sky'] — didn't match the actual param names object_id and sky_id so the LLM thought they were optional
         param_descs={'object_id': 'The file ID of the FITS file containing the object to subtract the sky from',
                      'sky_id': 'The file ID of the FITS file of the sky to subtract from the object'}
     )
@@ -198,7 +196,7 @@ def get_sky_subtraction_func(chat_consumer: 'ChatConsumer') -> LLMTool:
 def get_flat_fielding_func(chat_consumer: 'ChatConsumer') -> LLMTool:
     @llm_tool(
         for_whom='assistant',
-        required=['science', 'flat'],
+        required=['science_id', 'flat_id'],  # bug fix: was ['science', 'flat'] — same issue as sky_subtraction, param names didn't match
         param_descs={
             'science_id': 'The file ID of the FITS image to be flat-field corrected',
             'flat_id': 'The file ID of the flat-field FITS image to use for correction'
@@ -249,7 +247,7 @@ def get_flat_fielding_func(chat_consumer: 'ChatConsumer') -> LLMTool:
 def get_point_source_detection_func(chat_consumer: 'ChatConsumer') -> LLMTool:
     @llm_tool(
         for_whom='assistant',
-        required=['image'],
+        required=['image_id'],  # bug fix: was ['image'] — didn't match actual param name image_id
         param_descs={
             'image_id': 'The file ID of the sky-subtracted and flat-fielded FITS image to run source detection on.'
         }
