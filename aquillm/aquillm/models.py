@@ -819,9 +819,13 @@ class WSConversation(models.Model):
         first_two_messages = str(first_two)
 
         # Build kwargs compatible with the LLM interface
+        # thinking_budget=0 disables Gemini 2.5's internal reasoning for this simple task —
+        # without it, thinking tokens eat into the maxOutputTokens budget, truncating the title.
+        # Claude and OpenAI silently ignore thinking_budget.
         llm_args = {
             **llm_interface.base_args,  # Include base args (model, etc.)
             'max_tokens': 30,
+            'thinking_budget': 0,
             'system': system_prompt,
             'messages': [{'role': 'user', 'content': first_two_messages}]
         }
@@ -833,6 +837,8 @@ class WSConversation(models.Model):
             return response.text
 
         title_text = get_title()
+        if title_text:
+            title_text = title_text.strip().strip('"').strip("'").strip('*')  # Gemini (and sometimes Claude) wraps titles in quotes or asterisks; strip them so the UI title looks clean
         self.name = title_text if title_text else 'Conversation'
         self.save()
 
