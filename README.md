@@ -51,11 +51,11 @@ This assumes you have Docker and Docker Compose installed.
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (CLAUDE, OPENAI, GEMINI)
+    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, or `GEMINI`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
 
 4.  **Build and run using Docker Compose:**
     ```bash
-    docker compose up -d 
+    docker compose up -d
     ```
 
 4. **Add a superuser:**
@@ -72,13 +72,20 @@ This assumes you have Docker and Docker Compose installed.
     docker compose down
     ```
 
-## Updating from main:
+## Updating (development):
 
-After pulling updates, rebuild and restart the web container. Migrations run automatically on startup.
+Pull the latest changes and rebuild. Migrations run automatically on startup.
 
 ```bash
 git pull origin main
-docker compose up --build -d web
+docker compose down && docker compose up --build -d
+```
+
+## Updating (production):
+
+```bash
+git pull origin main
+docker compose -f docker-compose-prod.yml down && docker compose -f docker-compose-prod.yml up --build -d
 ```
 
 ## Small-scale deployment:
@@ -95,7 +102,7 @@ docker compose up --build -d web
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (CLAUDE, OPENAI, GEMINI)
+    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, or `GEMINI`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f docker-compose-prod.yml up` — a simple restart may not pick up the change.
     - Optional: Google OAuth credentials (GOOGLE_OAUTH2_CLIENT_ID, GOOGLE_OAUTH2_CLIENT_SECRET)
     - Optional: Email access permissions (ALLOWED_EMAIL_DOMAINS, ALLOWED_EMAIL_ADDRESSES). Required if OAuth is to be used.
     - Set HOST_NAME for your domain or use 'localhost' for development
