@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MessageCircle, Send, ChevronDown, Search, Loader2 } from 'lucide-react';
 import { CircularProgressbar } from 'react-circular-progressbar';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import formatUrl from '../utils/formatUrl';
 
 // Define TypeScript interfaces
@@ -486,8 +488,8 @@ const MessageBubble: React.FC<{
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
         )}
         {message.role === 'assistant' && !message.tool_call_input && (
-          <div className="prose max-w-none compact-prose leading-tight [&>*]:my-1 [&_ol>li>p]:inline">
-            <ReactMarkdown>
+          <div className="prose max-w-none compact-prose leading-tight whitespace-normal [&>*]:my-1 [&_ol>li>p]:inline">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
               {message.content}
             </ReactMarkdown>
           </div>
