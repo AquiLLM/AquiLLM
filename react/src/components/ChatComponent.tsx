@@ -56,6 +56,11 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
   const conversationEndRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [textareaMinHeight, setTextareaMinHeight] = useState(0);
+  const [contentOverflowing, setContentOverflowing] = useState(false);
+  const isDragging = useRef(false);
+  const dragStartY = useRef(0);
+  const dragStartHeight = useRef(0);
 
   const MAX_RECONNECTION_ATTEMPTS = 5;
   const CONNECTION_TIMEOUT = 5000;
@@ -90,7 +95,36 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
-    textarea.style.height = `${textarea.scrollHeight}px`;
+    const contentHeight = textarea.scrollHeight;
+    setContentOverflowing(contentHeight >= 450);
+    textarea.style.height = `${Math.max(contentHeight, textareaMinHeight)}px`;
+  };
+
+  const handleDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isDragging.current = true;
+    dragStartY.current = e.clientY;
+    const textarea = textareaRef.current;
+    dragStartHeight.current = textarea ? textarea.offsetHeight : 0;
+
+    const handleDragMove = (e: MouseEvent) => {
+      if (!isDragging.current || !textareaRef.current) return;
+      const delta = dragStartY.current - e.clientY;
+      const newHeight = Math.max(0, Math.min(450, dragStartHeight.current + delta));
+      setTextareaMinHeight(newHeight);
+      textareaRef.current.style.height = 'auto';
+      const contentHeight = textareaRef.current.scrollHeight;
+      textareaRef.current.style.height = `${Math.max(contentHeight, newHeight)}px`;
+    };
+
+    const handleDragEnd = () => {
+      isDragging.current = false;
+      document.removeEventListener('mousemove', handleDragMove);
+      document.removeEventListener('mouseup', handleDragEnd);
+    };
+
+    document.addEventListener('mousemove', handleDragMove);
+    document.addEventListener('mouseup', handleDragEnd);
   };
 
   const fetchCollections = async () => {
@@ -237,6 +271,8 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
     
     wsRef.current.send(JSON.stringify(payload));
     setMessageInput('');
+    setTextareaMinHeight(0);
+    setContentOverflowing(false);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -364,7 +400,13 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
               </div>
             </div>
 
-            <div className="flex justify-start flex-col gap-[8px] bg-scheme-shade_2 border border-border-mid_contrast py-2 px-4 rounded-[8px] w-full transition-colors duration-200 has-[:focus]:bg-scheme-shade_4 has-[:focus]:border-transparent">
+            <div className="relative flex justify-start flex-col gap-[8px] bg-scheme-shade_2 border border-border-mid_contrast py-2 px-4 rounded-[8px] w-full transition-colors duration-200 has-[:focus]:bg-scheme-shade_4 has-[:focus]:border-transparent">
+              <div
+                onMouseDown={contentOverflowing ? undefined : handleDragStart}
+                className={`absolute left-1/2 -translate-x-1/2 top-0 -translate-y-1/2 z-50 flex justify-center px-2 py-1 group ${contentOverflowing ? 'pointer-events-none' : 'cursor-ns-resize'}`}
+              >
+                <div className={`w-12 h-1 rounded-full transition-colors ${contentOverflowing ? 'bg-transparent' : 'bg-border-mid_contrast group-hover:bg-text-low_contrast'}`} />
+              </div>
               <div className="flex flex-grow items-center w-full">
                 <textarea
                   id="message-input"
