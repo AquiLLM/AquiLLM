@@ -323,14 +323,31 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
         className="flex-grow overflow-y-auto w-full px-[32px] pt-[32px]"
       >
         <div className="w-[98%] md:w-[96%] lg:w-[94%] xl:w-[92%] 2xl:max-w-[1800px] mx-auto gap-[32px] flex flex-col">
-          {conversation.messages.map((message, index) => (
-            <MessageBubble 
-              key={`msg-${index}`} 
-              message={message} 
-              onRate={rateMessage}
-              onFeedback={feedbackMessage}
-            />
-          ))}
+          {groupMessages(conversation.messages).map((item, index) => {
+            if ('main' in item) {
+              // Grouped assistant message with tool calls
+              return (
+                <div key={`group-${index}`} className="flex flex-col">
+                  {item.main.content && (
+                    <MessageBubble
+                      message={item.main}
+                      onRate={rateMessage}
+                      onFeedback={feedbackMessage}
+                    />
+                  )}
+                  <ToolCallGroup toolCalls={item.toolCalls} />
+                </div>
+              );
+            }
+            return (
+              <MessageBubble
+                key={`msg-${index}`}
+                message={item}
+                onRate={rateMessage}
+                onFeedback={feedbackMessage}
+              />
+            );
+          })}
           
           {shouldShowSpinner(conversation.messages) && (
             <div className="flex justify-center my-4">
@@ -462,6 +479,47 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
   );
 };
 
+// Group messages so tool-call sequences tuck under the preceding assistant message
+interface MessageGroup {
+  main: Message;
+  toolCalls: Message[]; // interleaved assistant-tool_call and tool messages
+}
+
+const groupMessages = (messages: Message[]): (Message | MessageGroup)[] => {
+  const result: (Message | MessageGroup)[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const msg = messages[i];
+    // An assistant message with tool_call_input starts a tool-call sequence
+    if (msg.role === 'assistant' && msg.tool_call_input) {
+      const toolCalls: Message[] = [msg];
+      let j = i + 1;
+      while (j < messages.length) {
+        const next = messages[j];
+        if ((next.role === 'assistant' && next.tool_call_input) || next.role === 'tool') {
+          toolCalls.push(next);
+          j++;
+        } else {
+          break;
+        }
+      }
+      // Attach to the preceding assistant text message if there is one
+      const prev = result[result.length - 1];
+      if (prev && !('main' in prev) && (prev as Message).role === 'assistant' && !(prev as Message).tool_call_input) {
+        result[result.length - 1] = { main: prev as Message, toolCalls };
+      } else {
+        // No preceding text message — group with empty main
+        result.push({ main: { role: 'assistant', content: '' }, toolCalls });
+      }
+      i = j;
+    } else {
+      result.push(msg);
+      i++;
+    }
+  }
+  return result;
+};
+
 // Helper function to determine if spinner should be shown
 const shouldShowSpinner = (messages: Message[]) => {
   if (messages.length === 0) return false;
@@ -589,6 +647,74 @@ const MessageBubble: React.FC<{
           <UserLogo />
         </div>
       )}
+    </div>
+  );
+};
+
+// Collapsed tool call group that tucks under assistant messages
+const ToolCallGroup: React.FC<{ toolCalls: Message[] }> = ({ toolCalls }) => {
+  const [expanded, setExpanded] = useState(false);
+
+  // Build summary: list of tool names called
+  const toolNames = toolCalls
+    .filter(m => m.role === 'assistant' && m.tool_call_name)
+    .map(m => m.tool_call_name!);
+
+  const summary = toolNames.length === 1
+    ? `Tool call: ${toolNames[0]}`
+    : `${toolNames.length} tool calls: ${toolNames.join(', ')}`;
+
+  return (
+    <div className={`ml-10 -mt-6 ${expanded ? '' : '-mb-4'}`}>
+      <div
+        className={`text-xs text-text-low_contrast select-none transition-all duration-200 ${expanded ? '' : 'max-h-[15px] overflow-hidden'}`}
+      >
+        <span className="cursor-pointer hover:text-text-normal" onClick={() => setExpanded(!expanded)}>
+          {expanded ? '▾' : '▸'} {summary}
+        </span>
+        {expanded && (
+          <div className="mt-1 pl-2 border-l border-border-mid_contrast space-y-1">
+            {toolCalls.map((msg, i) => (
+              <div key={i} className="text-xs text-text-low_contrast">
+                {msg.role === 'assistant' && msg.tool_call_input && i > 0 && (
+                  <hr className="border-border-mid_contrast my-2 w-1/3" />
+                )}
+                {msg.role === 'assistant' && msg.tool_call_input && (
+                  <div>
+                    <span className="font-semibold">{msg.tool_call_name}</span>
+                    <Collapsible
+                      summary="Arguments"
+                      summaryTextColor="text-text-low_contrast"
+                      content={
+                        <pre className="whitespace-pre-wrap break-words text-text-low_contrast text-xs max-h-[450px] overflow-y-auto border border-border-mid_contrast rounded-[8px] p-2">
+                          {JSON.stringify(msg.tool_call_input, null, 2)}
+                        </pre>
+                      }
+                    />
+                  </div>
+                )}
+                {msg.role === 'tool' && (
+                  <div>
+                    <Collapsible
+                      summary={'exception' in (msg.result_dict || {}) ? 'Exception' : 'Output'}
+                      summaryTextColor="text-text-low_contrast"
+                      isOpen={msg.for_whom === 'user'}
+                      content={
+                        <div className="text-text-low_contrast text-xs max-h-[450px] overflow-y-auto border border-border-mid_contrast rounded-[8px] p-2">
+                          <ToolResult result={'exception' in (msg.result_dict || {}) ?
+                            msg.result_dict?.exception :
+                            msg.result_dict?.result}
+                          />
+                        </div>
+                      }
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
