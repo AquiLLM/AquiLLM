@@ -34,6 +34,7 @@ interface Conversation {
 
 interface WebSocketMessage {
   exception?: string;
+  debug_html?: string;
   conversation?: Conversation;
 }
 
@@ -47,6 +48,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
   const [inputDisabled, setInputDisabled] = useState(true);
   const [messageInput, setMessageInput] = useState('');
   const [exception, setException] = useState('');
+  const [debugHtml, setDebugHtml] = useState<string | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [selectedCollections, setSelectedCollections] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
@@ -149,6 +151,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
           if (data.exception) {
             console.error('Server error:', data.exception);
             setException(data.exception);
+            setDebugHtml(data.debug_html || null);
             setInputDisabled(false);
             return;
           }
@@ -312,8 +315,20 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
     <div className="flex flex-col h-full">
       {/* Exception Alert */}
       {exception && (
-        <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded">
-          {exception}
+        <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded flex items-center justify-between">
+          <span>{exception}</span>
+          {debugHtml && (
+            <button
+              className="ml-4 px-3 py-1 bg-red-900 hover:bg-red-800 text-white rounded text-sm whitespace-nowrap"
+              onClick={() => {
+                const blob = new Blob([debugHtml], { type: 'text/html' });
+                const url = URL.createObjectURL(blob);
+                window.open(url, '_blank');
+              }}
+            >
+              View Stack Trace
+            </button>
+          )}
         </div>
       )}
 

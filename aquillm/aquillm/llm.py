@@ -306,14 +306,20 @@ class LLMInterface(ABC):
                     result_dict = future.result(timeout=15)
                     result = str(result_dict)
                 except TimeoutError:
-                    result = str({'exception': TimeoutError("Tool call timed out")})
+                    result_dict = {'exception': "Tool call timed out"}
+                    result = str(result_dict)
+                except Exception as e:
+                    if DEBUG:
+                        raise
+                    result_dict = {'exception': str(e)}
+                    result = str(result_dict)
             return ToolMessage(tool_name=tool.name,
                                 content=result,
                                 arguments=input,
                                 result_dict=result_dict,
                                 for_whom=tool.for_whom,
                                 tools=message.tools,
-                                files=result_dict.get('files'),    
+                                files=result_dict.get('files'),
                                 tool_choice=message.tool_choice)
         else:
             raise ValueError("call_tool called on a message with no tools!")

@@ -23,6 +23,8 @@ from aquillm.message_adapters import load_conversation_from_db, save_conversatio
 from anthropic._exceptions import OverloadedError
 
 import logging
+import sys
+import traceback
 logger = logging.getLogger(__name__)
 
 import io
@@ -47,6 +49,10 @@ def get_vector_search_func(user: User, col_ref: CollectionsRef):
         """
         Uses a combination of vector search, trigram search and reranking to search the documents available to the user.
         """
+        if top_k < 1 or top_k > 15:
+            return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
+        if not search_string.strip():
+            return {"exception": "search_string must not be empty"}
         docs = Collection.get_user_accessible_documents(user, Collection.objects.filter(id__in=col_ref.collections))
         if not docs:
             return {"exception": "No documents to search! Either no collections were selected, or the selected collections are empty."}
@@ -111,7 +117,14 @@ def get_search_single_document_func(user: User) -> LLMTool:
         """
         Use vector search to search the text of a single document.
         """
-        doc_uuid = UUID(doc_id)
+        if top_k < 1 or top_k > 15:
+            return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
+        if not search_string.strip():
+            return {"exception": "search_string must not be empty"}
+        try:
+            doc_uuid = UUID(doc_id)
+        except (ValueError, AttributeError):
+            return {"exception": f"Invalid document ID: {doc_id}"}
         doc = Document.get_by_id(doc_uuid)
         if doc is None:
             return {"exception": f"Document {doc_id} does not exist!"}
@@ -161,7 +174,7 @@ def get_sky_subtraction_func(chat_consumer: 'ChatConsumer') -> LLMTool:
     def sky_subtraction(object_id: int, sky_id: int) -> ToolResultDict:
         """
         Subtracts the sky from a FITS image of an object.
-        
+
         Use this when a user asks you to subtract the sky from an object, and provides the files, one of the sky and one of the object.
         Specify the IDs of the files in the parameters.
         """
@@ -304,6 +317,22 @@ def get_point_source_detection_func(chat_consumer: 'ChatConsumer') -> LLMTool:
     return detect_point_sources
 
 
+# Debug-only tool that always raises. Used to test that tool exceptions
+# surface the Django debug stack trace page in the frontend via WebSocket.
+def get_weather_func() -> LLMTool:
+    @llm_tool(
+        for_whom='assistant',
+        required=['location'],
+        param_descs={'location': 'The location to get the weather for'}
+    )
+    def get_weather(location: str) -> ToolResultDict:
+        """
+        Get the current weather for a location.
+        """
+        raise RuntimeError(f"This is a debug test exception (location={location})")
+    return get_weather
+
+
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -373,6 +402,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                       get_point_source_detection_func(self)]
         if getenv('LLM_CHOICE') == 'GEMMA3':
             self.tools.append(message_to_user)
+        if DEBUG:
+            self.tools.append(get_weather_func())
         convo_id = self.scope['url_route']['kwargs']['convo_id']
         logger.debug(f"Convo ID: {convo_id}")
         self.db_convo = await self.__get_convo(convo_id, self.user)
@@ -398,13 +429,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"Exception in connect(): {e}", exc_info=True)
             if DEBUG:
-                raise e
+                from django.views.debug import ExceptionReporter
+                reporter = ExceptionReporter(None, *sys.exc_info())
+                debug_html = reporter.get_traceback_html()
+                await self.send(text_data=dumps({"exception": str(e), "debug_html": debug_html}))
             else:
-
                 await self.send(text_data='{"exception": "A server error has occurred. Try reloading the page"}')
-
-                return
-
+            return
 
 
     async def receive(self, text_data):
@@ -498,7 +529,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             except Exception as e:
                 logger.error(f"Exception in receive(): {e}", exc_info=True)
                 if DEBUG:
-                    raise e
+                    from django.views.debug import ExceptionReporter
+                    reporter = ExceptionReporter(None, *sys.exc_info())
+                    debug_html = reporter.get_traceback_html()
+                    await self.send(text_data=dumps({"exception": str(e), "debug_html": debug_html}))
                 else:
                     await self.send(text_data='{"exception": "A server error has occurred. Try reloading the page"}')
 
