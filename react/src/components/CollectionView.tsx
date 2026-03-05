@@ -583,6 +583,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
         ingestWebpageUrl={window.apiUrls.api_ingest_webpage}
         ingestHandwrittenUrl={window.apiUrls.api_ingest_handwritten_notes}
         collectionId={collectionId}
+        onUploadSuccess={fetchCollectionData} // Re-fetch the collection file list when a document is uploaded
       />
 
       <div className="relative flex items-center mb-[24px]"> 
