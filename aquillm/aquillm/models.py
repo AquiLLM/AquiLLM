@@ -441,6 +441,9 @@ class Document(models.Model):
         
         if is_new:
             self.ingestion_complete = False
+            # Persist "in progress" state before enqueuing chunk creation.
+            # Without this, documents can remain marked complete if enqueue fails.
+            self.save(dont_rechunk=True, update_fields=['ingestion_complete'])
             result = None
             try:
                 result = create_chunks.delay(str(self.id)) # type: ignore
@@ -455,12 +458,9 @@ class Document(models.Model):
                 logger.error(f"Error creating chunks for document {self.id}: {str(e)}")
                 if result:
                     result.revoke()
-                # TEMPORARY FIX: Don't delete documents on error
-                # self.delete()
-                
-                # Instead, mark the document as complete but with error
-                self.ingestion_complete = True
-                super().save(dont_rechunk=True)
+                # Keep ingestion marked incomplete so operators can detect and retry.
+                self.ingestion_complete = False
+                self.save(dont_rechunk=True, update_fields=['ingestion_complete'])
 
     def move_to(self, new_collection):
         """Move this document to a new collection"""
