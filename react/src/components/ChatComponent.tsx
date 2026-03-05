@@ -34,6 +34,7 @@ interface Conversation {
 
 interface WebSocketMessage {
   exception?: string;
+  debug_html?: string;
   conversation?: Conversation;
 }
 
@@ -47,6 +48,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
   const [inputDisabled, setInputDisabled] = useState(true);
   const [messageInput, setMessageInput] = useState('');
   const [exception, setException] = useState('');
+  const [debugHtml, setDebugHtml] = useState<string | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [selectedCollections, setSelectedCollections] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
@@ -56,6 +58,11 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
   const conversationEndRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [textareaMinHeight, setTextareaMinHeight] = useState(0);
+  const [contentOverflowing, setContentOverflowing] = useState(false);
+  const isDragging = useRef(false);
+  const dragStartY = useRef(0);
+  const dragStartHeight = useRef(0);
 
   const MAX_RECONNECTION_ATTEMPTS = 5;
   const CONNECTION_TIMEOUT = 5000;
@@ -90,7 +97,36 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
-    textarea.style.height = `${textarea.scrollHeight}px`;
+    const contentHeight = textarea.scrollHeight;
+    setContentOverflowing(contentHeight >= 450);
+    textarea.style.height = `${Math.max(contentHeight, textareaMinHeight)}px`;
+  };
+
+  const handleDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isDragging.current = true;
+    dragStartY.current = e.clientY;
+    const textarea = textareaRef.current;
+    dragStartHeight.current = textarea ? textarea.offsetHeight : 0;
+
+    const handleDragMove = (e: MouseEvent) => {
+      if (!isDragging.current || !textareaRef.current) return;
+      const delta = dragStartY.current - e.clientY;
+      const newHeight = Math.max(0, Math.min(450, dragStartHeight.current + delta));
+      setTextareaMinHeight(newHeight);
+      textareaRef.current.style.height = 'auto';
+      const contentHeight = textareaRef.current.scrollHeight;
+      textareaRef.current.style.height = `${Math.max(contentHeight, newHeight)}px`;
+    };
+
+    const handleDragEnd = () => {
+      isDragging.current = false;
+      document.removeEventListener('mousemove', handleDragMove);
+      document.removeEventListener('mouseup', handleDragEnd);
+    };
+
+    document.addEventListener('mousemove', handleDragMove);
+    document.addEventListener('mouseup', handleDragEnd);
   };
 
   const fetchCollections = async () => {
@@ -149,6 +185,7 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
           if (data.exception) {
             console.error('Server error:', data.exception);
             setException(data.exception);
+            setDebugHtml(data.debug_html || null);
             setInputDisabled(false);
             return;
           }
@@ -237,6 +274,8 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
     
     wsRef.current.send(JSON.stringify(payload));
     setMessageInput('');
+    setTextareaMinHeight(0);
+    setContentOverflowing(false);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -312,8 +351,20 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
     <div className="flex flex-col h-full">
       {/* Exception Alert */}
       {exception && (
-        <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded">
-          {exception}
+        <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded flex items-center justify-between">
+          <span>{exception}</span>
+          {debugHtml && (
+            <button
+              className="ml-4 px-3 py-1 bg-red-900 hover:bg-red-800 text-white rounded text-sm whitespace-nowrap"
+              onClick={() => {
+                const blob = new Blob([debugHtml], { type: 'text/html' });
+                const url = URL.createObjectURL(blob);
+                window.open(url, '_blank');
+              }}
+            >
+              View Stack Trace
+            </button>
+          )}
         </div>
       )}
 
@@ -323,14 +374,31 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
         className="flex-grow overflow-y-auto w-full px-[32px] pt-[32px]"
       >
         <div className="w-[98%] md:w-[96%] lg:w-[94%] xl:w-[92%] 2xl:max-w-[1800px] mx-auto gap-[32px] flex flex-col">
-          {conversation.messages.map((message, index) => (
-            <MessageBubble 
-              key={`msg-${index}`} 
-              message={message} 
-              onRate={rateMessage}
-              onFeedback={feedbackMessage}
-            />
-          ))}
+          {groupMessages(conversation.messages).map((item, index) => {
+            if ('main' in item) {
+              // Grouped assistant message with tool calls
+              return (
+                <div key={`group-${index}`} className="flex flex-col">
+                  {item.main.content && (
+                    <MessageBubble
+                      message={item.main}
+                      onRate={rateMessage}
+                      onFeedback={feedbackMessage}
+                    />
+                  )}
+                  <ToolCallGroup toolCalls={item.toolCalls} />
+                </div>
+              );
+            }
+            return (
+              <MessageBubble
+                key={`msg-${index}`}
+                message={item}
+                onRate={rateMessage}
+                onFeedback={feedbackMessage}
+              />
+            );
+          })}
           
           {shouldShowSpinner(conversation.messages) && (
             <div className="flex justify-center my-4">
@@ -364,7 +432,13 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
               </div>
             </div>
 
-            <div className="flex justify-start flex-col gap-[8px] bg-scheme-shade_2 border border-border-mid_contrast py-2 px-4 rounded-[8px] w-full transition-colors duration-200 has-[:focus]:bg-scheme-shade_4 has-[:focus]:border-transparent">
+            <div className="relative flex justify-start flex-col gap-[8px] bg-scheme-shade_2 border border-border-mid_contrast py-2 px-4 rounded-[8px] w-full transition-colors duration-200 has-[:focus]:bg-scheme-shade_4 has-[:focus]:border-transparent">
+              <div
+                onMouseDown={contentOverflowing ? undefined : handleDragStart}
+                className={`absolute left-1/2 -translate-x-1/2 top-0 -translate-y-1/2 z-50 flex justify-center px-2 py-1 group ${contentOverflowing ? 'pointer-events-none' : 'cursor-ns-resize'}`}
+              >
+                <div className={`w-12 h-1 rounded-full transition-colors ${contentOverflowing ? 'bg-transparent' : 'bg-border-mid_contrast group-hover:bg-text-low_contrast'}`} />
+              </div>
               <div className="flex flex-grow items-center w-full">
                 <textarea
                   id="message-input"
@@ -460,6 +534,47 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
       )}
     </div>
   );
+};
+
+// Group messages so tool-call sequences tuck under the preceding assistant message
+interface MessageGroup {
+  main: Message;
+  toolCalls: Message[]; // interleaved assistant-tool_call and tool messages
+}
+
+const groupMessages = (messages: Message[]): (Message | MessageGroup)[] => {
+  const result: (Message | MessageGroup)[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const msg = messages[i];
+    // An assistant message with tool_call_input starts a tool-call sequence
+    if (msg.role === 'assistant' && msg.tool_call_input) {
+      const toolCalls: Message[] = [msg];
+      let j = i + 1;
+      while (j < messages.length) {
+        const next = messages[j];
+        if ((next.role === 'assistant' && next.tool_call_input) || next.role === 'tool') {
+          toolCalls.push(next);
+          j++;
+        } else {
+          break;
+        }
+      }
+      // Attach to the preceding assistant text message if there is one
+      const prev = result[result.length - 1];
+      if (prev && !('main' in prev) && (prev as Message).role === 'assistant' && !(prev as Message).tool_call_input) {
+        result[result.length - 1] = { main: prev as Message, toolCalls };
+      } else {
+        // No preceding text message — group with empty main
+        result.push({ main: { role: 'assistant', content: '' }, toolCalls });
+      }
+      i = j;
+    } else {
+      result.push(msg);
+      i++;
+    }
+  }
+  return result;
 };
 
 // Helper function to determine if spinner should be shown
@@ -589,6 +704,74 @@ const MessageBubble: React.FC<{
           <UserLogo />
         </div>
       )}
+    </div>
+  );
+};
+
+// Collapsed tool call group that tucks under assistant messages
+const ToolCallGroup: React.FC<{ toolCalls: Message[] }> = ({ toolCalls }) => {
+  const [expanded, setExpanded] = useState(false);
+
+  // Build summary: list of tool names called
+  const toolNames = toolCalls
+    .filter(m => m.role === 'assistant' && m.tool_call_name)
+    .map(m => m.tool_call_name!);
+
+  const summary = toolNames.length === 1
+    ? `Tool call: ${toolNames[0]}`
+    : `${toolNames.length} tool calls: ${toolNames.join(', ')}`;
+
+  return (
+    <div className={`ml-10 -mt-6 ${expanded ? '' : '-mb-4'}`}>
+      <div
+        className={`text-xs text-text-low_contrast select-none transition-all duration-200 ${expanded ? '' : 'max-h-[15px] overflow-hidden'}`}
+      >
+        <span className="cursor-pointer hover:text-text-normal" onClick={() => setExpanded(!expanded)}>
+          {expanded ? '▾' : '▸'} {summary}
+        </span>
+        {expanded && (
+          <div className="mt-1 pl-2 border-l border-border-mid_contrast space-y-1">
+            {toolCalls.map((msg, i) => (
+              <div key={i} className="text-xs text-text-low_contrast">
+                {msg.role === 'assistant' && msg.tool_call_input && i > 0 && (
+                  <hr className="border-border-mid_contrast my-2 w-1/3" />
+                )}
+                {msg.role === 'assistant' && msg.tool_call_input && (
+                  <div>
+                    <span className="font-semibold">{msg.tool_call_name}</span>
+                    <Collapsible
+                      summary="Arguments"
+                      summaryTextColor="text-text-low_contrast"
+                      content={
+                        <pre className="whitespace-pre-wrap break-words text-text-low_contrast text-xs max-h-[450px] overflow-y-auto border border-border-mid_contrast rounded-[8px] p-2">
+                          {JSON.stringify(msg.tool_call_input, null, 2)}
+                        </pre>
+                      }
+                    />
+                  </div>
+                )}
+                {msg.role === 'tool' && (
+                  <div>
+                    <Collapsible
+                      summary={'exception' in (msg.result_dict || {}) ? 'Exception' : 'Output'}
+                      summaryTextColor="text-text-low_contrast"
+                      isOpen={msg.for_whom === 'user'}
+                      content={
+                        <div className="text-text-low_contrast text-xs max-h-[450px] overflow-y-auto border border-border-mid_contrast rounded-[8px] p-2">
+                          <ToolResult result={'exception' in (msg.result_dict || {}) ?
+                            msg.result_dict?.exception :
+                            msg.result_dict?.result}
+                          />
+                        </div>
+                      }
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
