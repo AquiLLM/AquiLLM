@@ -384,9 +384,20 @@ class LLMInterface(ABC):
             await send_func(convo)
             if changed == 'unchanged':
                 return
-            last_message = convo[-1]    
+            last_message = convo[-1]
             if isinstance(last_message, AssistantMessage) and last_message.tool_call_id:
                 calls += 1
+        # If we hit the limit, the last message may be an AssistantMessage with an
+        # unexecuted tool call. Execute it, then get one final LLM response with
+        # tools stripped so the LLM is forced to reply with text instead of looping.
+        last = convo[-1]
+        if isinstance(last, AssistantMessage) and last.tool_call_id:
+            convo, _ = await self.complete(convo, max_tokens)
+            await send_func(convo)
+            convo[-1].tools = None
+            convo[-1].tool_choice = None
+            convo, _ = await self.complete(convo, max_tokens)
+            await send_func(convo)
                 
 
 
