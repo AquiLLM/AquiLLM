@@ -13,7 +13,7 @@
 
 **AquiLLM is an open-source RAG (Retrieval-Augmented Generation) application designed specifically for researchers.** It helps you manage, search, and interact with your research documents using AI, streamlining your literature review and knowledge discovery process. Upload various document formats, organize them into collections, and chat with an AI that understands your library's content.
 
-More info can be found at [[https://aquillm.org]]
+More info can be found at [https://aquillm.org](https://aquillm.org). See also our paper ["AquiLLM: a RAG Tool for Capturing Tacit Knowledge in Research Groups"](https://arxiv.org/abs/2508.05648) by Chandler Campbell, Bernie Boscoe, and Tuan Do
 
 <!-- ![AquiLLM Screenshot](path/to/screenshot.gif) -->
 
@@ -29,7 +29,7 @@ More info can be found at [[https://aquillm.org]]
 *   **Frontend**: React
 *   **Database**: PostgreSQL
 *   **Vector Store**: pgvector (PostgreSQL extension)
-*   **LLM Integration**: Claude, OpenAI, Gemini as desired
+*   **LLM Integration**: Local LLMs, Claude, OpenAI, Gemini as desired
 *   **Asynchronous Tasks**: Celery, Redis, Django Channels
 
 *   **Authentication**: django-allauth
@@ -86,6 +86,11 @@ docker compose down && docker compose up --build -d
 ```bash
 git pull origin main
 docker compose -f docker-compose-prod.yml down && docker compose -f docker-compose-prod.yml up --build -d
+```
+
+If ollama is used and needs to be recreated:
+```bash
+docker compose -f docker-compose-prod.yml --profile ollama up -d --force-recreate ollama
 ```
 
 ## Small-scale deployment:
@@ -160,10 +165,30 @@ docker compose -f docker-compose-prod.yml down && docker compose -f docker-compo
    - Access past conversations from the "Your Conversations" menu in the sidebar
    - Each conversation maintains its collection context
 
+## Contributors
+
+### Project Leads
+
+* Bernie Boscoe (Southern Oregon University)
+* Tuan Do (UCLA)
+
+### Other Contributors
+
+* Chandler Campbell (Lead Developer, Southern Oregon University)
+* Jack Stark
+* Jacob Nowack (Southern Oregon University)
+* Skyler Acosta (Southern Oregon University)
+* Zhuo Chen (University of Washington)
+* Kevin Donlon (Southern Oregon University)
+* Jackson Godsey (Southern Oregon University)
+* Tee Grant (Southern Oregon University)
+* Elyjah Kiehne (Southern Oregon University)
+* Jonathan Soriano (UCLA)
+
 ## Contributing
 
 We welcome contributions! AquiLLM is an open-source project, and we appreciate help from the community.
-
+*   **Using AquiLLM**: Please use AquiLLM to help you with your research. This will help us identify bugs and areas for improvement.
 *   **Reporting Bugs**: Please open an issue on GitHub detailing the problem, expected behavior, and steps to reproduce.
 *   **Feature Requests**: Open an issue describing the feature and its potential benefits.
 *   **Pull Requests**: Send a pull request!
