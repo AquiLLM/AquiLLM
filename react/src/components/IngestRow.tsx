@@ -17,6 +17,7 @@ interface IngestRowsContainerProps {
   ingestWebpageUrl: string;
   ingestHandwrittenUrl: string;
   collectionId: string;
+  onUploadSuccess?: () => void; // Optional callback to notify parent when a document is successfully uploaded
 }
 
 interface IngestRowData {
@@ -408,6 +409,7 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
   ingestWebpageUrl,
   ingestHandwrittenUrl,
   collectionId,
+  onUploadSuccess, // Destructure the callback so it's accessible in handleSubmit
 }) => {
   const [rows, setRows] = useState<IngestRowData[]>([
     {
@@ -579,6 +581,7 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
            } else {
              // Standard success handling for other types or synchronous responses
              setSubmissionStatus((prev) => ({ ...prev, [row.id]: "success" }));
+             onUploadSuccess?.(); // Notify parent to refresh the file list; ?. makes this a no-op if prop not provided
              // Clear inputs on standard success
              updateRow(row.id, {
                pdfTitle: "",

@@ -1,4 +1,5 @@
 from typing import Awaitable
+import uuid # Needed to convert the doc_id URL parameter string into a UUID for Document.get_by_id
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.auth import AuthMiddlewareStack
 from channels.db import database_sync_to_async, aclose_old_connections
@@ -7,7 +8,7 @@ from django.contrib.auth.models import User
 from django.apps import apps
 from json import dumps
 from aquillm.settings import DEBUG
-from aquillm.models import DESCENDED_FROM_DOCUMENT
+from aquillm.models import DESCENDED_FROM_DOCUMENT, Document # Import Document so we can check ingestion_complete on connect
 from functools import reduce
 import logging
 logger = logging.getLogger(__name__)
@@ -27,6 +28,10 @@ class IngestMonitorConsumer(AsyncWebsocketConsumer):
         else:
             await self.close()
         await self.channel_layer.group_add(f"document-ingest-{self.scope['url_route']['kwargs']['doc_id']}", self.channel_name) # type: ignore
+        doc_id = self.scope['url_route']['kwargs']['doc_id'] # Get the document ID from the URL route
+        doc = await database_sync_to_async(Document.get_by_id)(uuid.UUID(doc_id)) # Look up the document in the DB (must be async-safe)
+        if doc and doc.ingestion_complete: # If ingestion already finished before the client connected, notify immediately
+            await self.send(text_data=dumps({'type': 'document.ingest.complete', 'complete': True})) # Send complete so the frontend bar jumps to 100% instead of staying at 0%
 
     async def document_ingest_complete(self, event):
         await self.send(text_data=dumps(event))
