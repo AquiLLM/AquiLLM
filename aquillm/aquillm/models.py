@@ -893,6 +893,91 @@ class ConversationFile(models.Model):
         return f"File {self.file.name} for conversation {self.conversation.id}"
 
 
+# --- User memory (cross-thread): profile facts + episodic retrieval ---
+
+USER_MEMORY_CATEGORY_CHOICES = [
+    ('tone', 'Tone / style'),
+    ('goals', 'Goals'),
+    ('project', 'Project context'),
+    ('preference', 'Preference'),
+    ('general', 'General'),
+]
+
+
+class UserMemoryFact(models.Model):
+    """
+    Stable facts and preferences per user, injected into system context on every chat.
+    E.g. tone, goals, project context. Can be set manually (future UI) or extracted from conversations.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='memory_facts')
+    fact = models.TextField(help_text="Short statement of fact or preference")
+    category = models.CharField(
+        max_length=20,
+        choices=USER_MEMORY_CATEGORY_CHOICES,
+        default='general',
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['category', 'created_at']
+
+    def __str__(self):
+        return f"{self.user.username}: {self.fact[:50]}..."
+
+
+class EpisodicMemory(models.Model):
+    """
+    Embeddings of past conversation turns for semantic retrieval across threads.
+    When the user sends a message, we retrieve top-k similar past exchanges and inject them into context.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='episodic_memories')
+    content = models.TextField(help_text="Summary or excerpt of a past exchange (User: ... Assistant: ...)")
+    embedding = VectorField(dimensions=1024, blank=True, null=True)
+    conversation = models.ForeignKey(
+        WSConversation,
+        on_delete=models.CASCADE,
+        related_name='episodic_memories',
+        null=True,
+        blank=True,
+    )
+    assistant_message_uuid = models.UUIDField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Dedupe: we only store one episodic memory per assistant message",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            HnswIndex(
+                name='episodic_memory_embedding_idx',
+                fields=['embedding'],
+                m=16,
+                ef_construction=64,
+                opclasses=['vector_l2_ops'],
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'assistant_message_uuid'],
+                name='unique_episodic_per_assistant_msg',
+                condition=Q(assistant_message_uuid__isnull=False),
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username}: {self.content[:50]}..."
+
+    def save(self, *args, **kwargs):
+        if not self.embedding and self.content:
+            self.embedding = get_embedding(self.content, input_type='search_document')
+        super().save(*args, **kwargs)
+
+
 class EmailWhitelist(models.Model):
     email = models.EmailField(unique=True)
 

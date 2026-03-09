@@ -122,9 +122,9 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation) -> No
     from django.db import transaction
 
     with transaction.atomic():
-        # Update the system prompt on the conversation
-        db_convo.system_prompt = convo.system
-        db_convo.save()
+        # Do not overwrite system_prompt with convo.system: convo.system may be augmented
+        # with user memory (profile facts + episodic). Only messages are persisted here.
+        db_convo.save(update_fields=['updated_at'])
 
         # Delete all existing messages and re-create from the in-memory conversation
         db_convo.db_messages.all().delete()

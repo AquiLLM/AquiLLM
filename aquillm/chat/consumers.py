@@ -19,6 +19,7 @@ from aquillm.settings import DEBUG
 from aquillm.models import ConversationFile, TextChunk, Collection, CollectionPermission, WSConversation, Document, DocumentChild
 # Adapter functions that handle converting between Pydantic (runtime) and Django (database) message formats
 from aquillm.message_adapters import load_conversation_from_db, save_conversation_to_db, build_frontend_conversation_json
+from aquillm.memory import augment_conversation_with_memory, create_episodic_memories_for_conversation
 
 from anthropic._exceptions import OverloadedError
 
@@ -354,6 +355,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         assert self.db_convo is not None
         # Converts in-memory Pydantic messages to Django Message rows and saves them to the database
         save_conversation_to_db(self.convo, self.db_convo)
+        create_episodic_memories_for_conversation(self.db_convo)
         if len(self.convo) >= 2 and not self.db_convo.name:
             self.db_convo.set_name()
 
@@ -416,6 +418,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             # Loads Message rows from the database and converts them to Pydantic objects for runtime use
             self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
+            await database_sync_to_async(augment_conversation_with_memory)(
+                self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
+            )
             self.convo.rebind_tools(self.tools)
             logger.debug(f"About to call llm_if.spin() in connect()")
             await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
@@ -523,6 +528,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     await feedback(data)
                 else:
                     raise ValueError(f'Invalid action "{action}"')
+                await database_sync_to_async(augment_conversation_with_memory)(
+                    self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
+                )
                 logger.debug("About to call llm_if.spin() in receive()")
                 await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
                 logger.debug("llm_if.spin() completed in receive()")
