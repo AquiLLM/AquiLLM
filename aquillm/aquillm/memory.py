@@ -233,14 +233,17 @@ def _extract_json_object(text: str) -> dict:
 
 
 def _extract_stable_facts(user_content: str, assistant_content: str) -> list[str]:
-    """Extract stable user facts/preferences locally so Mem0 write can skip server-side infer."""
+    """Extract durable memory facts locally so Mem0 write can skip server-side infer."""
     base_url = getenv("MEM0_OLLAMA_BASE_URL", "http://aquillm-ollama-1:11434").rstrip("/")
     model = getenv("MEM0_LLM_MODEL", "qwen3.5:4b-q8_0")
     prompt = (
-        "Extract only stable, user-specific facts/preferences/goals from the conversation. "
+        "Extract durable memory candidates from this turn. "
+        "Include: (1) stable user-specific preferences/goals/background, and "
+        "(2) explicit user requests to remember information going forward "
+        '(e.g. "remember X"), including the remembered fact when available. '
         'Return STRICT JSON only in the form {"facts":["..."]}. '
         'If none exist, return {"facts":[]}. '
-        "Do not include temporary requests, one-off tasks, or assistant statements.\n\n"
+        "Do not include temporary one-off task requests unless they are explicit long-term remember directives.\n\n"
         f"User: {user_content}\nAssistant: {assistant_content}"
     )
     try:
