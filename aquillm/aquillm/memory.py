@@ -3,12 +3,19 @@ User memory: profile facts (stable preferences) + episodic semantic memory (retr
 
 - UserMemoryFact: injected into system on every chat for this user.
 - EpisodicMemory: embedded past turns; we retrieve top-k by similarity to current message and inject.
+
+Optional backend:
+- MEM0 ("MEMORY_BACKEND=mem0"): use Mem0 for episodic retrieval/write with local fallback.
 """
 
+import logging
+from dataclasses import dataclass
+from os import getenv
 from typing import TYPE_CHECKING, Optional
 
 from django.contrib.auth.models import User
 from pgvector.django import L2Distance
+import requests
 
 from .models import UserMemoryFact, EpisodicMemory
 from .utils import get_embedding
@@ -18,6 +25,240 @@ if TYPE_CHECKING:
 
 # How many past exchanges to retrieve for context
 EPISODIC_TOP_K = 5
+MEMORY_BACKEND = getenv("MEMORY_BACKEND", "local").strip().lower()
+MEM0_DUAL_WRITE_LOCAL = getenv("MEM0_DUAL_WRITE_LOCAL", "1").strip().lower() in ("1", "true", "yes", "on")
+MEM0_BASE_URL = getenv("MEM0_BASE_URL", "").strip().rstrip("/")
+
+logger = logging.getLogger(__name__)
+_MEM0_CLIENT = None
+_MEM0_INIT_ATTEMPTED = False
+
+
+@dataclass
+class RetrievedEpisodicMemory:
+    content: str
+    conversation_id: Optional[int] = None
+
+
+def _use_mem0() -> bool:
+    return MEMORY_BACKEND == "mem0"
+
+
+def _get_mem0_client():
+    """Create a Mem0 client once. Returns None when mem0 is unavailable/misconfigured."""
+    global _MEM0_CLIENT, _MEM0_INIT_ATTEMPTED
+    if _MEM0_INIT_ATTEMPTED:
+        return _MEM0_CLIENT
+    _MEM0_INIT_ATTEMPTED = True
+
+    api_key = getenv("MEM0_API_KEY")
+    if not api_key:
+        logger.warning("MEMORY_BACKEND=mem0 but MEM0_API_KEY is not set; falling back to local memory.")
+        return None
+
+    try:
+        # Mem0 cloud client
+        from mem0 import MemoryClient  # type: ignore
+
+        _MEM0_CLIENT = MemoryClient(api_key=api_key)
+        return _MEM0_CLIENT
+    except Exception as exc:
+        logger.warning("Failed to initialize Mem0 client; using local memory. Error: %s", exc)
+        return None
+
+
+def _mem0_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    api_key = getenv("MEM0_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Token {api_key}"
+    return headers
+
+
+def _search_mem0_via_rest(
+    user: User, query: str, top_k: int, exclude_conversation_id: Optional[int]
+) -> list[RetrievedEpisodicMemory]:
+    if not MEM0_BASE_URL:
+        return []
+    headers = _mem0_headers()
+    timeout = 8
+    try:
+        # Prefer POST endpoint (commonly available on recent mem0 servers)
+        response = requests.post(
+            f"{MEM0_BASE_URL}/memories/search",
+            headers=headers,
+            json={"query": query, "user_id": str(user.id), "limit": top_k},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        try:
+            # Fallback to query-param GET endpoint
+            response = requests.get(
+                f"{MEM0_BASE_URL}/memories/search",
+                headers=headers,
+                params={"query": query, "user_id": str(user.id), "limit": top_k},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            logger.warning("Mem0 REST search failed; falling back to local memory. Error: %s", exc)
+            return []
+
+    if isinstance(payload, dict):
+        raw_items = payload.get("results") or payload.get("memories") or payload.get("data") or []
+    elif isinstance(payload, list):
+        raw_items = payload
+    else:
+        raw_items = []
+
+    parsed: list[RetrievedEpisodicMemory] = []
+    for item in raw_items:
+        content = _extract_mem0_content(item)
+        if not content:
+            continue
+        conv_id = _extract_mem0_conversation_id(item)
+        if exclude_conversation_id is not None and conv_id == exclude_conversation_id:
+            continue
+        parsed.append(RetrievedEpisodicMemory(content=content, conversation_id=conv_id))
+    return parsed[:top_k]
+
+
+def _add_mem0_via_rest(
+    user: User,
+    user_content: str,
+    assistant_content: str,
+    conversation_id: int,
+    assistant_message_uuid: str,
+) -> bool:
+    if not MEM0_BASE_URL:
+        return False
+    try:
+        response = requests.post(
+            f"{MEM0_BASE_URL}/memories",
+            headers=_mem0_headers(),
+            json={
+                "messages": [
+                    {"role": "user", "content": user_content},
+                    {"role": "assistant", "content": assistant_content},
+                ],
+                "user_id": str(user.id),
+                "metadata": {
+                    "conversation_id": conversation_id,
+                    "assistant_message_uuid": assistant_message_uuid,
+                    "source": "aquillm",
+                    "memory_type": "episodic",
+                },
+            },
+            timeout=8,
+        )
+        response.raise_for_status()
+        return True
+    except Exception as exc:
+        logger.warning("Mem0 REST add failed; continuing with local memory. Error: %s", exc)
+        return False
+
+
+def _extract_mem0_content(item) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if not isinstance(item, dict):
+        return str(item).strip()
+    for key in ("memory", "text", "content", "value"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(item).strip()
+
+
+def _extract_mem0_conversation_id(item) -> Optional[int]:
+    if not isinstance(item, dict):
+        return None
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    raw_value = metadata.get("conversation_id")
+    if raw_value is None:
+        return None
+    try:
+        return int(raw_value)
+    except Exception:
+        return None
+
+
+def _search_mem0_episodic_memories(
+    user: User, query: str, top_k: int, exclude_conversation_id: Optional[int]
+) -> list[RetrievedEpisodicMemory]:
+    rest_results = _search_mem0_via_rest(
+        user=user, query=query, top_k=top_k, exclude_conversation_id=exclude_conversation_id
+    )
+    if rest_results:
+        return rest_results
+    client = _get_mem0_client()
+    if client is None:
+        return []
+    try:
+        response = client.search(  # type: ignore[attr-defined]
+            query=query,
+            user_id=str(user.id),
+            limit=top_k,
+        )
+        if isinstance(response, dict):
+            raw_items = response.get("results") or response.get("memories") or response.get("data") or []
+        elif isinstance(response, list):
+            raw_items = response
+        else:
+            raw_items = []
+
+        parsed: list[RetrievedEpisodicMemory] = []
+        for item in raw_items:
+            content = _extract_mem0_content(item)
+            if not content:
+                continue
+            conv_id = _extract_mem0_conversation_id(item)
+            if exclude_conversation_id is not None and conv_id == exclude_conversation_id:
+                continue
+            parsed.append(RetrievedEpisodicMemory(content=content, conversation_id=conv_id))
+        return parsed[:top_k]
+    except Exception as exc:
+        logger.warning("Mem0 search failed; falling back to local memory. Error: %s", exc)
+        return []
+
+
+def _add_mem0_memory(
+    user: User,
+    user_content: str,
+    assistant_content: str,
+    conversation_id: int,
+    assistant_message_uuid: str,
+) -> None:
+    if _add_mem0_via_rest(
+        user=user,
+        user_content=user_content,
+        assistant_content=assistant_content,
+        conversation_id=conversation_id,
+        assistant_message_uuid=assistant_message_uuid,
+    ):
+        return
+    client = _get_mem0_client()
+    if client is None:
+        return
+    try:
+        client.add(  # type: ignore[attr-defined]
+            messages=[
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": assistant_content},
+            ],
+            user_id=str(user.id),
+            metadata={
+                "conversation_id": conversation_id,
+                "assistant_message_uuid": assistant_message_uuid,
+                "source": "aquillm",
+                "memory_type": "episodic",
+            },
+        )
+    except Exception as exc:
+        logger.warning("Mem0 add failed; continuing with local memory. Error: %s", exc)
 
 
 def get_user_profile_facts(user: User):
@@ -37,6 +278,15 @@ def get_episodic_memories(
     """
     if not query or not query.strip():
         return []
+    if _use_mem0():
+        mem0_results = _search_mem0_episodic_memories(
+            user=user,
+            query=query.strip(),
+            top_k=top_k,
+            exclude_conversation_id=exclude_conversation_id,
+        )
+        if mem0_results:
+            return mem0_results
     qs = EpisodicMemory.objects.filter(user=user).exclude(embedding__isnull=True)
     if exclude_conversation_id is not None:
         qs = qs.exclude(conversation_id=exclude_conversation_id)
@@ -132,11 +382,22 @@ def create_episodic_memories_for_conversation(db_convo) -> None:
         ).exists():
             prev_content = ""
             continue
-        memory_content = f"User: {prev_content[:500]}\nAssistant: {content[:500]}"
-        EpisodicMemory.objects.create(
-            user=db_convo.owner,
-            content=memory_content,
-            conversation=db_convo,
-            assistant_message_uuid=msg_uuid,
-        )
+        user_excerpt = prev_content[:500]
+        assistant_excerpt = content[:500]
+        memory_content = f"User: {user_excerpt}\nAssistant: {assistant_excerpt}"
+        if _use_mem0():
+            _add_mem0_memory(
+                user=db_convo.owner,
+                user_content=user_excerpt,
+                assistant_content=assistant_excerpt,
+                conversation_id=db_convo.id,
+                assistant_message_uuid=str(msg_uuid),
+            )
+        if (not _use_mem0()) or MEM0_DUAL_WRITE_LOCAL:
+            EpisodicMemory.objects.create(
+                user=db_convo.owner,
+                content=memory_content,
+                conversation=db_convo,
+                assistant_message_uuid=msg_uuid,
+            )
         prev_content = ""
