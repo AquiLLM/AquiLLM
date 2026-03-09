@@ -65,6 +65,24 @@ if [ -z "$MEM0_COMPOSE_FILE" ]; then
 fi
 
 echo "Using Mem0 compose file: $MEM0_COMPOSE_FILE"
+MEM0_COMPOSE_DIR="$(dirname "$MEM0_COMPOSE_FILE")"
+
+# Mem0 server compose expects a local .env. Bootstrap it from an example when missing.
+if [ ! -f "$MEM0_COMPOSE_DIR/.env" ]; then
+  if [ -f "$MEM0_COMPOSE_DIR/.env.example" ]; then
+    echo "Creating $MEM0_COMPOSE_DIR/.env from .env.example"
+    cp "$MEM0_COMPOSE_DIR/.env.example" "$MEM0_COMPOSE_DIR/.env"
+  elif [ -f "$MEM0_COMPOSE_DIR/env.example" ]; then
+    echo "Creating $MEM0_COMPOSE_DIR/.env from env.example"
+    cp "$MEM0_COMPOSE_DIR/env.example" "$MEM0_COMPOSE_DIR/.env"
+  else
+    echo "ERROR: $MEM0_COMPOSE_DIR/.env is missing and no example env file was found." >&2
+    echo "Create the file, then re-run this script." >&2
+    exit 1
+  fi
+  echo "Bootstrapped Mem0 env file at $MEM0_COMPOSE_DIR/.env"
+fi
+
 docker compose -f "$MEM0_COMPOSE_FILE" up -d --build
 
 echo "Waiting for Mem0 API at http://localhost:${MEM0_PORT}/docs"
