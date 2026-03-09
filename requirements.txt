@@ -48,3 +48,4 @@ astropy
 numpy
 requests-oauthlib
 mem0ai
+ollama
