@@ -36,7 +36,7 @@ from django.db import DatabaseError
 from django.db.models import Case, When
 from django.utils import timezone
 from .utils import get_embedding
-from .settings import BASE_DIR
+from .settings import BASE_DIR, DEBUG
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +281,11 @@ def create_chunks(self, doc_id:str): #naive method, just number of characters
             'documentName': doc.title,
         })
 
+        # Debug-only: titles starting with "FAIL:" trigger a test exception
+        # to verify that ingestion stack traces reach the frontend.
+        if DEBUG and doc.title.startswith("FAIL:"):
+            raise RuntimeError(f"Debug test exception for document '{doc.title}'")
+
         # Check if there's an existing document with the same full_text_hash
         existing_doc_with_same_hash = None
         for doc_type in DESCENDED_FROM_DOCUMENT:
@@ -364,16 +369,27 @@ def create_chunks(self, doc_id:str): #naive method, just number of characters
     except Exception as e:
         logger.error(f"Error creating chunks for document {doc.id}: {str(e)}")
         self.update_state(state=FAILURE)
-        
+
+        # Send error (with debug stack trace if DEBUG) to the ingestion monitor WebSocket
+        from .utils import get_debug_traceback_html
+        debug_html = get_debug_traceback_html()
+        error_event = {
+            'type': 'document.ingest.error',
+            'exception': str(e),
+        }
+        if debug_html:
+            error_event['debug_html'] = debug_html
+        async_to_sync(channel_layer.group_send)(f'document-ingest-{doc.id}', error_event)
+
         # TEMPORARY FIX: Don't delete documents on error
         # doc.delete()
-        
+
         # Instead, mark the document as complete but with error status
         doc.ingestion_complete = True
         doc.full_text += f"\n\nERROR DURING PROCESSING: {str(e)}"
         doc.save(dont_rechunk=True)
-        
-        raise e    
+
+        raise e
 
 class DuplicateDocumentError(ValidationError):
     def __init__(self, message):

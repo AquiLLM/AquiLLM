@@ -1,11 +1,21 @@
 
 import logging
+import sys
 logger = logging.getLogger(__name__)
 
 
 
 
 from django.apps import apps
+
+
+def get_debug_traceback_html():
+    """Generate Django's HTML traceback page for the current exception. Returns None if DEBUG is off."""
+    from .settings import DEBUG
+    if not DEBUG:
+        return None
+    from django.views.debug import ExceptionReporter
+    return ExceptionReporter(None, *sys.exc_info()).get_traceback_html()
 
 
 def get_embedding(query: str, input_type: str='search_query'):

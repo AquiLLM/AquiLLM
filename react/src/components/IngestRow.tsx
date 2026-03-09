@@ -433,6 +433,9 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
   const [errorMessages, setErrorMessages] = useState<{ [key: number]: string }>(
     {}
   );
+  const [errorDebugHtml, setErrorDebugHtml] = useState<{ [key: number]: string }>(
+    {}
+  );
 
   const updateRow = (id: number, updates: Partial<IngestRowData>) => {
     setRows((prevRows) =>
@@ -495,6 +498,7 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
   const handleSubmit = async () => {
     const csrfToken = getCsrfCookie();
     setErrorMessages({});
+    setErrorDebugHtml({});
 
     for (const row of rows) {
       setSubmissionStatus((prev) => ({ ...prev, [row.id]: "submitting" }));
@@ -604,6 +608,9 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
           } catch (e) {
             errorData = { error: `HTTP error! status: ${response.status}` };
           }
+          if (errorData.debug_html) {
+            setErrorDebugHtml((prev) => ({ ...prev, [row.id]: errorData.debug_html }));
+          }
           throw new Error(
             errorData.error || `Request failed with status ${response.status}`
           );
@@ -636,7 +643,21 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
              <p className="text-blue mt-2">Webpage crawl initiated...</p> // Message for initiated state
           )}
           {submissionStatus[row.id] === "error" && errorMessages[row.id] && (
-            <p className="text-red mt-2">Error: {errorMessages[row.id]}</p>
+            <div className="flex items-center mt-2">
+              <p className="text-red">Error: {errorMessages[row.id]}</p>
+              {errorDebugHtml[row.id] && (
+                <button
+                  className="ml-4 px-3 py-1 bg-red-900 hover:bg-red-800 text-white rounded text-sm whitespace-nowrap"
+                  onClick={() => {
+                    const blob = new Blob([errorDebugHtml[row.id]], { type: 'text/html' });
+                    const url = URL.createObjectURL(blob);
+                    window.open(url, '_blank');
+                  }}
+                >
+                  View Stack Trace
+                </button>
+              )}
+            </div>
           )}
         </div>
       ))}

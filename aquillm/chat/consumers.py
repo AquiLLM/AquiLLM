@@ -428,10 +428,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
         except Exception as e:
             logger.error(f"Exception in connect(): {e}", exc_info=True)
-            if DEBUG:
-                from django.views.debug import ExceptionReporter
-                reporter = ExceptionReporter(None, *sys.exc_info())
-                debug_html = reporter.get_traceback_html()
+            from aquillm.utils import get_debug_traceback_html
+            debug_html = get_debug_traceback_html()
+            if debug_html:
                 await self.send(text_data=dumps({"exception": str(e), "debug_html": debug_html}))
             else:
                 await self.send(text_data='{"exception": "A server error has occurred. Try reloading the page"}')
@@ -528,10 +527,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 logger.debug("llm_if.spin() completed in receive()")
             except Exception as e:
                 logger.error(f"Exception in receive(): {e}", exc_info=True)
-                if DEBUG:
-                    from django.views.debug import ExceptionReporter
-                    reporter = ExceptionReporter(None, *sys.exc_info())
-                    debug_html = reporter.get_traceback_html()
+                from aquillm.utils import get_debug_traceback_html
+                debug_html = get_debug_traceback_html()
+                if debug_html:
                     await self.send(text_data=dumps({"exception": str(e), "debug_html": debug_html}))
                 else:
                     await self.send(text_data='{"exception": "A server error has occurred. Try reloading the page"}')

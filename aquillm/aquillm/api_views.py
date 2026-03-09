@@ -32,6 +32,7 @@ from django.db import DatabaseError, transaction
 from django.db.models import Q
 from aquillm.views import user_settings_api
 from django.core.exceptions import PermissionDenied
+from .utils import get_debug_traceback_html
 
 
 logger = logging.getLogger(__name__)
@@ -139,10 +140,12 @@ def ingest_arxiv(request):
         return JsonResponse({'message': status["message"]})
     except DuplicateDocumentError as e:
         logger.error(e.message)
-        return JsonResponse({'error': e.message}, status=400)
+        debug_html = get_debug_traceback_html()
+        return JsonResponse({'error': e.message, **({"debug_html": debug_html} if debug_html else {})}, status=400)
     except DatabaseError as e:
         logger.error(f"Database error: {e}")
-        return JsonResponse({'error': 'Database error occurred while saving document'}, status=500)
+        debug_html = get_debug_traceback_html()
+        return JsonResponse({'error': 'Database error occurred while saving document', **({"debug_html": debug_html} if debug_html else {})}, status=500)
 
 @login_required
 @require_http_methods(["POST"])
@@ -171,10 +174,12 @@ def ingest_pdf(request):
         doc.save()
     except DuplicateDocumentError as e:
         logger.error(e.message)
-        return JsonResponse({'error', e.message}, status=200)
+        debug_html = get_debug_traceback_html()
+        return JsonResponse({'error': e.message, **({"debug_html": debug_html} if debug_html else {})}, status=400)
     except DatabaseError as e:
         logger.error(f"Database error: {e}")
-        return JsonResponse({'error': 'Database error occurred while saving PDFDocument'}, status=500)
+        debug_html = get_debug_traceback_html()
+        return JsonResponse({'error': 'Database error occurred while saving PDFDocument', **({"debug_html": debug_html} if debug_html else {})}, status=500)
 
     return JsonResponse({'status_message': 'Success'})
 
@@ -210,7 +215,8 @@ def ingest_vtt(request):
         doc.save()
     except DatabaseError as e:
         logger.error(f"Database error: {e}")
-        return JsonResponse({'error': 'Database error occurred while saving VTTDocument'}, status=500)
+        debug_html = get_debug_traceback_html()
+        return JsonResponse({'error': 'Database error occurred while saving VTTDocument', **({"debug_html": debug_html} if debug_html else {})}, status=500)
 
     return JsonResponse({'status_message': 'Success'})
 

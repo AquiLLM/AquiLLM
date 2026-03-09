@@ -15,6 +15,7 @@ export interface IngestionMessage {
   messages?: string[];
   progress?: number;
   exception?: string;
+  debug_html?: string;
   complete?: boolean;
 }
 

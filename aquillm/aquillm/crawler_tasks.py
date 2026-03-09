@@ -25,6 +25,7 @@ from trafilatura import fetch_url, extract, extract_metadata
 # Local imports
 from .models import RawTextDocument, Collection, DuplicateDocumentError
 from .celery import app # Ensure Celery app is imported
+from .utils import get_debug_traceback_html
 
 logger = logging.getLogger(__name__)
 
@@ -254,26 +255,30 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
                 error_msg = e.message
                 logger.warning(f"[Task {task_id}] Duplicate document error on save: {error_msg}")
                 self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
-                send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
+                debug_html = get_debug_traceback_html()
+                send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg, **({"debug_html": debug_html} if debug_html else {})})
                 return {'error': error_msg}
             except ValidationError as e:
                  error_msg = "; ".join([f'{k}: {v[0]}' for k, v in e.message_dict.items()]) if hasattr(e, 'message_dict') else ". ".join(e.messages)
                  error_msg = f'Validation Error: {error_msg}'
                  logger.error(f"[Task {task_id}] Validation error saving document: {error_msg}", exc_info=True)
                  self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
-                 send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
+                 debug_html = get_debug_traceback_html()
+                 send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg, **({"debug_html": debug_html} if debug_html else {})})
                  return {'error': error_msg}
             except DatabaseError as e:
                 error_msg = 'Database error during save.'
                 logger.error(f"[Task {task_id}] {error_msg} {e}", exc_info=True)
                 self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
-                send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
+                debug_html = get_debug_traceback_html()
+                send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg, **({"debug_html": debug_html} if debug_html else {})})
                 return {'error': error_msg}
             except Exception as e:
                 error_msg = 'Unexpected error during save.'
                 logger.error(f"[Task {task_id}] {error_msg} {e}", exc_info=True)
                 self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
-                send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
+                debug_html = get_debug_traceback_html()
+                send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg, **({"debug_html": debug_html} if debug_html else {})})
                 return {'error': error_msg}
         else:
             error_msg = 'No text content could be extracted.'
@@ -286,7 +291,8 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
         error_msg = f'Unexpected task error: {e}'
         logger.error(f"[Task {task_id}] {error_msg}", exc_info=True)
         self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
-        send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
+        debug_html = get_debug_traceback_html()
+        send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg, **({"debug_html": debug_html} if debug_html else {})})
         return {'error': error_msg}
     finally:
         # Ensure Selenium driver is closed if it was opened

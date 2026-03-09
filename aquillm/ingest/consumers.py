@@ -35,8 +35,11 @@ class IngestMonitorConsumer(AsyncWebsocketConsumer):
 
     async def document_ingest_complete(self, event):
         await self.send(text_data=dumps(event))
-        
+
     async def document_ingest_progress(self, event):
+        await self.send(text_data=dumps(event))
+
+    async def document_ingest_error(self, event):
         await self.send(text_data=dumps(event))
 
 

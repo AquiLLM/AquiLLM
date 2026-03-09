@@ -6,6 +6,7 @@ const PDFIngestionMonitor: React.FC<PDFIngestionMonitorProps> = ({ documentName,
   const [progress, setProgress] = useState<number>(0);
   const [messages, setMessages] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [debugHtml, setDebugHtml] = useState<string | null>(null);
   const [showModal, setShowModal] = useState<boolean>(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const ws = useRef<WebSocket | null>(null);
@@ -45,6 +46,9 @@ const PDFIngestionMonitor: React.FC<PDFIngestionMonitorProps> = ({ documentName,
 
         if (data.exception) {
           setError(data.exception);
+          if (data.debug_html) {
+            setDebugHtml(data.debug_html);
+          }
         }
       };
 
@@ -122,9 +126,23 @@ const PDFIngestionMonitor: React.FC<PDFIngestionMonitorProps> = ({ documentName,
 
       {/* Error Display */}
       {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative">
-          <strong className="font-bold">Error:</strong>
-          <span className="block sm:inline"> {error}</span>
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative flex items-center justify-between">
+          <div>
+            <strong className="font-bold">Error:</strong>
+            <span className="block sm:inline"> {error}</span>
+          </div>
+          {debugHtml && (
+            <button
+              className="ml-4 px-3 py-1 bg-red-900 hover:bg-red-800 text-white rounded text-sm whitespace-nowrap"
+              onClick={() => {
+                const blob = new Blob([debugHtml], { type: 'text/html' });
+                const url = URL.createObjectURL(blob);
+                window.open(url, '_blank');
+              }}
+            >
+              View Stack Trace
+            </button>
+          )}
         </div>
       )}
     </div>
