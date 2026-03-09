@@ -28,6 +28,10 @@ EPISODIC_TOP_K = 5
 MEMORY_BACKEND = getenv("MEMORY_BACKEND", "local").strip().lower()
 MEM0_DUAL_WRITE_LOCAL = getenv("MEM0_DUAL_WRITE_LOCAL", "1").strip().lower() in ("1", "true", "yes", "on")
 MEM0_BASE_URL = getenv("MEM0_BASE_URL", "").strip().rstrip("/")
+try:
+    MEM0_TIMEOUT_SECONDS = int(getenv("MEM0_TIMEOUT_SECONDS", "30").strip())
+except Exception:
+    MEM0_TIMEOUT_SECONDS = 30
 
 logger = logging.getLogger(__name__)
 _MEM0_CLIENT = None
@@ -81,7 +85,7 @@ def _search_mem0_via_rest(
     if not MEM0_BASE_URL:
         return []
     headers = _mem0_headers()
-    timeout = 8
+    timeout = MEM0_TIMEOUT_SECONDS
     payload = None
     # Try known Mem0 search shapes in order:
     # 1) Newer OSS/server route: POST /search
@@ -152,7 +156,7 @@ def _add_mem0_via_rest(
                     "memory_type": "episodic",
                 },
             },
-            timeout=8,
+            timeout=MEM0_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         return True

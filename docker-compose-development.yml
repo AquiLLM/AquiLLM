@@ -122,6 +122,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.ollama
+    gpus: all
     deploy:
       resources:
         reservations:
@@ -137,6 +138,8 @@ services:
       - .env
     environment:
       - OLLAMA_KEEP_ALIVE=-1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     healthcheck:
       test: ["CMD-SHELL", "ollama --version && ollama ps || exit 1"]
       interval: 10s
