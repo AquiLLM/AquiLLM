@@ -107,6 +107,12 @@ services:
       retries: 5
       start_period: 20s
 
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+
   createbuckets:
     image: minio/mc
     depends_on:
@@ -148,5 +154,6 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  qdrant_data:
   certs:
   ollama_data:
