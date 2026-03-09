@@ -765,7 +765,10 @@ class TextChunk(models.Model):
             vector_results = cls.objects.filter_by_documents(docs).order_by(L2Distance('embedding', get_embedding(query)))[:vector_top_k] # type: ignore
             trigram_results = cls.objects.filter_by_documents(docs).annotate(similarity = TrigramSimilarity('content', query) # type: ignore
             ).filter(similarity__gt=0.000001).order_by('-similarity')[:trigram_top_k]
-            reranked_results = cls.rerank(query, vector_results | trigram_results, top_k)
+            combined = vector_results | trigram_results
+            if not combined.exists():
+                return vector_results, trigram_results, cls.objects.none()
+            reranked_results = cls.rerank(query, combined, top_k)
             return vector_results, trigram_results, reranked_results
         except DatabaseError as e:
             logger.error(f"Database error during search: {str(e)}")
