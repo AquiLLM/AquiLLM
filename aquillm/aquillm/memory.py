@@ -82,30 +82,30 @@ def _search_mem0_via_rest(
         return []
     headers = _mem0_headers()
     timeout = 8
-    try:
-        # Prefer POST endpoint (commonly available on recent mem0 servers)
-        response = requests.post(
-            f"{MEM0_BASE_URL}/memories/search",
-            headers=headers,
-            json={"query": query, "user_id": str(user.id), "limit": top_k},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except Exception:
+    payload = None
+    # Try known Mem0 search shapes in order:
+    # 1) Newer OSS/server route: POST /search
+    # 2) Legacy route: POST /memories/search
+    # 3) Legacy query-param fallback: GET /memories/search
+    for method, path, kwargs in [
+        ("post", "/search", {"json": {"query": query, "user_id": str(user.id), "limit": top_k}}),
+        ("post", "/memories/search", {"json": {"query": query, "user_id": str(user.id), "limit": top_k}}),
+        ("get", "/memories/search", {"params": {"query": query, "user_id": str(user.id), "limit": top_k}}),
+    ]:
         try:
-            # Fallback to query-param GET endpoint
-            response = requests.get(
-                f"{MEM0_BASE_URL}/memories/search",
-                headers=headers,
-                params={"query": query, "user_id": str(user.id), "limit": top_k},
-                timeout=timeout,
-            )
+            if method == "post":
+                response = requests.post(f"{MEM0_BASE_URL}{path}", headers=headers, timeout=timeout, **kwargs)
+            else:
+                response = requests.get(f"{MEM0_BASE_URL}{path}", headers=headers, timeout=timeout, **kwargs)
             response.raise_for_status()
             payload = response.json()
-        except Exception as exc:
-            logger.warning("Mem0 REST search failed; falling back to local memory. Error: %s", exc)
-            return []
+            break
+        except Exception:
+            continue
+
+    if payload is None:
+        logger.warning("Mem0 REST search failed; falling back to local memory.")
+        return []
 
     if isinstance(payload, dict):
         raw_items = payload.get("results") or payload.get("memories") or payload.get("data") or []
