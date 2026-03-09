@@ -1,6 +1,7 @@
 from django.apps import AppConfig
 
 from django.template import Engine, Context
+import structlog
 import cohere
 import openai
 import anthropic
@@ -12,6 +13,8 @@ from typing import TypedDict
 
 from .llm import LLMInterface, ClaudeInterface, OpenAIInterface, GeminiInterface  # GeminiInterface added for Gemini backend support
 from .settings import DEBUG
+
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -129,4 +132,21 @@ class AquillmConfig(AppConfig):
             )
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
+
+        self._prewarm_vector_index()
+
+    def _prewarm_vector_index(self):
+        """Run a dummy vector query to load the HNSW index into PostgreSQL's buffer cache."""
+        try:
+            from apps.documents.models import TextChunk
+            from pgvector.django import L2Distance
+            zero_vector = [0.0] * 1024
+            TextChunk.objects.order_by(L2Distance('embedding', zero_vector))[:1].exists()
+            logger.info("obs.rag.hnsw_prewarmed")
+        except Exception as e:
+            logger.warning(
+                "obs.rag.hnsw_prewarm_failed",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
 
