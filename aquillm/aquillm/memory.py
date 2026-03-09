@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 EPISODIC_TOP_K = 5
 MEMORY_BACKEND = getenv("MEMORY_BACKEND", "local").strip().lower()
 MEM0_DUAL_WRITE_LOCAL = getenv("MEM0_DUAL_WRITE_LOCAL", "1").strip().lower() in ("1", "true", "yes", "on")
+MEM0_REST_WRITE_FALLBACK = getenv("MEM0_REST_WRITE_FALLBACK", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 MEM0_BASE_URL = getenv("MEM0_BASE_URL", "").strip().rstrip("/")
 try:
     MEM0_TIMEOUT_SECONDS = int(getenv("MEM0_TIMEOUT_SECONDS", "30").strip())
@@ -283,6 +289,45 @@ def _extract_stable_facts(user_content: str, assistant_content: str) -> list[str
         return []
 
 
+def _heuristic_facts_from_turn(user_content: str, assistant_content: str) -> list[str]:
+    """
+    Deterministic fallback for explicit memory intents when model extraction returns nothing.
+    """
+    user_text = (user_content or "").strip()
+    if not user_text:
+        return []
+
+    lowered = user_text.lower()
+    facts: list[str] = []
+
+    # Respect explicit "remember" style user intent.
+    if any(token in lowered for token in ("remember", "going forward", "from now on")):
+        facts.append(f"User asked to remember: {user_text}")
+
+    # Common durable preference patterns.
+    pattern_map = [
+        (r"\bi prefer\b.+", "preference"),
+        (r"\bi like\b.+", "preference"),
+        (r"\bcall me\b.+", "name"),
+        (r"\bmy name is\b.+", "name"),
+    ]
+    for pattern, _label in pattern_map:
+        match = re.search(pattern, user_text, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(0).strip()
+            if candidate:
+                facts.append(candidate[0].upper() + candidate[1:] if len(candidate) > 1 else candidate.upper())
+
+    # If user asked to remember something but did not include the fact directly,
+    # preserve a short assistant summary fragment as fallback context.
+    if facts and "remember" in lowered and assistant_content:
+        assistant_snippet = re.sub(r"\s+", " ", assistant_content).strip()[:220]
+        if assistant_snippet:
+            facts.append(f"Remembered context: {assistant_snippet}")
+
+    return list(dict.fromkeys(facts))
+
+
 def _add_mem0_raw_facts(
     user: User,
     facts: list[str],
@@ -396,22 +441,36 @@ def _add_mem0_memory(
 ) -> None:
     facts = _extract_stable_facts(user_content, assistant_content)
     facts = list(dict.fromkeys(facts))
+    if not facts:
+        facts = _heuristic_facts_from_turn(user_content, assistant_content)
+        if facts:
+            logger.info("Using heuristic memory extraction fallback; extracted %d fact(s).", len(facts))
+
     if facts and _add_mem0_raw_facts(
         user=user,
         facts=facts,
         conversation_id=conversation_id,
         assistant_message_uuid=assistant_message_uuid,
     ):
+        logger.info("Mem0 raw-fact write succeeded with %d fact(s).", len(facts))
         return
 
-    if _add_mem0_via_rest(
-        user=user,
-        user_content=user_content,
-        assistant_content=assistant_content,
-        conversation_id=conversation_id,
-        assistant_message_uuid=assistant_message_uuid,
-    ):
-        return
+    if facts:
+        logger.warning("Mem0 raw-fact write produced no ADD events for %d fact(s).", len(facts))
+    else:
+        logger.info("No memory facts extracted for this turn; skipping Mem0 write.")
+
+    if MEM0_REST_WRITE_FALLBACK:
+        if _add_mem0_via_rest(
+            user=user,
+            user_content=user_content,
+            assistant_content=assistant_content,
+            conversation_id=conversation_id,
+            assistant_message_uuid=assistant_message_uuid,
+        ):
+            logger.info("Mem0 REST write fallback succeeded.")
+            return
+
     client = _get_mem0_client()
     if client is None:
         return

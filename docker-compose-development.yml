@@ -110,6 +110,8 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.13.2
     restart: unless-stopped
+    ports:
+      - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
 
