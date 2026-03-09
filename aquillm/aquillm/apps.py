@@ -103,3 +103,18 @@ class AquillmConfig(AppConfig):
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 
+        self._prewarm_vector_index()
+
+    def _prewarm_vector_index(self):
+        """Run a dummy vector query to load the HNSW index into PostgreSQL's buffer cache."""
+        import logging
+        logger = logging.getLogger(__name__)
+        try:
+            from .models import TextChunk
+            from pgvector.django import L2Distance
+            zero_vector = [0.0] * 1024
+            TextChunk.objects.order_by(L2Distance('embedding', zero_vector))[:1].exists()
+            logger.info("HNSW index prewarmed successfully.")
+        except Exception as e:
+            logger.warning(f"Failed to prewarm HNSW index (table may not exist yet): {e}")
+
