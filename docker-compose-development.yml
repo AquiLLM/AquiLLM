@@ -103,6 +103,28 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  mem0:
+    image: mem0/mem0-api-server:latest
+    restart: unless-stopped
+    profiles:
+      - mem0
+    env_file:
+      - .env
+    environment:
+      # Required by mem0-api-server for extraction/summarization in default setup.
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "8888:8000"
+    volumes:
+      - mem0_history:/app/history
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 25s
+
   createbuckets:
     image: minio/mc
     depends_on:
@@ -143,3 +165,4 @@ volumes:
   minio_data:
   certs:
   ollama_data:
+  mem0_history:
