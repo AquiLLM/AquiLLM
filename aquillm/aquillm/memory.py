@@ -9,6 +9,8 @@ Optional backend:
 """
 
 import logging
+import json
+import re
 from dataclasses import dataclass
 from os import getenv
 from typing import TYPE_CHECKING, Optional
@@ -36,6 +38,8 @@ except Exception:
 logger = logging.getLogger(__name__)
 _MEM0_CLIENT = None
 _MEM0_INIT_ATTEMPTED = False
+_MEM0_OSS = None
+_MEM0_OSS_INIT_ATTEMPTED = False
 
 
 @dataclass
@@ -68,6 +72,50 @@ def _get_mem0_client():
         return _MEM0_CLIENT
     except Exception as exc:
         logger.warning("Failed to initialize Mem0 client; using local memory. Error: %s", exc)
+        return None
+
+
+def _get_mem0_oss():
+    """Create a local OSS Mem0 SDK client once. Returns None when unavailable/misconfigured."""
+    global _MEM0_OSS, _MEM0_OSS_INIT_ATTEMPTED
+    if _MEM0_OSS_INIT_ATTEMPTED:
+        return _MEM0_OSS
+    _MEM0_OSS_INIT_ATTEMPTED = True
+
+    try:
+        from mem0 import Memory  # type: ignore
+
+        config = {
+            "version": "v1.1",
+            "llm": {
+                "provider": "ollama",
+                "config": {
+                    "model": getenv("MEM0_LLM_MODEL", "qwen3.5:4b-q8_0"),
+                    "ollama_base_url": getenv("MEM0_OLLAMA_BASE_URL", "http://aquillm-ollama-1:11434"),
+                    "temperature": 0,
+                },
+            },
+            "embedder": {
+                "provider": "ollama",
+                "config": {
+                    "model": getenv("MEM0_EMBED_MODEL", "nomic-embed-text:latest"),
+                    "ollama_base_url": getenv("MEM0_OLLAMA_BASE_URL", "http://aquillm-ollama-1:11434"),
+                },
+            },
+            "vector_store": {
+                "provider": "qdrant",
+                "config": {
+                    "host": getenv("MEM0_QDRANT_HOST", "qdrant"),
+                    "port": int(getenv("MEM0_QDRANT_PORT", "6333")),
+                    "collection_name": getenv("MEM0_COLLECTION_NAME", "mem0_768_v4"),
+                    "embedding_model_dims": int(getenv("MEM0_EMBED_DIMS", "768")),
+                },
+            },
+        }
+        _MEM0_OSS = Memory.from_config(config)  # type: ignore[attr-defined]
+        return _MEM0_OSS
+    except Exception as exc:
+        logger.warning("Failed to initialize OSS Mem0 client; using local memory. Error: %s", exc)
         return None
 
 
@@ -165,6 +213,110 @@ def _add_mem0_via_rest(
         return False
 
 
+def _extract_json_object(text: str) -> dict:
+    cleaned = (text or "").strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE | re.MULTILINE).strip()
+    if not cleaned:
+        return {}
+    try:
+        payload = json.loads(cleaned)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            return {}
+        try:
+            payload = json.loads(match.group(0))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+
+def _extract_stable_facts(user_content: str, assistant_content: str) -> list[str]:
+    """Extract stable user facts/preferences locally so Mem0 write can skip server-side infer."""
+    base_url = getenv("MEM0_OLLAMA_BASE_URL", "http://aquillm-ollama-1:11434").rstrip("/")
+    model = getenv("MEM0_LLM_MODEL", "qwen3.5:4b-q8_0")
+    prompt = (
+        "Extract only stable, user-specific facts/preferences/goals from the conversation. "
+        'Return STRICT JSON only in the form {"facts":["..."]}. '
+        'If none exist, return {"facts":[]}. '
+        "Do not include temporary requests, one-off tasks, or assistant statements.\n\n"
+        f"User: {user_content}\nAssistant: {assistant_content}"
+    )
+    try:
+        response = requests.post(
+            f"{base_url}/api/chat",
+            json={
+                "model": model,
+                "stream": False,
+                "messages": [{"role": "user", "content": prompt}],
+                "format": {
+                    "type": "object",
+                    "properties": {
+                        "facts": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["facts"],
+                },
+                "options": {"temperature": 0},
+            },
+            timeout=MEM0_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        raw_payload = response.json()
+        payload = raw_payload if isinstance(raw_payload, dict) else {}
+        content = payload.get("message", {}).get("content", "") if isinstance(payload, dict) else ""
+        obj = _extract_json_object(content)
+        facts = obj.get("facts", [])
+        out: list[str] = []
+        if isinstance(facts, list):
+            for item in facts:
+                if isinstance(item, str):
+                    item = item.strip()
+                    if item:
+                        out.append(item)
+        return out
+    except Exception as exc:
+        logger.warning("Stable-fact extraction failed: %s", exc)
+        return []
+
+
+def _add_mem0_raw_facts(
+    user: User,
+    facts: list[str],
+    conversation_id: int,
+    assistant_message_uuid: str,
+) -> bool:
+    """Write already-extracted facts into Mem0 with infer=False via OSS SDK."""
+    mem0 = _get_mem0_oss()
+    if mem0 is None:
+        return False
+
+    wrote_any = False
+    for fact in facts:
+        try:
+            result = mem0.add(  # type: ignore[attr-defined]
+                fact,
+                user_id=str(user.id),
+                metadata={
+                    "conversation_id": conversation_id,
+                    "assistant_message_uuid": assistant_message_uuid,
+                    "source": "aquillm",
+                    "memory_type": "episodic",
+                },
+                infer=False,
+            )
+            if isinstance(result, dict):
+                events = result.get("results") or []
+                if any(isinstance(x, dict) and x.get("event") == "ADD" for x in events):
+                    wrote_any = True
+            else:
+                # Some SDK variants return non-dict; treat non-exception as success.
+                wrote_any = True
+        except Exception as exc:
+            logger.warning("Mem0 raw fact add failed for fact=%r: %s", fact, exc)
+    return wrote_any
+
+
 def _extract_mem0_content(item) -> str:
     if isinstance(item, str):
         return item.strip()
@@ -198,6 +350,9 @@ def _search_mem0_episodic_memories(
     )
     if rest_results:
         return rest_results
+    # Avoid noisy cloud-client fallback when using local REST/self-hosted mem0.
+    if not getenv("MEM0_API_KEY"):
+        return []
     client = _get_mem0_client()
     if client is None:
         return []
@@ -236,6 +391,16 @@ def _add_mem0_memory(
     conversation_id: int,
     assistant_message_uuid: str,
 ) -> None:
+    facts = _extract_stable_facts(user_content, assistant_content)
+    facts = list(dict.fromkeys(facts))
+    if facts and _add_mem0_raw_facts(
+        user=user,
+        facts=facts,
+        conversation_id=conversation_id,
+        assistant_message_uuid=assistant_message_uuid,
+    ):
+        return
+
     if _add_mem0_via_rest(
         user=user,
         user_content=user_content,
