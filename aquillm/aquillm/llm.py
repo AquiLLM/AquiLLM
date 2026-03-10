@@ -127,13 +127,12 @@ class ToolChoice(BaseModel):
     name: Optional[str] = None
 
     @model_validator(mode='after')
-    @classmethod
-    def validate_name(cls, data: Any) -> Any:
-        if data.type == 'tool' and data.name is None:
+    def validate_name(self):
+        if self.type == 'tool' and self.name is None:
             raise ValueError("name is required when type is 'tool'")
-        if data.type != 'tool' and data.name is not None:
+        if self.type != 'tool' and self.name is not None:
             raise ValueError("name should only be set when type is 'tool'")
-        return data
+        return self
 
 class __LLMMessage(BaseModel, ABC):
     role: Literal['user', 'tool', 'assistant']
@@ -145,11 +144,11 @@ class __LLMMessage(BaseModel, ABC):
     files: Optional[list[tuple[str, int]]] = None
     message_uuid: uuid.UUID = Field(default_factory=uuid.uuid4)
     
-    @classmethod
     @model_validator(mode='after')
-    def validate_tools(cls, data: Any) -> Any:
-        if (data.tools and not data.tool_choice) or (data.tool_choice and not data.tools):
+    def validate_tools(self):
+        if (self.tools and not self.tool_choice) or (self.tool_choice and not self.tools):
             raise ValueError("Both tools and tool_choice must be populated if tools are used")
+        return self
 
     #render for LLM 
     def render(self, *args, **kwargs) -> dict:
@@ -190,12 +189,12 @@ class AssistantMessage(__LLMMessage):
     tool_call_input: Optional[dict] = None
     usage: int = 0
 
-    @classmethod
     @model_validator(mode='after')
-    def validate_tool_call(cls, data: Any) -> Any:
-        if (any([data.tool_call_id, data.tool_call_name]) and
-        not all([data.tool_call_id, data.tool_call_name])):
+    def validate_tool_call(self):
+        if (any([self.tool_call_id, self.tool_call_name]) and
+        not all([self.tool_call_id, self.tool_call_name])):
             raise ValueError("If a tool call is made, both tool_call_id and tool_call_name must have values")
+        return self
 
 
     # @override
@@ -248,18 +247,17 @@ class Conversation(BaseModel):
     def get_empty_conversation(cls):
         return cls(system=apps.get_app_config('aquillm').system_prompt).model_dump()
 
-    @classmethod
     @model_validator(mode='after')
-    def validate_flip_flop(cls, data: Any) -> Any:
+    def validate_flip_flop(self):
         def isUser(m: LLM_Message):
             return isinstance(m, UserMessage) or (isinstance(m, ToolMessage) and m.for_whom == 'assistant')
 
-        for a, b in zip(data.messages, data.messages[1:]):
+        for a, b in zip(self.messages, self.messages[1:]):
             if isinstance(a, AssistantMessage) and isinstance(b, AssistantMessage):
                 raise ValueError("Conversation has adjacent assistant messages")
             if isUser(a) and isUser(b):
                 raise ValueError("Conversation has adjacent user messages")
-        return data
+        return self
 
 class LLMResponse(BaseModel):
     text: Optional[str]
