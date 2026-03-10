@@ -249,12 +249,14 @@ def _extract_stable_facts(user_content: str, assistant_content: str) -> list[str
     model = getenv("MEM0_LLM_MODEL", "qwen3.5:4b-q8_0")
     prompt = (
         "Extract durable memory candidates from this turn. "
-        "Include: (1) stable user-specific preferences/goals/background, and "
-        "(2) explicit user requests to remember information going forward "
-        '(e.g. "remember X"), including the remembered fact when available. '
+        "Include: (1) stable user-specific preferences/goals/background, "
+        "(2) explicit user requests to remember information going forward, and "
+        "(3) durable task/domain facts that the user wants retained (project context, tooling choices, "
+        "technical facts the user explicitly says to remember). "
+        'For explicit remember directives (e.g. "remember X"), include the substantive fact X directly. '
         'Return STRICT JSON only in the form {"facts":["..."]}. '
         'If none exist, return {"facts":[]}. '
-        "Do not include temporary one-off task requests unless they are explicit long-term remember directives.\n\n"
+        "Do not include temporary one-off requests unless they are explicit long-term remember directives.\n\n"
         f"User: {user_content}\nAssistant: {assistant_content}"
     )
     try:
@@ -315,6 +317,11 @@ def _heuristic_facts_from_turn(user_content: str, assistant_content: str) -> lis
         (r"\bi like\b.+", "preference"),
         (r"\bcall me\b.+", "name"),
         (r"\bmy name is\b.+", "name"),
+        (r"\bi work on\b.+", "domain"),
+        (r"\bi am working on\b.+", "domain"),
+        (r"\bour stack is\b.+", "domain"),
+        (r"\bwe use\b.+", "domain"),
+        (r"\bthe project is\b.+", "domain"),
     ]
     for pattern, _label in pattern_map:
         match = re.search(pattern, user_text, flags=re.IGNORECASE)
@@ -331,6 +338,27 @@ def _heuristic_facts_from_turn(user_content: str, assistant_content: str) -> lis
             facts.append(f"Remembered context: {assistant_snippet}")
 
     return list(dict.fromkeys(facts))
+
+
+def _has_remember_intent(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(token in lowered for token in ("remember", "going forward", "from now on"))
+
+
+def _normalize_remember_fact(user_content: str) -> str:
+    """
+    Normalize explicit remember directives to a fact string while preserving user content.
+    """
+    text = (user_content or "").strip()
+    if not text:
+        return ""
+    text = re.sub(
+        r"^\s*(please\s+)?remember(\s+this)?(\s+going\s+forward)?\s*[:,-]?\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return text or (user_content or "").strip()
 
 
 def _add_mem0_raw_facts(
@@ -446,6 +474,12 @@ def _add_mem0_memory(
 ) -> None:
     facts = _extract_stable_facts(user_content, assistant_content)
     facts = list(dict.fromkeys(facts))
+    if not facts and _has_remember_intent(user_content):
+        remembered = _normalize_remember_fact(user_content)
+        if remembered:
+            facts = [remembered]
+            logger.info("Using direct remember fallback; storing user content as memory fact.")
+
     if not facts:
         facts = _heuristic_facts_from_turn(user_content, assistant_content)
         if facts:

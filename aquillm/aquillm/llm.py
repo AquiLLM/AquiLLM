@@ -499,6 +499,16 @@ class OpenAIInterface(LLMInterface):
         system_text = kwargs.pop('system')
         message_list = kwargs.pop('messages')
 
+        # If memory context is present, strongly steer away from generic "no memory"
+        # disclaimers and force use of retrieved facts when relevant.
+        if "[User preferences and background]" in system_text or "[Historical conversation context]" in system_text:
+            system_text = (
+                "You have access to retrieved user memory in the system context below. "
+                "When relevant memory is present, use it directly. "
+                "Do not claim you cannot remember past conversations when memory items are provided.\n\n"
+                + system_text
+            )
+
         # Compatibility: many OpenAI-compatible local servers (including Ollama routes)
         # reliably honor "system" but may ignore newer "developer" role semantics.
         configured_role = getenv("OPENAI_SYSTEM_ROLE", "").strip().lower()
