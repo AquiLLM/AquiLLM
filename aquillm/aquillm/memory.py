@@ -26,7 +26,12 @@ if TYPE_CHECKING:
     from .llm import Conversation
 
 # How many past exchanges to retrieve for context
-EPISODIC_TOP_K = 5
+try:
+    EPISODIC_TOP_K = int(getenv("EPISODIC_TOP_K", "5").strip())
+except Exception:
+    EPISODIC_TOP_K = 5
+if EPISODIC_TOP_K < 1:
+    EPISODIC_TOP_K = 1
 MEMORY_BACKEND = getenv("MEMORY_BACKEND", "local").strip().lower()
 MEM0_DUAL_WRITE_LOCAL = getenv("MEM0_DUAL_WRITE_LOCAL", "1").strip().lower() in ("1", "true", "yes", "on")
 MEM0_REST_WRITE_FALLBACK = getenv("MEM0_REST_WRITE_FALLBACK", "0").strip().lower() in (

@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from anthropic._exceptions import OverloadedError
 from aquillm.settings import DEBUG
 from django.apps import apps
+from os import getenv
 
 from asgiref.sync import sync_to_async
 
@@ -495,8 +496,22 @@ class OpenAIInterface(LLMInterface):
     async def get_message(self, *args, **kwargs) -> LLMResponse:
         kwargs.pop('messages_pydantic', None)  # Gemini needs the raw Pydantic objects; OpenAI uses the rendered 'messages' dicts and would reject this unknown kwarg
         kwargs.pop('thinking_budget', None)  # Gemini-only concept, ignored here
-        arguments = {"model": self.base_args['model'],
-                    "messages": [{"role": "developer", "content": kwargs.pop('system')}] + kwargs.pop('messages')}
+        system_text = kwargs.pop('system')
+        message_list = kwargs.pop('messages')
+
+        # Compatibility: many OpenAI-compatible local servers (including Ollama routes)
+        # reliably honor "system" but may ignore newer "developer" role semantics.
+        configured_role = getenv("OPENAI_SYSTEM_ROLE", "").strip().lower()
+        if configured_role in ("system", "developer"):
+            system_role = configured_role
+        else:
+            base_url = str(getattr(self.client, "base_url", "") or "").lower()
+            system_role = "system" if ("ollama" in base_url or "11434" in base_url) else "developer"
+
+        arguments = {
+            "model": self.base_args['model'],
+            "messages": [{"role": system_role, "content": system_text}] + message_list
+        }
 
         # Only add tools if they're provided
         if 'tools' in kwargs:
