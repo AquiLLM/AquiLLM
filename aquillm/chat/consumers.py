@@ -351,11 +351,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
     col_ref = CollectionsRef([])
     
     @database_sync_to_async
-    def __save(self):
+    def __save(self, create_memories: bool = False):
         assert self.db_convo is not None
         # Converts in-memory Pydantic messages to Django Message rows and saves them to the database
         save_conversation_to_db(self.convo, self.db_convo)
-        create_episodic_memories_for_conversation(self.db_convo)
+        if create_memories:
+            create_episodic_memories_for_conversation(self.db_convo)
         if len(self.convo) >= 2 and not self.db_convo.name:
             self.db_convo.set_name()
 
@@ -380,7 +381,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         async def send_func(convo: Conversation):
             logger.debug(f"send_func called in connect()")
             self.convo = convo
-            await self.__save()
+            # Persist streaming state for UI updates; memory extraction runs once after turn completion.
+            await self.__save(create_memories=False)
             # Builds JSON from Message table rows and sends it to the frontend over WebSocket
             frontend_json = await database_sync_to_async(build_frontend_conversation_json)(self.db_convo)
             await self.send(text_data=dumps({"conversation": frontend_json}))
@@ -424,6 +426,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.convo.rebind_tools(self.tools)
             logger.debug(f"About to call llm_if.spin() in connect()")
             await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
+            # Extract/store memories only after the assistant turn is complete.
+            await self.__save(create_memories=True)
             logger.debug(f"llm_if.spin() completed in connect()")
             return
         except OverloadedError as e:
@@ -456,7 +460,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.debug("send_func called in receive()")
             await aclose_old_connections()
             self.convo = convo
-            await self.__save()
+            # Persist streaming state for UI updates; memory extraction runs once after turn completion.
+            await self.__save(create_memories=False)
             # Builds JSON from Message table rows and sends it to the frontend over WebSocket
             frontend_json = await database_sync_to_async(build_frontend_conversation_json)(self.db_convo)
             await self.send(text_data=dumps({"conversation": frontend_json}))
@@ -479,7 +484,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.convo[-1].tools = self.tools
             self.convo[-1].files = [(file.name, file.id) for file in files]
             self.convo[-1].tool_choice = ToolChoice(type='auto')
-            await self.__save()
+            await self.__save(create_memories=False)
             logger.debug("append() completed, message added")
 
         async def rate(data: dict):
@@ -533,6 +538,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 )
                 logger.debug("About to call llm_if.spin() in receive()")
                 await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
+                # Extract/store memories only after the assistant turn is complete.
+                await self.__save(create_memories=True)
                 logger.debug("llm_if.spin() completed in receive()")
             except Exception as e:
                 logger.error(f"Exception in receive(): {e}", exc_info=True)
