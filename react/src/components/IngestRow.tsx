@@ -23,9 +23,9 @@ interface IngestRowsContainerProps {
 interface IngestRowData {
   id: number;
   docType: DocType;
-  // For PDF rows
+  // For PDF rows (supports multiple files; title used only when single file)
   pdfTitle: string;
-  pdfFile: File | null;
+  pdfFiles: File[];
   // For arXiv rows
   arxivId: string;
   // For VTT rows
@@ -131,46 +131,55 @@ const ARXIVLogo = (
 
 interface PDFFormProps {
   pdfTitle: string;
-  pdfFile: File | null;
+  pdfFiles: File[];
   onTitleChange: (value: string) => void;
-  onFileChange: (file: File | null) => void;
+  onFileChange: (files: File[]) => void;
 }
 
 const PDFForm: React.FC<PDFFormProps> = ({
   pdfTitle,
-  pdfFile,
+  pdfFiles,
   onTitleChange,
   onFileChange,
 }) => {
+  const fileLabel =
+    pdfFiles.length === 0
+      ? "Select PDF File(s)"
+      : pdfFiles.length === 1
+        ? "1 file selected"
+        : `${pdfFiles.length} files selected`;
   return (
     <div className="flex gap-4">
       <label
         htmlFor="pdf-file-upload"
         className={`cursor-pointer flex items-center justify-center border border-border-mid_contrast p-2 rounded-lg transition-colors flex-grow h-[40px] ${
-          pdfFile ? "bg-green-dark" : "hover:bg-scheme-shade_3"
+          pdfFiles.length > 0 ? "bg-green-dark" : "hover:bg-scheme-shade_3"
         }`}
       >
-        {pdfFile ? "File Selected" : "Select PDF File"}
+        {fileLabel}
       </label>
       <input
         id="pdf-file-upload"
         type="file"
         accept="application/pdf"
+        multiple
         onChange={(e) =>
           onFileChange(
-            e.target.files && e.target.files.length ? e.target.files[0] : null
+            e.target.files ? Array.from(e.target.files) : []
           )
         }
         className="hidden"
       />
 
-      <input
-        type="text"
-        placeholder="Enter PDF title"
-        value={pdfTitle}
-        onChange={(e) => onTitleChange(e.target.value)}
-        className="bg-scheme-shade_3 border border-border-mid_contrast p-2 rounded-lg h-[40px] placeholder:text-text-less_contrast flex-grow"
-      />
+      {pdfFiles.length <= 1 && (
+        <input
+          type="text"
+          placeholder="Enter PDF title"
+          value={pdfTitle}
+          onChange={(e) => onTitleChange(e.target.value)}
+          className="bg-scheme-shade_3 border border-border-mid_contrast p-2 rounded-lg h-[40px] placeholder:text-text-less_contrast flex-grow"
+        />
+      )}
     </div>
   );
 };
@@ -364,9 +373,9 @@ const IngestRow: React.FC<IngestRowProps> = ({ row, onDocTypeChange, onRowChange
         {row.docType === DocType.PDF ? (
           <PDFForm
             pdfTitle={row.pdfTitle}
-            pdfFile={row.pdfFile}
+            pdfFiles={row.pdfFiles}
             onTitleChange={(value) => onRowChange(row.id, { pdfTitle: value })}
-            onFileChange={(file) => onRowChange(row.id, { pdfFile: file })}
+            onFileChange={(files) => onRowChange(row.id, { pdfFiles: files })}
           />
         ) : row.docType === DocType.ARXIV ? (
           <ArxivForm
@@ -416,13 +425,13 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
       id: 0,
       docType: DocType.PDF,
       pdfTitle: "",
-      pdfFile: null,
+      pdfFiles: [],
       arxivId: "",
       vttTitle: "",
       vttFile: null,
       webpageUrl: "",
       webpageCrawlDepth: 1, // Default crawl depth
-      handwrittenTitle: "", 
+      handwrittenTitle: "",
       handwrittenFile: null,
       convertToLatex: false,
     },
@@ -447,7 +456,7 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
         id: prevRows.length > 0 ? prevRows[prevRows.length - 1].id + 1 : 0,
         docType: DocType.PDF,
         pdfTitle: "",
-        pdfFile: null,
+        pdfFiles: [],
         arxivId: "",
         vttTitle: "",
         vttFile: null,
@@ -466,7 +475,7 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
         if (row.id === id) {
           const newRow = { ...row, docType: newDocType };
           if (newDocType !== DocType.PDF) {
-            newRow.pdfFile = null;
+            newRow.pdfFiles = [];
             newRow.pdfTitle = "";
           }
           if (newDocType !== DocType.ARXIV) {
@@ -499,20 +508,33 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
     for (const row of rows) {
       setSubmissionStatus((prev) => ({ ...prev, [row.id]: "submitting" }));
       let url: string;
-      let body: FormData | string;
+      let body: FormData | FormData[] | string;
       let headers: HeadersInit = { "X-CSRFToken": csrfToken };
 
       try {
         switch (row.docType) {
           case DocType.PDF:
-            if (!row.pdfFile || !row.pdfTitle) {
-              throw new Error("PDF file and title are required.");
+            if (!row.pdfFiles?.length) {
+              throw new Error("At least one PDF file is required.");
             }
+            if (row.pdfFiles.length === 1 && !row.pdfTitle.trim()) {
+              throw new Error("PDF title is required when uploading a single file.");
+            }
+            // Multiple PDFs: submit each file (one POST per file); titles from filenames when multiple
             url = ingestPdfUrl;
-            body = new FormData();
-            body.append("pdf_file", row.pdfFile);
-            body.append("title", row.pdfTitle);
-            body.append("collection", collectionId);
+            const pdfBodies: FormData[] = row.pdfFiles.map((file) => {
+              const fd = new FormData();
+              fd.append("pdf_file", file);
+              fd.append(
+                "title",
+                row.pdfFiles.length === 1
+                  ? row.pdfTitle.trim()
+                  : file.name.replace(/\.pdf$/i, "")
+              );
+              fd.append("collection", collectionId);
+              return fd;
+            });
+            body = pdfBodies;
             break;
           case DocType.ARXIV:
             if (!row.arxivId) {
@@ -565,11 +587,35 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
             throw new Error("Invalid document type selected.");
         }
 
-        const response = await fetch(url, {
-          method: "POST",
-          headers: headers,
-          body: body,
-        });
+        let response: Response;
+        if (Array.isArray(body)) {
+          // Multiple PDFs: submit each in sequence; fail if any fails
+          for (const singleBody of body) {
+            response = await fetch(url, {
+              method: "POST",
+              headers,
+              body: singleBody,
+            });
+            if (!response.ok) {
+              let errorData: { error?: string };
+              try {
+                errorData = await response.json();
+              } catch {
+                errorData = { error: `HTTP error! status: ${response.status}` };
+              }
+              throw new Error(
+                errorData.error || `Request failed with status ${response.status}`
+              );
+            }
+          }
+          response = { ok: true, status: 200 } as Response; // all PDF requests already succeeded
+        } else {
+          response = await fetch(url, {
+            method: "POST",
+            headers: headers,
+            body: body,
+          });
+        }
 
         // Handle different success statuses
         if (response.ok) {
@@ -585,7 +631,7 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
              // Clear inputs on standard success
              updateRow(row.id, {
                pdfTitle: "",
-               pdfFile: null,
+               pdfFiles: [],
                arxivId: "",
                vttTitle: "",
                vttFile: null,
@@ -598,10 +644,10 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
            }
         } else {
           // Handle errors (status codes 4xx, 5xx)
-          let errorData;
+          let errorData: { error?: string };
           try {
             errorData = await response.json();
-          } catch (e) {
+          } catch {
             errorData = { error: `HTTP error! status: ${response.status}` };
           }
           throw new Error(
