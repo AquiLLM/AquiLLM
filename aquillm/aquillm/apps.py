@@ -73,8 +73,11 @@ class AquillmConfig(AppConfig):
 #                       <------->  chunk_overlap
 #                       |-----------CHUNK-----------|
     def ready(self):
-
-        self.cohere_client = cohere.Client(getenv('COHERE_KEY'))
+        cohere_key = (getenv('COHERE_KEY') or '').strip()
+        if cohere_key and not cohere_key.startswith('your-'):
+            self.cohere_client = cohere.Client(cohere_key)
+        else:
+            self.cohere_client = None
         self.openai_client = openai.AsyncOpenAI()
         self.anthropic_client = anthropic.Anthropic()
         self.async_anthropic_client = anthropic.AsyncAnthropic()
@@ -84,7 +87,7 @@ class AquillmConfig(AppConfig):
             aws_secret_key=getenv('AWS_SECRET_ACCESS_KEY')
         )
         self.google_genai_client = google_genai.Client(api_key=getenv('GEMINI_API_KEY'))  # Gemini API client, initialized at startup regardless of LLM_CHOICE so it's available even when not the primary LLM
-        self.get_embedding = get_embedding_func(self.cohere_client)
+        self.get_embedding = get_embedding_func(self.cohere_client) if self.cohere_client else None
         llm_choice = getenv('LLM_CHOICE', self.default_llm)
         local_base_url = getenv('VLLM_BASE_URL', 'http://vllm:8000/v1').rstrip('/')
         if not local_base_url.endswith('/v1'):

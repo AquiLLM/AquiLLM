@@ -740,20 +740,38 @@ class TextChunk(models.Model):
         self.embedding = get_embedding(self.content, input_type='search_document')
         if callback:
             callback()
+
+    @classmethod
+    def _fallback_rerank(cls, chunks, top_k: int):
+        chunk_ids = [chunk.pk for chunk in list(chunks)[:top_k]]
+        if not chunk_ids:
+            return cls.objects.none()
+        preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(chunk_ids)])
+        return cls.objects.filter(pk__in=chunk_ids).order_by(preserved)
+
     @classmethod
     def rerank(cls, query:str, chunks, top_k: int):
+        chunks_list = list(chunks)
         cohere = apps.get_app_config('aquillm').cohere_client # type: ignore
-        response = cohere.rerank(
-            model="rerank-english-v3.0",
-            query=query,
-            documents=list([{"content": chunk.content, "id": chunk.pk} for chunk in chunks]),
-            rank_fields=['content'],
-            top_n=top_k,
-            return_documents=True 
-        )
-        ranked_list = list([result.document.id for result in response.results])
-        preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(ranked_list)])
-        return cls.objects.filter(pk__in=ranked_list).order_by(preserved)
+        if cohere is None:
+            return cls._fallback_rerank(chunks_list, top_k)
+        try:
+            response = cohere.rerank(
+                model="rerank-english-v3.0",
+                query=query,
+                documents=[{"content": chunk.content, "id": chunk.pk} for chunk in chunks_list],
+                rank_fields=['content'],
+                top_n=top_k,
+                return_documents=True
+            )
+            ranked_list = [result.document.id for result in response.results]
+            if not ranked_list:
+                return cls._fallback_rerank(chunks_list, top_k)
+            preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(ranked_list)])
+            return cls.objects.filter(pk__in=ranked_list).order_by(preserved)
+        except Exception as exc:
+            logger.warning("Cohere rerank failed; using fallback order. Error: %s", exc)
+            return cls._fallback_rerank(chunks_list, top_k)
 
 
     @classmethod
