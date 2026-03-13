@@ -2,7 +2,83 @@
 
 set -e
 
+configure_mem0() {
+  if [ "${MEMORY_BACKEND:-local}" != "mem0" ]; then
+    return 0
+  fi
 
+  case "$(echo "${MEM0_AUTO_CONFIGURE:-1}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) ;;
+    *)
+      echo "MEM0_AUTO_CONFIGURE disabled; skipping Mem0 /configure"
+      return 0
+      ;;
+  esac
+
+  if [ -z "${MEM0_BASE_URL:-}" ]; then
+    echo "MEMORY_BACKEND=mem0 but MEM0_BASE_URL is not set; skipping Mem0 /configure"
+    return 0
+  fi
+
+  local base_url="${MEM0_BASE_URL%/}"
+  local llm_model="${MEM0_LLM_MODEL:-qwen3.5:4b-q8_0}"
+  local embed_model="${MEM0_EMBED_MODEL:-nomic-embed-text:latest}"
+  local ollama_url="${MEM0_OLLAMA_BASE_URL:-http://ollama:11434}"
+  local qdrant_host="${MEM0_QDRANT_HOST:-qdrant}"
+  local qdrant_port="${MEM0_QDRANT_PORT:-6333}"
+  local collection_name="${MEM0_COLLECTION_NAME:-mem0_768_v4}"
+  local embed_dims="${MEM0_EMBED_DIMS:-768}"
+
+  echo "Waiting for Mem0 API at ${base_url}..."
+  for i in $(seq 1 30); do
+    if curl -fsS --max-time 2 "${base_url}/docs" >/dev/null 2>&1 || curl -fsS --max-time 2 "${base_url}/openapi.json" >/dev/null 2>&1; then
+      break
+    fi
+    if [ "$i" -eq 30 ]; then
+      echo "Mem0 API not reachable after 30 attempts; continuing without auto-configure"
+      return 0
+    fi
+    sleep 2
+  done
+
+  local payload
+  payload=$(cat <<JSON
+{
+  "version": "v1.1",
+  "llm": {
+    "provider": "ollama",
+    "config": {
+      "model": "${llm_model}",
+      "ollama_base_url": "${ollama_url}",
+      "temperature": 0
+    }
+  },
+  "embedder": {
+    "provider": "ollama",
+    "config": {
+      "model": "${embed_model}",
+      "ollama_base_url": "${ollama_url}"
+    }
+  },
+  "vector_store": {
+    "provider": "qdrant",
+    "config": {
+      "host": "${qdrant_host}",
+      "port": ${qdrant_port},
+      "collection_name": "${collection_name}",
+      "embedding_model_dims": ${embed_dims}
+    }
+  }
+}
+JSON
+)
+
+  if curl -fsS --max-time 30 -X POST "${base_url}/configure" -H 'Content-Type: application/json' -d "${payload}" >/dev/null; then
+    echo "Mem0 configured successfully"
+  else
+    echo "Mem0 configure request failed; continuing startup"
+  fi
+}
 
 cd /app/react
 npm ci
@@ -16,6 +92,8 @@ npx tailwindcss -o /app/aquillm/aquillm/static/index.css
 cd /app/aquillm
 ./manage.py migrate --noinput
 ./manage.py collectstatic --noinput
+
+configure_mem0
 
 celery -A aquillm worker --loglevel=info &
 python -Xfrozen_modules=off manage.py runserver 0.0.0.0:${PORT:-8080}

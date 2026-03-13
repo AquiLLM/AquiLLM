@@ -20,6 +20,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     volumes:
       - .:/app
     healthcheck:

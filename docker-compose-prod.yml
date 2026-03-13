@@ -9,12 +9,9 @@ services:
     env_file:
       - .env
     environment:
-      - PORT=8080
-      - POSTGRES_HOST=db
-      - STORAGE_HOST=storage:9000
-      - STORAGE_ACCESS_KEY=dev
-      - STORAGE_SECRET_KEY=rickbailey
       - C_FORCE_ROOT=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
@@ -22,6 +19,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     volumes:
       - .:/app
     healthcheck:
@@ -108,6 +107,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
   createbuckets:
     image: minio/mc
     depends_on:
@@ -136,12 +144,20 @@ services:
       - .env
     environment:
       - OLLAMA_KEEP_ALIVE=-1
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD", "ollama --version && ollama ps || exit 1"]
+      test: ["CMD-SHELL", "ollama --version >/dev/null 2>&1 && ollama list >/dev/null 2>&1 || exit 1"]
       interval: 10s
-      start_period: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
 volumes:
   postgres_data:
   minio_data:
+  qdrant_data:
   certs:
+  ollama_data:

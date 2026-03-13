@@ -52,6 +52,14 @@ This assumes you have Docker and Docker Compose installed.
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
     - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, or `GEMINI`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
+    - Optional memory backend:
+      - `MEMORY_BACKEND=local` (default): AquiLLM pgvector memory tables
+      - `MEMORY_BACKEND=mem0`: Mem0 episodic memory retrieval/write with local fallback
+      - For self-hosted Mem0, set:
+        - `MEM0_BASE_URL=http://host.docker.internal:8888`
+        - `MEM0_OLLAMA_BASE_URL=http://aquillm-ollama-1:11434`
+        - `MEM0_QDRANT_HOST=qdrant`
+      - `dev/run.sh` will auto-call Mem0 `/configure` at startup when `MEMORY_BACKEND=mem0` and `MEM0_AUTO_CONFIGURE=1` (default)
 
 4.  **Build and run using Docker Compose:**
     ```bash
@@ -108,6 +116,14 @@ docker compose -f docker-compose-prod.yml --profile ollama up -d --force-recreat
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
     - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, or `GEMINI`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f docker-compose-prod.yml up` — a simple restart may not pick up the change.
+    - Optional memory backend:
+      - `MEMORY_BACKEND=local` (default): AquiLLM pgvector memory tables
+      - `MEMORY_BACKEND=mem0`: Mem0 episodic memory retrieval/write with local fallback
+      - For self-hosted Mem0, set:
+        - `MEM0_BASE_URL=http://host.docker.internal:8888`
+        - `MEM0_OLLAMA_BASE_URL=http://aquillm-ollama-1:11434`
+        - `MEM0_QDRANT_HOST=qdrant`
+      - `dev/run.sh` auto-configures Mem0 on startup when enabled
     - Optional: Google OAuth credentials (GOOGLE_OAUTH2_CLIENT_ID, GOOGLE_OAUTH2_CLIENT_SECRET)
     - Optional: Email access permissions (ALLOWED_EMAIL_DOMAINS, ALLOWED_EMAIL_ADDRESSES). Required if OAuth is to be used.
     - Set HOST_NAME for your domain or use 'localhost' for development
