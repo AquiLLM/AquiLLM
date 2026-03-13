@@ -484,9 +484,87 @@ def _extract_mem0_conversation_id(item) -> Optional[int]:
         return None
 
 
+def _parse_mem0_search_items(
+    raw_items, top_k: int, exclude_conversation_id: Optional[int]
+) -> list[RetrievedEpisodicMemory]:
+    parsed: list[RetrievedEpisodicMemory] = []
+    if not isinstance(raw_items, list):
+        return parsed
+    for item in raw_items:
+        content = _extract_mem0_content(item)
+        if not content:
+            continue
+        conv_id = _extract_mem0_conversation_id(item)
+        if exclude_conversation_id is not None and conv_id == exclude_conversation_id:
+            continue
+        parsed.append(RetrievedEpisodicMemory(content=content, conversation_id=conv_id))
+    return parsed[:top_k]
+
+
+def _search_mem0_via_oss(
+    user: User, query: str, top_k: int, exclude_conversation_id: Optional[int]
+) -> list[RetrievedEpisodicMemory]:
+    """
+    Query local/self-hosted Mem0 via OSS SDK first.
+    SDK signatures vary across versions, so we try several call shapes.
+    """
+    mem0 = _get_mem0_oss()
+    if mem0 is None:
+        return []
+
+    call_attempts = [
+        ((), {"query": query, "user_id": str(user.id), "limit": top_k}),
+        ((), {"query": query, "user_id": str(user.id), "top_k": top_k}),
+        ((), {"query": query, "user_id": str(user.id)}),
+        ((query,), {"user_id": str(user.id), "limit": top_k}),
+        ((query,), {"user_id": str(user.id)}),
+    ]
+
+    response = None
+    for args, kwargs in call_attempts:
+        try:
+            response = mem0.search(*args, **kwargs)  # type: ignore[attr-defined]
+            break
+        except TypeError:
+            # Signature mismatch on this attempt; try the next one.
+            continue
+        except Exception as exc:
+            logger.warning("Mem0 OSS search failed; falling back. Error: %s", exc)
+            return []
+
+    if response is None:
+        logger.warning("Mem0 OSS search call signature not supported; falling back.")
+        return []
+
+    if isinstance(response, dict):
+        raw_items = (
+            response.get("results")
+            or response.get("memories")
+            or response.get("data")
+            or response.get("items")
+            or []
+        )
+    elif isinstance(response, list):
+        raw_items = response
+    else:
+        raw_items = []
+
+    return _parse_mem0_search_items(
+        raw_items=raw_items,
+        top_k=top_k,
+        exclude_conversation_id=exclude_conversation_id,
+    )
+
+
 def _search_mem0_episodic_memories(
     user: User, query: str, top_k: int, exclude_conversation_id: Optional[int]
 ) -> list[RetrievedEpisodicMemory]:
+    oss_results = _search_mem0_via_oss(
+        user=user, query=query, top_k=top_k, exclude_conversation_id=exclude_conversation_id
+    )
+    if oss_results:
+        return oss_results
+
     rest_results = _search_mem0_via_rest(
         user=user, query=query, top_k=top_k, exclude_conversation_id=exclude_conversation_id
     )
@@ -511,16 +589,11 @@ def _search_mem0_episodic_memories(
         else:
             raw_items = []
 
-        parsed: list[RetrievedEpisodicMemory] = []
-        for item in raw_items:
-            content = _extract_mem0_content(item)
-            if not content:
-                continue
-            conv_id = _extract_mem0_conversation_id(item)
-            if exclude_conversation_id is not None and conv_id == exclude_conversation_id:
-                continue
-            parsed.append(RetrievedEpisodicMemory(content=content, conversation_id=conv_id))
-        return parsed[:top_k]
+        return _parse_mem0_search_items(
+            raw_items=raw_items,
+            top_k=top_k,
+            exclude_conversation_id=exclude_conversation_id,
+        )
     except Exception as exc:
         logger.warning("Mem0 search failed; falling back to local memory. Error: %s", exc)
         return []
