@@ -1,0 +1,6 @@
+FROM vllm/vllm-openai:latest
+
+COPY --chmod=755 ./deployment/vllm_start.sh /vllm_start.sh
+
+EXPOSE 8000
+ENTRYPOINT ["/vllm_start.sh"]

@@ -53,6 +53,15 @@ _MEM0_OSS = None
 _MEM0_OSS_INIT_ATTEMPTED = False
 
 
+def _normalize_openai_base_url(url: str) -> str:
+    base = (url or "").strip().rstrip("/")
+    if not base:
+        return "http://vllm:8000/v1"
+    if base.endswith("/v1"):
+        return base
+    return f"{base}/v1"
+
+
 @dataclass
 class RetrievedEpisodicMemory:
     content: str
@@ -96,22 +105,54 @@ def _get_mem0_oss():
     try:
         from mem0 import Memory  # type: ignore
 
+        llm_provider = getenv("MEM0_LLM_PROVIDER", "openai")
+        llm_model = getenv("MEM0_LLM_MODEL", getenv("VLLM_SERVED_MODEL_NAME", "qwen3.5:27b-q8_0"))
+        llm_base_url = _normalize_openai_base_url(
+            getenv(
+                "MEM0_LLM_BASE_URL",
+                getenv("MEM0_VLLM_BASE_URL", getenv("MEM0_OLLAMA_BASE_URL", "http://vllm:8000/v1")),
+            )
+        )
+        llm_api_key = getenv("MEM0_LLM_API_KEY", getenv("VLLM_API_KEY", "EMPTY"))
+
+        embed_provider = getenv("MEM0_EMBED_PROVIDER", "openai")
+        embed_model = getenv("MEM0_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+        embed_base_url = _normalize_openai_base_url(
+            getenv(
+                "MEM0_EMBED_BASE_URL",
+                getenv("MEM0_VLLM_BASE_URL", getenv("MEM0_OLLAMA_BASE_URL", "http://vllm:8000/v1")),
+            )
+        )
+        embed_api_key = getenv("MEM0_EMBED_API_KEY", getenv("VLLM_API_KEY", "EMPTY"))
+
+        llm_config = {
+            "model": llm_model,
+            "temperature": 0,
+        }
+        if llm_provider == "openai":
+            llm_config["openai_base_url"] = llm_base_url
+            llm_config["api_key"] = llm_api_key
+        else:
+            llm_config["ollama_base_url"] = llm_base_url
+
+        embed_config = {
+            "model": embed_model,
+        }
+        if embed_provider == "openai":
+            embed_config["openai_base_url"] = embed_base_url
+            embed_config["api_key"] = embed_api_key
+        else:
+            embed_config["ollama_base_url"] = embed_base_url
+
         config = {
             "version": "v1.1",
             "llm": {
-                "provider": "ollama",
-                "config": {
-                    "model": getenv("MEM0_LLM_MODEL", "qwen3.5:4b-q8_0"),
-                    "ollama_base_url": getenv("MEM0_OLLAMA_BASE_URL", "http://aquillm-ollama-1:11434"),
-                    "temperature": 0,
-                },
+                "provider": llm_provider,
+                "config": llm_config,
             },
             "embedder": {
-                "provider": "ollama",
-                "config": {
-                    "model": getenv("MEM0_EMBED_MODEL", "nomic-embed-text:latest"),
-                    "ollama_base_url": getenv("MEM0_OLLAMA_BASE_URL", "http://aquillm-ollama-1:11434"),
-                },
+                "provider": embed_provider,
+                "config": embed_config,
             },
             "vector_store": {
                 "provider": "qdrant",
@@ -245,8 +286,14 @@ def _extract_json_object(text: str) -> dict:
 
 def _extract_stable_facts(user_content: str, assistant_content: str) -> list[str]:
     """Extract durable memory facts locally so Mem0 write can skip server-side infer."""
-    base_url = getenv("MEM0_OLLAMA_BASE_URL", "http://aquillm-ollama-1:11434").rstrip("/")
-    model = getenv("MEM0_LLM_MODEL", "qwen3.5:4b-q8_0")
+    base_url = _normalize_openai_base_url(
+        getenv(
+            "MEM0_LLM_BASE_URL",
+            getenv("MEM0_VLLM_BASE_URL", getenv("MEM0_OLLAMA_BASE_URL", "http://vllm:8000/v1")),
+        )
+    ).rstrip("/")
+    model = getenv("MEM0_LLM_MODEL", getenv("VLLM_SERVED_MODEL_NAME", "qwen3.5:27b-q8_0"))
+    api_key = getenv("MEM0_LLM_API_KEY", getenv("VLLM_API_KEY", ""))
     prompt = (
         "Extract durable memory candidates from this turn. "
         "Include: (1) stable user-specific preferences/goals/background, "
@@ -259,28 +306,42 @@ def _extract_stable_facts(user_content: str, assistant_content: str) -> list[str
         "Do not include temporary one-off requests unless they are explicit long-term remember directives.\n\n"
         f"User: {user_content}\nAssistant: {assistant_content}"
     )
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         response = requests.post(
-            f"{base_url}/api/chat",
+            f"{base_url}/chat/completions",
+            headers=headers,
             json={
                 "model": model,
-                "stream": False,
-                "messages": [{"role": "user", "content": prompt}],
-                "format": {
-                    "type": "object",
-                    "properties": {
-                        "facts": {"type": "array", "items": {"type": "string"}},
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            'Return STRICT JSON only in the form {"facts":["..."]}. '
+                            'If none exist, return {"facts":[]}.'
+                        ),
                     },
-                    "required": ["facts"],
-                },
-                "options": {"temperature": 0},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0,
+                "stream": False,
             },
             timeout=MEM0_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         raw_payload = response.json()
         payload = raw_payload if isinstance(raw_payload, dict) else {}
-        content = payload.get("message", {}).get("content", "") if isinstance(payload, dict) else ""
+        content = ""
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices:
+            first_choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = first_choice.get("message") if isinstance(first_choice, dict) else {}
+            if isinstance(message, dict):
+                value = message.get("content")
+                if isinstance(value, str):
+                    content = value
         obj = _extract_json_object(content)
         facts = obj.get("facts", [])
         out: list[str] = []

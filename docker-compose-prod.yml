@@ -127,10 +127,10 @@ services:
       /usr/bin/mc mb aquillm/aquillm;
       exit 0;"
   
-  ollama:
+  vllm:
     build:
       context: .
-      dockerfile: Dockerfile.ollama
+      dockerfile: Dockerfile.vllm
     deploy:
       resources:
         reservations:
@@ -139,17 +139,19 @@ services:
               driver: nvidia
     restart: unless-stopped
     profiles:
-      - ollama
+      - vllm
     env_file:
       - .env
     environment:
-      - OLLAMA_KEEP_ALIVE=-1
+      - VLLM_HOST=0.0.0.0
+      - VLLM_PORT=8000
+      - VLLM_TENSOR_PARALLEL_SIZE=1
     ports:
-      - "11434:11434"
+      - "8000:8000"
     volumes:
-      - ollama_data:/root/.ollama
+      - vllm_data:/root/.cache/huggingface
     healthcheck:
-      test: ["CMD-SHELL", "ollama --version >/dev/null 2>&1 && ollama list >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 10
@@ -160,4 +162,4 @@ volumes:
   minio_data:
   qdrant_data:
   certs:
-  ollama_data:
+  vllm_data:

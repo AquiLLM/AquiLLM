@@ -2,6 +2,18 @@
 
 set -e
 
+normalize_openai_base_url() {
+  local base="${1%/}"
+  if [ -z "${base}" ]; then
+    echo "http://vllm:8000/v1"
+    return
+  fi
+  case "${base}" in
+    */v1) echo "${base}" ;;
+    *) echo "${base}/v1" ;;
+  esac
+}
+
 configure_mem0() {
   if [ "${MEMORY_BACKEND:-local}" != "mem0" ]; then
     return 0
@@ -21,9 +33,18 @@ configure_mem0() {
   fi
 
   local base_url="${MEM0_BASE_URL%/}"
-  local llm_model="${MEM0_LLM_MODEL:-qwen3.5:4b-q8_0}"
-  local embed_model="${MEM0_EMBED_MODEL:-nomic-embed-text:latest}"
-  local ollama_url="${MEM0_OLLAMA_BASE_URL:-http://ollama:11434}"
+  local llm_provider="${MEM0_LLM_PROVIDER:-openai}"
+  local llm_model="${MEM0_LLM_MODEL:-${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b-q8_0}}"
+  local llm_base_url_raw="${MEM0_LLM_BASE_URL:-${MEM0_VLLM_BASE_URL:-${MEM0_OLLAMA_BASE_URL:-http://vllm:8000/v1}}}"
+  local llm_base_url
+  llm_base_url="$(normalize_openai_base_url "${llm_base_url_raw}")"
+  local llm_api_key="${MEM0_LLM_API_KEY:-${VLLM_API_KEY:-EMPTY}}"
+  local embed_provider="${MEM0_EMBED_PROVIDER:-openai}"
+  local embed_model="${MEM0_EMBED_MODEL:-nomic-ai/nomic-embed-text-v1.5}"
+  local embed_base_url_raw="${MEM0_EMBED_BASE_URL:-${MEM0_VLLM_BASE_URL:-${MEM0_OLLAMA_BASE_URL:-http://vllm:8000/v1}}}"
+  local embed_base_url
+  embed_base_url="$(normalize_openai_base_url "${embed_base_url_raw}")"
+  local embed_api_key="${MEM0_EMBED_API_KEY:-${VLLM_API_KEY:-EMPTY}}"
   local qdrant_host="${MEM0_QDRANT_HOST:-qdrant}"
   local qdrant_port="${MEM0_QDRANT_PORT:-6333}"
   local collection_name="${MEM0_COLLECTION_NAME:-mem0_768_v4}"
@@ -46,18 +67,20 @@ configure_mem0() {
 {
   "version": "v1.1",
   "llm": {
-    "provider": "ollama",
+    "provider": "${llm_provider}",
     "config": {
       "model": "${llm_model}",
-      "ollama_base_url": "${ollama_url}",
+      "openai_base_url": "${llm_base_url}",
+      "api_key": "${llm_api_key}",
       "temperature": 0
     }
   },
   "embedder": {
-    "provider": "ollama",
+    "provider": "${embed_provider}",
     "config": {
       "model": "${embed_model}",
-      "ollama_base_url": "${ollama_url}"
+      "openai_base_url": "${embed_base_url}",
+      "api_key": "${embed_api_key}"
     }
   },
   "vector_store": {

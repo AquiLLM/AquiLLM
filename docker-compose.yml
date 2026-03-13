@@ -93,10 +93,10 @@ services:
       retries: 5
       start_period: 20s
 
-  ollama:
+  vllm:
     build:
       context: .
-      dockerfile: Dockerfile.ollama
+      dockerfile: Dockerfile.vllm
     deploy:
       resources:
         reservations:
@@ -105,17 +105,26 @@ services:
               driver: nvidia
     restart: unless-stopped
     profiles:
-      - ollama
+      - vllm
     env_file:
       - .env
     environment:
-      - OLLAMA_KEEP_ALIVE=-1
+      - VLLM_HOST=0.0.0.0
+      - VLLM_PORT=8000
+      - VLLM_TENSOR_PARALLEL_SIZE=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - vllm_data:/root/.cache/huggingface
     healthcheck:
-      test: ["CMD", "ollama --version && ollama ps || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
-      start_period: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
 
 volumes:
   postgres_data:
   minio_data:
+  vllm_data:

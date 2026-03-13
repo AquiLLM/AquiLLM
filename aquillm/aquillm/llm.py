@@ -509,14 +509,14 @@ class OpenAIInterface(LLMInterface):
                 + system_text
             )
 
-        # Compatibility: many OpenAI-compatible local servers (including Ollama routes)
+        # Compatibility: many OpenAI-compatible local servers (including vLLM/Ollama)
         # reliably honor "system" but may ignore newer "developer" role semantics.
         configured_role = getenv("OPENAI_SYSTEM_ROLE", "").strip().lower()
         if configured_role in ("system", "developer"):
             system_role = configured_role
         else:
             base_url = str(getattr(self.client, "base_url", "") or "").lower()
-            system_role = "system" if ("ollama" in base_url or "11434" in base_url) else "developer"
+            system_role = "system" if any(token in base_url for token in ("ollama", "vllm", "11434", "8000")) else "developer"
 
         arguments = {
             "model": self.base_args['model'],

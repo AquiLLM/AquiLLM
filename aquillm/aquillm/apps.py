@@ -86,6 +86,11 @@ class AquillmConfig(AppConfig):
         self.google_genai_client = google_genai.Client(api_key=getenv('GEMINI_API_KEY'))  # Gemini API client, initialized at startup regardless of LLM_CHOICE so it's available even when not the primary LLM
         self.get_embedding = get_embedding_func(self.cohere_client)
         llm_choice = getenv('LLM_CHOICE', self.default_llm)
+        local_base_url = getenv('VLLM_BASE_URL', 'http://vllm:8000/v1').rstrip('/')
+        if not local_base_url.endswith('/v1'):
+            local_base_url = f"{local_base_url}/v1"
+        local_base_url = local_base_url + '/'
+        local_api_key = getenv('VLLM_API_KEY', 'EMPTY')
         if llm_choice == 'CLAUDE':
             self.llm_interface = ClaudeInterface(self.async_anthropic_client)
         elif llm_choice == 'OPENAI':
@@ -93,15 +98,15 @@ class AquillmConfig(AppConfig):
         elif llm_choice == 'BEDROCK-CLAUDE':
             self.llm_interface = ClaudeInterface(self.async_anthropic_bedrock_client, model_override='arn:aws:bedrock:us-east-1:744423739991:inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0')
         elif llm_choice == 'GEMMA3':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "ebdm/gemma3-enhanced:12b")
+            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key), "ebdm/gemma3-enhanced:12b")
         elif llm_choice == 'LLAMA3.2':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "llama3.2")
+            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key), "llama3.2")
         elif llm_choice == 'GPT-OSS':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "gpt-oss:120b")
+            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key), "gpt-oss:120b")
         elif llm_choice == 'GEMINI':  # set LLM_CHOICE=GEMINI in .env to use Google Gemini as the chat backend
             self.llm_interface = GeminiInterface(self.google_genai_client, model='gemini-2.5-flash')  # gemini-2.5-flash is the faster/cheaper variant; swap model= here to use gemini-2.5-pro etc.
         elif llm_choice == 'QWEN3_30B':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "qwen3.5:27b-q8_0")
+            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key), "qwen3.5:27b-q8_0")
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 
