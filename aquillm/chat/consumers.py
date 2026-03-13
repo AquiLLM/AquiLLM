@@ -395,15 +395,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
         logger.debug(f"User: {self.user}")
         await self.__get_all_user_collections()
         logger.debug(f"Collections loaded: {self.col_ref.collections}")
-        self.tools = [
-                      get_vector_search_func(self.user, self.col_ref),
-                      get_more_context_func(self.user),
-                      get_document_ids_func(self.user, self.col_ref),
-                      get_whole_document_func(self.user, ChatRef(self)),
-                      get_search_single_document_func(self.user),
-                      get_sky_subtraction_func(self),
-                      get_flat_fielding_func(self),
-                      get_point_source_detection_func(self)]
+        self.doc_tools = [
+            get_vector_search_func(self.user, self.col_ref),
+            get_more_context_func(self.user),
+            get_document_ids_func(self.user, self.col_ref),
+            get_whole_document_func(self.user, ChatRef(self)),
+            get_search_single_document_func(self.user),
+        ]
+        self.tools = self.doc_tools + [
+            get_sky_subtraction_func(self),
+            get_flat_fielding_func(self),
+            get_point_source_detection_func(self),
+        ]
         if getenv('LLM_CHOICE') == 'GEMMA3':
             self.tools.append(message_to_user)
         if DEBUG:
@@ -472,7 +475,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             assert self.convo is not None
 
-            self.col_ref.collections = data['collections']
+            selected_collections = data['collections']
+            self.col_ref.collections = selected_collections
             self.convo += UserMessage.model_validate(data['message'])
             if 'files' in data:
                 files = [ConversationFile(
@@ -481,7 +485,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             conversation=self.db_convo, name=file['filename'][-200:],
                             message_uuid=self.convo[-1].message_uuid) for file in data['files']]
                 await _save_files(files)
-            self.convo[-1].tools = self.tools
+            # If no collections are selected, hide document/vector tools to avoid
+            # pointless tool loops that only return "no documents selected".
+            active_tools = (
+                self.tools
+                if selected_collections
+                else [tool for tool in self.tools if tool not in self.doc_tools]
+            )
+            self.convo[-1].tools = active_tools
             self.convo[-1].files = [(file.name, file.id) for file in files]
             self.convo[-1].tool_choice = ToolChoice(type='auto')
             await self.__save(create_memories=False)
