@@ -498,6 +498,7 @@ class OpenAIInterface(LLMInterface):
         kwargs.pop('thinking_budget', None)  # Gemini-only concept, ignored here
         system_text = kwargs.pop('system')
         message_list = kwargs.pop('messages')
+        max_tokens = kwargs.pop('max_tokens')
 
         # If memory context is present, strongly steer away from generic "no memory"
         # disclaimers and force use of retrieved facts when relevant.
@@ -520,7 +521,8 @@ class OpenAIInterface(LLMInterface):
 
         arguments = {
             "model": self.base_args['model'],
-            "messages": [{"role": system_role, "content": system_text}] + message_list
+            "messages": [{"role": system_role, "content": system_text}] + message_list,
+            "max_tokens": max_tokens,
         }
 
         # Only add tools if they're provided
