@@ -28,7 +28,26 @@ IFS='|' read -r MODEL_TO_SERVE SERVED_MODEL_NAME <<< "$(select_model_and_alias)"
 HOST="${VLLM_HOST:-0.0.0.0}"
 PORT="${VLLM_PORT:-8000}"
 
-cmd=(python -m vllm.entrypoints.openai.api_server
+detect_python_bin() {
+  if [ -n "${VLLM_PYTHON_BIN:-}" ] && command -v "${VLLM_PYTHON_BIN}" >/dev/null 2>&1; then
+    echo "${VLLM_PYTHON_BIN}"
+    return 0
+  fi
+  for candidate in python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ! PYTHON_BIN="$(detect_python_bin)"; then
+  echo "ERROR: No python interpreter found in container PATH (tried python3/python)." >&2
+  exit 127
+fi
+
+cmd=("${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --host "${HOST}"
   --port "${PORT}"
   --model "${MODEL_TO_SERVE}"
