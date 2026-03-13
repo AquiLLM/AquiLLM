@@ -53,6 +53,7 @@ This assumes you have Docker and Docker Compose installed.
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
     - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
     - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_mem0` (Mem0 LLM), and `vllm_embed` (Mem0 embeddings).
+    - GGUF note: set model as `repo:filename.gguf` (or `repo:filename`); startup resolves and downloads this to a local path before launching vLLM.
     - Optional memory backend:
       - `MEMORY_BACKEND=local` (default): AquiLLM pgvector memory tables
       - `MEMORY_BACKEND=mem0`: Mem0 episodic memory retrieval/write with local fallback
@@ -119,6 +120,7 @@ docker compose -f docker-compose-prod.yml --profile vllm up -d --force-recreate 
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
     - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f docker-compose-prod.yml up` — a simple restart may not pick up the change.
     - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_mem0` (Mem0 LLM), and `vllm_embed` (Mem0 embeddings).
+    - GGUF note: set model as `repo:filename.gguf` (or `repo:filename`); startup resolves and downloads this to a local path before launching vLLM.
     - Optional memory backend:
       - `MEMORY_BACKEND=local` (default): AquiLLM pgvector memory tables
       - `MEMORY_BACKEND=mem0`: Mem0 episodic memory retrieval/write with local fallback

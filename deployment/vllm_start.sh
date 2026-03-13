@@ -47,6 +47,36 @@ if ! PYTHON_BIN="$(detect_python_bin)"; then
   exit 127
 fi
 
+supports_arg() {
+  local arg_name="$1"
+  "${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server --help 2>&1 | grep -q -- "${arg_name}"
+}
+
+resolve_gguf_model_path() {
+  local spec="$1"
+  if [[ "${spec}" == */*:* && "${spec}" != /* ]]; then
+    local repo_id="${spec%%:*}"
+    local filename="${spec#*:}"
+    if [[ "${filename}" != *.gguf ]]; then
+      filename="${filename}.gguf"
+    fi
+    local dl_dir="${VLLM_DOWNLOAD_DIR:-/root/.cache/huggingface/gguf}"
+    mkdir -p "${dl_dir}"
+    echo "Downloading GGUF file '${filename}' from '${repo_id}' into '${dl_dir}'..." >&2
+    "${PYTHON_BIN}" - "${repo_id}" "${filename}" "${dl_dir}" <<'PY'
+from huggingface_hub import hf_hub_download
+import sys
+repo_id, filename, cache_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+local_path = hf_hub_download(repo_id=repo_id, filename=filename, cache_dir=cache_dir)
+print(local_path)
+PY
+    return 0
+  fi
+  echo "${spec}"
+}
+
+MODEL_TO_SERVE="$(resolve_gguf_model_path "${MODEL_TO_SERVE}")"
+
 cmd=("${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --host "${HOST}"
   --port "${PORT}"
@@ -74,12 +104,20 @@ if [ -n "${VLLM_DTYPE:-}" ]; then
   cmd+=(--dtype "${VLLM_DTYPE}")
 fi
 
-if [ -n "${VLLM_TASK:-}" ]; then
+if [ -n "${VLLM_RUNNER:-}" ] && supports_arg "--runner"; then
+  cmd+=(--runner "${VLLM_RUNNER}")
+fi
+
+if [ -n "${VLLM_TASK:-}" ] && supports_arg "--task"; then
   cmd+=(--task "${VLLM_TASK}")
 fi
 
 if [ -n "${VLLM_DOWNLOAD_DIR:-}" ]; then
   cmd+=(--download-dir "${VLLM_DOWNLOAD_DIR}")
+fi
+
+if [ -n "${VLLM_TOKENIZER:-}" ]; then
+  cmd+=(--tokenizer "${VLLM_TOKENIZER}")
 fi
 
 if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then

@@ -220,7 +220,7 @@ services:
       - VLLM_PORT=8000
       - VLLM_MODEL=${MEM0_EMBED_VLLM_MODEL:-nomic-ai/nomic-embed-text-v1.5}
       - VLLM_SERVED_MODEL_NAME=${MEM0_EMBED_MODEL:-nomic-ai/nomic-embed-text-v1.5}
-      - VLLM_TASK=embed
+      - VLLM_RUNNER=pooling
       - VLLM_TENSOR_PARALLEL_SIZE=${MEM0_EMBED_TENSOR_PARALLEL_SIZE:-1}
       - VLLM_GPU_MEMORY_UTILIZATION=${MEM0_EMBED_GPU_MEMORY_UTILIZATION:-0.2}
       - NVIDIA_VISIBLE_DEVICES=all
