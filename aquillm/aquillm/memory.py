@@ -144,6 +144,22 @@ def _get_mem0_oss():
         else:
             embed_config["ollama_base_url"] = embed_base_url
 
+        vector_store_config = {
+            "host": getenv("MEM0_QDRANT_HOST", "qdrant"),
+            "port": int(getenv("MEM0_QDRANT_PORT", "6333")),
+            "collection_name": getenv("MEM0_COLLECTION_NAME", "mem0_768_v4"),
+        }
+        # Optional: only set embedding dims when explicitly requested.
+        # Some OpenAI-compatible embedding backends reject forced dimensions.
+        embed_dims_raw = getenv("MEM0_EMBED_DIMS", "").strip()
+        if embed_dims_raw:
+            try:
+                embed_dims = int(embed_dims_raw)
+                if embed_dims > 0:
+                    vector_store_config["embedding_model_dims"] = embed_dims
+            except Exception:
+                logger.warning("Invalid MEM0_EMBED_DIMS=%r; ignoring.", embed_dims_raw)
+
         config = {
             "version": "v1.1",
             "llm": {
@@ -156,12 +172,7 @@ def _get_mem0_oss():
             },
             "vector_store": {
                 "provider": "qdrant",
-                "config": {
-                    "host": getenv("MEM0_QDRANT_HOST", "qdrant"),
-                    "port": int(getenv("MEM0_QDRANT_PORT", "6333")),
-                    "collection_name": getenv("MEM0_COLLECTION_NAME", "mem0_768_v4"),
-                    "embedding_model_dims": int(getenv("MEM0_EMBED_DIMS", "768")),
-                },
+                "config": vector_store_config,
             },
         }
         _MEM0_OSS = Memory.from_config(config)  # type: ignore[attr-defined]
@@ -730,14 +741,11 @@ def format_memories_for_system(profile_facts, episodic_memories) -> str:
 
 
 def get_last_user_message_text(convo: 'Conversation') -> str:
-    """Get the content of the most recent user message (or user-facing tool result) for use as retrieval query."""
-    from .llm import UserMessage, ToolMessage
+    """Get the content of the most recent user message for use as retrieval query."""
+    from .llm import UserMessage
 
     for msg in reversed(convo.messages):
         if isinstance(msg, UserMessage):
-            return msg.content or ""
-        if isinstance(msg, ToolMessage) and msg.for_whom == 'assistant':
-            # Tool result going to the model — still part of "user" context; use as query
             return msg.content or ""
     return ""
 
