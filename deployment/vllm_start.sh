@@ -56,26 +56,105 @@ resolve_gguf_model_path() {
   local spec="$1"
   if [[ "${spec}" == */*:* && "${spec}" != /* ]]; then
     local repo_id="${spec%%:*}"
-    local filename="${spec#*:}"
-    if [[ "${filename}" != *.gguf ]]; then
-      filename="${filename}.gguf"
+    local selector="${spec#*:}"
+    if [ -z "${selector}" ]; then
+      echo "ERROR: Invalid GGUF model spec '${spec}' (missing filename or selector after ':')." >&2
+      return 1
     fi
     local dl_dir="${VLLM_DOWNLOAD_DIR:-/root/.cache/huggingface/gguf}"
     mkdir -p "${dl_dir}"
-    echo "Downloading GGUF file '${filename}' from '${repo_id}' into '${dl_dir}'..." >&2
-    "${PYTHON_BIN}" - "${repo_id}" "${filename}" "${dl_dir}" <<'PY'
-from huggingface_hub import hf_hub_download
+    echo "Resolving GGUF selector '${selector}' from '${repo_id}'..." >&2
+    local local_path
+    if ! local_path="$("${PYTHON_BIN}" - "${repo_id}" "${selector}" "${dl_dir}" <<'PY'
+from huggingface_hub import hf_hub_download, list_repo_files
+import os
 import sys
-repo_id, filename, cache_dir = sys.argv[1], sys.argv[2], sys.argv[3]
-local_path = hf_hub_download(repo_id=repo_id, filename=filename, cache_dir=cache_dir)
+
+repo_id, selector, cache_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+selector_lc = selector.lower().strip()
+selector_no_ext = selector_lc[:-5] if selector_lc.endswith(".gguf") else selector_lc
+
+def normalize(s: str) -> str:
+    return "".join(ch for ch in s.lower() if ch.isalnum())
+
+selector_norm = normalize(selector_no_ext)
+
+repo_files = list_repo_files(repo_id=repo_id, repo_type="model")
+gguf_files = [f for f in repo_files if f.lower().endswith(".gguf")]
+if not gguf_files:
+    raise RuntimeError(f"No .gguf files found in repo '{repo_id}'")
+
+target = None
+
+# 1) Exact path match (case-insensitive), with and without .gguf suffix.
+exact_candidates = [selector_lc]
+if not selector_lc.endswith(".gguf"):
+    exact_candidates.insert(0, f"{selector_lc}.gguf")
+for candidate in exact_candidates:
+    for f in gguf_files:
+        if f.lower() == candidate:
+            target = f
+            break
+    if target:
+        break
+
+# 2) Exact basename match.
+if target is None:
+    wanted = f"{selector_no_ext}.gguf"
+    base_matches = [f for f in gguf_files if os.path.basename(f).lower() == wanted]
+    if len(base_matches) == 1:
+        target = base_matches[0]
+
+# 3) Token match anywhere in basename/path.
+if target is None:
+    token_matches = [
+        f for f in gguf_files
+        if (
+            selector_no_ext in os.path.basename(f).lower()
+            or selector_no_ext in f.lower()
+            or selector_norm in normalize(os.path.basename(f))
+            or selector_norm in normalize(f)
+        )
+    ]
+    if len(token_matches) == 1:
+        target = token_matches[0]
+    elif len(token_matches) > 1:
+        # Prefer shortest filename as a deterministic tie-breaker.
+        token_matches = sorted(token_matches, key=lambda x: (len(os.path.basename(x)), len(x), x))
+        target = token_matches[0]
+        print(
+            f"WARNING: selector '{selector}' matched multiple GGUF files; using '{target}'.",
+            file=sys.stderr,
+        )
+
+if target is None:
+    sample = ", ".join(sorted(os.path.basename(f) for f in gguf_files)[:12])
+    raise RuntimeError(
+        f"Could not resolve GGUF selector '{selector}' in repo '{repo_id}'. "
+        f"Example available files: {sample}"
+    )
+
+print(f"Downloading GGUF file '{target}' from '{repo_id}' into '{cache_dir}'...", file=sys.stderr)
+local_path = hf_hub_download(repo_id=repo_id, filename=target, cache_dir=cache_dir)
 print(local_path)
 PY
+    )"; then
+      echo "ERROR: Failed to resolve/download GGUF selector '${selector}' from '${repo_id}'." >&2
+      return 1
+    fi
+    if [ -z "${local_path}" ]; then
+      echo "ERROR: GGUF download returned empty path for '${repo_id}:${selector}'." >&2
+      return 1
+    fi
+    echo "${local_path}"
     return 0
   fi
   echo "${spec}"
 }
 
-MODEL_TO_SERVE="$(resolve_gguf_model_path "${MODEL_TO_SERVE}")"
+if ! MODEL_TO_SERVE="$(resolve_gguf_model_path "${MODEL_TO_SERVE}")"; then
+  exit 1
+fi
 
 cmd=("${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --host "${HOST}"
@@ -120,11 +199,36 @@ if [ -n "${VLLM_TOKENIZER:-}" ]; then
   cmd+=(--tokenizer "${VLLM_TOKENIZER}")
 fi
 
+if [ "${VLLM_TRUST_REMOTE_CODE:-0}" = "1" ] || [ "${VLLM_TRUST_REMOTE_CODE:-}" = "true" ] || [ "${VLLM_TRUST_REMOTE_CODE:-}" = "TRUE" ]; then
+  if supports_arg "--trust-remote-code"; then
+    cmd+=(--trust-remote-code)
+  fi
+fi
+
 if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
   # shellcheck disable=SC2206
   extra_args=( ${VLLM_EXTRA_ARGS} )
   cmd+=("${extra_args[@]}")
 fi
+
+# Avoid vLLM env validation warnings for wrapper-only variables.
+unset \
+  VLLM_HOST \
+  VLLM_PORT \
+  VLLM_MODEL \
+  VLLM_SERVED_MODEL_NAME \
+  VLLM_TENSOR_PARALLEL_SIZE \
+  VLLM_GPU_MEMORY_UTILIZATION \
+  VLLM_MAX_MODEL_LEN \
+  VLLM_DTYPE \
+  VLLM_RUNNER \
+  VLLM_TASK \
+  VLLM_DOWNLOAD_DIR \
+  VLLM_TOKENIZER \
+  VLLM_TRUST_REMOTE_CODE \
+  VLLM_EXTRA_ARGS \
+  VLLM_PYTHON_BIN \
+  VLLM_BASE_URL || true
 
 echo "Starting vLLM with model='${MODEL_TO_SERVE}' served_as='${SERVED_MODEL_NAME}' on ${HOST}:${PORT}"
 exec "${cmd[@]}"
