@@ -52,13 +52,14 @@ This assumes you have Docker and Docker Compose installed.
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
     - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
-    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose.
+    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_mem0` (Mem0 LLM), and `vllm_embed` (Mem0 embeddings).
     - Optional memory backend:
       - `MEMORY_BACKEND=local` (default): AquiLLM pgvector memory tables
       - `MEMORY_BACKEND=mem0`: Mem0 episodic memory retrieval/write with local fallback
       - For self-hosted Mem0, set:
         - `MEM0_BASE_URL=http://host.docker.internal:8888`
-        - `MEM0_VLLM_BASE_URL=http://vllm:8000/v1`
+        - `MEM0_LLM_BASE_URL=http://host.docker.internal:8001/v1`
+        - `MEM0_EMBED_BASE_URL=http://host.docker.internal:8002/v1`
         - `MEM0_QDRANT_HOST=qdrant`
       - `dev/run.sh` will auto-call Mem0 `/configure` at startup when `MEMORY_BACKEND=mem0` and `MEM0_AUTO_CONFIGURE=1` (default)
 
@@ -99,7 +100,7 @@ docker compose -f docker-compose-prod.yml down && docker compose -f docker-compo
 
 If vLLM is used and needs to be recreated:
 ```bash
-docker compose -f docker-compose-prod.yml --profile vllm up -d --force-recreate vllm
+docker compose -f docker-compose-prod.yml --profile vllm up -d --force-recreate vllm vllm_mem0 vllm_embed
 ```
 
 ## Small-scale deployment:
@@ -117,13 +118,14 @@ docker compose -f docker-compose-prod.yml --profile vllm up -d --force-recreate 
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
     - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f docker-compose-prod.yml up` — a simple restart may not pick up the change.
-    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose.
+    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_mem0` (Mem0 LLM), and `vllm_embed` (Mem0 embeddings).
     - Optional memory backend:
       - `MEMORY_BACKEND=local` (default): AquiLLM pgvector memory tables
       - `MEMORY_BACKEND=mem0`: Mem0 episodic memory retrieval/write with local fallback
       - For self-hosted Mem0, set:
         - `MEM0_BASE_URL=http://host.docker.internal:8888`
-        - `MEM0_VLLM_BASE_URL=http://vllm:8000/v1`
+        - `MEM0_LLM_BASE_URL=http://host.docker.internal:8001/v1`
+        - `MEM0_EMBED_BASE_URL=http://host.docker.internal:8002/v1`
         - `MEM0_QDRANT_HOST=qdrant`
       - `dev/run.sh` auto-configures Mem0 on startup when enabled
     - Optional: Google OAuth credentials (GOOGLE_OAUTH2_CLIENT_ID, GOOGLE_OAUTH2_CLIENT_SECRET)

@@ -55,6 +55,14 @@ if [ -n "${VLLM_DTYPE:-}" ]; then
   cmd+=(--dtype "${VLLM_DTYPE}")
 fi
 
+if [ -n "${VLLM_TASK:-}" ]; then
+  cmd+=(--task "${VLLM_TASK}")
+fi
+
+if [ -n "${VLLM_DOWNLOAD_DIR:-}" ]; then
+  cmd+=(--download-dir "${VLLM_DOWNLOAD_DIR}")
+fi
+
 if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
   # shellcheck disable=SC2206
   extra_args=( ${VLLM_EXTRA_ARGS} )

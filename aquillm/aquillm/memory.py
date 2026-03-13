@@ -106,7 +106,7 @@ def _get_mem0_oss():
         from mem0 import Memory  # type: ignore
 
         llm_provider = getenv("MEM0_LLM_PROVIDER", "openai")
-        llm_model = getenv("MEM0_LLM_MODEL", getenv("VLLM_SERVED_MODEL_NAME", "qwen3.5:27b-q8_0"))
+        llm_model = getenv("MEM0_LLM_MODEL", "qwen3.5:4b-q8_0")
         llm_base_url = _normalize_openai_base_url(
             getenv(
                 "MEM0_LLM_BASE_URL",
@@ -292,7 +292,7 @@ def _extract_stable_facts(user_content: str, assistant_content: str) -> list[str
             getenv("MEM0_VLLM_BASE_URL", getenv("MEM0_OLLAMA_BASE_URL", "http://vllm:8000/v1")),
         )
     ).rstrip("/")
-    model = getenv("MEM0_LLM_MODEL", getenv("VLLM_SERVED_MODEL_NAME", "qwen3.5:27b-q8_0"))
+    model = getenv("MEM0_LLM_MODEL", "qwen3.5:4b-q8_0")
     api_key = getenv("MEM0_LLM_API_KEY", getenv("VLLM_API_KEY", ""))
     prompt = (
         "Extract durable memory candidates from this turn. "

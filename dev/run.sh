@@ -34,7 +34,7 @@ configure_mem0() {
 
   local base_url="${MEM0_BASE_URL%/}"
   local llm_provider="${MEM0_LLM_PROVIDER:-openai}"
-  local llm_model="${MEM0_LLM_MODEL:-${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b-q8_0}}"
+  local llm_model="${MEM0_LLM_MODEL:-qwen3.5:4b-q8_0}"
   local llm_base_url_raw="${MEM0_LLM_BASE_URL:-${MEM0_VLLM_BASE_URL:-${MEM0_OLLAMA_BASE_URL:-http://vllm:8000/v1}}}"
   local llm_base_url
   llm_base_url="$(normalize_openai_base_url "${llm_base_url_raw}")"
