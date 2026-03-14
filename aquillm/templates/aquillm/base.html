@@ -268,6 +268,7 @@
     const conversationDropdown = document.getElementById("conversation-dropdown");
     const dropdownIndicator = document.getElementById("dropdown-indicator");
     const conversationDropdownButton = document.getElementById("conversation-dropdown-btn");
+    const floatingLogo = document.getElementById("floating-logo");
 
     var searchInput = document.getElementById("conversation-search");
 
@@ -303,6 +304,28 @@
         // Save the sidebar and conversation dropdown state in localStorage
         localStorage.setItem("sidebarClosed", sidebar.classList.contains("ml-[-260px]"));
     });
+
+    // Reopen sidebar/nav when the floating logo is clicked while collapsed.
+    if (floatingLogo) {
+        floatingLogo.addEventListener("click", function(e) {
+            if (!sidebar.classList.contains("ml-[-260px]")) {
+                return;
+            }
+            e.preventDefault();
+            const mainNav = document.getElementById("main-nav");
+            sidebar.classList.remove("ml-[-260px]");
+            mainNav.classList.remove("mt-[-80px]", "h-0", "overflow-hidden");
+            floatingLogo.classList.add("hidden");
+
+            menuToggle.style.transform = "translateX(0px)";
+            menuToggle.classList.remove("bg-accent");
+            menuToggle.classList.remove("pl-[24px]");
+            menuToggle.classList.remove("hover:bg-accent-light");
+            menuToggle.classList.add("hover:bg-scheme-shade_5");
+
+            localStorage.setItem("sidebarClosed", "false");
+        });
+    }
 
     function calculateDropdownHeight() {
         const computedStyle = window.getComputedStyle(conversationDropdown);
