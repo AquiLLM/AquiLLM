@@ -6,6 +6,8 @@ from django.apps import apps
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
+_LOCAL_OPENAI_CLIENT: OpenAI | None = None
+_LOCAL_OPENAI_CLIENT_CFG: tuple[str, str] | None = None
 
 
 def _fit_embedding_dims(embedding: list[float]) -> list[float]:
@@ -65,12 +67,33 @@ def _get_local_embed_config() -> tuple[str, str, str]:
 
 def _get_embedding_via_local_openai(query: str) -> list[float]:
     base_url, api_key, model = _get_local_embed_config()
-    client = OpenAI(base_url=base_url, api_key=api_key)
+    client = _get_local_openai_client(base_url, api_key)
     response = client.embeddings.create(
         model=model,
         input=query,
     )
     return response.data[0].embedding
+
+
+def _get_embeddings_via_local_openai(queries: list[str]) -> list[list[float]]:
+    if not queries:
+        return []
+    base_url, api_key, model = _get_local_embed_config()
+    client = _get_local_openai_client(base_url, api_key)
+    response = client.embeddings.create(
+        model=model,
+        input=queries,
+    )
+    return [item.embedding for item in response.data]
+
+
+def _get_local_openai_client(base_url: str, api_key: str) -> OpenAI:
+    global _LOCAL_OPENAI_CLIENT, _LOCAL_OPENAI_CLIENT_CFG
+    cfg = (base_url, api_key)
+    if _LOCAL_OPENAI_CLIENT is None or _LOCAL_OPENAI_CLIENT_CFG != cfg:
+        _LOCAL_OPENAI_CLIENT = OpenAI(base_url=base_url, api_key=api_key)
+        _LOCAL_OPENAI_CLIENT_CFG = cfg
+    return _LOCAL_OPENAI_CLIENT
 
 
 def _get_embedding_via_cohere(query: str, input_type: str) -> list[float]:
@@ -83,6 +106,20 @@ def _get_embedding_via_cohere(query: str, input_type: str) -> list[float]:
         input_type=input_type,
     )
     return response.embeddings[0]
+
+
+def _get_embeddings_via_cohere(queries: list[str], input_type: str) -> list[list[float]]:
+    if not queries:
+        return []
+    cohere_client = apps.get_app_config("aquillm").cohere_client
+    if cohere_client is None:
+        raise RuntimeError("Cohere client not configured")
+    response = cohere_client.embed(
+        texts=queries,
+        model="embed-english-v3.0",
+        input_type=input_type,
+    )
+    return response.embeddings
 
 
 def get_embedding(query: str, input_type: str = "search_query"):
@@ -98,5 +135,20 @@ def get_embedding(query: str, input_type: str = "search_query"):
     # Fallback for legacy deployments still using Cohere.
     try:
         return _fit_embedding_dims(_get_embedding_via_cohere(query, input_type))
+    except Exception as exc:
+        raise RuntimeError(f"All embedding providers failed: {exc}") from exc
+
+
+def get_embeddings(queries: list[str], input_type: str = "search_query") -> list[list[float]]:
+    if input_type not in ("search_document", "search_query", "classification", "clustering"):
+        raise ValueError(f"bad input type to embedding call: {input_type}")
+    if not queries:
+        return []
+    try:
+        return [_fit_embedding_dims(emb) for emb in _get_embeddings_via_local_openai(queries)]
+    except Exception as exc:
+        logger.warning("Local embed batch request failed; trying Cohere fallback. Error: %s", exc)
+    try:
+        return [_fit_embedding_dims(emb) for emb in _get_embeddings_via_cohere(queries, input_type)]
     except Exception as exc:
         raise RuntimeError(f"All embedding providers failed: {exc}") from exc

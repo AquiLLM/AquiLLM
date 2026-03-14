@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 
-celery -A aquillm worker --loglevel=info &
+if [ "${RUN_CELERY_IN_WEB:-1}" = "1" ]; then
+  celery -A aquillm worker --loglevel=info &
+fi
 
 cd /app/react
 npm ci

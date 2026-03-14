@@ -25,23 +25,23 @@ import json
 import logging
 from django.db.models.query import QuerySet
 from typing import  List, Type, Tuple
-import time
+from time import perf_counter
 
 from django.core.exceptions import ValidationError
 from django.contrib.postgres.search import TrigramSimilarity
+from django.contrib.postgres.indexes import GinIndex
 from django.core.validators import FileExtensionValidator
-import concurrent.futures
 
 from django.db import DatabaseError
 from django.db.models import Case, When
 from django.utils import timezone
-from .utils import get_embedding
+from .utils import get_embedding, get_embeddings
 from .settings import BASE_DIR
 
 logger = logging.getLogger(__name__)
 
 from .celery import app
-from celery.states import state, RECEIVED, STARTED, SUCCESS, FAILURE
+from celery.states import FAILURE
 
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -149,6 +149,9 @@ class Collection(models.Model):
     @property
     def documents(self):
         return functools.reduce(lambda l, r: l + r, [list(x.objects.filter(collection=self)) for x in DESCENDED_FROM_DOCUMENT])
+
+    def document_count(self) -> int:
+        return sum(model.objects.filter(collection=self).count() for model in DESCENDED_FROM_DOCUMENT)
 
     def user_has_permission_in(self, user, permissions):
         # First check permissions directly on this collection
@@ -343,16 +346,35 @@ def create_chunks(self, doc_id:str): #naive method, just number of characters
                     chunk_number = i) for i in range(last_character // chunk_pitch + 1)])
         n_chunks = len(chunks)
         done_chunks = [0] # this has to be a list because of the way python handles closures
+        last_progress = [-1]
 
-        def send_progress():
-            done_chunks[0] += 1
+        def send_progress(force: bool = False):
+            progress = int((done_chunks[0] / n_chunks) * 100) if n_chunks else 100
+            # Throttle websocket progress events to reduce overhead.
+            if not force and progress == last_progress[0]:
+                return
+            last_progress[0] = progress
             async_to_sync(channel_layer.group_send)(f'document-ingest-{doc.id}', {
                 'type': 'document.ingest.progress',
-                'progress': int((done_chunks[0] / n_chunks) * 100),
+                'progress': progress,
             })
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as e:
-            e.map(functools.partial(TextChunk.get_chunk_embedding, callback=send_progress), chunks)
+        chunk_texts = [chunk.content for chunk in chunks]
+        try:
+            embeddings = get_embeddings(chunk_texts, input_type='search_document')
+            if len(embeddings) != len(chunks):
+                raise RuntimeError(f"Embedding batch size mismatch: expected {len(chunks)}, got {len(embeddings)}")
+            for chunk, embedding in zip(chunks, embeddings):
+                chunk.embedding = embedding
+                done_chunks[0] += 1
+                send_progress()
+        except Exception as exc:
+            logger.warning("Batch embedding failed for document %s; falling back per chunk. Error: %s", doc.id, exc)
+            for chunk in chunks:
+                chunk.get_chunk_embedding()
+                done_chunks[0] += 1
+                send_progress()
+        send_progress(force=True)
         
         TextChunk.objects.bulk_create(chunks)
         doc.ingestion_complete = True
@@ -444,20 +466,11 @@ class Document(models.Model):
             # Persist "in progress" state before enqueuing chunk creation.
             # Without this, documents can remain marked complete if enqueue fails.
             self.save(dont_rechunk=True, update_fields=['ingestion_complete'])
-            result = None
             try:
-                result = create_chunks.delay(str(self.id)) # type: ignore
-                for _ in range(4):
-                    if state(result.status) == state(FAILURE):
-                        raise Exception(f"Task failed")
-                    if state(result.status) in [state(RECEIVED), state(STARTED), state(SUCCESS)]:
-                        return
-                    time.sleep(1)
-                raise Exception("Task was not received in time")
+                create_chunks.delay(str(self.id)) # type: ignore
+                return
             except Exception as e:
                 logger.error(f"Error creating chunks for document {self.id}: {str(e)}")
-                if result:
-                    result.revoke()
                 # Keep ingestion marked incomplete so operators can detect and retry.
                 self.ingestion_complete = False
                 self.save(dont_rechunk=True, update_fields=['ingestion_complete'])
@@ -663,8 +676,11 @@ DESCENDED_FROM_DOCUMENT = [
 DocumentChild = PDFDocument | TeXDocument | RawTextDocument | VTTDocument | HandwrittenNotesDocument
 
 class TextChunkQuerySet(models.QuerySet):
-    def filter_by_documents(self, docs):
-        ids = [doc.id for doc in docs]
+    def filter_by_documents(self, docs_or_ids):
+        ids = [
+            getattr(doc_or_id, 'id', doc_or_id)
+            for doc_or_id in docs_or_ids
+        ]
         return self.filter(doc_id__in=ids)
 
 def doc_id_validator(id):
@@ -723,6 +739,11 @@ class TextChunk(models.Model):
                 m=16,
                 ef_construction=64,
                 opclasses=['vector_l2_ops']
+            ),
+            GinIndex(
+                name='textchunk_content_trgm_idx',
+                fields=['content'],
+                opclasses=['gin_trgm_ops'],
             ),
         ]
         ordering = ['doc_id', 'chunk_number']
@@ -786,24 +807,60 @@ class TextChunk(models.Model):
     def text_chunk_search(cls, query:str, top_k: int, docs: List[DocumentChild]):
         vector_top_k = apps.get_app_config('aquillm').vector_top_k # type: ignore
         trigram_top_k = apps.get_app_config('aquillm').trigram_top_k # type: ignore
+        candidate_multiplier = 3
+        vector_limit = max(top_k + 2, min(vector_top_k, top_k * candidate_multiplier))
+        trigram_limit = max(top_k + 2, min(trigram_top_k, top_k * candidate_multiplier))
+        total_start = perf_counter()
 
         try:
             try:
+                vector_start = perf_counter()
                 query_embedding = get_embedding(query)
                 vector_results = (
                     cls.objects.filter_by_documents(docs)
                     .exclude(embedding__isnull=True)
                     .order_by(L2Distance('embedding', query_embedding))
-                )[:vector_top_k]  # type: ignore
+                )[:vector_limit]  # type: ignore
+                vector_ms = (perf_counter() - vector_start) * 1000
             except Exception as exc:
                 logger.warning(
                     "Vector embed/search failed; continuing with trigram-only retrieval. Error: %s",
                     exc,
                 )
                 vector_results = cls.objects.none()
+                vector_ms = (perf_counter() - total_start) * 1000
+            trigram_start = perf_counter()
             trigram_results = cls.objects.filter_by_documents(docs).annotate(similarity = TrigramSimilarity('content', query) # type: ignore
-            ).filter(similarity__gt=0.000001).order_by('-similarity')[:trigram_top_k]
-            reranked_results = cls.rerank(query, vector_results | trigram_results, top_k)
+            ).filter(similarity__gt=0.000001).order_by('-similarity')[:trigram_limit]
+            trigram_ms = (perf_counter() - trigram_start) * 1000
+            combined_candidates = list(vector_results) + list(trigram_results)
+            deduped_candidates = []
+            seen_pks = set()
+            for candidate in combined_candidates:
+                if candidate.pk in seen_pks:
+                    continue
+                seen_pks.add(candidate.pk)
+                deduped_candidates.append(candidate)
+            combined_candidates = deduped_candidates
+            # Fast path: skip reranker when there are not enough candidates to rerank.
+            if len(combined_candidates) <= top_k:
+                reranked_results = cls._fallback_rerank(combined_candidates, top_k)
+                rerank_ms = 0.0
+            else:
+                rerank_start = perf_counter()
+                reranked_results = cls.rerank(query, combined_candidates, top_k)
+                rerank_ms = (perf_counter() - rerank_start) * 1000
+            total_ms = (perf_counter() - total_start) * 1000
+            logger.info(
+                "text_chunk_search latency %.1fms (vector=%.1fms trigram=%.1fms rerank=%.1fms docs=%d top_k=%d candidates=%d)",
+                total_ms,
+                vector_ms,
+                trigram_ms,
+                rerank_ms,
+                len(docs),
+                top_k,
+                len(combined_candidates),
+            )
             return vector_results, trigram_results, reranked_results
         except DatabaseError as e:
             logger.error(f"Database error during search: {str(e)}")

@@ -309,7 +309,7 @@ def collections(request):
                 'name': collection.name,
                 'parent': collection.parent.id if collection.parent else None,
                 'path': collection.get_path(),
-                'document_count': len(collection.documents),
+                'document_count': collection.document_count(),
                 'children_count': collection.children.count(),
                 'permission': 'MANAGE'
             })
@@ -323,7 +323,7 @@ def collections(request):
             'name': colperm.collection.name,
             'parent': colperm.collection.parent.id if colperm.collection.parent else None,
             'path': colperm.collection.get_path(),
-            'document_count': len(colperm.collection.documents),
+            'document_count': colperm.collection.document_count(),
             'children_count': colperm.collection.children.count(),
             'permission': colperm.permission
         })
@@ -498,7 +498,7 @@ def collection(request, col_id):
         children = [{
             'id': child.id,
             'name': child.name,
-            'document_count': len([doc for doc in child.documents]) if hasattr(child, 'documents') else 0,
+            'document_count': child.document_count(),
             'created_at': child.created_at.isoformat() if hasattr(child, 'created_at') and child.created_at else None,
         } for child in collection.children.all()]
 

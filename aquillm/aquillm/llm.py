@@ -310,7 +310,8 @@ class LLMInterface(ABC):
                 else:
                     future = self.tool_executor.submit(tool) # necessary because None can't be unpacked
                 try:
-                    result_dict = future.result(timeout=15)
+                    tool_timeout_s = float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))
+                    result_dict = future.result(timeout=tool_timeout_s)
                     result = str(result_dict)
                 except TimeoutError:
                     result_dict = {'exception': "Tool call timed out"}

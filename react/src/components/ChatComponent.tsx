@@ -32,10 +32,16 @@ interface Conversation {
   usage?: number;
 }
 
+interface ConversationDelta {
+  messages: Message[];
+  usage?: number;
+}
+
 interface WebSocketMessage {
   exception?: string;
   debug_html?: string;
   conversation?: Conversation;
+  delta?: ConversationDelta;
 }
 
 interface ChatProps {
@@ -191,31 +197,47 @@ const Chat: React.FC<ChatProps> = ({ convoId }) => {
           }
           
           setException('');
-          
+
+          const applyInputState = (messages: Message[]) => {
+            if (!messages.length) {
+              setInputDisabled(false);
+              return;
+            }
+            const lastMessage = messages[messages.length - 1];
+            const shouldEnableInput =
+              (lastMessage.role === 'assistant' && !lastMessage.tool_call_input) ||
+              (lastMessage.role === 'tool' && lastMessage.for_whom === 'user');
+            setInputDisabled(!shouldEnableInput);
+          };
+
           if (data.conversation) {
             const updatedConversation = data.conversation;
-
-            // Find the most recent assistant message
             const lastAssistantMessage = updatedConversation.messages
               .slice()
               .reverse()
-              .find((msg) => msg.role === 'assistant');
-
-            // Update conversation.usage if the last assistant message has usage
+              .find((msg) => msg.role === 'assistant' && msg.usage !== undefined);
             if (lastAssistantMessage && lastAssistantMessage.usage !== undefined) {
               updatedConversation.usage = lastAssistantMessage.usage;
             }
-
             setConversation(updatedConversation);
+            applyInputState(updatedConversation.messages);
+            return;
+          }
 
-            if (updatedConversation.messages.length) {
-              const lastMessage = updatedConversation.messages[updatedConversation.messages.length - 1];
-              const shouldEnableInput =
-                (lastMessage.role === 'assistant' && !lastMessage.tool_call_input) ||
-                (lastMessage.role === 'tool' && lastMessage.for_whom === 'user');
-
-              setInputDisabled(!shouldEnableInput);
-            }
+          if (data.delta && data.delta.messages && data.delta.messages.length) {
+            setConversation((prev) => {
+              const seen = new Set(prev.messages.map((msg) => msg.message_uuid).filter(Boolean));
+              const appended = data.delta!.messages.filter(
+                (msg) => !msg.message_uuid || !seen.has(msg.message_uuid)
+              );
+              const merged = {
+                ...prev,
+                messages: [...prev.messages, ...appended],
+                usage: data.delta!.usage ?? prev.usage,
+              };
+              applyInputState(merged.messages);
+              return merged;
+            });
           }
         } catch (error) {
           setException(`Error processing message: ${error instanceof Error ? error.message : 'Unknown error'}`);

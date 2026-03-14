@@ -15,11 +15,17 @@ from pydantic import ValidationError
 import aquillm.llm
 from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, test_function, ToolChoice, llm_tool, ToolResultDict, message_to_user
 from aquillm.settings import DEBUG
+from time import perf_counter
 
 from aquillm.models import ConversationFile, TextChunk, Collection, CollectionPermission, WSConversation, Document, DocumentChild
 # Adapter functions that handle converting between Pydantic (runtime) and Django (database) message formats
-from aquillm.message_adapters import load_conversation_from_db, save_conversation_to_db, build_frontend_conversation_json
-from aquillm.memory import augment_conversation_with_memory, create_episodic_memories_for_conversation
+from aquillm.message_adapters import (
+    load_conversation_from_db,
+    save_conversation_to_db,
+    pydantic_message_to_frontend_dict,
+)
+from aquillm.memory import augment_conversation_with_memory
+from aquillm.tasks import create_conversation_memories_task
 
 from anthropic._exceptions import OverloadedError
 
@@ -58,7 +64,11 @@ def get_vector_search_func(user: User, col_ref: CollectionsRef):
         if not docs:
             return {"exception": "No documents to search! Either no collections were selected, or the selected collections are empty."}
         _,_,results = TextChunk.text_chunk_search(search_string, top_k, docs)
-        ret = {"result": {f"[Result {i+1}] -- {chunk.document.title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}": chunk.content for i, chunk in enumerate(results)}}
+        titles_by_doc_id = {doc.id: doc.title for doc in docs}
+        ret = {"result": {
+            f"[Result {i+1}] -- {titles_by_doc_id.get(chunk.doc_id, 'Untitled Document')} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}": chunk.content
+            for i, chunk in enumerate(results)
+        }}
         return ret
     
     return vector_search
@@ -132,7 +142,10 @@ def get_search_single_document_func(user: User) -> LLMTool:
         if not doc.collection.user_can_view(user):
             return {"exception": f"User cannot access document {doc_id}!"}
         _,_,results = TextChunk.text_chunk_search(search_string, top_k, [doc])
-        ret = {"result": {f"[Result {i+1}] -- {chunk.document.title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}": chunk.content for i, chunk in enumerate(results)}}
+        ret = {"result": {
+            f"[Result {i+1}] -- {doc.title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}": chunk.content
+            for i, chunk in enumerate(results)
+        }}
         return ret
 
     return search_single_document
@@ -154,14 +167,23 @@ def get_more_context_func(user: User) -> LLMTool:
         central_chunk = TextChunk.objects.filter(id=chunk_id).first()
         if central_chunk is None:
             return {"exception": f"Text chunk {chunk_id} does not exist!"}
-        if not central_chunk.document.collection.user_can_view(user):
+        doc = Document.get_by_id(central_chunk.doc_id)
+        if doc is None:
+            return {"exception": f"Document for chunk {chunk_id} does not exist!"}
+        if not doc.collection.user_can_view(user):
             return {"exception": f"User cannot access document containing {chunk_id}!"}
         central_chunk_number = central_chunk.chunk_number
         bottom = central_chunk_number - adjacent_chunks
         top = central_chunk_number + adjacent_chunks
-        window = TextChunk.objects.filter(doc_id=central_chunk.doc_id, chunk_number__in=range(bottom, top+1)).order_by('chunk_number')
+        window = list(
+            TextChunk.objects.filter(doc_id=central_chunk.doc_id, chunk_number__in=range(bottom, top+1))
+            .order_by('chunk_number')
+            .only('chunk_number', 'content')
+        )
+        if not window:
+            return {"exception": f"No nearby chunks found for chunk {chunk_id}."}
         text_blob = "".join([chunk.content for chunk in window])
-        return {"result": f"chunk_numbers:{window.first().chunk_number} -> {window.last().chunk_number} \n\n {text_blob}"}
+        return {"result": f"chunk_numbers:{window[0].chunk_number} -> {window[-1].chunk_number} \n\n {text_blob}"}
     return more_context
 
 
@@ -349,6 +371,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     
     
     col_ref = CollectionsRef([])
+    last_sent_sequence: int = -1
     
     @database_sync_to_async
     def __save(self, create_memories: bool = False):
@@ -356,7 +379,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # Converts in-memory Pydantic messages to Django Message rows and saves them to the database
         save_conversation_to_db(self.convo, self.db_convo)
         if create_memories:
-            create_episodic_memories_for_conversation(self.db_convo)
+            try:
+                create_conversation_memories_task.delay(self.db_convo.id)
+            except Exception as exc:
+                logger.warning("Failed to queue memory extraction task for convo %s: %s", self.db_convo.id, exc)
         if len(self.convo) >= 2 and not self.db_convo.name:
             self.db_convo.set_name()
 
@@ -382,10 +408,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.debug(f"send_func called in connect()")
             self.convo = convo
             # Persist streaming state for UI updates; memory extraction runs once after turn completion.
+            save_start = perf_counter()
             await self.__save(create_memories=False)
-            # Builds JSON from Message table rows and sends it to the frontend over WebSocket
-            frontend_json = await database_sync_to_async(build_frontend_conversation_json)(self.db_convo)
-            await self.send(text_data=dumps({"conversation": frontend_json}))
+            new_messages = convo.messages[self.last_sent_sequence + 1:]
+            if not new_messages:
+                logger.debug("send_func skipped; no new messages to send")
+                return
+            usage = next(
+                (msg.usage for msg in reversed(new_messages) if getattr(msg, 'role', None) == 'assistant' and getattr(msg, 'usage', 0)),
+                None
+            )
+            delta = {
+                "messages": [pydantic_message_to_frontend_dict(msg) for msg in new_messages],
+            }
+            if usage is not None:
+                delta["usage"] = usage
+            await self.send(text_data=dumps({"delta": delta}))
+            self.last_sent_sequence = len(convo) - 1
+            logger.info("Chat send_func persisted+sent delta in %.1fms (messages=%d)", (perf_counter() - save_start) * 1000, len(new_messages))
             logger.debug(f"send_func completed in connect()")
 
         await self.accept()
@@ -423,14 +463,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             # Loads Message rows from the database and converts them to Pydantic objects for runtime use
             self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
+            self.last_sent_sequence = len(self.convo) - 1
+            await self.send(text_data=dumps({
+                "conversation": {
+                    "system": self.db_convo.system_prompt,
+                    "messages": [pydantic_message_to_frontend_dict(msg) for msg in self.convo]
+                }
+            }))
+            augment_start = perf_counter()
             await database_sync_to_async(augment_conversation_with_memory)(
                 self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
             )
+            logger.info("Memory augmentation took %.1fms in connect()", (perf_counter() - augment_start) * 1000)
             self.convo.rebind_tools(self.tools)
             logger.debug(f"About to call llm_if.spin() in connect()")
+            before_spin_len = len(self.convo)
+            llm_start = perf_counter()
             await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
+            logger.info("LLM spin took %.1fms in connect()", (perf_counter() - llm_start) * 1000)
             # Extract/store memories only after the assistant turn is complete.
-            await self.__save(create_memories=True)
+            await self.__save(create_memories=len(self.convo) > before_spin_len)
             logger.debug(f"llm_if.spin() completed in connect()")
             return
         except OverloadedError as e:
@@ -464,10 +516,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await aclose_old_connections()
             self.convo = convo
             # Persist streaming state for UI updates; memory extraction runs once after turn completion.
+            save_start = perf_counter()
             await self.__save(create_memories=False)
-            # Builds JSON from Message table rows and sends it to the frontend over WebSocket
-            frontend_json = await database_sync_to_async(build_frontend_conversation_json)(self.db_convo)
-            await self.send(text_data=dumps({"conversation": frontend_json}))
+            new_messages = convo.messages[self.last_sent_sequence + 1:]
+            if not new_messages:
+                logger.debug("send_func skipped; no new messages to send")
+                return
+            usage = next(
+                (msg.usage for msg in reversed(new_messages) if getattr(msg, 'role', None) == 'assistant' and getattr(msg, 'usage', 0)),
+                None
+            )
+            delta = {
+                "messages": [pydantic_message_to_frontend_dict(msg) for msg in new_messages],
+            }
+            if usage is not None:
+                delta["usage"] = usage
+            await self.send(text_data=dumps({"delta": delta}))
+            self.last_sent_sequence = len(convo) - 1
+            logger.info("Chat send_func persisted+sent delta in %.1fms (messages=%d)", (perf_counter() - save_start) * 1000, len(new_messages))
             logger.debug("send_func completed in receive()")
 
         async def append(data: dict):
@@ -496,6 +562,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.convo[-1].files = [(file.name, file.id) for file in files]
             self.convo[-1].tool_choice = ToolChoice(type='auto')
             await self.__save(create_memories=False)
+            # Frontend already added the user message optimistically.
+            self.last_sent_sequence = len(self.convo) - 1
             logger.debug("append() completed, message added")
 
         async def rate(data: dict):
@@ -538,20 +606,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 logger.debug(f"Action: {action}")
                 if action == 'append':
                     await append(data)
+                    augment_start = perf_counter()
+                    await database_sync_to_async(augment_conversation_with_memory)(
+                        self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
+                    )
+                    logger.info("Memory augmentation took %.1fms in receive()", (perf_counter() - augment_start) * 1000)
+                    logger.debug("About to call llm_if.spin() in receive()")
+                    llm_start = perf_counter()
+                    await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
+                    logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
+                    # Extract/store memories only after the assistant turn is complete.
+                    await self.__save(create_memories=True)
                 elif action == 'rate':
                     await rate(data)
                 elif action == 'feedback':
                     await feedback(data)
                 else:
                     raise ValueError(f'Invalid action "{action}"')
-                await database_sync_to_async(augment_conversation_with_memory)(
-                    self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
-                )
-                logger.debug("About to call llm_if.spin() in receive()")
-                await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
-                # Extract/store memories only after the assistant turn is complete.
-                await self.__save(create_memories=True)
-                logger.debug("llm_if.spin() completed in receive()")
+                logger.debug("receive() action completed")
             except Exception as e:
                 logger.error(f"Exception in receive(): {e}", exc_info=True)
                 if DEBUG:

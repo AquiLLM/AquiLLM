@@ -42,9 +42,9 @@ MEM0_REST_WRITE_FALLBACK = getenv("MEM0_REST_WRITE_FALLBACK", "0").strip().lower
 )
 MEM0_BASE_URL = getenv("MEM0_BASE_URL", "").strip().rstrip("/")
 try:
-    MEM0_TIMEOUT_SECONDS = int(getenv("MEM0_TIMEOUT_SECONDS", "30").strip())
+    MEM0_TIMEOUT_SECONDS = int(getenv("MEM0_TIMEOUT_SECONDS", "5").strip())
 except Exception:
-    MEM0_TIMEOUT_SECONDS = 30
+    MEM0_TIMEOUT_SECONDS = 5
 
 logger = logging.getLogger(__name__)
 _MEM0_CLIENT = None

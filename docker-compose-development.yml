@@ -10,6 +10,7 @@ services:
       - .env
     environment:
       - C_FORCE_ROOT=1
+      - RUN_CELERY_IN_WEB=0
     # Allow web container to reach host services (e.g., self-hosted Mem0 API on port 8888)
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -33,6 +34,31 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - C_FORCE_ROOT=1
+      - RUN_CELERY_IN_WEB=0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    volumes:
+      - .:/app
+    command: sh -c "cd /app/aquillm && celery -A aquillm worker --loglevel=info"
   
   nginx:
       image: nginx:stable-bookworm

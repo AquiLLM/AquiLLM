@@ -118,5 +118,7 @@ cd /app/aquillm
 
 configure_mem0
 
-celery -A aquillm worker --loglevel=info &
+if [ "${RUN_CELERY_IN_WEB:-1}" = "1" ]; then
+  celery -A aquillm worker --loglevel=info &
+fi
 python -Xfrozen_modules=off manage.py runserver 0.0.0.0:${PORT:-8080}
