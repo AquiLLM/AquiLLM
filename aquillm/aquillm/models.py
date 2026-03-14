@@ -731,7 +731,15 @@ class TextChunk(models.Model):
         if self.start_position >= self.end_position:
             raise ValueError("end_position must be greater than start_position")
         if not self.embedding:
-            self.get_chunk_embedding()
+            try:
+                self.get_chunk_embedding()
+            except Exception as exc:
+                logger.warning(
+                    "Chunk embedding failed (doc_id=%s chunk=%s); saving without embedding. Error: %s",
+                    self.doc_id,
+                    self.chunk_number,
+                    exc,
+                )
 
         super().save(*args, **kwargs)
 
@@ -780,7 +788,19 @@ class TextChunk(models.Model):
         trigram_top_k = apps.get_app_config('aquillm').trigram_top_k # type: ignore
 
         try:
-            vector_results = cls.objects.filter_by_documents(docs).order_by(L2Distance('embedding', get_embedding(query)))[:vector_top_k] # type: ignore
+            try:
+                query_embedding = get_embedding(query)
+                vector_results = (
+                    cls.objects.filter_by_documents(docs)
+                    .exclude(embedding__isnull=True)
+                    .order_by(L2Distance('embedding', query_embedding))
+                )[:vector_top_k]  # type: ignore
+            except Exception as exc:
+                logger.warning(
+                    "Vector embed/search failed; continuing with trigram-only retrieval. Error: %s",
+                    exc,
+                )
+                vector_results = cls.objects.none()
             trigram_results = cls.objects.filter_by_documents(docs).annotate(similarity = TrigramSimilarity('content', query) # type: ignore
             ).filter(similarity__gt=0.000001).order_by('-similarity')[:trigram_top_k]
             reranked_results = cls.rerank(query, vector_results | trigram_results, top_k)
@@ -992,7 +1012,13 @@ class EpisodicMemory(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.embedding and self.content:
-            self.embedding = get_embedding(self.content, input_type='search_document')
+            try:
+                self.embedding = get_embedding(self.content, input_type='search_document')
+            except Exception as exc:
+                logger.warning(
+                    "Episodic memory embedding failed; saving without embedding. Error: %s",
+                    exc,
+                )
         super().save(*args, **kwargs)
 
 

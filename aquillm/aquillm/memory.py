@@ -655,6 +655,8 @@ def _add_mem0_memory(
             logger.info("Mem0 REST write fallback succeeded.")
             return
 
+    if not getenv("MEM0_API_KEY"):
+        return
     client = _get_mem0_client()
     if client is None:
         return
