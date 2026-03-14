@@ -35,6 +35,22 @@ import traceback
 logger = logging.getLogger(__name__)
 
 import io
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default %d", name, raw, default)
+        return default
+    return value if value > 0 else default
+
+
+CHAT_MAX_FUNC_CALLS = _env_int("CHAT_MAX_FUNC_CALLS", 5)
+CHAT_MAX_TOKENS = _env_int("CHAT_MAX_TOKENS", 1024)
 # necessary so that when collections are set inside the consumer, it changes inside the vector_search closure as well. 
 class CollectionsRef:
     def __init__(self, collections: list[int]):
@@ -479,7 +495,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.debug(f"About to call llm_if.spin() in connect()")
             before_spin_len = len(self.convo)
             llm_start = perf_counter()
-            await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
+            await self.llm_if.spin(
+                self.convo,
+                max_func_calls=CHAT_MAX_FUNC_CALLS,
+                max_tokens=CHAT_MAX_TOKENS,
+                send_func=send_func,
+            )
             logger.info("LLM spin took %.1fms in connect()", (perf_counter() - llm_start) * 1000)
             # Extract/store memories only after the assistant turn is complete.
             await self.__save(create_memories=len(self.convo) > before_spin_len)
@@ -613,7 +634,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     logger.info("Memory augmentation took %.1fms in receive()", (perf_counter() - augment_start) * 1000)
                     logger.debug("About to call llm_if.spin() in receive()")
                     llm_start = perf_counter()
-                    await self.llm_if.spin(self.convo, max_func_calls=5, max_tokens=2048, send_func=send_func)
+                    await self.llm_if.spin(
+                        self.convo,
+                        max_func_calls=CHAT_MAX_FUNC_CALLS,
+                        max_tokens=CHAT_MAX_TOKENS,
+                        send_func=send_func,
+                    )
                     logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
                     # Extract/store memories only after the assistant turn is complete.
                     await self.__save(create_memories=True)
