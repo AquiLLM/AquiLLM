@@ -295,10 +295,16 @@ class LLMInterface(ABC):
             name = message.tool_call_name
             input = message.tool_call_input
             tools_dict = {tool.llm_definition['name'] : tool for tool in tools}
+            tool_name = name or "invalid_tool"
+            for_whom: Literal['assistant', 'user'] = 'assistant'
+            result_dict: ToolResultDict = {"exception": "Tool call failed before execution"}
             if not name or name not in tools_dict.keys():
-                result = str({'exception': ValueError("Function name is not valid")})
+                result_dict = {'exception': "Function name is not valid"}
+                result = str(result_dict)
             else:
                 tool = tools_dict[name]
+                tool_name = tool.name
+                for_whom = tool.for_whom
                 if input:
                     future = self.tool_executor.submit(partial(tool, **input))
                 else:
@@ -314,13 +320,13 @@ class LLMInterface(ABC):
                         raise
                     result_dict = {'exception': str(e)}
                     result = str(result_dict)
-            return ToolMessage(tool_name=tool.name,
+            return ToolMessage(tool_name=tool_name,
                                 content=result,
                                 arguments=input,
                                 result_dict=result_dict,
-                                for_whom=tool.for_whom,
+                                for_whom=for_whom,
                                 tools=message.tools,
-                                files=result_dict.get('files'),
+                                files=result_dict.get('files') if isinstance(result_dict, dict) else None,
                                 tool_choice=message.tool_choice)
         else:
             raise ValueError("call_tool called on a message with no tools!")
@@ -477,20 +483,41 @@ class OpenAIInterface(LLMInterface):
         self.base_args = {'model': model}
 
     async def _transform_tools(self, tools: list[dict]) -> list[dict]:
-        return list([{
-                "type": "function",
-                "function": {
+        strict_tools = getenv("OPENAI_TOOL_STRICT", "0").strip().lower() in ("1", "true", "yes", "on")
+        transformed: list[dict] = []
+        for tool in tools:
+            function_payload = {
                     "name": tool['name'],
                     "description": tool['description'],
                     "parameters": {
                         "type": "object",
                         "properties": tool['input_schema']['properties'],
-                        "required": list(tool['input_schema']['properties'].keys()),
+                        "required": tool['input_schema'].get('required', []),
                         "additionalProperties": False
                     },
-                    "strict": True
-                },
-            } for tool in tools])
+                }
+            if strict_tools:
+                function_payload["strict"] = True
+            transformed.append({
+                "type": "function",
+                "function": function_payload,
+            })
+        return transformed
+
+    def _transform_tool_choice(self, tool_choice: dict | None) -> str | dict | None:
+        if not tool_choice:
+            return None
+        choice_type = tool_choice.get("type")
+        if choice_type == "auto":
+            return "auto"
+        if choice_type == "any":
+            return "required"
+        if choice_type == "tool" and tool_choice.get("name"):
+            return {
+                "type": "function",
+                "function": {"name": tool_choice["name"]},
+            }
+        return None
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
@@ -499,6 +526,7 @@ class OpenAIInterface(LLMInterface):
         system_text = kwargs.pop('system')
         message_list = kwargs.pop('messages')
         max_tokens = kwargs.pop('max_tokens')
+        tool_choice_raw = kwargs.pop('tool_choice', None)
 
         # If memory context is present, strongly steer away from generic "no memory"
         # disclaimers and force use of retrieved facts when relevant.
@@ -528,8 +556,12 @@ class OpenAIInterface(LLMInterface):
         # Only add tools if they're provided
         if 'tools' in kwargs:
             arguments["tools"] = await self._transform_tools(kwargs.pop('tools'))
+            transformed_tool_choice = self._transform_tool_choice(tool_choice_raw)
+            if transformed_tool_choice is not None:
+                arguments["tool_choice"] = transformed_tool_choice
 
-        response = await self.client.chat.completions.create(**arguments)
+        request_timeout_s = float(getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "120"))
+        response = await self.client.chat.completions.create(timeout=request_timeout_s, **arguments)
         if DEBUG:
             print("OpenAI SDK Response:")
             pp(response)
@@ -538,8 +570,12 @@ class OpenAIInterface(LLMInterface):
         if tool_call and tool_call.function.name == 'message_to_user':
             # this is a special tool that just sends a message to the user, so we don't need to return it.
             # this is necessary because local models feel the need to call a tool every time. 
+            try:
+                parsed_args = loads(tool_call.function.arguments)
+            except Exception:
+                parsed_args = {}
+            text = parsed_args.get('message') or text
             tool_call = None
-            text = tool_call.function.arguments['message']
 
         return LLMResponse(text=text,
                            tool_call={"tool_call_id": tool_call.id,
