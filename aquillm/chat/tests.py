@@ -7,11 +7,23 @@ or WebSocket connection — they test the database layer directly.
 """
 
 from uuid import uuid4
-from django.test import TestCase
+from django.test import TestCase, SimpleTestCase
 from django.contrib.auth import get_user_model
+from asgiref.sync import async_to_sync
+from types import SimpleNamespace
 
 from aquillm.models import WSConversation, Message
-from aquillm.llm import Conversation, UserMessage, AssistantMessage, ToolMessage
+from aquillm.llm import (
+    Conversation,
+    UserMessage,
+    AssistantMessage,
+    ToolMessage,
+    LLMInterface,
+    LLMResponse,
+    llm_tool,
+    ToolChoice,
+    OpenAIInterface,
+)
 from aquillm.message_adapters import (
     pydantic_message_to_django,
     django_message_to_pydantic,
@@ -21,6 +33,154 @@ from aquillm.message_adapters import (
 )
 
 User = get_user_model()
+
+
+@llm_tool(
+    for_whom='assistant',
+    required=[],
+    param_descs={},
+)
+def _test_document_ids():
+    """Test tool for LLMInterface.complete() retry behavior."""
+    return {'result': 'ok'}
+
+
+class _FakeLLMInterface(LLMInterface):
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+
+    async def get_message(self, *args, **kwargs):
+        self.calls.append(kwargs)
+        return self.responses[len(self.calls) - 1]
+
+    async def token_count(self, conversation, new_message=None):
+        return 0
+
+
+class ToolUseRetryTests(SimpleTestCase):
+    def test_retries_with_required_tool_when_model_only_promises_to_search(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll search each of these three papers for detailed information.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Search these papers and summarize memory systems.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='auto'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'auto')
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+
+    def test_does_not_retry_for_normal_non_tool_text_reply(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text='Here is a concise answer from prior context.',
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Give me a quick answer.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='auto'),
+                )
+            ],
+        )
+
+        updated, _ = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(len(llm.calls), 1)
+        self.assertIsNone(updated[-1].tool_call_id)
+
+
+class OpenAIFallbackToolParsingTests(SimpleTestCase):
+    class _FakeCompletions:
+        def __init__(self, response):
+            self.response = response
+
+        async def create(self, **kwargs):
+            return self.response
+
+    class _FakeOpenAIClient:
+        def __init__(self, response):
+            self.chat = SimpleNamespace(
+                completions=OpenAIFallbackToolParsingTests._FakeCompletions(response)
+            )
+
+    def test_extracts_tool_call_from_xml_text_when_tool_calls_missing(self):
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        tool_calls=[],
+                        content=(
+                            '<function_call>{"name":"vector_search","arguments":'
+                            '{"search_string":"memory and agents","top_k":5}}</function_call>'
+                        ),
+                    ),
+                    finish_reason='stop',
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
+        )
+
+        llm = OpenAIInterface(self._FakeOpenAIClient(response), model='qwen3.5:27b')
+        result = async_to_sync(llm.get_message)(
+            system='test system',
+            messages=[{'role': 'user', 'content': 'search for memory papers'}],
+            max_tokens=256,
+            tools=[{
+                'name': 'vector_search',
+                'description': 'Search docs',
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {
+                        'search_string': {'type': 'string', 'description': 'query'},
+                        'top_k': {'type': 'integer', 'description': 'k'},
+                    },
+                    'required': ['search_string', 'top_k'],
+                },
+            }],
+            tool_choice={'type': 'auto'},
+        )
+
+        self.assertEqual(result.tool_call['tool_call_name'], 'vector_search')
+        self.assertEqual(result.tool_call['tool_call_input']['search_string'], 'memory and agents')
+        self.assertEqual(result.tool_call['tool_call_input']['top_k'], 5)
+        self.assertIsNone(result.text)
 
 
 class MessageAdapterTests(TestCase):

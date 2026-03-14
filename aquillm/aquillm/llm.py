@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from pprint import pformat
 from copy import copy
 from concurrent.futures import ThreadPoolExecutor
+import re
 
 from anthropic._exceptions import OverloadedError
 from aquillm.settings import DEBUG
@@ -286,6 +287,29 @@ class LLMInterface(ABC):
     async def token_count(self, conversation: Conversation, new_message: Optional[str] = None) -> int:
         pass
 
+    @staticmethod
+    def _looks_like_deferred_tool_intent(text: Optional[str]) -> bool:
+        """
+        Heuristic: detect when the model says it will search/look something up
+        instead of actually issuing a tool call in this turn.
+        """
+        if not text:
+            return False
+        normalized = text.lower().replace("’", "'")
+        cues = (
+            "i'll search",
+            "i will search",
+            "let me search",
+            "i can search",
+            "i'm going to search",
+            "i'll look up",
+            "i will look up",
+            "let me look up",
+            "i'll check",
+            "i will check",
+        )
+        return any(cue in normalized for cue in cues)
+
     # This shouldn't raise exceptions in cases where it was called correctly, ie the LLM really did attempt to call a tool. 
     # The results are going back to the LLM, so they need to just be strings. Tools themselves can raise, because the llm_tool wrapper
     # converts exceptions to dicts and returns them. 
@@ -369,6 +393,16 @@ class LLMInterface(ABC):
                 #pp(sdk_args)
             
             response = await self.get_message(**sdk_args)
+            should_force_tool_retry = (
+                bool(last_message.tools)
+                and bool(last_message.tool_choice)
+                and last_message.tool_choice.type == 'auto'
+                and not response.tool_call
+                and self._looks_like_deferred_tool_intent(response.text)
+            )
+            if should_force_tool_retry:
+                retry_args = sdk_args | {'tool_choice': {'type': 'any'}}
+                response = await self.get_message(**retry_args)
             new_msg = AssistantMessage(
                             content=response.text if response.text else "** Empty Message, tool call **",
                             stop_reason=response.stop_reason,
@@ -483,6 +517,128 @@ class OpenAIInterface(LLMInterface):
         self.client = openai_client
         self.base_args = {'model': model}
 
+    @staticmethod
+    def _decode_json_dict(raw: Any) -> dict:
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                parsed = loads(raw)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return {}
+        return {}
+
+    @staticmethod
+    def _extract_first_json_object(text: str) -> Optional[str]:
+        start = None
+        depth = 0
+        in_string = False
+        escaped = False
+        for i, ch in enumerate(text):
+            if start is None:
+                if ch == "{":
+                    start = i
+                    depth = 1
+                    in_string = False
+                    escaped = False
+                continue
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+            else:
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start:i + 1]
+        return None
+
+    @staticmethod
+    def _tool_call_from_payload(payload: dict, allowed_tools: set[str]) -> Optional[dict]:
+        if not isinstance(payload, dict):
+            return None
+        name = payload.get("name") or payload.get("tool_name")
+        args = payload.get("arguments")
+        if args is None:
+            args = payload.get("args")
+        if args is None:
+            args = payload.get("parameters")
+
+        if isinstance(name, str) and name in allowed_tools:
+            if not isinstance(args, dict):
+                args = {}
+            return {
+                "tool_call_id": str(uuid.uuid4()),
+                "tool_call_name": name,
+                "tool_call_input": args,
+            }
+
+        if len(payload) == 1:
+            only_name = next(iter(payload.keys()))
+            only_args = payload[only_name]
+            if isinstance(only_name, str) and only_name in allowed_tools and isinstance(only_args, dict):
+                return {
+                    "tool_call_id": str(uuid.uuid4()),
+                    "tool_call_name": only_name,
+                    "tool_call_input": only_args,
+                }
+        return None
+
+    def _extract_tool_call_from_text(self, text: str, raw_tools: Optional[list[dict]]) -> Optional[dict]:
+        if not text or not raw_tools:
+            return None
+        allowed_tools = {
+            tool.get("name")
+            for tool in raw_tools
+            if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+        }
+        allowed_tools.discard(None)
+        if not allowed_tools:
+            return None
+
+        candidates = [text]
+        candidates.extend(re.findall(r"```(?:json|xml)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE))
+        candidates.extend(re.findall(r"<function_call>\s*([\s\S]*?)\s*</function_call>", text, flags=re.IGNORECASE))
+        candidates.extend(re.findall(r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", text, flags=re.IGNORECASE))
+
+        for candidate in candidates:
+            payload = self._decode_json_dict(candidate)
+            if not payload:
+                json_obj = self._extract_first_json_object(candidate)
+                if json_obj:
+                    payload = self._decode_json_dict(json_obj)
+            parsed = self._tool_call_from_payload(payload, allowed_tools)
+            if parsed:
+                return parsed
+
+        for tool_name in sorted(allowed_tools, key=len, reverse=True):
+            pattern = rf"<{re.escape(tool_name)}>\s*([\s\S]*?)\s*</{re.escape(tool_name)}>"
+            direct_match = re.search(pattern, text, flags=re.IGNORECASE)
+            if not direct_match:
+                continue
+            args_payload = self._decode_json_dict(direct_match.group(1))
+            if not args_payload:
+                json_obj = self._extract_first_json_object(direct_match.group(1))
+                if json_obj:
+                    args_payload = self._decode_json_dict(json_obj)
+            if isinstance(args_payload, dict):
+                return {
+                    "tool_call_id": str(uuid.uuid4()),
+                    "tool_call_name": tool_name,
+                    "tool_call_input": args_payload,
+                }
+
+        return None
+
     async def _transform_tools(self, tools: list[dict]) -> list[dict]:
         strict_tools = getenv("OPENAI_TOOL_STRICT", "0").strip().lower() in ("1", "true", "yes", "on")
         transformed: list[dict] = []
@@ -528,6 +684,7 @@ class OpenAIInterface(LLMInterface):
         message_list = kwargs.pop('messages')
         max_tokens = kwargs.pop('max_tokens')
         tool_choice_raw = kwargs.pop('tool_choice', None)
+        raw_tools = kwargs.get('tools')
 
         # If memory context is present, strongly steer away from generic "no memory"
         # disclaimers and force use of retrieved facts when relevant.
@@ -566,23 +723,33 @@ class OpenAIInterface(LLMInterface):
         if DEBUG:
             print("OpenAI SDK Response:")
             pp(response)
-        tool_call = response.choices[0].message.tool_calls[0] if response.choices[0].message.tool_calls else None
         text = response.choices[0].message.content
-        if tool_call and tool_call.function.name == 'message_to_user':
+        tool_call_payload: Optional[dict] = None
+        raw_tool_call = response.choices[0].message.tool_calls[0] if response.choices[0].message.tool_calls else None
+        if raw_tool_call:
+            tool_call_payload = {
+                "tool_call_id": raw_tool_call.id or str(uuid.uuid4()),
+                "tool_call_name": raw_tool_call.function.name,
+                "tool_call_input": self._decode_json_dict(raw_tool_call.function.arguments),
+            }
+        elif text and raw_tools:
+            tool_call_payload = self._extract_tool_call_from_text(text, raw_tools)
+            if tool_call_payload and re.fullmatch(
+                r"\s*(```[\s\S]*```|<function_call>[\s\S]*</function_call>|<tool_call>[\s\S]*</tool_call>|<\w+>\s*\{[\s\S]*\}\s*</\w+>)\s*",
+                text,
+                flags=re.IGNORECASE,
+            ):
+                text = None
+
+        if tool_call_payload and tool_call_payload.get("tool_call_name") == 'message_to_user':
             # this is a special tool that just sends a message to the user, so we don't need to return it.
             # this is necessary because local models feel the need to call a tool every time. 
-            try:
-                parsed_args = loads(tool_call.function.arguments)
-            except Exception:
-                parsed_args = {}
+            parsed_args = tool_call_payload.get("tool_call_input") or {}
             text = parsed_args.get('message') or text
-            tool_call = None
+            tool_call_payload = None
 
         return LLMResponse(text=text,
-                           tool_call={"tool_call_id": tool_call.id,
-                                        "tool_call_name": tool_call.function.name,
-                                        "tool_call_input": loads(tool_call.function.arguments)}
-                                        if tool_call else {},
+                           tool_call=tool_call_payload or {},
                            stop_reason=response.choices[0].finish_reason,
                            input_usage=response.usage.prompt_tokens,
                            output_usage=response.usage.completion_tokens,
