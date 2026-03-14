@@ -23,6 +23,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      vllm:
+        condition: service_healthy
+        required: false
       vllm_embed:
         condition: service_healthy
         required: false

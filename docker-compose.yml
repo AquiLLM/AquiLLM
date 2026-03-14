@@ -59,6 +59,9 @@ services:
         condition: service_healthy
       createbuckets:
         condition: service_completed_successfully
+      vllm:
+        condition: service_healthy
+        required: false
     volumes:
       - .:/app
     command: sh -c "cd /app/aquillm && celery -A aquillm worker --loglevel=info"
