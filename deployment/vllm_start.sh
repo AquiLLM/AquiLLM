@@ -15,10 +15,10 @@ select_model_and_alias() {
       echo "${VLLM_MODEL:-openai/gpt-oss-120b}|${VLLM_SERVED_MODEL_NAME:-gpt-oss:120b}"
       ;;
     QWEN3_30B)
-      echo "${VLLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}|${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b-q8_0}"
+      echo "${VLLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}|${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b}"
       ;;
     *)
-      echo "${VLLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}|${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b-q8_0}"
+      echo "${VLLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}|${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b}"
       ;;
   esac
 }

@@ -94,6 +94,7 @@ class AquillmConfig(AppConfig):
             local_base_url = f"{local_base_url}/v1"
         local_base_url = local_base_url + '/'
         local_api_key = getenv('VLLM_API_KEY', 'EMPTY')
+        local_served_model_name = getenv('VLLM_SERVED_MODEL_NAME', 'qwen3.5:27b')
         if llm_choice == 'CLAUDE':
             self.llm_interface = ClaudeInterface(self.async_anthropic_client)
         elif llm_choice == 'OPENAI':
@@ -109,7 +110,10 @@ class AquillmConfig(AppConfig):
         elif llm_choice == 'GEMINI':  # set LLM_CHOICE=GEMINI in .env to use Google Gemini as the chat backend
             self.llm_interface = GeminiInterface(self.google_genai_client, model='gemini-2.5-flash')  # gemini-2.5-flash is the faster/cheaper variant; swap model= here to use gemini-2.5-pro etc.
         elif llm_choice == 'QWEN3_30B':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key), "qwen3.5:27b-q8_0")
+            self.llm_interface = OpenAIInterface(
+                openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key),
+                local_served_model_name,
+            )
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 
