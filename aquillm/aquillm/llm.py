@@ -518,6 +518,37 @@ class OpenAIInterface(LLMInterface):
         self.base_args = {'model': model}
 
     @staticmethod
+    def _retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional[dict]:
+        """
+        Some OpenAI-compatible servers return a 400 when input+output exceeds
+        context by a tiny amount. Parse that message and retry once with a
+        reduced max_tokens instead of failing the whole turn.
+        """
+        message = str(exc)
+        match = re.search(
+            r"passed\s+(\d+)\s+input tokens.*maximum input length of\s+(\d+)\s+tokens",
+            message,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return None
+        passed_input_tokens = int(match.group(1))
+        max_input_tokens = int(match.group(2))
+        overflow = passed_input_tokens - max_input_tokens
+        if overflow <= 0:
+            return None
+        current_max_tokens = int(arguments.get("max_tokens", 0))
+        # Leave a small safety margin to avoid a second near-boundary failure.
+        reduced_max_tokens = max(64, current_max_tokens - overflow - 16)
+        if reduced_max_tokens >= current_max_tokens:
+            reduced_max_tokens = max(64, current_max_tokens - 1)
+        if reduced_max_tokens <= 0:
+            return None
+        retry_args = dict(arguments)
+        retry_args["max_tokens"] = reduced_max_tokens
+        return retry_args
+
+    @staticmethod
     def _decode_json_dict(raw: Any) -> dict:
         if isinstance(raw, dict):
             return raw
@@ -719,7 +750,13 @@ class OpenAIInterface(LLMInterface):
                 arguments["tool_choice"] = transformed_tool_choice
 
         request_timeout_s = float(getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "120"))
-        response = await self.client.chat.completions.create(timeout=request_timeout_s, **arguments)
+        try:
+            response = await self.client.chat.completions.create(timeout=request_timeout_s, **arguments)
+        except Exception as exc:
+            retry_args = self._retry_args_for_context_overflow(arguments, exc)
+            if retry_args is None:
+                raise
+            response = await self.client.chat.completions.create(timeout=request_timeout_s, **retry_args)
         if DEBUG:
             print("OpenAI SDK Response:")
             pp(response)

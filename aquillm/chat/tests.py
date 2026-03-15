@@ -183,6 +183,52 @@ class OpenAIFallbackToolParsingTests(SimpleTestCase):
         self.assertIsNone(result.text)
 
 
+class OpenAIContextOverflowRetryTests(SimpleTestCase):
+    class _SequencedCompletions:
+        def __init__(self):
+            self.calls = []
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                raise Exception(
+                    "Error code: 400 - {'error': {'message': "
+                    "\"You passed 31745 input tokens and requested 1024 output tokens. "
+                    "However, the model's context length is only 32768 tokens, resulting in "
+                    "a maximum input length of 31744 tokens. Please reduce the length of the "
+                    "input prompt. (parameter=input_tokens, value=31745)\"}}"
+                )
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(tool_calls=[], content='Recovered after retry'),
+                        finish_reason='stop',
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
+            )
+
+    class _FakeOpenAIClient:
+        def __init__(self, completions):
+            self.chat = SimpleNamespace(completions=completions)
+
+    def test_retries_once_with_lower_max_tokens_on_context_overflow(self):
+        completions = self._SequencedCompletions()
+        llm = OpenAIInterface(self._FakeOpenAIClient(completions), model='qwen3.5:27b')
+
+        result = async_to_sync(llm.get_message)(
+            system='test system',
+            messages=[{'role': 'user', 'content': 'hello'}],
+            max_tokens=1024,
+        )
+
+        self.assertEqual(result.text, 'Recovered after retry')
+        self.assertEqual(len(completions.calls), 2)
+        self.assertEqual(completions.calls[0]['max_tokens'], 1024)
+        self.assertLess(completions.calls[1]['max_tokens'], 1024)
+        self.assertGreaterEqual(completions.calls[1]['max_tokens'], 64)
+
+
 class MessageAdapterTests(TestCase):
     """Tests for converting between Pydantic messages and Django Message rows.
 
