@@ -82,6 +82,18 @@ target/
 profile_default/
 ipython_config.py
 
+# Node:
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Playwright:
+playwright-report/
+test-results/
+*.zip
+*.npm-cache/
+
 # pyenv
 #   For a library or package, you might want to ignore these files since the code is
 #   intended to run in multiple environments; otherwise, check them in:
@@ -169,4 +181,5 @@ aquillm/prod_static
 aquillm/staticfiles
 aquillm/aquillm/static/js/dist
 aquillm/aquillm/static/index.css 
-react/node_modules/
+react/node_modules/.npm-cache/
+.npm-cache/
