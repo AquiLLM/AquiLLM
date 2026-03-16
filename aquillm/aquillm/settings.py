@@ -56,6 +56,8 @@ INSTALLED_APPS = [
     "django_extensions",
     'django.contrib.postgres',
     'debug_toolbar',
+    'django_tasks',
+    'django_tasks_db',
 ]
 
 MIDDLEWARE = [
@@ -244,9 +246,11 @@ CHANNEL_LAYERS = {
     }
 }
 
-CELERY_BROKER_URL = "redis://redis:6379"
-CELERY_RESULT_BACKEND = "redis://redis:6379"
-CELERY_ACCEPT_CONTENT = ['pickle', 'json']
+TASKS = {
+    "default": {
+        "BACKEND": "django_tasks_db.backend.DatabaseBackend",
+    }
+}
 
 # Zotero Integration Settings
 # OAuth credentials should be set in environment variables:
@@ -305,20 +309,10 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': True,
         },
-        'celery': {
-            'handlers': ['file', 'console'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
         'ingest': {
             'handlers': ['file', 'console'],
             'level': 'DEBUG',
             'propagate': True,
-        },
-        'kombu': {
-            'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': False,
         },
     },
 }
