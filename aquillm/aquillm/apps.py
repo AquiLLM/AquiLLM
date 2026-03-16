@@ -75,15 +75,19 @@ class AquillmConfig(AppConfig):
     def ready(self):
 
         self.cohere_client = cohere.Client(getenv('COHERE_KEY'))
-        self.openai_client = openai.AsyncOpenAI()
-        self.anthropic_client = anthropic.Anthropic()
-        self.async_anthropic_client = anthropic.AsyncAnthropic()
-        self.async_anthropic_bedrock_client = anthropic.AsyncAnthropicBedrock(
-            aws_region='us-east-1',
-            aws_access_key=getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_key=getenv('AWS_SECRET_ACCESS_KEY')
-        )
-        self.google_genai_client = google_genai.Client(api_key=getenv('GEMINI_API_KEY'))  # Gemini API client, initialized at startup regardless of LLM_CHOICE so it's available even when not the primary LLM
+        if getenv('OPENAI_API_KEY'):
+            self.openai_client = openai.AsyncOpenAI()
+        if getenv('ANTHROPIC_API_KEY'):
+            self.anthropic_client = anthropic.Anthropic()
+            self.async_anthropic_client = anthropic.AsyncAnthropic()
+        if getenv('AWS_ACCESS_KEY_ID'):
+            self.async_anthropic_bedrock_client = anthropic.AsyncAnthropicBedrock(
+                aws_region='us-east-1',
+                aws_access_key=getenv('AWS_ACCESS_KEY_ID'),
+                aws_secret_key=getenv('AWS_SECRET_ACCESS_KEY')
+            )
+        if getenv('GEMINI_API_KEY'):
+            self.google_genai_client = google_genai.Client(api_key=getenv('GEMINI_API_KEY'))
         self.get_embedding = get_embedding_func(self.cohere_client)
         llm_choice = getenv('LLM_CHOICE', self.default_llm)
         if llm_choice == 'CLAUDE':
