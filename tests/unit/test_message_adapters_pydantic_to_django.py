@@ -42,7 +42,7 @@ def test_assistant_message_maps_to_django_row(assistant_message, db_conversation
     assert msg.feedback_text == "good answer"
     assert msg.sequence_number == 1
 
-    assert msg.model == "gpt-4o"
+    assert msg.model == "claude-sonnet-4-6"
     assert msg.stop_reason == "end_turn"
     assert msg.tool_call_id == "tool-call-1"
     assert msg.tool_call_name == "search_docs"

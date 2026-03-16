@@ -38,7 +38,7 @@ def test_assistant_row_maps_to_pydantic_message(db_conversation):
         rating=4,
         feedback_text="solid",
         sequence_number=1,
-        model="gpt-4o",
+        model="claude-sonnet-4-6",
         stop_reason="end_turn",
         tool_call_id="tc-1",
         tool_call_name="search_docs",
@@ -54,7 +54,7 @@ def test_assistant_row_maps_to_pydantic_message(db_conversation):
     assert msg.rating == 4
     assert msg.feedback_text == "solid"
     assert msg.message_uuid == row.message_uuid
-    assert msg.model == "gpt-4o"
+    assert msg.model == "claude-sonnet-4-6"
     assert msg.stop_reason == "end_turn"
     assert msg.tool_call_id == "tc-1"
     assert msg.tool_call_name == "search_docs"
