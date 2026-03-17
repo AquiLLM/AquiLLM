@@ -14,6 +14,7 @@ services:
       - STORAGE_HOST=storage:9000
       - STORAGE_ACCESS_KEY=dev
       - STORAGE_SECRET_KEY=rickbailey
+      - REDIS_HOST=redis
       - C_FORCE_ROOT=1
     depends_on:
       db:

@@ -1,0 +1,71 @@
+[project]
+name = "aquillm"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "django",
+    "psycopg2-binary",
+    "cohere",
+    "python-dotenv",
+    "pgvector",
+    "pypdf",
+    "django-allauth[socialaccount]",
+    "openai",
+    "anthropic[bedrock]",
+    "tenacity",
+    "uvicorn",
+    "whitenoise",
+    "typeguard",
+    "pydantic",
+    "channels",
+    "daphne",
+    "google-generativeai",
+    "django-storages[google]",
+    "django-storages[s3]",
+    "boto3",
+    "websockets",
+    "channels-redis",
+    "celery[redis]",
+    "pdf2image",
+    "pillow",
+    "pytesseract",
+    "google-genai",
+    "chardet",
+    "tiktoken",
+    "trafilatura",
+    "beautifulsoup4",
+    "selenium>=4.0.0",
+    "webdriver-manager>=4.0.0",
+    "astropy",
+    "numpy",
+    "requests-oauthlib",
+]
+
+[dependency-groups]
+dev = [
+    "debugpy",
+    "django-debug-toolbar",
+    "django-extensions",
+    "mypy",
+    "django-stubs",
+    "werkzeug",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-django",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "aquillm.settings"
+pythonpath = ["aquillm"]
+python_files = "test_*.py"
+addopts = "--strict-markers"
+testpaths = [
+    "aquillm/tests",
+    "chat/tests",
+    "tests",
+]
+markers = [
+    "unit: fast unit tests",
+]

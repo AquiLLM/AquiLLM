@@ -10,6 +10,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    profiles:
+      - web
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
       - "5678:5678"
@@ -19,6 +21,7 @@ services:
       PORT: ${PORT:-8080}
       POSTGRES_HOST: db
       STORAGE_HOST: storage:9000
+      REDIS_HOST: redis
       DJANGO_DEBUG: 1
       C_FORCE_ROOT: 1
       <<: *db-variables
@@ -39,6 +42,8 @@ services:
 
   db:
     image: pgvector/pgvector:0.8.0-pg17
+    ports:
+      - "5434:5432"
     environment:
       <<: *db-variables
     volumes:
@@ -55,7 +60,8 @@ services:
   storage:
     image: minio/minio
     restart: unless-stopped
-    ports: 
+    ports:
+      - "9000:9000"
       - "9001:9001"
     env_file:
       - .env
@@ -85,7 +91,8 @@ services:
 
   redis:
     image: redis:7.4-bookworm
-
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
