@@ -43,7 +43,7 @@ def assistant_message():
         rating=4,
         feedback_text="good answer",
         message_uuid=uuid.UUID("22222222-2222-2222-2222-222222222222"),
-        model="gpt-4o",
+        model="claude-sonnet-4-6",
         stop_reason="end_turn",
         tool_call_id="tool-call-1",
         tool_call_name="search_docs",
