@@ -12,7 +12,8 @@ from django.urls import path, include
 # from trafilatura import fetch_url, extract, extract_metadata # Keep commented or remove if not used elsewhere
 from django.core.files.base import ContentFile
 
-# Import the new Celery task
+import uuid
+
 from .crawler_tasks import crawl_and_ingest_webpage
 
 from .vtt import parse, to_text, coalesce_captions
@@ -624,17 +625,15 @@ def ingest_webpage(request):
             # Raise PermissionDenied to be caught by the outer exception handler
             raise PermissionDenied("You do not have permission to add documents to this collection.")
 
-        # --- Delegate to Celery Task ---
         try:
+            task_id = str(uuid.uuid4())
             logger.info(f"Dispatching crawl_and_ingest_webpage task for URL: {url}, Collection: {collection_id}, User: {request.user.id}, Depth: {depth}")
-            # Call the Celery task asynchronously, passing the validated depth.
-            crawl_and_ingest_webpage.delay(url, collection_id, request.user.id, max_depth=depth)
+            crawl_and_ingest_webpage.enqueue(url, collection_id, request.user.id, max_depth=depth, task_id=task_id)
 
             # Return 202 Accepted immediately
             return JsonResponse({'message': 'Webpage crawl initiated successfully.'}, status=202)
 
         except Exception as task_dispatch_error:
-             # Catch potential errors during task dispatch (e.g., Celery broker connection issues)
              logger.error(f"Failed to dispatch crawl_and_ingest_webpage task for URL {url}: {task_dispatch_error}", exc_info=True)
              return JsonResponse({'error': 'Failed to initiate webpage crawl task.'}, status=500)
 

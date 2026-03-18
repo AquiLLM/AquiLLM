@@ -23,7 +23,6 @@ services:
       STORAGE_HOST: storage:9000
       REDIS_HOST: redis
       DJANGO_DEBUG: 1
-      C_FORCE_ROOT: 1
       <<: *db-variables
     restart: on-failure
     depends_on:
