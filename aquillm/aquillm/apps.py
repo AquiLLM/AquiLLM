@@ -2,15 +2,12 @@ from django.apps import AppConfig
 
 from django.template import Engine, Context
 import cohere
-import openai
 import anthropic
-import google.generativeai as genai  # older google SDK — kept for OCR/image features already using it
-from google import genai as google_genai  # NEW: newer google-genai SDK used by GeminiInterface for chat
 from os import getenv
 from typing import TypedDict
 
 
-from .llm import LLMInterface, ClaudeInterface, OpenAIInterface, GeminiInterface  # GeminiInterface added for Gemini backend support
+from .llm import LLMInterface, ClaudeInterface
 from .settings import DEBUG
 RAG_PROMPT_STRING = """
 <context>
@@ -49,14 +46,12 @@ class AquillmConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'aquillm'
     cohere_client = None
-    openai_client = None
     anthropic_client = None
     async_anthropic_client = None
     get_embedding = None
     llm_interface: LLMInterface = None
     system_prompt = "You are a helpful assistant embedded in a retrieval augmented generation system."
 
-    google_genai_client = None
     default_llm = "CLAUDE"
     
     
@@ -75,35 +70,19 @@ class AquillmConfig(AppConfig):
     def ready(self):
 
         self.cohere_client = cohere.Client(getenv('COHERE_KEY'))
-        if getenv('OPENAI_API_KEY'):
-            self.openai_client = openai.AsyncOpenAI()
-        if getenv('ANTHROPIC_API_KEY'):
-            self.anthropic_client = anthropic.Anthropic()
-            self.async_anthropic_client = anthropic.AsyncAnthropic()
-        if getenv('AWS_ACCESS_KEY_ID'):
-            self.async_anthropic_bedrock_client = anthropic.AsyncAnthropicBedrock(
-                aws_region='us-east-1',
-                aws_access_key=getenv('AWS_ACCESS_KEY_ID'),
-                aws_secret_key=getenv('AWS_SECRET_ACCESS_KEY')
-            )
-        if getenv('GEMINI_API_KEY'):
-            self.google_genai_client = google_genai.Client(api_key=getenv('GEMINI_API_KEY'))
+        self.anthropic_client = anthropic.Anthropic()
+        self.async_anthropic_client = anthropic.AsyncAnthropic()
+        self.async_anthropic_bedrock_client = anthropic.AsyncAnthropicBedrock(
+            aws_region='us-east-1',
+            aws_access_key=getenv('AWS_ACCESS_KEY_ID'),
+            aws_secret_key=getenv('AWS_SECRET_ACCESS_KEY')
+        )
         self.get_embedding = get_embedding_func(self.cohere_client)
         llm_choice = getenv('LLM_CHOICE', self.default_llm)
         if llm_choice == 'CLAUDE':
             self.llm_interface = ClaudeInterface(self.async_anthropic_client)
-        elif llm_choice == 'OPENAI':
-            self.llm_interface = OpenAIInterface(self.openai_client, "gpt-4o")
         elif llm_choice == 'BEDROCK-CLAUDE':
             self.llm_interface = ClaudeInterface(self.async_anthropic_bedrock_client, model_override='arn:aws:bedrock:us-east-1:744423739991:inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0')
-        elif llm_choice == 'GEMMA3':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "ebdm/gemma3-enhanced:12b")
-        elif llm_choice == 'LLAMA3.2':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "llama3.2")
-        elif llm_choice == 'GPT-OSS':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url='http://ollama:11434/v1/'), "gpt-oss:120b")
-        elif llm_choice == 'GEMINI':  # set LLM_CHOICE=GEMINI in .env to use Google Gemini as the chat backend
-            self.llm_interface = GeminiInterface(self.google_genai_client, model='gemini-2.5-flash')  # gemini-2.5-flash is the faster/cheaper variant; swap model= here to use gemini-2.5-pro etc.
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 
