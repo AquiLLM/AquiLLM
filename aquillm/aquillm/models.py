@@ -804,14 +804,9 @@ class WSConversation(models.Model):
         first_two = list(self.db_messages.order_by('sequence_number')[:2].values('role', 'content'))
         first_two_messages = str(first_two)
 
-        # Build kwargs compatible with the LLM interface
-        # thinking_budget=0 disables Gemini 2.5's internal reasoning for this simple task —
-        # without it, thinking tokens eat into the maxOutputTokens budget, truncating the title.
-        # Claude and OpenAI silently ignore thinking_budget.
         llm_args = {
-            **llm_interface.base_args,  # Include base args (model, etc.)
+            **llm_interface.base_args,
             'max_tokens': 30,
-            'thinking_budget': 0,
             'system': system_prompt,
             'messages': [{'role': 'user', 'content': first_two_messages}]
         }
@@ -824,7 +819,7 @@ class WSConversation(models.Model):
 
         title_text = get_title()
         if title_text:
-            title_text = title_text.strip().strip('"').strip("'").strip('*')  # Gemini (and sometimes Claude) wraps titles in quotes or asterisks; strip them so the UI title looks clean
+            title_text = title_text.strip().strip('"').strip("'").strip('*')
         self.name = title_text if title_text else 'Conversation'
         self.save()
 
@@ -886,54 +881,3 @@ class EmailWhitelist(models.Model):
         return self.email
 
 
-class GeminiAPIUsage(models.Model):
-    """Model to track Gemini API usage and costs"""
-    timestamp = models.DateTimeField(auto_now_add=True)
-    operation_type = models.CharField(max_length=100, help_text="Type of operation (e.g., 'OCR', 'Handwritten Notes')")
-    input_tokens = models.PositiveIntegerField(default=0)
-    output_tokens = models.PositiveIntegerField(default=0)
-    cost = models.DecimalField(max_digits=10, decimal_places=6, default=0)
-
-    # Constants for pricing (can be updated as needed)
-    INPUT_COST_PER_1K = 0.0005  # $0.0005 per 1,000 input tokens
-    OUTPUT_COST_PER_1K = 0.0015  # $0.0015 per 1,000 output tokens
-
-    class Meta:
-        verbose_name = "Gemini API Usage"
-        verbose_name_plural = "Gemini API Usage"
-        ordering = ['-timestamp']
-
-    def __str__(self):
-        return f"{self.operation_type} at {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
-
-    @classmethod
-    def calculate_cost(cls, input_tokens, output_tokens):
-        """Calculate cost based on token usage"""
-        input_cost = (input_tokens / 1000) * cls.INPUT_COST_PER_1K
-        output_cost = (output_tokens / 1000) * cls.OUTPUT_COST_PER_1K
-        return input_cost + output_cost
-
-    @classmethod
-    def log_usage(cls, operation_type, input_tokens, output_tokens):
-        """Log API usage and return the cost"""
-        cost = cls.calculate_cost(input_tokens, output_tokens)
-        usage = cls.objects.create(
-            operation_type=operation_type,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost=cost
-        )
-        return usage
-
-    @classmethod
-    def get_total_stats(cls):
-        """Get aggregated usage statistics"""
-        from django.db.models import Sum, Count
-
-        stats = cls.objects.aggregate(
-            total_input_tokens=Sum('input_tokens'),
-            total_output_tokens=Sum('output_tokens'),
-            total_cost=Sum('cost'),
-            api_calls=Count('id')
-        )
-        return stats

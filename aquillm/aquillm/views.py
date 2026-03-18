@@ -42,7 +42,6 @@ import uuid
 
 from .forms import HandwrittenNotesForm
 from .models import HandwrittenNotesDocument
-from .ocr_utils import extract_text_from_image, get_gemini_cost_stats
 
 logger = logging.getLogger(__name__)
 
@@ -550,13 +549,6 @@ def pdf_ingestion_monitor(request, doc_id):
 
 @login_required
 @require_http_methods(['GET'])
-def gemini_cost_monitor(request):
-    """View to display the current Gemini API cost statistics"""
-    stats = get_gemini_cost_stats()
-    return render(request, 'aquillm/gemini_cost_monitor.html', {'stats': stats})
-
-@login_required
-@require_http_methods(['GET'])
 def email_whitelist(request):
     return render(request, 'aquillm/email_whitelist.html')
 
@@ -575,5 +567,4 @@ urlpatterns = [
     path("ingestion_dashboard/", ingestion_dashboard, name="ingestion_dashboard"),
     path("email_whitelist/", email_whitelist, name="email_whitelist"),
     path("ingest_handwritten_notes/", ingest_handwritten_notes, name="ingest_handwritten_notes"),
-    path('gemini-costs/', gemini_cost_monitor, name='gemini_cost_monitor')
 ]

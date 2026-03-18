@@ -3,8 +3,7 @@ from django.contrib.contenttypes.admin import GenericTabularInline
 from django.urls import reverse, path
 from django.utils.html import format_html
 from django.shortcuts import render
-from .models import ConversationFile, RawTextDocument, HandwrittenNotesDocument, PDFDocument, VTTDocument, TeXDocument, TextChunk, Collection, CollectionPermission, WSConversation, GeminiAPIUsage
-from .ocr_utils import get_gemini_cost_stats
+from .models import ConversationFile, RawTextDocument, HandwrittenNotesDocument, PDFDocument, VTTDocument, TeXDocument, TextChunk, Collection, CollectionPermission, WSConversation
 
 
 # class TextChunkInline(GenericTabularInline):
@@ -64,33 +63,3 @@ class WSConversationAdmin(admin.ModelAdmin):
     list_display = ('owner', 'id')
 
 
-@admin.register(GeminiAPIUsage)
-class GeminiAPIUsageAdmin(admin.ModelAdmin):
-    list_display = ('operation_type', 'timestamp', 'input_tokens', 'output_tokens', 'cost')
-    list_filter = ('operation_type', 'timestamp')
-    date_hierarchy = 'timestamp'
-    readonly_fields = ('timestamp', 'operation_type', 'input_tokens', 'output_tokens', 'cost')
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    # Custom admin view for cost summary
-    def get_urls(self):
-        urls = super().get_urls()
-        custom_urls = [
-            path('summary/', self.admin_site.admin_view(self.cost_summary_view), name='gemini-cost-summary'),
-        ]
-        return custom_urls + urls
-
-    def cost_summary_view(self, request):
-        stats = get_gemini_cost_stats()
-        context = {
-            'title': 'Gemini API Cost Summary',
-            'stats': stats,
-            'opts': self.model._meta,
-            **self.admin_site.each_context(request),
-        }
-        return render(request, 'aquillm/gemini_cost_monitor.html', context)

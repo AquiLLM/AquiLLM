@@ -8,7 +8,6 @@ pypdf
 django-extensions
 Werkzeug
 django-allauth[socialaccount]
-openai
 django-debug-toolbar
 mypy
 django-stubs
@@ -21,7 +20,6 @@ typeguard
 pydantic
 channels
 daphne
-google-generativeai
 django-storages[google]
 django-storages[s3]
 pytest
@@ -34,12 +32,9 @@ channels-redis
 django-stubs
 pdf2image
 pillow
-google-generativeai
 dotenv
 pytesseract
-google-genai
 chardet
-tiktoken
 trafilatura
 beautifulsoup4
 selenium>=4.0.0

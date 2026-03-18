@@ -29,7 +29,7 @@ More info can be found at [https://aquillm.org](https://aquillm.org). See also o
 *   **Frontend**: React
 *   **Database**: PostgreSQL
 *   **Vector Store**: pgvector (PostgreSQL extension)
-*   **LLM Integration**: Local LLMs, Claude, OpenAI, Gemini as desired
+*   **LLM Integration**: Claude (Anthropic API or AWS Bedrock)
 *   **Asynchronous Tasks**: Celery, Redis, Django Channels
 
 *   **Authentication**: django-allauth
@@ -50,8 +50,8 @@ This assumes you have Docker and Docker Compose installed.
     ```
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
-    - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, or `GEMINI`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
+    - ANTHROPIC_API_KEY (required)
+    - Set LLM_CHOICE to `CLAUDE` or `BEDROCK-CLAUDE`. To switch after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
 
 4.  **Build and run using Docker Compose:**
     ```bash
@@ -106,8 +106,8 @@ docker compose -f docker-compose-prod.yml --profile ollama up -d --force-recreat
     ```
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
-    - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, or `GEMINI`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f docker-compose-prod.yml up` — a simple restart may not pick up the change.
+    - ANTHROPIC_API_KEY (required)
+    - Set LLM_CHOICE to `CLAUDE` or `BEDROCK-CLAUDE`. To switch after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f docker-compose-prod.yml up` — a simple restart may not pick up the change.
     - Optional: Google OAuth credentials (GOOGLE_OAUTH2_CLIENT_ID, GOOGLE_OAUTH2_CLIENT_SECRET)
     - Optional: Email access permissions (ALLOWED_EMAIL_DOMAINS, ALLOWED_EMAIL_ADDRESSES). Required if OAuth is to be used.
     - Set HOST_NAME for your domain or use 'localhost' for development

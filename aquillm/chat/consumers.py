@@ -13,7 +13,7 @@ from django.apps import apps
 
 from pydantic import ValidationError
 import aquillm.llm
-from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, test_function, ToolChoice, llm_tool, ToolResultDict, message_to_user
+from aquillm.llm import UserMessage, Conversation, LLMTool, LLMInterface, test_function, ToolChoice, llm_tool, ToolResultDict
 from aquillm.settings import DEBUG
 
 from aquillm.models import ConversationFile, TextChunk, Collection, CollectionPermission, WSConversation, Document, DocumentChild
@@ -40,7 +40,7 @@ class ChatRef:
 def get_vector_search_func(user: User, col_ref: CollectionsRef): 
     @llm_tool(
         param_descs={"search_string": "The string to search by. Often it helps to phrase it as a question. ",
-                     "top_k": "The number of results to return. Start with 5 for simple questions, 8-10 for broad or multi-part questions. Increase if the desired information is not found. Go no higher than 15."},  # updated from vague "start low" to give Gemini/Claude more concrete starting guidance
+                     "top_k": "The number of results to return. Start with 5 for simple questions, 8-10 for broad or multi-part questions. Increase if the desired information is not found. Go no higher than 15."},
         required=['search_string', 'top_k'],
         for_whom='assistant'
 
@@ -401,7 +401,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                       get_flat_fielding_func(self),
                       get_point_source_detection_func(self)]
         if getenv('LLM_CHOICE') == 'GEMMA3':
-            self.tools.append(message_to_user)
+            pass
         if DEBUG:
             self.tools.append(get_weather_func())
         convo_id = self.scope['url_route']['kwargs']['convo_id']
