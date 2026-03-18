@@ -1,23 +1,15 @@
-FROM python:3.12-slim
+FROM astral/uv:0.8.17-python3.12-bookworm
 
-# Set environment variables
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
 
-ENV PORT=${PORT}
-# Set working directory
 WORKDIR /app
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project --group test
 RUN apt update && apt install -y curl
-# Copy the rest of the application
+
 COPY . .
 
-# Set working directory for Django app
 WORKDIR /app/aquillm
 
-# Command to run the application
-CMD pytest -s -v \
-    --ds=aquillm.settings \
-    --reuse-db \
-    | tee ../test-results.txt
+CMD pytest -s -v --ds=aquillm.settings --reuse-db | tee ../test-results.txt

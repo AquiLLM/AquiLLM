@@ -11,6 +11,7 @@ services:
     environment:
       - POSTGRES_HOST=db_test
       - STORAGE_HOST=storage_test:4566
+      - REDIS_HOST=redis
       - DJANGO_DEBUG=1
     depends_on:
       db_test:

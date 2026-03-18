@@ -102,10 +102,11 @@ WSGI_APPLICATION = "aquillm.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
-POSTGRES_USER = os.environ["POSTGRES_USER"]
-POSTGRES_HOST = os.environ["POSTGRES_HOST"]
-POSTGRES_NAME = os.environ["POSTGRES_NAME"]
-POSTGRES_PASSWORD = os.environ["POSTGRES_PASSWORD"]
+POSTGRES_USER = os.environ.get("POSTGRES_USER", "postgres")
+POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
+POSTGRES_NAME = os.environ.get("POSTGRES_NAME", "postgres")
+POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "postgres")
+POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
 
 DATABASES = {
     "default": {
@@ -114,7 +115,7 @@ DATABASES = {
         "USER": POSTGRES_USER,
         "PASSWORD": POSTGRES_PASSWORD,
         "HOST": POSTGRES_HOST,
-        "PORT": "5432",
+        "PORT": POSTGRES_PORT,
         "TEST": {
             'NAME': 'test'
         }
@@ -208,6 +209,25 @@ INTERNAL_IPS = [
     "127.0.0.1",
 ]
 
+DEBUG_TOOLBAR_PANELS = [
+    "debug_toolbar.panels.history.HistoryPanel",
+    "debug_toolbar.panels.versions.VersionsPanel",
+    # TimerPanel and RequestPanel are auto-disabled under ASGI
+    "debug_toolbar.panels.timer.TimerPanel",
+    "debug_toolbar.panels.settings.SettingsPanel",
+    "debug_toolbar.panels.headers.HeadersPanel",
+    "debug_toolbar.panels.request.RequestPanel",
+    "debug_toolbar.panels.sql.SQLPanel",
+    "debug_toolbar.panels.staticfiles.StaticFilesPanel",
+    # TemplatesPanel disabled: crashes under Daphne ASGI with SynchronousOnlyOperation
+    # "debug_toolbar.panels.templates.TemplatesPanel",
+    "debug_toolbar.panels.alerts.AlertsPanel",
+    "debug_toolbar.panels.cache.CachePanel",
+    "debug_toolbar.panels.signals.SignalsPanel",
+    "debug_toolbar.panels.redirects.RedirectsPanel",
+    "debug_toolbar.panels.profiling.ProfilingPanel",
+]
+
 X_FRAME_OPTIONS = "SAMEORIGIN"
 USE_TZ=True
 DATA_UPLOAD_MAX_MEMORY_SIZE=  268435456
@@ -221,9 +241,9 @@ STORAGES = {
     "default": {
         "BACKEND": "storages.backends.s3.S3Storage",
         "OPTIONS": {
-            "endpoint_url": "http://" + os.environ["STORAGE_HOST"],
-            "access_key": os.environ["STORAGE_ACCESS_KEY"],
-            "secret_key": os.environ["STORAGE_SECRET_KEY"],
+            "endpoint_url": "http://" + os.environ.get("STORAGE_HOST", "localhost:9000"),
+            "access_key": os.environ.get("STORAGE_ACCESS_KEY", "dev"),
+            "secret_key": os.environ.get("STORAGE_SECRET_KEY", "rickbailey"),
 
             "bucket_name": "aquillm",
             "file_overwrite": False,
@@ -241,7 +261,7 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [('redis', 6379)],
+            "hosts": [(os.environ.get("REDIS_HOST", "localhost"), 6379)],
         },
     }
 }

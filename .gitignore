@@ -170,3 +170,7 @@ aquillm/staticfiles
 aquillm/aquillm/static/js/dist
 aquillm/aquillm/static/index.css 
 react/node_modules/
+.playwright-mcp/
+CLAUDE.md
+
+# Do NOT ignore uv.lock — it should be committed for reproducible builds
