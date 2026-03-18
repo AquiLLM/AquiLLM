@@ -1,4 +1,5 @@
-django
+django>=6.0
+django-tasks-db
 psycopg2-binary
 cohere
 python-dotenv
@@ -29,7 +30,6 @@ websockets
 debugpy
 channels-redis
 django-stubs
-celery[redis]
 pdf2image
 pillow
 dotenv

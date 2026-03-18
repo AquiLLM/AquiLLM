@@ -40,8 +40,7 @@ from .settings import BASE_DIR
 
 logger = logging.getLogger(__name__)
 
-from .celery import app
-from celery.states import state, RECEIVED, STARTED, SUCCESS, FAILURE
+from django_tasks import task
 
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -268,8 +267,8 @@ class CollectionPermission(models.Model):
 
             super().save(*args, **kwargs)
             
-@app.task(serializer='pickle', bind=True, track_started=True)
-def create_chunks(self, doc_id:str): #naive method, just number of characters
+@task()
+def create_chunks(doc_id:str): #naive method, just number of characters
     channel_layer = get_channel_layer()
     doc = Document.get_by_id(uuid.UUID(doc_id))
     if not doc:
@@ -363,8 +362,7 @@ def create_chunks(self, doc_id:str): #naive method, just number of characters
         })
     except Exception as e:
         logger.error(f"Error creating chunks for document {doc.id}: {str(e)}")
-        self.update_state(state=FAILURE)
-        
+
         # TEMPORARY FIX: Don't delete documents on error
         # doc.delete()
         
@@ -441,26 +439,14 @@ class Document(models.Model):
         
         if is_new:
             self.ingestion_complete = False
-            result = None
+            super().save()
             try:
-                result = create_chunks.delay(str(self.id)) # type: ignore
-                for _ in range(4):
-                    if state(result.status) == state(FAILURE):
-                        raise Exception(f"Task failed")
-                    if state(result.status) in [state(RECEIVED), state(STARTED), state(SUCCESS)]:
-                        return
-                    time.sleep(1)
-                raise Exception("Task was not received in time")
+                create_chunks.enqueue(str(self.id))
             except Exception as e:
-                logger.error(f"Error creating chunks for document {self.id}: {str(e)}")
-                if result:
-                    result.revoke()
-                # TEMPORARY FIX: Don't delete documents on error
-                # self.delete()
-                
-                # Instead, mark the document as complete but with error
+                logger.error(f"Error dispatching create_chunks for document {self.id}: {str(e)}")
+                # Mark the document as complete but with error
                 self.ingestion_complete = True
-                super().save(dont_rechunk=True)
+                super().save()
 
     def move_to(self, new_collection):
         """Move this document to a new collection"""

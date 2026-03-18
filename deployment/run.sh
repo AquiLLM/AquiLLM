@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-celery -A aquillm worker --loglevel=info &
+cd /app/aquillm && python manage.py db_worker &
 
 cd /app/react
 npm ci

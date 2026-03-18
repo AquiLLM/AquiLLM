@@ -309,13 +309,13 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
                 library_config[lib_id].append(col_key)
 
             # Trigger background sync task with collection selection
-            task = sync_zotero_library.delay(
+            result = sync_zotero_library.enqueue(
                 user_id=request.user.id,
                 library_config=library_config
             )
 
             messages.info(request, "Zotero sync started. This may take a few minutes depending on your library size.")
-            logger.info(f"Started Zotero sync for user {request.user.id} with collections: {library_config} (task: {task.id})")
+            logger.info(f"Started Zotero sync for user {request.user.id} with collections: {library_config} (task: {result.id})")
 
             return redirect('zotero_settings')
 

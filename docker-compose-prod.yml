@@ -14,7 +14,6 @@ services:
       - STORAGE_HOST=storage:9000
       - STORAGE_ACCESS_KEY=dev
       - STORAGE_SECRET_KEY=rickbailey
-      - C_FORCE_ROOT=1
     depends_on:
       db:
         condition: service_healthy

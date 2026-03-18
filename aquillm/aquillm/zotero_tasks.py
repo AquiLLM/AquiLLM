@@ -3,7 +3,7 @@ Celery tasks for Zotero synchronization
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from celery import shared_task
+from django_tasks import task
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.utils import timezone
@@ -219,8 +219,8 @@ def sync_items_from_library(client, user, collection_map, library_id=None, libra
     return items_synced, pdfs_downloaded, errors
 
 
-@shared_task(bind=True)
-def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = None):
+@task()
+def sync_zotero_library(user_id: int, library_config: Optional[dict] = None):
     """
     Background task to sync a user's Zotero library including personal and group libraries.
 

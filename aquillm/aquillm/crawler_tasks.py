@@ -2,8 +2,7 @@ import logging
 import requests
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
-from celery import shared_task
-from celery.states import state, STARTED, SUCCESS, FAILURE
+from django_tasks import task
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import DatabaseError
 from django.contrib.auth import get_user_model
@@ -23,8 +22,9 @@ from webdriver_manager.chrome import ChromeDriverManager
 from trafilatura import fetch_url, extract, extract_metadata
 
 # Local imports
+import uuid
+
 from .models import RawTextDocument, Collection, DuplicateDocumentError
-from .celery import app # Ensure Celery app is imported
 
 logger = logging.getLogger(__name__)
 
@@ -75,15 +75,14 @@ def send_crawl_status(user_id: int, task_id: str, message_type: str, payload: di
         logger.error(f"Failed to send WebSocket status update for task {task_id} to user {user_id}: {e}", exc_info=False)
 
 
-@app.task(bind=True, track_started=True, serializer='pickle')
-def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id: int, max_depth: int = 1):
+@task()
+def crawl_and_ingest_webpage(initial_url: str, collection_id: int, user_id: int, max_depth: int = 1, task_id: str | None = None):
     """
-    Celery task to crawl a webpage, follow links (1 level deep, same domain),
+    Background task to crawl a webpage, follow links (1 level deep, same domain),
     extract text using Trafilatura (with Selenium fallback), and save as a RawTextDocument.
     """
-    task_id = str(self.request.id) # Ensure task_id is a string for consistency
+    task_id = task_id or str(uuid.uuid4())
     logger.info(f"[Task {task_id}] Starting crawl for URL: {initial_url}, Collection: {collection_id}, User: {user_id}, Depth: {max_depth}")
-    self.update_state(state=STARTED, meta={'current_url': initial_url, 'progress': 0, 'task_id': task_id})
     # Send initial start message via WebSocket
     send_crawl_status(user_id, task_id, 'crawl.start', {'initial_url': initial_url, 'message': 'Crawl initiated...'})
 
@@ -93,7 +92,6 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
     except ObjectDoesNotExist as e:
         error_msg = 'Collection or User not found.'
         logger.error(f"[Task {task_id}] Failed: {error_msg} {e}")
-        self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
         send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
         return {'error': error_msg}
 
@@ -112,7 +110,6 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
             processed_count += 1
             progress = int((processed_count / max(total_urls_found, 1)) * 90) # Avoid division by zero; 90% for crawling
             status_message = f"Processing URL {processed_count}/{total_urls_found}: {current_url}"
-            self.update_state(state=STARTED, meta={'current_url': current_url, 'progress': progress, 'message': status_message, 'task_id': task_id})
             send_crawl_status(user_id, task_id, 'crawl.progress', {'progress': progress, 'message': status_message})
             logger.info(f"[Task {task_id}] {status_message}")
 
@@ -232,7 +229,6 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
             final_text = "".join(all_text_content).strip()
             status_message = f"Crawling complete. Total text length: {len(final_text)}. Saving document..."
             logger.info(f"[Task {task_id}] {status_message}")
-            self.update_state(state=STARTED, meta={'current_url': 'Saving Document', 'progress': 95, 'message': status_message, 'task_id': task_id})
             send_crawl_status(user_id, task_id, 'crawl.progress', {'progress': 95, 'message': status_message})
             try:
                 doc = RawTextDocument(
@@ -246,46 +242,39 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
                 doc_id_str = str(doc.id)
                 doc_title = doc.title
                 logger.info(f"[Task {task_id}] Successfully saved RawTextDocument {doc_id_str} for initial URL {initial_url}")
-                self.update_state(state=SUCCESS, meta={'document_id': doc_id_str, 'title': doc_title, 'progress': 100, 'task_id': task_id})
                 send_crawl_status(user_id, task_id, 'crawl.success', {'document_id': doc_id_str, 'title': doc_title, 'message': 'Crawl and save successful.'})
                 return {'document_id': doc_id_str, 'title': doc_title}
 
             except DuplicateDocumentError as e:
                 error_msg = e.message
                 logger.warning(f"[Task {task_id}] Duplicate document error on save: {error_msg}")
-                self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
                 send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
                 return {'error': error_msg}
             except ValidationError as e:
                  error_msg = "; ".join([f'{k}: {v[0]}' for k, v in e.message_dict.items()]) if hasattr(e, 'message_dict') else ". ".join(e.messages)
                  error_msg = f'Validation Error: {error_msg}'
                  logger.error(f"[Task {task_id}] Validation error saving document: {error_msg}", exc_info=True)
-                 self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
                  send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
                  return {'error': error_msg}
             except DatabaseError as e:
                 error_msg = 'Database error during save.'
                 logger.error(f"[Task {task_id}] {error_msg} {e}", exc_info=True)
-                self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
                 send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
                 return {'error': error_msg}
             except Exception as e:
                 error_msg = 'Unexpected error during save.'
                 logger.error(f"[Task {task_id}] {error_msg} {e}", exc_info=True)
-                self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
                 send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
                 return {'error': error_msg}
         else:
             error_msg = 'No text content could be extracted.'
             logger.error(f"[Task {task_id}] Crawling finished, but {error_msg} from any URL starting with {initial_url}.")
-            self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
             send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
             return {'error': error_msg}
 
     except Exception as e:
         error_msg = f'Unexpected task error: {e}'
         logger.error(f"[Task {task_id}] {error_msg}", exc_info=True)
-        self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
         send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
         return {'error': error_msg}
     finally:
