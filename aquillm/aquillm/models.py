@@ -874,6 +874,31 @@ class ConversationFile(models.Model):
         return f"File {self.file.name} for conversation {self.conversation.id}"
 
 
+class FeedbackExport(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    triggered_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    file = models.FileField(upload_to='feedback_exports/', null=True, blank=True)
+    conversation_count = models.PositiveIntegerField(default=0)
+    message_count = models.PositiveIntegerField(default=0)
+    error_message = models.TextField(blank=True, default='')
+    celery_task_id = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"FeedbackExport {self.pk} ({self.status})"
+
+
 class EmailWhitelist(models.Model):
     email = models.EmailField(unique=True)
 

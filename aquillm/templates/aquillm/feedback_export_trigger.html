@@ -1,0 +1,13 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}Generate Feedback Export{% endblock %}
+
+{% block content %}
+<p>This will generate a JSON export of all conversations containing feedback (ratings or text).</p>
+<form method="post">
+    {% csrf_token %}
+    <input type="submit" value="Confirm Export">
+</form>
+<p><a href="{% url 'admin:aquillm_feedbackexport_changelist' %}">Cancel</a></p>
+{% endblock %}
