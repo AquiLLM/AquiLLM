@@ -122,6 +122,8 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+.env
+.env.multimodal
 .venv
 env/
 venv/
