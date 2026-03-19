@@ -1,61 +1,90 @@
 {% extends "allauth/layouts/base.html" %}
 {% load allauth %}
 {% block body %}
-    <div id="login-background" class="flex-grow-1 bg-scheme-shade_2 flex flex-col justify-center bg-gradient-to-b from-scheme-shade_2 to-accent-dark h-screen">
-    
-    <svg width="350" height="382" viewBox="0 0 427 466" fill="none" xmlns="http://www.w3.org/2000/svg" class="absolute left-[37.5%] top-[25%] transform -translate-x-1/2 -translate-y-1/2">
-        <g clip-path="url(#clip0_48_106)">
-            <path d="M412.566 465.933C418.297 465.933 422.942 461.584 422.942 456.219C422.942 450.853 418.297 446.504 412.566 446.504C406.835 446.504 402.19 450.853 402.19 456.219C402.19 461.584 406.835 465.933 412.566 465.933Z" fill="#1C79D8"/>
-            <path d="M386.614 450.799C394.052 450.799 400.082 445.153 400.082 438.189C400.082 431.225 394.052 425.58 386.614 425.58C379.175 425.58 373.146 431.225 373.146 438.189C373.146 445.153 379.175 450.799 386.614 450.799Z" fill="#1C79D8"/>
-            <path d="M412.566 456.219L386.614 438.189" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M276.338 281.059C283.979 281.059 290.173 275.26 290.173 268.106C290.173 260.952 283.979 255.153 276.338 255.153C268.697 255.153 262.503 260.952 262.503 268.106C262.503 275.26 268.697 281.059 276.338 281.059Z" fill="#1C79D8"/>
-            <path d="M386.614 438.189L276.338 268.106" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M385.63 51.0524C394.342 51.0524 401.404 44.4404 401.404 36.2841C401.404 28.1278 394.342 21.5157 385.63 21.5157C376.919 21.5157 369.857 28.1278 369.857 36.2841C369.857 44.4404 376.919 51.0524 385.63 51.0524Z" fill="#1C79D8"/>
-            <path d="M276.338 268.106L385.631 36.2841" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M158.328 123.889C167.821 123.889 175.517 116.684 175.517 107.796C175.517 98.9084 167.821 91.7033 158.328 91.7033C148.835 91.7033 141.14 98.9084 141.14 107.796C141.14 116.684 148.835 123.889 158.328 123.889Z" fill="#1C79D8"/>
-            <path d="M385.63 36.2841L158.328 107.796" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M132.637 170.759C147.803 170.759 160.097 159.249 160.097 145.05C160.097 130.85 147.803 119.34 132.637 119.34C117.471 119.34 105.177 130.85 105.177 145.05C105.177 159.249 117.471 170.759 132.637 170.759Z" fill="#1C79D8"/>
-            <path d="M158.328 107.796L132.637 145.049" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M106.542 208.786C113.17 208.786 118.543 203.755 118.543 197.55C118.543 191.344 113.17 186.314 106.542 186.314C99.9141 186.314 94.5413 191.344 94.5413 197.55C94.5413 203.755 99.9141 208.786 106.542 208.786Z" fill="#1C79D8"/>
-            <path d="M132.637 145.049L106.542 197.55" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M14.4637 329.859C22.4518 329.859 28.9274 323.796 28.9274 316.317C28.9274 308.839 22.4518 302.776 14.4637 302.776C6.47562 302.776 0 308.839 0 316.317C0 323.796 6.47562 329.859 14.4637 329.859Z" fill="#1C79D8"/>
-            <path d="M106.542 197.55L14.4636 316.317" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M122.137 323.746C128.302 323.746 133.3 319.067 133.3 313.295C133.3 307.523 128.302 302.845 122.137 302.845C115.973 302.845 110.975 307.523 110.975 313.295C110.975 319.067 115.973 323.746 122.137 323.746Z" fill="#1C79D8"/>
-            <path d="M14.4636 316.317L122.137 313.295" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M122.137 313.295L276.338 268.106" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M416.624 19.4294C422.355 19.4294 427 15.08 427 9.71472C427 4.34943 422.355 0 416.624 0C410.893 0 406.248 4.34943 406.248 9.71472C406.248 15.08 410.893 19.4294 416.624 19.4294Z" fill="#1C79D8"/>
-            <path d="M416.624 9.71472L385.63 36.2841" stroke="#1C79D8" stroke-width="1.92045"/>
-            <path d="M83.092 109.41V108.78L83.0733 108.149L83.0359 107.553L82.9984 106.957L82.8674 105.801L82.7177 104.714L82.4931 103.663L82.2498 102.664L81.969 101.718L81.6322 100.824L81.2766 99.9831L80.8648 99.177L80.453 98.4235L79.9851 97.7051L79.4985 97.0392L78.9932 96.4084L78.4504 95.8301L77.889 95.2869L77.3275 94.7788L76.7285 94.3232L76.1109 93.9026L75.4746 93.5171L74.8383 93.1667L74.2019 92.8513L73.5281 92.5709L72.873 92.3255L72.1993 92.0977L71.5255 91.9225L70.8517 91.7648L70.1779 91.6422L69.5042 91.5545L68.8304 91.4845L68.1754 91.4494L67.5203 91.4319L67.4267 93.3594C76.6537 93.3594 76.6537 104.802 76.6537 111.601C76.6537 114.825 76.6537 119.889 76.8409 121.379C68.6433 128.09 61.4563 129.054 57.7318 129.054C52.1358 129.054 49.3471 125.128 49.3471 119.539C49.3471 115.263 51.7614 105.836 54.756 101.385C59.1355 95.0066 64.1702 93.3594 67.4267 93.3594L67.5203 91.4319C54.756 91.4319 42.4409 103.926 42.4409 116.227C42.4409 124.34 48.0369 130.981 57.5447 130.981C63.4215 130.981 70.1405 128.966 77.2152 123.639C78.4317 128.265 81.5011 130.981 85.7122 130.981C90.6532 130.981 93.5355 126.18 93.5355 124.778C93.5355 124.165 92.974 123.902 92.4125 123.902C91.7575 123.902 91.4767 124.165 91.196 124.778C89.5303 129.054 86.1801 129.054 85.9742 129.054C83.092 129.054 83.092 122.255 83.092 120.152C83.092 118.312 83.092 118.154 84.0278 117.103C92.7869 106.8 94.752 96.6713 94.752 96.5837C94.752 96.4084 94.6585 95.7075 93.6291 95.7075C92.6933 95.7075 92.6933 95.9703 92.2254 97.5474C90.5597 103.05 87.4715 109.673 83.092 114.825V109.41Z" fill="#1C79D8"/>
-        </g>
-        <defs>
-            <clipPath id="clip0_48_106">
-                <rect width="427" height="465.933" fill="white"/>
-            </clipPath>
-        </defs>
-    </svg>
-    
-        <div class="container mx-auto flex items-center justify-center">
-            <div class="flex justify-center">
-                <div class="w-full">
+    <div class="min-h-screen text-text-normal"
+         style="background: linear-gradient(100deg, var(--color-scheme-shade-3) 0%, var(--color-scheme-shade-2) 44%, var(--color-scheme-shade-8) 56%, var(--color-scheme-shade-12) 68%, var(--color-scheme-shade-14) 80%, var(--color-accent-dark_i) 100%);">
+        <div class="grid min-h-screen w-full grid-cols-1 lg:grid-cols-[minmax(0,1.1fr)_minmax(460px,0.9fr)]">
+            <aside class="relative hidden overflow-hidden bg-transparent lg:flex lg:flex-col lg:justify-start lg:gap-12 lg:px-14 lg:py-12">
+                <div class="pointer-events-none absolute -left-12 -top-12 h-[230px] w-[230px] rounded-full bg-accent opacity-15 blur-3xl"></div>
+                <div class="pointer-events-none absolute bottom-[-80px] right-[-40px] h-[260px] w-[260px] rounded-full bg-accent opacity-20 blur-3xl"></div>
+
+                <div class="relative z-10">
+                    <a href="{% url 'index' %}" class="inline-flex items-center gap-3 no-underline">
+                        <div class="nav-brand-mark" aria-hidden="true">
+                            <svg width="48" height="57" viewBox="0 0 48 57" fill="none" xmlns="http://www.w3.org/2000/svg" class="nav-brand-mark-icon">
+                                <g clip-path="url(#clip0_login_brand)">
+                                <path d="M46.3775 56.5333C47.0216 56.5333 47.5439 56.0056 47.5439 55.3546C47.5439 54.7036 47.0216 54.1759 46.3775 54.1759C45.7333 54.1759 45.2111 54.7036 45.2111 55.3546C45.2111 56.0056 45.7333 56.5333 46.3775 56.5333Z" fill="var(--color-contrast)"/>
+                                <path d="M43.4601 54.697C44.2962 54.697 44.974 54.012 44.974 53.167C44.974 52.3221 44.2962 51.6371 43.4601 51.6371C42.6239 51.6371 41.9461 52.3221 41.9461 53.167C41.9461 54.012 42.6239 54.697 43.4601 54.697Z" fill="var(--color-contrast)"/>
+                                <path d="M46.3775 55.3546L43.4601 53.167" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M31.0638 34.1019C31.9227 34.1019 32.619 33.3982 32.619 32.5302C32.619 31.6623 31.9227 30.9586 31.0638 30.9586C30.2049 30.9586 29.5086 31.6623 29.5086 32.5302C29.5086 33.3982 30.2049 34.1019 31.0638 34.1019Z" fill="var(--color-contrast)"/>
+                                <path d="M43.4601 53.1671L31.0638 32.5303" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M43.3496 6.19438C44.3288 6.19438 45.1227 5.39213 45.1227 4.40249C45.1227 3.41285 44.3288 2.6106 43.3496 2.6106C42.3703 2.6106 41.5764 3.41285 41.5764 4.40249C41.5764 5.39213 42.3703 6.19438 43.3496 6.19438Z" fill="var(--color-contrast)"/>
+                                <path d="M31.0638 32.5302L43.3496 4.40247" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M17.798 15.032C18.8652 15.032 19.7303 14.1577 19.7303 13.0793C19.7303 12.0009 18.8652 11.1267 17.798 11.1267C16.7309 11.1267 15.8658 12.0009 15.8658 13.0793C15.8658 14.1577 16.7309 15.032 17.798 15.032Z" fill="var(--color-contrast)"/>
+                                <path d="M43.3496 4.40247L17.798 13.0793" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M14.91 20.7189C16.6148 20.7189 17.9968 19.3222 17.9968 17.5994C17.9968 15.8766 16.6148 14.48 14.91 14.48C13.2052 14.48 11.8232 15.8766 11.8232 17.5994C11.8232 19.3222 13.2052 20.7189 14.91 20.7189Z" fill="var(--color-contrast)"/>
+                                <path d="M17.798 13.0793L14.91 17.5994" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M11.9766 25.3327C12.7217 25.3327 13.3256 24.7224 13.3256 23.9695C13.3256 23.2166 12.7217 22.6062 11.9766 22.6062C11.2316 22.6062 10.6276 23.2166 10.6276 23.9695C10.6276 24.7224 11.2316 25.3327 11.9766 25.3327Z" fill="var(--color-contrast)"/>
+                                <path d="M14.91 17.5994L11.9766 23.9694" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M1.6259 40.0229C2.52385 40.0229 3.25179 39.2873 3.25179 38.3799C3.25179 37.4724 2.52385 36.7368 1.6259 36.7368C0.727938 36.7368 0 37.4724 0 38.3799C0 39.2873 0.727938 40.0229 1.6259 40.0229Z" fill="var(--color-contrast)"/>
+                                <path d="M11.9766 23.9694L1.62589 38.3799" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M13.7297 39.2813C14.4227 39.2813 14.9845 38.7136 14.9845 38.0133C14.9845 37.3129 14.4227 36.7452 13.7297 36.7452C13.0367 36.7452 12.4749 37.3129 12.4749 38.0133C12.4749 38.7136 13.0367 39.2813 13.7297 39.2813Z" fill="var(--color-contrast)"/>
+                                <path d="M1.62589 38.3799L13.7297 38.0132" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M13.7297 38.0132L31.0638 32.5303" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M46.8336 2.35744C47.4778 2.35744 48 1.82971 48 1.17872C48 0.527731 47.4778 0 46.8336 0C46.1894 0 45.6672 0.527731 45.6672 1.17872C45.6672 1.82971 46.1894 2.35744 46.8336 2.35744Z" fill="var(--color-contrast)"/>
+                                <path d="M46.8336 1.17871L43.3495 4.40247" stroke="var(--color-contrast)" stroke-width="1.92045"/>
+                                <path d="M9.34055 13.2751V13.1985L9.33845 13.122L9.33424 13.0497L9.33003 12.9774L9.31531 12.8371L9.29847 12.7053L9.27322 12.5777L9.24587 12.4565L9.21432 12.3417L9.17645 12.2333L9.13647 12.1312L9.09019 12.0334L9.0439 11.942L8.9913 11.8548L8.9366 11.774L8.8798 11.6975L8.81878 11.6273L8.75567 11.5614L8.69255 11.4998L8.62522 11.4445L8.55579 11.3935L8.48426 11.3467L8.41273 11.3042L8.3412 11.2659L8.26545 11.2319L8.19182 11.2021L8.11608 11.1745L8.04033 11.1532L7.9646 11.1341L7.88885 11.1192L7.81312 11.1086L7.73738 11.1001L7.66374 11.0958L7.5901 11.0937L7.57959 11.3276C8.61681 11.3276 8.61681 12.7159 8.61681 13.5408C8.61681 13.9321 8.61681 14.5465 8.63785 14.7272C7.71634 15.5415 6.90844 15.6585 6.48976 15.6585C5.86069 15.6585 5.54721 15.1822 5.54721 14.504C5.54721 13.9852 5.81861 12.8414 6.15524 12.3013C6.64755 11.5274 7.21351 11.3276 7.57959 11.3276L7.5901 11.0937C6.15524 11.0937 4.77087 12.6096 4.77087 14.1021C4.77087 15.0865 5.39994 15.8923 6.46872 15.8923C7.12934 15.8923 7.88465 15.6478 8.67992 15.0015C8.81668 15.5628 9.16172 15.8923 9.6351 15.8923C10.1905 15.8923 10.5145 15.3098 10.5145 15.1397C10.5145 15.0653 10.4514 15.0334 10.3883 15.0334C10.3147 15.0334 10.2831 15.0653 10.2515 15.1397C10.0643 15.6585 9.68769 15.6585 9.66455 15.6585C9.34055 15.6585 9.34055 14.8335 9.34055 14.5784C9.34055 14.3552 9.34055 14.336 9.44575 14.2085C10.4304 12.9583 10.6513 11.7294 10.6513 11.7188C10.6513 11.6975 10.6408 11.6125 10.525 11.6125C10.4199 11.6125 10.4199 11.6443 10.3673 11.8357C10.18 12.5033 9.83286 13.307 9.34055 13.9321V13.2751Z" fill="var(--color-contrast)"/>
+                                </g>
+                                <defs>
+                                    <clipPath id="clip0_login_brand">
+                                        <rect width="48" height="57" fill="white"/>
+                                    </clipPath>
+                                </defs>
+                            </svg>
+                        </div>
+                        <span class="brand-wordmark-font text-[2.45rem] leading-none tracking-[0.01em] text-text-normal">AquiLLM</span>
+                    </a>
+                    <p class="brand-wordmark-font mt-7 max-w-[34ch] text-[1.35rem] leading-[1.2] text-text-normal">
+                        A Tool for Preserving Tacit Knowledge in Research Groups.
+                    </p>
+                </div>
+
+                <div class="relative z-10 w-full max-w-[560px] rounded-[20px] border border-border-low_contrast bg-scheme-shade_1 p-5">
+                    <p class="text-sm font-semibold text-text-slightly_less_contrast">Built for focused research workflows</p>
+                    <ul class="mt-3 space-y-2 text-sm text-text-less_contrast">
+                        <li>- Ingest documents, media, and web sources</li>
+                        <li>- Organize collections with figure sub-collections</li>
+                        <li>- Retrieve with OCR, reranking, and RAG-ready chunks</li>
+                    </ul>
+                </div>
+            </aside>
+
+            <section class="relative flex items-center justify-center px-4 py-8 sm:px-8 lg:px-12">
+                <div class="pointer-events-none absolute inset-0 bg-accent" style="opacity: 0.06;"></div>
+                <div class="w-full max-w-[480px]">
                     {% if messages %}
-                        {% for message in messages %}
-                            {% element alert level=message.tags %}
-                                {% slot message %}
-                                    {{ message }}
-                                {% endslot %}
-                            {% endelement %}
-                        {% endfor %}
+                        <div class="mb-4 space-y-2">
+                            {% for message in messages %}
+                                {% element alert level=message.tags %}
+                                    {% slot message %}
+                                        {{ message }}
+                                    {% endslot %}
+                                {% endelement %}
+                            {% endfor %}
+                        </div>
                     {% endif %}
-                    <div class="">
-                        <div id="content" class="relative bg-scheme-shade_3 rounded-[36px] shadow text-text-normal z-20 w-[440px] h-[600px] overflow-hidden border border-accent shadow-lg">
-                            <div class="bg-scheme-shade_4 h-[80px] flex items-center justify-center text-text-normal text-[24px] mb-[20px] font-serif"> AquiLLM </div>
-                            <div class="px-[32px]">
-                                {% block content %}{% endblock %}
-                            </div>
+
+                    <div id="content" class="relative overflow-hidden rounded-[28px] border border-border-low_contrast bg-scheme-shade_2 shadow-[0_20px_44px_rgba(6,18,56,0.28)]">
+                        <div class="border-b border-border-low_contrast bg-scheme-shade_3 px-8 py-6">
+                            <h2 class="brand-wordmark-font text-[1.95rem] font-semibold leading-tight text-text-normal">Welcome back</h2>
+                            <p class="mt-1 text-sm text-text-slightly_less_contrast">Sign in to continue to AquiLLM.</p>
+                        </div>
+                        <div class="px-8 py-7">
+                            {% block content %}{% endblock %}
                         </div>
                     </div>
                 </div>
-            </div>
+            </section>
         </div>
     </div>
 {% endblock %}
