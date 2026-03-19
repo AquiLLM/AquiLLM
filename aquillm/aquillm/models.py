@@ -210,7 +210,7 @@ def document_provider_model(doc: Any) -> str:
     return ""
 
 
-@app.task(serializer="pickle", bind=True, track_started=True)
+@app.task(serializer="json", bind=True, track_started=True)
 def create_chunks(self, doc_id: str):
     channel_layer = get_channel_layer()
     doc = Document.get_by_id(uuid.UUID(doc_id))
@@ -406,4 +406,3 @@ __all__ = [
     "get_embedding",
     "get_embeddings",
 ]
-

@@ -75,7 +75,7 @@ def send_crawl_status(user_id: int, task_id: str, message_type: str, payload: di
         logger.error(f"Failed to send WebSocket status update for task {task_id} to user {user_id}: {e}", exc_info=False)
 
 
-@app.task(bind=True, track_started=True, serializer='pickle')
+@app.task(bind=True, track_started=True, serializer='json')
 def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id: int, max_depth: int = 1):
     """
     Celery task to crawl a webpage, follow links (1 level deep, same domain),
