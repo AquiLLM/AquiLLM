@@ -236,6 +236,26 @@ class LLMInterface(ABC):
     def _contains_markdown_image(text: str) -> bool:
         return bool(re.search(r"!\[[^\]]*\]\([^)]+\)", text or ""))
 
+    @staticmethod
+    def _looks_like_image_display_request(text: str) -> bool:
+        normalized = (text or "").strip().lower()
+        if not normalized:
+            return False
+        cues = (
+            "show me",
+            "display",
+            "render",
+            "show it",
+            "display it",
+            "in chat",
+            "show image",
+            "display image",
+            "figure",
+            "plot",
+            "graph",
+        )
+        return any(cue in normalized for cue in cues)
+
     @classmethod
     def _recent_tool_image_markdown(cls, conversation: Conversation, max_images: int = 3) -> list[str]:
         lines: list[str] = []
@@ -646,7 +666,13 @@ class LLMInterface(ABC):
                         if synthesized:
                             response_text = synthesized
             if (
-                is_post_tool_result_turn
+                (
+                    is_post_tool_result_turn
+                    or (
+                        isinstance(last_message, UserMessage)
+                        and self._looks_like_image_display_request(last_message.content)
+                    )
+                )
                 and (not response_tool_call)
                 and response_text.strip()
                 and (not self._contains_markdown_image(response_text))

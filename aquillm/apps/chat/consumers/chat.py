@@ -212,6 +212,7 @@ def get_vector_search_func(user: User, col_ref: CollectionsRef):
             return {"exception": "No documents to search! Either no collections were selected, or the selected collections are empty."}
         _,_,results = TextChunk.text_chunk_search(search_string, top_k, docs)
         titles_by_doc_id = {doc.id: doc.title for doc in docs}
+        docs_by_doc_id = {doc.id: doc for doc in docs}
         
         result_items = {}
         has_image_results = False
@@ -230,7 +231,17 @@ def get_vector_search_func(user: User, col_ref: CollectionsRef):
                     "doc_id": str(chunk.doc_id),
                 }
             else:
-                result_items[key] = _truncate_tool_text(chunk.content)
+                doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
+                if doc_for_chunk is not None and getattr(doc_for_chunk, "image_file", None):
+                    has_image_results = True
+                    result_items[key] = {
+                        "type": "text_with_image",
+                        "text": _truncate_tool_text(chunk.content),
+                        "image_url": f"/aquillm/document_image/{chunk.doc_id}/",
+                        "doc_id": str(chunk.doc_id),
+                    }
+                else:
+                    result_items[key] = _truncate_tool_text(chunk.content)
         
         ret = {"result": result_items}
         if has_image_results:
@@ -353,7 +364,16 @@ def get_search_single_document_func(user: User) -> LLMTool:
                     "doc_id": str(chunk.doc_id),
                 }
             else:
-                result_items[key] = _truncate_tool_text(chunk.content)
+                if getattr(doc, "image_file", None):
+                    has_image_results = True
+                    result_items[key] = {
+                        "type": "text_with_image",
+                        "text": _truncate_tool_text(chunk.content),
+                        "image_url": f"/aquillm/document_image/{chunk.doc_id}/",
+                        "doc_id": str(chunk.doc_id),
+                    }
+                else:
+                    result_items[key] = _truncate_tool_text(chunk.content)
 
         ret = {"result": result_items}
         if has_image_results:
