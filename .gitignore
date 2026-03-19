@@ -171,3 +171,5 @@ aquillm/staticfiles
 aquillm/aquillm/static/js/dist
 aquillm/aquillm/static/index.css 
 react/node_modules/
+/node_modules/
+/aquillm/tmp/

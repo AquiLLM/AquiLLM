@@ -26,6 +26,7 @@ django-storages[s3]
 pytest
 pytest-cov
 pytest-django
+pytest-asyncio
 boto3
 websockets
 debugpy
