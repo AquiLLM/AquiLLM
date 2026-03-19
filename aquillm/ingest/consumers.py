@@ -30,10 +30,10 @@ class IngestMonitorConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.user = self.scope.get('user', None)
         is_authenticated = bool(self.user and getattr(self.user, 'is_authenticated', False))
-        if is_authenticated:
-            await self.accept()
-        else:
+        if not is_authenticated:
             await self.close()
+            return
+        await self.accept()
         await self.channel_layer.group_add(f"document-ingest-{self.scope['url_route']['kwargs']['doc_id']}", self.channel_name) # type: ignore
         doc_id = self.scope['url_route']['kwargs']['doc_id'] # Get the document ID from the URL route
         doc = await database_sync_to_async(Document.get_by_id)(uuid.UUID(doc_id)) # Look up the document in the DB (must be async-safe)
@@ -58,10 +58,10 @@ class IngestionDashboardConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.user = self.scope.get('user')
         is_authenticated = bool(self.user and getattr(self.user, 'is_authenticated', False))
-        if is_authenticated:
-            await self.accept()
-        else:
+        if not is_authenticated:
             await self.close()
+            return
+        await self.accept()
         await self.channel_layer.group_add(f"ingestion-dashboard-{self.user.id}", self.channel_name) # type: ignore
         in_progress = await self.__get_in_progress(self.user)
         for doc in in_progress:
