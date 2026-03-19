@@ -17,6 +17,7 @@ interface CollectionContent {
   name: string;
   created_at: string;
   document_count?: number;
+  parent_document_id?: string | null;
 }
 
 interface CollectionViewProps {
@@ -79,9 +80,38 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
         }));
         const transformedChildren = (data.children || []).map((child: any) => ({
           id: child.id, type: 'collection', name: child.name,
-          created_at: new Date(child.created_at || new Date()).toLocaleString(), document_count: child.document_count,
+          created_at: new Date(child.created_at || new Date()).toLocaleString(),
+          document_count: child.document_count,
+          parent_document_id: child.parent_document_id || null,
         }));
-        setContents([...transformedChildren, ...transformedDocuments]);
+        const docsById = new Map<string, CollectionContent>(
+          transformedDocuments.map((doc: CollectionContent) => [String(doc.id), doc])
+        );
+        const anchoredChildrenByDoc = new Map<string, CollectionContent[]>();
+        const unanchoredChildren: CollectionContent[] = [];
+
+        for (const child of transformedChildren as CollectionContent[]) {
+          const parentDocumentId = child.parent_document_id ? String(child.parent_document_id) : "";
+          if (parentDocumentId && docsById.has(parentDocumentId)) {
+            const existing = anchoredChildrenByDoc.get(parentDocumentId) || [];
+            existing.push(child);
+            anchoredChildrenByDoc.set(parentDocumentId, existing);
+          } else {
+            unanchoredChildren.push(child);
+          }
+        }
+
+        const orderedContents: CollectionContent[] = [];
+        for (const doc of transformedDocuments as CollectionContent[]) {
+          orderedContents.push(doc);
+          const anchoredChildren = anchoredChildrenByDoc.get(String(doc.id)) || [];
+          anchoredChildren.sort((a, b) => a.name.localeCompare(b.name));
+          orderedContents.push(...anchoredChildren);
+        }
+        unanchoredChildren.sort((a, b) => a.name.localeCompare(b.name));
+        orderedContents.push(...unanchoredChildren);
+
+        setContents(orderedContents);
         setLoading(false);
       })
       .catch(err => {
@@ -369,6 +399,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
     let processedCount = 0;
     let errorCount = 0;
     const totalCount = items.length;
+    const removedItemKeys = new Set<string>();
     
     // Process each item for deletion
     items.forEach(item => {
@@ -388,6 +419,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
           if (!res.ok) {
             throw new Error(`Failed to delete ${item.type} ${item.id}`);
           }
+          removedItemKeys.add(`${item.type}:${item.id}`);
           processedCount++;
           checkIfComplete();
         })
@@ -402,17 +434,26 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
     function checkIfComplete() {
       if (processedCount === totalCount) {
         setIsBatchOperationLoading(false);
-        
-        if (errorCount > 0) {
-          setSuccessMessage(`Deletion completed with ${errorCount} errors. The page will refresh.`);
-        } else {
-          setSuccessMessage(`Successfully deleted ${totalCount} item${totalCount !== 1 ? 's' : ''}. The page will refresh.`);
+        if (removedItemKeys.size > 0) {
+          setContents(prevContents =>
+            prevContents.filter(
+              contentItem => !removedItemKeys.has(`${contentItem.type}:${contentItem.id}`)
+            )
+          );
         }
-        
-        // Set a timeout to reload the page after showing the message
+
+        const successCount = removedItemKeys.size;
+        if (errorCount > 0) {
+          setSuccessMessage(
+            `Deleted ${successCount} item${successCount !== 1 ? 's' : ''}; ${errorCount} failed.`
+          );
+        } else {
+          setSuccessMessage(`Successfully deleted ${successCount} item${successCount !== 1 ? 's' : ''}.`);
+        }
+
         setTimeout(() => {
-          window.location.reload();
-        }, 2000);
+          setSuccessMessage(null);
+        }, 3000);
       }
     }
   };
@@ -487,44 +528,17 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
   
   const breadcrumbs = parseBreadcrumbs();
 
-  // Construct WebSocket URL base
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsBaseUrl = `${wsProtocol}//${window.location.host}`;
-
   return (
-    <div style={{ padding: '2rem' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'end', justifyContent: 'center' }} className='mb-[32px] px-[40px]'>
+    <div className="p-[24px] md:p-[32px]">
+      <div className="px-[8px] md:px-[12px] mb-[24px]">
         <button
           onClick={handleBack}
-          className="bg-transparent border-none cursor-pointer flex items-center text-text-lower_contrast"
+          className="h-[36px] px-3 rounded-[18px] bg-scheme-shade_4 text-text-slightly_less_contrast border border-border-mid_contrast hover:bg-scheme-shade_5 hover:text-text-normal transition-colors cursor-pointer inline-flex items-center justify-center mb-[12px]"
         >
-          ← Back
+          {"← Back"}
         </button>
-        
-        {/* 
-            The right padding here is a little weird, because the padding on the the element to the right of it
-            has a padding of 0.5rem that slightly offsets this title off-center.  This padding re-centers it with respect
-            to the page. 
-        */}
-        <h1 style={{ fontSize: '1.5rem', fontWeight: 'bold', flex: 1, textAlign: 'center', paddingRight: '0.5rem' }}>
-          {collection.name}
-        </h1>
 
-        <CollectionSettingsMenu
-          collection={collection}
-          onManageCollaborators={handleManageCollaborators}
-          onDelete={handleDelete}
-          onMove={() => {
-            setMovingItem({ id: collection!.id, type: 'collection', name: collection!.name });
-            setIsMoveModalOpen(true);
-          }}
-        />
-      </div>
-
-      {/* Breadcrumb Navigation */}
-      <div className="mb-4 px-[40px]">
-        <nav className="flex" aria-label="Breadcrumb">
+        <nav className="flex mb-[8px]" aria-label="Breadcrumb">
           <ol className="inline-flex items-center space-x-1 md:space-x-3">
             {breadcrumbs.map((crumb, index) => (
               <li key={`${crumb.name}-${index}`} className="inline-flex items-center">
@@ -533,10 +547,10 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
                     <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 9 4-4-4-4"/>
                   </svg>
                 )}
-                
+
                 {crumb.id !== null ? (
-                  <a 
-                    href={formatUrl(window.pageUrls.collection, {col_id: crumb.id})}
+                  <a
+                    href={formatUrl(window.pageUrls.collection, { col_id: crumb.id })}
                     className={`ml-1 text-sm ${index === breadcrumbs.length - 1
                       ? 'text-accent font-medium'
                       : 'text-text-slightly_less_contrast hover:text-accent'}`}
@@ -555,8 +569,23 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
             ))}
           </ol>
         </nav>
-      </div>
 
+        <div className="flex items-center justify-between gap-4 border-b border-border-low_contrast pb-[10px]">
+          <h1 className="text-[2.05rem] font-semibold leading-none text-text-normal">
+            {collection.name}
+          </h1>
+          <CollectionSettingsMenu
+            collection={collection}
+            onManageCollaborators={handleManageCollaborators}
+            onDelete={handleDelete}
+            triggerLabel="Collection Settings"
+            onMove={() => {
+              setMovingItem({ id: collection!.id, type: 'collection', name: collection!.name });
+              setIsMoveModalOpen(true);
+            }}
+          />
+        </div>
+      </div>
       {/* Permission Source Indicator */}
       {permissionSource && !permissionSource.direct && permissionSource.source_collection_name && (
         <div className="mb-4 p-3 bg-accent bg-opacity-15 text-accent-light rounded-md flex items-center">
@@ -570,23 +599,21 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
         </div>
       )}
 
-      <div className="relative flex items-center mb-[24px]"> 
-          <div className="flex-grow border-t border-border-low_contrast"></div>
-            <span className="text-xs px-[8px] bg-dark-mode-background text-text-lower_contrast">Add Content</span>
-          <div className="flex-grow border-t border-border-low_contrast"></div>
+      <div className="mb-[24px] bg-scheme-shade_4 border border-border-low_contrast rounded-[20px] p-[14px]">
+        <IngestRowContainer
+          ingestUploadsUrl={window.apiUrls.api_ingest_uploads}
+          ingestArxivUrl={window.apiUrls.api_ingest_arxiv}
+          ingestPdfUrl={window.apiUrls.api_ingest_pdf}
+          ingestVttUrl={window.apiUrls.api_ingest_vtt}
+          ingestWebpageUrl={window.apiUrls.api_ingest_webpage}
+          ingestHandwrittenUrl={window.apiUrls.api_ingest_handwritten_notes}
+          collectionId={collectionId}
+          onUploadSuccess={fetchCollectionData}
+          layout="compact"
+        />
       </div>
 
-      <IngestRowContainer
-        ingestArxivUrl={window.apiUrls.api_ingest_arxiv}
-        ingestPdfUrl={window.apiUrls.api_ingest_pdf}
-        ingestVttUrl={window.apiUrls.api_ingest_vtt}
-        ingestWebpageUrl={window.apiUrls.api_ingest_webpage}
-        ingestHandwrittenUrl={window.apiUrls.api_ingest_handwritten_notes}
-        collectionId={collectionId}
-        onUploadSuccess={fetchCollectionData} // Re-fetch the collection file list when a document is uploaded
-      />
-
-      <div className="relative flex items-center mb-[24px]"> 
+      <div className="relative flex items-center mb-[16px]"> 
           <div className="flex-grow border-t border-border-low_contrast"></div>
             <span className="text-xs px-[8px] bg-dark-mode-background text-text-lower_contrast">Browse</span>
           <div className="flex-grow border-t border-border-low_contrast"></div>

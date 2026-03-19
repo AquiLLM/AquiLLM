@@ -22,7 +22,15 @@ const IngestionDashboard: React.FC<IngestionDashboardProps> = ({ wsUrl, onNewDoc
       try {
         const message = JSON.parse(event.data);
         if (message.type === 'document.ingestion.start') {
-          const newMonitor: PDFIngestionMonitorProps = JSON.parse(event.data);
+          const newMonitor: PDFIngestionMonitorProps = {
+            documentId: String(message.documentId || ""),
+            documentName: String(message.documentName || "Untitled"),
+            modality: message.modality ? String(message.modality) : undefined,
+            rawMediaSaved: typeof message.rawMediaSaved === "boolean" ? message.rawMediaSaved : undefined,
+            textExtracted: typeof message.textExtracted === "boolean" ? message.textExtracted : undefined,
+            provider: message.provider ? String(message.provider) : undefined,
+            providerModel: message.providerModel ? String(message.providerModel) : undefined,
+          };
           setMonitors((prevMonitors) => [...prevMonitors, newMonitor]);
           setLoading(false);
           onNewDocument(); // Notify the parent component

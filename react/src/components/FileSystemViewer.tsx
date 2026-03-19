@@ -1,7 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { FileSystemItem } from '../types/FileSystemItem';
-import { FolderIcon } from '../icons/folder';
-import { DocumentIcon } from '../icons/document';
 import { Collection } from './CollectionsTree';
 import ContextMenu from './CustomContextMenu';
 
@@ -15,6 +13,8 @@ const typeToTextColorClass = {
   'audio': 'text-secondary_accent-light',
   'pdf': 'text-secondary_accent-light',
   'TeXDocument': 'text-secondary_accent-light',
+  'ImageUploadDocument': 'text-secondary_accent-light',
+  'MediaUploadDocument': 'text-secondary_accent-light',
 };
 
 // Props for the FileSystemViewer
@@ -44,8 +44,12 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
   onRemoveBatch,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<number | string>>(new Set());
   const [actionMenuOpen, setActionMenuOpen] = useState<boolean>(false);
+  const [sortKey, setSortKey] = useState<'name' | 'type' | 'details' | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [rowsPerPage, setRowsPerPage] = useState<number>(10);
+  const [currentPage, setCurrentPage] = useState<number>(1);
 
   // Filter items by search query
   const filteredItems = useMemo(() => {
@@ -55,6 +59,45 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
       item.name.toLowerCase().includes(normalizedQuery)
     );
   }, [items, searchQuery]);
+
+  const sortedItems = useMemo(() => {
+    if (!sortKey) return filteredItems;
+
+    const sorted = [...filteredItems];
+    const directionFactor = sortDirection === 'asc' ? 1 : -1;
+    const asTimestamp = (value?: string) => {
+      const parsed = Date.parse(value || '');
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+
+    sorted.sort((a, b) => {
+      if (sortKey === 'name') {
+        return directionFactor * a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      }
+      if (sortKey === 'type') {
+        return directionFactor * a.type.localeCompare(b.type, undefined, { sensitivity: 'base' });
+      }
+      return directionFactor * (asTimestamp(a.created_at) - asTimestamp(b.created_at));
+    });
+
+    return sorted;
+  }, [filteredItems, sortKey, sortDirection]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedItems.length / rowsPerPage));
+  const activePage = Math.min(currentPage, totalPages);
+  const pageStart = (activePage - 1) * rowsPerPage;
+  const pageEnd = pageStart + rowsPerPage;
+  const paginatedItems = sortedItems.slice(pageStart, pageEnd);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, rowsPerPage, items.length, sortKey, sortDirection]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   // Define a state to track the custom context menu
   const [contextMenu, setContextMenu] = useState<{
@@ -103,7 +146,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
   };
 
   // Handle checkbox toggles
-  const handleToggleSelect = (itemId: number) => {
+  const handleToggleSelect = (itemId: number | string) => {
     setSelectedIds(prev => {
       const newSet = new Set(prev);
       if (newSet.has(itemId)) {
@@ -116,12 +159,25 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
   };
 
   // A convenience function to see if all displayed items are selected
-  const allDisplayedSelected = filteredItems.every(item => selectedIds.has(item.id));
+  const allDisplayedSelected = paginatedItems.length > 0 && paginatedItems.every(item => selectedIds.has(item.id));
 
   // Get selected items
   const selectedItems = useMemo(() => {
     return items.filter(item => selectedIds.has(item.id));
   }, [items, selectedIds]);
+
+  useEffect(() => {
+    const remainingIds = new Set(items.map(item => item.id));
+    setSelectedIds(prev => {
+      const next = new Set<number | string>();
+      prev.forEach(id => {
+        if (remainingIds.has(id)) {
+          next.add(id);
+        }
+      });
+      return next;
+    });
+  }, [items]);
 
   // Toggle select-all for items currently displayed
   const handleToggleSelectAll = () => {
@@ -129,17 +185,31 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
       // Unselect all
       setSelectedIds(prev => {
         const newSet = new Set(prev);
-        filteredItems.forEach(item => newSet.delete(item.id));
+        paginatedItems.forEach(item => newSet.delete(item.id));
         return newSet;
       });
     } else {
       // Select all
       setSelectedIds(prev => {
         const newSet = new Set(prev);
-        filteredItems.forEach(item => newSet.add(item.id));
+        paginatedItems.forEach(item => newSet.add(item.id));
         return newSet;
       });
     }
+  };
+
+  const toggleSort = (nextKey: 'name' | 'type' | 'details') => {
+    if (sortKey === nextKey) {
+      setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDirection('asc');
+  };
+
+  const sortSuffix = (key: 'name' | 'type' | 'details') => {
+    if (sortKey !== key) return '';
+    return sortDirection === 'asc' ? ' (asc)' : ' (desc)';
   };
 
   // Handle batch operations
@@ -349,7 +419,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
         <table style={{ width: '100%', height: '100%', borderCollapse: 'collapse'}}>
           <thead className='bg-scheme-shade_4'>
             <tr className='border-b border-l border-r border-border-mid_contrast h-[40px] max-h-[40px]'>
-              <th style={{ textAlign: 'left' }} className='h-full flex items-center justify-left'>
+              <th style={{ textAlign: 'center', width: '64px' }} className='h-full align-middle'>
                 <div 
                   style={{ 
                     padding: '4px', 
@@ -366,14 +436,14 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
                 >
                   <input
                     type="checkbox"
-                    checked={allDisplayedSelected && filteredItems.length > 0}
+                    checked={allDisplayedSelected}
                     onChange={(e) => {
                       e.stopPropagation();
                       handleToggleSelectAll();
                     }}
                     onClick={(e) => e.stopPropagation()}
-                    className={`ml-4 w-4 h-4 rounded cursor-pointer relative border ${
-                      allDisplayedSelected && filteredItems.length > 0
+                    className={`w-4 h-4 rounded cursor-pointer relative border ${
+                      allDisplayedSelected
                         ? 'bg-accent border-accent after:content-["✓"] after:absolute after:text-text-normal after:text-xs after:top-[-1px] after:left-[3px]'
                         : 'bg-scheme-shade_5 border-border-mid_contrast'
                     }`}
@@ -387,14 +457,38 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
                 </div>
               </th>
               
-              <th style={{ textAlign: 'left' }}>Name</th>
-              <th style={{ textAlign: 'left' }}>Type</th>
-              <th style={{ textAlign: 'left' }}>Details</th>
+              <th style={{ textAlign: 'left' }}>
+                <button
+                  type="button"
+                  onClick={() => toggleSort('name')}
+                  className="bg-transparent border-none p-0 cursor-pointer text-text-normal font-inherit"
+                >
+                  Name{sortSuffix('name')}
+                </button>
+              </th>
+              <th style={{ textAlign: 'left' }}>
+                <button
+                  type="button"
+                  onClick={() => toggleSort('type')}
+                  className="bg-transparent border-none p-0 cursor-pointer text-text-normal font-inherit"
+                >
+                  Type{sortSuffix('type')}
+                </button>
+              </th>
+              <th style={{ textAlign: 'left' }}>
+                <button
+                  type="button"
+                  onClick={() => toggleSort('details')}
+                  className="bg-transparent border-none p-0 cursor-pointer text-text-normal font-inherit"
+                >
+                  Details{sortSuffix('details')}
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody className="bg-scheme-shade_3">
-            {filteredItems.length > 0 ? (
-              filteredItems.map((item) => {
+            {paginatedItems.length > 0 ? (
+              paginatedItems.map((item) => {
                 const isSelected = selectedIds.has(item.id);
                 return (
                   <tr
@@ -411,7 +505,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
                       }}
                   >
                       <td 
-                        style={{ textAlign: 'left' }}
+                        style={{ textAlign: 'center', width: '64px' }}
                         onClick={(e) => {
                           // Stop propagation at the cell level too
                           e.stopPropagation();
@@ -433,7 +527,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
                         >
                           <input
                               type="checkbox"
-                              className={`ml-4 w-4 h-4 rounded cursor-pointer relative border ${
+                              className={`w-4 h-4 rounded cursor-pointer relative border ${
                                 isSelected
                                   ? "bg-accent border-accent after:content-['✓'] after:absolute after:text-white after:text-xs after:top-[-1px] after:left-[3px]" // merged className
                                   : 'bg-scheme-shade_5 border-border-mid_contrast'
@@ -515,7 +609,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
               onMove?.(item);
             }}
             onRemove={(item) => {
-              {renderManageCell(item)}
+              onRemoveItem?.(item);
             }}
           />
         )}
@@ -533,9 +627,43 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
           padding: '1rem',
         }}
       >
-        <span className='text-text-normal'>Rows per page: 10</span>
-        <button style={{ background: 'none', border: 'none'}} className="text-text-normal">←</button>
-        <button style={{ background: 'none', border: 'none'}} className="text-text-normal">→</button>
+        <label className='text-text-normal flex items-center gap-2'>
+          <span>Rows per page:</span>
+          <select
+            value={rowsPerPage}
+            onChange={(e) => setRowsPerPage(Number(e.target.value))}
+            className="bg-scheme-shade_4 border border-border-mid_contrast rounded px-2 py-1 text-text-normal"
+          >
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+          </select>
+        </label>
+        <span className='text-text-normal'>
+          {sortedItems.length === 0
+            ? '0-0 of 0'
+            : `${pageStart + 1}-${Math.min(pageEnd, sortedItems.length)} of ${sortedItems.length}`}
+        </span>
+        <button
+          type="button"
+          style={{ background: 'none', border: 'none' }}
+          className="text-text-normal disabled:opacity-40 disabled:cursor-not-allowed"
+          onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+          disabled={activePage <= 1}
+          aria-label="Previous page"
+        >
+          {'<'}
+        </button>
+        <button
+          type="button"
+          style={{ background: 'none', border: 'none' }}
+          className="text-text-normal disabled:opacity-40 disabled:cursor-not-allowed"
+          onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+          disabled={activePage >= totalPages}
+          aria-label="Next page"
+        >
+          {'>'}
+        </button>
       </div>
     </div>
   );
