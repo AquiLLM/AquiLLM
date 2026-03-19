@@ -1,6 +1,0 @@
-FROM ollama/ollama:latest
-
-COPY --chmod=755 ./deployment/ollama_start.sh /ollama_start.sh
-
-EXPOSE 11434
-ENTRYPOINT ["/ollama_start.sh"]

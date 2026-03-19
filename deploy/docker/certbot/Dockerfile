@@ -9,4 +9,4 @@ RUN apt update && \
     ln -sf /opt/certbot/bin/certbot /usr/bin/certbot
 
 # Set the entrypoint script
-ENTRYPOINT ["/get_certs.sh"]
+ENTRYPOINT ["sh", "/get_certs.sh"]

@@ -9,7 +9,7 @@ WORKDIR /app
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 RUN pip install -r requirements.txt
-RUN apt update && apt install -y curl
+RUN apt update && apt install -y curl tesseract-ocr
 # Copy the rest of the application
 COPY . .
 
