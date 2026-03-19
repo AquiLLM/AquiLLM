@@ -8,7 +8,7 @@ import SearchPage from './components/SearchPage';
 
 import IngestionDashboard from './components/IngestionDashboard';
 import IngestionDashboardLauncher from './components/IngestionDashboardLauncher';
-import IngestRowContainer from './components/IngestRow';
+import IngestRowContainer from './features/ingestion/components/IngestRowsContainer';
 import WhitelistEmails from './components/WhitelistEmails';
 import ChatComponent from './components/ChatComponent';
 import UserSettings from './components/UserSettings';
