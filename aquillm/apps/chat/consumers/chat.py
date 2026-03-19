@@ -798,6 +798,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             selected_collections = data['collections']
             self.col_ref.collections = selected_collections
             self.convo += UserMessage.model_validate(data['message'])
+            files: list[ConversationFile] = []
             if 'files' in data:
                 files = [ConversationFile(
                             file=ContentFile(b64decode(file['base64']),
