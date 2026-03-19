@@ -4,9 +4,13 @@ from types import GenericAlias
 from functools import wraps
 import inspect
 
+import logging
+
 from pydantic import validate_call
 
 from ..types.tools import LLMTool, ToolResultDict
+
+_logger = logging.getLogger(__name__)
 
 
 # Import DEBUG setting - will be None if Django not configured
@@ -47,7 +51,7 @@ def llm_tool(
         @wraps(type_checked_func)
         def wrapper(*args, **kwargs) -> ToolResultDict:
             if DEBUG:
-                print(f"{func_name} called!")
+                _logger.debug("%s called", func_name)
             try:
                 return type_checked_func(*args, **kwargs)
             except Exception as e:

@@ -74,8 +74,12 @@ if DEBUG:
     def debug_models(request):
         models = apps.get_models()
         model_instances = {model.__name__: list(model.objects.all()) for model in models}
-        breakpoint()
-        return HttpResponse(status=200)
+        logger.debug("debug_models loaded %d model classes", len(model_instances))
+        return HttpResponse(
+            f"debug_models: {len(models)} model classes registered",
+            status=200,
+            content_type="text/plain",
+        )
 
 
 __all__ = [
