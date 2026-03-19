@@ -1,5 +1,7 @@
 """LLM message types for conversation handling."""
 from typing import Literal, Optional, Any
+from os import getenv
+import re
 from pydantic import BaseModel, Field, model_validator
 from abc import ABC
 from typing import override
@@ -45,10 +47,21 @@ class ToolMessage(__LLMMessage):
     arguments: Optional[dict] = None
     for_whom: Literal['assistant', 'user']
     result_dict: ToolResultDict = {}
+
+    @staticmethod
+    def _sanitize_text_for_llm(text: str) -> str:
+        # Keep prompt payload bounded by removing inline base64 image data URLs.
+        return re.sub(
+            r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
+            "[image data url redacted for context budget]",
+            text or "",
+            flags=re.IGNORECASE,
+        )
     
     def has_images(self) -> bool:
         """Check if this tool result contains images for multimodal processing."""
-        return bool(self.result_dict and self.result_dict.get("_images"))
+        inline_images_enabled = (getenv("LLM_TOOL_INLINE_IMAGES", "0") or "").strip().lower() in {"1", "true", "yes", "on"}
+        return inline_images_enabled and bool(self.result_dict and self.result_dict.get("_images"))
     
     def get_images(self) -> list[dict]:
         """Get image data from the tool result for multimodal LLM processing."""
@@ -63,7 +76,7 @@ class ToolMessage(__LLMMessage):
         """
         content_parts = []
         
-        text_content = f'The following is the result of a call to tool {self.tool_name}.\nArguments:\n{self.arguments}\n\nResults:\n{self.content}'
+        text_content = f'The following is the result of a call to tool {self.tool_name}.\nArguments:\n{self.arguments}\n\nResults:\n{self._sanitize_text_for_llm(self.content)}'
         
         if self.result_dict and self.result_dict.get("_image_instruction"):
             text_content += f"\n\n{self.result_dict['_image_instruction']}"
@@ -92,7 +105,11 @@ class ToolMessage(__LLMMessage):
         if self.has_images():
             ret['content'] = self.render_multimodal_content()
         else:
-            ret['content'] = f'The following is the result of a call to tool {self.tool_name}.\nArguments:\n{self.arguments}\n\nResults:\n{self.content}'
+            ret['content'] = (
+                f'The following is the result of a call to tool {self.tool_name}.\n'
+                f'Arguments:\n{self.arguments}\n\n'
+                f'Results:\n{self._sanitize_text_for_llm(self.content)}'
+            )
         
         ret.pop('result_dict', None)
         return ret

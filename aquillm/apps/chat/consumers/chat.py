@@ -214,14 +214,11 @@ def get_vector_search_func(user: User, col_ref: CollectionsRef):
         titles_by_doc_id = {doc.id: doc.title for doc in docs}
         
         result_items = {}
-        image_content = []
-        
         for i, chunk in enumerate(results):
             title = titles_by_doc_id.get(chunk.doc_id, 'Untitled Document')
             key = f"[Result {i+1}] -- {title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}"
             
             if chunk.modality == TextChunk.Modality.IMAGE:
-                image_data_url = chunk._image_data_url()
                 display_url = f"/aquillm/document_image/{chunk.doc_id}/"
                 
                 result_items[key] = {
@@ -230,29 +227,11 @@ def get_vector_search_func(user: User, col_ref: CollectionsRef):
                     "image_url": display_url,
                     "doc_id": str(chunk.doc_id),
                 }
-                
-                if image_data_url and len(image_content) < MAX_IMAGES_PER_TOOL_RESULT:
-                    resized_url = _resize_image_for_llm_context(image_data_url)
-                    if resized_url:
-                        image_content.append({
-                            "result_index": i + 1,
-                            "title": title,
-                            "image_data_url": resized_url,
-                            "caption": chunk.content[:200] if chunk.content else "Image",
-                        })
             else:
                 result_items[key] = _truncate_tool_text(chunk.content)
         
         ret = {"result": result_items}
-        
-        if image_content:
-            ret["_images"] = image_content
-            ret["_image_instruction"] = (
-                "Images are included in this search result. You can see them above. "
-                "When discussing these images with the user, include them in your response using markdown: "
-                "![description](image_url) where image_url is the 'image_url' field from the result."
-            )
-        
+
         return ret
     
     return vector_search
@@ -301,23 +280,14 @@ def get_whole_document_func(user: User, chat_ref: ChatRef) -> LLMTool:
         
         ret = {"result": doc.full_text}
         
-        from aquillm.models import _doc_image_data_url
-        image_data_url = _doc_image_data_url(doc)
-        if image_data_url:
-            resized_url = _resize_image_for_llm_context(image_data_url)
+        image_file = getattr(doc, "image_file", None)
+        if image_file:
             display_url = f"/aquillm/document_image/{doc.id}/"
             ret["result"] = {
                 "text": doc.full_text,
                 "type": "image_document",
                 "image_url": display_url,
             }
-            if resized_url:
-                ret["_images"] = [{
-                    "result_index": 1,
-                    "title": doc.title,
-                    "image_data_url": resized_url,
-                    "caption": doc.full_text[:200] if doc.full_text else doc.title,
-                }]
             ret["_image_instruction"] = (
                 f"This is an image document. The image is shown above. "
                 f"When showing this to the user, include the image using markdown: "
@@ -360,13 +330,10 @@ def get_search_single_document_func(user: User) -> LLMTool:
         _,_,results = TextChunk.text_chunk_search(search_string, top_k, [doc])
         
         result_items = {}
-        image_content = []
-        
         for i, chunk in enumerate(results):
             key = f"[Result {i+1}] -- {doc.title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}"
             
             if chunk.modality == TextChunk.Modality.IMAGE:
-                image_data_url = chunk._image_data_url()
                 display_url = f"/aquillm/document_image/{chunk.doc_id}/"
                 
                 result_items[key] = {
@@ -375,28 +342,10 @@ def get_search_single_document_func(user: User) -> LLMTool:
                     "image_url": display_url,
                     "doc_id": str(chunk.doc_id),
                 }
-                
-                if image_data_url and len(image_content) < MAX_IMAGES_PER_TOOL_RESULT:
-                    resized_url = _resize_image_for_llm_context(image_data_url)
-                    if resized_url:
-                        image_content.append({
-                            "result_index": i + 1,
-                            "title": doc.title,
-                            "image_data_url": resized_url,
-                            "caption": chunk.content[:200] if chunk.content else "Image",
-                        })
             else:
                 result_items[key] = _truncate_tool_text(chunk.content)
 
         ret = {"result": result_items}
-
-        if image_content:
-            ret["_images"] = image_content
-            ret["_image_instruction"] = (
-                "Images are included in this search result. You can see them above. "
-                "When discussing these images with the user, include them in your response using markdown: "
-                "![description](image_url) where image_url is the 'image_url' field from the result."
-            )
 
         return ret
 

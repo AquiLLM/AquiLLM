@@ -46,6 +46,26 @@ def _test_document_ids():
     return {'result': 'ok'}
 
 
+@llm_tool(
+    for_whom='assistant',
+    required=[],
+    param_descs={},
+)
+def _test_image_result_tool():
+    return {
+        "result": {"status": "ok"},
+        "_images": [
+            {
+                "result_index": 1,
+                "title": "figure",
+                "image_data_url": "data:image/jpeg;base64," + ("A" * 4096),
+                "caption": "chart",
+            }
+        ],
+        "_image_instruction": "Use markdown image syntax.",
+    }
+
+
 class _FakeLLMInterface(LLMInterface):
     def __init__(self, responses):
         self.responses = responses
@@ -382,6 +402,43 @@ class OpenAIContextReserveScalingTests(SimpleTestCase):
             OpenAIInterface._preflight_trim_for_context(arguments, context_limit=12_288)
 
         trim_mock.assert_called()
+
+
+class ToolMessageSafetyTests(SimpleTestCase):
+    def test_render_uses_text_only_and_redacts_data_urls(self):
+        msg = ToolMessage(
+            content="{'result': 'ok', '_images': [{'image_data_url': 'data:image/jpeg;base64," + ("A" * 2048) + "'}]}",
+            tool_name="vector_search",
+            arguments={"search_string": "test", "top_k": 5},
+            for_whom="assistant",
+            result_dict={
+                "result": {"status": "ok"},
+                "_images": [{"image_data_url": "data:image/jpeg;base64," + ("A" * 2048)}],
+            },
+        )
+
+        rendered = msg.render(include={"role", "content"})
+        self.assertIsInstance(rendered["content"], str)
+        self.assertNotIn("data:image", rendered["content"])
+        self.assertIn("redacted", rendered["content"].lower())
+
+    def test_call_tool_sanitizes_private_keys_and_data_urls_in_content(self):
+        llm = _FakeLLMInterface([])
+        assistant_message = AssistantMessage(
+            content="",
+            stop_reason="tool_use",
+            tool_call_id="tool_1",
+            tool_call_name="_test_image_result_tool",
+            tool_call_input={},
+            tools=[_test_image_result_tool],
+            tool_choice=ToolChoice(type="auto"),
+        )
+
+        tool_msg = llm.call_tool(assistant_message)
+        self.assertIsInstance(tool_msg, ToolMessage)
+        self.assertIn("result", tool_msg.content)
+        self.assertNotIn("_images", tool_msg.content)
+        self.assertNotIn("data:image", tool_msg.content)
 
 
 class CutoffContinuationTests(SimpleTestCase):

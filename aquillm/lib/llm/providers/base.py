@@ -131,6 +131,31 @@ class LLMInterface(ABC):
         sentence_count = len(re.findall(r"[.!?](?:\s|$)", candidate))
         return bullet_count >= 3 or sentence_count >= 5
 
+    @staticmethod
+    def _sanitize_data_urls_for_llm_text(text: str) -> str:
+        return re.sub(
+            r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
+            "[image data url redacted for context budget]",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+
+    @classmethod
+    def _serialize_tool_result_for_llm(cls, result_dict: Any) -> str:
+        """
+        Build tool result text for LLM context while excluding private transport keys
+        (e.g. _images blobs) and redacting inline base64 data URLs.
+        """
+        if isinstance(result_dict, dict):
+            visible = {
+                key: value
+                for key, value in result_dict.items()
+                if not str(key).startswith("_")
+            }
+            serialized = dumps(visible, ensure_ascii=False, default=str)
+            return cls._sanitize_data_urls_for_llm_text(serialized)
+        return cls._sanitize_data_urls_for_llm_text(str(result_dict))
+
     @classmethod
     def _select_evidence_snippet(cls, text: str, max_chars: int = 420) -> str:
         cleaned = re.sub(r"([A-Za-z])-\s+([A-Za-z])", r"\1\2", text or "")
@@ -383,7 +408,7 @@ class LLMInterface(ABC):
             result_dict: dict = {"exception": "Tool call failed before execution"}
             if not name or name not in tools_dict.keys():
                 result_dict = {'exception': "Function name is not valid"}
-                result = str(result_dict)
+                result = self._serialize_tool_result_for_llm(result_dict)
             else:
                 tool = tools_dict[name]
                 tool_name = tool.name
@@ -395,15 +420,15 @@ class LLMInterface(ABC):
                 try:
                     tool_timeout_s = float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))
                     result_dict = future.result(timeout=tool_timeout_s)
-                    result = str(result_dict)
+                    result = self._serialize_tool_result_for_llm(result_dict)
                 except TimeoutError:
                     result_dict = {'exception': "Tool call timed out"}
-                    result = str(result_dict)
+                    result = self._serialize_tool_result_for_llm(result_dict)
                 except Exception as e:
                     if DEBUG:
                         raise
                     result_dict = {'exception': str(e)}
-                    result = str(result_dict)
+                    result = self._serialize_tool_result_for_llm(result_dict)
             return ToolMessage(
                 tool_name=tool_name,
                 content=result,
