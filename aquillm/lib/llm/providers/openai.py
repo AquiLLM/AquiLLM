@@ -75,6 +75,18 @@ class OpenAIInterface(LLMInterface):
             text_val = content.get("text")
             if isinstance(text_val, str):
                 return text_val
+            part_type = str(content.get("type", "")).lower()
+            if part_type in {"image_url", "input_image", "image"}:
+                image_val = content.get("image_url")
+                if isinstance(image_val, dict):
+                    url_val = image_val.get("url")
+                    if isinstance(url_val, str):
+                        return url_val
+                if isinstance(image_val, str):
+                    return image_val
+                direct_url = content.get("url")
+                if isinstance(direct_url, str):
+                    return direct_url
             content_val = content.get("content")
             if isinstance(content_val, str):
                 return content_val
@@ -85,6 +97,21 @@ class OpenAIInterface(LLMInterface):
                 if isinstance(item, str):
                     parts.append(item)
                 elif isinstance(item, dict):
+                    part_type = str(item.get("type", "")).lower()
+                    if part_type in {"image_url", "input_image", "image"}:
+                        image_val = item.get("image_url")
+                        if isinstance(image_val, dict):
+                            url_val = image_val.get("url")
+                            if isinstance(url_val, str):
+                                parts.append(url_val)
+                                continue
+                        if isinstance(image_val, str):
+                            parts.append(image_val)
+                            continue
+                        direct_url = item.get("url")
+                        if isinstance(direct_url, str):
+                            parts.append(direct_url)
+                            continue
                     text_val = item.get("text")
                     if isinstance(text_val, str):
                         parts.append(text_val)
@@ -257,12 +284,12 @@ class OpenAIInterface(LLMInterface):
             ]
 
         changed = False
-        
-        if overflow > 500:
-            if OpenAIInterface._strip_images_from_messages(retry_args):
-                changed = True
-                return retry_args
-        
+
+        # Data-URL images can dominate prompt size. Strip them on any overflow retry.
+        if OpenAIInterface._strip_images_from_messages(retry_args):
+            changed = True
+            return retry_args
+
         if current_max_tokens > min_completion_tokens:
             if overflow <= 4:
                 safety_margin = 8

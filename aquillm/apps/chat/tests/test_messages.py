@@ -238,6 +238,79 @@ class OpenAIContextOverflowRetryTests(SimpleTestCase):
         self.assertLess(completions.calls[1]['max_tokens'], 1024)
         self.assertGreaterEqual(completions.calls[1]['max_tokens'], 64)
 
+    class _ImageSensitiveCompletions:
+        def __init__(self):
+            self.calls = []
+
+        @staticmethod
+        def _has_image_content(messages) -> bool:
+            if not isinstance(messages, list):
+                return False
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content")
+                if not isinstance(content, list):
+                    continue
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") in {"image_url", "image", "input_image"}:
+                        return True
+            return False
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                raise Exception(
+                    "Error code: 400 - {'error': {'message': "
+                    "\"You passed 31745 input tokens and requested 1024 output tokens. "
+                    "However, the model's context length is only 32768 tokens, resulting in "
+                    "a maximum input length of 31744 tokens. Please reduce the length of the "
+                    "input prompt. (parameter=input_tokens, value=31745)\"}}"
+                )
+
+            if self._has_image_content(kwargs.get("messages")):
+                raise Exception(
+                    "Error code: 400 - {'error': {'message': "
+                    "\"You passed 31745 input tokens and requested 1015 output tokens. "
+                    "However, the model's context length is only 32768 tokens, resulting in "
+                    "a maximum input length of 31753 tokens. Please reduce the length of the "
+                    "input prompt. (parameter=input_tokens, value=31745)\"}}"
+                )
+
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(tool_calls=[], content='Recovered after image stripping retry'),
+                        finish_reason='stop',
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=12, completion_tokens=18),
+            )
+
+    def test_retries_with_images_stripped_even_for_small_overflow(self):
+        completions = self._ImageSensitiveCompletions()
+        llm = OpenAIInterface(self._FakeOpenAIClient(completions), model='qwen3.5:27b')
+
+        result = async_to_sync(llm.get_message)(
+            system='test system',
+            messages=[{
+                'role': 'user',
+                'content': [
+                    {'type': 'text', 'text': 'Analyze this chart.'},
+                    {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,' + ('A' * 8000)}},
+                ],
+            }],
+            max_tokens=1024,
+        )
+
+        self.assertEqual(result.text, 'Recovered after image stripping retry')
+        self.assertEqual(len(completions.calls), 2)
+        second_message_content = completions.calls[1]['messages'][1]['content']
+        self.assertIsInstance(second_message_content, str)
+        self.assertIn("Image removed due to context limit", second_message_content)
+
 
 class OpenAIContextReserveScalingTests(SimpleTestCase):
     def test_ratio_reserve_scales_with_context_limit(self):
@@ -265,6 +338,24 @@ class OpenAIContextReserveScalingTests(SimpleTestCase):
             OpenAIInterface._preflight_trim_for_context(arguments, context_limit=12_288)
 
         trim_mock.assert_not_called()
+
+    def test_token_estimator_counts_image_url_payload(self):
+        text_only = [{
+            "role": "user",
+            "content": [{"type": "text", "text": "caption"}],
+        }]
+        with_image = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "caption"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + ("A" * 4096)}},
+            ],
+        }]
+
+        text_tokens = OpenAIInterface._estimate_prompt_tokens(text_only)
+        image_tokens = OpenAIInterface._estimate_prompt_tokens(with_image)
+
+        self.assertGreater(image_tokens, text_tokens)
 
     @patch.dict(
         "os.environ",

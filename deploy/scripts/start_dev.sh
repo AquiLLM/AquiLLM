@@ -10,6 +10,7 @@ set -euo pipefail
 #   AQUILLM_COMPOSE_FILE=deploy/compose/development.yml
 #   USE_VLLM=1
 #   USE_EDGE=0
+#   RUN_CERTBOT=0
 #   BUILD=0
 #   FORCE_RECREATE=1
 #   WAIT_TIMEOUT_SECONDS=1800
@@ -17,6 +18,7 @@ set -euo pipefail
 AQUILLM_COMPOSE_FILE="${AQUILLM_COMPOSE_FILE:-deploy/compose/development.yml}"
 USE_VLLM="${USE_VLLM:-1}"
 USE_EDGE="${USE_EDGE:-0}"
+RUN_CERTBOT="${RUN_CERTBOT:-0}"
 BUILD="${BUILD:-0}"
 FORCE_RECREATE="${FORCE_RECREATE:-1}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-1800}"
@@ -113,7 +115,11 @@ fi
 compose_up web worker
 
 if [ "$USE_EDGE" = "1" ]; then
-  compose_up get_certs nginx
+  if [ "$RUN_CERTBOT" = "1" ]; then
+    "${compose_cmd[@]}" stop nginx >/dev/null 2>&1 || true
+    compose_up get_certs
+  fi
+  compose_up nginx
   wait_for_service_healthy nginx
 fi
 

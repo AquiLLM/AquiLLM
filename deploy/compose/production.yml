@@ -107,13 +107,13 @@ services:
       depends_on:
         web:
           condition: service_healthy
-        get_certs:
-          condition: service_completed_successfully
 
   get_certs:
     build:
       context: ../..
       dockerfile: deploy/docker/certbot/Dockerfile
+    profiles:
+      - certbot
     ports:
       - "80:80"
     env_file:
