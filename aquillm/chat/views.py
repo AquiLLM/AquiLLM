@@ -6,6 +6,7 @@ from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
 
 from django.urls import path
+import os
 
 
 @require_http_methods(['GET'])
@@ -18,7 +19,25 @@ def new_ws_convo(request):
 @require_http_methods(['GET'])
 @login_required
 def ws_convo(request, convo_id):
-    return render(request, 'aquillm/ws_convo.html', {'convo_id': convo_id})
+    context_limit_raw = (
+        (os.getenv("OPENAI_CONTEXT_LIMIT", "") or "").strip()
+        or (os.getenv("VLLM_MAX_MODEL_LEN", "") or "").strip()
+    )
+    try:
+        context_limit = int(context_limit_raw)
+    except (TypeError, ValueError):
+        context_limit = 0
+    if context_limit <= 0:
+        context_limit = 200000
+
+    return render(
+        request,
+        'aquillm/ws_convo.html',
+        {
+            'convo_id': convo_id,
+            'context_limit': context_limit,
+        },
+    )
 
 @require_http_methods(['DELETE'])
 @login_required

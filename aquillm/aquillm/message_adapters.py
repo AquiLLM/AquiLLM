@@ -122,19 +122,67 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation) -> No
     from django.db import transaction
 
     with transaction.atomic():
-        # Update the system prompt on the conversation
-        db_convo.system_prompt = convo.system
-        db_convo.save()
+        # Do not overwrite system_prompt with convo.system: convo.system may be augmented
+        # with user memory (profile facts + episodic). Only messages are persisted here.
+        db_convo.save(update_fields=['updated_at'])
 
-        # Delete all existing messages and re-create from the in-memory conversation
-        db_convo.db_messages.all().delete()
+        existing_rows = list(db_convo.db_messages.all())
+        existing_by_uuid = {row.message_uuid: row for row in existing_rows}
+        incoming_uuids = []
+        rows_to_create = []
+        rows_to_update = []
 
-        # bulk_create inserts all messages in a single query for performance
-        messages_to_create = [
-            pydantic_message_to_django(msg, db_convo, seq)
-            for seq, msg in enumerate(convo.messages)  # enumerate gives us the sequence number
-        ]
-        Message.objects.bulk_create(messages_to_create)
+        for seq, msg in enumerate(convo.messages):
+            incoming_uuids.append(msg.message_uuid)
+            incoming = pydantic_message_to_django(msg, db_convo, seq)
+            current = existing_by_uuid.get(msg.message_uuid)
+            if current is None:
+                rows_to_create.append(incoming)
+                continue
+
+            current.role = incoming.role
+            current.content = incoming.content
+            current.rating = incoming.rating
+            current.feedback_text = incoming.feedback_text
+            current.sequence_number = incoming.sequence_number
+            current.model = incoming.model
+            current.stop_reason = incoming.stop_reason
+            current.tool_call_id = incoming.tool_call_id
+            current.tool_call_name = incoming.tool_call_name
+            current.tool_call_input = incoming.tool_call_input
+            current.usage = incoming.usage
+            current.tool_name = incoming.tool_name
+            current.arguments = incoming.arguments
+            current.for_whom = incoming.for_whom
+            current.result_dict = incoming.result_dict
+            rows_to_update.append(current)
+
+        if rows_to_create:
+            Message.objects.bulk_create(rows_to_create)
+        if rows_to_update:
+            Message.objects.bulk_update(
+                rows_to_update,
+                fields=[
+                    'role',
+                    'content',
+                    'rating',
+                    'feedback_text',
+                    'sequence_number',
+                    'model',
+                    'stop_reason',
+                    'tool_call_id',
+                    'tool_call_name',
+                    'tool_call_input',
+                    'usage',
+                    'tool_name',
+                    'arguments',
+                    'for_whom',
+                    'result_dict',
+                ],
+            )
+
+        # Keep DB in sync when callers pass a shorter conversation than what's stored.
+        db_convo.db_messages.exclude(message_uuid__in=incoming_uuids).delete()
 
 
 def build_frontend_conversation_json(db_convo: WSConversation) -> dict:
@@ -172,3 +220,27 @@ def build_frontend_conversation_json(db_convo: WSConversation) -> dict:
         messages.append(msg_dict)
 
     return {'system': db_convo.system_prompt, 'messages': messages}
+
+
+def pydantic_message_to_frontend_dict(msg: LLM_Message) -> dict:
+    content = msg.content
+    if content == "** Empty Message, tool call **":
+        content = ""
+    msg_dict = {
+        'role': msg.role,
+        'content': content,
+        'message_uuid': str(msg.message_uuid),
+        'rating': msg.rating,
+    }
+
+    if isinstance(msg, AssistantMessage):
+        if msg.tool_call_name:
+            msg_dict['tool_call_name'] = msg.tool_call_name
+            msg_dict['tool_call_input'] = msg.tool_call_input
+        if msg.usage:
+            msg_dict['usage'] = msg.usage
+    elif isinstance(msg, ToolMessage):
+        msg_dict['tool_name'] = msg.tool_name
+        msg_dict['result_dict'] = msg.result_dict
+        msg_dict['for_whom'] = msg.for_whom
+    return msg_dict

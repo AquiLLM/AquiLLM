@@ -3,7 +3,7 @@ from django.contrib.contenttypes.admin import GenericTabularInline
 from django.urls import reverse, path
 from django.utils.html import format_html
 from django.shortcuts import render
-from .models import ConversationFile, RawTextDocument, HandwrittenNotesDocument, PDFDocument, VTTDocument, TeXDocument, TextChunk, Collection, CollectionPermission, WSConversation, GeminiAPIUsage
+from .models import ConversationFile, RawTextDocument, HandwrittenNotesDocument, PDFDocument, VTTDocument, TeXDocument, TextChunk, Collection, CollectionPermission, WSConversation, GeminiAPIUsage, UserMemoryFact, EpisodicMemory, ImageUploadDocument, MediaUploadDocument
 from .ocr_utils import get_gemini_cost_stats
 
 
@@ -30,6 +30,8 @@ from .ocr_utils import get_gemini_cost_stats
 @admin.register(PDFDocument)
 @admin.register(HandwrittenNotesDocument)
 @admin.register(RawTextDocument)
+@admin.register(ImageUploadDocument)
+@admin.register(MediaUploadDocument)
 class DocumentAdmin(admin.ModelAdmin):
     list_display = ('title', 'id')
     search_fields = ('title', 'full_text')
@@ -57,6 +59,33 @@ class CollectionAdmin(admin.ModelAdmin):
 @admin.register(CollectionPermission)
 class CollectionPermissionAdmin(admin.ModelAdmin):
     list_display = ('collection', 'user', 'permission')
+
+
+@admin.register(UserMemoryFact)
+class UserMemoryFactAdmin(admin.ModelAdmin):
+    list_display = ('user', 'category', 'fact_short', 'updated_at')
+    list_filter = ('category', 'user')
+    search_fields = ('fact',)
+    ordering = ('user', 'category', 'created_at')
+
+    def fact_short(self, obj):
+        return (obj.fact or '')[:60] + ('…' if len(obj.fact or '') > 60 else '')
+    fact_short.short_description = 'Fact'
+
+
+@admin.register(EpisodicMemory)
+class EpisodicMemoryAdmin(admin.ModelAdmin):
+    list_display = ('user', 'content_short', 'conversation', 'created_at')
+    list_filter = ('user',)
+    search_fields = ('content',)
+    readonly_fields = ('user', 'content', 'conversation', 'assistant_message_uuid', 'created_at')
+
+    def content_short(self, obj):
+        return (obj.content or '')[:80] + ('…' if len(obj.content or '') > 80 else '')
+    content_short.short_description = 'Content'
+
+    def has_add_permission(self, request):
+        return False  # Created automatically from conversation turns
 
 
 @admin.register(WSConversation)

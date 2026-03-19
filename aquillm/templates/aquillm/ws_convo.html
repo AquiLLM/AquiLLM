@@ -12,6 +12,7 @@
 <script>
     mountReactComponent('chat-mount', 'ChatComponent', {
         convoId: {{ convo_id }},
+        contextLimit: {{ context_limit|default:200000 }},
         collectionsUrl: window.apiUrls.api_collections,
 
     });

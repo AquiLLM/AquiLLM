@@ -1,17 +1,17 @@
 {# aquillm/templates/partials/conversation_list.html #}
-<div class="conversation-dropdown-container bg-scheme-shade_4 text-sm rounded-[12px] flex flex-col element-border">
-    <input type="text" id="conversation-search" placeholder="Search conversations..." class="conversation-search h-[28px] bg-scheme-shade_6 placeholder:text-text-less_contrast pl-[8px] mt-[8px] ml-[8px] mr-[8px] rounded-[8px] flex-grow-1" />
+<div class="conversation-dropdown-container bg-scheme-shade_4 text-sm text-text-normal rounded-[10px] flex flex-col element-border">
+    <input type="text" id="conversation-search" placeholder="Search conversations..." class="conversation-search h-[26px] bg-scheme-shade_6 text-text-normal placeholder:text-text-less_contrast pl-[8px] mt-[6px] ml-[6px] mr-[6px] rounded-[8px] flex-grow-1" />
 
     {% if conversations %}
-        <ul class="conversation-list overflow-y-auto max-h-[240px] pb-[8px]">
+        <ul class="conversation-list overflow-y-auto max-h-[240px] pb-[6px]">
         {% for conversation in conversations %}
-            <li id="convo-{{ conversation.id }}" class="conversation-item relative mt-[8px] ml-[8px]">
-                <div class="flex justify-between items-center rounded-[8px] pl-[8px] mr-[8px] hover:bg-scheme-shade_5 h-[40px]">
-                    <a href="{% url 'ws_convo' convo_id=conversation.pk %}" class="conversation-link max-w-[150px] p-1 rounded-[4px] overflow-hidden" style="white-space: nowrap; text-overflow: ellipsis;">
+            <li id="convo-{{ conversation.id }}" class="conversation-item relative mt-[4px] ml-[6px]">
+                <div class="flex justify-between items-center rounded-[8px] pl-[8px] mr-[6px] hover:bg-scheme-shade_5 h-[34px]">
+                    <a href="{% url 'ws_convo' convo_id=conversation.pk %}" class="conversation-link max-w-[150px] p-1 rounded-[4px] overflow-hidden text-[13px]" style="white-space: nowrap; text-overflow: ellipsis;">
                         {{ conversation.name|default:"Untitled Conversation" }}
                     </a>
 
-                    <span class="options-icon px-[8px] py-[4px] mr-[8px] hover:bg-scheme-shade_6 rounded-[4px]" style="cursor: pointer;" onclick="openConversationModal(event, {{ conversation.id }})">
+                    <span class="options-icon px-[6px] py-[3px] mr-[6px] hover:bg-scheme-shade_6 rounded-[4px]" style="cursor: pointer;" onclick="openConversationModal(event, {{ conversation.id }})">
                         &#8942;
                     </span>
                 </div>
@@ -41,6 +41,6 @@
         {% endfor %}
         </ul>
     {% else %}
-        <p class="no-conversations">You don't have any conversations yet.</p>
+        <p class="no-conversations text-text-normal">You don't have any conversations yet.</p>
     {% endif %}
 </div>

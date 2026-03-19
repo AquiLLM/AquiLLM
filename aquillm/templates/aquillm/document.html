@@ -6,6 +6,15 @@
 
 {% block head %}
 {{ block.super }}
+<style>
+  .document-details-summary {
+    list-style: none;
+  }
+
+  .document-details-summary::-webkit-details-marker {
+    display: none;
+  }
+</style>
 {% if document.has_latex %}
 <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 <script>
@@ -125,11 +134,13 @@
 {% endblock %}
 
 {% block content %}
-<div class="w-full h-full text-text-normal">
-<h1 class="text-2xl">{{ document.title|default:"Untitled Document" }}</h1>
-<details>
-    <summary class="font-black">Details</summary>
-    <ul>
+<div class="w-full h-full text-text-normal p-[20px] md:p-[24px]">
+<h1 class="text-[2.05rem] font-semibold leading-tight mb-3">{{ document.title|default:"Untitled Document" }}</h1>
+<details class="mb-4">
+    <summary class="document-details-summary h-[36px] inline-flex items-center gap-2 px-3 rounded-[18px] bg-scheme-shade_4 text-text-slightly_less_contrast border border-border-mid_contrast hover:bg-scheme-shade_5 hover:text-text-normal transition-colors cursor-pointer">
+        <span class="font-semibold">Details</span>
+    </summary>
+    <ul class="mt-2 bg-scheme-shade_3 border border-border-mid_contrast rounded-[12px] p-3 space-y-1 text-sm">
         <li><span class="font-black">Collection:</span> {{ document.collection.name }}</li>
         <li><span class="font-black">Ingested By:</span> {{ document.ingested_by }}</li>
         <li><span class="font-black">Date Ingested:</span> {{ document.ingestion_date|localtime|date:"F j, Y, g:i a e" }}</li>
@@ -137,6 +148,40 @@
 </details>
 {% if document.pdf_file %}
 <iframe src="{% url 'pdf' document.id %}" class="w-full h-full"></iframe>
+{% elif document.image_file %}
+{# Image document: show both the image and extracted text #}
+<div class="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+    {# Image Preview #}
+    <div class="order-1 space-y-2">
+        <h2 class="text-[1.2rem] font-semibold">Image:</h2>
+        <div class="bg-scheme-shade_3 rounded-lg p-4 element-border">
+            <img 
+                src="{% url 'document_image' document.id %}" 
+                alt="{{ document.title }}" 
+                class="max-w-full h-auto rounded cursor-pointer hover:opacity-90 transition-opacity"
+                style="max-height: 600px; object-fit: contain;"
+                onclick="window.open('{% url 'document_image' document.id %}', '_blank')"
+                title="Click to view full size"
+            />
+            <p class="text-text-lower_contrast text-sm mt-2 text-center">Click image to view full size</p>
+        </div>
+        {% if document.ocr_provider or document.ocr_model %}
+        <div class="mt-2 text-sm text-text-lower_contrast">
+            <span class="font-semibold">OCR:</span> 
+            {% if document.ocr_provider %}{{ document.ocr_provider }}{% endif %}
+            {% if document.ocr_model %} ({{ document.ocr_model }}){% endif %}
+        </div>
+        {% endif %}
+    </div>
+    
+    {# Extracted Text #}
+    <div class="order-2 space-y-2">
+        <h2 class="text-[1.2rem] font-semibold">Extracted Text (OCR):</h2>
+        <div class="bg-scheme-shade_3 rounded-lg p-4 element-border" style="max-height: 600px; overflow-y: auto;">
+            <div class="whitespace-pre-wrap">{{ document.original_text|linebreaks }}</div>
+        </div>
+    </div>
+</div>
 {% else %}
 <h1 class ="text-xl w-full">Full Text:</h1>
 <div>{{ document.original_text|linebreaks }}</div>

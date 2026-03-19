@@ -47,3 +47,12 @@ webdriver-manager>=4.0.0
 astropy
 numpy
 requests-oauthlib
+mem0ai
+python-docx
+openpyxl
+xlrd
+odfpy
+python-pptx
+ebooklib
+PyYAML
+PyMuPDF>=1.24.0
