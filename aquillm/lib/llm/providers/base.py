@@ -150,7 +150,7 @@ class LLMInterface(ABC):
             visible = {
                 key: value
                 for key, value in result_dict.items()
-                if not str(key).startswith("_")
+                if (not str(key).startswith("_")) or str(key) == "_image_instruction"
             }
             serialized = dumps(visible, ensure_ascii=False, default=str)
             return cls._sanitize_data_urls_for_llm_text(serialized)
@@ -231,6 +231,47 @@ class LLMInterface(ABC):
                 break
 
         return latest_user_query, snippets
+
+    @staticmethod
+    def _contains_markdown_image(text: str) -> bool:
+        return bool(re.search(r"!\[[^\]]*\]\([^)]+\)", text or ""))
+
+    @classmethod
+    def _recent_tool_image_markdown(cls, conversation: Conversation, max_images: int = 3) -> list[str]:
+        lines: list[str] = []
+        seen_urls: set[str] = set()
+        tool_messages = [
+            msg for msg in reversed(conversation.messages)
+            if isinstance(msg, ToolMessage) and msg.for_whom == 'assistant'
+        ]
+        for tool_msg in tool_messages[:4]:
+            result_dict = tool_msg.result_dict if isinstance(tool_msg.result_dict, dict) else {}
+            payload = result_dict.get("result")
+            candidates: list[tuple[str, str]] = []
+
+            if isinstance(payload, dict):
+                direct_url = payload.get("image_url")
+                if isinstance(direct_url, str):
+                    caption = str(payload.get("text") or payload.get("title") or "Image").strip()[:80] or "Image"
+                    candidates.append((caption, direct_url))
+                for key, value in payload.items():
+                    if isinstance(value, dict):
+                        url = value.get("image_url")
+                        if isinstance(url, str):
+                            caption = str(value.get("text") or value.get("title") or key or "Image").strip()[:80] or "Image"
+                            candidates.append((caption, url))
+
+            for caption, url in candidates:
+                if not url or url.startswith("data:image/"):
+                    continue
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                lines.append(f"![{caption}]({url})")
+                if len(lines) >= max_images:
+                    return lines
+
+        return lines
 
     async def _generate_compact_tool_summary(
         self,
@@ -604,6 +645,15 @@ class LLMInterface(ABC):
                         synthesized = self._synthesize_from_recent_tool_results(conversation)
                         if synthesized:
                             response_text = synthesized
+            if (
+                is_post_tool_result_turn
+                and (not response_tool_call)
+                and response_text.strip()
+                and (not self._contains_markdown_image(response_text))
+            ):
+                markdown_images = self._recent_tool_image_markdown(conversation, max_images=3)
+                if markdown_images:
+                    response_text = response_text.rstrip() + "\n\n" + "\n".join(markdown_images)
             new_msg = AssistantMessage(
                             content=response_text,
                             stop_reason=response.stop_reason,

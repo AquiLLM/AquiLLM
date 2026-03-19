@@ -214,12 +214,14 @@ def get_vector_search_func(user: User, col_ref: CollectionsRef):
         titles_by_doc_id = {doc.id: doc.title for doc in docs}
         
         result_items = {}
+        has_image_results = False
         for i, chunk in enumerate(results):
             title = titles_by_doc_id.get(chunk.doc_id, 'Untitled Document')
             key = f"[Result {i+1}] -- {title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}"
             
             if chunk.modality == TextChunk.Modality.IMAGE:
                 display_url = f"/aquillm/document_image/{chunk.doc_id}/"
+                has_image_results = True
                 
                 result_items[key] = {
                     "type": "image",
@@ -231,6 +233,12 @@ def get_vector_search_func(user: User, col_ref: CollectionsRef):
                 result_items[key] = _truncate_tool_text(chunk.content)
         
         ret = {"result": result_items}
+        if has_image_results:
+            ret["_image_instruction"] = (
+                "One or more results include an image_url. "
+                "When discussing those image results, include them in markdown with "
+                "![description](image_url) using the image_url field from the result."
+            )
 
         return ret
     
@@ -330,11 +338,13 @@ def get_search_single_document_func(user: User) -> LLMTool:
         _,_,results = TextChunk.text_chunk_search(search_string, top_k, [doc])
         
         result_items = {}
+        has_image_results = False
         for i, chunk in enumerate(results):
             key = f"[Result {i+1}] -- {doc.title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}"
             
             if chunk.modality == TextChunk.Modality.IMAGE:
                 display_url = f"/aquillm/document_image/{chunk.doc_id}/"
+                has_image_results = True
                 
                 result_items[key] = {
                     "type": "image",
@@ -346,6 +356,12 @@ def get_search_single_document_func(user: User) -> LLMTool:
                 result_items[key] = _truncate_tool_text(chunk.content)
 
         ret = {"result": result_items}
+        if has_image_results:
+            ret["_image_instruction"] = (
+                "One or more results include an image_url. "
+                "When discussing those image results, include them in markdown with "
+                "![description](image_url) using the image_url field from the result."
+            )
 
         return ret
 

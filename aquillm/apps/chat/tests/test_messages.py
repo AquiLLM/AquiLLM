@@ -437,8 +437,51 @@ class ToolMessageSafetyTests(SimpleTestCase):
         tool_msg = llm.call_tool(assistant_message)
         self.assertIsInstance(tool_msg, ToolMessage)
         self.assertIn("result", tool_msg.content)
+        self.assertIn("_image_instruction", tool_msg.content)
         self.assertNotIn("_images", tool_msg.content)
         self.assertNotIn("data:image", tool_msg.content)
+
+
+class ToolImageMarkdownInjectionTests(SimpleTestCase):
+    def test_complete_appends_image_markdown_when_missing_after_tool_result(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="Here is the figure summary.",
+                tool_call={},
+                stop_reason='stop',
+                input_usage=10,
+                output_usage=20,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[
+                UserMessage(content='Show me the image result.'),
+                ToolMessage(
+                    content='{"result": {"type":"image"}}',
+                    tool_name='vector_search',
+                    arguments={"search_string": "figure", "top_k": 1},
+                    for_whom='assistant',
+                    result_dict={
+                        "result": {
+                            "[Result 1] -- Doc chunk #: 1": {
+                                "type": "image",
+                                "text": "Figure 2",
+                                "image_url": "/aquillm/document_image/00000000-0000-0000-0000-000000000001/",
+                            }
+                        },
+                        "_image_instruction": "Use markdown image syntax.",
+                    },
+                ),
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 1024)
+
+        self.assertEqual(changed, 'changed')
+        self.assertIn("Here is the figure summary.", updated[-1].content)
+        self.assertIn("![", updated[-1].content)
+        self.assertIn("/aquillm/document_image/00000000-0000-0000-0000-000000000001/", updated[-1].content)
 
 
 class CutoffContinuationTests(SimpleTestCase):
