@@ -340,6 +340,17 @@ bash deploy/scripts/start_dev.sh
    - Access past conversations from the "Your Conversations" menu in the sidebar
    - Each conversation maintains its collection context
 
+## Tests and hygiene
+
+Backend tests use pytest from the `aquillm/` directory (where `manage.py` lives), with `DJANGO_SETTINGS_MODULE=aquillm.settings`. Set the same environment variables as runtime (at minimum `SECRET_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and Google OAuth variables if `DJANGO_DEBUG` is off). PostgreSQL must be reachable for tests that use `@pytest.mark.django_db`.
+
+```bash
+cd aquillm
+python -m pytest aquillm/tests aquillm/apps/chat/tests aquillm/apps/ingestion/tests -q
+```
+
+To ensure generated paths such as `node_modules/` are not committed, run `pwsh -ExecutionPolicy Bypass -File scripts/check_hygiene.ps1` from the repository root.
+
 ## Contributors
 
 ### Project Leads
