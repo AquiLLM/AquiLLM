@@ -18,7 +18,6 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from django.contrib.auth import views as auth_views
-from debug_toolbar.toolbar import debug_toolbar_urls
 
 from chat import views as chat_views
 from chat.views import urlpatterns as chat_urlpatterns
@@ -56,6 +55,10 @@ urlpatterns = [
 ]
 
 if DEBUG:
+    # Import only when DEBUG is True so we never load debug_toolbar models when
+    # DJANGO_DEBUG is off (debug_toolbar must be in INSTALLED_APPS only then).
+    from debug_toolbar.toolbar import debug_toolbar_urls
+
     urlpatterns += debug_toolbar_urls()
     urlpatterns += [
         path("debug_models/", views.debug_models, name="debug_models"),
