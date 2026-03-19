@@ -1,6 +1,7 @@
 import pytest
 from django.contrib.auth.models import User
 from aquillm.models import Collection, CollectionPermission
+from apps.collections.models.collection import _get_document_types
 
 @pytest.mark.django_db
 def test_collection_creation():
@@ -63,4 +64,21 @@ def test_collection_filter_by_user_perm():
     filtered_collections = Collection.objects.filter_by_user_perm(user, 'VIEW')
     assert len(filtered_collections) == 1
     assert filtered_collections[0] == collection1
-    assert False
+
+
+@pytest.mark.django_db
+def test_collection_document_types_resolve_from_refactored_app():
+    model_types = _get_document_types()
+    model_names = {model.__name__ for model in model_types}
+
+    assert model_names == {
+        "PDFDocument",
+        "TeXDocument",
+        "RawTextDocument",
+        "VTTDocument",
+        "HandwrittenNotesDocument",
+        "ImageUploadDocument",
+        "MediaUploadDocument",
+        "DocumentFigure",
+    }
+    assert all(model._meta.app_label == "apps_documents" for model in model_types)

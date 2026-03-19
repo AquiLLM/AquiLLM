@@ -7,11 +7,24 @@ or WebSocket connection — they test the database layer directly.
 """
 
 from uuid import uuid4
-from django.test import TestCase
+from django.test import TestCase, SimpleTestCase
 from django.contrib.auth import get_user_model
+from asgiref.sync import async_to_sync
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from aquillm.models import WSConversation, Message
-from aquillm.llm import Conversation, UserMessage, AssistantMessage, ToolMessage
+from aquillm.llm import (
+    Conversation,
+    UserMessage,
+    AssistantMessage,
+    ToolMessage,
+    LLMInterface,
+    LLMResponse,
+    llm_tool,
+    ToolChoice,
+    OpenAIInterface,
+)
 from aquillm.message_adapters import (
     pydantic_message_to_django,
     django_message_to_pydantic,
@@ -21,6 +34,294 @@ from aquillm.message_adapters import (
 )
 
 User = get_user_model()
+
+
+@llm_tool(
+    for_whom='assistant',
+    required=[],
+    param_descs={},
+)
+def _test_document_ids():
+    """Test tool for LLMInterface.complete() retry behavior."""
+    return {'result': 'ok'}
+
+
+class _FakeLLMInterface(LLMInterface):
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+
+    async def get_message(self, *args, **kwargs):
+        self.calls.append(kwargs)
+        return self.responses[len(self.calls) - 1]
+
+    async def token_count(self, conversation, new_message=None):
+        return 0
+
+
+class _FakeTitleLLM:
+    def __init__(self, text):
+        self.base_args = {}
+        self._text = text
+
+    async def get_message(self, *args, **kwargs):
+        return SimpleNamespace(text=self._text)
+
+
+class ToolUseRetryTests(SimpleTestCase):
+    def test_retries_with_required_tool_when_model_only_promises_to_search(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll search each of these three papers for detailed information.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Search these papers and summarize memory systems.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='auto'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'auto')
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+
+    def test_does_not_retry_for_normal_non_tool_text_reply(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text='Here is a concise answer from prior context.',
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Give me a quick answer.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='auto'),
+                )
+            ],
+        )
+
+        updated, _ = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(len(llm.calls), 1)
+        self.assertIsNone(updated[-1].tool_call_id)
+
+
+class OpenAIFallbackToolParsingTests(SimpleTestCase):
+    class _FakeCompletions:
+        def __init__(self, response):
+            self.response = response
+
+        async def create(self, **kwargs):
+            return self.response
+
+    class _FakeOpenAIClient:
+        def __init__(self, response):
+            self.chat = SimpleNamespace(
+                completions=OpenAIFallbackToolParsingTests._FakeCompletions(response)
+            )
+
+    def test_extracts_tool_call_from_xml_text_when_tool_calls_missing(self):
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        tool_calls=[],
+                        content=(
+                            '<function_call>{"name":"vector_search","arguments":'
+                            '{"search_string":"memory and agents","top_k":5}}</function_call>'
+                        ),
+                    ),
+                    finish_reason='stop',
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
+        )
+
+        llm = OpenAIInterface(self._FakeOpenAIClient(response), model='qwen3.5:27b')
+        result = async_to_sync(llm.get_message)(
+            system='test system',
+            messages=[{'role': 'user', 'content': 'search for memory papers'}],
+            max_tokens=256,
+            tools=[{
+                'name': 'vector_search',
+                'description': 'Search docs',
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {
+                        'search_string': {'type': 'string', 'description': 'query'},
+                        'top_k': {'type': 'integer', 'description': 'k'},
+                    },
+                    'required': ['search_string', 'top_k'],
+                },
+            }],
+            tool_choice={'type': 'auto'},
+        )
+
+        self.assertEqual(result.tool_call['tool_call_name'], 'vector_search')
+        self.assertEqual(result.tool_call['tool_call_input']['search_string'], 'memory and agents')
+        self.assertEqual(result.tool_call['tool_call_input']['top_k'], 5)
+        self.assertIsNone(result.text)
+
+
+class OpenAIContextOverflowRetryTests(SimpleTestCase):
+    class _SequencedCompletions:
+        def __init__(self):
+            self.calls = []
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                raise Exception(
+                    "Error code: 400 - {'error': {'message': "
+                    "\"You passed 31745 input tokens and requested 1024 output tokens. "
+                    "However, the model's context length is only 32768 tokens, resulting in "
+                    "a maximum input length of 31744 tokens. Please reduce the length of the "
+                    "input prompt. (parameter=input_tokens, value=31745)\"}}"
+                )
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(tool_calls=[], content='Recovered after retry'),
+                        finish_reason='stop',
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
+            )
+
+    class _FakeOpenAIClient:
+        def __init__(self, completions):
+            self.chat = SimpleNamespace(completions=completions)
+
+    def test_retries_once_with_lower_max_tokens_on_context_overflow(self):
+        completions = self._SequencedCompletions()
+        llm = OpenAIInterface(self._FakeOpenAIClient(completions), model='qwen3.5:27b')
+
+        result = async_to_sync(llm.get_message)(
+            system='test system',
+            messages=[{'role': 'user', 'content': 'hello'}],
+            max_tokens=1024,
+        )
+
+        self.assertEqual(result.text, 'Recovered after retry')
+        self.assertEqual(len(completions.calls), 2)
+        self.assertEqual(completions.calls[0]['max_tokens'], 1024)
+        self.assertLess(completions.calls[1]['max_tokens'], 1024)
+        self.assertGreaterEqual(completions.calls[1]['max_tokens'], 64)
+
+
+class OpenAIContextReserveScalingTests(SimpleTestCase):
+    def test_ratio_reserve_scales_with_context_limit(self):
+        small_guard, small_pad = OpenAIInterface._context_reserve_tokens(12_288)
+        large_guard, large_pad = OpenAIInterface._context_reserve_tokens(100_000)
+
+        self.assertGreaterEqual(small_guard, 64)
+        self.assertGreaterEqual(small_pad, 0)
+        self.assertGreater(large_guard, small_guard)
+        self.assertGreater(large_pad, small_pad)
+
+    def test_preflight_trim_uses_ratio_reserve_by_default(self):
+        arguments = {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "x"},
+            ],
+            "max_tokens": 2048,
+        }
+        with patch.object(OpenAIInterface, "_estimate_prompt_tokens", return_value=9700), patch.object(
+            OpenAIInterface,
+            "_trim_messages_for_overflow",
+            return_value=True,
+        ) as trim_mock:
+            OpenAIInterface._preflight_trim_for_context(arguments, context_limit=12_288)
+
+        trim_mock.assert_not_called()
+
+    @patch.dict(
+        "os.environ",
+        {
+            "OPENAI_CONTEXT_RESERVE_MODE": "fixed",
+            "OPENAI_CONTEXT_GUARD_TOKENS": "512",
+            "OPENAI_ESTIMATOR_PAD_TOKENS": "256",
+        },
+        clear=False,
+    )
+    def test_fixed_mode_keeps_legacy_behavior(self):
+        arguments = {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "x"},
+            ],
+            "max_tokens": 2048,
+        }
+        with patch.object(OpenAIInterface, "_estimate_prompt_tokens", return_value=9700), patch.object(
+            OpenAIInterface,
+            "_trim_messages_for_overflow",
+            return_value=True,
+        ) as trim_mock:
+            OpenAIInterface._preflight_trim_for_context(arguments, context_limit=12_288)
+
+        trim_mock.assert_called()
+
+
+class CutoffContinuationTests(SimpleTestCase):
+    def test_continues_cutoff_response_before_compact_fallback(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text='Scalable patent analysis outline:\n1. Ingestion and preprocessing',
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text='2. Claim parsing and structured extraction.\n3. Prior-art ranking.\n4. Validation and reporting.',
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Give me a detailed patent-analysis implementation outline.')],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertIn('1. Ingestion and preprocessing', updated[-1].content)
+        self.assertIn('2. Claim parsing and structured extraction.', updated[-1].content)
 
 
 class MessageAdapterTests(TestCase):
@@ -455,3 +756,43 @@ class BuildFrontendJsonTests(TestCase):
         result = build_frontend_conversation_json(self.db_convo)
 
         self.assertIsInstance(result['messages'][0]['message_uuid'], str)
+
+
+class ConversationTitleTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='title-user', password='testpass')
+        self.db_convo = WSConversation.objects.create(
+            owner=self.user,
+            system_prompt='You are a helpful assistant.',
+        )
+        Message.objects.create(
+            conversation=self.db_convo,
+            role='user',
+            content='Plan a 3 day Yosemite itinerary',
+            sequence_number=0,
+        )
+        Message.objects.create(
+            conversation=self.db_convo,
+            role='assistant',
+            content='Sure, here is an itinerary you can use.',
+            stop_reason='end_turn',
+            sequence_number=1,
+        )
+
+    def test_set_name_falls_back_when_llm_returns_generic_title(self):
+        fake_llm = _FakeTitleLLM('conversation')
+        fake_config = SimpleNamespace(llm_interface=fake_llm)
+        with patch('aquillm.models.apps.get_app_config', return_value=fake_config):
+            self.db_convo.set_name()
+
+        self.db_convo.refresh_from_db()
+        self.assertEqual(self.db_convo.name, 'Plan a 3 day Yosemite itinerary')
+
+    def test_set_name_cleans_wrapped_llm_title(self):
+        fake_llm = _FakeTitleLLM('  "*Yosemite Road Trip Plan*"  ')
+        fake_config = SimpleNamespace(llm_interface=fake_llm)
+        with patch('aquillm.models.apps.get_app_config', return_value=fake_config):
+            self.db_convo.set_name()
+
+        self.db_convo.refresh_from_db()
+        self.assertEqual(self.db_convo.name, 'Yosemite Road Trip Plan')
