@@ -53,9 +53,10 @@ urlpatterns = [
     path('zotero/disconnect/', zotero_views.zotero_disconnect, name='zotero_disconnect'),
     path('zotero/sync/', zotero_views.zotero_sync, name='zotero_sync'),
     path('zotero/sync/status/', zotero_views.zotero_sync_status, name='zotero_sync_status'),
-] + debug_toolbar_urls()
+]
 
 if DEBUG:
-   urlpatterns += [
-       path("debug_models/", views.debug_models, name="debug_models"),
-   ]
+    urlpatterns += debug_toolbar_urls()
+    urlpatterns += [
+        path("debug_models/", views.debug_models, name="debug_models"),
+    ]

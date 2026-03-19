@@ -73,8 +73,10 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.google',
     "django_extensions",
     'django.contrib.postgres',
-    'debug_toolbar',
 ]
+
+if DEBUG:
+    INSTALLED_APPS = list(INSTALLED_APPS) + ["debug_toolbar"]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -86,8 +88,10 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     'allauth.account.middleware.AccountMiddleware',
-    'debug_toolbar.middleware.DebugToolbarMiddleware'
 ]
+
+if DEBUG:
+    MIDDLEWARE = list(MIDDLEWARE) + ["debug_toolbar.middleware.DebugToolbarMiddleware"]
 
 ROOT_URLCONF = "aquillm.urls"
 
@@ -268,7 +272,9 @@ CHANNEL_LAYERS = {
 
 CELERY_BROKER_URL = "redis://redis:6379"
 CELERY_RESULT_BACKEND = "redis://redis:6379"
-CELERY_ACCEPT_CONTENT = ['pickle', 'json']
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
 
 # Zotero Integration Settings
 # OAuth credentials should be set in environment variables:
