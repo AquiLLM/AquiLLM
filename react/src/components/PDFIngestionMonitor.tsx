@@ -2,7 +2,15 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Terminal, X } from 'lucide-react';
 import { PDFIngestionMonitorProps, IngestionMessage } from '../types';
 import formatUrl from '../utils/formatUrl';
-const PDFIngestionMonitor: React.FC<PDFIngestionMonitorProps> = ({ documentName, documentId }) => {
+const PDFIngestionMonitor: React.FC<PDFIngestionMonitorProps> = ({
+  documentName,
+  documentId,
+  modality,
+  rawMediaSaved,
+  textExtracted,
+  provider,
+  providerModel,
+}) => {
   const [progress, setProgress] = useState<number>(0);
   const [messages, setMessages] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +78,28 @@ const PDFIngestionMonitor: React.FC<PDFIngestionMonitorProps> = ({ documentName,
         >
           {documentName}
         </a>
+        <div className="mt-1 flex flex-wrap gap-2 text-xs">
+          {modality && (
+            <span className="px-2 py-1 rounded-full bg-scheme-shade_5 border border-border-mid_contrast text-text-normal">
+              {modality}
+            </span>
+          )}
+          {typeof rawMediaSaved === "boolean" && (
+            <span className="px-2 py-1 rounded-full bg-scheme-shade_5 border border-border-mid_contrast text-text-normal">
+              raw media: {rawMediaSaved ? "saved" : "none"}
+            </span>
+          )}
+          {typeof textExtracted === "boolean" && (
+            <span className="px-2 py-1 rounded-full bg-scheme-shade_5 border border-border-mid_contrast text-text-normal">
+              text: {textExtracted ? "extracted" : "none"}
+            </span>
+          )}
+          {provider && (
+            <span className="px-2 py-1 rounded-full bg-scheme-shade_5 border border-border-mid_contrast text-text-normal">
+              provider: {providerModel ? `${provider} (${providerModel})` : provider}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {/* Terminal icon that triggers the modal */}
           <button onClick={() => setShowModal(true)} className="hover:text-accent">

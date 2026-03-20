@@ -1,0 +1,383 @@
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web/Dockerfile.prod
+
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      - C_FORCE_ROOT=1
+      - RUN_CELERY_IN_WEB=0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      vllm:
+        condition: service_healthy
+        required: false
+      vllm_ocr:
+        condition: service_healthy
+        required: false
+      vllm_transcribe:
+        condition: service_healthy
+        required: false
+      vllm_embed:
+        condition: service_healthy
+        required: false
+      vllm_rerank:
+        condition: service_healthy
+        required: false
+    volumes:
+      - ../..:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web/Dockerfile.prod
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      - C_FORCE_ROOT=1
+      - RUN_CELERY_IN_WEB=0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      vllm:
+        condition: service_healthy
+        required: false
+      vllm_ocr:
+        condition: service_healthy
+        required: false
+      vllm_transcribe:
+        condition: service_healthy
+        required: false
+      vllm_embed:
+        condition: service_healthy
+        required: false
+      vllm_rerank:
+        condition: service_healthy
+        required: false
+    volumes:
+      - ../..:/app
+    command: sh -c "cd /app/aquillm && celery -A aquillm worker --loglevel=info"
+  
+  nginx:
+      image: nginx:stable-bookworm
+      restart: unless-stopped
+      env_file:
+        - ../../.env
+      ports:
+        - "443:443"
+        - "80:80"
+      volumes:
+        - ../../deploy/nginx/nginx.conf:/etc/nginx/nginx.conf
+        - ../../deploy/nginx/aquillm.conf.template:/etc/nginx/templates/aquillm.conf.template
+        - certs:/etc/letsencrypt
+      healthcheck:
+        test: ["CMD", "service", "nginx", "status"]
+        interval: 30s
+        timeout: 10s
+        retries: 3
+        start_period: 6s
+      depends_on:
+        web:
+          condition: service_healthy
+
+  get_certs:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/certbot/Dockerfile
+    profiles:
+      - certbot
+    ports:
+      - "80:80"
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../deploy/scripts/get_certs.sh:/get_certs.sh
+      - certs:/etc/letsencrypt
+      - ../../deploy/scripts/get_certs.cron:/etc/cron.d/get_certs
+
+  db:
+    image: pgvector/pgvector:0.8.0-pg17
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  storage:
+    image: minio/minio
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      - MINIO_ROOT_USER=dev
+      - MINIO_ROOT_PASSWORD=rickbailey
+      - MINIO_DEFAULT_BUCKETS=aquillm
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', '-I', 'localhost:9000/minio/health/live']
+      interval: 5s
+      timeout: 10s
+      start_period: 15s
+    command: minio server /data --console-address ":9001"
+
+  redis:
+    image: redis:7.4-bookworm
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  qdrant:
+    image: qdrant/qdrant:v1.17
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set aquillm http://storage:9000 dev rickbailey;
+      /usr/bin/mc mb aquillm/aquillm;
+      exit 0;"
+  
+  vllm:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/vllm/Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+    restart: unless-stopped
+    profiles:
+      - vllm
+    env_file:
+      - ../../.env
+    environment:
+      - VLLM_HOST=0.0.0.0
+      - VLLM_PORT=8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - vllm_data:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 36
+      start_period: 120s
+
+  vllm_ocr:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/vllm/Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+    restart: unless-stopped
+    profiles:
+      - vllm
+    depends_on:
+      vllm:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      - VLLM_HOST=0.0.0.0
+      - VLLM_PORT=8000
+      - VLLM_MODEL=${OCR_VLLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
+      - VLLM_SERVED_MODEL_NAME=${OCR_VLLM_SERVED_MODEL_NAME:-qwen-ocr}
+      - VLLM_TOKENIZER=${OCR_VLLM_TOKENIZER:-Qwen/Qwen2.5-VL-7B-Instruct}
+      - VLLM_TENSOR_PARALLEL_SIZE=${OCR_VLLM_TENSOR_PARALLEL_SIZE:-1}
+      - VLLM_GPU_MEMORY_UTILIZATION=${OCR_VLLM_GPU_MEMORY_UTILIZATION:-0.2}
+      - VLLM_MAX_MODEL_LEN=${OCR_VLLM_MAX_MODEL_LEN:-4096}
+      - VLLM_EXTRA_ARGS=${OCR_VLLM_EXTRA_ARGS:-}
+      - VLLM_TRUST_REMOTE_CODE=${OCR_VLLM_TRUST_REMOTE_CODE:-1}
+    ports:
+      - "8004:8000"
+    volumes:
+      - vllm_data:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 36
+      start_period: 120s
+
+  vllm_transcribe:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/vllm/Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+    restart: unless-stopped
+    profiles:
+      - vllm
+    depends_on:
+      vllm_ocr:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      - VLLM_HOST=0.0.0.0
+      - VLLM_PORT=8000
+      - VLLM_MODEL=${TRANSCRIBE_VLLM_MODEL:-openai/whisper-large-v3}
+      - VLLM_SERVED_MODEL_NAME=${TRANSCRIBE_VLLM_SERVED_MODEL_NAME:-whisper-large-v3}
+      - VLLM_TOKENIZER=${TRANSCRIBE_VLLM_TOKENIZER:-openai/whisper-large-v3}
+      - VLLM_TENSOR_PARALLEL_SIZE=${TRANSCRIBE_VLLM_TENSOR_PARALLEL_SIZE:-1}
+      - VLLM_GPU_MEMORY_UTILIZATION=${TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION:-0.2}
+      - VLLM_MAX_MODEL_LEN=${TRANSCRIBE_VLLM_MAX_MODEL_LEN:-4096}
+      - VLLM_EXTRA_ARGS=${TRANSCRIBE_VLLM_EXTRA_ARGS:-}
+      - VLLM_TRUST_REMOTE_CODE=${TRANSCRIBE_VLLM_TRUST_REMOTE_CODE:-1}
+    ports:
+      - "8005:8000"
+    volumes:
+      - vllm_data:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 36
+      start_period: 120s
+
+  vllm_embed:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/vllm/Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+    restart: unless-stopped
+    profiles:
+      - vllm
+    depends_on:
+      vllm_transcribe:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      - VLLM_HOST=0.0.0.0
+      - VLLM_PORT=8000
+      - VLLM_MODEL=${MEM0_EMBED_VLLM_MODEL:-Qwen/Qwen3-Embedding-4B}
+      - VLLM_SERVED_MODEL_NAME=${MEM0_EMBED_MODEL:-Qwen/Qwen3-Embedding-4B}
+      - VLLM_RUNNER=pooling
+      - VLLM_TENSOR_PARALLEL_SIZE=${MEM0_EMBED_TENSOR_PARALLEL_SIZE:-1}
+      - VLLM_GPU_MEMORY_UTILIZATION=${MEM0_EMBED_GPU_MEMORY_UTILIZATION:-0.2}
+      - VLLM_MAX_MODEL_LEN=${MEM0_EMBED_MAX_MODEL_LEN:-8192}
+      - VLLM_EXTRA_ARGS=${MEM0_EMBED_VLLM_EXTRA_ARGS:-}
+      - VLLM_TRUST_REMOTE_CODE=${MEM0_EMBED_VLLM_TRUST_REMOTE_CODE:-1}
+    ports:
+      - "8002:8000"
+    volumes:
+      - vllm_data:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 36
+      start_period: 120s
+
+  vllm_rerank:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/vllm/Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              driver: nvidia
+    restart: unless-stopped
+    profiles:
+      - vllm
+    depends_on:
+      vllm_embed:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      - VLLM_HOST=0.0.0.0
+      - VLLM_PORT=8000
+      - VLLM_MODEL=${APP_RERANK_VLLM_MODEL:-Qwen/Qwen3-Reranker-4B}
+      - VLLM_SERVED_MODEL_NAME=${APP_RERANK_MODEL:-Qwen/Qwen3-Reranker-4B}
+      - VLLM_TASK=score
+      - VLLM_TENSOR_PARALLEL_SIZE=${APP_RERANK_TENSOR_PARALLEL_SIZE:-1}
+      - VLLM_GPU_MEMORY_UTILIZATION=${APP_RERANK_GPU_MEMORY_UTILIZATION:-0.2}
+      - VLLM_MAX_MODEL_LEN=${APP_RERANK_MAX_MODEL_LEN:-8192}
+      - VLLM_EXTRA_ARGS=${APP_RERANK_VLLM_EXTRA_ARGS:-}
+      - VLLM_TRUST_REMOTE_CODE=${APP_RERANK_VLLM_TRUST_REMOTE_CODE:-1}
+    ports:
+      - "8003:8000"
+    volumes:
+      - vllm_data:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 36
+      start_period: 120s
+
+volumes:
+  postgres_data:
+  minio_data:
+  qdrant_data:
+  certs:
+  vllm_data:
+
+
+

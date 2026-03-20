@@ -11,52 +11,143 @@
 
 
 {% block content %}
-    <!-- 
-        Theme-specific styles for logo and text readability.
-        Light mode: reduces logo opacity and adds white text shadow for contrast.
-        Dark mode: keeps logo fully visible, no text shadow needed.
-    -->
+    <!-- Home screen visual tuning -->
     <style>
-        /* Light mode themes - reduce logo opacity, add text outline for readability */
+        .welcome-shell {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.8rem;
+            padding: 1.5rem 1rem;
+            max-width: 760px;
+            width: min(94vw, 760px);
+            text-align: center;
+        }
+
+        .welcome-shell::before {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: 52%;
+            width: min(660px, 78vw);
+            height: min(430px, 52vh);
+            transform: translate(-50%, -50%);
+            border-radius: 999px;
+            background: rgba(98, 118, 150, 0.13);
+            filter: blur(82px);
+            opacity: 0.67;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .welcome-shell > * {
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Circular badge treatment for the main hover logo. */
+        .welcome-logo-badge {
+            --color-contrast: #0a1a45;
+            width: min(152px, 35vw);
+            height: min(152px, 35vw);
+            border-radius: 9999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f5f8ff;
+            border: 1px solid #d8e0f5;
+            box-shadow: 0 10px 26px rgba(2, 10, 28, 0.22);
+            margin-bottom: 0.2rem;
+            transition: transform 220ms ease, box-shadow 220ms ease;
+        }
+
+        .welcome-logo {
+            width: 58%;
+            height: auto;
+            margin: 0;
+            transition: transform 220ms ease, opacity 220ms ease;
+        }
+
+        .welcome-shell:hover .welcome-logo-badge {
+            transform: translateY(-2px) scale(1.01);
+            box-shadow: 0 14px 30px rgba(2, 10, 28, 0.28);
+        }
+
+        .welcome-heading {
+            font-weight: 700;
+            line-height: 1.15;
+            letter-spacing: 0.01em;
+        }
+
+        .welcome-subtext {
+            font-size: 1rem;
+            color: var(--color-text-low-contrast);
+        }
+
+        .welcome-login-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 0.2rem;
+        }
+
+        .welcome-login-link {
+            border: none;
+            background: transparent;
+            color: var(--color-accent-DEFAULT);
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            padding: 0;
+            font-weight: 600;
+            transition: color 150ms ease;
+        }
+
+        .welcome-login-link:hover {
+            color: var(--color-accent-light);
+        }
+
+        /* Light mode themes - reduce logo opacity for subtle decoration */
         body.theme-aquillm_default_light .welcome-logo,
         body.theme-aquillm_default_light_accessible_chat .welcome-logo {
-            opacity: 0.5 !important;
+            opacity: 0.94 !important;
         }
-        body.theme-aquillm_default_light .welcome-text,
-        body.theme-aquillm_default_light_accessible_chat .welcome-text {
-            text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff, 0 0 10px #fff, 0 0 20px #fff;
+
+        body.theme-aquillm_default_light .welcome-shell,
+        body.theme-aquillm_default_light_accessible_chat .welcome-shell {
+            background: transparent;
         }
+
         /* Dark mode themes - invert logo color so it shows on dark backgrounds */
         body.theme-aquillm_default_dark .welcome-logo,
         body.theme-aquillm_default_dark_accessible_chat .welcome-logo,
         body.theme-high_contrast .welcome-logo {
-            opacity: .5 !important;
-            filter: invert(1);
+            opacity: 0.92 !important;
+            filter: invert(1) contrast(1.04);
         }
-        body.theme-aquillm_default_dark .welcome-text,
-        body.theme-aquillm_default_dark_accessible_chat .welcome-text,
-        body.theme-high_contrast .welcome-text {
-            text-shadow: -1px -1px 0 #111, 1px -1px 0 #111, -1px 1px 0 #111, 1px 1px 0 #111, 0 0 10px #111, 0 0 20px #111;
+
+        body.theme-aquillm_default_dark .welcome-logo-badge,
+        body.theme-aquillm_default_dark_accessible_chat .welcome-logo-badge,
+        body.theme-high_contrast .welcome-logo-badge {
+            background: var(--color-scheme-shade-3);
+            border-color: var(--color-border-high-contrast);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
         }
-        /* Responsive logo sizing - shrinks with viewport, stays centered in content area */
-        .welcome-logo {
-            width: min(500px, 70vw);
-            height: auto;
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
+
+        body.theme-aquillm_default_dark .welcome-shell,
+        body.theme-aquillm_default_dark_accessible_chat .welcome-shell,
+        body.theme-high_contrast .welcome-shell {
+            background: transparent;
         }
     </style>
 
     <!-- Main content container - centered flexbox layout -->
-    <div class="flex flex-col items-center justify-center h-full w-full text-text-normal relative">
+    <div class="flex flex-col items-center justify-center h-full w-full text-text-normal">
+        <div class="welcome-shell">
 
-        <!-- 
-            Large decorative AquiLLM logo (Aquila bird constellation).
-            Absolute position within content area, sits behind text as a background watermark.
-            Opacity controlled by theme-specific CSS above.
-        -->
+        <div class="welcome-logo-badge" aria-hidden="true">
         <svg viewBox="0 0 48 57" fill="none" xmlns="http://www.w3.org/2000/svg" class="welcome-logo">
             <g clip-path="url(#clip0_42_32)">
             <path d="M46.3775 56.5333C47.0216 56.5333 47.5439 56.0056 47.5439 55.3546C47.5439 54.7036 47.0216 54.1759 46.3775 54.1759C45.7333 54.1759 45.2111 54.7036 45.2111 55.3546C45.2111 56.0056 45.7333 56.5333 46.3775 56.5333Z" fill="#282828"/>
@@ -82,6 +173,7 @@
             <path d="M9.34055 13.2751V13.1985L9.33845 13.122L9.33424 13.0497L9.33003 12.9774L9.31531 12.8371L9.29847 12.7053L9.27322 12.5777L9.24587 12.4565L9.21432 12.3417L9.17645 12.2333L9.13647 12.1312L9.09019 12.0334L9.0439 11.942L8.9913 11.8548L8.9366 11.774L8.8798 11.6975L8.81878 11.6273L8.75567 11.5614L8.69255 11.4998L8.62522 11.4445L8.55579 11.3935L8.48426 11.3467L8.41273 11.3042L8.3412 11.2659L8.26545 11.2319L8.19182 11.2021L8.11608 11.1745L8.04033 11.1532L7.9646 11.1341L7.88885 11.1192L7.81312 11.1086L7.73738 11.1001L7.66374 11.0958L7.5901 11.0937L7.57959 11.3276C8.61681 11.3276 8.61681 12.7159 8.61681 13.5408C8.61681 13.9321 8.61681 14.5465 8.63785 14.7272C7.71634 15.5415 6.90844 15.6585 6.48976 15.6585C5.86069 15.6585 5.54721 15.1822 5.54721 14.504C5.54721 13.9852 5.81861 12.8414 6.15524 12.3013C6.64755 11.5274 7.21351 11.3276 7.57959 11.3276L7.5901 11.0937C6.15524 11.0937 4.77087 12.6096 4.77087 14.1021C4.77087 15.0865 5.39994 15.8923 6.46872 15.8923C7.12934 15.8923 7.88465 15.6478 8.67992 15.0015C8.81668 15.5628 9.16172 15.8923 9.6351 15.8923C10.1905 15.8923 10.5145 15.3098 10.5145 15.1397C10.5145 15.0653 10.4514 15.0334 10.3883 15.0334C10.3147 15.0334 10.2831 15.0653 10.2515 15.1397C10.0643 15.6585 9.68769 15.6585 9.66455 15.6585C9.34055 15.6585 9.34055 14.8335 9.34055 14.5784C9.34055 14.3552 9.34055 14.336 9.44575 14.2085C10.4304 12.9583 10.6513 11.7294 10.6513 11.7188C10.6513 11.6975 10.6408 11.6125 10.525 11.6125C10.4199 11.6125 10.4199 11.6443 10.3673 11.8357C10.18 12.5033 9.83286 13.307 9.34055 13.9321V13.2751Z" fill="#282828"/>
             </g>
         </svg>
+        </div>
         
 
         <!-- 
@@ -91,7 +183,8 @@
         {% if user.is_authenticated %}
         {% csrf_token %}
 
-        <h1 class="font-sans text-5xl text-accent-light pb-[24px] mb-[24px] pointer-events-none text-center z-10 welcome-text px-4">Welcome, {{ user.username }}</h1>
+        <h1 class="text-4xl md:text-5xl text-accent-light text-center welcome-text px-4 welcome-heading brand-wordmark-font">Welcome to AquiLLM</h1>
+        <p class="welcome-subtext brand-wordmark-font">A Tool for Preserving Tacit Knowledge in Research Groups.</p>
             
         <!-- 
             Guest/Unauthenticated User View
@@ -100,18 +193,22 @@
         {% else %}
         {% csrf_token %}
 
-            <h1 class="font-sans text-5xl border-b border-scheme-shade_14 pb-[24px] mb-[24px] pointer-events-none text-center z-50 welcome-text px-4">Welcome to AquiLLM</h1>
+            <h1 class="text-4xl md:text-5xl text-center welcome-text px-4 welcome-heading brand-wordmark-font">Welcome to AquiLLM</h1>
+            <p class="welcome-subtext brand-wordmark-font">A Tool for Preserving Tacit Knowledge in Research Groups.</p>
 
             <!-- Login prompt with form that redirects to login page -->
-            <div class="font-sans z-50 welcome-text">
+            <div class="font-sans welcome-text welcome-subtext">
                 <form method="post" action="{% url 'account_login' %}">
                     {% csrf_token %}
-                    <span class="pointer-events-none">Please</span>
-                    <button class="underline text-accent-light" type="submit">login</button>
-                    <span class="pointer-events-none">to access all features.</span>
+                    <div class="welcome-login-row">
+                        <span class="pointer-events-none">Please</span>
+                        <button class="welcome-login-link" type="submit">log in</button>
+                        <span class="pointer-events-none">to access all features.</span>
+                    </div>
                 </form>
             </div>
 
         {% endif %}
+        </div>
     </div>
 {% endblock %}

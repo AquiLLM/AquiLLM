@@ -19,9 +19,22 @@ More info can be found at [https://aquillm.org](https://aquillm.org). See also o
 
 ## Key Features
 
-*   **Versatile Document Ingestion**: Upload PDFs, fetch arXiv papers by ID, import VTT transcripts, scrape webpages, and process handwritten notes (with OCR).
+*   **Versatile Document Ingestion**: Upload PDFs, fetch arXiv papers by ID, import VTT transcripts, scrape webpages, process handwritten notes (with OCR), and ingest mixed-format file batches through one unified upload flow.
 *   **Intelligent Organization**: Group documents into logical `Collections` for focused research projects.
 *   **AI-Powered Chat**: Engage in context-aware conversations with your documents, ask follow-up questions, and get answers with source references.
+
+### Unified Upload Format Support
+
+The unified upload endpoint supports:
+
+* Documents: `pdf`, `doc`, `docx`, `odt`, `rtf`, `txt`, `md`, `html`, `htm`, `epub`
+* Spreadsheets/tabular: `csv`, `tsv`, `xls`, `xlsx`, `ods`
+* Presentations: `ppt`, `pptx`, `odp`
+* Structured: `json`, `jsonl`, `xml`, `yaml`, `yml`
+* Captions/transcripts: `vtt`, `srt`
+* Images (OCR): `png`, `jpg`, `jpeg`, `tif`, `tiff`, `bmp`, `webp`, `heic`, `heif`
+* Audio/video transcription: `mp3`, `wav`, `m4a`, `aac`, `flac`, `ogg`, `opus`, `mp4`, `mov`, `m4v`, `webm`, `mkv`, `avi`, `mpeg`, `mpg`
+* Archives: `zip` (supported files inside are expanded and ingested)
 
 ## Tech Stack
 
@@ -51,46 +64,86 @@ This assumes you have Docker and Docker Compose installed.
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, or `GEMINI`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
+    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
+    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_ocr` (OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker).
+    - For image OCR through local vLLM, set `APP_OCR_PROVIDER=qwen` and point `APP_OCR_QWEN_BASE_URL` to `http://vllm_ocr:8000/v1`.
+    - For audio/video transcription through local vLLM, set `INGEST_TRANSCRIBE_PROVIDER=openai` and `INGEST_TRANSCRIBE_OPENAI_BASE_URL=http://vllm_transcribe:8000/v1`.
+    - GGUF note: set model as `repo:filename.gguf` or `repo:selector` (for example `repo:i1-Q4_K_M`). Startup resolves the best matching GGUF file in the repo, downloads it, and launches vLLM with the local file path.
+    - For embedding/reranker models like `Qwen/Qwen3-Embedding-4B` and `Qwen/Qwen3-Reranker-4B`, set `MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1` and `APP_RERANK_VLLM_TRUST_REMOTE_CODE=1`.
+    - Optional memory backend:
+      - `MEMORY_BACKEND=local` (default): AquiLLM pgvector memory tables
+      - `MEMORY_BACKEND=mem0`: Mem0 episodic memory retrieval/write with local fallback
+      - OSS setup:
+        - `MEM0_QDRANT_HOST=qdrant`
+        - `MEM0_LLM_BASE_URL=http://host.docker.internal:8000/v1`
+        - `MEM0_EMBED_BASE_URL=http://host.docker.internal:8002/v1`
+        - Leave `MEM0_EMBED_DIMS` blank unless you need to force a known dimension
 
-4.  **Build and run using Docker Compose:**
+4.  **Build and run using Docker Compose (development):**
     ```bash
+    # Default: use hosted LLMs configured in .env (e.g., OpenAI, Claude, Gemini)
     docker compose up -d
+
+    # Local vLLM-backed startup (serial health-gated launch:
+    # vllm -> vllm_ocr -> vllm_transcribe -> vllm_embed -> vllm_rerank -> web/worker)
+    bash deploy/scripts/start_dev.sh
     ```
 
-4. **Add a superuser:**
+5. **Add a superuser:**
    ```bash
    docker compose exec web ./manage.py addsuperuser
    ```
 
-5.  **Access the application:**
+6.  **Access the application (development):**
 
-    Open your browser to `http://localhost:8080`, sign in with superuser account.
+    Open your browser to `http://localhost:8080`, then sign in with the superuser account you just created.
 
-7.  **Stop the application:**
+7.  **Common dev commands:**
+
+    ```bash
+    # View logs for all services
+    docker compose logs -f
+
+    # View status of services
+    docker compose ps
+    ```
+
+8.  **Stop the application (development):**
     ```bash
     docker compose down
     ```
 
-## Updating (development):
+## Updating (development)
 
 Pull the latest changes and rebuild. Migrations run automatically on startup.
 
 ```bash
 git pull origin main
-docker compose down && docker compose up --build -d
+docker compose down
+docker compose up --build -d
+
+# Or, if you are using local vLLM-backed models:
+bash deploy/scripts/start_dev.sh
 ```
 
-## Updating (production):
+## Updating (production)
 
 ```bash
 git pull origin main
-docker compose -f docker-compose-prod.yml down && docker compose -f docker-compose-prod.yml up --build -d
+docker compose -f deploy/compose/production.yml down
+docker compose -f deploy/compose/production.yml up --build -d
+
+# Or, if you are using local vLLM-backed models in production:
+docker compose -f deploy/compose/production.yml --profile vllm up --build -d
 ```
 
-If ollama is used and needs to be recreated:
+If vLLM is running but individual services need to be force-recreated (for example, after changing model configuration):
+
 ```bash
-docker compose -f docker-compose-prod.yml --profile ollama up -d --force-recreate ollama
+docker compose -f deploy/compose/production.yml --profile vllm up -d --force-recreate vllm vllm_ocr vllm_transcribe vllm_embed vllm_rerank
+
+# Recreate only OCR + transcription model services:
+docker compose -f deploy/compose/production.yml --profile vllm up -d --force-recreate vllm_ocr vllm_transcribe
 ```
 
 ## Small-scale deployment:
@@ -107,22 +160,144 @@ docker compose -f docker-compose-prod.yml --profile ollama up -d --force-recreat
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, or `GEMINI`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f docker-compose-prod.yml up` — a simple restart may not pick up the change.
+    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f deploy/compose/production.yml up` — a simple restart may not pick up the change.
+    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_ocr` (OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker).
+    - GGUF note: set model as `repo:filename.gguf` or `repo:selector` (for example `repo:i1-Q4_K_M`). Startup resolves the best matching GGUF file in the repo, downloads it, and launches vLLM with the local file path.
+    - For embedding/reranker models like `Qwen/Qwen3-Embedding-4B` and `Qwen/Qwen3-Reranker-4B`, set `MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1` and `APP_RERANK_VLLM_TRUST_REMOTE_CODE=1`.
+    - Optional memory backend:
+      - `MEMORY_BACKEND=local` (default): AquiLLM pgvector memory tables
+      - `MEMORY_BACKEND=mem0`: Mem0 episodic memory retrieval/write with local fallback
+      - OSS setup:
+        - `MEM0_QDRANT_HOST=qdrant`
+        - `MEM0_LLM_BASE_URL=http://host.docker.internal:8000/v1`
+        - `MEM0_EMBED_BASE_URL=http://host.docker.internal:8002/v1`
+        - Leave `MEM0_EMBED_DIMS` blank unless you need to force a known dimension
     - Optional: Google OAuth credentials (GOOGLE_OAUTH2_CLIENT_ID, GOOGLE_OAUTH2_CLIENT_SECRET)
     - Optional: Email access permissions (ALLOWED_EMAIL_DOMAINS, ALLOWED_EMAIL_ADDRESSES). Required if OAuth is to be used.
     - Set HOST_NAME for your domain or use 'localhost' for development
 
-4.  **Build and run using Docker Compose:**
+4.  **Build and run using Docker Compose (HTTPS deployment):**
     ```bash
-    docker compose -f docker-compose-prod.yml up  -d 
+    # Default: hosted LLMs (OpenAI, Claude, Gemini, etc.)
+    docker compose -f deploy/compose/production.yml up -d 
+
+    # Optional: with local vLLM-backed models
+    docker compose -f deploy/compose/production.yml --profile vllm up -d
     ```
-    This will automatically use letsencrypt to get TLS certificates.
+    This will automatically use Let's Encrypt to get TLS certificates and serve AquiLLM over HTTPS on ports 80/443.
 
 4. **Add a superuser for administration:**
    ```bash
-   docker compose -f docker-compose-prod.yml exec web ./manage.py addsuperuser
+   docker compose -f deploy/compose/production.yml exec web ./manage.py addsuperuser
    ```
 
+## Configuring and deploying Mem0 with vLLM
+
+AquiLLM can use [Mem0](https://github.com/mem0ai/mem0) for **episodic memory**: storing and retrieving past conversation turns so the assistant can refer to them in new chats. You can run Mem0 entirely locally by backing it with vLLM for the LLM and embedding models, and Qdrant (included in the stack) for the vector store.
+
+AquiLLM integrates Mem0 in OSS SDK mode.
+
+This uses AquiLLM's built-in Mem0 SDK integration: no extra Mem0 server, and no `MEM0_API_KEY` required.
+
+**1. Enable Mem0 and use the SDK**
+
+In `.env`:
+
+```bash
+MEMORY_BACKEND=mem0
+MEM0_QDRANT_HOST=qdrant
+MEM0_QDRANT_PORT=6333
+MEM0_COLLECTION_NAME=mem0_1024_v1
+```
+
+Leave `MEM0_EMBED_DIMS` blank unless you need to force a specific embedding dimension.
+
+**2. Point Mem0 at vLLM for LLM and embeddings**
+
+Use OpenAI-compatible endpoints (vLLM exposes these):
+
+```bash
+MEM0_LLM_PROVIDER=openai
+MEM0_EMBED_PROVIDER=openai
+MEM0_LLM_API_KEY=EMPTY
+MEM0_EMBED_API_KEY=EMPTY
+```
+
+- **When vLLM runs in the same Docker Compose** (e.g. `docker compose --profile vllm up`):
+  - `MEM0_LLM_BASE_URL=http://vllm:8000/v1`
+  - `MEM0_EMBED_BASE_URL=http://vllm_embed:8000/v1`
+- **When vLLM runs on the host** (e.g. bare metal or another compose):
+  - `MEM0_LLM_BASE_URL=http://host.docker.internal:8000/v1`
+  - `MEM0_EMBED_BASE_URL=http://host.docker.internal:8002/v1`
+
+Set the model names to match what your vLLM instances serve:
+
+```bash
+MEM0_LLM_MODEL=your-chat-model-name
+MEM0_EMBED_MODEL=Qwen/Qwen3-Embedding-4B
+```
+
+For embedding models that need it (e.g. Qwen3-Embedding-4B), set:
+
+```bash
+MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1
+```
+
+**3. Start the stack with vLLM**
+
+Development:
+
+```bash
+docker compose --profile vllm up -d
+```
+
+Production:
+
+```bash
+docker compose -f deploy/compose/production.yml --profile vllm up -d
+```
+
+The `vllm` profile starts dedicated model services: chat (`vllm` on 8000), OCR (`vllm_ocr` on 8004), transcription (`vllm_transcribe` on 8005), embeddings (`vllm_embed` on 8002), and reranker (`vllm_rerank` on 8003). Mem0 uses chat + embed services; Qdrant is already part of the stack.
+
+**4. Optional: dual-write to local DB**
+
+To keep a copy of episodic memories in AquiLLM's local pgvector tables as well:
+
+```bash
+MEM0_DUAL_WRITE_LOCAL=1
+```
+
+**5. Relaunch Mem0 (OSS mode)**
+
+In OSS mode, relaunching Mem0 means recreating AquiLLM services that host/use it (`qdrant`, `web`, `worker`).
+
+```bash
+./deploy/scripts/relaunch_mem0_oss.sh
+```
+
+Optional env vars:
+
+- `AQUILLM_COMPOSE_FILE` - e.g. `deploy/compose/development.yml` or `deploy/compose/production.yml`
+- `RELAUNCH_MEM0_MODELS=1` - also recreate `vllm`, `vllm_ocr`, `vllm_transcribe`, `vllm_embed`, and `vllm_rerank`
+
+`./deploy/scripts/start_mem0_local.sh` now forwards to this OSS relaunch flow for backward compatibility.
+
+For standard development launches with local vLLM services in serial order, use:
+
+```bash
+bash deploy/scripts/start_dev.sh
+```
+
+### Summary: key env vars for Mem0 + vLLM
+
+| Variable | Purpose |
+|----------|--------|
+| `MEMORY_BACKEND=mem0` | Use Mem0 for episodic memory. |
+| `MEM0_LLM_BASE_URL` | OpenAI-compatible URL for chat (e.g. `http://vllm:8000/v1` or `http://host.docker.internal:8000/v1`). |
+| `MEM0_EMBED_BASE_URL` | OpenAI-compatible URL for embeddings (e.g. `http://vllm_embed:8000/v1` or `http://host.docker.internal:8002/v1`). |
+| `MEM0_LLM_MODEL` / `MEM0_EMBED_MODEL` | Model names as served by vLLM. |
+| `MEM0_QDRANT_HOST=qdrant` | Qdrant service name (same stack). |
+| `MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1` | Required for some embedding models (e.g. Qwen3-Embedding-4B). |
 
 ## Using AquiLLM
 
@@ -165,6 +340,17 @@ docker compose -f docker-compose-prod.yml --profile ollama up -d --force-recreat
    - Access past conversations from the "Your Conversations" menu in the sidebar
    - Each conversation maintains its collection context
 
+## Tests and hygiene
+
+Backend tests use pytest from the `aquillm/` directory (where `manage.py` lives), with `DJANGO_SETTINGS_MODULE=aquillm.settings`. Set the same environment variables as runtime (at minimum `SECRET_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and Google OAuth variables if `DJANGO_DEBUG` is off). PostgreSQL must be reachable for tests that use `@pytest.mark.django_db`.
+
+```bash
+cd aquillm
+python -m pytest aquillm/tests aquillm/apps/chat/tests aquillm/apps/ingestion/tests -q
+```
+
+To ensure generated paths such as `node_modules/` are not committed, run `pwsh -ExecutionPolicy Bypass -File scripts/check_hygiene.ps1` from the repository root.
+
 ## Contributors
 
 ### Project Leads
@@ -192,3 +378,4 @@ We welcome contributions! AquiLLM is an open-source project, and we appreciate h
 *   **Reporting Bugs**: Please open an issue on GitHub detailing the problem, expected behavior, and steps to reproduce.
 *   **Feature Requests**: Open an issue describing the feature and its potential benefits.
 *   **Pull Requests**: Send a pull request!
+

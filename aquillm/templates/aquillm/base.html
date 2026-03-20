@@ -49,7 +49,7 @@
         </div>
     </div>
 
-    <div id="account-menu-modal" class="flex z-50 flex-col items-left gap-[16px] absolute top-[10%] right-[5%] p-[16px] rounded-[12px] bg-scheme-shade_4 border border-border-mid_contrast hidden text-text-normal">
+    <div id="account-menu-modal" class="z-50 flex flex-col items-left gap-[16px] fixed top-[76px] right-[16px] p-[16px] rounded-[12px] bg-scheme-shade_4 border border-border-mid_contrast hidden text-text-normal min-w-[220px]">
         <p class="w-full text-center border-b border-border-mid_contrast">
             <strong>{{ user.username }}</strong>
         </p>
@@ -97,15 +97,16 @@
 
     <div class="flex flex-col max-h-screen h-screen" id="wrapper">
         <!-- Nav bar -->
-        <nav id="main-nav" class="bg-scheme-shade_4 h-[80px] text-text-normal flex-shrink-0 element-border transition-all">
+        <nav id="main-nav" style="--color-contrast: var(--color-slightly-muted-white); background-color: var(--color-accent-dark_i); color: var(--color-slightly-muted-white);" class="h-[80px] text-slight_muted_white flex-shrink-0 element-border transition-all">
             <div class="mx-auto flex justify-between items-center max-w-full h-full">
                 <!-- <button class="bg-deep-secondary my-2 hover:bg-lighter-secondary px-3 py-1 rounded-lg" id="menu-toggle">
                     <img id="menu-open-icon" class="h-6 hidden" src="{% static 'images/latex-implies.svg' %}" alt="Open Menu" class="">
                     <img id="menu-close-icon" class="h-6 -scale-x-100" src="{% static 'images/latex-implies.svg' %}" alt="Close Menu" class="hidden">
                 </button> -->
 
-                <a href="{% url 'index' %}" class="flex items-center justify-center ml-[16px]" style="gap: 24px">
-                    <svg width="48" height="57" viewBox="0 0 48 57" fill="none" xmlns="http://www.w3.org/2000/svg" id="nav-logo">
+                <a href="{% url 'index' %}" class="flex items-center justify-center ml-[16px] nav-brand-link">
+                    <div class="nav-brand-mark" aria-hidden="true">
+                    <svg width="48" height="57" viewBox="0 0 48 57" fill="none" xmlns="http://www.w3.org/2000/svg" id="nav-logo" class="nav-brand-mark-icon">
                         <g clip-path="url(#clip0_42_32)">
                         <path d="M46.3775 56.5333C47.0216 56.5333 47.5439 56.0056 47.5439 55.3546C47.5439 54.7036 47.0216 54.1759 46.3775 54.1759C45.7333 54.1759 45.2111 54.7036 45.2111 55.3546C45.2111 56.0056 45.7333 56.5333 46.3775 56.5333Z" fill="var(--color-contrast)"/>
                         <path d="M43.4601 54.697C44.2962 54.697 44.974 54.012 44.974 53.167C44.974 52.3221 44.2962 51.6371 43.4601 51.6371C42.6239 51.6371 41.9461 52.3221 41.9461 53.167C41.9461 54.012 42.6239 54.697 43.4601 54.697Z" fill="var(--color-contrast)"/>
@@ -130,8 +131,9 @@
                         <path d="M9.34055 13.2751V13.1985L9.33845 13.122L9.33424 13.0497L9.33003 12.9774L9.31531 12.8371L9.29847 12.7053L9.27322 12.5777L9.24587 12.4565L9.21432 12.3417L9.17645 12.2333L9.13647 12.1312L9.09019 12.0334L9.0439 11.942L8.9913 11.8548L8.9366 11.774L8.8798 11.6975L8.81878 11.6273L8.75567 11.5614L8.69255 11.4998L8.62522 11.4445L8.55579 11.3935L8.48426 11.3467L8.41273 11.3042L8.3412 11.2659L8.26545 11.2319L8.19182 11.2021L8.11608 11.1745L8.04033 11.1532L7.9646 11.1341L7.88885 11.1192L7.81312 11.1086L7.73738 11.1001L7.66374 11.0958L7.5901 11.0937L7.57959 11.3276C8.61681 11.3276 8.61681 12.7159 8.61681 13.5408C8.61681 13.9321 8.61681 14.5465 8.63785 14.7272C7.71634 15.5415 6.90844 15.6585 6.48976 15.6585C5.86069 15.6585 5.54721 15.1822 5.54721 14.504C5.54721 13.9852 5.81861 12.8414 6.15524 12.3013C6.64755 11.5274 7.21351 11.3276 7.57959 11.3276L7.5901 11.0937C6.15524 11.0937 4.77087 12.6096 4.77087 14.1021C4.77087 15.0865 5.39994 15.8923 6.46872 15.8923C7.12934 15.8923 7.88465 15.6478 8.67992 15.0015C8.81668 15.5628 9.16172 15.8923 9.6351 15.8923C10.1905 15.8923 10.5145 15.3098 10.5145 15.1397C10.5145 15.0653 10.4514 15.0334 10.3883 15.0334C10.3147 15.0334 10.2831 15.0653 10.2515 15.1397C10.0643 15.6585 9.68769 15.6585 9.66455 15.6585C9.34055 15.6585 9.34055 14.8335 9.34055 14.5784C9.34055 14.3552 9.34055 14.336 9.44575 14.2085C10.4304 12.9583 10.6513 11.7294 10.6513 11.7188C10.6513 11.6975 10.6408 11.6125 10.525 11.6125C10.4199 11.6125 10.4199 11.6443 10.3673 11.8357C10.18 12.5033 9.83286 13.307 9.34055 13.9321V13.2751Z" fill="var(--color-contrast)"/>
                         </g>
                     </svg>
-                    
-                    <span class="font-serif text-2xl" >AquiLLM</span>
+                    </div>
+
+                    <span class="nav-brand-wordmark">AquiLLM</span>
                 </a>
 
                 <!-- <a id="navbar-aquillm-button-container" href="{% url 'index' %}" class="text-2xl text-lightest-primary px-2 rounded-lg font-bold hover:bg-lighter-primary flex justify-center items-center hover:underline hidden">
@@ -141,25 +143,24 @@
                     </div>
                 </a> -->
 
-                <div class="flex items-center my-2 text-lightest-primary">
+                <div class="flex items-center my-2 text-slight_muted_white pr-[16px]">
                     {% if user.is_authenticated %}
-                    
-                        <button id="account-management-toggle-button">
-                            <!-- border radius is half of svg size (20) + padding (12) / 2 to make a circle -->
-                            <div class="my-[12px] mr-[24px] hover:bg-scheme-shade_6 transition-all rounded-[24px] p-[12px] outline outline-scheme-contrast outline-2 cursor-pointer">
-                                <svg width="20" height="20" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <g clip-path="url(#clip0_42_68)">
-                                    <path d="M16 16C17.5823 16 19.129 15.5308 20.4446 14.6518C21.7602 13.7727 22.7855 12.5233 23.391 11.0615C23.9965 9.59966 24.155 7.99113 23.8463 6.43928C23.5376 4.88743 22.7757 3.46197 21.6569 2.34315C20.538 1.22433 19.1126 0.462403 17.5607 0.153721C16.0089 -0.15496 14.4003 0.00346629 12.9385 0.608967C11.4767 1.21447 10.2273 2.23985 9.34824 3.55544C8.46919 4.87103 8 6.41775 8 8C8.00212 10.1211 8.84565 12.1547 10.3455 13.6545C11.8453 15.1544 13.8789 15.9979 16 16ZM16 2.66667C17.0548 2.66667 18.086 2.97946 18.963 3.5655C19.8401 4.15153 20.5237 4.98449 20.9274 5.95903C21.331 6.93357 21.4366 8.00592 21.2309 9.04049C21.0251 10.0751 20.5171 11.0254 19.7712 11.7712C19.0254 12.5171 18.075 13.0251 17.0405 13.2309C16.0059 13.4366 14.9336 13.331 13.959 12.9274C12.9845 12.5237 12.1515 11.8401 11.5655 10.963C10.9795 10.086 10.6667 9.05484 10.6667 8C10.6667 6.58552 11.2286 5.22896 12.2288 4.22877C13.229 3.22857 14.5855 2.66667 16 2.66667Z" fill="var(--color-contrast)"/>
-                                    <path d="M16 18.6666C12.8185 18.6702 9.76829 19.9356 7.51862 22.1852C5.26894 24.4349 4.00353 27.4851 4 30.6666C4 31.0202 4.14048 31.3594 4.39052 31.6094C4.64057 31.8595 4.97971 32 5.33333 32C5.68696 32 6.02609 31.8595 6.27614 31.6094C6.52619 31.3594 6.66667 31.0202 6.66667 30.6666C6.66667 28.1913 7.65 25.8173 9.40034 24.067C11.1507 22.3166 13.5246 21.3333 16 21.3333C18.4754 21.3333 20.8493 22.3166 22.5997 24.067C24.35 25.8173 25.3333 28.1913 25.3333 30.6666C25.3333 31.0202 25.4738 31.3594 25.7239 31.6094C25.9739 31.8595 26.313 32 26.6667 32C27.0203 32 27.3594 31.8595 27.6095 31.6094C27.8595 31.3594 28 31.0202 28 30.6666C27.9965 27.4851 26.7311 24.4349 24.4814 22.1852C22.2317 19.9356 19.1815 18.6702 16 18.6666Z" fill="var(--color-contrast)"/>
-                                    </g>
-                                </svg>
+                        <button id="account-management-toggle-button" class="h-[40px] px-[10px] rounded-[14px] hover:bg-scheme-shade_6 transition-all flex items-center gap-[10px] border border-scheme-contrast">
+                            <div class="h-[28px] w-[28px] rounded-full bg-scheme-shade_5 text-text-normal flex items-center justify-center text-xs font-semibold">
+                                {{ user.username|slice:":1"|upper }}
                             </div>
+                            <span class="text-sm text-text-normal font-medium max-w-[180px] truncate">{{ user.username }}</span>
                         </button>
 
                     {% else %}
                     <form method="post" action="{% url 'account_login' %}">
                         {% csrf_token %}
-                        <button class="text-sm px-3 h-[40px] mr-[24px] text-accent-light underline transition-colors py-1 rounded-[20px]" type="submit">Log In</button>
+                        <button
+                            class="h-[40px] px-[14px] mr-[24px] rounded-[14px] border border-scheme-contrast text-sm font-medium text-slight_muted_white hover:bg-scheme-shade_6 transition-all"
+                            type="submit"
+                        >
+                            Log In
+                        </button>
                     </form>
                     {% endif %}
                 </div>
@@ -171,8 +172,8 @@
             <!-- Sidebar -->
             <div id= "aq-sidebar" style="overflow-x: visible;" class="element-border flex flex-col aq-sidebar transition-all pl-[8px] max-w-[260px] min-w-[260px] flex-grow bg-scheme-shade_3 text-text-normal h-full max-h-full">
 
-                <div class="flex justify-between items-center my-[26px]" style="overflow-x: visible;" id="sidebar-header">
-                    <span class="text-lg pl-[8px]">Menu</span>
+                <div class="flex justify-between items-center my-[12px]" style="overflow-x: visible;" id="sidebar-header">
+                    <span class="text-base pl-[8px]">Menu</span>
                     <button id="menu-toggle" class="p-[8px] mr-[8px] hover:bg-scheme-shade_5 transition-all rounded-[8px] cursor-pointer">
                         <svg xmlns="http://www.w3.org/2000/svg" id="Outline" viewBox="0 0 24 24" width="20" height="20">
                             <path d="M7,6H23a1,1,0,0,0,0-2H7A1,1,0,0,0,7,6Z" fill="var(--color-contrast)"/>
@@ -189,7 +190,7 @@
                 <!-- bottom margin of 8 is the balance spacing between elements beneath this and above it -->
                 <div class="relative flex items-center pr-[8px]" style="transform: translateY(-8px);"> 
                     <div class="flex-grow border-t border-border-low_contrast"></div>
-                    <span class="text-xs px-[8px] bg-dark-mode-background text-text-lower_contrast">AquiLLM</span>
+                    <span class="text-xs px-[8px] bg-transparent text-text-normal">AquiLLM</span>
                     <div class="flex-grow border-t border-border-low_contrast"></div>
                 </div>
 
@@ -205,20 +206,20 @@
                         {% if user.is_authenticated %}
                             {% for link in nav_links %}
                                 {% if "ingest" in link.url or "insert" in link.url %}
-                                    <a href="#" data-url="{% url link.url %}" class="open-modal my-[5px] pl-[8px] py-[3px]text-lg w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all">
+                                    <a href="#" data-url="{% url link.url %}" class="open-modal my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
                                         {{ link.text }}
                                     </a>
                                 {% elif "user_ws_convo" in link.url %}
                                     <!-- Dropdown for conversations -->
                                     <div class="dropdown">
-                                        <div id="conversation-dropdown-btn" class="flex justify-between items-center w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all cursor-pointer h-[34px] my-[5px]" onclick="toggleDropdown()">
+                                        <div id="conversation-dropdown-btn" class="flex justify-between items-center w-full text-text-normal hover:bg-scheme-shade_5 rounded-[10px] transition-all cursor-pointer h-[30px] my-[2px]" onclick="toggleDropdown()">
 
-                                            <span class="text-left my-[5px] pl-[8px] py-[3px] text-lg">
+                                            <span class="text-left my-[2px] pl-[8px] py-[2px] text-base text-text-normal">
                                                 Your Conversations
                                             </span>
                                             
-                                            <svg id="dropdown-indicator" class="transition-all mr-[8px]" width="12" height="9" viewBox="0 0 12 9" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                <path d="M6 9L0.803847 -2.51245e-08L11.1962 8.834e-07L6 9Z" fill="#EEEEEE"/>
+                                            <svg id="dropdown-indicator" class="transition-all mr-[8px]" style="color: var(--color-accent-dark_i);" width="12" height="9" viewBox="0 0 12 9" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M6 9L0.803847 -2.51245e-08L11.1962 8.834e-07L6 9Z" fill="currentColor"/>
                                             </svg>
 
                                         </div>
@@ -227,7 +228,7 @@
                                         </div>
                                     </div>
                                 {% else %}
-                                    <a href="{% url link.url %}" class="my-[5px] pl-[8px] py-[3px] text-lg w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all">
+                                    <a href="{% url link.url %}" class="my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
                                         {{ link.text }}
                                     </a>
                                 {% endif %}
@@ -235,14 +236,14 @@
                                 {% if forloop.counter == 4 %}
                                     <div class="relative flex items-center"> 
                                         <div class="flex-grow border-t border-border-low_contrast"></div>
-                                        <span class="text-xs px-[8px] bg-dark-mode-background text-text-lower_contrast">Utilities</span>
+                                        <span class="text-xs px-[8px] bg-transparent text-text-normal">Utilities</span>
                                         <div class="flex-grow border-t border-border-low_contrast"></div>
                                     </div>
                                 {% endif %}
                             {% endfor %} 
-                            <div id="ingestion-monitor" class="cursor-pointer"></div>
+                            <div id="ingestion-monitor" class="cursor-pointer text-text-normal"></div>
                             {% if user.is_staff %}
-                            <a href="{% url 'email_whitelist' %}" class="my-[5px] pl-[8px] py-[3px] text-lg w-full hover:bg-scheme-shade_5 rounded-[12px] transition-all">
+                            <a href="{% url 'email_whitelist' %}" class="my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
                                 Email Whitelist
                             </a>
                             {% endif %}
@@ -268,6 +269,7 @@
     const conversationDropdown = document.getElementById("conversation-dropdown");
     const dropdownIndicator = document.getElementById("dropdown-indicator");
     const conversationDropdownButton = document.getElementById("conversation-dropdown-btn");
+    const floatingLogo = document.getElementById("floating-logo");
 
     var searchInput = document.getElementById("conversation-search");
 
@@ -303,6 +305,28 @@
         // Save the sidebar and conversation dropdown state in localStorage
         localStorage.setItem("sidebarClosed", sidebar.classList.contains("ml-[-260px]"));
     });
+
+    // Reopen sidebar/nav when the floating logo is clicked while collapsed.
+    if (floatingLogo) {
+        floatingLogo.addEventListener("click", function(e) {
+            if (!sidebar.classList.contains("ml-[-260px]")) {
+                return;
+            }
+            e.preventDefault();
+            const mainNav = document.getElementById("main-nav");
+            sidebar.classList.remove("ml-[-260px]");
+            mainNav.classList.remove("mt-[-80px]", "h-0", "overflow-hidden");
+            floatingLogo.classList.add("hidden");
+
+            menuToggle.style.transform = "translateX(0px)";
+            menuToggle.classList.remove("bg-accent");
+            menuToggle.classList.remove("pl-[24px]");
+            menuToggle.classList.remove("hover:bg-accent-light");
+            menuToggle.classList.add("hover:bg-scheme-shade_5");
+
+            localStorage.setItem("sidebarClosed", "false");
+        });
+    }
 
     function calculateDropdownHeight() {
         const computedStyle = window.getComputedStyle(conversationDropdown);
@@ -653,22 +677,30 @@
         }
     });
 
-    document.getElementById("account-management-toggle-button").addEventListener("click", function(event){
-        event.stopPropagation();
-        document.getElementById("account-menu-modal").classList.remove("hidden");
-    });
+    const accountToggleButton = document.getElementById("account-management-toggle-button");
+    const accountManagementModal = document.getElementById("account-menu-modal");
 
     function closeAccountManagementModal() {
-        document.getElementById("account-menu-modal").classList.add("hidden");
+        if (accountManagementModal) {
+            accountManagementModal.classList.add("hidden");
+        }
     }
 
-    document.addEventListener('click', function(event) {
-        const accountManagementModal = document.getElementById("account-menu-modal");
+    if (accountToggleButton && accountManagementModal) {
+        accountToggleButton.addEventListener("click", function(event) {
+            event.stopPropagation();
+            accountManagementModal.classList.toggle("hidden");
+        });
 
-        if (accountManagementModal && !accountManagementModal.contains(event.target)) {
-            closeAccountManagementModal();
-        }
-    });
+        document.addEventListener("click", function(event) {
+            if (
+                !accountManagementModal.contains(event.target) &&
+                !accountToggleButton.contains(event.target)
+            ) {
+                closeAccountManagementModal();
+            }
+        });
+    }
 
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProtocol}//${window.location.host}/ingest/dashboard/`;

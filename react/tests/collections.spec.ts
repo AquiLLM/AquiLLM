@@ -89,7 +89,7 @@ test.describe('Collection Management and Operations', () => {
       const fileChooserPromise = page.waitForEvent('filechooser');
       // Select PDF type (default, but explicit).
       await page.locator('button[title="PDF"]').click();
-      await page.getByText('Select PDF File', { exact: true }).click();
+      await page.getByText('Select PDF File(s)', { exact: true }).click();
       const fileChooser = await fileChooserPromise;
 
       // Check if file exists before upload for debugging.
@@ -243,7 +243,7 @@ test.describe('Collection Management and Operations', () => {
       // Ingest a document for this test.
       await page.locator('button[title="PDF"]').click(); // Ensure PDF type.
       const fileChooserPromise = page.waitForEvent('filechooser');
-      await page.getByText('Select PDF File', { exact: true }).click();
+      await page.getByText('Select PDF File(s)', { exact: true }).click();
       const fileChooser = await fileChooserPromise;
       const resolvedPdfPath = path.resolve(pdfFilePath); // Resolved path for reliable file setting.
        if (!fs.existsSync(resolvedPdfPath)) {
@@ -288,7 +288,7 @@ test.describe('Collection Management and Operations', () => {
 
     await expect(page.getByRole('heading', { name: collectionToNavigate, level: 1 })).toBeVisible();
     await expect(page.getByText('Add Content')).toBeVisible();
-    await expect(page.getByText('Select PDF File', { exact: true })).toBeVisible();
+    await expect(page.getByText('Select PDF File(s)', { exact: true })).toBeVisible();
   });
 
   test('should allow moving a collection into another collection', async ({ page }) => {

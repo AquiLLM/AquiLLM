@@ -7,6 +7,7 @@
         <link rel="icon" type="image/png" href="{% static 'images/aquila-small-light.ico' %}" media="(prefers-color-scheme: dark)"/>
         <link rel="icon" type="image/png" href="{% static 'images/aquila-small-dark.ico' %}" media="(prefers-color-scheme: light)"/>
         <link rel="stylesheet" href="{% static 'theme.css' %}" type="text/css" charset="utf-8" />
+        <link rel="stylesheet" href="{% static 'fonts.css' %}" type="text/css" charset="utf-8" />
     
         <link rel="stylesheet" href="https://lalten.github.io/lmweb/style/latinmodern-mono.css" type="text/css" charset="utf-8" />
         <script>
@@ -105,11 +106,19 @@
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="description" content="">
+        <style>
+            input,
+            button,
+            select,
+            textarea {
+                font-family: inherit;
+            }
+        </style>
         <title>
             {% block head_title %}{% endblock %}
         </title>
     </head>
-    <body class="min-h-screen flex flex-col font-sans theme-aquillm_default_dark">
+    <body class="min-h-screen flex flex-col brand-wordmark-font theme-aquillm_default_light bg-scheme-shade_2 text-text-normal">
         <header class="bg-scheme-shade_4 text-text-normal">
         </header>
         {% block body %}

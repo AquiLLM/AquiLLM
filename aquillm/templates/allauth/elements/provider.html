@@ -1,6 +1,6 @@
 {% load allauth %}
-<li class="pb-[20px] mb-[20px] border-b border-border-higher_contrast">
-    <a class="block w-full text-text-normal no-underline hover:underline flex items-center justify-center"
+<li>
+    <a class="flex h-[44px] w-full items-center justify-center gap-3 rounded-[12px] border border-border-mid_contrast bg-scheme-shade_4 text-text-slightly_less_contrast no-underline transition-colors hover:bg-scheme-shade_5 hover:text-text-normal"
        title="{{ attrs.name }}"
        href="{{ attrs.href }}">
        
@@ -10,5 +10,6 @@
             <path d="M20.4999 37.5833C24.9126 37.5833 28.922 35.8946 31.9535 33.1485L26.6662 28.6744C24.951 29.9735 22.819 30.75 20.4999 30.75C16.0566 30.75 12.2837 27.9167 10.8624 23.9628L5.2915 28.255C8.1188 33.7874 13.8605 37.5833 20.4999 37.5833Z" fill="#4CAF50"/>
             <path d="M37.2511 17.1543L37.2374 17.0834H35.875H20.5V23.9167H30.1546C29.4781 25.8275 28.249 27.4752 26.6637 28.6753L26.6662 28.6736L31.9535 33.1477C31.5794 33.4876 37.5833 29.0417 37.5833 20.5C37.5833 19.3546 37.4655 18.2365 37.2511 17.1543Z" fill="#1565C0"/>
         </svg>
+        <span class="text-sm font-medium">Continue with {{ attrs.name }}</span>
     </a>
 </li>

@@ -8,7 +8,14 @@ from django.contrib.auth.models import User
 from django.apps import apps
 from json import dumps
 from aquillm.settings import DEBUG
-from aquillm.models import DESCENDED_FROM_DOCUMENT, Document # Import Document so we can check ingestion_complete on connect
+from aquillm.models import (
+    DESCENDED_FROM_DOCUMENT,
+    Document,
+    document_has_raw_media,
+    document_modality,
+    document_provider_model,
+    document_provider_name,
+)  # Import Document so we can check ingestion_complete on connect
 from functools import reduce
 import logging
 logger = logging.getLogger(__name__)
@@ -23,10 +30,10 @@ class IngestMonitorConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.user = self.scope.get('user', None)
         is_authenticated = bool(self.user and getattr(self.user, 'is_authenticated', False))
-        if is_authenticated:
-            await self.accept()
-        else:
+        if not is_authenticated:
             await self.close()
+            return
+        await self.accept()
         await self.channel_layer.group_add(f"document-ingest-{self.scope['url_route']['kwargs']['doc_id']}", self.channel_name) # type: ignore
         doc_id = self.scope['url_route']['kwargs']['doc_id'] # Get the document ID from the URL route
         doc = await database_sync_to_async(Document.get_by_id)(uuid.UUID(doc_id)) # Look up the document in the DB (must be async-safe)
@@ -51,14 +58,27 @@ class IngestionDashboardConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.user = self.scope.get('user')
         is_authenticated = bool(self.user and getattr(self.user, 'is_authenticated', False))
-        if is_authenticated:
-            await self.accept()
-        else:
+        if not is_authenticated:
             await self.close()
+            return
+        await self.accept()
         await self.channel_layer.group_add(f"ingestion-dashboard-{self.user.id}", self.channel_name) # type: ignore
         in_progress = await self.__get_in_progress(self.user)
         for doc in in_progress:
-            await self.send(dumps({'type': 'document.ingestion.start', 'documentName': doc.title, 'documentId': str(doc.id)}))
+            await self.send(
+                dumps(
+                    {
+                        'type': 'document.ingestion.start',
+                        'documentName': doc.title,
+                        'documentId': str(doc.id),
+                        'modality': document_modality(doc),
+                        'rawMediaSaved': document_has_raw_media(doc),
+                        'textExtracted': bool((doc.full_text or "").strip()),
+                        'provider': document_provider_name(doc),
+                        'providerModel': document_provider_model(doc),
+                    }
+                )
+            )
 
         
     async def document_ingestion_start(self, event):

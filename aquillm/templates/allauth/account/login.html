@@ -23,21 +23,21 @@
         {% endslot %}
     {% endelement %}
 
-    <div class="relative flex items-center justify-center mt-[20px]"> 
+    <div class="relative mt-4 flex items-center justify-center"> 
         <div class="flex-grow border-t border-border-higher_contrast"></div>
-            <span class="font-sans text-sm px-[8px] bg-dark-mode-background text-text-less_contrast">Or</span>
+            <span class="px-[8px] text-sm text-text-less_contrast bg-scheme-shade_3">Or</span>
         <div class="flex-grow border-t border-border-higher_contrast"></div>
     </div>
 
-    <div class="text-text-less_contrast text-sm mt-[12px] mb-[16px] w-full text-center">
-        Use a Third Party    
+    <div class="mb-3 mt-3 w-full text-center text-sm text-text-less_contrast">
+        Continue with a provider
     </div>
 
     {% if SOCIALACCOUNT_ENABLED %}
         {% include "socialaccount/snippets/login.html" with page_layout="entrance" %}
     {% endif %}
 
-    <div class="text-text-less_contrast text-xs mt-[12px] mb-[16px] w-full text-center">
+    <div class="mt-4 w-full text-center text-xs text-text-lower_contrast">
         At present, only users at the domains sou.edu and g.ucla.edu can use AquiLLM. Inquire for your own deployment.
     </div>
 

@@ -18,7 +18,6 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from django.contrib.auth import views as auth_views
-from debug_toolbar.toolbar import debug_toolbar_urls
 
 from chat import views as chat_views
 from chat.views import urlpatterns as chat_urlpatterns
@@ -53,9 +52,14 @@ urlpatterns = [
     path('zotero/disconnect/', zotero_views.zotero_disconnect, name='zotero_disconnect'),
     path('zotero/sync/', zotero_views.zotero_sync, name='zotero_sync'),
     path('zotero/sync/status/', zotero_views.zotero_sync_status, name='zotero_sync_status'),
-] + debug_toolbar_urls()
+]
 
 if DEBUG:
-   urlpatterns += [
-       path("debug_models/", views.debug_models, name="debug_models"),
-   ]
+    # Import only when DEBUG is True so we never load debug_toolbar models when
+    # DJANGO_DEBUG is off (debug_toolbar must be in INSTALLED_APPS only then).
+    from debug_toolbar.toolbar import debug_toolbar_urls
+
+    urlpatterns += debug_toolbar_urls()
+    urlpatterns += [
+        path("debug_models/", views.debug_models, name="debug_models"),
+    ]

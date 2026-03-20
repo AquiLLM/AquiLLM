@@ -25,6 +25,11 @@ export interface IngestionDashboardProps {
 export interface PDFIngestionMonitorProps {
   documentName: string;
   documentId: string;
+  modality?: string;
+  rawMediaSaved?: boolean;
+  textExtracted?: boolean;
+  provider?: string;
+  providerModel?: string;
 }
 
 declare global {

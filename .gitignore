@@ -14,8 +14,8 @@ develop-eggs/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -123,6 +123,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.multimodal
 .venv
 env/
 venv/
@@ -170,3 +171,5 @@ aquillm/staticfiles
 aquillm/aquillm/static/js/dist
 aquillm/aquillm/static/index.css 
 react/node_modules/
+/node_modules/
+/aquillm/tmp/
