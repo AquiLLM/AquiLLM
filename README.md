@@ -87,6 +87,10 @@ This assumes you have Docker and Docker Compose installed.
     # Local vLLM-backed startup (serial health-gated launch:
     # vllm -> vllm_ocr -> vllm_transcribe -> vllm_embed -> vllm_rerank -> web/worker)
     bash deploy/scripts/start_dev.sh
+
+    # Optional edge/TLS dev startup with nginx:
+    # - first cert issue/renewal run: USE_EDGE=1 RUN_CERTBOT=1 bash deploy/scripts/start_dev.sh
+    # - normal restarts after cert exists: USE_EDGE=1 bash deploy/scripts/start_dev.sh
     ```
 
 5. **Add a superuser:**
@@ -178,13 +182,17 @@ docker compose -f deploy/compose/production.yml --profile vllm up -d --force-rec
 
 4.  **Build and run using Docker Compose (HTTPS deployment):**
     ```bash
+    # First-time cert issue/renewal (must have port 80 free):
+    docker compose -f deploy/compose/production.yml stop nginx
+    docker compose -f deploy/compose/production.yml --profile certbot up --build get_certs
+
     # Default: hosted LLMs (OpenAI, Claude, Gemini, etc.)
     docker compose -f deploy/compose/production.yml up -d 
 
     # Optional: with local vLLM-backed models
     docker compose -f deploy/compose/production.yml --profile vllm up -d
     ```
-    This will automatically use Let's Encrypt to get TLS certificates and serve AquiLLM over HTTPS on ports 80/443.
+    `get_certs` now runs only on the explicit `certbot` profile so regular stack restarts do not collide on port 80.
 
 4. **Add a superuser for administration:**
    ```bash
@@ -340,6 +348,21 @@ bash deploy/scripts/start_dev.sh
    - Access past conversations from the "Your Conversations" menu in the sidebar
    - Each conversation maintains its collection context
 
+### Exporting chat feedback (superusers)
+
+Ratings and free-text feedback on assistant messages are stored on the chat `Message` rows. Superusers can download them as CSV for analysis.
+
+- **UI:** On the Email Whitelist page (`/aquillm/email_whitelist/`), a **Download Feedback CSV** link appears only when you are logged in as a superuser.
+- **API:** `GET /api/feedback/ratings.csv` (same permission: Django superuser only; otherwise HTTP 403).
+- **Columns (in order):** `date` (ISO 8601 UTC), `user_number` (conversation owner user id), `rating` (1–5, or empty if only comments were submitted), `question_number` (1-based count of user prompts in that conversation up to and including the assistant turn), `comments`.
+- **Optional query parameters:** `start_date`, `end_date` (inclusive; `YYYY-MM-DD` or parseable datetime), `min_rating` (integer; rows without a numeric rating are excluded when set), `user_number` (filter by conversation owner id).
+
+Example (after saving session cookies to `cookies.txt`):
+
+```bash
+curl -L -b cookies.txt "http://localhost:8000/api/feedback/ratings.csv?start_date=2026-03-01&end_date=2026-03-31" -o feedback_ratings.csv
+```
+
 ## Tests and hygiene
 
 Backend tests use pytest from the `aquillm/` directory (where `manage.py` lives), with `DJANGO_SETTINGS_MODULE=aquillm.settings`. Set the same environment variables as runtime (at minimum `SECRET_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and Google OAuth variables if `DJANGO_DEBUG` is off). PostgreSQL must be reachable for tests that use `@pytest.mark.django_db`.
@@ -378,4 +401,3 @@ We welcome contributions! AquiLLM is an open-source project, and we appreciate h
 *   **Reporting Bugs**: Please open an issue on GitHub detailing the problem, expected behavior, and steps to reproduce.
 *   **Feature Requests**: Open an issue describing the feature and its potential benefits.
 *   **Pull Requests**: Send a pull request!
-
