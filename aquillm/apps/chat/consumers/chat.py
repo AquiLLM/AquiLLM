@@ -11,7 +11,6 @@ from django.core.files.base import ContentFile
 from django.contrib.auth.models import User
 from django.apps import apps
 
-from pydantic import ValidationError
 import aquillm.llm
 from aquillm.llm import (
     UserMessage,
@@ -26,7 +25,10 @@ from aquillm.llm import (
 from aquillm.settings import DEBUG
 from time import perf_counter
 
+from django.core.exceptions import ValidationError
+
 from apps.chat.models import ConversationFile, WSConversation
+from apps.chat.services.feedback import apply_message_feedback_text, apply_message_rating
 from apps.collections.models import Collection, CollectionPermission
 from apps.documents.models import TextChunk, Document, DocumentChild
 from aquillm.message_adapters import (
@@ -808,13 +810,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             uuid_str = data['uuid']
             rating = data['rating']
 
-            await database_sync_to_async(
-                lambda: self.db_convo.db_messages.filter(message_uuid=uuid_str).update(rating=rating)
-            )()
+            await database_sync_to_async(apply_message_rating)(
+                self.db_convo.id, uuid_str, rating
+            )
 
             for msg in self.convo:
                 if str(msg.message_uuid) == uuid_str:
-                    msg.rating = rating
+                    msg.rating = int(rating)
                     break
 
         async def feedback(data: dict):
@@ -822,13 +824,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             uuid_str = data['uuid']
             feedback_text = data['feedback_text']
 
-            await database_sync_to_async(
-                lambda: self.db_convo.db_messages.filter(message_uuid=uuid_str).update(feedback_text=feedback_text)
-            )()
+            await database_sync_to_async(apply_message_feedback_text)(
+                self.db_convo.id, uuid_str, feedback_text
+            )
 
             for msg in self.convo:
                 if str(msg.message_uuid) == uuid_str:
-                    msg.feedback_text = feedback_text
+                    raw = "" if feedback_text is None else str(feedback_text)
+                    msg.feedback_text = raw.strip() or None
                     break
 
         if not self.dead:
@@ -861,6 +864,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 else:
                     raise ValueError(f'Invalid action "{action}"')
                 logger.debug("receive() action completed")
+            except ValidationError as e:
+                msg = e.messages[0] if getattr(e, "messages", None) else str(e)
+                logger.warning("Validation error in receive(): %s", msg)
+                await self.send(text_data=dumps({"exception": msg}))
             except Exception as e:
                 logger.error(f"Exception in receive(): {e}", exc_info=True)
                 if DEBUG:
