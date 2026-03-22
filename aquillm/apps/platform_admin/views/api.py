@@ -6,10 +6,12 @@ from django.contrib.auth.decorators import login_required
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import HttpResponseBadRequest, HttpResponseForbidden, JsonResponse, StreamingHttpResponse
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from apps.platform_admin.models import EmailWhitelist
+from apps.platform_admin.services.feedback_export import parse_query_bounds, stream_feedback_csv_lines
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +77,50 @@ def whitelisted_email(request, email):
     return JsonResponse({'error': 'Invalid request method'}, status=400)
 
 
+@login_required
+@require_http_methods(["GET"])
+def feedback_ratings_csv(request):
+    """Stream CSV of message ratings/feedback (superuser only)."""
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("Superuser access required")
+
+    start_d, end_d = parse_query_bounds(
+        request.GET.get("start_date"),
+        request.GET.get("end_date"),
+    )
+
+    min_rating = None
+    raw_min = request.GET.get("min_rating")
+    if raw_min not in (None, ""):
+        try:
+            min_rating = int(raw_min)
+        except ValueError:
+            return HttpResponseBadRequest("Invalid min_rating")
+
+    user_number = None
+    raw_user = request.GET.get("user_number")
+    if raw_user not in (None, ""):
+        try:
+            user_number = int(raw_user)
+        except ValueError:
+            return HttpResponseBadRequest("Invalid user_number")
+
+    def content():
+        yield from stream_feedback_csv_lines(
+            start_date=start_d,
+            end_date=end_d,
+            min_rating=min_rating,
+            user_number=user_number,
+        )
+
+    response = StreamingHttpResponse(content(), content_type="text/csv; charset=utf-8")
+    fname = f'feedback_ratings_{timezone.now().strftime("%Y%m%d")}.csv'
+    response["Content-Disposition"] = f'attachment; filename="{fname}"'
+    return response
+
+
 __all__ = [
+    'feedback_ratings_csv',
     'search_users',
     'whitelisted_emails',
     'whitelisted_email',
