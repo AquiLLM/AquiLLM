@@ -3,7 +3,12 @@ import { Trash2 } from 'lucide-react';
 import formatUrl from '../utils/formatUrl';
 import { getCsrfCookie } from '../main';
 
-const WhitelistEmails: React.FC = () => {
+export interface WhitelistEmailsProps {
+  /** When true, show one-click CSV download (server still enforces superuser on the API). */
+  isSuperuser?: boolean;
+}
+
+const WhitelistEmails: React.FC<WhitelistEmailsProps> = ({ isSuperuser = false }) => {
   const [emails, setEmails] = useState<string[]>([]);
   const [newEmail, setNewEmail] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -107,9 +112,22 @@ const WhitelistEmails: React.FC = () => {
     }
   };
 
+  const csvUrl = window.apiUrls?.api_feedback_ratings_csv;
+
   return (
     <div className="max-w-md mx-auto p-4">
       <h2 className="text-xl font-bold text-center mb-4">Whitelisted Emails</h2>
+      {isSuperuser && csvUrl && (
+        <p className="text-center mb-4">
+          <a
+            href={csvUrl}
+            className="text-base underline text-text-normal"
+            data-testid="download-feedback-csv"
+          >
+            Download Feedback CSV
+          </a>
+        </p>
+      )}
       {error && <div className="text-red-500 mb-4">{error}</div>}
       {loading && <div>Loading...</div>}
       <ul className="list-none p-0">

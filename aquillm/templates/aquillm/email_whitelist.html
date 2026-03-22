@@ -9,7 +9,7 @@
 {% block scripts %}
 <script>
     mountReactComponent('react-test', 'WhitelistEmails', {
-
+        isSuperuser: {% if request.user.is_superuser %}true{% else %}false{% endif %}
     });
 </script>
 {% endblock %}
