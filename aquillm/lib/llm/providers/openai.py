@@ -1,7 +1,6 @@
 """OpenAI LLM interface."""
 from typing import Optional, Any, override
 from os import getenv
-from json import loads
 import re
 import uuid
 
@@ -11,6 +10,7 @@ from ..types.messages import AssistantMessage
 from ..types.conversation import Conversation
 from ..types.response import LLMResponse
 from .base import LLMInterface
+from .openai_streaming import consume_streaming_completion
 from .openai_overflow import (
     retry_args_for_context_overflow,
     retry_args_for_timeout,
@@ -24,6 +24,8 @@ from .openai_tokens import (
     preflight_trim_for_context,
     trim_messages_for_overflow,
 )
+from .openai_tool_text import decode_json_dict, extract_tool_call_from_text
+from .openai_tools_format import transform_openai_tool_choice, transform_openai_tools
 
 
 try:
@@ -104,165 +106,6 @@ class OpenAIInterface(LLMInterface):
     def _retry_args_for_timeout(arguments: dict, attempt: int) -> Optional[dict]:
         return retry_args_for_timeout(arguments, attempt)
 
-    @staticmethod
-    def _decode_json_dict(raw: Any) -> dict:
-        if isinstance(raw, dict):
-            return raw
-        if isinstance(raw, str):
-            try:
-                parsed = loads(raw)
-                if isinstance(parsed, dict):
-                    return parsed
-            except Exception:
-                return {}
-        return {}
-
-    @staticmethod
-    def _extract_first_json_object(text: str) -> Optional[str]:
-        start = None
-        depth = 0
-        in_string = False
-        escaped = False
-        for i, ch in enumerate(text):
-            if start is None:
-                if ch == "{":
-                    start = i
-                    depth = 1
-                    in_string = False
-                    escaped = False
-                continue
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    in_string = False
-            else:
-                if ch == '"':
-                    in_string = True
-                elif ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        return text[start:i + 1]
-        return None
-
-    @staticmethod
-    def _tool_call_from_payload(payload: dict, allowed_tools: set[str]) -> Optional[dict]:
-        if not isinstance(payload, dict):
-            return None
-        name = payload.get("name") or payload.get("tool_name")
-        args = payload.get("arguments")
-        if args is None:
-            args = payload.get("args")
-        if args is None:
-            args = payload.get("parameters")
-
-        if isinstance(name, str) and name in allowed_tools:
-            if not isinstance(args, dict):
-                args = {}
-            return {
-                "tool_call_id": str(uuid.uuid4()),
-                "tool_call_name": name,
-                "tool_call_input": args,
-            }
-
-        if len(payload) == 1:
-            only_name = next(iter(payload.keys()))
-            only_args = payload[only_name]
-            if isinstance(only_name, str) and only_name in allowed_tools and isinstance(only_args, dict):
-                return {
-                    "tool_call_id": str(uuid.uuid4()),
-                    "tool_call_name": only_name,
-                    "tool_call_input": only_args,
-                }
-        return None
-
-    def _extract_tool_call_from_text(self, text: str, raw_tools: Optional[list[dict]]) -> Optional[dict]:
-        if not text or not raw_tools:
-            return None
-        allowed_tools = {
-            tool.get("name")
-            for tool in raw_tools
-            if isinstance(tool, dict) and isinstance(tool.get("name"), str)
-        }
-        allowed_tools.discard(None)
-        if not allowed_tools:
-            return None
-
-        candidates = [text]
-        candidates.extend(re.findall(r"```(?:json|xml)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE))
-        candidates.extend(re.findall(r"<function_call>\s*([\s\S]*?)\s*</function_call>", text, flags=re.IGNORECASE))
-        candidates.extend(re.findall(r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", text, flags=re.IGNORECASE))
-
-        for candidate in candidates:
-            payload = self._decode_json_dict(candidate)
-            if not payload:
-                json_obj = self._extract_first_json_object(candidate)
-                if json_obj:
-                    payload = self._decode_json_dict(json_obj)
-            parsed = self._tool_call_from_payload(payload, allowed_tools)
-            if parsed:
-                return parsed
-
-        for tool_name in sorted(allowed_tools, key=len, reverse=True):
-            pattern = rf"<{re.escape(tool_name)}>\s*([\s\S]*?)\s*</{re.escape(tool_name)}>"
-            direct_match = re.search(pattern, text, flags=re.IGNORECASE)
-            if not direct_match:
-                continue
-            args_payload = self._decode_json_dict(direct_match.group(1))
-            if not args_payload:
-                json_obj = self._extract_first_json_object(direct_match.group(1))
-                if json_obj:
-                    args_payload = self._decode_json_dict(json_obj)
-            if isinstance(args_payload, dict):
-                return {
-                    "tool_call_id": str(uuid.uuid4()),
-                    "tool_call_name": tool_name,
-                    "tool_call_input": args_payload,
-                }
-
-        return None
-
-    async def _transform_tools(self, tools: list[dict], include_strict: bool = True) -> list[dict]:
-        strict_tools = include_strict and getenv("OPENAI_TOOL_STRICT", "0").strip().lower() in ("1", "true", "yes", "on")
-        transformed: list[dict] = []
-        for tool in tools:
-            function_payload = {
-                    "name": tool['name'],
-                    "description": tool['description'],
-                    "parameters": {
-                        "type": "object",
-                        "properties": tool['input_schema']['properties'],
-                        "required": tool['input_schema'].get('required', []),
-                        "additionalProperties": False
-                    },
-                }
-            if strict_tools:
-                function_payload["strict"] = True
-            transformed.append({
-                "type": "function",
-                "function": function_payload,
-            })
-        return transformed
-
-    def _transform_tool_choice(self, tool_choice: dict | None) -> str | dict | None:
-        if not tool_choice:
-            return None
-        choice_type = tool_choice.get("type")
-        if choice_type == "auto":
-            return "auto"
-        if choice_type == "any":
-            return "required"
-        if choice_type == "tool" and tool_choice.get("name"):
-            return {
-                "type": "function",
-                "function": {"name": tool_choice["name"]},
-            }
-        return None
-
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
         kwargs.pop('messages_pydantic', None)
@@ -322,11 +165,11 @@ class OpenAIInterface(LLMInterface):
                 pass
 
         if 'tools' in kwargs:
-            arguments["tools"] = await self._transform_tools(
+            arguments["tools"] = await transform_openai_tools(
                 kwargs.pop('tools'),
                 include_strict=not is_local_compatible_endpoint,
             )
-            transformed_tool_choice = self._transform_tool_choice(tool_choice_raw)
+            transformed_tool_choice = transform_openai_tool_choice(tool_choice_raw)
             if transformed_tool_choice is not None:
                 arguments["tool_choice"] = transformed_tool_choice
 
@@ -365,99 +208,12 @@ class OpenAIInterface(LLMInterface):
             try:
                 if stream_enabled:
                     stream = await self.client.chat.completions.create(timeout=request_timeout_s, **request_args)
-                    text_parts: list[str] = []
-                    tool_call_parts: dict[int, dict[str, Any]] = {}
-                    finish_reason = "stop"
-                    input_usage = 0
-                    output_usage = 0
-
-                    async for chunk in stream:
-                        choices = getattr(chunk, "choices", None) or []
-                        if choices:
-                            choice = choices[0]
-                            delta = getattr(choice, "delta", None)
-                            if delta is not None:
-                                content_piece = getattr(delta, "content", None)
-                                if content_piece:
-                                    piece = str(content_piece)
-                                    text_parts.append(piece)
-                                    await stream_callback({
-                                        "message_uuid": stream_message_uuid,
-                                        "role": "assistant",
-                                        "content": "".join(text_parts),
-                                        "done": False,
-                                    })
-
-                                for tc in (getattr(delta, "tool_calls", None) or []):
-                                    idx = int(getattr(tc, "index", 0) or 0)
-                                    entry = tool_call_parts.setdefault(
-                                        idx,
-                                        {"id": None, "name_parts": [], "arg_parts": []},
-                                    )
-                                    tc_id = getattr(tc, "id", None)
-                                    if tc_id:
-                                        entry["id"] = str(tc_id)
-                                    fn = getattr(tc, "function", None)
-                                    if fn is not None:
-                                        fn_name = getattr(fn, "name", None)
-                                        if fn_name:
-                                            entry["name_parts"].append(str(fn_name))
-                                        fn_args = getattr(fn, "arguments", None)
-                                        if fn_args:
-                                            entry["arg_parts"].append(str(fn_args))
-
-                            finish_reason_chunk = getattr(choice, "finish_reason", None)
-                            if finish_reason_chunk:
-                                finish_reason = str(finish_reason_chunk)
-
-                        usage = getattr(chunk, "usage", None)
-                        if usage is not None:
-                            input_usage = int(getattr(usage, "prompt_tokens", input_usage) or input_usage)
-                            output_usage = int(getattr(usage, "completion_tokens", output_usage) or output_usage)
-
-                    text = "".join(text_parts) or None
-                    tool_call_payload: Optional[dict] = None
-                    if tool_call_parts:
-                        first_idx = sorted(tool_call_parts.keys())[0]
-                        first_tool_call = tool_call_parts[first_idx]
-                        tool_name = "".join(first_tool_call["name_parts"]).strip()
-                        tool_args = "".join(first_tool_call["arg_parts"])
-                        if tool_name:
-                            tool_call_payload = {
-                                "tool_call_id": first_tool_call["id"] or str(uuid.uuid4()),
-                                "tool_call_name": tool_name,
-                                "tool_call_input": self._decode_json_dict(tool_args),
-                            }
-                    elif text and raw_tools:
-                        tool_call_payload = self._extract_tool_call_from_text(text, raw_tools)
-                        if tool_call_payload and re.fullmatch(
-                            r"\s*(```[\s\S]*```|<function_call>[\s\S]*</function_call>|<tool_call>[\s\S]*</tool_call>|<\w+>\s*\{[\s\S]*\}\s*</\w+>)\s*",
-                            text,
-                            flags=re.IGNORECASE,
-                        ):
-                            text = None
-
-                    if tool_call_payload and tool_call_payload.get("tool_call_name") == 'message_to_user':
-                        parsed_args = tool_call_payload.get("tool_call_input") or {}
-                        text = parsed_args.get('message') or text
-                        tool_call_payload = None
-
-                    await stream_callback({
-                        "message_uuid": stream_message_uuid,
-                        "role": "assistant",
-                        "content": text or "",
-                        "done": True,
-                        "usage": input_usage + output_usage,
-                    })
-
-                    parsed_response = LLMResponse(
-                        text=text,
-                        tool_call=tool_call_payload or {},
-                        stop_reason=finish_reason,
-                        input_usage=input_usage,
-                        output_usage=output_usage,
-                        model=self.base_args['model'],
-                        message_uuid=stream_message_uuid,
+                    parsed_response = await consume_streaming_completion(
+                        stream=stream,
+                        stream_callback=stream_callback,
+                        stream_message_uuid=stream_message_uuid,
+                        raw_tools=raw_tools,
+                        model_name=self.base_args["model"],
                     )
                 else:
                     response = await self.client.chat.completions.create(timeout=request_timeout_s, **request_args)
@@ -471,10 +227,10 @@ class OpenAIInterface(LLMInterface):
                         tool_call_payload = {
                             "tool_call_id": raw_tool_call.id or str(uuid.uuid4()),
                             "tool_call_name": raw_tool_call.function.name,
-                            "tool_call_input": self._decode_json_dict(raw_tool_call.function.arguments),
+                            "tool_call_input": decode_json_dict(raw_tool_call.function.arguments),
                         }
                     elif text and raw_tools:
-                        tool_call_payload = self._extract_tool_call_from_text(text, raw_tools)
+                        tool_call_payload = extract_tool_call_from_text(text, raw_tools)
                         if tool_call_payload and re.fullmatch(
                             r"\s*(```[\s\S]*```|<function_call>[\s\S]*</function_call>|<tool_call>[\s\S]*</tool_call>|<\w+>\s*\{[\s\S]*\}\s*</\w+>)\s*",
                             text,
