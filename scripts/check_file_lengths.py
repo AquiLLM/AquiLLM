@@ -13,7 +13,6 @@ _ALLOWLIST: frozenset[str] = frozenset(
     {
         # Backend hotspots (remediation in progress; see architecture remediation plan)
         "aquillm/apps/chat/consumers/chat.py",
-        "aquillm/apps/chat/tests/test_messages.py",
         "aquillm/apps/collections/views/api.py",
         "aquillm/apps/documents/models/chunks.py",
         "aquillm/apps/ingestion/views/api.py",
