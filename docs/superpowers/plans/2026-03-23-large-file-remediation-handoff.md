@@ -1,8 +1,10 @@
 # Large-file remediation — session handoff
 
+> **Updated:** Commits **15** and **17** are on `development`. For current “what’s done” and next steps, prefer **[2026-03-24-large-file-remediation-handoff.md](./2026-03-24-large-file-remediation-handoff.md)**.
+
 **Purpose:** Continue [2026-03-23-large-file-remediation-commit-plan.md](./2026-03-23-large-file-remediation-commit-plan.md) (and parent [2026-03-19-large-file-remediation-lib-tools-and-splits.md](./2026-03-19-large-file-remediation-lib-tools-and-splits.md)) with minimal rediscovery.
 
-**Last known state:** Backend chat/tool wiring and LLM `base.py` extractions landed in the working tree; React moves, `test_messages` split, `openai_tokens` extraction, and allowlist trimming were **not** completed in that pass.
+**Last known state (historical):** Backend chat/tool wiring and LLM `base.py` extractions landed; **as of 2026-03-24**, `openai_tokens` / `openai_overflow` extraction and the `test_messages` split **have** landed — see the 2026-03-24 handoff.
 
 ---
 
@@ -47,6 +49,14 @@
 | `aquillm/lib/llm/providers/summary.py` | `generate_compact_tool_summary(llm, conversation, max_tokens)` |
 | `aquillm/lib/llm/providers/base.py` | Thinner `LLMInterface`: `call_tool`, `complete`, `spin`, `_continue_cutoff_response` |
 
+### OpenAI provider — token / overflow (commit 15)
+
+| Module | Role |
+|--------|------|
+| `aquillm/lib/llm/providers/openai_tokens.py` | Estimation, preflight trim, `trim_messages_for_overflow` |
+| `aquillm/lib/llm/providers/openai_overflow.py` | Image strip + overflow/timeout retry args |
+| `aquillm/lib/llm/providers/openai.py` | Delegating `OpenAIInterface` |
+
 ### Compatibility and docs
 
 - **`aquillm/chat/consumers.py`** — Re-exports `ChatConsumer`, refs, utils aliases (`_truncate_tool_text`, etc.), and maps legacy `get_*_func` names to `tool_wiring` factories; `get_weather_func` → `get_debug_weather_tool`.
@@ -54,7 +64,7 @@
 
 ### Tests
 
-- **`aquillm/apps/chat/tests/test_messages.py`** — `_test_image_result_tool` has a docstring (required by `llm_tool`).
+- **Split modules** (replaces monolithic `test_messages.py`): see [2026-03-24-large-file-remediation-handoff.md](./2026-03-24-large-file-remediation-handoff.md). Stubs live in `chat_message_test_support.py` with docstrings required by `llm_tool`.
 
 ---
 
@@ -76,10 +86,12 @@
 
 | Plan commits | Work |
 |--------------|------|
-| **15** | Extract multimodal token / overflow helpers to `aquillm/lib/llm/providers/openai_tokens.py`; thin wrappers on `OpenAIInterface` if tests patch class methods. |
-| **17** | Split `aquillm/apps/chat/tests/test_messages.py` into focused modules (plan lists `test_message_adapters.py`, `test_multimodal_messages.py`, `test_tool_result_images.py`, shrink `test_messages.py`). |
+| **15** | Done — see 2026-03-24 handoff. |
+| **17** | Done — see 2026-03-24 handoff. |
 | **18–21** | React: `features/chat`, `features/collections`, documents/platform admin, optional `IngestRowsContainer` split. |
-| **23** | Run `scripts/check_file_lengths.py` and **remove** allowlist entries only for files that drop **≤ 300** lines. Current hotspots still likely over budget: `chat.py` (~343), `base.py` (~395), `test_messages.py` (~1000+), `openai.py` (large). |
+| **23** | Run `scripts/check_file_lengths.py` and **remove** allowlist entries only for files that drop **≤ 300** lines. Hotspots may still include `chat.py`, `base.py`, `openai.py` until further splits. |
+
+**Authoritative next steps:** [2026-03-24-large-file-remediation-handoff.md](./2026-03-24-large-file-remediation-handoff.md).
 
 **Optional / already satisfied in spirit**
 
@@ -130,10 +142,9 @@ npm run build
 
 ## Suggested next session order
 
-1. **`openai_tokens.py`** (commit 15) — keeps `openai.py` shrinking toward line budget; update tests if they patch moved symbols.
-2. **`test_messages` split** (commit 17) — reduces test-file hotspot and prepares allowlist trim.
-3. **React feature modules** (18–21) — isolated commits per feature; `npm run build` each time.
-4. **Allowlist trim** (commit 23) — only after line counts prove files under 300.
+1. **React feature modules** (18–21) — isolated commits per feature; `npm run build` each time.
+2. **Allowlist trim** (commit 23) — only after line counts prove files under 300.
+3. See [2026-03-24-large-file-remediation-handoff.md](./2026-03-24-large-file-remediation-handoff.md) for verification commands and file layout.
 
 ---
 
