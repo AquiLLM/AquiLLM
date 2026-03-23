@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Trash2 } from 'lucide-react';
+import { FileDown, Trash2 } from 'lucide-react';
 import formatUrl from '../utils/formatUrl';
 import { getCsrfCookie } from '../main';
 
@@ -118,15 +118,16 @@ const WhitelistEmails: React.FC<WhitelistEmailsProps> = ({ isSuperuser = false }
     <div className="max-w-md mx-auto p-4">
       <h2 className="text-xl font-bold text-center mb-4">Whitelisted Emails</h2>
       {isSuperuser && csvUrl && (
-        <p className="text-center mb-4">
+        <div className="flex justify-center mb-4">
           <a
             href={csvUrl}
-            className="text-base underline text-text-normal"
+            className="inline-flex h-[56px] w-max cursor-pointer items-center gap-2 rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] text-base text-text-normal no-underline transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5"
             data-testid="download-feedback-csv"
           >
+            <FileDown size={16} className="shrink-0 text-text-normal" aria-hidden />
             Download Feedback CSV
           </a>
-        </p>
+        </div>
       )}
       {error && <div className="text-red-500 mb-4">{error}</div>}
       {loading && <div>Loading...</div>}
