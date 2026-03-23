@@ -27,6 +27,7 @@ from lib.parsers import (
     IMAGE_EXTENSIONS,
     AUDIO_EXTENSIONS,
     VIDEO_EXTENSIONS,
+    SUPPORTED_EXTENSIONS,
     clean_filename as _clean_name,
     get_stem as _stem,
     guess_content_type as _guess_content_type,
