@@ -8,12 +8,13 @@ including figure extraction and media transcription.
 import io
 import logging
 import os
-import zipfile
 
 from aquillm.ocr_utils import extract_text_from_image
 from aquillm.vtt import coalesce_captions, parse as parse_vtt, to_text as vtt_to_text
 
 from .media import transcribe_media_bytes
+from .parser_archive import extract_archive_payloads
+from .parser_figures import extract_figure_payloads_for_format
 from .types import ExtractedTextPayload, ExtractionError, UnsupportedFileTypeError
 
 # Import from lib/parsers
@@ -26,7 +27,6 @@ from lib.parsers import (
     IMAGE_EXTENSIONS,
     AUDIO_EXTENSIONS,
     VIDEO_EXTENSIONS,
-    SUPPORTED_EXTENSIONS,
     clean_filename as _clean_name,
     get_stem as _stem,
     guess_content_type as _guess_content_type,
@@ -59,69 +59,6 @@ def detect_ingest_type(filename: str, content_type: str | None = None) -> str:
         raise UnsupportedFileTypeError(str(e)) from e
 
 
-def _extract_figures_for_format(
-    filename: str,
-    data: bytes,
-    source_format: str,
-    payloads: list[ExtractedTextPayload],
-) -> None:
-    """Extract figures from a document and append to payloads list."""
-    try:
-        from aquillm.ingestion.figure_extraction import (
-            extract_figures_from_document,
-            generate_figure_caption,
-            enhance_figure_with_ocr,
-        )
-        
-        doc_title = _stem(filename)
-        figure_count = 0
-        
-        for figure in extract_figures_from_document(data, source_format, filename):
-            caption = generate_figure_caption(figure, doc_title, source_format)
-            
-            ocr_text, ocr_provider, ocr_model = "", "", ""
-            try:
-                ocr_text, ocr_provider, ocr_model = enhance_figure_with_ocr(figure)
-            except Exception:
-                pass
-            
-            combined_text = caption
-            if ocr_text and ocr_text.strip():
-                combined_text = f"{caption}\n\nText in figure: {ocr_text.strip()}"
-            
-            fig_filename = f"{doc_title}_fig{figure.figure_index}.{figure.image_format}"
-            
-            payloads.append(ExtractedTextPayload(
-                title=f"{doc_title} - Figure {figure.figure_index + 1}",
-                normalized_type="document_figure",
-                full_text=combined_text,
-                modality="image",
-                media_bytes=figure.image_bytes,
-                media_filename=fig_filename,
-                media_content_type=f"image/{figure.image_format}",
-                provider=ocr_provider or None,
-                model=ocr_model or None,
-                metadata={
-                    "source_format": source_format,
-                    "source_document_title": doc_title,
-                    "figure_index": figure.figure_index,
-                    "extracted_caption": figure.nearby_text,
-                    "location_metadata": figure.location_metadata,
-                    "width": figure.width,
-                    "height": figure.height,
-                },
-            ))
-            figure_count += 1
-        
-        if figure_count > 0:
-            logger.info("Extracted %d figures from %s %s", figure_count, source_format.upper(), filename)
-            
-    except ImportError:
-        logger.debug("Figure extraction not available for %s", filename)
-    except Exception as exc:
-        logger.warning("Figure extraction failed for %s: %s", filename, exc)
-
-
 def _extract_pdf(filename: str, data: bytes) -> list[ExtractedTextPayload]:
     """Extract text and figures from a PDF."""
     payloads: list[ExtractedTextPayload] = []
@@ -133,7 +70,7 @@ def _extract_pdf(filename: str, data: bytes) -> list[ExtractedTextPayload]:
         full_text=full_text,
     ))
     
-    _extract_figures_for_format(filename, data, "pdf", payloads)
+    extract_figure_payloads_for_format(filename, data, "pdf", payloads)
     
     return payloads
 
@@ -165,14 +102,14 @@ def _extract_csv_like(filename: str, data: bytes, delimiter: str) -> ExtractedTe
 def _extract_docx(filename: str, data: bytes) -> list[ExtractedTextPayload]:
     text = extract_docx_text(data)
     payloads = [ExtractedTextPayload(title=_stem(filename), normalized_type="docx", full_text=text)]
-    _extract_figures_for_format(filename, data, "docx", payloads)
+    extract_figure_payloads_for_format(filename, data, "docx", payloads)
     return payloads
 
 
 def _extract_xlsx(filename: str, data: bytes) -> list[ExtractedTextPayload]:
     text = extract_xlsx_text(data)
     payloads = [ExtractedTextPayload(title=_stem(filename), normalized_type="xlsx", full_text=text)]
-    _extract_figures_for_format(filename, data, "xlsx", payloads)
+    extract_figure_payloads_for_format(filename, data, "xlsx", payloads)
     return payloads
 
 
@@ -183,7 +120,7 @@ def _extract_xls(filename: str, data: bytes) -> ExtractedTextPayload:
 def _extract_ods(filename: str, data: bytes) -> list[ExtractedTextPayload]:
     text = extract_ods_text(data)
     payloads = [ExtractedTextPayload(title=_stem(filename), normalized_type="ods", full_text=text)]
-    _extract_figures_for_format(filename, data, "ods", payloads)
+    extract_figure_payloads_for_format(filename, data, "ods", payloads)
     return payloads
 
 
@@ -201,7 +138,7 @@ def _extract_odp(filename: str, data: bytes) -> ExtractedTextPayload:
 def _extract_epub(filename: str, data: bytes) -> list[ExtractedTextPayload]:
     text = extract_epub_text(data)
     payloads = [ExtractedTextPayload(title=_stem(filename), normalized_type="epub", full_text=text)]
-    _extract_figures_for_format(filename, data, "epub", payloads)
+    extract_figure_payloads_for_format(filename, data, "epub", payloads)
     return payloads
 
 
@@ -253,41 +190,6 @@ def _extract_media_transcript(filename: str, data: bytes, normalized_type: str) 
     )
 
 
-def _extract_archive(filename: str, data: bytes, depth: int) -> list[ExtractedTextPayload]:
-    max_files = int((os.getenv("INGEST_ARCHIVE_MAX_FILES") or "100").strip())
-    max_total_bytes = int((os.getenv("INGEST_ARCHIVE_MAX_TOTAL_BYTES") or "52428800").strip())
-    payloads: list[ExtractedTextPayload] = []
-    total_bytes = 0
-
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        for info in archive.infolist():
-            if info.is_dir():
-                continue
-            if len(payloads) >= max_files:
-                break
-            if info.file_size <= 0:
-                continue
-            total_bytes += info.file_size
-            if total_bytes > max_total_bytes:
-                raise ExtractionError("Archive expanded size exceeds INGEST_ARCHIVE_MAX_TOTAL_BYTES.")
-            inner_name = info.filename
-            inner_ext = os.path.splitext(inner_name)[1].lower()
-            if inner_ext not in SUPPORTED_EXTENSIONS or inner_ext == ".zip":
-                continue
-            with archive.open(info, "r") as file_obj:
-                inner_data = file_obj.read()
-            payloads.extend(
-                extract_text_payloads(
-                    inner_name,
-                    inner_data,
-                    content_type=_guess_content_type(inner_name, fallback="application/octet-stream"),
-                    depth=depth + 1,
-                )
-            )
-
-    return payloads
-
-
 def extract_text_payloads(filename: str, data: bytes, content_type: str | None = None, depth: int = 0) -> list[ExtractedTextPayload]:
     if depth > 2:
         raise ExtractionError("Nested archive depth exceeded.")
@@ -300,7 +202,7 @@ def extract_text_payloads(filename: str, data: bytes, content_type: str | None =
         raise UnsupportedFileTypeError(str(e)) from e
 
     if ingest_type == "archive":
-        return _extract_archive(filename, data, depth)
+        return extract_archive_payloads(filename, data, depth)
     if ingest_type == "image":
         return [_extract_image_ocr(filename, data)]
     if ingest_type == "audio":
