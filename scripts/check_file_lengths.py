@@ -9,25 +9,7 @@ REPO = Path(__file__).resolve().parents[1]
 MAX_LINES = 300
 
 # Paths relative to repo root; trim trailing slashes for consistency
-_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        # Backend hotspots (remediation in progress; see architecture remediation plan)
-        "aquillm/apps/chat/consumers/chat.py",
-        "aquillm/apps/documents/services/chunk_rerank.py",
-        "aquillm/apps/collections/views/api.py",
-        "aquillm/aquillm/ingestion/figure_extraction/pdf.py",
-        "aquillm/aquillm/ingestion/parsers.py",
-        "aquillm/aquillm/settings.py",
-        "aquillm/aquillm/tasks.py",
-        "aquillm/aquillm/zotero_views.py",
-        "aquillm/lib/llm/providers/openai.py",
-        # Frontend (legacy large components; feature modules still over budget)
-        "react/src/components/CollectionsPage.tsx",
-        "react/src/features/collections/components/CollectionView.tsx",
-        "react/src/features/documents/components/FileSystemViewer.tsx",
-        "react/src/features/platform_admin/components/UserManagementModal.tsx",
-    }
-)
+_ALLOWLIST: frozenset[str] = frozenset()
 
 
 def _line_count(path: Path) -> int:
