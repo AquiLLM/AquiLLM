@@ -143,7 +143,8 @@
                     </div>
                 </a> -->
 
-                <div class="flex items-center my-2 text-slight_muted_white pr-[16px]">
+                <div class="flex items-center gap-2 sm:gap-3 my-2 text-slight_muted_white pr-[16px]">
+                    {% block nav_extra %}{% endblock %}
                     {% if user.is_authenticated %}
                         <button id="account-management-toggle-button" class="h-[40px] px-[10px] rounded-[14px] hover:bg-scheme-shade_6 transition-all flex items-center gap-[10px] border border-scheme-contrast">
                             <div class="h-[28px] w-[28px] rounded-full bg-scheme-shade_5 text-text-normal flex items-center justify-center text-xs font-semibold">

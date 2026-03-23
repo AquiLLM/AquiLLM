@@ -1,14 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { FileDown, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import formatUrl from '../utils/formatUrl';
 import { getCsrfCookie } from '../main';
 
-export interface WhitelistEmailsProps {
-  /** When true, show one-click CSV download (server still enforces superuser on the API). */
-  isSuperuser?: boolean;
-}
-
-const WhitelistEmails: React.FC<WhitelistEmailsProps> = ({ isSuperuser = false }) => {
+const WhitelistEmails: React.FC = () => {
   const [emails, setEmails] = useState<string[]>([]);
   const [newEmail, setNewEmail] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -112,25 +107,9 @@ const WhitelistEmails: React.FC<WhitelistEmailsProps> = ({ isSuperuser = false }
     }
   };
 
-  const csvUrl = window.apiUrls?.api_feedback_ratings_csv;
-
   return (
     <div className="w-full p-4 md:px-8">
-      <div className="relative mb-6 min-h-[56px] w-full">
-        <h2 className="text-center text-xl font-bold text-text-normal">Whitelisted Emails</h2>
-        {isSuperuser && csvUrl && (
-          <div className="mt-3 flex justify-end sm:absolute sm:right-0 sm:top-1/2 sm:mt-0 sm:-translate-y-1/2">
-            <a
-              href={csvUrl}
-              className="inline-flex h-[56px] w-max shrink-0 cursor-pointer items-center gap-2 rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] text-base text-text-normal no-underline transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5"
-              data-testid="download-feedback-csv"
-            >
-              <FileDown size={16} className="shrink-0 text-text-normal" aria-hidden />
-              Download Feedback CSV
-            </a>
-          </div>
-        )}
-      </div>
+      <h2 className="mb-6 text-center text-xl font-bold text-text-normal">Whitelisted Emails</h2>
       <div className="mx-auto max-w-md">
         {error && <div className="text-red-500 mb-4">{error}</div>}
         {loading && <div>Loading...</div>}

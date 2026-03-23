@@ -352,7 +352,7 @@ bash deploy/scripts/start_dev.sh
 
 Ratings and free-text feedback on assistant messages are stored on the chat `Message` rows. Superusers can download them as CSV for analysis.
 
-- **UI:** On the Email Whitelist page (`/aquillm/email_whitelist/`), a **Download Feedback CSV** link appears only when you are logged in as a superuser.
+- **UI:** While viewing the Email Whitelist page (`/aquillm/email_whitelist/`), superusers see **Download Feedback CSV** in the **top navigation bar** (next to the account control), aligned with the rest of the header.
 - **API:** `GET /api/feedback/ratings.csv` (same permission: Django superuser only; otherwise HTTP 403).
 - **Columns (in order):** `date` (ISO 8601 UTC), `user_number` (conversation owner user id), `rating` (1–5, or empty if only comments were submitted), `question_number` (1-based count of user prompts in that conversation up to and including the assistant turn), `comments`.
 - **Optional query parameters:** `start_date`, `end_date` (inclusive; `YYYY-MM-DD` or parseable datetime), `min_rating` (integer; rows without a numeric rating are excluded when set), `user_number` (filter by conversation owner id).
