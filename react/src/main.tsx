@@ -3,14 +3,14 @@ import { createRoot } from 'react-dom/client';
 import TestComponent from './components/TestComponent';
 import PDFIngestionMonitor from './components/PDFIngestionMonitor';
 import CollectionsPage from './components/CollectionsPage';
-import CollectionView from './components/CollectionView';
+import CollectionView from './features/collections/components/CollectionView';
 import SearchPage from './components/SearchPage';
 
 import IngestionDashboard from './components/IngestionDashboard';
 import IngestionDashboardLauncher from './components/IngestionDashboardLauncher';
 import IngestRowContainer from './features/ingestion/components/IngestRowsContainer';
 import WhitelistEmails from './components/WhitelistEmails';
-import ChatComponent from './components/ChatComponent';
+import ChatComponent from './features/chat/components/ChatShell';
 import UserSettings from './components/UserSettings';
 import ChatFileUpload from './components/ChatFileUpload';
 // Type for the components mapping
