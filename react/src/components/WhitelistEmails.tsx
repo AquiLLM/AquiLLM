@@ -108,45 +108,47 @@ const WhitelistEmails: React.FC = () => {
   };
 
   return (
-    <div className="max-w-md mx-auto p-4">
-      <h2 className="text-xl font-bold text-center mb-4">Whitelisted Emails</h2>
-      {error && <div className="text-red-500 mb-4">{error}</div>}
-      {loading && <div>Loading...</div>}
-      <ul className="list-none p-0">
-        {emails.map(email => (
-          <li
-            key={email}
-            className="flex items-center py-2 border-b border-gray-300"
-          >
-            <span className="flex-grow">{email}</span>
-            <button
-              onClick={() => handleDelete(email)}
-              className="bg-scheme-shade_3 border-none cursor-pointer p-0"
-              aria-label={`Delete ${email}`}
+    <div className="w-full p-4 md:px-8">
+      <h2 className="mb-6 text-center text-xl font-bold text-text-normal">Whitelisted Emails</h2>
+      <div className="mx-auto max-w-md">
+        {error && <div className="text-red-500 mb-4">{error}</div>}
+        {loading && <div>Loading...</div>}
+        <ul className="list-none p-0">
+          {emails.map(email => (
+            <li
+              key={email}
+              className="flex items-center py-2 border-b border-gray-300"
             >
-              <Trash2 size={18} />
-            </button>
-          </li>
-        ))}
-      </ul>
-      <div className="mt-4 flex">
-        <input
-          type="email"
-          value={newEmail}
-          onChange={(e) => setNewEmail(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Add new email"
-          className="flex-grow p-2 bg-scheme-shade_3 text-base border border-gray-300 rounded"
-        />
-        <button
-          onClick={handleAddEmail}
-          className="ml-2 p-2 text-base cursor-pointer border border-gray-300 rounded bg-scheme-shade_3"
-          disabled={!newEmail.trim() || inputError !== null}
-        >
-          Add
-        </button>
+              <span className="flex-grow">{email}</span>
+              <button
+                onClick={() => handleDelete(email)}
+                className="bg-scheme-shade_3 border-none cursor-pointer p-0"
+                aria-label={`Delete ${email}`}
+              >
+                <Trash2 size={18} />
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-4 flex">
+          <input
+            type="email"
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Add new email"
+            className="flex-grow p-2 bg-scheme-shade_3 text-base border border-gray-300 rounded"
+          />
+          <button
+            onClick={handleAddEmail}
+            className="ml-2 p-2 text-base cursor-pointer border border-gray-300 rounded bg-scheme-shade_3"
+            disabled={!newEmail.trim() || inputError !== null}
+          >
+            Add
+          </button>
+        </div>
+        {inputError && <div className="text-red-500 mt-2">{inputError}</div>}
       </div>
-      {inputError && <div className="text-red-500 mt-2">{inputError}</div>}
     </div>
   );
 };

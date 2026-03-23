@@ -41,6 +41,7 @@ from apps.ingestion.views.api import (
 
 # Re-export platform admin views
 from apps.platform_admin.views.api import (
+    feedback_ratings_csv,
     search_users,
     whitelisted_emails,
     whitelisted_email,
@@ -71,6 +72,7 @@ urlpatterns = [
     path("users/search/", search_users, name="api_search_users"),
     path("whitelisted_email/<str:email>/", whitelisted_email, name="api_whitelist_email"),
     path("whitelisted_emails/", whitelisted_emails, name="api_whitelist_emails"),
+    path("feedback/ratings.csv", feedback_ratings_csv, name="api_feedback_ratings_csv"),
     path("ingest_vtt/", ingest_vtt, name="api_ingest_vtt"),
     path("ingest_uploads/", ingest_uploads, name="api_ingest_uploads"),
     path("ingest_uploads/<int:batch_id>/", ingest_uploads_status, name="api_ingest_uploads_status"),

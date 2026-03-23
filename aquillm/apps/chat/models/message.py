@@ -16,6 +16,7 @@ class Message(models.Model):
     content = models.TextField()
     rating = models.PositiveSmallIntegerField(null=True, blank=True)
     feedback_text = models.TextField(null=True, blank=True)
+    feedback_submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     sequence_number = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
 

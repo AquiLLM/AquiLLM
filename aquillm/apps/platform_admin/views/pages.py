@@ -1,7 +1,7 @@
 """Page views for platform administration."""
 import logging
 
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required, user_passes_test
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
@@ -19,6 +19,7 @@ def gemini_cost_monitor(request):
 
 
 @login_required
+@user_passes_test(lambda u: u.is_staff)
 @require_http_methods(['GET'])
 def email_whitelist(request):
     """Display the email whitelist management page."""
