@@ -128,7 +128,7 @@ def _extract_ods(filename: str, data: bytes) -> list[ExtractedTextPayload]:
 def _extract_pptx(filename: str, data: bytes) -> list[ExtractedTextPayload]:
     text = extract_pptx_text(data)
     payloads = [ExtractedTextPayload(title=_stem(filename), normalized_type="pptx", full_text=text)]
-    _extract_figures_for_format(filename, data, "pptx", payloads)
+    extract_figure_payloads_for_format(filename, data, "pptx", payloads)
     return payloads
 
 
