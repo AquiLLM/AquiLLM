@@ -48,6 +48,14 @@ The unified upload endpoint supports:
 *   **Authentication**: django-allauth
 *   **Containerization**: Docker, Docker Compose
 
+## Module layout and boundaries
+
+* **`aquillm/apps/*`**: Domain Django apps (models, views, consumers, and Celery tasks owned per app). Prefer importing concrete models and services from `apps.<domain>` rather than the `aquillm.models` compatibility module in new application code.
+* **`aquillm/lib/*`**: Shared, provider-style helpers (for example LLM adapters and tool types). Keep this tree free of direct `apps.*` imports; pass Django or ORM behavior in from `apps` callers.
+* **`aquillm/aquillm/models.py`**: Legacy barrel that re-exports models and a few helpers for older call sites. Integration tests under `aquillm/tests/integration/test_architecture_import_boundaries.py` and `scripts/check_import_boundaries.py` discourage new `from aquillm.models import` usage under `apps/` and `lib/`.
+* **WebSockets**: `aquillm/asgi.py` wires `apps.chat.routing` and `apps.ingestion.routing` into the Channels URL router (legacy `chat.routing` / `ingest.routing` remain thin re-exports).
+* **Structure checks** (also run in CI): `python scripts/check_file_lengths.py` and `python scripts/check_import_boundaries.py`.
+
 ## Quick start (development and local use):
 
 This assumes you have Docker and Docker Compose installed.
