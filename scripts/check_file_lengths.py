@@ -15,7 +15,6 @@ _ALLOWLIST: frozenset[str] = frozenset(
         "aquillm/apps/chat/consumers/chat.py",
         "aquillm/apps/collections/views/api.py",
         "aquillm/apps/documents/models/chunks.py",
-        "aquillm/apps/ingestion/views/api.py",
         "aquillm/aquillm/ingestion/figure_extraction/pdf.py",
         "aquillm/aquillm/ingestion/parsers.py",
         "aquillm/aquillm/settings.py",
