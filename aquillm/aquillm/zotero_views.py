@@ -1,7 +1,7 @@
 """
 Views for Zotero OAuth and sync functionality
 """
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
@@ -249,32 +249,28 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
                         'collections': flatten_collections(collections, items)
                     }
 
-                # Fetch groups list first (needed to know what to parallelize)
                 groups = client.get_user_groups()
 
-                # Parallel fetch all libraries (personal + all groups)
+                # Sequential library fetches (Zotero API only in threads inside fetch_library_data;
+                # no Django ORM on worker threads).
                 libraries = []
-                with ThreadPoolExecutor(max_workers=min(8, len(groups) + 1)) as executor:
-                    futures = {}
+                try:
+                    libraries.append(
+                        fetch_library_data("personal", "Personal Library", "user", None)
+                    )
+                except Exception as e:
+                    logger.error("Error fetching personal library: %s", e)
 
-                    # Submit personal library fetch
-                    futures[executor.submit(
-                        fetch_library_data, 'personal', 'Personal Library', 'user', None
-                    )] = 'personal'
-
-                    # Submit group library fetches
-                    for group in groups:
-                        group_id = str(group['id'])
-                        futures[executor.submit(
-                            fetch_library_data, group_id, group['data']['name'], 'group', group_id
-                        )] = group_id
-
-                    # Collect results as they complete
-                    for future in as_completed(futures):
-                        try:
-                            libraries.append(future.result())
-                        except Exception as e:
-                            logger.error(f"Error fetching library {futures[future]}: {e}")
+                for group in groups:
+                    group_id = str(group["id"])
+                    try:
+                        libraries.append(
+                            fetch_library_data(
+                                group_id, group["data"]["name"], "group", group_id
+                            )
+                        )
+                    except Exception as e:
+                        logger.error("Error fetching library %s: %s", group_id, e)
 
                 # Sort so personal library appears first
                 libraries.sort(key=lambda lib: (0 if lib['id'] == 'personal' else 1, lib['name']))

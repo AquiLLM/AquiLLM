@@ -19,7 +19,6 @@ _ALLOWLIST: frozenset[str] = frozenset(
         "aquillm/aquillm/ingestion/parsers.py",
         "aquillm/aquillm/settings.py",
         "aquillm/aquillm/tasks.py",
-        "aquillm/aquillm/zotero_tasks.py",
         "aquillm/aquillm/zotero_views.py",
         "aquillm/lib/llm/providers/base.py",
         "aquillm/lib/llm/providers/openai.py",
