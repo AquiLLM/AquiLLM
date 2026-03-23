@@ -115,57 +115,59 @@ const WhitelistEmails: React.FC<WhitelistEmailsProps> = ({ isSuperuser = false }
   const csvUrl = window.apiUrls?.api_feedback_ratings_csv;
 
   return (
-    <div className="max-w-md mx-auto p-4">
-      <h2 className="text-xl font-bold text-center mb-4">Whitelisted Emails</h2>
-      {isSuperuser && csvUrl && (
-        <div className="flex justify-center mb-4">
+    <div className="w-full p-4 md:px-8">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-xl font-bold text-text-normal">Whitelisted Emails</h2>
+        {isSuperuser && csvUrl && (
           <a
             href={csvUrl}
-            className="inline-flex h-[56px] w-max cursor-pointer items-center gap-2 rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] text-base text-text-normal no-underline transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5"
+            className="inline-flex h-[56px] w-max shrink-0 cursor-pointer items-center gap-2 self-end rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] text-base text-text-normal no-underline transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5 sm:self-auto"
             data-testid="download-feedback-csv"
           >
             <FileDown size={16} className="shrink-0 text-text-normal" aria-hidden />
             Download Feedback CSV
           </a>
-        </div>
-      )}
-      {error && <div className="text-red-500 mb-4">{error}</div>}
-      {loading && <div>Loading...</div>}
-      <ul className="list-none p-0">
-        {emails.map(email => (
-          <li
-            key={email}
-            className="flex items-center py-2 border-b border-gray-300"
-          >
-            <span className="flex-grow">{email}</span>
-            <button
-              onClick={() => handleDelete(email)}
-              className="bg-scheme-shade_3 border-none cursor-pointer p-0"
-              aria-label={`Delete ${email}`}
-            >
-              <Trash2 size={18} />
-            </button>
-          </li>
-        ))}
-      </ul>
-      <div className="mt-4 flex">
-        <input
-          type="email"
-          value={newEmail}
-          onChange={(e) => setNewEmail(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Add new email"
-          className="flex-grow p-2 bg-scheme-shade_3 text-base border border-gray-300 rounded"
-        />
-        <button
-          onClick={handleAddEmail}
-          className="ml-2 p-2 text-base cursor-pointer border border-gray-300 rounded bg-scheme-shade_3"
-          disabled={!newEmail.trim() || inputError !== null}
-        >
-          Add
-        </button>
+        )}
       </div>
-      {inputError && <div className="text-red-500 mt-2">{inputError}</div>}
+      <div className="mx-auto max-w-md">
+        {error && <div className="text-red-500 mb-4">{error}</div>}
+        {loading && <div>Loading...</div>}
+        <ul className="list-none p-0">
+          {emails.map(email => (
+            <li
+              key={email}
+              className="flex items-center py-2 border-b border-gray-300"
+            >
+              <span className="flex-grow">{email}</span>
+              <button
+                onClick={() => handleDelete(email)}
+                className="bg-scheme-shade_3 border-none cursor-pointer p-0"
+                aria-label={`Delete ${email}`}
+              >
+                <Trash2 size={18} />
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-4 flex">
+          <input
+            type="email"
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Add new email"
+            className="flex-grow p-2 bg-scheme-shade_3 text-base border border-gray-300 rounded"
+          />
+          <button
+            onClick={handleAddEmail}
+            className="ml-2 p-2 text-base cursor-pointer border border-gray-300 rounded bg-scheme-shade_3"
+            disabled={!newEmail.trim() || inputError !== null}
+          >
+            Add
+          </button>
+        </div>
+        {inputError && <div className="text-red-500 mt-2">{inputError}</div>}
+      </div>
     </div>
   );
 };
