@@ -9,9 +9,8 @@ from json import dumps
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from aquillm.models import (
-    DESCENDED_FROM_DOCUMENT,
-    Document,
+from apps.documents.models import DESCENDED_FROM_DOCUMENT, Document
+from apps.documents.services.document_meta import (
     document_has_raw_media,
     document_modality,
     document_provider_model,
