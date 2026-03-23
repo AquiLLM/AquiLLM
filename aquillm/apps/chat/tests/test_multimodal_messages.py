@@ -6,6 +6,7 @@ from django.test import SimpleTestCase
 from asgiref.sync import async_to_sync
 
 from aquillm.llm import OpenAIInterface
+from lib.llm.providers.openai_overflow import context_overflow_search_text
 
 
 class OpenAIFallbackToolParsingTests(SimpleTestCase):
@@ -203,6 +204,51 @@ class OpenAIContextOverflowRetryTests(SimpleTestCase):
         second_message_content = completions.calls[1]['messages'][1]['content']
         self.assertIsInstance(second_message_content, str)
         self.assertIn("Image removed due to context limit", second_message_content)
+
+    def test_overflow_retry_parses_message_from_exception_body_not_only_str(self):
+        """Some clients put the long overflow text only on the structured error body."""
+
+        class _BodyOnlyExc(Exception):
+            pass
+
+        exc = _BodyOnlyExc("Error code: 400")
+        exc.message = "Error code: 400"
+        exc.body = {
+            "message": (
+                "You passed 31799 input tokens and requested 970 output tokens. However, the "
+                "model's context length is only 32768 tokens, resulting in a maximum input "
+                "length of 31798 tokens. Please reduce the length of the input prompt."
+            ),
+            "type": "invalid_request_error",
+        }
+        arguments = {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "x"},
+            ],
+            "max_tokens": 970,
+        }
+        retry = OpenAIInterface._retry_args_for_context_overflow(dict(arguments), exc)
+        self.assertIsNotNone(retry)
+        self.assertLess(retry["max_tokens"], 970)
+
+    def test_context_overflow_search_text_includes_nested_error_message(self):
+        class _NestedExc(Exception):
+            pass
+
+        exc = _NestedExc("bad")
+        exc.body = {
+            "error": {
+                "message": (
+                    "You passed 10 input tokens and requested 9 output tokens. However, the "
+                    "model's context length is only 16 tokens, resulting in a maximum input "
+                    "length of 7 tokens."
+                ),
+            }
+        }
+        blob = context_overflow_search_text(exc)
+        self.assertIn("passed 10 input tokens", blob)
+        self.assertIn("maximum input length of 7 tokens", blob)
 
 
 class OpenAIContextReserveScalingTests(SimpleTestCase):

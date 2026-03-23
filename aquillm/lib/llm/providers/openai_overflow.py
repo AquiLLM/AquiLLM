@@ -8,6 +8,28 @@ from typing import Optional
 from .openai_tokens import trim_messages_for_overflow
 
 
+def context_overflow_search_text(exc: BaseException) -> str:
+    """Collect all text the API might put the overflow message in (str vs nested JSON body)."""
+    parts: list[str] = []
+    s = str(exc)
+    if s:
+        parts.append(s)
+    msg = getattr(exc, "message", None)
+    if isinstance(msg, str) and msg.strip() and msg not in s:
+        parts.append(msg)
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err_obj = body.get("error")
+        if isinstance(err_obj, dict):
+            inner = err_obj.get("message")
+            if isinstance(inner, str) and inner.strip():
+                parts.append(inner)
+        top = body.get("message")
+        if isinstance(top, str) and top.strip():
+            parts.append(top)
+    return "\n".join(parts)
+
+
 def strip_images_from_messages(arguments: dict) -> bool:
     """Remove image content from messages to recover from context overflow."""
     messages = arguments.get("messages")
@@ -24,7 +46,7 @@ def strip_images_from_messages(arguments: dict) -> bool:
             for part in content:
                 if isinstance(part, dict):
                     part_type = part.get("type", "")
-                    if part_type == "image_url" or part_type == "image":
+                    if part_type in {"image_url", "image", "input_image"}:
                         stripped = True
                         new_content.append(
                             {"type": "text", "text": "[Image removed due to context limit]"}
@@ -49,7 +71,7 @@ def strip_images_from_messages(arguments: dict) -> bool:
 
 def retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional[dict]:
     """Parse context overflow error and adjust arguments for retry."""
-    message = str(exc)
+    message = context_overflow_search_text(exc)
     match = re.search(
         r"passed\s+(\d+)\s+input tokens.*maximum input length of\s+(\d+)\s+tokens",
         message,
@@ -85,7 +107,6 @@ def retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional
 
     if strip_images_from_messages(retry_args):
         changed = True
-        return retry_args
 
     if current_max_tokens > min_completion_tokens:
         if overflow <= 4:
@@ -165,6 +186,7 @@ def retry_args_for_timeout(arguments: dict, attempt: int) -> Optional[dict]:
 
 
 __all__ = [
+    "context_overflow_search_text",
     "retry_args_for_context_overflow",
     "retry_args_for_timeout",
     "strip_images_from_messages",

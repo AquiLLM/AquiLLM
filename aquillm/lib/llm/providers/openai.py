@@ -139,18 +139,20 @@ class OpenAIInterface(LLMInterface):
             "messages": [{"role": system_role, "content": system_text}] + message_list,
             "max_tokens": max_tokens,
         }
-        if is_local_compatible_endpoint:
-            context_limit_raw = (
-                (getenv("OPENAI_CONTEXT_LIMIT", "") or "").strip()
-                or (getenv("VLLM_MAX_MODEL_LEN", "") or "").strip()
-            )
-            try:
-                context_limit = int(context_limit_raw)
-            except Exception:
-                context_limit = 0
-            if context_limit > 0:
-                compat_slack = self._env_int("OPENAI_COMPAT_PROMPT_SLACK_TOKENS", 256)
-                self._preflight_trim_for_context(arguments, context_limit, compat_slack)
+        context_limit_raw = (
+            (getenv("OPENAI_CONTEXT_LIMIT", "") or "").strip()
+            or (getenv("VLLM_MAX_MODEL_LEN", "") or "").strip()
+        )
+        try:
+            context_limit = int(context_limit_raw)
+        except Exception:
+            context_limit = 0
+        if context_limit > 0:
+            if is_local_compatible_endpoint:
+                prompt_slack = self._env_int("OPENAI_COMPAT_PROMPT_SLACK_TOKENS", 256)
+            else:
+                prompt_slack = self._env_int("OPENAI_API_PROMPT_SLACK_TOKENS", 384)
+            self._preflight_trim_for_context(arguments, context_limit, prompt_slack)
         temp_raw = (getenv("OPENAI_TEMPERATURE", "") or "").strip()
         if temp_raw:
             try:
