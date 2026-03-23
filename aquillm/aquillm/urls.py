@@ -19,8 +19,8 @@ from django.contrib import admin
 from django.urls import path, include
 from django.contrib.auth import views as auth_views
 
-from chat import views as chat_views
-from chat.views import urlpatterns as chat_urlpatterns
+from apps.chat.urls import urlpatterns as chat_urlpatterns
+from apps.chat.views.pages import new_ws_convo
 from . import views, api_views
 from .views import urlpatterns as page_urlpatterns
 from .settings import DEBUG
@@ -36,7 +36,7 @@ urlpatterns = [
     path('accounts/', include('allauth.urls')),
 
     path("admin/", admin.site.urls),
-    path("new_ws_convo/", chat_views.new_ws_convo, name="new_ws_convo"),
+    path("new_ws_convo/", new_ws_convo, name="new_ws_convo"),
 
     path("health/", views.health_check, name="health"),
     path("ready/", views.health_check, name="ready"),
