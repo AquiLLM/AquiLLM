@@ -40,7 +40,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Django system check
-        run: python aquillm/manage.py check
+        working-directory: aquillm
+        run: python manage.py check
       - name: Architecture + import-boundary tests
         run: >-
           python -m pytest
