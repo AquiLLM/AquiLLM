@@ -258,6 +258,27 @@ class OpenAIContextOverflowRetryTests(SimpleTestCase):
         self.assertLess(completions.calls[1]['max_tokens'], 1024)
         self.assertGreaterEqual(completions.calls[1]['max_tokens'], 64)
 
+    def test_one_token_overflow_retry_trims_messages_not_only_max_tokens(self):
+        """vLLM can reject when 1 token over; retries must trim, not only lower max_tokens."""
+        user_content = "word " * 800
+        arguments = {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": user_content},
+            ],
+            "max_tokens": 476,
+            "tools": [{"type": "function", "function": {"name": "t", "description": "d", "parameters": {}}}],
+        }
+        exc = Exception(
+            "You passed 32293 input tokens and requested 476 output tokens. "
+            "However, the model's context length is only 32768 tokens, resulting in "
+            "a maximum input length of 32292 tokens."
+        )
+        retry = OpenAIInterface._retry_args_for_context_overflow(dict(arguments), exc)
+        self.assertIsNotNone(retry)
+        self.assertLess(retry["max_tokens"], 476)
+        self.assertNotEqual(retry["messages"][1].get("content"), user_content)
+
     class _ImageSensitiveCompletions:
         def __init__(self):
             self.calls = []

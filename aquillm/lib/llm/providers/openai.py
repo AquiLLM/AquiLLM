@@ -170,12 +170,15 @@ class OpenAIInterface(LLMInterface):
         return guard_tokens, estimator_pad_tokens
 
     @classmethod
-    def _preflight_trim_for_context(cls, arguments: dict, context_limit: int) -> None:
+    def _preflight_trim_for_context(
+        cls, arguments: dict, context_limit: int, extra_prompt_slack: int = 0
+    ) -> None:
         messages = arguments.get("messages")
         if not isinstance(messages, list) or len(messages) <= 1 or context_limit <= 0:
             return
 
         guard_tokens, estimator_pad_tokens = cls._context_reserve_tokens(context_limit)
+        slack = max(0, int(extra_prompt_slack))
 
         has_tools = bool(arguments.get("tools"))
         min_completion_tokens = 128 if has_tools else 256
@@ -183,13 +186,24 @@ class OpenAIInterface(LLMInterface):
         if current_max_tokens <= 0:
             return
 
-        prompt_budget = context_limit - current_max_tokens - guard_tokens - estimator_pad_tokens
+        prompt_budget = (
+            context_limit - current_max_tokens - guard_tokens - estimator_pad_tokens - slack
+        )
         if prompt_budget < 256:
-            reduced_completion_tokens = max(min_completion_tokens, context_limit - guard_tokens - estimator_pad_tokens - 256)
+            reduced_completion_tokens = max(
+                min_completion_tokens,
+                context_limit - guard_tokens - estimator_pad_tokens - slack - 256,
+            )
             if 0 < reduced_completion_tokens < current_max_tokens:
                 arguments["max_tokens"] = reduced_completion_tokens
                 current_max_tokens = reduced_completion_tokens
-                prompt_budget = context_limit - current_max_tokens - guard_tokens - estimator_pad_tokens
+                prompt_budget = (
+                    context_limit
+                    - current_max_tokens
+                    - guard_tokens
+                    - estimator_pad_tokens
+                    - slack
+                )
 
         if prompt_budget <= 0:
             return
@@ -207,7 +221,9 @@ class OpenAIInterface(LLMInterface):
             trim_loops += 1
 
         if prompt_tokens > prompt_budget:
-            available_completion_tokens = context_limit - prompt_tokens - guard_tokens - estimator_pad_tokens
+            available_completion_tokens = (
+                context_limit - prompt_tokens - guard_tokens - estimator_pad_tokens - slack
+            )
             if min_completion_tokens <= available_completion_tokens < current_max_tokens:
                 arguments["max_tokens"] = available_completion_tokens
 
@@ -317,8 +333,13 @@ class OpenAIInterface(LLMInterface):
                 retry_args["max_tokens"] = emergency_reduced_max_tokens
                 changed = True
 
-        should_trim_context = (overflow > 16) or (current_max_tokens <= (min_completion_tokens + 16))
-        if should_trim_context and OpenAIInterface._trim_messages_for_overflow(retry_args, overflow):
+        # Always try trimming on vLLM-style overflow: tokenizer mismatch (we estimate with
+        # gpt-4o) often yields 1–32 extra tokens vs Qwen, and tool rounds grow the prompt
+        # while retries only shrink max_tokens.
+        should_trim_context = overflow > 0
+        if should_trim_context and OpenAIInterface._trim_messages_for_overflow(
+            retry_args, max(overflow, 1)
+        ):
             changed = True
         
         if not changed and OpenAIInterface._strip_images_from_messages(retry_args):
@@ -586,7 +607,8 @@ class OpenAIInterface(LLMInterface):
             except Exception:
                 context_limit = 0
             if context_limit > 0:
-                self._preflight_trim_for_context(arguments, context_limit)
+                compat_slack = self._env_int("OPENAI_COMPAT_PROMPT_SLACK_TOKENS", 256)
+                self._preflight_trim_for_context(arguments, context_limit, compat_slack)
         temp_raw = (getenv("OPENAI_TEMPERATURE", "") or "").strip()
         if temp_raw:
             try:
