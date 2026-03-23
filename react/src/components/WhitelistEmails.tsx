@@ -116,17 +116,19 @@ const WhitelistEmails: React.FC<WhitelistEmailsProps> = ({ isSuperuser = false }
 
   return (
     <div className="w-full p-4 md:px-8">
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-xl font-bold text-text-normal">Whitelisted Emails</h2>
+      <div className="relative mb-6 min-h-[56px] w-full">
+        <h2 className="text-center text-xl font-bold text-text-normal">Whitelisted Emails</h2>
         {isSuperuser && csvUrl && (
-          <a
-            href={csvUrl}
-            className="inline-flex h-[56px] w-max shrink-0 cursor-pointer items-center gap-2 self-end rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] text-base text-text-normal no-underline transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5 sm:self-auto"
-            data-testid="download-feedback-csv"
-          >
-            <FileDown size={16} className="shrink-0 text-text-normal" aria-hidden />
-            Download Feedback CSV
-          </a>
+          <div className="mt-3 flex justify-end sm:absolute sm:right-0 sm:top-1/2 sm:mt-0 sm:-translate-y-1/2">
+            <a
+              href={csvUrl}
+              className="inline-flex h-[56px] w-max shrink-0 cursor-pointer items-center gap-2 rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] text-base text-text-normal no-underline transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5"
+              data-testid="download-feedback-csv"
+            >
+              <FileDown size={16} className="shrink-0 text-text-normal" aria-hidden />
+              Download Feedback CSV
+            </a>
+          </div>
         )}
       </div>
       <div className="mx-auto max-w-md">
