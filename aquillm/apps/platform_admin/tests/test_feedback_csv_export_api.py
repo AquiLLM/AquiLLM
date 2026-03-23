@@ -1,5 +1,6 @@
 """HTTP tests for feedback ratings CSV export."""
 import csv
+import gzip
 import io
 from uuid import uuid4
 
@@ -73,3 +74,35 @@ def test_csv_streams_rows_and_escaping(superuser, conversation):
     assert rows[1][2] == "4"
     assert rows[1][3] == "1"
     assert "second line" in rows[1][4]
+
+
+@pytest.mark.django_db
+def test_csv_gzip_when_accept_encoding(superuser, conversation):
+    Message.objects.create(
+        conversation=conversation,
+        message_uuid=uuid4(),
+        role="user",
+        content="q",
+        sequence_number=0,
+    )
+    Message.objects.create(
+        conversation=conversation,
+        message_uuid=uuid4(),
+        role="assistant",
+        content="a",
+        sequence_number=1,
+        stop_reason="end_turn",
+        rating=2,
+    )
+
+    client = Client()
+    client.force_login(superuser)
+    r = client.get("/api/feedback/ratings.csv", HTTP_ACCEPT_ENCODING="gzip, deflate")
+    assert r.status_code == 200
+    assert r.get("Content-Encoding") == "gzip"
+    assert "Accept-Encoding" in r.get("Vary", "")
+    plain = gzip.decompress(r.content).decode("utf-8")
+    rows = list(csv.reader(io.StringIO(plain)))
+    assert rows[0] == ["date", "user_number", "rating", "question_number", "comments"]
+    assert len(rows) == 2
+    assert rows[1][2] == "2"

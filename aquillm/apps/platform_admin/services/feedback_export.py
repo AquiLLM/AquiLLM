@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import zlib
 from datetime import datetime, time
 from datetime import timezone as py_tz
 from typing import Any, Iterator
@@ -121,3 +122,26 @@ def stream_feedback_csv_lines(
         line = io.StringIO()
         csv.writer(line, quoting=csv.QUOTE_MINIMAL, lineterminator="\n").writerow(list(row))
         yield line.getvalue()
+
+
+def stream_feedback_csv_gzip_bytes(
+    *,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    min_rating: int | None = None,
+    user_number: int | None = None,
+) -> Iterator[bytes]:
+    """Same rows as ``stream_feedback_csv_lines``, as a streaming gzip byte stream (no full-file buffer)."""
+    compressor = zlib.compressobj(9, zlib.DEFLATED, zlib.MAX_WBITS | 16)
+    for text in stream_feedback_csv_lines(
+        start_date=start_date,
+        end_date=end_date,
+        min_rating=min_rating,
+        user_number=user_number,
+    ):
+        chunk = compressor.compress(text.encode("utf-8"))
+        if chunk:
+            yield chunk
+    tail = compressor.flush()
+    if tail:
+        yield tail

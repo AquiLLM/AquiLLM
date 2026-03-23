@@ -353,14 +353,14 @@ bash deploy/scripts/start_dev.sh
 Ratings and free-text feedback on assistant messages are stored on the chat `Message` rows. Superusers can download them as CSV for analysis.
 
 - **UI:** While viewing the Email Whitelist page (`/aquillm/email_whitelist/`), superusers see **Download Feedback CSV** in the **top navigation bar** (next to the account control), aligned with the rest of the header.
-- **API:** `GET /api/feedback/ratings.csv` (same permission: Django superuser only; otherwise HTTP 403).
+- **API:** `GET /api/feedback/ratings.csv` (same permission: Django superuser only; otherwise HTTP 403). If the request sends **`Accept-Encoding: gzip`** (browsers and `curl --compressed` do), the body is **gzip-compressed** with `Content-Encoding: gzip` to keep large exports light on the wire; the payload is still UTF-8 CSV after decompression.
 - **Columns (in order):** `date` (ISO 8601 UTC), `user_number` (conversation owner user id), `rating` (1–5, or empty if only comments were submitted), `question_number` (1-based count of user prompts in that conversation up to and including the assistant turn), `comments`.
 - **Optional query parameters:** `start_date`, `end_date` (inclusive; `YYYY-MM-DD` or parseable datetime), `min_rating` (integer; rows without a numeric rating are excluded when set), `user_number` (filter by conversation owner id).
 
 Example (after saving session cookies to `cookies.txt`):
 
 ```bash
-curl -L -b cookies.txt "http://localhost:8000/api/feedback/ratings.csv?start_date=2026-03-01&end_date=2026-03-31" -o feedback_ratings.csv
+curl --compressed -L -b cookies.txt "http://localhost:8000/api/feedback/ratings.csv?start_date=2026-03-01&end_date=2026-03-31" -o feedback_ratings.csv
 ```
 
 ## Tests and hygiene
