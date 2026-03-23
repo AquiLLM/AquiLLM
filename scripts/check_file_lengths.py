@@ -20,7 +20,6 @@ _ALLOWLIST: frozenset[str] = frozenset(
         "aquillm/aquillm/settings.py",
         "aquillm/aquillm/tasks.py",
         "aquillm/aquillm/zotero_views.py",
-        "aquillm/lib/llm/providers/base.py",
         "aquillm/lib/llm/providers/openai.py",
         # Frontend (legacy large components; feature modules still over budget)
         "react/src/components/CollectionsPage.tsx",

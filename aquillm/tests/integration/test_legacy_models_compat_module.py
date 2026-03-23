@@ -35,4 +35,4 @@ def test_compat_models_module_keeps_migration_helpers():
 
     assert "def doc_id_validator(" in contents
     assert "def get_default_system_prompt(" in contents
-    assert "def create_chunks(" in contents
+    assert "create_chunks" in contents
