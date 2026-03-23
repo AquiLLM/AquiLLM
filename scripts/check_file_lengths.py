@@ -24,13 +24,11 @@ _ALLOWLIST: frozenset[str] = frozenset(
         "aquillm/aquillm/zotero_views.py",
         "aquillm/lib/llm/providers/base.py",
         "aquillm/lib/llm/providers/openai.py",
-        # Frontend (feature splits in progress)
-        "react/src/components/ChatComponent.tsx",
-        "react/src/components/CollectionView.tsx",
+        # Frontend (legacy large components; feature modules still over budget)
         "react/src/components/CollectionsPage.tsx",
-        "react/src/components/FileSystemViewer.tsx",
-        "react/src/components/UserManagementModal.tsx",
-        "react/src/features/ingestion/components/IngestRowsContainer.tsx",
+        "react/src/features/collections/components/CollectionView.tsx",
+        "react/src/features/documents/components/FileSystemViewer.tsx",
+        "react/src/features/platform_admin/components/UserManagementModal.tsx",
     }
 )
 
