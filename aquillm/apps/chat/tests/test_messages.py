@@ -52,6 +52,7 @@ def _test_document_ids():
     param_descs={},
 )
 def _test_image_result_tool():
+    """Test tool returning image payload for serialization tests."""
     return {
         "result": {"status": "ok"},
         "_images": [
