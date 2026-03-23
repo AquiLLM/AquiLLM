@@ -8,25 +8,87 @@ from typing import Optional
 from .openai_tokens import trim_messages_for_overflow
 
 
+def _token_int(raw: str) -> int:
+    """Parse token counts that may include separators like commas/underscores."""
+    return int(re.sub(r"[,_\s]", "", raw))
+
+
+def _extract_overflow_tokens(message: str) -> Optional[int]:
+    """Extract overflow amount from common OpenAI-compatible context error templates."""
+    if not message:
+        return None
+
+    patterns = (
+        (
+            r"passed\s+([\d,\s_]+)\s+input tokens.*maximum input length of\s+([\d,\s_]+)\s+tokens",
+            lambda m: _token_int(m.group(1)) - _token_int(m.group(2)),
+        ),
+        (
+            r"maximum context length is\s+([\d,\s_]+)\s+tokens.*requested\s+([\d,\s_]+)\s+tokens",
+            lambda m: _token_int(m.group(2)) - _token_int(m.group(1)),
+        ),
+        (
+            r"requested\s+([\d,\s_]+)\s+tokens.*maximum context length is\s+([\d,\s_]+)\s+tokens",
+            lambda m: _token_int(m.group(1)) - _token_int(m.group(2)),
+        ),
+    )
+    for pattern, overflow_fn in patterns:
+        match = re.search(pattern, message, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            continue
+        overflow = overflow_fn(match)
+        if overflow > 0:
+            return overflow
+    return None
+
+
 def context_overflow_search_text(exc: BaseException) -> str:
     """Collect all text the API might put the overflow message in (str vs nested JSON body)."""
     parts: list[str] = []
-    s = str(exc)
-    if s:
-        parts.append(s)
-    msg = getattr(exc, "message", None)
-    if isinstance(msg, str) and msg.strip() and msg not in s:
-        parts.append(msg)
-    body = getattr(exc, "body", None)
-    if isinstance(body, dict):
-        err_obj = body.get("error")
-        if isinstance(err_obj, dict):
-            inner = err_obj.get("message")
-            if isinstance(inner, str) and inner.strip():
-                parts.append(inner)
-        top = body.get("message")
-        if isinstance(top, str) and top.strip():
-            parts.append(top)
+    seen_exc_ids: set[int] = set()
+    queue: list[BaseException] = [exc]
+
+    while queue:
+        current = queue.pop(0)
+        if id(current) in seen_exc_ids:
+            continue
+        seen_exc_ids.add(id(current))
+
+        s = str(current)
+        if isinstance(s, str) and s.strip():
+            parts.append(s)
+
+        msg = getattr(current, "message", None)
+        if isinstance(msg, str) and msg.strip():
+            parts.append(msg)
+
+        body = getattr(current, "body", None)
+        if isinstance(body, dict):
+            err_obj = body.get("error")
+            if isinstance(err_obj, dict):
+                inner = err_obj.get("message")
+                if isinstance(inner, str) and inner.strip():
+                    parts.append(inner)
+            top = body.get("message")
+            if isinstance(top, str) and top.strip():
+                parts.append(top)
+
+        for arg in getattr(current, "args", ()):
+            if isinstance(arg, str) and arg.strip():
+                parts.append(arg)
+            elif isinstance(arg, dict):
+                nested_err = arg.get("error")
+                if isinstance(nested_err, dict):
+                    inner = nested_err.get("message")
+                    if isinstance(inner, str) and inner.strip():
+                        parts.append(inner)
+                top = arg.get("message")
+                if isinstance(top, str) and top.strip():
+                    parts.append(top)
+
+        nested = current.__cause__ or current.__context__
+        if isinstance(nested, BaseException):
+            queue.append(nested)
     return "\n".join(parts)
 
 
@@ -72,18 +134,10 @@ def strip_images_from_messages(arguments: dict) -> bool:
 def retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional[dict]:
     """Parse context overflow error and adjust arguments for retry."""
     message = context_overflow_search_text(exc)
-    match = re.search(
-        r"passed\s+(\d+)\s+input tokens.*maximum input length of\s+(\d+)\s+tokens",
-        message,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if not match:
+    overflow = _extract_overflow_tokens(message)
+    if overflow is None:
         return None
-    passed_input_tokens = int(match.group(1))
-    max_input_tokens = int(match.group(2))
-    overflow = passed_input_tokens - max_input_tokens
-    if overflow <= 0:
-        return None
+
     current_max_tokens = int(arguments.get("max_tokens", 0))
     has_tools = bool(arguments.get("tools"))
     try:

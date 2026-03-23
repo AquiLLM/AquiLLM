@@ -250,6 +250,25 @@ class OpenAIContextOverflowRetryTests(SimpleTestCase):
         self.assertIn("passed 10 input tokens", blob)
         self.assertIn("maximum input length of 7 tokens", blob)
 
+    def test_overflow_retry_parses_total_requested_token_format_with_commas(self):
+        exc = Exception(
+            "This model's maximum context length is 32,768 tokens. However, you requested "
+            "32,769 tokens (31,799 in the messages, 970 in the completion). "
+            "Please reduce the length of the messages or completion."
+        )
+        arguments = {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "x"},
+            ],
+            "max_tokens": 970,
+        }
+
+        retry = OpenAIInterface._retry_args_for_context_overflow(dict(arguments), exc)
+
+        self.assertIsNotNone(retry)
+        self.assertLess(retry["max_tokens"], 970)
+
 
 class OpenAIContextReserveScalingTests(SimpleTestCase):
     def test_ratio_reserve_scales_with_context_limit(self):
