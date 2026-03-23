@@ -1,10 +1,10 @@
 # Large-file remediation — session handoff
 
-> **Updated:** Commits **15** and **17** are on `development`. For current “what’s done” and next steps, prefer **[2026-03-24-large-file-remediation-handoff.md](./2026-03-24-large-file-remediation-handoff.md)**.
+> **Updated:** Large-file plan commits **15**, **17**, and **18–23** are on `development`. For current “what’s done”, allowlist state, and **code-quality / architecture next steps**, use **[2026-03-24-large-file-remediation-handoff.md](./2026-03-24-large-file-remediation-handoff.md)**.
 
 **Purpose:** Continue [2026-03-23-large-file-remediation-commit-plan.md](./2026-03-23-large-file-remediation-commit-plan.md) (and parent [2026-03-19-large-file-remediation-lib-tools-and-splits.md](./2026-03-19-large-file-remediation-lib-tools-and-splits.md)) with minimal rediscovery.
 
-**Last known state (historical):** Backend chat/tool wiring and LLM `base.py` extractions landed; **as of 2026-03-24**, `openai_tokens` / `openai_overflow` extraction and the `test_messages` split **have** landed — see the 2026-03-24 handoff.
+**Last known state (historical):** Backend chat/tool wiring, LLM extractions, React `features/*` moves (chat, collections, documents, platform admin), ingestion split, README note, and allowlist refresh **have** landed — details in the 2026-03-24 handoff.
 
 ---
 

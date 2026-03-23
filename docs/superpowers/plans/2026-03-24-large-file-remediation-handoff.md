@@ -1,29 +1,34 @@
 # Large-file remediation — continuation handoff (2026-03-24)
 
-**Purpose:** Pick up [2026-03-23-large-file-remediation-commit-plan.md](./2026-03-23-large-file-remediation-commit-plan.md) and [2026-03-19-large-file-remediation-lib-tools-and-splits.md](./2026-03-19-large-file-remediation-lib-tools-and-splits.md) after commits **15** and **17** landed on `development`.
+**Purpose:** Resume [2026-03-23-large-file-remediation-commit-plan.md](./2026-03-23-large-file-remediation-commit-plan.md) and [2026-03-19-large-file-remediation-lib-tools-and-splits.md](./2026-03-19-large-file-remediation-lib-tools-and-splits.md). **Plan commits 1–23 from the large-file commit plan are done** except optional **commit 16** (compact tool summary / `base.py` shrink) and any further splits driven by `check_file_lengths.py`.
 
-**Previous snapshot:** [2026-03-23-large-file-remediation-handoff.md](./2026-03-23-large-file-remediation-handoff.md) (superseded for “what’s done” by this file).
+**Code quality / hygiene (separate track):** For runtime, security, settings, logging, and React hygiene items (mount map barrels, `IngestRow` dedup, `.gitignore`, CI), use [2026-03-19-aquillm-structure-code-quality-remediation.md](./2026-03-19-aquillm-structure-code-quality-remediation.md) and [2026-03-21-architecture-remediation-commit-plan.md](./2026-03-21-architecture-remediation-commit-plan.md).
+
+**Previous snapshot:** [2026-03-23-large-file-remediation-handoff.md](./2026-03-23-large-file-remediation-handoff.md) (historical; superseded by this file for “what’s done”).
 
 ---
 
-## Commits made (this session)
+## Commits on `development` (reference — verify with `git log`)
+
+### Large-file plan: backend + tests (earlier)
 
 | Plan | Short hash | Subject |
 |------|------------|---------|
-| **15** | `09e3304756` | `refactor(openai): extract multimodal token and overflow helpers` |
-| **17** | `2ebd2d4f9e` | `test(chat): split monolithic test_messages into focused modules` |
-| **docs** | `git log` | `docs(superpowers): hand off large-file remediation after commits 15 and 17` |
+| **15** | `09e3304` | `refactor(openai): extract multimodal token and overflow helpers` |
+| **17** | `2ebd2d4` | `test(chat): split monolithic test_messages into focused modules` |
 
-Full hashes (plan commits):
+### Large-file plan: frontend + docs + allowlist (2026-03-23 session)
 
-- `09e33047568bb2c044dc968d98973955d6f526c9`
-- `2ebd2d4f9efeeeb711109ed0a85d874ff8f958d3`
+| Plan | Short hash | Subject |
+|------|------------|---------|
+| **18–21** | `8e0d1a5` | `refactor(frontend): move chat, collections, documents, and admin UI to features` |
+| **22–23** | `1693dd5` | `docs: document React features layout; chore(structure): refresh file-length allowlist` |
 
-A third commit on the same branch adds this handoff; locate it with `git log --oneline -5` on `development`.
+*If you need exact full hashes: `git log --oneline -15` on `development`.*
 
 ---
 
-## What is now implemented (additions since prior handoff)
+## What is now implemented
 
 ### OpenAI provider — token / overflow modules
 
@@ -33,45 +38,71 @@ A third commit on the same branch adds this handoff; locate it with `git log --o
 | `aquillm/lib/llm/providers/openai_overflow.py` | `strip_images_from_messages`, `retry_args_for_context_overflow`, `retry_args_for_timeout` |
 | `aquillm/lib/llm/providers/openai.py` | Thin `OpenAIInterface` delegators; tests can still patch `_estimate_prompt_tokens` / `_trim_messages_for_overflow` on the class |
 
-**Note:** Overflow/retry live in a second module so each file stays under the **300-line** policy (`check_file_lengths.py`).
-
 ### Chat tests — `test_messages.py` removed
 
 | File | Role |
 |------|------|
-| `aquillm/apps/chat/tests/chat_message_test_support.py` | Shared fakes + `@llm_tool` stubs (`_test_document_ids`, `_test_image_result_tool`, `_FakeLLMInterface`, `_FakeTitleLLM`) — not a test module |
+| `aquillm/apps/chat/tests/chat_message_test_support.py` | Shared fakes + `@llm_tool` stubs — not a test module |
 | `test_message_adapters.py` | Pydantic ↔ Django adapters + `build_frontend_conversation_json` |
 | `test_conversation_persistence.py` | Save/load, ratings, conversation title |
 | `test_multimodal_messages.py` | OpenAI fallback parsing, context overflow/retry, reserve scaling, image token estimator |
 | `test_tool_result_images.py` | Tool result redaction + markdown injection after `complete()` |
 | `test_llm_complete_retry.py` | Tool-use retry + max-token cutoff continuation |
 
-**Allowlist:** `aquillm/apps/chat/tests/test_messages.py` was removed from `scripts/check_file_lengths.py`.
+### React — `features/*` layout (commits 18–21)
+
+| Area | Location | Notes |
+|------|----------|--------|
+| Chat | `react/src/features/chat/components/Chat.tsx`, `ChatShell.tsx`, `ChatInputDock.tsx`, `ChatCollectionsModal.tsx` | WebSocket logic in `features/chat/hooks/useChatWebSocket.ts` |
+| Chat mount | `react/src/main.tsx` | `ChatComponent` from `./features/chat/components/ChatShell` |
+| Shim | `react/src/components/ChatComponent.tsx` | Re-exports `ChatShell` |
+| Collections | `react/src/features/collections/components/CollectionView.tsx` | Imports shared UI via `../../../components/*`; uses `../../documents/...` and `../../platform_admin/...` for moved widgets |
+| Shim | `react/src/components/CollectionView.tsx` | Re-export |
+| Documents | `react/src/features/documents/components/FileSystemViewer.tsx` | Shared deps: `../../../components/*`, `../../../types/*` |
+| Platform admin | `react/src/features/platform_admin/components/UserManagementModal.tsx` | Same `../../../` pattern |
+| Shims | `react/src/components/FileSystemViewer.tsx`, `UserManagementModal.tsx` | Re-exports |
+| Ingestion | `react/src/features/ingestion/components/IngestRowsContainer.tsx` | Slim container; polling in `hooks/useIngestUploadBatchPolling.ts`, submit loop in `utils/runIngestRowSubmissions.ts`, status UI in `IngestRowStatusBlocks.tsx` |
+
+### Docs + structure (commits 22–23)
+
+- **README.md** — “Module layout” includes a bullet on `react/src/features/*` and shim pattern.
+- **`scripts/check_file_lengths.py`** — Allowlist updated: removed shims and slimmed `IngestRowsContainer`; **still allowlists** the three large feature files below plus `CollectionsPage.tsx` and all prior backend hotspots.
+
+**Current frontend allowlist entries (still &gt;300 lines):**
+
+- `react/src/components/CollectionsPage.tsx`
+- `react/src/features/collections/components/CollectionView.tsx`
+- `react/src/features/documents/components/FileSystemViewer.tsx`
+- `react/src/features/platform_admin/components/UserManagementModal.tsx`
 
 ---
 
-## Gotchas (unchanged — read before import churn)
+## Gotchas (read before import churn)
 
 1. **Circular import (`tool_wiring` ↔ `ChatConsumer`)** — `apps/chat/consumers/__init__.py` uses **`__getattr__`** for lazy `ChatConsumer`. Do not eager-import `chat.py` at package init without fixing the cycle.
-2. **`lib` must not import `apps.*`** — run `python scripts/check_import_boundaries.py` after refactors.
+2. **`lib` must not import `apps.*`** — run `python scripts/check_import_boundaries.py` after Python refactors.
 3. **Wiring type hints** — `ChatConsumer` stays forward-quoted in `tool_wiring` where needed.
+4. **React path depth** — Files under `features/<domain>/components/` typically need **`../../../`** to reach `src/components`, `src/types`, `src/utils`. Cross-feature imports use `../../other_feature/...` (e.g. collections → documents).
 
 ---
 
-## Remaining work (commit plan mapping)
+## Remaining work
 
-| Plan commits | Work |
-|--------------|------|
-| **18** | React: `features/chat` — `Chat.tsx`, `useChatWebSocket`, shim `ChatComponent.tsx`, `main.tsx` |
-| **19** | React: `features/collections` — `CollectionView`, shim, `main.tsx` |
-| **20** | React: `features/documents` + `features/platform_admin` — `FileSystemViewer`, `UserManagementModal`, shims, `main.tsx` |
-| **21** | Optional: split `IngestRowsContainer.tsx` if still >300 lines |
-| **22** | Docs: README / architecture pointers (if not already satisfied) |
-| **23** | `python scripts/check_file_lengths.py` — remove allowlist entries **only** for paths that are ≤300 lines after splits (`chat.py`, `base.py`, `openai.py`, etc.) |
+### Large-file plan (optional / follow-up)
 
-**Optional**
+| Item | Work |
+|------|------|
+| **Commit 16 (optional)** | If `aquillm/lib/llm/providers/base.py` should leave the allowlist, extract compact tool summary (e.g. `summary.py`) per [2026-03-23-large-file-remediation-commit-plan.md](./2026-03-23-large-file-remediation-commit-plan.md). |
+| **Backend allowlist** | When `chat.py`, `base.py`, or `openai.py` drops ≤300 lines, remove only that path from `_ALLOWLIST` in `scripts/check_file_lengths.py` (proof: script exit 0). |
+| **React &gt;300** | Split `CollectionView`, `FileSystemViewer`, and `UserManagementModal` until each is ≤300 lines, then remove their paths from the allowlist. |
 
-- **16** Revisit compact summary / `base.py` size only if still over budget after other trims.
+### Architecture / ingestion backend (separate plan)
+
+- [2026-03-21-architecture-remediation-commit-plan.md](./2026-03-21-architecture-remediation-commit-plan.md) commits **11–13** (e.g. ingestion `api.py`, `chunks.py` services, Zotero split) — schedule after or in parallel worktrees.
+
+### Structure and code quality remediation
+
+- [2026-03-19-aquillm-structure-code-quality-remediation.md](./2026-03-19-aquillm-structure-code-quality-remediation.md) — chat append regression tests, ingest consumer auth, settings/toolbar security, logging cleanup, **`main.tsx` barrel imports**, **`IngestRow` dedup**, `.gitignore` / hygiene CI.
 
 ---
 
@@ -105,7 +136,7 @@ $env:GEMINI_API_KEY='dummy'
 python -m pytest apps/chat/tests lib/llm/tests -q --tb=short
 ```
 
-**Frontend (after React commits 18–21):**
+**Frontend:**
 
 ```powershell
 cd react
@@ -117,15 +148,15 @@ npm run build
 
 ## Suggested next session order
 
-1. **React 18 → 21** — one feature area per commit; `npm run build` after each.
-2. **Commit 23** — allowlist trim once `check_file_lengths.py` reports offenders only for files still over budget.
-3. **Architecture backlog** (parallel or after): [2026-03-21-architecture-remediation-commit-plan.md](./2026-03-21-architecture-remediation-commit-plan.md) commits 11–13.
+1. **Code quality blockers** — [2026-03-19-aquillm-structure-code-quality-remediation.md](./2026-03-19-aquillm-structure-code-quality-remediation.md) Chunk 1 (tests + consumers) and settings slice; run pytest where DB is available.
+2. **Architecture plan** — [2026-03-21-architecture-remediation-commit-plan.md](./2026-03-21-architecture-remediation-commit-plan.md) commits 11–13 as needed.
+3. **Large-file polish** — Optional commit 16; React splits for allowlisted feature files; trim backend allowlist only with `check_file_lengths.py` proof.
 
 ---
 
 ## Doc / command drift
 
-Older plans and snippets may still reference `apps/chat/tests/test_messages.py`. Prefer:
+Older plans may still reference `apps/chat/tests/test_messages.py`. Prefer:
 
 ```text
 apps/chat/tests/test_message_adapters.py
@@ -137,4 +168,4 @@ apps/chat/tests/test_llm_complete_retry.py
 
 ---
 
-*Handoff for large-file remediation continuation; align new commits with [2026-03-23-large-file-remediation-commit-plan.md](./2026-03-23-large-file-remediation-commit-plan.md).*
+*Handoff for large-file remediation and related code-quality continuation; large-file commit plan 1–23 is effectively complete except optional 16 and incremental allowlist/split work.*
