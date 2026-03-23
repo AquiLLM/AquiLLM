@@ -162,8 +162,9 @@ class TextChunk(models.Model):
             doc = self.document
         except Exception:
             return None
-        from aquillm.models import _doc_image_data_url
-        return _doc_image_data_url(doc)
+        from apps.documents.services.image_payloads import doc_image_data_url
+
+        return doc_image_data_url(doc)
 
     def _image_embedding_payloads(self) -> list[Any]:
         data_url = self._image_data_url()

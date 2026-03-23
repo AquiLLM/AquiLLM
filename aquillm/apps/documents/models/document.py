@@ -104,7 +104,8 @@ class Document(models.Model):
             self.ingestion_complete = False
             self.save(dont_rechunk=True, update_fields=['ingestion_complete'])
             try:
-                from aquillm.models import create_chunks
+                from apps.documents.tasks.chunking import create_chunks
+
                 create_chunks.delay(str(self.id))
                 return
             except Exception as e:
