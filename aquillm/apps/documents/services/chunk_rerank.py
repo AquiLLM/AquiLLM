@@ -11,6 +11,9 @@ from apps.documents.services.chunk_rerank_local_vllm import rerank_via_local_vll
 from apps.documents.services.chunk_rerank_parse import fallback_rerank, ordered_queryset_from_ids
 from apps.documents.services.chunk_rerank_payload import rerank_document_payload
 
+# chunk_search and legacy imports expect this name
+_fallback_rerank = fallback_rerank
+
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
@@ -51,4 +54,4 @@ def rerank_chunks(model_cls: Type[TextChunk], query: str, chunks, top_k: int):
         return fallback_rerank(model_cls, chunks_list, top_k)
 
 
-__all__ = ["rerank_chunks", "rerank_document_payload"]
+__all__ = ["_fallback_rerank", "rerank_chunks", "rerank_document_payload"]
