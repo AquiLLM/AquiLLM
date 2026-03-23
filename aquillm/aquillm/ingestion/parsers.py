@@ -30,7 +30,7 @@ from lib.parsers import (
     clean_filename as _clean_name,
     get_stem as _stem,
     guess_content_type as _guess_content_type,
-    detect_ingest_type,
+    detect_ingest_type as _detect_ingest_type_lib,
     read_text_bytes as _read_text_bytes,
     extract_pdf_text,
     extract_html_text,
@@ -50,6 +50,13 @@ from lib.parsers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def detect_ingest_type(filename: str, content_type: str | None = None) -> str:
+    try:
+        return _detect_ingest_type_lib(filename, content_type)
+    except ValueError as e:
+        raise UnsupportedFileTypeError(str(e)) from e
 
 
 def _extract_figures_for_format(
