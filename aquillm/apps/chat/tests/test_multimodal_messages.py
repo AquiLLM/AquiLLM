@@ -1,4 +1,5 @@
 """OpenAI provider tests: multimodal message shapes, context overflow, token preflight."""
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -183,6 +184,11 @@ class OpenAIContextOverflowRetryTests(SimpleTestCase):
                 usage=SimpleNamespace(prompt_tokens=12, completion_tokens=18),
             )
 
+    @patch.dict(
+        os.environ,
+        {"VLLM_MAX_MODEL_LEN": "", "OPENAI_CONTEXT_LIMIT": ""},
+        clear=False,
+    )
     def test_retries_with_images_stripped_even_for_small_overflow(self):
         completions = self._ImageSensitiveCompletions()
         llm = OpenAIInterface(self._FakeOpenAIClient(completions), model='qwen3.5:27b')

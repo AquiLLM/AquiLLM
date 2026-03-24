@@ -159,7 +159,8 @@ def retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional
 
     changed = False
 
-    if strip_images_from_messages(retry_args):
+    stripped_images = strip_images_from_messages(retry_args)
+    if stripped_images:
         changed = True
 
     if current_max_tokens > min_completion_tokens:
@@ -192,7 +193,13 @@ def retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional
             changed = True
 
     should_trim_context = overflow > 0
-    if should_trim_context and trim_messages_for_overflow(retry_args, max(overflow, 1)):
+    # Do not run text trim immediately after stripping images: small overflows use tiny
+    # trim windows and would replace the whole user message (including the strip marker).
+    if (
+        should_trim_context
+        and not stripped_images
+        and trim_messages_for_overflow(retry_args, max(overflow, 1))
+    ):
         changed = True
 
     if not changed and strip_images_from_messages(retry_args):
