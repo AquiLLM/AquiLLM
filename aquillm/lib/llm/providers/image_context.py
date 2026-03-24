@@ -58,6 +58,32 @@ def looks_like_image_display_request(text: str) -> bool:
     return any(cue in normalized for cue in cues)
 
 
+def _result_row_image_url(value: dict) -> str | None:
+    """Resolve image URL from verbose (`image_url`) or compact (`u` + `ty`) vector_search rows."""
+    url = value.get("image_url")
+    if isinstance(url, str):
+        u = url.strip()
+        if u:
+            return u
+    ty = value.get("type") or value.get("ty")
+    compact = value.get("u")
+    if isinstance(compact, str) and ty in ("image", "text_with_image"):
+        u = compact.strip()
+        if u:
+            return u
+    return None
+
+
+def _result_row_image_caption(value: dict, key_fallback: str | None = None) -> str:
+    for k in ("text", "x", "title", "n"):
+        raw = value.get(k)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()[:80]
+    if key_fallback and str(key_fallback).strip():
+        return str(key_fallback).strip()[:80]
+    return "Image"
+
+
 def recent_tool_image_markdown(conversation: Conversation, max_images: int = 3) -> list[str]:
     lines: list[str] = []
     seen_urls: set[str] = set()
@@ -75,24 +101,20 @@ def recent_tool_image_markdown(conversation: Conversation, max_images: int = 3) 
             for value in payload:
                 if not isinstance(value, dict):
                     continue
-                url = value.get("image_url")
-                if isinstance(url, str):
-                    caption = (
-                        str(value.get("text") or value.get("title") or "Image").strip()[:80] or "Image"
-                    )
+                url = _result_row_image_url(value)
+                if url:
+                    caption = _result_row_image_caption(value)
                     candidates.append((caption, url))
 
         if isinstance(payload, dict):
-            direct_url = payload.get("image_url")
-            if isinstance(direct_url, str):
-                caption = str(payload.get("text") or payload.get("title") or "Image").strip()[:80] or "Image"
-                candidates.append((caption, direct_url))
+            direct_url = _result_row_image_url(payload)
+            if direct_url:
+                candidates.append((_result_row_image_caption(payload), direct_url))
             for key, value in payload.items():
                 if isinstance(value, dict):
-                    url = value.get("image_url")
-                    if isinstance(url, str):
-                        caption = str(value.get("text") or value.get("title") or key or "Image").strip()[:80] or "Image"
-                        candidates.append((caption, url))
+                    url = _result_row_image_url(value)
+                    if url:
+                        candidates.append((_result_row_image_caption(value, key_fallback=str(key)), url))
 
         for caption, url in candidates:
             if not url or url.startswith("data:image/"):
