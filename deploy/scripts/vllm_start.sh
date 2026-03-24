@@ -236,12 +236,15 @@ fi
 
 # vLLM 0.17.x: bitsandbytes + Qwen3-VL sequence-classification reranker fails loading classifier weights
 # (AssertionError: e.g. torch.Size([1, 2048]) vs [512, 1]). Use fp16 for rerank until upstream fixes.
-# Match VLLM_TASK=score (trim CR from Windows-sourced env) or any *Reranker* model id.
+# Match rerank intents broadly: score task, reranker model id, pooling runner, or known reranker hf_overrides marker.
 _vllm_task_trim="${VLLM_TASK:-}"
 _vllm_task_trim="${_vllm_task_trim%%[$'\r']}"
 _rerank_bnb_strip=0
 if [[ "${VLLM_EXTRA_ARGS:-}" == *[Bb]itsandbytes* ]]; then
-  if [ "${_vllm_task_trim}" = "score" ] || [[ "${VLLM_MODEL:-}" == *[Rr]eranker* ]]; then
+  if [ "${_vllm_task_trim}" = "score" ] \
+    || [[ "${VLLM_MODEL:-}" == *[Rr]eranker* ]] \
+    || [[ "${VLLM_RUNNER:-}" == "pooling" ]] \
+    || [[ "${VLLM_EXTRA_ARGS:-}" == *is_original_qwen3_reranker* ]]; then
     _rerank_bnb_strip=1
   fi
 fi
