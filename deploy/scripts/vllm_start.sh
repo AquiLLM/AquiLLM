@@ -29,7 +29,8 @@ HOST="${VLLM_HOST:-0.0.0.0}"
 PORT="${VLLM_PORT:-8000}"
 
 # If .env omits OCR_VLLM_EXTRA_ARGS, full BF16/BFloat16 weights (~15+ GiB for 7B-VL) often exhaust KV budget at low gpu_memory_utilization.
-_DEFAULT_OCR_VLLM_EXTRA_ARGS=$'--quantization bitsandbytes --load-format bitsandbytes --dtype float16 --model-loader-extra-config \'{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\''
+# Same flags as .env.example / typical OCR_VLLM_EXTRA_ARGS (bitsandbytes 4-bit).
+_DEFAULT_OCR_VLLM_EXTRA_ARGS="--quantization bitsandbytes --load-format bitsandbytes --dtype float16 --model-loader-extra-config '{\"load_in_4bit\":true,\"bnb_4bit_compute_dtype\":\"float16\",\"bnb_4bit_quant_type\":\"nf4\",\"bnb_4bit_use_double_quant\":true}'"
 
 # Compose sometimes injects VLLM_EXTRA_ARGS="" when ${VAR:-} interpolation is empty on the host,
 # which overrides env_file. Recover from the service-specific *VLLM_EXTRA_ARGS in the same .env.
