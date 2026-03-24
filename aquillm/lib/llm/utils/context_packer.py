@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import copy
 import logging
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
 from typing import Any
 
 from tiktoken import encoding_for_model
@@ -21,7 +22,6 @@ class ContextPackerConfig:
     budget_retrieval_tokens: int = 3500
     pin_last_turns: int = 2
     max_snippets_per_doc: int = 3
-    stages_applied: list[str] = field(default_factory=list)
 
 
 def load_context_packer_config() -> ContextPackerConfig:
@@ -92,6 +92,108 @@ def _estimate_list_tokens(messages: list[dict[str, Any]]) -> int:
     return estimate_prompt_tokens(messages, _ENC)
 
 
+def _dedupe_adjacent_tool_headers(msgs: list[dict[str, Any]]) -> bool:
+    changed = False
+    for i in range(len(msgs) - 1):
+        if not (_is_tool_evidence(msgs[i]) and _is_tool_evidence(msgs[i + 1])):
+            continue
+        c0 = msgs[i].get("content")
+        c1 = msgs[i + 1].get("content")
+        if not isinstance(c0, str) or not isinstance(c1, str):
+            continue
+        lines0, lines1 = c0.splitlines(), c1.splitlines()
+        k = 0
+        n = min(len(lines0), len(lines1), 16)
+        while k < n and lines0[k] == lines1[k]:
+            k += 1
+        if k >= 2:
+            msgs[i + 1]["content"] = "\n".join(lines1[k:])
+            changed = True
+    return changed
+
+
+def _collapse_excess_newlines(msgs: list[dict[str, Any]]) -> bool:
+    changed = False
+    for m in msgs:
+        c = m.get("content")
+        if isinstance(c, str) and re.search(r"\n{4,}", c):
+            m["content"] = re.sub(r"\n{3,}", "\n\n", c)
+            changed = True
+    return changed
+
+
+def _extractive_sentences_low_salience(
+    msgs: list[dict[str, Any]],
+    salience_scores: dict[int, float],
+) -> bool:
+    vals = sorted(salience_scores.values())
+    median = vals[len(vals) // 2] if vals else 0.0
+    changed = False
+    for i, m in enumerate(msgs):
+        if _is_tool_evidence(m):
+            continue
+        c = m.get("content")
+        if not isinstance(c, str) or len(c) < 500:
+            continue
+        if salience_scores.get(i, 0.0) > median:
+            continue
+        parts = re.split(r"(?<=[.!?])\s+", c.strip())
+        if len(parts) <= 2:
+            continue
+        short = " ".join(parts[:2]).strip()
+        if len(short) + 24 < len(c):
+            m["content"] = short + "\n[Context shortened.]"
+            changed = True
+    return changed
+
+
+def _lm_compress_low_salience(
+    msgs: list[dict[str, Any]],
+    salience_scores: dict[int, float],
+) -> bool:
+    try:
+        from lib.llm.optimizations.lm_lingua2_adapter import (
+            compress_plain_text_for_prompt,
+            lm_lingua2_enabled,
+        )
+    except Exception:
+        return False
+    if not lm_lingua2_enabled():
+        return False
+    vals = sorted(salience_scores.values())
+    median = vals[len(vals) // 2] if vals else 0.0
+    changed = False
+    for i, m in enumerate(msgs):
+        if _is_tool_evidence(m):
+            continue
+        c = m.get("content")
+        if not isinstance(c, str):
+            continue
+        if salience_scores.get(i, 0.0) >= median:
+            continue
+        out = compress_plain_text_for_prompt(c)
+        if out and len(out) < len(c):
+            m["content"] = out
+            changed = True
+    return changed
+
+
+def _run_staged_pruning(
+    msgs: list[dict[str, Any]],
+    salience_scores: dict[int, float] | None,
+) -> list[str]:
+    stages: list[str] = []
+    if _dedupe_adjacent_tool_headers(msgs):
+        stages.append("dedupe")
+    if _collapse_excess_newlines(msgs):
+        stages.append("boilerplate")
+    if salience_scores and _extractive_sentences_low_salience(msgs, salience_scores):
+        stages.append("extractive")
+    if salience_scores and _lm_compress_low_salience(msgs, salience_scores):
+        stages.append("lm_lingua2")
+    return stages
+
+
 def _prompt_budget_tokens(context_limit: int, max_tokens: int, slack: int) -> int:
     if context_limit <= 0 or max_tokens <= 0:
         return 0
@@ -124,7 +226,7 @@ def _pack_core(
         "before_tokens": 0,
         "after_tokens": 0,
         "stage_fit": None,
-        "stages_applied": list(cfg.stages_applied),
+        "stages_applied": [],
     }
 
     def total_prompt_tokens() -> int:
@@ -146,6 +248,8 @@ def _pack_core(
         scale = avail / denom
         hist_cap = max(256, int(hist_cap * scale))
         tool_cap = max(128, int(tool_cap * scale))
+
+    stats["stages_applied"].extend(_run_staged_pruning(msgs, salience_scores))
 
     pinned = _compute_pinned_indices(msgs, cfg)
     stats["pinned_count"] = len(pinned)
@@ -206,6 +310,30 @@ def _pack_core(
         break
 
     stats["dropped_history"] = orig_len - len(msgs)
+
+    trim_loops = 0
+    while total_prompt_tokens() > budget and trim_loops < 48:
+        victim: int | None = None
+        best = 0
+        for i, m in enumerate(msgs):
+            if i in pinned:
+                continue
+            c = m.get("content")
+            if isinstance(c, str) and len(c) > best:
+                best = len(c)
+                victim = i
+        if victim is None:
+            break
+        overflow = max(1, total_prompt_tokens() - budget)
+        trim_chars = max(128, overflow * 12)
+        c = str(msgs[victim].get("content", ""))
+        if len(c) <= trim_chars:
+            msgs[victim]["content"] = "[Earlier context trimmed due to token limit.]"
+        else:
+            msgs[victim]["content"] = c[trim_chars:]
+        trim_loops += 1
+        stats["stages_applied"].append("hard_trim")
+
     stats["after_tokens"] = total_prompt_tokens()
     if stats["after_tokens"] <= budget:
         stats["stage_fit"] = stats["stages_applied"][-1] if stats["stages_applied"] else "pack"

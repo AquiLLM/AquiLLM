@@ -157,4 +157,17 @@ def maybe_compress_openai_style_messages(messages: list[dict[str, Any]]) -> bool
     return changed
 
 
-__all__ = ["maybe_compress_openai_style_messages"]
+def lm_lingua2_enabled() -> bool:
+    return _enabled()
+
+
+def compress_plain_text_for_prompt(text: str) -> str | None:
+    """Optional LM-Lingua2 compression for a single string; None if disabled or on error."""
+    return _compress_plain_text(text)
+
+
+__all__ = [
+    "compress_plain_text_for_prompt",
+    "lm_lingua2_enabled",
+    "maybe_compress_openai_style_messages",
+]

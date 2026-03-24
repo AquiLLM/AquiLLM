@@ -83,3 +83,39 @@ def test_context_packer_respects_section_budgets():
     assert "keep_marker" in flat
     assert "latest user asks" in flat
     assert "OLDTOOL" not in flat
+
+
+def test_pruning_stage_order_dedupe_then_compress_then_hard_trim():
+    shared = (
+        "Tool vector_search result:\nargs {}\nshared header line one\nshared header line two\n"
+    )
+    filler = (
+        "First sentence about nothing. Second sentence also filler. "
+        "Third runs on with extra detail that should be trimmed away under pressure."
+    )
+    msgs = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": filler * 18},
+        {"role": "user", "content": shared + ("alpha " * 80)},
+        {"role": "user", "content": shared + ("beta " * 80)},
+        {"role": "user", "content": "last"},
+    ]
+    cfg = ContextPackerConfig(
+        pin_last_turns=1,
+        budget_history_tokens=150,
+        budget_tool_evidence_tokens=9000,
+    )
+    out = pack_messages_for_budget(
+        "sys",
+        msgs,
+        context_limit=650,
+        max_tokens=96,
+        cfg=cfg,
+        slack=24,
+    )
+    stages = out["stats"]["stages_applied"]
+    assert "dedupe" in stages
+    if "extractive" in stages and "hard_trim" in stages:
+        assert stages.index("extractive") < stages.index("hard_trim")
+    if "hard_trim" in stages:
+        assert stages.index("dedupe") < stages.index("hard_trim")
