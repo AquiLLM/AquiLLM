@@ -150,6 +150,28 @@ class OpenAIInterface(LLMInterface):
             context_limit = int(context_limit_raw)
         except Exception:
             context_limit = 0
+        try:
+            from lib.llm.utils.prompt_budget import (
+                context_packer_enabled,
+                maybe_pack_message_dicts_for_context,
+                prompt_budget_context_limit,
+                prompt_budget_max_tokens_cap,
+            )
+
+            pack_limit = context_limit if context_limit > 0 else prompt_budget_context_limit()
+            if pack_limit > 0 and context_packer_enabled():
+                sys_row = arguments["messages"][0]
+                tail = arguments["messages"][1:]
+                mt0 = min(max(int(arguments["max_tokens"]), 1), prompt_budget_max_tokens_cap())
+                _, mt1 = maybe_pack_message_dicts_for_context(
+                    str(sys_row.get("content", "")),
+                    tail,
+                    context_limit=pack_limit,
+                    max_tokens=mt0,
+                )
+                arguments["max_tokens"] = mt1
+        except Exception:
+            pass
         if context_limit > 0:
             if is_local_compatible_endpoint:
                 prompt_slack = self._env_int("OPENAI_COMPAT_PROMPT_SLACK_TOKENS", 256)

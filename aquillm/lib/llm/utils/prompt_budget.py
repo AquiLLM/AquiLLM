@@ -49,6 +49,10 @@ def token_efficiency_enabled() -> bool:
     return _settings_bool("TOKEN_EFFICIENCY_ENABLED", False)
 
 
+def context_packer_enabled() -> bool:
+    return _settings_bool("CONTEXT_PACKER_ENABLED", False)
+
+
 def prompt_budget_context_limit() -> int:
     v = _settings_int("PROMPT_BUDGET_CONTEXT_LIMIT", 0)
     if v > 0:
@@ -71,6 +75,53 @@ def prompt_budget_max_tokens_cap() -> int:
     return _settings_int("PROMPT_BUDGET_MAX_TOKENS_CAP", 8192)
 
 
+def maybe_pack_message_dicts_for_context(
+    system_text: str,
+    message_dicts: list[dict[str, Any]],
+    *,
+    context_limit: int,
+    max_tokens: int,
+) -> tuple[bool, int]:
+    """
+    Run salience-aware packing when CONTEXT_PACKER_ENABLED. Mutates message_dicts in place.
+    Returns (changed?, effective_max_tokens).
+    """
+    if context_limit <= 0 or not context_packer_enabled():
+        return (False, max_tokens)
+    try:
+        from lib.llm.utils.context_packer import load_context_packer_config, pack_messages_for_budget
+
+        cfg = load_context_packer_config()
+        mt = min(max(int(max_tokens), 1), prompt_budget_max_tokens_cap())
+        before_tok = estimate_prompt_tokens(
+            [{"role": "system", "content": system_text}] + list(message_dicts),
+            _ENC,
+        )
+        out = pack_messages_for_budget(
+            system_text,
+            message_dicts,
+            context_limit,
+            mt,
+            cfg,
+            slack=prompt_budget_slack_tokens(),
+        )
+        packed = out["messages"]
+        new_max = int(out["max_tokens"])
+        message_dicts[:] = packed
+        after_tok = estimate_prompt_tokens(
+            [{"role": "system", "content": system_text}] + message_dicts,
+            _ENC,
+        )
+        changed = after_tok != before_tok or new_max != max_tokens
+        return (changed, new_max)
+    except Exception as exc:
+        logger.warning(
+            "context_packer skipped in prompt_budget (fail-open): %s",
+            type(exc).__name__,
+        )
+        return (False, max_tokens)
+
+
 def apply_preflight_trim_to_message_dicts(
     system_text: str,
     message_dicts: list[dict[str, Any]],
@@ -80,11 +131,31 @@ def apply_preflight_trim_to_message_dicts(
     Trim `message_dicts` in place (roles preserved) when over budget.
     Returns (trimmed?, effective_max_tokens).
     """
-    if not token_efficiency_enabled():
-        return (False, max_tokens)
     limit = prompt_budget_context_limit()
     if limit <= 0:
         return (False, max_tokens)
+    te = token_efficiency_enabled()
+    if not te and not context_packer_enabled():
+        return (False, max_tokens)
+
+    orig_max = max(int(max_tokens), 1)
+    mt = min(orig_max, prompt_budget_max_tokens_cap())
+    changed_pack, mt = maybe_pack_message_dicts_for_context(
+        system_text, message_dicts, context_limit=limit, max_tokens=mt
+    )
+
+    if not te:
+        if changed_pack:
+            tail_tok = estimate_prompt_tokens(
+                [{"role": "system", "content": system_text}] + message_dicts,
+                _ENC,
+            )
+            logger.info(
+                "prompt_budget context_pack estimated_input_tokens=%s max_tokens=%s",
+                tail_tok,
+                mt,
+            )
+        return (changed_pack, mt)
 
     class _Estimator:
         @staticmethod
@@ -95,8 +166,6 @@ def apply_preflight_trim_to_message_dicts(
         def _estimate_prompt_tokens(messages: list[dict]) -> int:
             return estimate_prompt_tokens(messages, _ENC)
 
-    orig_max = max(int(max_tokens), 1)
-    mt = min(orig_max, prompt_budget_max_tokens_cap())
     arguments: dict[str, Any] = {
         "messages": [{"role": "system", "content": system_text}] + message_dicts,
         "max_tokens": mt,
@@ -109,7 +178,12 @@ def apply_preflight_trim_to_message_dicts(
         return (False, max_tokens)
     trimmed_tail = new_messages[1:]
     after = estimate_prompt_tokens(new_messages, _ENC)
-    changed = after < before or trimmed_tail != message_dicts or new_max != orig_max
+    changed = (
+        changed_pack
+        or after < before
+        or trimmed_tail != message_dicts
+        or new_max != orig_max
+    )
     message_dicts[:] = trimmed_tail
     if changed:
         logger.info(
@@ -142,6 +216,8 @@ def sync_trimmed_dicts_into_pydantic_messages(
 
 __all__ = [
     "apply_preflight_trim_to_message_dicts",
+    "context_packer_enabled",
+    "maybe_pack_message_dicts_for_context",
     "prompt_budget_context_limit",
     "prompt_budget_max_tokens_cap",
     "prompt_budget_slack_tokens",
