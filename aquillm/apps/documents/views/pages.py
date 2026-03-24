@@ -44,16 +44,22 @@ def pdf(request, doc_id):
 def document_image(request, doc_id):
     """Serve the image file for an ImageUploadDocument or HandwrittenNotesDocument."""
     doc = get_doc(request, doc_id)
-    
+
     image_file = getattr(doc, 'image_file', None)
-    if image_file:
-        content_type, _ = mimetypes.guess_type(image_file.name)
-        if not content_type:
-            content_type = 'image/jpeg'
-        response = HttpResponse(image_file.read(), content_type=content_type)
-        return response
-    else:
+    if not image_file:
         raise Http404("Requested document does not have an associated image file")
+
+    content_type, _ = mimetypes.guess_type(image_file.name)
+    if not content_type:
+        content_type = 'image/jpeg'
+    try:
+        with image_file.open("rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        raise Http404("Image file is missing from storage") from None
+    if not data:
+        raise Http404("Image file is empty")
+    return HttpResponse(data, content_type=content_type)
 
 
 @require_http_methods(['GET'])

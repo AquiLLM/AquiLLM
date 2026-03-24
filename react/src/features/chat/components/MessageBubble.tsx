@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import formatUrl from '../../../utils/formatUrl';
+import { resolveSiteAbsoluteUrl } from '../../../utils/resolveSiteAbsoluteUrl';
 import { Collapsible, ToolResult, AquillmLogo, UserLogo } from '../../../shared/components';
 import { RatingButtons } from './RatingButtons';
 import type { Message } from '../types';
@@ -81,14 +82,19 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
                 img: ({ node, ...props }) => {
                   const altText = (props.alt ?? '').trim();
                   const showCaption = altText.length > 0 && !/^image$/i.test(altText);
+                  const resolvedSrc = resolveSiteAbsoluteUrl(props.src);
+                  // Avoid duplicating the caption as both alt text (shown on load failure) and figcaption.
+                  const imgAlt = showCaption ? '' : altText;
 
                   return (
                     <figure className="my-3 w-fit max-w-full rounded-[10px] border border-border-mid_contrast bg-scheme-shade_3 p-2.5">
                       <img
                         {...props}
+                        src={resolvedSrc}
+                        alt={imgAlt}
                         className="block max-w-full h-auto rounded-lg border border-border-mid_contrast cursor-pointer hover:opacity-90 transition-opacity"
                         style={{ maxHeight: '360px', objectFit: 'contain' }}
-                        onClick={() => props.src && window.open(props.src, '_blank')}
+                        onClick={() => resolvedSrc && window.open(resolvedSrc, '_blank')}
                         title="Click to view full size"
                       />
                       {showCaption && (
