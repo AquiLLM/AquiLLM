@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: List):
     from aquillm.utils import get_embedding
+    from apps.documents.services import rag_cache
+    from lib.embeddings.config import get_local_embed_config
 
     vector_top_k = apps.get_app_config("aquillm").vector_top_k  # type: ignore
     trigram_top_k = apps.get_app_config("aquillm").trigram_top_k  # type: ignore
@@ -32,7 +34,13 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
     try:
         try:
             vector_start = perf_counter()
-            query_embedding = get_embedding(query)
+            _embed_base, _embed_key, embed_model = get_local_embed_config()
+            cached_vec = rag_cache.get_cached_query_embedding(query, "search_query", embed_model)
+            if cached_vec is not None:
+                query_embedding = cached_vec
+            else:
+                query_embedding = get_embedding(query)
+                rag_cache.set_cached_query_embedding(query, "search_query", embed_model, query_embedding)
             vector_results = model_cls.objects.filter_by_documents(docs).exclude(
                 embedding__isnull=True
             ).order_by(L2Distance("embedding", query_embedding))[

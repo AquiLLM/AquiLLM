@@ -117,11 +117,36 @@ def _to_data_url(image_bytes: bytes, file_name: str = "") -> str | None:
 
 
 def doc_image_data_url(doc: Any) -> str | None:
+    from django.conf import settings
+
+    from apps.documents.services import rag_cache
+
+    doc_id = getattr(doc, "id", None)
+    image_file = getattr(doc, "image_file", None)
+    file_name_for_cache = (getattr(image_file, "name", "") or "") if image_file else ""
+
+    if (
+        getattr(settings, "RAG_CACHE_ENABLED", False)
+        and doc_id is not None
+        and file_name_for_cache
+    ):
+        cached = rag_cache.get_cached_image_data_url(doc_id, file_name_for_cache)
+        if cached:
+            return cached
+
     extracted = _extract_image_bytes(doc)
     if not extracted:
         return None
     image_bytes, file_name = extracted
-    return _to_data_url(image_bytes, file_name)
+    data_url = _to_data_url(image_bytes, file_name)
+    if (
+        data_url
+        and getattr(settings, "RAG_CACHE_ENABLED", False)
+        and doc_id is not None
+        and file_name_for_cache
+    ):
+        rag_cache.set_cached_image_data_url(doc_id, file_name_for_cache, data_url)
+    return data_url
 
 
 __all__ = ["doc_image_data_url"]

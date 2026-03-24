@@ -1,4 +1,9 @@
-"""Document- and search-related LLM tools (Django-bound)."""
+"""Document- and search-related LLM tools (Django-bound).
+
+Collection-backed tools resolve visible documents via
+``Collection.get_user_accessible_documents`` (optional RAG doc-access cache when
+``RAG_CACHE_ENABLED``).
+"""
 from __future__ import annotations
 
 from asgiref.sync import async_to_sync

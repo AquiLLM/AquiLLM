@@ -6,6 +6,7 @@ from typing import Any, Type, TYPE_CHECKING
 
 import requests
 
+from apps.documents.services import rag_cache
 from apps.documents.services.chunk_rerank_config import (
     rerank_api_key,
     rerank_base_url,
@@ -49,13 +50,27 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
     if not documents:
         return model_cls.objects.none()
 
+    base_v1 = rerank_base_url()
+    base_root = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
+    rm = rerank_model()
+    qsig = rag_cache.query_signature_for_rerank(query)
+    cand_ids = [c.pk for c in chunks_list]
+    cached_ranked = rag_cache.get_cached_rerank_result(qsig, cand_ids, top_k, rm)
+    if cached_ranked:
+        return ordered_queryset_from_ids(model_cls, cached_ranked)
+
+    def _finish(ranked_ids: list[int], winning_endpoint: str | None = None):
+        if ranked_ids:
+            rag_cache.set_cached_rerank_result(qsig, cand_ids, top_k, rm, ranked_ids)
+            if winning_endpoint:
+                rag_cache.set_cached_rerank_capability(base_v1, rm, winning_endpoint)
+        return ordered_queryset_from_ids(model_cls, ranked_ids)
+
     headers = {"Content-Type": "application/json"}
     api_key = rerank_api_key()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    base_v1 = rerank_base_url()
-    base_root = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
     timeout = rerank_timeout_seconds()
     first_http_error: str | None = None
 
@@ -74,13 +89,16 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
             response_body = "<unavailable>"
         first_http_error = f"{endpoint} -> {response.status_code}: {response_body}"
 
-    rerank_endpoints = (
+    rerank_endpoints = [
         f"{base_root}/rerank",
         f"{base_root}/v2/rerank",
         f"{base_v1}/rerank",
-    )
+    ]
+    preferred = rag_cache.get_cached_rerank_capability(base_v1, rm)
+    if preferred:
+        rerank_endpoints = [preferred] + [e for e in rerank_endpoints if e != preferred]
     if rerank_model_is_qwen3_vl():
-        rerank_endpoints = ()
+        rerank_endpoints = []
     rerank_payloads = (
         {
             "model": rerank_model(),
@@ -123,7 +141,7 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
                     continue
                 ranked_ids = parse_rerank_results(response.json(), chunks_list)
                 if ranked_ids:
-                    return ordered_queryset_from_ids(model_cls, ranked_ids)
+                    return _finish(ranked_ids, endpoint)
         except Exception:
             continue
 
@@ -175,7 +193,7 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
                     for idx, _ in sorted(pairs, key=lambda item: item[1], reverse=True)[:top_k]
                 ]
                 if ranked_ids:
-                    return ordered_queryset_from_ids(model_cls, ranked_ids)
+                    return _finish(ranked_ids, endpoint)
 
             scored: list[tuple[int, float]] = []
             for idx, doc in enumerate(effective_documents):
@@ -243,7 +261,7 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
             scored.sort(key=lambda item: item[1], reverse=True)
             ranked_ids = [chunks_list[idx].pk for idx, _ in scored[:top_k]]
             if ranked_ids:
-                return ordered_queryset_from_ids(model_cls, ranked_ids)
+                return _finish(ranked_ids, endpoint)
         except Exception:
             continue
 

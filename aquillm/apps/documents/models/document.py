@@ -83,10 +83,32 @@ class Document(models.Model):
 
     @staticmethod
     def get_by_id(doc_id: uuid.UUID) -> Optional[DocumentChild]:
+        from django.conf import settings
+
+        from apps.documents.services import rag_cache
+
+        if getattr(settings, "RAG_CACHE_ENABLED", False):
+            ref = rag_cache.get_cached_document_ref(doc_id)
+            if ref is not None:
+                try:
+                    from django.apps import apps
+
+                    model = apps.get_model("apps_documents", str(ref["model"]))
+                    hit = model.objects.filter(pkid=int(ref["pkid"])).first()
+                    if hit is not None and hit.id == doc_id:
+                        return hit
+                except Exception:
+                    pass
+
         doc_types = _get_document_types()
         for t in doc_types:
             doc = t.objects.filter(id=doc_id).first()
             if doc:
+                if getattr(settings, "RAG_CACHE_ENABLED", False):
+                    rag_cache.set_cached_document_ref(
+                        doc_id,
+                        {"model": doc.__class__.__name__, "pkid": int(doc.pkid)},
+                    )
                 return doc
         return None
 
