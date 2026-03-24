@@ -14,7 +14,7 @@ from apps.chat.consumers.utils import truncate_tool_text
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.collections.models import Collection
 from apps.documents.models import Document, DocumentChild, TextChunk
-from lib.tools.documents.ids import resolve_doc_id_with_candidates
+from lib.tools.documents.ids import clean_and_parse_doc_id, resolve_doc_id_with_candidates
 from lib.tools.documents.list_ids import titles_to_document_ids
 from lib.tools.documents.whole_document import image_document_instruction, image_document_tool_payload
 from lib.tools.search.context import format_adjacent_chunks_tool_result
@@ -36,7 +36,29 @@ def _accessible_document_ids(user: User, col_ref: CollectionsRef) -> list:
 
 
 def _resolve_doc_uuid(doc_id: str, user: User, col_ref: CollectionsRef):
-    return resolve_doc_id_with_candidates(doc_id, _accessible_document_ids(user, col_ref))
+    """
+    Prefer ids in the chat-selected collections (prefix match + membership).
+    If the id is a valid UUID but not in that set, fall back to any document the user can view
+    so whole_document/search_single_document still work when collections are under-selected or
+    the model cites an id from elsewhere in the workspace.
+    """
+    candidates = _accessible_document_ids(user, col_ref)
+    uid, err = resolve_doc_id_with_candidates(doc_id, candidates)
+    if uid is not None:
+        return uid, ""
+    parsed, _ = clean_and_parse_doc_id(doc_id)
+    if parsed is None:
+        return None, err
+    doc = Document.get_by_id(parsed)
+    if doc is None:
+        return None, (
+            f"Document {doc_id} does not exist. "
+            "Use document_ids for the collections selected in this chat, or add the right collection "
+            "in the chat picker if the file lives elsewhere."
+        )
+    if not doc.collection.user_can_view(user):
+        return None, f"User cannot access document {doc_id}!"
+    return parsed, ""
 
 
 def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
@@ -116,14 +138,16 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
         required=["doc_id"],
         param_descs={
             "doc_id": (
-                "UUID string from document_ids for this chat only; ids not in that list will be rejected."
+                "Document UUID; prefer values from document_ids for the selected chat collections. "
+                "If the document is in another collection you can access, add that collection in the "
+                "chat picker or use the exact id from the library."
             )
         },
     )
     def whole_document(doc_id: str) -> ToolResultDict:
         """
-        Get the full text of a document. Use only doc_id values from document_ids for this chat;
-        invented UUIDs are rejected without a database lookup.
+        Get the full text of a document. Prefer doc_id from document_ids for the active collections;
+        other documents you are allowed to see can still be opened if the UUID is exact.
         For image documents, this includes both the extracted text and the image itself.
         When returning an image to the user, use markdown: ![description](image_url)
         """
@@ -164,7 +188,10 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
         for_whom="assistant",
         required=["doc_id", "search_string", "top_k"],
         param_descs={
-            "doc_id": "UUID from document_ids for this chat only; other ids are rejected.",
+            "doc_id": (
+                "Document UUID; prefer document_ids for selected collections, exact id if the doc is "
+                "only in another collection you can access."
+            ),
             "search_string": "String to search the contents of the document by.",
             "top_k": "Number of search results to return.",
         },
