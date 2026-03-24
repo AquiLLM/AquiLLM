@@ -173,3 +173,6 @@ aquillm/aquillm/static/index.css
 react/node_modules/
 /node_modules/
 /aquillm/tmp/
+
+# Local Hugging Face cache bind default for compose (LM-Lingua2 / web)
+/data/hf_web/

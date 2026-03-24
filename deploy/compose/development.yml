@@ -11,6 +11,8 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
+      # LM-Lingua2 / transformers: keep Hub downloads on a host bind (set WEB_HF_CACHE_HOST_PATH in .env).
+      - HF_HOME=/root/.cache/huggingface
     # Allow web container to reach host services (e.g., host-run vLLM endpoints).
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -40,6 +42,8 @@ services:
         required: false
     volumes:
       - ../..:/app
+      # Persist Hugging Face hub cache for web (LM-Lingua2). Override WEB_HF_CACHE_HOST_PATH in .env (e.g. Jetstream volume).
+      - ${WEB_HF_CACHE_HOST_PATH:-../../data/hf_web}:/root/.cache/huggingface
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/health/"]
       interval: 30s
