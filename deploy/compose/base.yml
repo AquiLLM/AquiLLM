@@ -1,9 +1,9 @@
 x-common-variables: &db-variables
-  POSTGRES_NAME: postgres
-  POSTGRES_USER: postgres
-  POSTGRES_PASSWORD: jacksonmadden
-  STORAGE_ACCESS_KEY: dev
-  STORAGE_SECRET_KEY: rickbailey
+  POSTGRES_NAME: ${POSTGRES_NAME:?POSTGRES_NAME is required}
+  POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:?STORAGE_ACCESS_KEY is required}
+  STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:?STORAGE_SECRET_KEY is required}
 
 # Satellite vLLM services set VLLM_EXTRA_ARGS from ${OCR_VLLM_EXTRA_ARGS} etc. Compose reads those names
 # from the environment used at parse time — pass repo .env, e.g.  docker compose --env-file .env -f deploy/compose/base.yml …
@@ -122,8 +122,8 @@ services:
     env_file:
       - ../../.env
     environment:
-      MINIO_ROOT_USER: dev
-      MINIO_ROOT_PASSWORD: rickbailey
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:?STORAGE_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:?STORAGE_SECRET_KEY is required}
 
     volumes:
       - minio_data:/data
