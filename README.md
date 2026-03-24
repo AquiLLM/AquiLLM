@@ -47,6 +47,10 @@ The unified upload endpoint supports:
 
 *   **Optional RAG / cost controls**: Django cache–backed retrieval TTL caches (`RAG_CACHE_*`), cross-provider prompt preflight trimming (`TOKEN_EFFICIENCY_*`), optional LM-Lingua2 compression (`LM_LINGUA2_*`), and optional vLLM LMCache wiring (`LMCACHE_*`). See `.env.example` and `docs/superpowers/plans/2026-03-23-caching-rag-token-efficiency-rollout-notes.md` for rollout and rollback.
 
+### RAG retrieval defaults and benchmarking
+
+Default `VECTOR_TOP_K`, `TRIGRAM_TOP_K`, `CHUNK_SIZE`, and `CHUNK_OVERLAP` target a balance of latency and recall for typical research corpora. Tune `RAG_CANDIDATE_MULTIPLIER`, `RAG_*_MIN_LIMIT`, and `RAG_TRIGRAM_SIMILARITY_MIN` when you need more aggressive candidate fan-out or stricter trigram filtering. To compare old versus new defaults without code changes, snapshot your current `.env`, restore prior values (for example higher `VECTOR_TOP_K` / `TRIGRAM_TOP_K`), run the same fixed set of chat queries, and compare p95 end-to-end chat latency plus qualitative answer quality. Enable `RAG_CACHE_ENABLED=1` only after you have a shared cache backend so measurements are not dominated by cold embed calls.
+
 *   **Authentication**: django-allauth
 *   **Containerization**: Docker, Docker Compose
 
