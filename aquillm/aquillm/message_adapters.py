@@ -8,6 +8,8 @@ This file keeps all the conversion logic in one place so consumers.py doesn't ne
 about database column mapping — it just calls save/load/build.
 """
 
+from django.utils import timezone
+
 from .models import Message, WSConversation
 from .llm import (
     Conversation, UserMessage, AssistantMessage, ToolMessage,
@@ -72,6 +74,7 @@ def django_message_to_pydantic(msg: Message) -> LLM_Message:
         'rating': msg.rating,
         'feedback_text': msg.feedback_text,
         'message_uuid': msg.message_uuid,
+        'created_at': msg.created_at,
     }
 
     if msg.role == 'assistant':
@@ -202,6 +205,7 @@ def build_frontend_conversation_json(db_convo: WSConversation) -> dict:
             'content': msg.content,
             'message_uuid': str(msg.message_uuid),  # convert UUID to string for JSON
             'rating': msg.rating,
+            'created_at': msg.created_at.isoformat() if msg.created_at else None,
         }
 
         # Add role-specific fields only when they have data
@@ -231,6 +235,7 @@ def pydantic_message_to_frontend_dict(msg: LLM_Message) -> dict:
         'content': content,
         'message_uuid': str(msg.message_uuid),
         'rating': msg.rating,
+        'created_at': (msg.created_at or timezone.now()).isoformat(),
     }
 
     if isinstance(msg, AssistantMessage):
