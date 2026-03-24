@@ -57,3 +57,4 @@ python-pptx
 ebooklib
 PyYAML
 PyMuPDF>=1.24.0
+llmlingua

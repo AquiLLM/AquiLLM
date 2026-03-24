@@ -26,6 +26,7 @@ from .openai_tokens import (
 )
 from .openai_tool_text import decode_json_dict, extract_tool_call_from_text
 from .openai_tools_format import transform_openai_tool_choice, transform_openai_tools
+from lib.llm.optimizations.lm_lingua2_adapter import maybe_compress_openai_style_messages
 
 
 try:
@@ -117,6 +118,8 @@ class OpenAIInterface(LLMInterface):
         max_tokens = kwargs.pop('max_tokens')
         tool_choice_raw = kwargs.pop('tool_choice', None)
         raw_tools = kwargs.get('tools')
+
+        maybe_compress_openai_style_messages(message_list)
 
         if "[User preferences and background]" in system_text or "[Historical conversation context]" in system_text:
             system_text = (

@@ -148,6 +148,17 @@ class GeminiInterface(LLMInterface):
         tool_choice = kwargs.pop('tool_choice', None)
         thinking_budget = kwargs.pop('thinking_budget', None)
 
+        if isinstance(messages, list):
+            from lib.llm.utils.prompt_budget import (
+                apply_preflight_trim_to_message_dicts,
+                sync_trimmed_dicts_into_pydantic_messages,
+            )
+
+            _, max_tokens = apply_preflight_trim_to_message_dicts(
+                str(system), messages, int(max_tokens)
+            )
+            sync_trimmed_dicts_into_pydantic_messages(messages_pydantic, messages)
+
         if messages_pydantic is not None:
             contents = self._convert_pydantic_messages(messages_pydantic)
         else:
