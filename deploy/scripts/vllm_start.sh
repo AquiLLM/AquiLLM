@@ -28,6 +28,25 @@ IFS='|' read -r MODEL_TO_SERVE SERVED_MODEL_NAME <<< "$(select_model_and_alias)"
 HOST="${VLLM_HOST:-0.0.0.0}"
 PORT="${VLLM_PORT:-8000}"
 
+# Compose sometimes injects VLLM_EXTRA_ARGS="" when ${VAR:-} interpolation is empty on the host,
+# which overrides env_file. Recover from the service-specific *VLLM_EXTRA_ARGS in the same .env.
+if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
+  case "${VLLM_TASK:-}" in
+    score) export VLLM_EXTRA_ARGS="${APP_RERANK_VLLM_EXTRA_ARGS:-}" ;;
+  esac
+fi
+if [ -z "${VLLM_EXTRA_ARGS// }" ] && [ "${VLLM_RUNNER:-}" = "pooling" ] && [ -z "${VLLM_TASK:-}" ]; then
+  case "${VLLM_MODEL:-}" in
+    *Embedding*|*embedding*) export VLLM_EXTRA_ARGS="${MEM0_EMBED_VLLM_EXTRA_ARGS:-}" ;;
+  esac
+fi
+if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
+  case "${VLLM_MODEL:-}" in
+    *whisper*|*Whisper*) export VLLM_EXTRA_ARGS="${TRANSCRIBE_VLLM_EXTRA_ARGS:-}" ;;
+    *Qwen2.5-VL*|*Qwen/Qwen2.5-VL*) export VLLM_EXTRA_ARGS="${OCR_VLLM_EXTRA_ARGS:-}" ;;
+  esac
+fi
+
 detect_python_bin() {
   if [ -n "${VLLM_PYTHON_BIN:-}" ] && command -v "${VLLM_PYTHON_BIN}" >/dev/null 2>&1; then
     echo "${VLLM_PYTHON_BIN}"
