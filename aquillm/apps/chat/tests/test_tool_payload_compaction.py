@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
+from lib.llm.types.messages import ToolMessage
 from lib.tools.search.vector_search import pack_chunk_search_results
 
 
@@ -57,3 +58,31 @@ class PackChunkSearchTests(SimpleTestCase):
         self.assertEqual(row["type"], "image")
         self.assertIn("image_url", row)
         self.assertIn("_image_instruction", out)
+
+
+class ToolMessageWrapperTests(SimpleTestCase):
+    def test_tool_message_render_uses_compact_prefix(self):
+        msg = ToolMessage(
+            content='{"ok":true}',
+            tool_name="vector_search",
+            arguments={"search_string": "hi", "top_k": 3},
+            for_whom="assistant",
+            result_dict={},
+        )
+        rendered = msg.render(include={"role", "content"})
+        text = rendered["content"]
+        self.assertTrue(text.startswith("Tool vector_search result:\n"))
+        self.assertNotIn("The following is the result", text)
+        self.assertNotIn("Arguments:\n", text)
+        self.assertIn("args ", text)
+
+    def test_tool_message_omits_args_line_when_arguments_empty(self):
+        msg = ToolMessage(
+            content="{}",
+            tool_name="vector_search",
+            arguments=None,
+            for_whom="assistant",
+            result_dict={},
+        )
+        rendered = msg.render(include={"role", "content"})
+        self.assertNotIn("args ", rendered["content"])
