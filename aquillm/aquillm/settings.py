@@ -29,6 +29,59 @@ def env_csv(key: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def env_int(key: str, default: int) -> int:
+    try:
+        raw = (os.environ.get(key) or str(default)).strip()
+        value = int(raw)
+    except Exception:
+        return default
+    return value if value >= 0 else default
+
+
+# RAG retrieval caches (fail-open; disabled unless RAG_CACHE_ENABLED=1)
+RAG_CACHE_ENABLED = env_bool("RAG_CACHE_ENABLED", False)
+RAG_QUERY_EMBED_TTL_SECONDS = env_int("RAG_QUERY_EMBED_TTL_SECONDS", 300)
+RAG_DOC_ACCESS_TTL_SECONDS = env_int("RAG_DOC_ACCESS_TTL_SECONDS", 60)
+RAG_IMAGE_DATA_URL_TTL_SECONDS = env_int("RAG_IMAGE_DATA_URL_TTL_SECONDS", 120)
+RAG_RERANK_RESULT_TTL_SECONDS = env_int("RAG_RERANK_RESULT_TTL_SECONDS", 45)
+RAG_RERANK_CAPABILITY_TTL_SECONDS = env_int("RAG_RERANK_CAPABILITY_TTL_SECONDS", 900)
+
+# Cross-provider prompt token efficiency (Claude/Gemini mirror OpenAI-style preflight trim)
+TOKEN_EFFICIENCY_ENABLED = env_bool("TOKEN_EFFICIENCY_ENABLED", False)
+PROMPT_BUDGET_CONTEXT_LIMIT = env_int("PROMPT_BUDGET_CONTEXT_LIMIT", 0)
+PROMPT_BUDGET_MAX_TOKENS_CAP = env_int("PROMPT_BUDGET_MAX_TOKENS_CAP", 8192)
+PROMPT_BUDGET_SLACK_TOKENS = env_int("PROMPT_BUDGET_SLACK_TOKENS", 384)
+PROMPT_COMPRESS_MIN_CHARS = env_int("PROMPT_COMPRESS_MIN_CHARS", 4000)
+PROMPT_COMPRESS_TARGET_TOKENS = env_int("PROMPT_COMPRESS_TARGET_TOKENS", 2048)
+
+# Optional LM-Lingua2 (llmlingua) extractive compression; default off, fail-open
+LM_LINGUA2_ENABLED = env_bool("LM_LINGUA2_ENABLED", False)
+LM_LINGUA2_MODEL = os.environ.get(
+    "LM_LINGUA2_MODEL",
+    "microsoft/llmlingua-2-xlm-roberta-large-meetingbank",
+).strip()
+
+# Django cache: Redis when DJANGO_CACHE_REDIS_URL is set; otherwise LocMem (tests/local deterministic)
+DJANGO_CACHE_REDIS_URL = (os.environ.get("DJANGO_CACHE_REDIS_URL") or "").strip()
+if DJANGO_CACHE_REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": DJANGO_CACHE_REDIS_URL,
+            "OPTIONS": {},
+            "KEY_PREFIX": os.environ.get("DJANGO_CACHE_KEY_PREFIX", "aquillm"),
+            "TIMEOUT": 300,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "aquillm-default",
+        }
+    }
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
