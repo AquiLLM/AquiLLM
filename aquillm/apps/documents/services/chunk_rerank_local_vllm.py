@@ -30,6 +30,17 @@ logger = logging.getLogger(__name__)
 
 
 def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list, top_k: int):
+    if not chunks_list:
+        return model_cls.objects.none()
+
+    base_v1 = rerank_base_url()
+    rm = rerank_model()
+    qsig = rag_cache.query_signature_for_rerank(query)
+    cand_ids = [c.pk for c in chunks_list]
+    cached_ranked = rag_cache.get_cached_rerank_result(qsig, cand_ids, top_k, rm)
+    if cached_ranked:
+        return ordered_queryset_from_ids(model_cls, cached_ranked)
+
     raw_documents = [chunk.content for chunk in chunks_list]
     multimodal_documents = [rerank_document_payload(chunk) for chunk in chunks_list]
     char_limit = rerank_doc_char_limit()
@@ -50,14 +61,7 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
     if not documents:
         return model_cls.objects.none()
 
-    base_v1 = rerank_base_url()
     base_root = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
-    rm = rerank_model()
-    qsig = rag_cache.query_signature_for_rerank(query)
-    cand_ids = [c.pk for c in chunks_list]
-    cached_ranked = rag_cache.get_cached_rerank_result(qsig, cand_ids, top_k, rm)
-    if cached_ranked:
-        return ordered_queryset_from_ids(model_cls, cached_ranked)
 
     def _finish(ranked_ids: list[int], winning_endpoint: str | None = None):
         if ranked_ids:

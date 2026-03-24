@@ -45,3 +45,37 @@ def test_rerank_result_cache_second_call_skips_http(
         posts_after_first = mock_post.call_count
         rerank_via_local_vllm(MC, "same query", chunks, 3)
     assert mock_post.call_count == posts_after_first
+
+
+@override_settings(RAG_CACHE_ENABLED=True)
+@patch("apps.documents.services.chunk_rerank_local_vllm.requests.post")
+@patch("apps.documents.services.chunk_rerank_local_vllm.rerank_document_payload")
+@patch("apps.documents.services.chunk_rerank_local_vllm.rerank_model")
+@patch("apps.documents.services.chunk_rerank_local_vllm.rerank_base_url")
+def test_rerank_cache_hit_skips_multimodal_payload_work(
+    mock_base_url,
+    mock_model,
+    mock_payload,
+    mock_post,
+):
+    mock_base_url.return_value = "http://test/v1"
+    mock_model.return_value = "m1"
+
+    chunks = [MagicMock(pk=i, content=f"t{i}") for i in (1, 2, 3)]
+
+    class MC:
+        objects = MagicMock()
+
+    ordered = MagicMock()
+    with patch(
+        "apps.documents.services.chunk_rerank_local_vllm.rag_cache.get_cached_rerank_result",
+        return_value=[3, 1, 2],
+    ):
+        with patch(
+            "apps.documents.services.chunk_rerank_local_vllm.ordered_queryset_from_ids",
+            return_value=ordered,
+        ):
+            out = rerank_via_local_vllm(MC, "cached query", chunks, 3)
+    mock_payload.assert_not_called()
+    mock_post.assert_not_called()
+    assert out is ordered
