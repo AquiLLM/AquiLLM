@@ -234,6 +234,42 @@ if [ "${VLLM_TRUST_REMOTE_CODE:-0}" = "1" ] || [ "${VLLM_TRUST_REMOTE_CODE:-}" =
   fi
 fi
 
+# vLLM 0.17.x: bitsandbytes + Qwen3-VL sequence-classification reranker fails loading classifier weights
+# (AssertionError: e.g. torch.Size([1, 2048]) vs [512, 1]). Use fp16 for rerank until upstream fixes.
+if [ "${VLLM_TASK:-}" = "score" ] && [[ "${VLLM_EXTRA_ARGS:-}" == *bitsandbytes* ]]; then
+  echo "WARN: Removing bitsandbytes flags from rerank VLLM_EXTRA_ARGS (VLLM_TASK=score); incompatible with Qwen3-VL reranker on vLLM 0.17.x." >&2
+  VLLM_EXTRA_ARGS="$(
+    VLLM_EXTRA_ARGS_IN="${VLLM_EXTRA_ARGS}" "${PYTHON_BIN}" - <<'PY'
+import os
+import shlex
+
+raw = os.environ.get("VLLM_EXTRA_ARGS_IN", "")
+try:
+    toks = shlex.split(raw, posix=True)
+except ValueError:
+    toks = []
+
+out: list[str] = []
+i = 0
+while i < len(toks):
+    if toks[i] in ("--quantization", "--load-format") and i + 1 < len(toks) and toks[i + 1] == "bitsandbytes":
+        i += 2
+        continue
+    if toks[i] == "--model-loader-extra-config" and i + 1 < len(toks):
+        i += 2
+        continue
+    out.append(toks[i])
+    i += 1
+
+has_dtype = any(out[j] == "--dtype" and j + 1 < len(out) for j in range(len(out)))
+if not has_dtype:
+    out.extend(["--dtype", "float16"])
+
+print(shlex.join(out))
+PY
+  )"
+fi
+
 if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
   parser_script="/parse_vllm_extra_args.py"
   if [ -f "${parser_script}" ]; then
