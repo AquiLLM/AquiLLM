@@ -24,6 +24,11 @@ def test_token_efficiency_defaults():
     assert settings.PROMPT_BUDGET_CONTEXT_LIMIT == 0
 
 
+def test_context_packer_defaults():
+    assert settings.CONTEXT_PACKER_ENABLED is False
+    assert settings.CONTEXT_BUDGET_TOOL_EVIDENCE_TOKENS == 1400
+
+
 def test_caches_default_locmem_without_redis_url():
     assert settings.CACHES["default"]["BACKEND"].endswith("LocMemCache")
 
