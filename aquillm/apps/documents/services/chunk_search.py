@@ -83,6 +83,7 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
         )
         trigram_ms = (perf_counter() - trigram_start) * 1000
         combined_candidates = list(vector_results) + list(trigram_results)
+        pre_dedupe_count = len(combined_candidates)
         deduped_candidates = []
         seen_pks = set()
         for candidate in combined_candidates:
@@ -100,13 +101,15 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             rerank_ms = (perf_counter() - rerank_start) * 1000
         total_ms = (perf_counter() - total_start) * 1000
         logger.info(
-            "text_chunk_search latency %.1fms (vector=%.1fms trigram=%.1fms rerank=%.1fms docs=%d top_k=%d candidates=%d)",
+            "text_chunk_search latency %.1fms (vector=%.1fms trigram=%.1fms rerank=%.1fms "
+            "docs=%d top_k=%d pre_dedupe=%d candidates=%d)",
             total_ms,
             vector_ms,
             trigram_ms,
             rerank_ms,
             len(docs),
             top_k,
+            pre_dedupe_count,
             len(combined_candidates),
         )
         return vector_results, trigram_results, reranked_results

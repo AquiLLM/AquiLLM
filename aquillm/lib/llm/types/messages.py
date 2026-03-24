@@ -1,5 +1,6 @@
 """LLM message types for conversation handling."""
 import json
+import logging
 from typing import Literal, Optional, Any
 from os import getenv
 import re
@@ -9,6 +10,8 @@ from typing import override
 import uuid
 
 from .tools import LLMTool, ToolChoice, ToolResultDict
+
+logger = logging.getLogger(__name__)
 
 _TOOL_ARGS_RENDER_MAX = 512
 
@@ -116,12 +119,19 @@ class ToolMessage(__LLMMessage):
         ret = super().render(*args, **kwargs)
         ret['role'] = 'user'  # This is what LLMs expect.
         
+        sanitized = self._sanitize_text_for_llm(self.content)
         if self.has_images():
             ret['content'] = self.render_multimodal_content()
         else:
             prefix = _compact_tool_prefix(self.tool_name, self.arguments)
-            ret['content'] = f"{prefix}\n{self._sanitize_text_for_llm(self.content)}"
-        
+            ret['content'] = f"{prefix}\n{sanitized}"
+
+        logger.info(
+            "tool_message_render tool=%s content_chars=%d",
+            self.tool_name,
+            len(sanitized),
+        )
+
         ret.pop('result_dict', None)
         return ret
 

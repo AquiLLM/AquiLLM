@@ -79,3 +79,43 @@ def test_rerank_cache_hit_skips_multimodal_payload_work(
     mock_payload.assert_not_called()
     mock_post.assert_not_called()
     assert out is ordered
+
+
+@override_settings(RAG_CACHE_ENABLED=True)
+@patch("apps.documents.services.chunk_rerank_local_vllm.logger")
+@patch("apps.documents.services.chunk_rerank_local_vllm.requests.post")
+@patch("apps.documents.services.chunk_rerank_local_vllm.rerank_model")
+@patch("apps.documents.services.chunk_rerank_local_vllm.rerank_base_url")
+def test_rerank_logs_cache_hit_without_query_text(
+    mock_base_url,
+    mock_model,
+    mock_post,
+    mock_logger,
+):
+    mock_base_url.return_value = "http://test/v1"
+    mock_model.return_value = "m1"
+    chunks = [MagicMock(pk=i, content="secret-query-text") for i in (1, 2, 3)]
+
+    class MC:
+        objects = MagicMock()
+
+    with patch(
+        "apps.documents.services.chunk_rerank_local_vllm.rag_cache.get_cached_rerank_result",
+        return_value=[3, 2, 1],
+    ):
+        with patch(
+            "apps.documents.services.chunk_rerank_local_vllm.ordered_queryset_from_ids",
+            return_value=MagicMock(),
+        ):
+            rerank_via_local_vllm(MC, "user query must not appear in metrics log", chunks, 2)
+
+    mock_post.assert_not_called()
+    hit_calls = [
+        c
+        for c in mock_logger.info.call_args_list
+        if c.args and "cache_hit=1" in c.args[0]
+    ]
+    assert hit_calls
+    joined = " ".join(str(c.args) for c in hit_calls)
+    assert "secret-query-text" not in joined
+    assert "user query must not appear" not in joined

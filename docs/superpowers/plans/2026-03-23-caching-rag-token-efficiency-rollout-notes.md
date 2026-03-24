@@ -5,6 +5,9 @@ This note accompanies the implementation in `2026-03-23-caching-rag-token-effici
 ## Observability (safe logging)
 
 - RAG cache: `apps.documents.services.rag_cache` logs **hits** at INFO (`rag_cache.* hit`) and **misses** at DEBUG (`rag_cache.* miss`). No query text, embeddings, or base64 payloads are logged.
+- Hybrid search: `apps.documents.services.chunk_search` INFO latency line includes `pre_dedupe` (vector+trigram row count before dedupe) and `candidates` (after dedupe). No query text.
+- Local rerank: `apps.documents.services.chunk_rerank_local_vllm` logs `cache_hit=1` with candidate and `top_k` counts only when the rerank result cache short-circuits HTTP — no query text.
+- Tool messages: `lib.llm.types.messages.ToolMessage.render` logs `tool_message_render` with `tool` name and sanitized `content_chars` (length only).
 - Prompt budget: `lib.llm.utils.prompt_budget` logs a single INFO line when preflight trim runs: estimated input tokens before/after and effective `max_tokens` — no message bodies.
 - LM-Lingua2: `lib.llm.optimizations.lm_lingua2_adapter` logs only role and character counts when compression succeeds; failures log a short warning.
 

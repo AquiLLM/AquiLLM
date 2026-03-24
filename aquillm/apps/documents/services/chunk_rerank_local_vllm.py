@@ -39,6 +39,11 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
     cand_ids = [c.pk for c in chunks_list]
     cached_ranked = rag_cache.get_cached_rerank_result(qsig, cand_ids, top_k, rm)
     if cached_ranked:
+        logger.info(
+            "rerank_local_vllm cache_hit=1 candidates=%d top_k=%d",
+            len(cand_ids),
+            top_k,
+        )
         return ordered_queryset_from_ids(model_cls, cached_ranked)
 
     raw_documents = [chunk.content for chunk in chunks_list]
