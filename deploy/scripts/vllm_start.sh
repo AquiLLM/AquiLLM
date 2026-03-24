@@ -220,6 +220,23 @@ if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
   fi
 fi
 
+# Optional LMCache / KV connector flags (see .env.example: LMCACHE_*).
+if [ "${LMCACHE_ENABLED:-0}" = "1" ] || [ "${LMCACHE_ENABLED:-}" = "true" ] || [ "${LMCACHE_ENABLED:-}" = "TRUE" ]; then
+  if [ -n "${LMCACHE_EXTRA_ARGS:-}" ]; then
+    parser_script="/parse_vllm_extra_args.py"
+    if [ -f "${parser_script}" ]; then
+      mapfile -d '' -t lmc_args < <("${PYTHON_BIN}" "${parser_script}" "${LMCACHE_EXTRA_ARGS}")
+      if [ "${#lmc_args[@]}" -gt 0 ]; then
+        cmd+=("${lmc_args[@]}")
+      fi
+    else
+      # shellcheck disable=SC2206,SC2294
+      eval "lmc_args=( ${LMCACHE_EXTRA_ARGS} )"
+      cmd+=("${lmc_args[@]}")
+    fi
+  fi
+fi
+
 # vLLM's offloading connector requires hybrid KV cache manager to be disabled.
 # Auto-append the flag when KV offloading is enabled so startup doesn't crash.
 if printf '%s\n' "${cmd[@]}" | grep -q -- '--kv-offloading-'; then
@@ -246,7 +263,9 @@ unset \
   VLLM_TRUST_REMOTE_CODE \
   VLLM_EXTRA_ARGS \
   VLLM_PYTHON_BIN \
-  VLLM_BASE_URL || true
+  VLLM_BASE_URL \
+  LMCACHE_ENABLED \
+  LMCACHE_EXTRA_ARGS || true
 
 echo "Starting vLLM with model='${MODEL_TO_SERVE}' served_as='${SERVED_MODEL_NAME}' on ${HOST}:${PORT}"
 exec "${cmd[@]}"

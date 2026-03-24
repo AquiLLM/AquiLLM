@@ -201,6 +201,8 @@ services:
     environment:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
+      - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
+      - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:

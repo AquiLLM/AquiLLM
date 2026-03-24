@@ -207,6 +207,8 @@ services:
       - VLLM_PORT=8000
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
+      - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
     ports:
       - "8000:8000"
     healthcheck:
