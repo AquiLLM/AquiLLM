@@ -14,7 +14,42 @@ interface MessageBubbleProps {
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, onFeedback }) => {
-  const displayTime = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const formatTimestamp = (isoString?: string): { display: string; tooltip: string } | null => {
+    if (!isoString) return null;
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffSeconds = Math.floor(diffMs / 1000);
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    const tooltip = date.toLocaleString([], {
+      weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+    });
+
+    let display: string;
+    if (diffHours < 48) {
+      const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      display = date.getDate() !== now.getDate() ? `yesterday at ${time}` : `today at ${time}`;
+    } else if (diffDays < 14) {
+      display = `${diffDays} days ago`;
+    } else if (diffDays < 60) {
+      const weeks = Math.floor(diffDays / 7);
+      display = weeks === 1 ? '1 week ago' : `${weeks} weeks ago`;
+    } else if (diffDays < 365) {
+      const months = Math.floor(diffDays / 30);
+      display = months === 1 ? '1 month ago' : `${months} months ago`;
+    } else {
+      const years = Math.floor(diffDays / 365);
+      display = years === 1 ? '1 year ago' : `${years} years ago`;
+    }
+
+    return { display, tooltip };
+  };
+
+  const timestamp = formatTimestamp(message.created_at);
 
   const getMessageClasses = () => {
     let classes = "w-full p-2 rounded-[10px] shadow-sm whitespace-pre-wrap break-words element-border leading-[1.35] text-[14px]";
@@ -163,9 +198,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
             </ul>
           </div>
         )}
-        <p className="text-[11px] mt-1 text-text-low_contrast">
-          {displayTime}
-        </p>
+        {timestamp && (
+          <p className="text-[11px] mt-1 text-text-low_contrast" title={timestamp.tooltip}>
+            {timestamp.display}
+          </p>
+        )}
         </div>
       </div>
     </div>
