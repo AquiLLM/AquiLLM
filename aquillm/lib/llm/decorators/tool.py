@@ -6,7 +6,7 @@ import inspect
 
 import logging
 
-from pydantic import validate_call
+from pydantic import ValidationError, validate_call
 
 from ..types.tools import LLMTool, ToolResultDict
 
@@ -55,10 +55,18 @@ def llm_tool(
             try:
                 return type_checked_func(*args, **kwargs)
             except Exception as e:
+                if isinstance(e, ValidationError):
+                    return {
+                        "exception": (
+                            f"Missing or invalid arguments for {func_name}. "
+                            "Pass every required field with correct types (see tool description). "
+                            "For searching many documents, use vector_search; for one document by "
+                            "ID, call document_ids first and pass the full UUID."
+                        ),
+                    }
                 if DEBUG:
                     raise e
-                else:
-                    return {"exception": str(e)}
+                return {"exception": str(e)}
         
         def translate_type(t: type | GenericAlias) -> dict:
             allowed_primitives = {

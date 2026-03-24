@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from uuid import UUID
+
+_UUID_HEX_LEN = 32
+# Shorter fragments are too easy to collide when many documents are visible.
+_MIN_PREFIX_MATCH_HEX_LEN = 16
 
 
 def clean_and_parse_doc_id(doc_id: str) -> tuple[UUID | None, str]:
@@ -46,4 +51,42 @@ def clean_and_parse_doc_id(doc_id: str) -> tuple[UUID | None, str]:
     )
 
 
-__all__ = ["clean_and_parse_doc_id"]
+def _hex_fragment_from_doc_id_arg(doc_id: str) -> str:
+    cleaned = doc_id.strip()
+    cleaned = re.sub(r"</?\w+>", "", cleaned)
+    return re.sub(r"[^0-9a-fA-F]", "", cleaned).lower()
+
+
+def resolve_doc_id_with_candidates(doc_id: str, candidates: Sequence[UUID]) -> tuple[UUID | None, str]:
+    """
+    Parse doc_id; if that fails, try a unique prefix match against candidate document UUIDs.
+
+    Used when models truncate UUIDs while copying from long document lists.
+    """
+    parsed, err = clean_and_parse_doc_id(doc_id)
+    if parsed is not None:
+        return parsed, ""
+
+    fragment = _hex_fragment_from_doc_id_arg(doc_id)
+    if len(fragment) < _MIN_PREFIX_MATCH_HEX_LEN:
+        return None, err
+    if len(fragment) > _UUID_HEX_LEN:
+        fragment = fragment[:_UUID_HEX_LEN]
+
+    matches: list[UUID] = []
+    for u in candidates:
+        uh = str(u).replace("-", "").lower()
+        if uh.startswith(fragment):
+            matches.append(u)
+
+    if len(matches) == 1:
+        return matches[0], ""
+    if not matches:
+        return None, err
+    return None, (
+        f"Ambiguous document ID (matches {len(matches)} documents in the selected collections). "
+        "Copy the full UUID from document_ids, or use vector_search to search all documents at once."
+    )
+
+
+__all__ = ["clean_and_parse_doc_id", "resolve_doc_id_with_candidates"]

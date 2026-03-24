@@ -14,7 +14,7 @@ from apps.chat.consumers.utils import truncate_tool_text
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.collections.models import Collection
 from apps.documents.models import Document, DocumentChild, TextChunk
-from lib.tools.documents.ids import clean_and_parse_doc_id
+from lib.tools.documents.ids import resolve_doc_id_with_candidates
 from lib.tools.documents.list_ids import titles_to_document_ids
 from lib.tools.documents.whole_document import image_document_instruction, image_document_tool_payload
 from lib.tools.search.context import format_adjacent_chunks_tool_result
@@ -26,6 +26,17 @@ _NO_DOCS_EXCEPTION = {
         "collections are empty."
     )
 }
+
+
+def _accessible_document_ids(user: User, col_ref: CollectionsRef) -> list:
+    docs = Collection.get_user_accessible_documents(
+        user, Collection.objects.filter(id__in=col_ref.collections)
+    )
+    return [d.id for d in docs]
+
+
+def _resolve_doc_uuid(doc_id: str, user: User, col_ref: CollectionsRef):
+    return resolve_doc_id_with_candidates(doc_id, _accessible_document_ids(user, col_ref))
 
 
 def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
@@ -46,7 +57,8 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
     def vector_search(search_string: str, top_k: int) -> ToolResultDict:
         """
         Uses a combination of vector search, trigram search and reranking to search the documents
-        available to the user.
+        available to the user. Prefer this tool when the question may span many documents; it does
+        not require document UUIDs.
         Returns text chunks and image chunks. For image chunks, both the image and its OCR-extracted
         text are provided.
         When returning results to the user that include images, use markdown image syntax:
@@ -85,7 +97,8 @@ def document_list_ids_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
     def document_ids() -> ToolResultDict:
         """
         Get the names and IDs of all documents in the selected collections. When a user asks to see
-        a document in full, or to search a single document, use this to get its ID.
+        a document in full, or to search a single document, use this to get its ID. Copy UUIDs in full;
+        they are easy to truncate by mistake.
         """
         docs = Collection.get_user_accessible_documents(
             user, Collection.objects.filter(id__in=col_ref.collections)
@@ -97,7 +110,7 @@ def document_list_ids_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
     return document_ids
 
 
-def whole_document_tool(user: User, chat_ref: ChatRef) -> LLMTool:
+def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) -> LLMTool:
     @llm_tool(
         for_whom="assistant",
         required=["doc_id"],
@@ -109,7 +122,7 @@ def whole_document_tool(user: User, chat_ref: ChatRef) -> LLMTool:
         For image documents, this includes both the extracted text and the image itself.
         When returning an image to the user, use markdown: ![description](image_url)
         """
-        doc_uuid, error_msg = clean_and_parse_doc_id(doc_id)
+        doc_uuid, error_msg = _resolve_doc_uuid(doc_id, user, col_ref)
         if doc_uuid is None:
             return {"exception": error_msg}
         doc: DocumentChild | None = Document.get_by_id(doc_uuid)
@@ -136,7 +149,7 @@ def whole_document_tool(user: User, chat_ref: ChatRef) -> LLMTool:
     return whole_document
 
 
-def search_single_document_tool(user: User) -> LLMTool:
+def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
     @llm_tool(
         for_whom="assistant",
         required=["doc_id", "search_string", "top_k"],
@@ -148,7 +161,8 @@ def search_single_document_tool(user: User) -> LLMTool:
     )
     def search_single_document(doc_id: str, search_string: str, top_k: int) -> ToolResultDict:
         """
-        Use vector search to search the text of a single document.
+        Use vector search to search the text of a single document. If the user may mean many
+        documents, prefer vector_search instead (no doc_id required).
         Returns text chunks and image chunks. For image chunks, both the image and its
         OCR-extracted text are provided.
         When returning results to the user that include images, use markdown image syntax:
@@ -158,7 +172,7 @@ def search_single_document_tool(user: User) -> LLMTool:
             return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
         if not search_string.strip():
             return {"exception": "search_string must not be empty"}
-        doc_uuid, error_msg = clean_and_parse_doc_id(doc_id)
+        doc_uuid, error_msg = _resolve_doc_uuid(doc_id, user, col_ref)
         if doc_uuid is None:
             return {"exception": error_msg}
         doc = Document.get_by_id(doc_uuid)

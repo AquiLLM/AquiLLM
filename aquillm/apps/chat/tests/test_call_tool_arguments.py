@@ -48,7 +48,12 @@ class CallToolArgumentsTests(SimpleTestCase):
         exc = out.result_dict.get("exception", "")
         self.assertTrue(exc)
         el = exc.lower()
-        self.assertTrue("validation error" in el or "missing" in el or "required" in el)
+        self.assertTrue(
+            "validation error" in el
+            or "missing" in el
+            or "required" in el
+            or "invalid arguments" in el
+        )
 
     def test_valid_arguments_succeed(self):
         llm = _FakeLLMInterface([])

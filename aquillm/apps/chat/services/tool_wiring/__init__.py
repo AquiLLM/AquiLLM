@@ -25,8 +25,8 @@ def build_document_tools(user: User, col_ref: CollectionsRef, chat_ref: ChatRef)
         vector_search_tool(user, col_ref),
         more_context_tool(user),
         document_list_ids_tool(user, col_ref),
-        whole_document_tool(user, chat_ref),
-        search_single_document_tool(user),
+        whole_document_tool(user, chat_ref, col_ref),
+        search_single_document_tool(user, col_ref),
     ]
 
 
