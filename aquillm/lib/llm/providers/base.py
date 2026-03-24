@@ -96,22 +96,30 @@ class LLMInterface(ABC):
                 tool = tools_dict[name]
                 tool_name = tool.name
                 for_whom = tool.for_whom
-                if input:
-                    future = self.tool_executor.submit(partial(tool, **input))
+                # Must use a dict for kwargs. `if input:` is wrong: `{}` is falsy but still means
+                # "model sent an argument object" and should be validated (not bare tool() with no params).
+                if not isinstance(input, dict):
+                    result_dict = {
+                        "exception": (
+                            "The model returned a tool call without a JSON argument object. "
+                            "Required parameters were not supplied; try again or simplify the request."
+                        ),
+                    }
+                    result = imgctx.serialize_tool_result_for_llm(result_dict)
                 else:
-                    future = self.tool_executor.submit(tool)
-                try:
-                    tool_timeout_s = float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))
-                    result_dict = future.result(timeout=tool_timeout_s)
-                    result = imgctx.serialize_tool_result_for_llm(result_dict)
-                except TimeoutError:
-                    result_dict = {"exception": "Tool call timed out"}
-                    result = imgctx.serialize_tool_result_for_llm(result_dict)
-                except Exception as e:
-                    if DEBUG:
-                        raise
-                    result_dict = {"exception": str(e)}
-                    result = imgctx.serialize_tool_result_for_llm(result_dict)
+                    future = self.tool_executor.submit(partial(tool, **input))
+                    try:
+                        tool_timeout_s = float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))
+                        result_dict = future.result(timeout=tool_timeout_s)
+                        result = imgctx.serialize_tool_result_for_llm(result_dict)
+                    except TimeoutError:
+                        result_dict = {"exception": "Tool call timed out"}
+                        result = imgctx.serialize_tool_result_for_llm(result_dict)
+                    except Exception as e:
+                        if DEBUG:
+                            raise
+                        result_dict = {"exception": str(e)}
+                        result = imgctx.serialize_tool_result_for_llm(result_dict)
             return ToolMessage(
                 tool_name=tool_name,
                 content=result,
