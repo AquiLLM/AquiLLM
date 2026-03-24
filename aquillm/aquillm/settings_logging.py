@@ -66,6 +66,12 @@ LOGGING = {
             "level": "DEBUG",
             "propagate": True,
         },
+        # lib.llm.* (context packer, prompt_budget, etc.) — not under the "aquillm" package name
+        "lib.llm.utils": {
+            "handlers": ["file", "console"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "kombu": {
             "handlers": ["console"],
             "level": "INFO",
