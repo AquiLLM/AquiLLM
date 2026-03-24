@@ -6,6 +6,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, List, Type
 
 from django.apps import apps
+from django.conf import settings as django_settings
 from django.contrib.postgres.search import TrigramSimilarity
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError
@@ -26,9 +27,26 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
 
     vector_top_k = apps.get_app_config("aquillm").vector_top_k  # type: ignore
     trigram_top_k = apps.get_app_config("aquillm").trigram_top_k  # type: ignore
-    candidate_multiplier = 3
-    vector_limit = max(top_k + 2, min(vector_top_k, top_k * candidate_multiplier))
-    trigram_limit = max(top_k + 2, min(trigram_top_k, top_k * candidate_multiplier))
+    qstrip = query.strip()
+    q_len = len(qstrip)
+    short_len = int(getattr(django_settings, "RAG_QUERY_SHORT_LEN", 48))
+    long_len = int(getattr(django_settings, "RAG_QUERY_LONG_LEN", 160))
+    short_scale = float(getattr(django_settings, "RAG_SHORT_QUERY_CANDIDATE_SCALE", 0.9))
+    long_scale = float(getattr(django_settings, "RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1))
+    if q_len <= short_len:
+        len_scale = short_scale
+    elif q_len >= long_len:
+        len_scale = long_scale
+    else:
+        len_scale = 1.0
+    mult = float(getattr(django_settings, "RAG_CANDIDATE_MULTIPLIER", 3.0))
+    eff_mult = mult * len_scale
+    raw_cap = int(top_k * eff_mult)
+    vector_min = int(getattr(django_settings, "RAG_VECTOR_MIN_LIMIT", 0))
+    trigram_min = int(getattr(django_settings, "RAG_TRIGRAM_MIN_LIMIT", 0))
+    vector_limit = max(top_k + 2, vector_min, min(vector_top_k, raw_cap))
+    trigram_limit = max(top_k + 2, trigram_min, min(trigram_top_k, raw_cap))
+    tri_sim_min = float(getattr(django_settings, "RAG_TRIGRAM_SIMILARITY_MIN", 0.000001))
     total_start = perf_counter()
 
     try:
@@ -60,7 +78,7 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             model_cls.objects.filter_by_documents(docs)
             .filter(modality=model_cls.Modality.TEXT)
             .annotate(similarity=TrigramSimilarity("content", query))  # type: ignore
-            .filter(similarity__gt=0.000001)
+            .filter(similarity__gt=tri_sim_min)
             .order_by("-similarity")[:trigram_limit]
         )
         trigram_ms = (perf_counter() - trigram_start) * 1000

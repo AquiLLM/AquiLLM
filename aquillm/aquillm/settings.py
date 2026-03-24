@@ -38,6 +38,15 @@ def env_int(key: str, default: int) -> int:
     return value if value >= 0 else default
 
 
+def env_float(key: str, default: float) -> float:
+    try:
+        raw = (os.environ.get(key) or str(default)).strip()
+        value = float(raw)
+    except Exception:
+        return default
+    return value if value >= 0 else default
+
+
 # RAG retrieval caches (fail-open; disabled unless RAG_CACHE_ENABLED=1)
 RAG_CACHE_ENABLED = env_bool("RAG_CACHE_ENABLED", False)
 RAG_QUERY_EMBED_TTL_SECONDS = env_int("RAG_QUERY_EMBED_TTL_SECONDS", 300)
@@ -45,6 +54,16 @@ RAG_DOC_ACCESS_TTL_SECONDS = env_int("RAG_DOC_ACCESS_TTL_SECONDS", 60)
 RAG_IMAGE_DATA_URL_TTL_SECONDS = env_int("RAG_IMAGE_DATA_URL_TTL_SECONDS", 120)
 RAG_RERANK_RESULT_TTL_SECONDS = env_int("RAG_RERANK_RESULT_TTL_SECONDS", 45)
 RAG_RERANK_CAPABILITY_TTL_SECONDS = env_int("RAG_RERANK_CAPABILITY_TTL_SECONDS", 900)
+
+# Hybrid search candidate fan-out (chunk_search); min limits are floors, 0 = unset
+RAG_CANDIDATE_MULTIPLIER = env_float("RAG_CANDIDATE_MULTIPLIER", 3.0)
+RAG_VECTOR_MIN_LIMIT = env_int("RAG_VECTOR_MIN_LIMIT", 0)
+RAG_TRIGRAM_MIN_LIMIT = env_int("RAG_TRIGRAM_MIN_LIMIT", 0)
+RAG_TRIGRAM_SIMILARITY_MIN = env_float("RAG_TRIGRAM_SIMILARITY_MIN", 0.000001)
+RAG_QUERY_SHORT_LEN = env_int("RAG_QUERY_SHORT_LEN", 48)
+RAG_QUERY_LONG_LEN = env_int("RAG_QUERY_LONG_LEN", 160)
+RAG_SHORT_QUERY_CANDIDATE_SCALE = env_float("RAG_SHORT_QUERY_CANDIDATE_SCALE", 0.9)
+RAG_LONG_QUERY_CANDIDATE_SCALE = env_float("RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1)
 
 # Cross-provider prompt token efficiency (Claude/Gemini mirror OpenAI-style preflight trim)
 TOKEN_EFFICIENCY_ENABLED = env_bool("TOKEN_EFFICIENCY_ENABLED", False)
