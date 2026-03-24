@@ -20,36 +20,47 @@ def pack_chunk_search_results(
     image_url_prefix: str = "/aquillm/document_image/",
 ) -> dict[str, Any]:
     """Build the tool `result` dict for multi-chunk search (collections or single doc)."""
-    result_items: dict[str, Any] = {}
+    items: list[dict[str, Any]] = []
     has_image_results = False
     for i, chunk in enumerate(results):
+        rank = i + 1
         title = titles_by_doc_id.get(chunk.doc_id, "Untitled Document")
-        key = f"[Result {i + 1}] -- {title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}"
+        base: dict[str, Any] = {
+            "rank": rank,
+            "chunk_id": chunk.id,
+            "doc_id": str(chunk.doc_id),
+            "chunk": chunk.chunk_number,
+            "title": title,
+        }
 
         if chunk.modality == image_modality:
             display_url = f"{image_url_prefix}{chunk.doc_id}/"
             has_image_results = True
 
-            result_items[key] = {
-                "type": "image",
-                "text": truncate(chunk.content),
-                "image_url": display_url,
-                "doc_id": str(chunk.doc_id),
-            }
+            items.append(
+                {
+                    **base,
+                    "type": "image",
+                    "text": truncate(chunk.content),
+                    "image_url": display_url,
+                }
+            )
         else:
             doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
             if doc_for_chunk is not None and getattr(doc_for_chunk, "image_file", None):
                 has_image_results = True
-                result_items[key] = {
-                    "type": "text_with_image",
-                    "text": truncate(chunk.content),
-                    "image_url": f"{image_url_prefix}{chunk.doc_id}/",
-                    "doc_id": str(chunk.doc_id),
-                }
+                items.append(
+                    {
+                        **base,
+                        "type": "text_with_image",
+                        "text": truncate(chunk.content),
+                        "image_url": f"{image_url_prefix}{chunk.doc_id}/",
+                    }
+                )
             else:
-                result_items[key] = truncate(chunk.content)
+                items.append({**base, "text": truncate(chunk.content)})
 
-    ret: dict[str, Any] = {"result": result_items}
+    ret: dict[str, Any] = {"result": items}
     if has_image_results:
         ret["_image_instruction"] = IMAGE_MARKDOWN_INSTRUCTION
 

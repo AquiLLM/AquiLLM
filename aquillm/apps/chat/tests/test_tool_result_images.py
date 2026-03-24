@@ -76,13 +76,18 @@ class ToolImageMarkdownInjectionTests(SimpleTestCase):
                     arguments={"search_string": "figure", "top_k": 1},
                     for_whom='assistant',
                     result_dict={
-                        "result": {
-                            "[Result 1] -- Doc chunk #: 1": {
+                        "result": [
+                            {
+                                "rank": 1,
+                                "chunk_id": 1,
+                                "doc_id": "00000000-0000-0000-0000-000000000001",
+                                "chunk": 1,
+                                "title": "Doc",
                                 "type": "image",
                                 "text": "Figure 2",
                                 "image_url": "/aquillm/document_image/00000000-0000-0000-0000-000000000001/",
                             }
-                        },
+                        ],
                         "_image_instruction": "Use markdown image syntax.",
                     },
                 ),
@@ -116,13 +121,18 @@ class ToolImageMarkdownInjectionTests(SimpleTestCase):
                     arguments={"search_string": "Figure 2", "top_k": 5},
                     for_whom='assistant',
                     result_dict={
-                        "result": {
-                            "[Result 1] -- Paper chunk #: 12": {
+                        "result": [
+                            {
+                                "rank": 1,
+                                "chunk_id": 12,
+                                "doc_id": "00000000-0000-0000-0000-000000000002",
+                                "chunk": 12,
+                                "title": "Paper",
                                 "type": "image",
                                 "text": "Figure 2",
                                 "image_url": "/aquillm/document_image/00000000-0000-0000-0000-000000000002/",
                             }
-                        },
+                        ],
                         "_image_instruction": "Use markdown image syntax.",
                     },
                 ),

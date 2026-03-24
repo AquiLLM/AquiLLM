@@ -71,6 +71,17 @@ def recent_tool_image_markdown(conversation: Conversation, max_images: int = 3) 
         payload = result_dict.get("result")
         candidates: list[tuple[str, str]] = []
 
+        if isinstance(payload, list):
+            for value in payload:
+                if not isinstance(value, dict):
+                    continue
+                url = value.get("image_url")
+                if isinstance(url, str):
+                    caption = (
+                        str(value.get("text") or value.get("title") or "Image").strip()[:80] or "Image"
+                    )
+                    candidates.append((caption, url))
+
         if isinstance(payload, dict):
             direct_url = payload.get("image_url")
             if isinstance(direct_url, str):
