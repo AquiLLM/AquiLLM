@@ -211,7 +211,8 @@ services:
       - VLLM_TENSOR_PARALLEL_SIZE=${OCR_VLLM_TENSOR_PARALLEL_SIZE:-1}
       - VLLM_GPU_MEMORY_UTILIZATION=${OCR_VLLM_GPU_MEMORY_UTILIZATION:-0.2}
       - VLLM_MAX_MODEL_LEN=${OCR_VLLM_MAX_MODEL_LEN:-4096}
-      # VLLM_EXTRA_ARGS: do not use ${OCR_VLLM_EXTRA_ARGS:-} here (empty host interpolation overrides env_file). vllm_start.sh copies OCR_VLLM_EXTRA_ARGS when unset.
+      # Blank overrides chat VLLM_EXTRA_ARGS from env_file (e.g. --reasoning-parser qwen3). vllm_start.sh fills from OCR_VLLM_EXTRA_ARGS.
+      - VLLM_EXTRA_ARGS=
       - VLLM_TRUST_REMOTE_CODE=${OCR_VLLM_TRUST_REMOTE_CODE:-1}
     ports:
       - "8004:8000"
@@ -251,7 +252,7 @@ services:
       - VLLM_TENSOR_PARALLEL_SIZE=${TRANSCRIBE_VLLM_TENSOR_PARALLEL_SIZE:-1}
       - VLLM_GPU_MEMORY_UTILIZATION=${TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION:-0.2}
       - VLLM_MAX_MODEL_LEN=${TRANSCRIBE_VLLM_MAX_MODEL_LEN:-4096}
-      # VLLM_EXTRA_ARGS via vllm_start.sh from TRANSCRIBE_VLLM_EXTRA_ARGS when unset (avoid empty ${...:-} override).
+      - VLLM_EXTRA_ARGS=
       - VLLM_TRUST_REMOTE_CODE=${TRANSCRIBE_VLLM_TRUST_REMOTE_CODE:-1}
     ports:
       - "8005:8000"
@@ -291,7 +292,7 @@ services:
       - VLLM_TENSOR_PARALLEL_SIZE=${MEM0_EMBED_TENSOR_PARALLEL_SIZE:-1}
       - VLLM_GPU_MEMORY_UTILIZATION=${MEM0_EMBED_GPU_MEMORY_UTILIZATION:-0.2}
       - VLLM_MAX_MODEL_LEN=${MEM0_EMBED_MAX_MODEL_LEN:-8192}
-      # VLLM_EXTRA_ARGS via vllm_start.sh from MEM0_EMBED_VLLM_EXTRA_ARGS when unset.
+      - VLLM_EXTRA_ARGS=
       - VLLM_TRUST_REMOTE_CODE=${MEM0_EMBED_VLLM_TRUST_REMOTE_CODE:-1}
     ports:
       - "8002:8000"
@@ -332,7 +333,7 @@ services:
       # Must be <= free_vram/total_vram at startup (other vLLM/chat procs on same GPU reduce free VRAM).
       - VLLM_GPU_MEMORY_UTILIZATION=${APP_RERANK_GPU_MEMORY_UTILIZATION:-0.08}
       - VLLM_MAX_MODEL_LEN=${APP_RERANK_MAX_MODEL_LEN:-8192}
-      # VLLM_EXTRA_ARGS via vllm_start.sh from APP_RERANK_VLLM_EXTRA_ARGS when unset.
+      - VLLM_EXTRA_ARGS=
       - VLLM_TRUST_REMOTE_CODE=${APP_RERANK_VLLM_TRUST_REMOTE_CODE:-1}
     ports:
       - "8003:8000"
