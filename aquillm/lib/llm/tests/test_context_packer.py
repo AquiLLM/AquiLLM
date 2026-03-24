@@ -1,6 +1,8 @@
 """Deterministic context packing: pinning and section budgets."""
 from __future__ import annotations
 
+import logging
+
 from lib.llm.utils.context_packer import ContextPackerConfig, pack_messages_for_budget
 
 
@@ -117,5 +119,23 @@ def test_pruning_stage_order_dedupe_then_compress_then_hard_trim():
         assert stages.index("extractive") < stages.index("hard_trim")
     if "hard_trim" in stages:
         assert stages.index("dedupe") < stages.index("hard_trim")
+
+
+def test_context_packer_logs_stats_without_prompt_body(caplog):
+    secret = "SECRET_USER_TEXT_DO_NOT_LOG"
+    msgs = [{"role": "user", "content": secret}]
+    with caplog.at_level(logging.INFO, logger="lib.llm.utils.context_packer"):
+        pack_messages_for_budget(
+            "system also hidden",
+            msgs,
+            context_limit=2048,
+            max_tokens=256,
+            cfg=ContextPackerConfig(),
+            slack=32,
+        )
+    joined = " ".join(r.message for r in caplog.records)
+    assert "context_pack stats" in joined
+    assert secret not in joined
+    assert "system also hidden" not in joined
 
 
