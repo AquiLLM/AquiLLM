@@ -28,6 +28,9 @@ IFS='|' read -r MODEL_TO_SERVE SERVED_MODEL_NAME <<< "$(select_model_and_alias)"
 HOST="${VLLM_HOST:-0.0.0.0}"
 PORT="${VLLM_PORT:-8000}"
 
+# If .env omits OCR_VLLM_EXTRA_ARGS, full BF16/BFloat16 weights (~15+ GiB for 7B-VL) often exhaust KV budget at low gpu_memory_utilization.
+_DEFAULT_OCR_VLLM_EXTRA_ARGS=$'--quantization bitsandbytes --load-format bitsandbytes --dtype float16 --model-loader-extra-config \'{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\''
+
 # Compose sometimes injects VLLM_EXTRA_ARGS="" when ${VAR:-} interpolation is empty on the host,
 # which overrides env_file. Recover from the service-specific *VLLM_EXTRA_ARGS in the same .env.
 if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
@@ -43,7 +46,13 @@ fi
 if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
   case "${VLLM_MODEL:-}" in
     *whisper*|*Whisper*) export VLLM_EXTRA_ARGS="${TRANSCRIBE_VLLM_EXTRA_ARGS:-}" ;;
-    *Qwen2.5-VL*|*Qwen/Qwen2.5-VL*) export VLLM_EXTRA_ARGS="${OCR_VLLM_EXTRA_ARGS:-}" ;;
+    *Qwen2.5-VL*|*Qwen/Qwen2.5-VL*)
+      if [ -n "${OCR_VLLM_EXTRA_ARGS// }" ]; then
+        export VLLM_EXTRA_ARGS="${OCR_VLLM_EXTRA_ARGS}"
+      else
+        export VLLM_EXTRA_ARGS="${_DEFAULT_OCR_VLLM_EXTRA_ARGS}"
+      fi
+      ;;
   esac
 fi
 
