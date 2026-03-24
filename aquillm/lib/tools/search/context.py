@@ -10,7 +10,7 @@ def format_adjacent_chunks_tool_result(
     truncate: Callable[[str], str],
 ) -> dict[str, str]:
     """Build tool result text from ordered chunks with chunk_number and content attributes."""
-    text_blob = "".join(chunk.content for chunk in window)
+    text_blob = "\n\n".join(chunk.content for chunk in window)
     text_blob = truncate(text_blob)
     return {
         "result": (
