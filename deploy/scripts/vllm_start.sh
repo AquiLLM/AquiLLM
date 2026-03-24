@@ -236,8 +236,17 @@ fi
 
 # vLLM 0.17.x: bitsandbytes + Qwen3-VL sequence-classification reranker fails loading classifier weights
 # (AssertionError: e.g. torch.Size([1, 2048]) vs [512, 1]). Use fp16 for rerank until upstream fixes.
-if [ "${VLLM_TASK:-}" = "score" ] && [[ "${VLLM_EXTRA_ARGS:-}" == *bitsandbytes* ]]; then
-  echo "WARN: Removing bitsandbytes flags from rerank VLLM_EXTRA_ARGS (VLLM_TASK=score); incompatible with Qwen3-VL reranker on vLLM 0.17.x." >&2
+# Match VLLM_TASK=score (trim CR from Windows-sourced env) or any *Reranker* model id.
+_vllm_task_trim="${VLLM_TASK:-}"
+_vllm_task_trim="${_vllm_task_trim%%[$'\r']}"
+_rerank_bnb_strip=0
+if [[ "${VLLM_EXTRA_ARGS:-}" == *[Bb]itsandbytes* ]]; then
+  if [ "${_vllm_task_trim}" = "score" ] || [[ "${VLLM_MODEL:-}" == *[Rr]eranker* ]]; then
+    _rerank_bnb_strip=1
+  fi
+fi
+if [ "${_rerank_bnb_strip}" = "1" ]; then
+  echo "WARN: Removing bitsandbytes flags from rerank VLLM_EXTRA_ARGS; incompatible with Qwen3-VL reranker on vLLM 0.17.x." >&2
   VLLM_EXTRA_ARGS="$(
     VLLM_EXTRA_ARGS_IN="${VLLM_EXTRA_ARGS}" "${PYTHON_BIN}" - <<'PY'
 import os
@@ -313,6 +322,8 @@ fi
 
 # Avoid vLLM env validation warnings for wrapper-only variables.
 unset \
+  _rerank_bnb_strip \
+  _vllm_task_trim \
   VLLM_HOST \
   VLLM_PORT \
   VLLM_MODEL \
