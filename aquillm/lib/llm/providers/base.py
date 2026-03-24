@@ -15,6 +15,7 @@ from ..types.messages import AssistantMessage, LLM_Message, ToolMessage, UserMes
 from ..types.response import LLMResponse
 from . import image_context as imgctx
 from .complete_turn import complete_conversation_turn
+from ..utils.tool_call_kwargs import normalize_tool_call_kwargs
 
 try:
     from aquillm.settings import DEBUG
@@ -89,6 +90,7 @@ class LLMInterface(ABC):
             tool_name = name or "invalid_tool"
             for_whom: Literal["assistant", "user"] = "assistant"
             result_dict: dict = {"exception": "Tool call failed before execution"}
+            call_arguments: Any = input
             if not name or name not in tools_dict.keys():
                 result_dict = {"exception": "Function name is not valid"}
                 result = imgctx.serialize_tool_result_for_llm(result_dict)
@@ -107,7 +109,8 @@ class LLMInterface(ABC):
                     }
                     result = imgctx.serialize_tool_result_for_llm(result_dict)
                 else:
-                    future = self.tool_executor.submit(partial(tool, **input))
+                    call_arguments = normalize_tool_call_kwargs(name, input)
+                    future = self.tool_executor.submit(partial(tool, **call_arguments))
                     try:
                         tool_timeout_s = float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))
                         result_dict = future.result(timeout=tool_timeout_s)
@@ -123,7 +126,7 @@ class LLMInterface(ABC):
             return ToolMessage(
                 tool_name=tool_name,
                 content=result,
-                arguments=input,
+                arguments=call_arguments,
                 result_dict=result_dict,
                 for_whom=for_whom,
                 tools=message.tools,
