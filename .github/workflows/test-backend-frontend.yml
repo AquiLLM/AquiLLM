@@ -47,6 +47,7 @@ jobs:
           python -m pytest
           aquillm/tests/integration/test_architecture_import_boundaries.py
           aquillm/tests/integration/test_context_processors_urls.py
+          aquillm/tests/integration/test_document_image_view.py
           -q --tb=short
 
   frontend-build:
