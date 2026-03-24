@@ -41,11 +41,12 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             else:
                 query_embedding = get_embedding(query)
                 rag_cache.set_cached_query_embedding(query, "search_query", embed_model, query_embedding)
-            vector_results = model_cls.objects.filter_by_documents(docs).exclude(
-                embedding__isnull=True
-            ).order_by(L2Distance("embedding", query_embedding))[
-                :vector_limit
-            ]  # type: ignore
+            vector_results = (
+                model_cls.objects.filter_by_documents(docs)
+                .exclude(embedding__isnull=True)
+                .defer("embedding")
+                .order_by(L2Distance("embedding", query_embedding))[:vector_limit]
+            )  # type: ignore
             vector_ms = (perf_counter() - vector_start) * 1000
         except Exception as exc:
             logger.warning(
