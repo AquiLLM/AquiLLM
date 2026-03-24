@@ -45,6 +45,8 @@ The unified upload endpoint supports:
 *   **LLM Integration**: Local LLMs, Claude, OpenAI, Gemini as desired
 *   **Asynchronous Tasks**: Celery, Redis, Django Channels
 
+*   **Optional RAG / cost controls**: Django cache–backed retrieval TTL caches (`RAG_CACHE_*`), cross-provider prompt preflight trimming (`TOKEN_EFFICIENCY_*`), optional LM-Lingua2 compression (`LM_LINGUA2_*`), and optional vLLM LMCache wiring (`LMCACHE_*`). See `.env.example` and `docs/superpowers/plans/2026-03-23-caching-rag-token-efficiency-rollout-notes.md` for rollout and rollback.
+
 *   **Authentication**: django-allauth
 *   **Containerization**: Docker, Docker Compose
 
