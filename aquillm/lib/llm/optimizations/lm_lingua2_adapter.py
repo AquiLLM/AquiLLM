@@ -62,6 +62,27 @@ def _model_name() -> str:
     return raw or "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
 
 
+def _device_map() -> str:
+    """cuda when available; else cpu. Web containers are usually CPU-only — override with LM_LINGUA2_DEVICE_MAP."""
+    raw = (getenv("LM_LINGUA2_DEVICE_MAP", "") or "").strip()
+    if raw:
+        return raw
+    try:
+        from django.conf import settings
+
+        s = str(getattr(settings, "LM_LINGUA2_DEVICE_MAP", "") or "").strip()
+        if s:
+            return s
+    except Exception:
+        pass
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 def _get_compressor():
     global _COMPRESSOR, _COMPRESSOR_FAILED
     if _COMPRESSOR_FAILED:
@@ -71,7 +92,11 @@ def _get_compressor():
     try:
         from llmlingua import PromptCompressor
 
-        _COMPRESSOR = PromptCompressor(model_name=_model_name(), use_llmlingua2=True)
+        _COMPRESSOR = PromptCompressor(
+            model_name=_model_name(),
+            device_map=_device_map(),
+            use_llmlingua2=True,
+        )
     except Exception as exc:
         logger.warning("LM-Lingua2 init failed (fail-open): %s", exc)
         _COMPRESSOR_FAILED = True

@@ -60,6 +60,8 @@ LM_LINGUA2_MODEL = os.environ.get(
     "LM_LINGUA2_MODEL",
     "microsoft/llmlingua-2-xlm-roberta-large-meetingbank",
 ).strip()
+# Empty: adapter picks cuda if torch sees a GPU, else cpu (typical in Docker web).
+LM_LINGUA2_DEVICE_MAP = (os.environ.get("LM_LINGUA2_DEVICE_MAP") or "").strip()
 
 # Django cache: Redis when DJANGO_CACHE_REDIS_URL is set; otherwise LocMem (tests/local deterministic)
 DJANGO_CACHE_REDIS_URL = (os.environ.get("DJANGO_CACHE_REDIS_URL") or "").strip()
