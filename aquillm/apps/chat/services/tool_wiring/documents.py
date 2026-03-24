@@ -43,12 +43,12 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
     @llm_tool(
         param_descs={
             "search_string": (
-                "The string to search by. Often it helps to phrase it as a question."
+                "Required. Non-empty search query (string). Never call this tool with missing "
+                "arguments; always pass search_string and top_k together."
             ),
             "top_k": (
-                "The number of results to return. Start with 5 for simple questions, 8-10 for broad "
-                "or multi-part questions. Increase if the desired information is not found. "
-                "Go no higher than 15."
+                "Required. Integer from 1 to 15. Start with 5 for simple questions, 8-10 for broad "
+                "or multi-part questions."
             ),
         },
         required=["search_string", "top_k"],
@@ -57,8 +57,8 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
     def vector_search(search_string: str, top_k: int) -> ToolResultDict:
         """
         Uses a combination of vector search, trigram search and reranking to search the documents
-        available to the user. Prefer this tool when the question may span many documents; it does
-        not require document UUIDs.
+        available to the user. You must pass search_string and top_k every time—empty tool calls fail.
+        Prefer this tool when the question may span many documents; it does not require document UUIDs.
         Returns text chunks and image chunks. For image chunks, both the image and its OCR-extracted
         text are provided.
         When returning results to the user that include images, use markdown image syntax:
@@ -114,11 +114,16 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
     @llm_tool(
         for_whom="assistant",
         required=["doc_id"],
-        param_descs={"doc_id": "UUID (as as string) of the document to return in full"},
+        param_descs={
+            "doc_id": (
+                "UUID string from document_ids for this chat only; ids not in that list will be rejected."
+            )
+        },
     )
     def whole_document(doc_id: str) -> ToolResultDict:
         """
-        Get the full text of a document. Use when a user asks you to get a full document.
+        Get the full text of a document. Use only doc_id values from document_ids for this chat;
+        invented UUIDs are rejected without a database lookup.
         For image documents, this includes both the extracted text and the image itself.
         When returning an image to the user, use markdown: ![description](image_url)
         """
@@ -127,7 +132,12 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
             return {"exception": error_msg}
         doc: DocumentChild | None = Document.get_by_id(doc_uuid)
         if doc is None:
-            return {"exception": f"Document {doc_id} does not exist!"}
+            return {
+                "exception": (
+                    f"Document {doc_id} is missing from storage (data inconsistency). "
+                    "Try document_ids and vector_search instead."
+                )
+            }
         if not doc.collection.user_can_view(user):
             return {"exception": f"User cannot access document {doc_id}!"}
         token_count = async_to_sync(chat_ref.chat.llm_if.token_count)(chat_ref.chat.convo, doc.full_text)
@@ -154,7 +164,7 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
         for_whom="assistant",
         required=["doc_id", "search_string", "top_k"],
         param_descs={
-            "doc_id": "UUID (as a string) of the document to search.",
+            "doc_id": "UUID from document_ids for this chat only; other ids are rejected.",
             "search_string": "String to search the contents of the document by.",
             "top_k": "Number of search results to return.",
         },
@@ -177,7 +187,12 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             return {"exception": error_msg}
         doc = Document.get_by_id(doc_uuid)
         if doc is None:
-            return {"exception": f"Document {doc_id} does not exist!"}
+            return {
+                "exception": (
+                    f"Document {doc_id} is missing from storage (data inconsistency). "
+                    "Try document_ids and vector_search instead."
+                )
+            }
         if not doc.collection.user_can_view(user):
             return {"exception": f"User cannot access document {doc_id}!"}
         _, _, results = TextChunk.text_chunk_search(search_string, top_k, [doc])

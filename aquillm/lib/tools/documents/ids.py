@@ -9,6 +9,15 @@ _UUID_HEX_LEN = 32
 # Shorter fragments are too easy to collide when many documents are visible.
 _MIN_PREFIX_MATCH_HEX_LEN = 16
 
+_ERR_ID_NOT_IN_CHAT = (
+    "That document id is not in the documents available for this chat's selected collections. "
+    "Call document_ids and use a UUID from that list only; do not guess or reuse ids from elsewhere."
+)
+_ERR_NO_DOCS_IN_CHAT = (
+    "No documents are available in the selected collections for this chat. "
+    "Select collections that contain documents, then use vector_search or document_ids."
+)
+
 
 def clean_and_parse_doc_id(doc_id: str) -> tuple[UUID | None, str]:
     """
@@ -62,9 +71,16 @@ def resolve_doc_id_with_candidates(doc_id: str, candidates: Sequence[UUID]) -> t
     Parse doc_id; if that fails, try a unique prefix match against candidate document UUIDs.
 
     Used when models truncate UUIDs while copying from long document lists.
+    Syntactically valid UUIDs that are not in ``candidates`` are rejected so models cannot
+    burn turns on hallucinated or out-of-scope ids.
     """
+    candidate_set = frozenset(candidates)
     parsed, err = clean_and_parse_doc_id(doc_id)
     if parsed is not None:
+        if not candidate_set:
+            return None, _ERR_NO_DOCS_IN_CHAT
+        if parsed not in candidate_set:
+            return None, _ERR_ID_NOT_IN_CHAT
         return parsed, ""
 
     fragment = _hex_fragment_from_doc_id_arg(doc_id)
@@ -82,6 +98,8 @@ def resolve_doc_id_with_candidates(doc_id: str, candidates: Sequence[UUID]) -> t
     if len(matches) == 1:
         return matches[0], ""
     if not matches:
+        if not candidate_set:
+            return None, _ERR_NO_DOCS_IN_CHAT
         return None, err
     return None, (
         f"Ambiguous document ID (matches {len(matches)} documents in the selected collections). "

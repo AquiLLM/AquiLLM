@@ -56,12 +56,19 @@ def llm_tool(
                 return type_checked_func(*args, **kwargs)
             except Exception as e:
                 if isinstance(e, ValidationError):
+                    extra = ""
+                    if func_name == "vector_search":
+                        extra = (
+                            " For vector_search you must pass search_string (non-empty string) "
+                            "and top_k (integer 1-15) in the same tool call."
+                        )
                     return {
                         "exception": (
                             f"Missing or invalid arguments for {func_name}. "
-                            "Pass every required field with correct types (see tool description). "
-                            "For searching many documents, use vector_search; for one document by "
-                            "ID, call document_ids first and pass the full UUID."
+                            "Pass every required field with correct types (see tool description)."
+                            f"{extra} "
+                            "For many documents use vector_search with those fields; for one document "
+                            "by id, call document_ids first and pass the full UUID."
                         ),
                     }
                 if DEBUG:
