@@ -1,0 +1,171 @@
+# Local development compose — no GPU, no vLLM.
+# Routes LLM/OCR/transcription/embeddings through OpenAI, reranking through Cohere.
+#
+# Required in .env: OPENAI_API_KEY, COHERE_KEY
+# Optional in .env: GEMINI_API_KEY (unused here but available if you switch OCR provider)
+#
+# Usage:
+#   docker compose -f deploy/compose/no_gpu_dev.yml up
+#   docker compose -f deploy/compose/no_gpu_dev.yml up -d
+
+x-common-env: &common-env
+  # Database
+  POSTGRES_USER: aquillm
+  POSTGRES_PASSWORD: aquillm
+  POSTGRES_NAME: aquillm
+  POSTGRES_HOST: db
+  # Storage
+  STORAGE_HOST: storage:9000
+  STORAGE_ACCESS_KEY: dev
+  STORAGE_SECRET_KEY: rickbailey
+  # Django
+  DJANGO_DEBUG: 1
+  C_FORCE_ROOT: 1
+  RUN_CELERY_IN_WEB: 0
+  # LLM — OpenAI
+  LLM_CHOICE: OPENAI
+  # OCR — OpenAI vision (GPT-4o)
+  APP_OCR_PROVIDER: qwen
+  APP_OCR_QWEN_BASE_URL: https://api.openai.com/v1
+  APP_OCR_QWEN_MODEL: gpt-4o
+  # Transcription — OpenAI Whisper
+  INGEST_TRANSCRIBE_PROVIDER: openai
+  INGEST_TRANSCRIBE_MODEL: whisper-1
+  INGEST_TRANSCRIBE_OPENAI_BASE_URL: https://api.openai.com/v1
+  # Embeddings — OpenAI
+  APP_EMBED_BASE_URL: https://api.openai.com/v1
+  APP_EMBED_API_KEY: ${OPENAI_API_KEY}
+  APP_EMBED_MODEL: text-embedding-3-small
+  APP_EMBED_DIMS: 1024
+  # Reranking — Cohere fallback (no OpenAI equivalent)
+  APP_RERANK_PROVIDER: cohere
+  # Memory — Mem0 with Qdrant, LLM/embeddings via OpenAI
+  MEMORY_BACKEND: mem0
+  MEM0_LLM_PROVIDER: openai
+  MEM0_LLM_BASE_URL: https://api.openai.com/v1
+  MEM0_LLM_API_KEY: ${OPENAI_API_KEY}
+  MEM0_LLM_MODEL: gpt-4o-mini
+  MEM0_EMBED_PROVIDER: openai
+  MEM0_EMBED_BASE_URL: https://api.openai.com/v1
+  MEM0_EMBED_API_KEY: ${OPENAI_API_KEY}
+  MEM0_EMBED_MODEL: text-embedding-3-small
+  MEM0_EMBED_DIMS: 1024
+  MEM0_EMBED_ALLOW_DIMENSIONS_OVERRIDE: 1
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web/Dockerfile.prod
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      <<: *common-env
+    depends_on:
+      db:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    volumes:
+      - ../..:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web/Dockerfile.prod
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      <<: *common-env
+    depends_on:
+      db:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    volumes:
+      - ../..:/app
+    command: sh -c "cd /app/aquillm && celery -A aquillm worker --loglevel=info"
+
+  db:
+    image: pgvector/pgvector:0.8.0-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aquillm
+      POSTGRES_PASSWORD: aquillm
+      POSTGRES_DB: aquillm
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aquillm -d aquillm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  storage:
+    image: minio/minio
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: dev
+      MINIO_ROOT_PASSWORD: rickbailey
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-I", "localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 10s
+      start_period: 15s
+    command: minio server /data --console-address ":9001"
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set aquillm http://storage:9000 dev rickbailey;
+      /usr/bin/mc mb aquillm/aquillm;
+      exit 0;"
+
+  redis:
+    image: redis:7.4-bookworm
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  qdrant:
+    image: qdrant/qdrant:v1.17
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_data:
+  minio_data:
+  qdrant_data:

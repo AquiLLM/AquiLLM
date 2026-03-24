@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from .config import (
     get_local_embed_config,
+    get_target_dims,
     max_embed_input_chars,
     is_context_limit_error,
     extract_context_limit_tokens,
@@ -41,12 +42,20 @@ def _shrink_text_for_retry(text: str) -> str:
     return text[:next_len]
 
 
+def _dims_kwargs() -> dict:
+    """Return dimensions kwarg for OpenAI API if APP_EMBED_DIMS is set."""
+    dims = get_target_dims()
+    return {"dimensions": dims} if dims else {}
+
+
 def _embed_local_with_context_retry(client: OpenAI, model: str, query: Any) -> list[float]:
     """Embed with automatic retry on context limit errors."""
+    dims_kw = _dims_kwargs()
     if not isinstance(query, str):
         response = client.embeddings.create(
             model=model,
             input=query,
+            **dims_kw,
         )
         return response.data[0].embedding
 
@@ -62,6 +71,7 @@ def _embed_local_with_context_retry(client: OpenAI, model: str, query: Any) -> l
             response = client.embeddings.create(
                 model=model,
                 input=candidate,
+                **dims_kw,
             )
             return response.data[0].embedding
         except Exception as exc:
@@ -111,10 +121,12 @@ def get_embeddings_via_local_openai(queries: list[Any]) -> list[list[float]]:
         (query[:char_cap] if char_cap > 0 and isinstance(query, str) else query)
         for query in queries
     ]
+    dims_kw = _dims_kwargs()
     try:
         response = client.embeddings.create(
             model=model,
             input=prepared_queries,
+            **dims_kw,
         )
         return [item.embedding for item in response.data]
     except Exception as exc:
