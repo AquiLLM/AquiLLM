@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import uuid
+from collections import defaultdict
 from typing import Any, Mapping, Sequence
 
 from django.conf import settings
@@ -261,15 +262,42 @@ def document_refs_from_documents(documents: Sequence[Any]) -> list[dict[str, Any
 def rehydrate_documents_from_refs(refs: Sequence[Mapping[str, Any]]) -> list[Any]:
     from django.apps import apps
 
-    out: list[Any] = []
+    if not refs:
+        return []
+
+    by_model: dict[str, list[int]] = defaultdict(list)
+    order: list[tuple[str, int]] = []
     for ref in refs:
         try:
-            model = apps.get_model("apps_documents", str(ref["model"]))
-            doc = model.objects.filter(pkid=int(ref["pkid"])).first()
-            if doc is not None:
-                out.append(doc)
+            mname = str(ref["model"])
+            pk = int(ref["pkid"])
         except Exception:
             continue
+        by_model[mname].append(pk)
+        order.append((mname, pk))
+
+    fetched: dict[tuple[str, int], Any] = {}
+    for mname, pks in by_model.items():
+        try:
+            model = apps.get_model("apps_documents", mname)
+        except Exception:
+            continue
+        uniq_pks = list(dict.fromkeys(pks))
+        try:
+            qs = model.objects.filter(pkid__in=uniq_pks)
+        except Exception:
+            continue
+        for doc in qs:
+            try:
+                fetched[(mname, int(doc.pkid))] = doc
+            except Exception:
+                continue
+
+    out: list[Any] = []
+    for mname, pk in order:
+        doc = fetched.get((mname, pk))
+        if doc is not None:
+            out.append(doc)
     return out
 
 

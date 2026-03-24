@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from django.test import override_settings
@@ -38,6 +38,51 @@ def test_cache_set_swallows_errors():
 
 def test_rehydrate_documents_from_refs_empty():
     assert rag_cache.rehydrate_documents_from_refs([]) == []
+
+
+@patch("django.apps.apps.get_model")
+def test_rehydrate_documents_from_refs_batches_queries_by_model(mock_get_model):
+    """Same-model refs should use one pkid__in query, not one query per ref."""
+
+    def _make_doc(pkid: int):
+        d = MagicMock()
+        d.pkid = pkid
+        return d
+
+    mock_alpha = MagicMock()
+    mock_beta = MagicMock()
+
+    def _alpha_qs(pkids: list[int]):
+        qs = MagicMock()
+        qs.__iter__ = lambda self: iter(_make_doc(p) for p in pkids)
+        return qs
+
+    def _beta_qs(pkids: list[int]):
+        qs = MagicMock()
+        qs.__iter__ = lambda self: iter(_make_doc(p) for p in pkids)
+        return qs
+
+    mock_alpha.objects.filter.side_effect = lambda **kw: _alpha_qs(list(kw["pkid__in"]))
+    mock_beta.objects.filter.side_effect = lambda **kw: _beta_qs(list(kw["pkid__in"]))
+
+    mock_get_model.side_effect = lambda app, name: (
+        mock_alpha if name == "AlphaDoc" else mock_beta
+    )
+
+    refs = [
+        {"model": "AlphaDoc", "pkid": 1},
+        {"model": "BetaDoc", "pkid": 10},
+        {"model": "AlphaDoc", "pkid": 2},
+        {"model": "AlphaDoc", "pkid": 1},
+        {"model": "AlphaDoc", "pkid": 3},
+    ]
+    out = rag_cache.rehydrate_documents_from_refs(refs)
+
+    assert mock_alpha.objects.filter.call_count == 1
+    assert mock_beta.objects.filter.call_count == 1
+    alpha_call = mock_alpha.objects.filter.call_args
+    assert set(alpha_call.kwargs["pkid__in"]) == {1, 2, 3}
+    assert [d.pkid for d in out] == [1, 10, 2, 1, 3]
 
 
 def test_document_refs_roundtrip_keys():
