@@ -78,7 +78,7 @@ class PackChunkSearchTests(SimpleTestCase):
         out = pack_chunk_search_results(
             [chunk],
             titles_by_doc_id={did: "Fig"},
-            docs_by_doc_id={},
+            docs_by_doc_id={did: SimpleNamespace(image_file=SimpleNamespace(name="fig.png"))},
             truncate=lambda s: s,
             image_modality="image",
             compact_items=False,
@@ -87,6 +87,28 @@ class PackChunkSearchTests(SimpleTestCase):
         self.assertEqual(row["type"], "image")
         self.assertIn("image_url", row)
         self.assertIn("_image_instruction", out)
+
+    def test_pack_image_modality_without_stored_image_emits_text_only(self):
+        did = uuid.uuid4()
+        chunk = SimpleNamespace(
+            id=1,
+            doc_id=did,
+            chunk_number=1,
+            content="orphan caption",
+            modality="image",
+        )
+        out = pack_chunk_search_results(
+            [chunk],
+            titles_by_doc_id={did: "Fig"},
+            docs_by_doc_id={did: SimpleNamespace(image_file=None)},
+            truncate=lambda s: s,
+            image_modality="image",
+            compact_items=False,
+        )
+        row = out["result"][0]
+        self.assertEqual(row["text"], "orphan caption")
+        self.assertNotIn("image_url", row)
+        self.assertNotIn("_image_instruction", out)
 
 
 class ToolMessageWrapperTests(SimpleTestCase):

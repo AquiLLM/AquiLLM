@@ -5,9 +5,9 @@ from os import getenv
 from typing import Any, Callable, Sequence
 
 IMAGE_MARKDOWN_INSTRUCTION = (
-    "One or more results include an image_url. "
-    "When discussing those image results, include them in markdown with "
-    "![description](image_url) using the image_url field from the result."
+    "One or more results include an image URL (field `image_url`, or compact payloads: `u` with "
+    "`ty` of `image` or `text_with_image`). When discussing those results, include them in markdown "
+    "with ![description](url) using that exact URL from the tool result—do not guess document ids."
 )
 
 
@@ -52,27 +52,34 @@ def pack_chunk_search_results(
             }
 
         if chunk.modality == image_modality:
-            display_url = f"{image_url_prefix}{chunk.doc_id}/"
-            has_image_results = True
+            doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
+            if doc_for_chunk is not None and getattr(doc_for_chunk, "image_file", None):
+                display_url = f"{image_url_prefix}{chunk.doc_id}/"
+                has_image_results = True
 
-            if use_compact:
-                items.append(
-                    {
-                        **base,
-                        "ty": "image",
-                        "x": truncate(chunk.content),
-                        "u": display_url,
-                    }
-                )
+                if use_compact:
+                    items.append(
+                        {
+                            **base,
+                            "ty": "image",
+                            "x": truncate(chunk.content),
+                            "u": display_url,
+                        }
+                    )
+                else:
+                    items.append(
+                        {
+                            **base,
+                            "type": "image",
+                            "text": truncate(chunk.content),
+                            "image_url": display_url,
+                        }
+                    )
             else:
-                items.append(
-                    {
-                        **base,
-                        "type": "image",
-                        "text": truncate(chunk.content),
-                        "image_url": display_url,
-                    }
-                )
+                if use_compact:
+                    items.append({**base, "x": truncate(chunk.content)})
+                else:
+                    items.append({**base, "text": truncate(chunk.content)})
         else:
             doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
             if doc_for_chunk is not None and getattr(doc_for_chunk, "image_file", None):
