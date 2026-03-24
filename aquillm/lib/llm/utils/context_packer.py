@@ -162,13 +162,22 @@ def _pack_core(
         return sorted(idxs, key=lambda i: (salience_scores.get(i, 0.0), i))
 
     def remove_best_candidate(pool: set[int]) -> bool:
-        nonlocal pinned
+        nonlocal pinned, salience_scores
         unpinned = [i for i in pool if i not in pinned]
         if not unpinned:
             return False
         victim = drop_priority_order(unpinned)[0]
         del msgs[victim]
         pinned = {p if p < victim else p - 1 for p in pinned if p != victim}
+        if salience_scores:
+            remapped: dict[int, float] = {}
+            for k, v in salience_scores.items():
+                if k == victim:
+                    continue
+                nk = k if k < victim else k - 1
+                remapped[nk] = v
+            salience_scores.clear()
+            salience_scores.update(remapped)
         return True
 
     orig_len = len(msgs)
@@ -219,6 +228,12 @@ def pack_messages_for_budget(
     """
     cfg = cfg or ContextPackerConfig()
     try:
+        active_scores = salience_scores
+        if active_scores is None:
+            from lib.llm.utils.context_salience import build_salience_scores
+
+            built = build_salience_scores(message_dicts)
+            active_scores = dict(built) if built else None
         msgs, mt, stats = _pack_core(
             system_text,
             message_dicts,
@@ -226,7 +241,7 @@ def pack_messages_for_budget(
             max_tokens,
             cfg,
             slack,
-            salience_scores,
+            active_scores,
         )
         return {"messages": msgs, "max_tokens": mt, "stats": stats}
     except Exception as exc:
