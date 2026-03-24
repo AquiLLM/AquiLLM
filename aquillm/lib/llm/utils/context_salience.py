@@ -15,7 +15,9 @@ def _is_tool_evidence_msg(m: dict[str, Any]) -> bool:
         return False
     head = content.lstrip()[:160]
     first_line = head.split("\n", 1)[0]
-    return first_line.startswith("Tool ") and "result:" in first_line
+    if first_line.startswith("Tool ") and "result:" in first_line:
+        return True
+    return first_line.startswith("Tool:")
 
 
 def _word_tokens(s: str) -> set[str]:

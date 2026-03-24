@@ -17,13 +17,13 @@ _TOOL_ARGS_RENDER_MAX = 512
 
 
 def _compact_tool_prefix(tool_name: str, arguments: Optional[dict]) -> str:
-    lines = [f"Tool {tool_name} result:"]
+    head = f"Tool:{tool_name}"
     if arguments:
         raw = json.dumps(arguments, ensure_ascii=False, default=str, separators=(",", ":"))
         if len(raw) > _TOOL_ARGS_RENDER_MAX:
             raw = raw[:_TOOL_ARGS_RENDER_MAX] + "…"
-        lines.append(f"args {raw}")
-    return "\n".join(lines)
+        return f"{head}\n{raw}"
+    return head
 
 
 class __LLMMessage(BaseModel, ABC):

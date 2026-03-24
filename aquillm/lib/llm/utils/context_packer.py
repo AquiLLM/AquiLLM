@@ -51,7 +51,9 @@ def _is_tool_evidence(msg: dict[str, Any]) -> bool:
         return False
     head = content.lstrip()[:160]
     first_line = head.split("\n", 1)[0]
-    return first_line.startswith("Tool ") and "result:" in first_line
+    if first_line.startswith("Tool ") and "result:" in first_line:
+        return True
+    return first_line.startswith("Tool:")
 
 
 def _assistant_has_tool_calls(msg: dict[str, Any]) -> bool:
@@ -370,6 +372,16 @@ def pack_messages_for_budget(
             cfg,
             slack,
             active_scores,
+        )
+        logger.info(
+            "context_pack stats before_tokens=%s after_tokens=%s pinned_count=%s "
+            "dropped_history=%s stage_fit=%s stages=%s",
+            stats.get("before_tokens"),
+            stats.get("after_tokens"),
+            stats.get("pinned_count"),
+            stats.get("dropped_history"),
+            stats.get("stage_fit"),
+            ",".join(stats.get("stages_applied") or []),
         )
         return {"messages": msgs, "max_tokens": mt, "stats": stats}
     except Exception as exc:

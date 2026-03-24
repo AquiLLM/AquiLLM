@@ -18,7 +18,7 @@ def test_context_packer_pins_latest_user_and_tool_chain():
     }
     tool_res = {
         "role": "user",
-        "content": "Tool vector_search result:\nargs {}\n" + ("bulkdata " * 300),
+        "content": "Tool:vector_search\n{}\n" + ("bulkdata " * 300),
     }
     final = {"role": "user", "content": "final question unique"}
     msgs = [
@@ -52,11 +52,11 @@ def test_context_packer_pins_latest_user_and_tool_chain():
 def test_context_packer_respects_section_budgets():
     old_tool = {
         "role": "user",
-        "content": "Tool t1 result:\nargs {}\n" + ("OLDTOOL " * 400),
+        "content": "Tool:t1\n{}\n" + ("OLDTOOL " * 400),
     }
     new_tool = {
         "role": "user",
-        "content": "Tool t2 result:\nargs {}\nkeep_marker " + ("x" * 80),
+        "content": "Tool:t2\n{}\nkeep_marker " + ("x" * 80),
     }
     msgs = [
         {"role": "user", "content": "hi"},
@@ -86,9 +86,7 @@ def test_context_packer_respects_section_budgets():
 
 
 def test_pruning_stage_order_dedupe_then_compress_then_hard_trim():
-    shared = (
-        "Tool vector_search result:\nargs {}\nshared header line one\nshared header line two\n"
-    )
+    shared = "Tool:vector_search\n{}\nshared header line one\nshared header line two\n"
     filler = (
         "First sentence about nothing. Second sentence also filler. "
         "Third runs on with extra detail that should be trimmed away under pressure."
@@ -119,3 +117,5 @@ def test_pruning_stage_order_dedupe_then_compress_then_hard_trim():
         assert stages.index("extractive") < stages.index("hard_trim")
     if "hard_trim" in stages:
         assert stages.index("dedupe") < stages.index("hard_trim")
+
+
