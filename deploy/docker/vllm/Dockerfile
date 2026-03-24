@@ -1,4 +1,6 @@
-FROM vllm/vllm-openai:latest
+# Pinned: Whisper + bitsandbytes 4-bit fails on v0.18.x (V1 engine, bitsandbytes.py bias shape in encoder profile).
+# Bump to :latest (or v0.18+) only after upstream fixes or use fp16 + smaller Whisper without BnB on transcribe.
+FROM vllm/vllm-openai:v0.17.1
 
 USER root
 RUN apt-get update \
