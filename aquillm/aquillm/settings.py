@@ -67,6 +67,7 @@ INSTALLED_APPS = [
     "apps.platform_admin",
     "apps.core",
     "apps.integrations.zotero",
+    "apps.bug_reports",
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -88,6 +89,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     'allauth.account.middleware.AccountMiddleware',
+    'apps.bug_reports.middleware.BugReportMiddleware',
 ]
 
 if DEBUG:

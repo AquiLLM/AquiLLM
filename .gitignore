@@ -173,3 +173,4 @@ aquillm/aquillm/static/index.css
 react/node_modules/
 /node_modules/
 /aquillm/tmp/
+.playwright-mcp

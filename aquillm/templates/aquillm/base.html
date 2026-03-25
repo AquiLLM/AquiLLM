@@ -146,6 +146,8 @@
                 <div class="flex items-center gap-2 sm:gap-3 my-2 text-slight_muted_white pr-[16px]">
                     {% block nav_extra %}{% endblock %}
                     {% if user.is_authenticated %}
+                        <div id="bug-report-root"></div>
+                        <script>mountReactComponent('bug-report-root', 'BugReportButton', {});</script>
                         <button id="account-management-toggle-button" class="h-[40px] px-[10px] rounded-[14px] hover:bg-scheme-shade_6 transition-all flex items-center gap-[10px] border border-scheme-contrast">
                             <div class="h-[28px] w-[28px] rounded-full bg-scheme-shade_5 text-text-normal flex items-center justify-center text-xs font-semibold">
                                 {{ user.username|slice:":1"|upper }}
@@ -246,6 +248,9 @@
                             {% if user.is_staff %}
                             <a href="{% url 'email_whitelist' %}" class="my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
                                 Email Whitelist
+                            </a>
+                            <a href="{% url 'bug_reports_admin' %}" class="my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
+                                Bug Reports
                             </a>
                             {% endif %}
                         {% endif %}

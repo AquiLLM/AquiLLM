@@ -41,6 +41,8 @@ from aquillm.tasks import create_conversation_memories_task
 
 from anthropic._exceptions import OverloadedError
 
+from apps.bug_reports.capture import async_capture_exception
+
 import logging
 import sys
 import io
@@ -697,34 +699,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.send('{"exception": "Invalid chat_id"}')
             return
         try:
-            self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
-            self.last_sent_sequence = len(self.convo) - 1
-            await self.send(text_data=dumps({
-                "conversation": {
-                    "system": self.db_convo.system_prompt,
-                    "messages": [pydantic_message_to_frontend_dict(msg) for msg in self.convo]
-                }
-            }))
-            augment_start = perf_counter()
-            await database_sync_to_async(augment_conversation_with_memory)(
-                self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
-            )
-            logger.info("Memory augmentation took %.1fms in connect()", (perf_counter() - augment_start) * 1000)
-            self.convo.rebind_tools(self.tools)
-            logger.debug(f"About to call llm_if.spin() in connect()")
-            before_spin_len = len(self.convo)
-            llm_start = perf_counter()
-            await self.llm_if.spin(
-                self.convo,
-                max_func_calls=CHAT_MAX_FUNC_CALLS,
-                max_tokens=CHAT_MAX_TOKENS,
-                send_func=send_func,
-                stream_func=stream_func,
-            )
-            logger.info("LLM spin took %.1fms in connect()", (perf_counter() - llm_start) * 1000)
-            await self.__save(create_memories=len(self.convo) > before_spin_len)
-            logger.debug(f"llm_if.spin() completed in connect()")
-            return
+            async with async_capture_exception(user=self.user, context='chat.connect'):
+                self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
+                self.last_sent_sequence = len(self.convo) - 1
+                await self.send(text_data=dumps({
+                    "conversation": {
+                        "system": self.db_convo.system_prompt,
+                        "messages": [pydantic_message_to_frontend_dict(msg) for msg in self.convo]
+                    }
+                }))
+                augment_start = perf_counter()
+                await database_sync_to_async(augment_conversation_with_memory)(
+                    self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
+                )
+                logger.info("Memory augmentation took %.1fms in connect()", (perf_counter() - augment_start) * 1000)
+                self.convo.rebind_tools(self.tools)
+                logger.debug(f"About to call llm_if.spin() in connect()")
+                before_spin_len = len(self.convo)
+                llm_start = perf_counter()
+                await self.llm_if.spin(
+                    self.convo,
+                    max_func_calls=CHAT_MAX_FUNC_CALLS,
+                    max_tokens=CHAT_MAX_TOKENS,
+                    send_func=send_func,
+                    stream_func=stream_func,
+                )
+                logger.info("LLM spin took %.1fms in connect()", (perf_counter() - llm_start) * 1000)
+                await self.__save(create_memories=len(self.convo) > before_spin_len)
+                logger.debug(f"llm_if.spin() completed in connect()")
+                return
         except OverloadedError as e:
             logger.error(f"LLM overloaded: {e}")
             self.dead = True
@@ -836,34 +839,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         if not self.dead:
             try:
-                data = loads(text_data)
-                action = data.pop('action', None)
-                logger.debug(f"Action: {action}")
-                if action == 'append':
-                    await append(data)
-                    augment_start = perf_counter()
-                    await database_sync_to_async(augment_conversation_with_memory)(
-                        self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
-                    )
-                    logger.info("Memory augmentation took %.1fms in receive()", (perf_counter() - augment_start) * 1000)
-                    logger.debug("About to call llm_if.spin() in receive()")
-                    llm_start = perf_counter()
-                    await self.llm_if.spin(
-                        self.convo,
-                        max_func_calls=CHAT_MAX_FUNC_CALLS,
-                        max_tokens=CHAT_MAX_TOKENS,
-                        send_func=send_func,
-                        stream_func=stream_func,
-                    )
-                    logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
-                    await self.__save(create_memories=True)
-                elif action == 'rate':
-                    await rate(data)
-                elif action == 'feedback':
-                    await feedback(data)
-                else:
-                    raise ValueError(f'Invalid action "{action}"')
-                logger.debug("receive() action completed")
+                async with async_capture_exception(user=self.user, context='chat.receive'):
+                    data = loads(text_data)
+                    action = data.pop('action', None)
+                    logger.debug(f"Action: {action}")
+                    if action == 'append':
+                        await append(data)
+                        augment_start = perf_counter()
+                        await database_sync_to_async(augment_conversation_with_memory)(
+                            self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
+                        )
+                        logger.info("Memory augmentation took %.1fms in receive()", (perf_counter() - augment_start) * 1000)
+                        logger.debug("About to call llm_if.spin() in receive()")
+                        llm_start = perf_counter()
+                        await self.llm_if.spin(
+                            self.convo,
+                            max_func_calls=CHAT_MAX_FUNC_CALLS,
+                            max_tokens=CHAT_MAX_TOKENS,
+                            send_func=send_func,
+                            stream_func=stream_func,
+                        )
+                        logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
+                        await self.__save(create_memories=True)
+                    elif action == 'rate':
+                        await rate(data)
+                    elif action == 'feedback':
+                        await feedback(data)
+                    else:
+                        raise ValueError(f'Invalid action "{action}"')
+                    logger.debug("receive() action completed")
             except ValidationError as e:
                 msg = e.messages[0] if getattr(e, "messages", None) else str(e)
                 logger.warning("Validation error in receive(): %s", msg)

@@ -58,8 +58,10 @@ if DEBUG:
     # Import only when DEBUG is True so we never load debug_toolbar models when
     # DJANGO_DEBUG is off (debug_toolbar must be in INSTALLED_APPS only then).
     from debug_toolbar.toolbar import debug_toolbar_urls
+    from apps.bug_reports.views.api import test_exception
 
     urlpatterns += debug_toolbar_urls()
     urlpatterns += [
         path("debug_models/", views.debug_models, name="debug_models"),
+        path("debug_exception/", test_exception, name="debug_exception"),
     ]
