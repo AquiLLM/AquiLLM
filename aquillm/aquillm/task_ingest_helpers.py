@@ -47,12 +47,41 @@ def figures_subcollection_name(source_doc_title: str, max_len: int = 100) -> str
 
 
 def ensure_child_collection_permissions(CollectionPermission, parent_collection, child_collection) -> None:
-    permissions = CollectionPermission.objects.filter(collection=parent_collection).values("user_id", "permission")
+    """Make child collection permissions exactly match the parent (add, update, remove)."""
+    permissions = list(
+        CollectionPermission.objects.filter(collection=parent_collection).values("user_id", "permission")
+    )
+    parent_user_ids = {p["user_id"] for p in permissions}
+    child_qs = CollectionPermission.objects.filter(collection=child_collection)
+    if parent_user_ids:
+        child_qs.exclude(user_id__in=parent_user_ids).delete()
+    else:
+        child_qs.delete()
     for permission in permissions:
         CollectionPermission.objects.update_or_create(
             user_id=permission["user_id"],
             collection=child_collection,
             defaults={"permission": permission["permission"]},
+        )
+
+
+def is_figures_derived_subcollection_name(name: str) -> bool:
+    """True for collections created by get_or_create_figures_subcollection (document-derived figures)."""
+    n = (name or "").strip()
+    return n.endswith(" - Figures") or n == "Figures"
+
+
+def sync_figure_subcollection_permissions_from_parent(parent_collection) -> None:
+    """Copy parent sharing to direct children that hold extracted document figures."""
+    from apps.collections.models import CollectionPermission
+
+    for child in parent_collection.children.all():
+        if not is_figures_derived_subcollection_name(child.name):
+            continue
+        ensure_child_collection_permissions(
+            CollectionPermission,
+            parent_collection=parent_collection,
+            child_collection=child,
         )
 
 
@@ -82,6 +111,8 @@ __all__ = [
     "figures_subcollection_name",
     "get_or_create_figures_subcollection",
     "infer_source_title_from_figure_title",
+    "is_figures_derived_subcollection_name",
     "media_uniqueness_ref",
     "normalize_source_key",
+    "sync_figure_subcollection_permissions_from_parent",
 ]

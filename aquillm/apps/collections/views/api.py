@@ -16,6 +16,7 @@ from apps.collections.services.collection_api_payloads import (
     raw_text_type_overrides,
 )
 from apps.documents.models import DESCENDED_FROM_DOCUMENT
+from aquillm.task_ingest_helpers import sync_figure_subcollection_permissions_from_parent
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,8 @@ def collection_permissions(request, col_id):
                     user=get_user_model().objects.get(id=admin),
                     permission='MANAGE'
                 )
+
+            sync_figure_subcollection_permissions_from_parent(collection)
 
         return JsonResponse({'status': 'success'})
     except Exception as e:
