@@ -1,6 +1,6 @@
-﻿# Specs Index
+# Specs Index
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Status legend
 
@@ -29,9 +29,13 @@ Last updated: 2026-03-25
 | `2026-03-19-kubernetes-support-services-deployment-scaling-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-19-kubernetes-support-services-deployment-scaling.md` |
 | `2026-03-25-gcp-secret-management-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-25-gcp-secret-management-implementation.md` |
 | `2026-03-25-jenkins-pipeline-design.md` | Planned | (implementation plan not yet created) |
+| `2026-03-26-multi-backend-inference-deploy-strategy-design.md` | Planned | (implementation plan not yet created) |
+| `2026-03-26-ingestion-work-queue-batching-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-26-ingestion-work-queue-batching-implementation.md` |
+| `2026-03-26-langgraph-mcp-tools-orchestration-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-25-langgraph-research-orchestration.md` |
 
 ## Notes
 
 - Canonical progress tracking is maintained in `docs/roadmap/roadmap-status.md`.
 - If spec intent changes after implementation, update this index and link the updated execution notes.
 - `docs/specs/canceled/` currently has no files.
+
