@@ -1,4 +1,4 @@
-# RAG Low-Hanging Fruit (Latency, Context Efficiency, Quality) Implementation Plan
+﻿# RAG Low-Hanging Fruit (Latency, Context Efficiency, Quality) Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -366,7 +366,7 @@ git commit -m "docs(tuning): update default rag chunking and retrieval knobs"
 - Modify: `aquillm/apps/documents/services/chunk_search.py`
 - Modify: `aquillm/apps/documents/services/chunk_rerank_local_vllm.py`
 - Modify: `aquillm/lib/llm/types/messages.py`
-- Modify: `docs/superpowers/plans/2026-03-23-caching-rag-token-efficiency-rollout-notes.md`
+- Modify: `docs/roadmap/plans/active/2026-03-23-caching-rag-token-efficiency-rollout-notes.md`
 
 - [ ] **Step 1: Add failing test(s) for non-sensitive logging fields**
 
@@ -390,14 +390,14 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/lib/llm/types/messages.py docs/superpowers/plans/2026-03-23-caching-rag-token-efficiency-rollout-notes.md
+git add aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/lib/llm/types/messages.py docs/roadmap/plans/active/2026-03-23-caching-rag-token-efficiency-rollout-notes.md
 git commit -m "obs(rag): add low-risk latency and payload-size metrics"
 ```
 
 ### Task 10: Final regression pass and execution handoff
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-03-24-rag-low-hanging-fruit-latency-context-quality.md` (checklist updates)
+- Modify: `docs/roadmap/plans/active/2026-03-24-rag-low-hanging-fruit-latency-context-quality.md` (checklist updates)
 
 - [ ] **Step 1: Run focused regression suite**
 
@@ -423,7 +423,7 @@ Record any deferred items (for example dynamic rerank payload-shape cache key gr
 - [ ] **Step 4: Commit plan state**
 
 ```bash
-git add docs/superpowers/plans/2026-03-24-rag-low-hanging-fruit-latency-context-quality.md
+git add docs/roadmap/plans/active/2026-03-24-rag-low-hanging-fruit-latency-context-quality.md
 git commit -m "docs(plan): finalize rag low-hanging fruit execution checklist"
 ```
 
@@ -449,7 +449,9 @@ git commit -m "docs(plan): finalize rag low-hanging fruit execution checklist"
 ## Execution status (2026-03-23)
 
 - **Commits on `development` (newest first):** `obs(rag)`, `docs(tuning)`, `perf(search)` adaptive fan-out, `fix(rag)` adjacent chunks, `perf(prompt)` tool wrapper, `perf(context)` compact vector payload, `perf(cache)` batch rehydrate, `perf(search)` defer embedding, `perf(rerank)` cache short-circuit.
-- **Focused pytest (passing locally):** `test_rag_cache`, `test_rerank_http_cache`, `test_chunk_search_query_cache`, `test_chunk_search_candidate_tuning`, `test_tool_result_images`, `test_tool_payload_compaction`, `test_context_format` — run with `DJANGO_DEBUG=1`, `OPENAI_API_KEY`, `GEMINI_API_KEY` set (see README).
-- **Not run here (needs PostgreSQL):** `apps/documents/tests/test_multimodal_chunk_position_uniqueness.py` and full `pytest` — run in Docker Compose or CI against `db`.
+- **Focused pytest (passing locally):** `test_rag_cache`, `test_rerank_http_cache`, `test_chunk_search_query_cache`, `test_chunk_search_candidate_tuning`, `test_tool_result_images`, `test_tool_payload_compaction`, `test_context_format` â€” run with `DJANGO_DEBUG=1`, `OPENAI_API_KEY`, `GEMINI_API_KEY` set (see README).
+- **Not run here (needs PostgreSQL):** `apps/documents/tests/test_multimodal_chunk_position_uniqueness.py` and full `pytest` â€” run in Docker Compose or CI against `db`.
 - **Open questions / follow-ups:** Rerank result cache key is query-signature + candidate IDs + `top_k` + model; it does not vary by per-chunk multimodal payload shape. Acceptable given short TTL; revisit if thumbnail/OCR drift causes stale ordering complaints.
+
+
 

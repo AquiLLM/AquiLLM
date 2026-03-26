@@ -1,4 +1,4 @@
-# Full Multimodal Support And Storage Implementation Plan
+﻿# Full Multimodal Support And Storage Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -257,4 +257,6 @@
 
 ## Execution Hand-off
 
-Plan complete and saved to `docs/superpowers/plans/2026-03-17-full-multimodal-storage-and-ingestion.md`. Ready to execute.
+Plan complete and saved to `docs/roadmap/plans/completed/2026-03-17-full-multimodal-storage-and-ingestion.md`. Ready to execute.
+
+

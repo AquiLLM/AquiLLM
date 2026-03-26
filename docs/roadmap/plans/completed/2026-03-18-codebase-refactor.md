@@ -1,4 +1,4 @@
-# AquiLLM Codebase Refactor Implementation Plan
+﻿# AquiLLM Codebase Refactor Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Django 5.1, React, PostgreSQL, Celery, Docker Compose
 
-**Spec:** `docs/superpowers/specs/2026-03-18-codebase-refactor-design.md`
+**Spec:** `docs/specs/2026-03-18-codebase-refactor-design.md`
 
 ---
 
@@ -442,8 +442,8 @@ python manage.py migrate apps_collections
 - [ ] **Step 8: Update imports across codebase**
 
 Search and replace:
-- `from aquillm.models import Collection` → `from apps.collections.models import Collection`
-- `from aquillm.models import CollectionPermission` → `from apps.collections.models import CollectionPermission`
+- `from aquillm.models import Collection` â†’ `from apps.collections.models import Collection`
+- `from aquillm.models import CollectionPermission` â†’ `from apps.collections.models import CollectionPermission`
 
 ```bash
 # Find all files that need updating
@@ -615,7 +615,7 @@ git commit -m "refactor: Phase 2 complete - models moved to apps/"
 - Create: `aquillm/lib/llm/types/conversation.py`
 - Create: `aquillm/lib/llm/types/tools.py`
 - Create: `aquillm/lib/llm/types/response.py`
-- Modify: `aquillm/aquillm/llm.py` (lines 1-338 → lib/)
+- Modify: `aquillm/aquillm/llm.py` (lines 1-338 â†’ lib/)
 
 - [ ] **Step 1: Create messages.py**
 
@@ -991,7 +991,7 @@ Extract from `aquillm/ingestion/parsers.py`.
 
 ### Task 4.6: Phase 3 Verification
 
-- [ ] **Step 1: Verify no lib/ → apps/ imports**
+- [ ] **Step 1: Verify no lib/ â†’ apps/ imports**
 
 ```bash
 rg "from apps\." lib/
@@ -1018,10 +1018,10 @@ git commit -m "refactor: Phase 3 complete - lib/ extraction done"
 ### Task 5.1: Split api_views.py into Domain Apps
 
 Move views from `aquillm/api_views.py` to appropriate apps:
-- Collection views → `apps/collections/views/api.py`
-- Document views → `apps/documents/views/api.py`
-- Ingestion views → `apps/ingestion/views/api.py`
-- Admin views → `apps/platform_admin/views/`
+- Collection views â†’ `apps/collections/views/api.py`
+- Document views â†’ `apps/documents/views/api.py`
+- Ingestion views â†’ `apps/ingestion/views/api.py`
+- Admin views â†’ `apps/platform_admin/views/`
 
 ### Task 5.2: Split views.py into Domain Apps
 
@@ -1120,7 +1120,7 @@ git commit -m "refactor: Phase 5 complete - deployment restructured"
 
 ### Task 7.1: Move Unit Tests to Domain Apps
 
-**Files per spec (docs/superpowers/specs/2026-03-18-codebase-refactor-design.md lines 683-707):**
+**Files per spec (docs/specs/2026-03-18-codebase-refactor-design.md lines 683-707):**
 
 | Current File | New Location |
 |--------------|--------------|
@@ -1185,8 +1185,8 @@ Move-Item aquillm/ingest/tests.py apps/ingestion/tests/test_ingest.py
 - [ ] **Step 6: Update test imports**
 
 Update import paths in all moved test files:
-- `from aquillm.models import` → `from apps.documents.models import` (etc.)
-- `from aquillm.llm import` → `from lib.llm import`
+- `from aquillm.models import` â†’ `from apps.documents.models import` (etc.)
+- `from aquillm.llm import` â†’ `from lib.llm import`
 
 - [ ] **Step 7: Run tests to verify**
 
@@ -1390,3 +1390,4 @@ ruff check aquillm/apps aquillm/lib
 - Each phase has a checkpoint commit
 - Can revert to any phase boundary if remote build fails
 - Phase 2 migrations use `SeparateDatabaseAndState` to avoid DB changes
+

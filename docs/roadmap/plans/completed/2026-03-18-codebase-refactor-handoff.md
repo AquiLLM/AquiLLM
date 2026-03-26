@@ -1,4 +1,4 @@
-# Codebase Refactor Handoff
+﻿# Codebase Refactor Handoff
 
 **Date:** 2026-03-18
 **Status:** In Progress - Chunk 8 Complete, Starting Chunk 9
@@ -6,26 +6,26 @@
 ## Resume Instructions
 
 Start new chat with:
-> "Continue the codebase refactor from Chunk 9 (Cleanup). Chunks 1-8 are complete. Docker validation will be done on remote at the end. Read handoff at `docs/superpowers/plans/2026-03-18-codebase-refactor-handoff.md` first."
+> "Continue the codebase refactor from Chunk 9 (Cleanup). Chunks 1-8 are complete. Docker validation will be done on remote at the end. Read handoff at `docs/roadmap/plans/completed/2026-03-18-codebase-refactor-handoff.md` first."
 
 ## Key Documents
 
-- **Spec:** `docs/superpowers/specs/2026-03-18-codebase-refactor-design.md`
-- **Plan:** `docs/superpowers/plans/2026-03-18-codebase-refactor.md`
+- **Spec:** `docs/specs/2026-03-18-codebase-refactor-design.md`
+- **Plan:** `docs/roadmap/plans/completed/2026-03-18-codebase-refactor.md`
 
 ## Progress Overview
 
 | Chunk | Phase | Status | Commits |
 |-------|-------|--------|---------|
-| 1 | Create Directory Structure | ✅ COMPLETE | `b4a727e` |
-| 2 | Move Models to apps/ | ✅ COMPLETE | `0b04ce7` |
-| 3 | Extract lib/llm/ | ✅ COMPLETE | (pending commit) |
-| 4 | Extract remaining lib/ | ✅ COMPLETE | (pending commit) |
-| 5 | Restructure Views/Consumers | ✅ COMPLETE | `3d00a87` |
-| 6 | Deployment Restructure | ✅ COMPLETE | `4142e24` |
-| 7 | Test Migration | ✅ COMPLETE | (pending commit) |
-| 8 | Frontend Restructure | ✅ COMPLETE | (pending commit) |
-| 9 | Cleanup | ⏳ PENDING | - |
+| 1 | Create Directory Structure | âœ… COMPLETE | `b4a727e` |
+| 2 | Move Models to apps/ | âœ… COMPLETE | `0b04ce7` |
+| 3 | Extract lib/llm/ | âœ… COMPLETE | (pending commit) |
+| 4 | Extract remaining lib/ | âœ… COMPLETE | (pending commit) |
+| 5 | Restructure Views/Consumers | âœ… COMPLETE | `3d00a87` |
+| 6 | Deployment Restructure | âœ… COMPLETE | `4142e24` |
+| 7 | Test Migration | âœ… COMPLETE | (pending commit) |
+| 8 | Frontend Restructure | âœ… COMPLETE | (pending commit) |
+| 9 | Cleanup | â³ PENDING | - |
 
 ## Chunk 4 Completed Work
 
@@ -103,11 +103,11 @@ The tools remain well-organized in consumers.py with clear separation.
 
 ## Chunk 4 Verification Results
 
-- ✅ No lib/ → apps/ imports (verified with grep)
-- ✅ No Django imports in lib/memory, lib/embeddings, lib/ocr, lib/parsers (pure Python)
-- ✅ All lib/ files pass py_compile syntax check
-- ✅ All updated aquillm files pass py_compile syntax check
-- ⚠️ Note: lib/llm/types/conversation.py has Django import (from Chunk 3) - minor tech debt
+- âœ… No lib/ â†’ apps/ imports (verified with grep)
+- âœ… No Django imports in lib/memory, lib/embeddings, lib/ocr, lib/parsers (pure Python)
+- âœ… All lib/ files pass py_compile syntax check
+- âœ… All updated aquillm files pass py_compile syntax check
+- âš ï¸ Note: lib/llm/types/conversation.py has Django import (from Chunk 3) - minor tech debt
 
 ## Chunk 5 Completed Work
 
@@ -166,41 +166,41 @@ Moved all deployment files to `deploy/` directory with organized subdirectories:
 #### New Directory Structure
 ```
 deploy/
-├── docker/
-│   ├── web/
-│   │   ├── Dockerfile           (was Dockerfile)
-│   │   └── Dockerfile.prod      (was Dockerfile.prod)
-│   ├── vllm/
-│   │   ├── Dockerfile           (was Dockerfile.vllm)
-│   │   └── chat_templates/
-│   ├── certbot/
-│   │   └── Dockerfile           (was Dockerfile.certbot)
-│   └── test/
-│       └── Dockerfile           (was Dockerfile.test)
-├── compose/
-│   ├── base.yml                 (was docker-compose.yml)
-│   ├── development.yml          (was docker-compose-development.yml)
-│   ├── production.yml           (was docker-compose-prod.yml)
-│   └── test.yml                 (was docker-compose-test.yml)
-├── nginx/
-│   ├── nginx.conf               (was deployment/nginx.conf)
-│   └── aquillm.conf.template    (was deployment/aquillm.conf.template)
-└── scripts/
-    ├── run.sh                   (was deployment/run.sh)
-    ├── vllm_start.sh            (was deployment/vllm_start.sh)
-    ├── healthcheck.sh           (was deployment/healthcheck.sh)
-    ├── start_dev.sh             (was deployment/start_dev.sh)
-    ├── get_certs.sh             (was deployment/get_certs.sh)
-    ├── get_certs.cron           (was deployment/get_certs.cron)
-    ├── start_mem0_local.sh      (was deployment/start_mem0_local.sh)
-    ├── relaunch_mem0_oss.sh     (was deployment/relaunch_mem0_oss.sh)
-    ├── nginx_start.sh           (was deployment/nginx_start.sh)
-    ├── install.sh               (was deployment/install.sh)
-    ├── aquillm.service          (was deployment/aquillm.service)
-    └── dev/
-        ├── run.sh               (was dev/run.sh)
-        ├── create_buckets.sh    (was dev/create_buckets.sh)
-        └── reload_tailwind.sh   (was dev/reload_tailwind.sh)
+â”œâ”€â”€ docker/
+â”‚   â”œâ”€â”€ web/
+â”‚   â”‚   â”œâ”€â”€ Dockerfile           (was Dockerfile)
+â”‚   â”‚   â””â”€â”€ Dockerfile.prod      (was Dockerfile.prod)
+â”‚   â”œâ”€â”€ vllm/
+â”‚   â”‚   â”œâ”€â”€ Dockerfile           (was Dockerfile.vllm)
+â”‚   â”‚   â””â”€â”€ chat_templates/
+â”‚   â”œâ”€â”€ certbot/
+â”‚   â”‚   â””â”€â”€ Dockerfile           (was Dockerfile.certbot)
+â”‚   â””â”€â”€ test/
+â”‚       â””â”€â”€ Dockerfile           (was Dockerfile.test)
+â”œâ”€â”€ compose/
+â”‚   â”œâ”€â”€ base.yml                 (was docker-compose.yml)
+â”‚   â”œâ”€â”€ development.yml          (was docker-compose-development.yml)
+â”‚   â”œâ”€â”€ production.yml           (was docker-compose-prod.yml)
+â”‚   â””â”€â”€ test.yml                 (was docker-compose-test.yml)
+â”œâ”€â”€ nginx/
+â”‚   â”œâ”€â”€ nginx.conf               (was deployment/nginx.conf)
+â”‚   â””â”€â”€ aquillm.conf.template    (was deployment/aquillm.conf.template)
+â””â”€â”€ scripts/
+    â”œâ”€â”€ run.sh                   (was deployment/run.sh)
+    â”œâ”€â”€ vllm_start.sh            (was deployment/vllm_start.sh)
+    â”œâ”€â”€ healthcheck.sh           (was deployment/healthcheck.sh)
+    â”œâ”€â”€ start_dev.sh             (was deployment/start_dev.sh)
+    â”œâ”€â”€ get_certs.sh             (was deployment/get_certs.sh)
+    â”œâ”€â”€ get_certs.cron           (was deployment/get_certs.cron)
+    â”œâ”€â”€ start_mem0_local.sh      (was deployment/start_mem0_local.sh)
+    â”œâ”€â”€ relaunch_mem0_oss.sh     (was deployment/relaunch_mem0_oss.sh)
+    â”œâ”€â”€ nginx_start.sh           (was deployment/nginx_start.sh)
+    â”œâ”€â”€ install.sh               (was deployment/install.sh)
+    â”œâ”€â”€ aquillm.service          (was deployment/aquillm.service)
+    â””â”€â”€ dev/
+        â”œâ”€â”€ run.sh               (was dev/run.sh)
+        â”œâ”€â”€ create_buckets.sh    (was dev/create_buckets.sh)
+        â””â”€â”€ reload_tailwind.sh   (was dev/reload_tailwind.sh)
 ```
 
 #### Files Updated with New Paths
@@ -268,8 +268,8 @@ Moved all test files from `aquillm/aquillm/tests/` and `aquillm/chat/tests.py`, 
 
 ### Verification
 
-- ✅ All 18 test files pass py_compile
-- ✅ No tests left in old locations
+- âœ… All 18 test files pass py_compile
+- âœ… No tests left in old locations
 
 ## Chunk 8 Completed Work
 
@@ -279,57 +279,57 @@ Created feature-based directory structure:
 
 ```
 react/src/
-├── features/
-│   ├── chat/
-│   │   ├── components/
-│   │   │   ├── index.ts
-│   │   │   ├── MessageBubble.tsx
-│   │   │   ├── ToolCallGroup.tsx
-│   │   │   └── RatingButtons.tsx
-│   │   ├── types/
-│   │   │   └── index.ts
-│   │   └── utils/
-│   │       ├── index.ts
-│   │       └── messageGrouping.ts
-│   │
-│   ├── ingestion/
-│   │   ├── components/
-│   │   │   ├── index.ts
-│   │   │   ├── DocTypeToggle.tsx
-│   │   │   ├── IngestRow.tsx
-│   │   │   └── forms/
-│   │   │       ├── index.ts
-│   │   │       ├── UploadsForm.tsx
-│   │   │       ├── PDFForm.tsx
-│   │   │       ├── VTTForm.tsx
-│   │   │       ├── WebpageForm.tsx
-│   │   │       ├── ArxivForm.tsx
-│   │   │       └── HandwrittenForm.tsx
-│   │   └── types/
-│   │       └── index.ts
-│   │
-│   ├── collections/components/
-│   ├── documents/components/
-│   └── platform_admin/components/
-│
-└── shared/
-    ├── components/
-    │   ├── index.ts
-    │   ├── Collapsible.tsx
-    │   ├── ToolResult.tsx
-    │   └── logos/
-    │       ├── index.ts
-    │       ├── AquillmLogo.tsx
-    │       ├── UserLogo.tsx
-    │       └── ArxivLogo.tsx
-    ├── hooks/
-    ├── utils/
-    └── types/
+â”œâ”€â”€ features/
+â”‚   â”œâ”€â”€ chat/
+â”‚   â”‚   â”œâ”€â”€ components/
+â”‚   â”‚   â”‚   â”œâ”€â”€ index.ts
+â”‚   â”‚   â”‚   â”œâ”€â”€ MessageBubble.tsx
+â”‚   â”‚   â”‚   â”œâ”€â”€ ToolCallGroup.tsx
+â”‚   â”‚   â”‚   â””â”€â”€ RatingButtons.tsx
+â”‚   â”‚   â”œâ”€â”€ types/
+â”‚   â”‚   â”‚   â””â”€â”€ index.ts
+â”‚   â”‚   â””â”€â”€ utils/
+â”‚   â”‚       â”œâ”€â”€ index.ts
+â”‚   â”‚       â””â”€â”€ messageGrouping.ts
+â”‚   â”‚
+â”‚   â”œâ”€â”€ ingestion/
+â”‚   â”‚   â”œâ”€â”€ components/
+â”‚   â”‚   â”‚   â”œâ”€â”€ index.ts
+â”‚   â”‚   â”‚   â”œâ”€â”€ DocTypeToggle.tsx
+â”‚   â”‚   â”‚   â”œâ”€â”€ IngestRow.tsx
+â”‚   â”‚   â”‚   â””â”€â”€ forms/
+â”‚   â”‚   â”‚       â”œâ”€â”€ index.ts
+â”‚   â”‚   â”‚       â”œâ”€â”€ UploadsForm.tsx
+â”‚   â”‚   â”‚       â”œâ”€â”€ PDFForm.tsx
+â”‚   â”‚   â”‚       â”œâ”€â”€ VTTForm.tsx
+â”‚   â”‚   â”‚       â”œâ”€â”€ WebpageForm.tsx
+â”‚   â”‚   â”‚       â”œâ”€â”€ ArxivForm.tsx
+â”‚   â”‚   â”‚       â””â”€â”€ HandwrittenForm.tsx
+â”‚   â”‚   â””â”€â”€ types/
+â”‚   â”‚       â””â”€â”€ index.ts
+â”‚   â”‚
+â”‚   â”œâ”€â”€ collections/components/
+â”‚   â”œâ”€â”€ documents/components/
+â”‚   â””â”€â”€ platform_admin/components/
+â”‚
+â””â”€â”€ shared/
+    â”œâ”€â”€ components/
+    â”‚   â”œâ”€â”€ index.ts
+    â”‚   â”œâ”€â”€ Collapsible.tsx
+    â”‚   â”œâ”€â”€ ToolResult.tsx
+    â”‚   â””â”€â”€ logos/
+    â”‚       â”œâ”€â”€ index.ts
+    â”‚       â”œâ”€â”€ AquillmLogo.tsx
+    â”‚       â”œâ”€â”€ UserLogo.tsx
+    â”‚       â””â”€â”€ ArxivLogo.tsx
+    â”œâ”€â”€ hooks/
+    â”œâ”€â”€ utils/
+    â””â”€â”€ types/
 ```
 
 ### ChatComponent.tsx Split
 
-Original: 1066 lines → Main component: ~450 lines + extracted modules
+Original: 1066 lines â†’ Main component: ~450 lines + extracted modules
 
 | Extracted Module | New Location |
 |-----------------|--------------|
@@ -345,7 +345,7 @@ Original: 1066 lines → Main component: ~450 lines + extracted modules
 
 ### IngestRow.tsx Split
 
-Original: 967 lines → Main component: ~300 lines + extracted modules
+Original: 967 lines â†’ Main component: ~300 lines + extracted modules
 
 | Extracted Module | New Location |
 |-----------------|--------------|
@@ -368,9 +368,9 @@ Original component files now import from new locations:
 
 ### Verification
 
-- ✅ `npm run build` passes successfully
-- ✅ All modules correctly imported
-- ✅ Build output: 628.15 kB (193.94 kB gzipped)
+- âœ… `npm run build` passes successfully
+- âœ… All modules correctly imported
+- âœ… Build output: 628.15 kB (193.94 kB gzipped)
 
 ## What's Next
 
@@ -391,7 +391,7 @@ Final cleanup phase:
 3. Dependencies: All new app migrations depend on `('aquillm', '0017_document_figure_model')`
 4. Removal migration depends on all new app migrations
 
-### Model → Table Name Mapping
+### Model â†’ Table Name Mapping
 
 All models use `db_table = 'aquillm_<lowercase_model_name>'` to preserve existing tables.
 
@@ -582,15 +582,15 @@ deploy/scripts/:
 
 ### Files Deleted (Moved)
 
-- `Dockerfile` → `deploy/docker/web/Dockerfile`
-- `Dockerfile.prod` → `deploy/docker/web/Dockerfile.prod`
-- `Dockerfile.vllm` → `deploy/docker/vllm/Dockerfile`
-- `Dockerfile.certbot` → `deploy/docker/certbot/Dockerfile`
-- `Dockerfile.test` → `deploy/docker/test/Dockerfile`
-- `docker-compose.yml` → `deploy/compose/base.yml`
-- `docker-compose-development.yml` → `deploy/compose/development.yml`
-- `docker-compose-prod.yml` → `deploy/compose/production.yml`
-- `docker-compose-test.yml` → `deploy/compose/test.yml`
+- `Dockerfile` â†’ `deploy/docker/web/Dockerfile`
+- `Dockerfile.prod` â†’ `deploy/docker/web/Dockerfile.prod`
+- `Dockerfile.vllm` â†’ `deploy/docker/vllm/Dockerfile`
+- `Dockerfile.certbot` â†’ `deploy/docker/certbot/Dockerfile`
+- `Dockerfile.test` â†’ `deploy/docker/test/Dockerfile`
+- `docker-compose.yml` â†’ `deploy/compose/base.yml`
+- `docker-compose-development.yml` â†’ `deploy/compose/development.yml`
+- `docker-compose-prod.yml` â†’ `deploy/compose/production.yml`
+- `docker-compose-test.yml` â†’ `deploy/compose/test.yml`
 - `deployment/` directory (moved to `deploy/`)
 - `dev/` directory (moved to `deploy/scripts/dev/`)
 
@@ -640,8 +640,11 @@ react/src/shared/:
 
 ## Constraints
 
-- **Local validation:** `python -m py_compile <file>` ✅ All files pass
-- **Docker validation:** `manage.py check`, `migrate --plan` ⏳ Requires Docker
+- **Local validation:** `python -m py_compile <file>` âœ… All files pass
+- **Docker validation:** `manage.py check`, `migrate --plan` â³ Requires Docker
 - **Backward compatibility:** Old imports from aquillm modules must continue working
 - **No DB changes:** All migrations use SeparateDatabaseAndState
 - **lib/ purity:** lib/ modules should not import from apps/ (verified) or Django models (mostly achieved)
+
+
+

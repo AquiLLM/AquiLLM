@@ -1,4 +1,4 @@
-# Observability (Logging, Monitoring, Pyroscope + Grafana) Implementation Plan
+﻿# Observability (Logging, Monitoring, Pyroscope + Grafana) Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
@@ -183,7 +183,7 @@ git commit -m "feat: add /metrics endpoint and optional Pyroscope in web process
 
 In `settings.py`:
 - Define `LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()` and `LOG_JSON = env_bool("LOG_JSON", False)`.
-- In `LOGGING["formatters"]`, add a `"json"` formatter that outputs a single JSON line per record (e.g. `{"timestamp": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": "%(message)s"}` — use proper escaping for JSON; or use a small custom formatter that builds a dict and `json.dumps`).
+- In `LOGGING["formatters"]`, add a `"json"` formatter that outputs a single JSON line per record (e.g. `{"timestamp": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": "%(message)s"}` â€” use proper escaping for JSON; or use a small custom formatter that builds a dict and `json.dumps`).
 - In `LOGGING["handlers"]`, add a handler (e.g. `"console_json"`) that uses the JSON formatter and `StreamHandler`, or switch existing `"console"` formatter based on `LOG_JSON`.
 - Apply `LOG_LEVEL` to the relevant loggers (e.g. `logging.getLogger().setLevel(LOG_LEVEL)` or set in each logger's `level` in the config). Prefer setting `level` in handler and logger config from `LOG_LEVEL`.
 
@@ -392,11 +392,13 @@ git commit -m "docs: add observability env and README section"
 
 ## Execution options
 
-**Plan complete and saved to `docs/plans/2026-03-16-observability-implementation-plan.md`.**
+**Plan complete and saved to `docs/roadmap/plans/pending/2026-03-16-observability-implementation-plan.md`.**
 
 Two execution options:
 
-1. **Subagent-driven (this session)** — Dispatch a fresh subagent per task, review between tasks, fast iteration.
-2. **Parallel session (separate)** — Open a new session with executing-plans and run through the plan with checkpoints.
+1. **Subagent-driven (this session)** â€” Dispatch a fresh subagent per task, review between tasks, fast iteration.
+2. **Parallel session (separate)** â€” Open a new session with executing-plans and run through the plan with checkpoints.
 
 Which approach do you prefer?
+
+

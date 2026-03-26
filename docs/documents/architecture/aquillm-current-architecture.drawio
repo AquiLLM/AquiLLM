@@ -1,0 +1,147 @@
+<mxfile host="app.diagrams.net" modified="2026-03-19T00:25:00.000Z" agent="Codex" version="24.7.17">
+  <diagram id="aquillm-cleaned-overview" name="AquiLLM Architecture (Cleaned Overview)">
+    <mxGraphModel dx="1800" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1300" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="2" value="AquiLLM Current Architecture (cleaned overview)" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=24;fontStyle=1;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1100" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="10" value="Clients &amp; External" style="swimlane;html=1;rounded=1;startSize=30;fillColor=#FDE9E9;strokeColor=#CC6D6D;fontStyle=1;fontSize=14;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="30" y="80" width="250" height="700" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="Ingress" style="swimlane;html=1;rounded=1;startSize=30;fillColor=#FFF4D6;strokeColor=#D6B656;fontStyle=1;fontSize=14;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="305" y="80" width="220" height="700" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="AquiLLM Runtime" style="swimlane;html=1;rounded=1;startSize=30;fillColor=#EAF3FF;strokeColor=#6C8EBF;fontStyle=1;fontSize=14;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="550" y="80" width="620" height="450" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="State &amp; Storage" style="swimlane;html=1;rounded=1;startSize=30;fillColor=#E9F7E9;strokeColor=#82B366;fontStyle=1;fontSize=14;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="550" y="560" width="620" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="AI / Memory Integrations" style="swimlane;html=1;rounded=1;startSize=30;fillColor=#F2EAF9;strokeColor=#9673A6;fontStyle=1;fontSize=14;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="80" width="600" height="700" as="geometry" />
+        </mxCell>
+
+        <mxCell id="20" value="Browser User" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="55" y="155" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="21" value="React UI (Vite/Tailwind build output)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="55" y="235" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="22" value="Zotero API/OAuth" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="55" y="325" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="30" value="nginx + certbot&#xa;(production)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="330" y="165" width="170" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="31" value="Direct web access&#xa;:8080 (development)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="330" y="275" width="170" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="40" value="web container&#xa;Django ASGI + Channels&#xa;(serve API/pages/websocket)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="575" y="155" width="260" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="41" value="worker container&#xa;Celery async tasks&#xa;(ingestion/background jobs)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="885" y="155" width="260" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="42" value="Domain modules&#xa;chat, collections, documents, ingestion,&#xa;memory, core, platform_admin, zotero integration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="575" y="285" width="570" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="43" value="Runtime orchestration&#xa;realtime websocket consumers + ingestion/parsers +&#xa;LLM provider routing + memory injection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="575" y="395" width="570" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="44" value="Build note: web startup compiles React + Tailwind and serves static via Django" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;dashed=1;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="575" y="505" width="570" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="50" value="PostgreSQL + pgvector" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="575" y="610" width="170" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="51" value="Redis&#xa;Channels + Celery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="775" y="610" width="170" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="52" value="MinIO&#xa;object storage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="975" y="610" width="170" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="53" value="Qdrant (optional)&#xa;Mem0 vector store" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;dashed=1;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="775" y="700" width="370" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="60" value="Hosted model APIs&#xa;OpenAI / Claude / Gemini" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="155" width="330" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="61" value="Local vLLM profile (optional)&#xa;chat + ocr + transcribe + embed + rerank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;dashed=1;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="255" width="540" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="62" value="OCR/transcribe providers&#xa;Tesseract / Gemini / Qwen / Whisper" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="365" width="540" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="63" value="Mem0 SDK backend (optional mode)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;dashed=1;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="465" width="540" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="64" value="Legend: dashed boxes/lines = optional profile or env-driven path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;dashed=1;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="555" width="540" height="55" as="geometry" />
+        </mxCell>
+
+        <mxCell id="200" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="20" target="30">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="201" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;dashed=1;" edge="1" parent="1" source="20" target="31">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="202" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="30" target="40">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="203" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;dashed=1;" edge="1" parent="1" source="31" target="40">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="204" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="40" target="42">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="205" value="enqueue async" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="40" target="41">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="206" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="42" target="43">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="207" value="OAuth + sync" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="42" target="22">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="208" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="43" target="50">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="209" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="43" target="51">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="210" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="43" target="52">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="211" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;dashed=1;" edge="1" parent="1" source="43" target="53">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="212" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="43" target="60">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="213" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;dashed=1;" edge="1" parent="1" source="43" target="61">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="214" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="43" target="62">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="215" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;dashed=1;" edge="1" parent="1" source="43" target="63">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="216" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;dashed=1;" edge="1" parent="1" source="63" target="53">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
