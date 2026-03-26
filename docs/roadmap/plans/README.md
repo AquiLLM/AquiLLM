@@ -37,6 +37,5 @@ This folder is organized by execution status, with status decisions checked agai
 
 ## Priority active plans
 
-- `active/2026-03-19-large-file-remediation-lib-tools-and-splits.md`
-- `active/2026-03-23-caching-rag-token-efficiency-optimization-refresh.md`
-- `active/2026-03-24-under-300-line-budget-completion.md`
+- `active/2026-03-16-observability-implementation-plan.md`
+- `active/2026-03-25-gcp-secret-management-implementation.md`
