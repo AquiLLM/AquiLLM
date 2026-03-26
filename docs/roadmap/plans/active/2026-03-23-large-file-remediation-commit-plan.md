@@ -355,7 +355,7 @@ python scripts/check_import_boundaries.py
 
 ## Appendix A â€” Related backlog (architecture plan, not 2026-03-19)
 
-If you are sequencing **all** structural debt in one branch, schedule these **after** Commit 23 (or in parallel worktrees) using [2026-03-21-architecture-remediation-commit-plan.md](../pending/2026-03-21-architecture-remediation-commit-plan.md) commits **11â€“13**:
+If you are sequencing **all** structural debt in one branch, schedule these **after** Commit 23 (or in parallel worktrees) using [2026-03-21-architecture-remediation-commit-plan.md](../completed/2026-03-21-architecture-remediation-commit-plan.md) commits **11â€“13**:
 
 - Ingestion `api.py` decomposition  
 - `chunks.py` embedding/search/rerank services  
@@ -374,6 +374,7 @@ If you are sequencing **all** structural debt in one branch, schedule these **af
 ---
 
 **Plan saved as `docs/roadmap/plans/active/2026-03-23-large-file-remediation-commit-plan.md`.**
+
 
 
 

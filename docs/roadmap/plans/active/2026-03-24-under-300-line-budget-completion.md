@@ -247,7 +247,7 @@ The line budget is a **guardrail**, not the product. Prefer staying slightly ove
 ## Optional doc updates (same PR or follow-up)
 
 - [ ] Update [2026-03-24-large-file-remediation-handoff.md](./2026-03-24-large-file-remediation-handoff.md) allowlist section to match repo state.
-- [ ] Note completion in [2026-03-21-architecture-remediation-commit-plan.md](../pending/2026-03-21-architecture-remediation-commit-plan.md) if all structural commits are done.
+- [ ] Note completion in [2026-03-21-architecture-remediation-commit-plan.md](../completed/2026-03-21-architecture-remediation-commit-plan.md) if all structural commits are done.
 
 ---
 
@@ -262,6 +262,7 @@ The line budget is a **guardrail**, not the product. Prefer staying slightly ove
 ---
 
 *Plan saved as `docs/roadmap/plans/active/2026-03-24-under-300-line-budget-completion.md`.*
+
 
 
 

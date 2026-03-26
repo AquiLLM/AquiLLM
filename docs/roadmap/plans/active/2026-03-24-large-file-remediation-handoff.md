@@ -2,7 +2,7 @@
 
 **Purpose:** Resume [2026-03-23-large-file-remediation-commit-plan.md](./2026-03-23-large-file-remediation-commit-plan.md) and [2026-03-19-large-file-remediation-lib-tools-and-splits.md](./2026-03-19-large-file-remediation-lib-tools-and-splits.md). **Plan commits 1â€“23 from the large-file commit plan are done** except optional **commit 16** (compact tool summary / `base.py` shrink) and any further splits driven by `check_file_lengths.py`.
 
-**Code quality / hygiene (separate track):** For runtime, security, settings, logging, and React hygiene items (mount map barrels, `IngestRow` dedup, `.gitignore`, CI), use [2026-03-19-aquillm-structure-code-quality-remediation.md](./2026-03-19-aquillm-structure-code-quality-remediation.md) and [2026-03-21-architecture-remediation-commit-plan.md](../pending/2026-03-21-architecture-remediation-commit-plan.md).
+**Code quality / hygiene (separate track):** For runtime, security, settings, logging, and React hygiene items (mount map barrels, `IngestRow` dedup, `.gitignore`, CI), use [2026-03-19-aquillm-structure-code-quality-remediation.md](./2026-03-19-aquillm-structure-code-quality-remediation.md) and [2026-03-21-architecture-remediation-commit-plan.md](../completed/2026-03-21-architecture-remediation-commit-plan.md).
 
 **Previous snapshot:** [2026-03-23-large-file-remediation-handoff.md](./2026-03-23-large-file-remediation-handoff.md) (historical; superseded by this file for â€œwhatâ€™s doneâ€).
 
@@ -98,7 +98,7 @@
 
 ### Architecture / ingestion backend (separate plan)
 
-- [2026-03-21-architecture-remediation-commit-plan.md](../pending/2026-03-21-architecture-remediation-commit-plan.md) commits **11â€“13** (e.g. ingestion `api.py`, `chunks.py` services, Zotero split) â€” schedule after or in parallel worktrees.
+- [2026-03-21-architecture-remediation-commit-plan.md](../completed/2026-03-21-architecture-remediation-commit-plan.md) commits **11â€“13** (e.g. ingestion `api.py`, `chunks.py` services, Zotero split) â€” schedule after or in parallel worktrees.
 
 ### Structure and code quality remediation
 
@@ -149,7 +149,7 @@ npm run build
 ## Suggested next session order
 
 1. **Code quality blockers** â€” [2026-03-19-aquillm-structure-code-quality-remediation.md](./2026-03-19-aquillm-structure-code-quality-remediation.md) Chunk 1 (tests + consumers) and settings slice; run pytest where DB is available.
-2. **Architecture plan** â€” [2026-03-21-architecture-remediation-commit-plan.md](../pending/2026-03-21-architecture-remediation-commit-plan.md) commits 11â€“13 as needed.
+2. **Architecture plan** â€” [2026-03-21-architecture-remediation-commit-plan.md](../completed/2026-03-21-architecture-remediation-commit-plan.md) commits 11â€“13 as needed.
 3. **Large-file polish** â€” Optional commit 16; React splits for allowlisted feature files; trim backend allowlist only with `check_file_lengths.py` proof.
 
 ---
@@ -169,4 +169,5 @@ apps/chat/tests/test_llm_complete_retry.py
 ---
 
 *Handoff for large-file remediation and related code-quality continuation; large-file commit plan 1â€“23 is effectively complete except optional 16 and incremental allowlist/split work.*
+
 

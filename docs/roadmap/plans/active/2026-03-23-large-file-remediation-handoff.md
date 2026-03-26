@@ -150,9 +150,10 @@ npm run build
 
 ## Related backlog (out of this planâ€™s numbered commits)
 
-Architecture follow-ups scheduled **after** commit 23 or in parallel worktrees: [2026-03-21-architecture-remediation-commit-plan.md](../pending/2026-03-21-architecture-remediation-commit-plan.md) commits 11â€“13 (ingestion `api.py`, `chunks.py`, Zotero tasks).
+Architecture follow-ups scheduled **after** commit 23 or in parallel worktrees: [2026-03-21-architecture-remediation-commit-plan.md](../completed/2026-03-21-architecture-remediation-commit-plan.md) commits 11â€“13 (ingestion `api.py`, `chunks.py`, Zotero tasks).
 
 ---
 
 *Handoff written for continuation of large-file remediation; align commits and messages with [2026-03-23-large-file-remediation-commit-plan.md](./2026-03-23-large-file-remediation-commit-plan.md).*
+
 

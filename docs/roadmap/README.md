@@ -20,7 +20,6 @@ Last updated: 2026-03-25
 - Feedback rating tracking + CSV export
 - Structure and code-quality remediation
 - Large-file remediation and tool extraction
-- Bigger vLLM model configuration (drift from plan)
 
 ### Not started
 
@@ -36,6 +35,7 @@ Last updated: 2026-03-25
 
 - PDF-only figure extraction plan (replaced by unified figure extraction)
 - Early RAG caching/token-efficiency plans replaced by refresh plans
+- Bigger vLLM model sizing plan (replaced by later vLLM tuning/config updates)
 
 ## What to work next
 
