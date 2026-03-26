@@ -417,3 +417,4 @@ We welcome contributions! AquiLLM is an open-source project, and we appreciate h
 *   **Reporting Bugs**: Please open an issue on GitHub detailing the problem, expected behavior, and steps to reproduce.
 *   **Feature Requests**: Open an issue describing the feature and its potential benefits.
 *   **Pull Requests**: Send a pull request!
+*   **Code style and structure**: Follow [docs/code-style-guide.md](docs/code-style-guide.md) for repository standards and quality gates.
