@@ -7,6 +7,7 @@ Last updated: 2026-03-25
 - `docs/roadmap/`: delivery status, priorities, and execution plans.
   Plans are organized under `docs/roadmap/plans/{active,pending,completed,superseded}`.
 - `docs/specs/`: design specifications and architecture proposals.
+  Status folders include `docs/specs/superseded/` and `docs/specs/canceled/`.
 - `docs/documents/`: reference documents (architecture, standards, and supporting artifacts).
 
 ## Start here
