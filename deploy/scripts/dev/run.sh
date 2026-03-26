@@ -12,11 +12,11 @@ npx tailwindcss -o /app/aquillm/aquillm/static/index.css
 /app/deploy/scripts/dev/reload_tailwind.sh &
 
 cd /app/aquillm
-./manage.py migrate --noinput
-./manage.py collectstatic --noinput
+uv run ./manage.py migrate --noinput
+uv run ./manage.py collectstatic --noinput
 
 if [ "${RUN_CELERY_IN_WEB:-1}" = "1" ]; then
-  celery -A aquillm worker --loglevel=info &
+  uv run celery -A aquillm worker --loglevel=info &
 fi
-python -Xfrozen_modules=off manage.py runserver 0.0.0.0:${PORT:-8080}
+uv run python -Xfrozen_modules=off manage.py runserver 0.0.0.0:${PORT:-8080}
 

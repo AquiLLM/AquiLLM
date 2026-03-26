@@ -6,9 +6,9 @@ ENV PORT=${PORT}
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
-RUN uv pip install -r requirements.txt --system
+# Copy dependency files first to leverage Docker cache
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 RUN apt update && apt install -y curl npm inotify-tools tesseract-ocr \
     libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui
 # Copy the rest of the application
