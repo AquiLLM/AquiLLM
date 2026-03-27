@@ -1,4 +1,4 @@
-# AquiLLM
+﻿# AquiLLM
 
 
 ![AquiLLM Logo](aquillm/aquillm/static/images/aquila.svg)
@@ -45,7 +45,7 @@ The unified upload endpoint supports:
 *   **LLM Integration**: Local LLMs, Claude, OpenAI, Gemini as desired
 *   **Asynchronous Tasks**: Celery, Redis, Django Channels
 
-*   **Optional RAG / cost controls**: Django cache–backed retrieval TTL caches (`RAG_CACHE_*`), cross-provider prompt preflight trimming (`TOKEN_EFFICIENCY_*`), optional LM-Lingua2 compression (`LM_LINGUA2_*`), and optional vLLM LMCache wiring (`LMCACHE_*`). See `.env.example` and `docs/superpowers/plans/2026-03-23-caching-rag-token-efficiency-rollout-notes.md` for rollout and rollback.
+*   **Optional RAG / cost controls**: Django cacheâ€“backed retrieval TTL caches (`RAG_CACHE_*`), cross-provider prompt preflight trimming (`TOKEN_EFFICIENCY_*`), optional LM-Lingua2 compression (`LM_LINGUA2_*`), and optional vLLM LMCache wiring (`LMCACHE_*`). See `.env.example` and `docs/roadmap/plans/active/2026-03-23-caching-rag-token-efficiency-rollout-notes.md` for rollout and rollback.
 
 ### RAG retrieval defaults and benchmarking
 
@@ -80,7 +80,7 @@ This assumes you have Docker and Docker Compose installed.
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
+    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` â€” a simple restart may not pick up the change.
     - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_ocr` (OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker).
     - For image OCR through local vLLM, set `APP_OCR_PROVIDER=qwen` and point `APP_OCR_QWEN_BASE_URL` to `http://vllm_ocr:8000/v1`.
     - For audio/video transcription through local vLLM, set `INGEST_TRANSCRIBE_PROVIDER=openai` and `INGEST_TRANSCRIBE_OPENAI_BASE_URL=http://vllm_transcribe:8000/v1`.
@@ -180,7 +180,7 @@ docker compose -f deploy/compose/production.yml --profile vllm up -d --force-rec
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f deploy/compose/production.yml up` — a simple restart may not pick up the change.
+    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f deploy/compose/production.yml up` â€” a simple restart may not pick up the change.
     - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_ocr` (OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker).
     - GGUF note: set model as `repo:filename.gguf` or `repo:selector` (for example `repo:i1-Q4_K_M`). Startup resolves the best matching GGUF file in the repo, downloads it, and launches vLLM with the local file path.
     - For embedding/reranker models like `Qwen/Qwen3-Embedding-4B` and `Qwen/Qwen3-Reranker-4B`, set `MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1` and `APP_RERANK_VLLM_TRUST_REMOTE_CODE=1`.
@@ -370,7 +370,7 @@ Ratings and free-text feedback on assistant messages are stored on the chat `Mes
 
 - **UI:** While viewing the Email Whitelist page (`/aquillm/email_whitelist/`), superusers see **Download Feedback CSV** in the **top navigation bar** (next to the account control), aligned with the rest of the header.
 - **API:** `GET /api/feedback/ratings.csv` (same permission: Django superuser only; otherwise HTTP 403). If the request sends **`Accept-Encoding: gzip`** (browsers and `curl --compressed` do), the body is **gzip-compressed** with `Content-Encoding: gzip` to keep large exports light on the wire; the payload is still UTF-8 CSV after decompression.
-- **Columns (in order):** `date` (ISO 8601 UTC), `user_number` (conversation owner user id), `rating` (1–5, or empty if only comments were submitted), `question_number` (1-based count of user prompts in that conversation up to and including the assistant turn), `comments`.
+- **Columns (in order):** `date` (ISO 8601 UTC), `user_number` (conversation owner user id), `rating` (1â€“5, or empty if only comments were submitted), `question_number` (1-based count of user prompts in that conversation up to and including the assistant turn), `comments`.
 - **Optional query parameters:** `start_date`, `end_date` (inclusive; `YYYY-MM-DD` or parseable datetime), `min_rating` (integer; rows without a numeric rating are excluded when set), `user_number` (filter by conversation owner id).
 
 Example (after saving session cookies to `cookies.txt`):
@@ -417,3 +417,6 @@ We welcome contributions! AquiLLM is an open-source project, and we appreciate h
 *   **Reporting Bugs**: Please open an issue on GitHub detailing the problem, expected behavior, and steps to reproduce.
 *   **Feature Requests**: Open an issue describing the feature and its potential benefits.
 *   **Pull Requests**: Send a pull request!
+*   **Code style and structure**: Follow [docs/code-style-guide.md](docs/code-style-guide.md) for repository standards and quality gates.
+
+

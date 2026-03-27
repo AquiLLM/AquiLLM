@@ -4,6 +4,19 @@ from __future__ import annotations
 import hashlib
 
 
+def sanitize_db_text(value) -> str:
+    """
+    PostgreSQL text/varchar cannot contain NUL (0x00) characters.
+
+    Some extractors (notably PDF text) can yield NULs; strip them so saves don't
+    hard-fail with: "A string literal cannot contain NUL (0x00) characters."
+    """
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    return text.replace("\x00", "")
+
+
 def media_uniqueness_ref(item_id: int, payload_index: int, modality: str, media_bytes: bytes | None) -> str:
     digest = hashlib.sha256(media_bytes or b"").hexdigest()[:12]
     return f"[ref:{item_id}:{payload_index}:{modality}:{digest}]"
@@ -114,5 +127,6 @@ __all__ = [
     "is_figures_derived_subcollection_name",
     "media_uniqueness_ref",
     "normalize_source_key",
+    "sanitize_db_text",
     "sync_figure_subcollection_permissions_from_parent",
 ]

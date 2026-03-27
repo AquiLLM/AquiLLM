@@ -11,6 +11,7 @@ from .task_ingest_helpers import (
     infer_source_title_from_figure_title,
     media_uniqueness_ref,
     normalize_source_key,
+    sanitize_db_text,
 )
 
 
@@ -46,7 +47,7 @@ def run_ingest_uploaded_file(item_id: int) -> None:
         source_docs_by_key: dict[str, object] = {}
         figure_collections_by_key: dict[str, object] = {}
         for index, payload in enumerate(payloads):
-            full_text = (payload.full_text or "").strip()
+            full_text = sanitize_db_text((payload.full_text or "")).strip()
             modality = (payload.modality or "text").strip().lower()
             payload_metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
             if not full_text and modality in {"image", "audio", "video"}:
@@ -56,6 +57,7 @@ def run_ingest_uploaded_file(item_id: int) -> None:
                     modality=modality,
                     media_bytes=payload.media_bytes,
                 )
+                full_text = sanitize_db_text(full_text).strip()
             if not full_text:
                 continue
 
@@ -64,7 +66,7 @@ def run_ingest_uploaded_file(item_id: int) -> None:
             provider = payload.provider or ""
             model_name = payload.model or ""
             source_content_type = payload.media_content_type or payload_metadata.get("content_type", "")
-            safe_title = (payload.title or item.original_filename)[:200]
+            safe_title = sanitize_db_text(payload.title or item.original_filename)[:200]
             is_document_figure = modality == "image" and payload.normalized_type == "document_figure"
 
             source_doc = None
@@ -113,7 +115,7 @@ def run_ingest_uploaded_file(item_id: int) -> None:
                         ingested_by=item.batch.user,
                         source_format=payload_metadata.get("source_format", "unknown"),
                         figure_index=payload_metadata.get("figure_index", 0),
-                        extracted_caption=payload_metadata.get("extracted_caption", ""),
+                        extracted_caption=sanitize_db_text(payload_metadata.get("extracted_caption", "")),
                         location_metadata=payload_metadata.get("location_metadata", {}),
                         source_content_type=source_content_type,
                         ocr_provider=provider,
@@ -232,7 +234,7 @@ def run_ingest_uploaded_file(item_id: int) -> None:
         item.save(update_fields=["document_ids", "parser_metadata", "status", "finished_at"])
     except Exception as exc:
         item.status = IngestionBatchItem.Status.ERROR
-        item.error_message = str(exc)
+        item.error_message = sanitize_db_text(str(exc))
         item.finished_at = timezone.now()
         item.save(update_fields=["status", "error_message", "finished_at"])
 

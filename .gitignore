@@ -178,3 +178,4 @@ react/node_modules/
 
 # Local Hugging Face cache bind default for compose (LM-Lingua2 / web)
 /data/hf_web/
+.env copy

@@ -23,7 +23,7 @@ services:
       PORT: ${PORT:-8080}
       POSTGRES_HOST: db
       STORAGE_HOST: storage:9000
-      DJANGO_DEBUG: 1
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
       RUN_CELERY_IN_WEB: 0
       C_FORCE_ROOT: 1
       <<: *db-variables
@@ -64,7 +64,7 @@ services:
     environment:
       POSTGRES_HOST: db
       STORAGE_HOST: storage:9000
-      DJANGO_DEBUG: 1
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
       RUN_CELERY_IN_WEB: 0
       C_FORCE_ROOT: 1
       <<: *db-variables
