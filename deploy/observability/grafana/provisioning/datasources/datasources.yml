@@ -37,6 +37,10 @@ datasources:
       tracesToProfiles:
         datasourceUid: pyroscope
         profileTypeId: "process_cpu:cpu:nanoseconds:cpu:nanoseconds"
+      tracesToMetrics:
+        datasourceUid: prometheus
+        spanStartTimeShift: "-1m"
+        spanEndTimeShift: "1m"
       nodeGraph:
         enabled: true
 
@@ -45,3 +49,9 @@ datasources:
     access: proxy
     uid: pyroscope
     url: http://pyroscope:4040
+
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    uid: prometheus
+    url: http://prometheus:9090

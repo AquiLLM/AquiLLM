@@ -37,3 +37,5 @@ storage:
 metrics_generator:
   storage:
     path: /var/tempo/metrics
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write

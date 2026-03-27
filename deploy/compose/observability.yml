@@ -33,6 +33,8 @@ services:
         condition: service_started
       pyroscope:
         condition: service_started
+      prometheus:
+        condition: service_started
 
   loki:
     image: grafana/loki:latest
@@ -95,6 +97,34 @@ services:
       createbuckets:
         condition: service_completed_successfully
 
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+    depends_on:
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+      pyroscope:
+        condition: service_started
+
+  celery-exporter:
+    image: danihodovic/celery-exporter:latest
+    ports:
+      - "9808:9808"
+    environment:
+      CE_BROKER_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_started
+
   promtail:
     image: grafana/promtail:latest
     volumes:
@@ -146,6 +176,7 @@ services:
       PYROSCOPE_SERVER_ADDRESS: http://pyroscope:4040
       PYROSCOPE_APPLICATION_NAME: aquillm.web
       LOKI_PUSH_URL: http://loki:3100/loki/api/v1/push
+      DJANGO_ALLOWED_HOSTS: web
     depends_on:
       loki:
         condition: service_started
@@ -176,4 +207,5 @@ volumes:
   tempo_data:
   pyroscope_data:
   kafka_data:
+  prometheus_data:
   pg_logs:

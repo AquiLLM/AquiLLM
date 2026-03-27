@@ -128,6 +128,7 @@ else:
 # Application definition
 
 INSTALLED_APPS = [
+    "django_prometheus",
     "daphne",
     "chat",
     "ingest",
@@ -162,6 +163,7 @@ if DEBUG:
     INSTALLED_APPS = list(INSTALLED_APPS) + ["debug_toolbar"]
 
 MIDDLEWARE = [
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -172,6 +174,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     'allauth.account.middleware.AccountMiddleware',
     'apps.bug_reports.middleware.BugReportMiddleware',
+    "django_prometheus.middleware.PrometheusAfterMiddleware",
 ]
 
 if DEBUG:
@@ -213,7 +216,7 @@ POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "aquillm")
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        "ENGINE": "django_prometheus.db.backends.postgresql",
         "NAME": POSTGRES_NAME,
         "USER": POSTGRES_USER,
         "PASSWORD": POSTGRES_PASSWORD,

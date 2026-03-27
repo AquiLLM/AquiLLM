@@ -38,6 +38,8 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("new_ws_convo/", new_ws_convo, name="new_ws_convo"),
 
+    path("", include("django_prometheus.urls")),
+
     path("health/", views.health_check, name="health"),
     path("ready/", views.health_check, name="ready"),
     path("health", views.health_check),
