@@ -59,6 +59,16 @@ dependencies = [
     "llmlingua",
     "dotenv",
     "pytesseract",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-django",
+    "opentelemetry-instrumentation-celery",
+    "opentelemetry-instrumentation-psycopg2",
+    "opentelemetry-instrumentation-redis",
+    "opentelemetry-instrumentation-asgi",
+    "pyroscope-io",
+    "pyroscope-otel",
 ]
 
 [tool.uv]

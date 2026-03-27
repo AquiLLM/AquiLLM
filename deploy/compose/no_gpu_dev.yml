@@ -102,7 +102,7 @@ services:
         condition: service_started
     volumes:
       - ../..:/app
-    command: sh -c "cd /app/aquillm && celery -A aquillm worker --loglevel=info"
+    command: sh -c "cd /app/aquillm && uv run celery -A aquillm worker --loglevel=info"
 
   db:
     image: pgvector/pgvector:0.8.0-pg17

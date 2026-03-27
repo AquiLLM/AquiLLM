@@ -1,0 +1,8 @@
+storage:
+  backend: s3
+  s3:
+    endpoint: storage:9000
+    bucket_name: pyroscope
+    access_key_id: dev
+    secret_access_key: rickbailey
+    insecure: true

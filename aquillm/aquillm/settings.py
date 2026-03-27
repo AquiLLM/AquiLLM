@@ -149,6 +149,7 @@ INSTALLED_APPS = [
     "apps.platform_admin",
     "apps.core",
     "apps.integrations.zotero",
+    "apps.bug_reports",
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -170,6 +171,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     'allauth.account.middleware.AccountMiddleware',
+    'apps.bug_reports.middleware.BugReportMiddleware',
 ]
 
 if DEBUG:
@@ -367,3 +369,7 @@ CELERY_RESULT_SERIALIZER = "json"
 from aquillm.settings_logging import LOGGING, LOGS_DIR
 
 os.makedirs(LOGS_DIR, exist_ok=True)
+
+from aquillm.observability import setup as _setup_observability
+
+_setup_observability()

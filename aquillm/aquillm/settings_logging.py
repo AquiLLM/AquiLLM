@@ -14,12 +14,17 @@ LOGGING = {
     "disable_existing_loggers": False,
     "formatters": {
         "verbose": {
-            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+            "format": "{levelname} {asctime} {module} {process:d} {thread:d} trace_id={otel_trace_id} {message}",
             "style": "{",
         },
         "simple": {
             "format": "{levelname} {message}",
             "style": "{",
+        },
+    },
+    "filters": {
+        "trace_context": {
+            "()": "aquillm.observability.TraceContextFilter",
         },
     },
     "handlers": {
@@ -28,11 +33,13 @@ LOGGING = {
             "class": "logging.FileHandler",
             "filename": os.path.join(LOGS_DIR, "django.log"),
             "formatter": "verbose",
+            "filters": ["trace_context"],
         },
         "console": {
             "level": "DEBUG",
             "class": "logging.StreamHandler",
-            "formatter": "simple",
+            "formatter": "verbose",
+            "filters": ["trace_context"],
         },
     },
     "loggers": {

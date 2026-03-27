@@ -1,4 +1,10 @@
 venv/
+.venv/
+.git/
+.claude/
+.playwright-mcp/
+__pycache__/
+*.pyc
 test-results.txt
 react/node_modules/
 react/npm-debug.log

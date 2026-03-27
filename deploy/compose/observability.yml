@@ -1,0 +1,146 @@
+# Observability stack overlay — Grafana, Loki, Tempo, Pyroscope.
+#
+# Layer on top of any base compose file:
+#   docker compose -f deploy/compose/no_gpu_dev.yml -f deploy/compose/observability.yml --profile web up
+#
+# Dashboards: http://localhost:3000  (Grafana, anonymous admin)
+# Pyroscope:  http://localhost:4040
+
+services:
+  # ── Observability infrastructure ──────────────────────────────────────
+
+  createbuckets:
+    volumes:
+      - ../scripts/observability:/scripts
+    entrypoint: /bin/sh /scripts/create_buckets.sh
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_PLUGINS_PREINSTALL_SYNC: grafana-lokiexplore-app,grafana-pyroscope-app
+    volumes:
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+      pyroscope:
+        condition: service_started
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    volumes:
+      - ../observability/loki/loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    depends_on:
+      createbuckets:
+        condition: service_completed_successfully
+
+  kafka:
+    image: apache/kafka:latest
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_LOG_RETENTION_HOURS: "24"
+      CLUSTER_ID: "observability-tempo-kafka-001"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  tempo:
+    image: grafana/tempo:latest
+    ports:
+      - "4318:4318"   # OTLP HTTP receiver (traces from app)
+      - "3200:3200"   # Tempo API (Grafana queries this)
+    volumes:
+      - ../observability/tempo/tempo-config.yml:/etc/tempo/config.yaml
+      - tempo_data:/var/tempo
+    command: -config.file=/etc/tempo/config.yaml
+    depends_on:
+      kafka:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+
+  pyroscope:
+    image: grafana/pyroscope:latest
+    ports:
+      - "4040:4040"
+    volumes:
+      - ../observability/pyroscope/pyroscope-config.yml:/etc/pyroscope/config.yaml
+      - pyroscope_data:/data
+    command: -config.file=/etc/pyroscope/config.yaml
+    depends_on:
+      createbuckets:
+        condition: service_completed_successfully
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - ../observability/promtail/promtail-config.yml:/etc/promtail/config.yml
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      loki:
+        condition: service_started
+
+  # ── App service overrides (add observability env vars) ────────────────
+
+  web:
+    environment:
+      OTEL_ENABLED: "1"
+      OTEL_SERVICE_NAME: aquillm-web
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+      PYROSCOPE_SERVER_ADDRESS: http://pyroscope:4040
+      PYROSCOPE_APPLICATION_NAME: aquillm.web
+    depends_on:
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+      pyroscope:
+        condition: service_started
+
+  worker:
+    environment:
+      OTEL_ENABLED: "1"
+      OTEL_SERVICE_NAME: aquillm-worker
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+      PYROSCOPE_SERVER_ADDRESS: http://pyroscope:4040
+      PYROSCOPE_APPLICATION_NAME: aquillm.worker
+    depends_on:
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+      pyroscope:
+        condition: service_started
+
+volumes:
+  grafana_data:
+  loki_data:
+  tempo_data:
+  pyroscope_data:
+  kafka_data:
