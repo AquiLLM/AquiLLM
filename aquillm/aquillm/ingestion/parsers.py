@@ -6,7 +6,7 @@ including figure extraction and media transcription.
 """
 
 import io
-import logging
+import structlog
 import os
 
 from aquillm.ocr_utils import extract_text_from_image
@@ -50,7 +50,7 @@ from lib.parsers import (
     iter_srt_text,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def detect_ingest_type(filename: str, content_type: str | None = None) -> str:

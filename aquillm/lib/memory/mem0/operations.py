@@ -2,14 +2,14 @@
 Mem0 search and write operations.
 """
 
-import logging
+import structlog
 from os import getenv
 from typing import Optional, Any
 
 from ..types import RetrievedEpisodicMemory
 from .client import get_mem0_client, get_mem0_oss
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _extract_mem0_content(item: Any) -> str:

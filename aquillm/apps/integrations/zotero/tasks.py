@@ -1,7 +1,7 @@
 """Celery tasks for Zotero synchronization."""
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import Optional
 
 from celery import shared_task
@@ -10,7 +10,7 @@ from django.contrib.auth.models import User
 from apps.integrations.zotero.models import ZoteroConnection
 from apps.integrations.zotero.services.library_sync import run_zotero_library_sync
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @shared_task(bind=True, name="aquillm.zotero_tasks.sync_zotero_library")

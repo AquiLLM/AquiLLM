@@ -1,5 +1,5 @@
 """Page views for core app functionality."""
-import logging
+import structlog
 
 from django.apps import apps
 from django.contrib.auth.decorators import login_required
@@ -13,7 +13,7 @@ from apps.documents.models import TextChunk
 from aquillm.forms import SearchForm
 from aquillm.settings import DEBUG
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @require_http_methods(['GET'])

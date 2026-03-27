@@ -1,7 +1,7 @@
 """Template context processors: navigation, URLs exposed to the client, theme."""
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import Any
 from uuid import UUID
 
@@ -9,7 +9,7 @@ from django.urls import NoReverseMatch, reverse
 
 from .models import UserSettings, WSConversation
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _PLACEHOLDER_DOC_ID = UUID("00000000-0000-0000-0000-000000000001")
 

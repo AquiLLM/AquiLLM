@@ -1,5 +1,5 @@
 """ArXiv JSON API views."""
-import logging
+import structlog
 
 from django.contrib.auth.decorators import login_required
 from django.db import DatabaseError
@@ -10,7 +10,7 @@ from apps.collections.models import Collection
 from apps.documents.models import DuplicateDocumentError
 from apps.ingestion.services.arxiv_ingest import insert_one_from_arxiv
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @login_required

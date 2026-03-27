@@ -1,7 +1,7 @@
 """WebSocket consumers for ingestion monitoring (primary runtime path)."""
 from __future__ import annotations
 
-import logging
+import structlog
 import uuid
 from functools import reduce
 from json import dumps
@@ -17,7 +17,7 @@ from apps.documents.services.document_meta import (
     document_provider_name,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class IngestMonitorConsumer(AsyncWebsocketConsumer):

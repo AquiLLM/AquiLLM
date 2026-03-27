@@ -1,5 +1,5 @@
 """WebSocket Conversation model."""
-import logging
+import structlog
 import re
 from typing import Optional
 
@@ -8,7 +8,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def get_default_system_prompt():

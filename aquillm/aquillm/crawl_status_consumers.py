@@ -1,9 +1,9 @@
 import json
-import logging
+import structlog
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 class CrawlStatusConsumer(AsyncWebsocketConsumer):
     """

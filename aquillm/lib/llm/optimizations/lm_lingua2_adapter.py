@@ -1,11 +1,11 @@
 """Optional LM-Lingua2 (llmlingua) extractive compression for long plain-text turns."""
 from __future__ import annotations
 
-import logging
+import structlog
 from os import getenv
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _COMPRESSOR: Any | None = None
 _COMPRESSOR_FAILED = False

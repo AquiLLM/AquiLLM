@@ -1,5 +1,5 @@
 """Page views for chat functionality."""
-import logging
+import structlog
 import os
 
 from django.contrib.auth.decorators import login_required
@@ -9,7 +9,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.chat.models import WSConversation
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @require_http_methods(["GET"])

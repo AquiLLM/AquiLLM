@@ -1,7 +1,7 @@
 """Hybrid vector + trigram chunk retrieval with reranking."""
 from __future__ import annotations
 
-import logging
+import structlog
 from time import perf_counter
 from typing import TYPE_CHECKING, List, Type
 
@@ -17,7 +17,7 @@ from apps.documents.services.chunk_rerank import _fallback_rerank, rerank_chunks
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: List):

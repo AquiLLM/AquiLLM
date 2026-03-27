@@ -1,4 +1,4 @@
-import logging
+import structlog
 from os import getenv
 
 from allauth.account.adapter import DefaultAccountAdapter
@@ -6,7 +6,7 @@ from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 
 from .models import EmailWhitelist
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 class NoDefaultAccounts(DefaultAccountAdapter):
     def is_open_for_signup(self, request):
         return False # No email/password signups allowed

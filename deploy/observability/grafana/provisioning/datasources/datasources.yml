@@ -10,7 +10,12 @@ datasources:
     jsonData:
       derivedFields:
         - name: TraceID
-          matcherRegex: "trace_id=(\\w+)"
+          matcherRegex: '"trace_id":\s*"([a-f0-9]{32})"'
+          url: "$${__value.raw}"
+          datasourceUid: tempo
+          urlDisplayLabel: View Trace
+        - name: TraceID-PG
+          matcherRegex: "traceparent='00-([a-f0-9]{32})-[a-f0-9]{16}-[a-f0-9]{2}'"
           url: "$${__value.raw}"
           datasourceUid: tempo
           urlDisplayLabel: View Trace
@@ -28,7 +33,7 @@ datasources:
         spanStartTimeShift: "-1m"
         spanEndTimeShift: "1m"
         customQuery: true
-        query: '{service_name=~".+"} |= `trace_id=$${__trace.traceId}`'
+        query: '{service_name=~".+"} | json | trace_id=`$${__trace.traceId}`'
       tracesToProfiles:
         datasourceUid: pyroscope
         profileTypeId: "process_cpu:cpu:nanoseconds:cpu:nanoseconds"

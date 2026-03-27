@@ -1,10 +1,10 @@
 """HTTP middleware for exception capture and user trace tagging."""
-import logging
+import structlog
 import traceback
 
 from .tracing import get_current_trace_id, set_user_attribute
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _SKIP_PREFIXES = ('/static/', '/health', '/ready', '/favicon.ico')
 
@@ -28,8 +28,6 @@ class BugReportMiddleware:
     def process_exception(self, request, exception):
         """Auto-create a BugReport and log structured traceback to Loki."""
         try:
-            import json
-
             from .models import BugReport
 
             user = None
@@ -48,24 +46,19 @@ class BugReportMiddleware:
                 source='exception',
             )
 
-            # Structured JSON traceback → Promtail → Loki.
             frames = [
                 {"filename": f.filename, "lineno": f.lineno, "name": f.name, "line": f.line}
                 for f in traceback.extract_tb(exception.__traceback__)
             ]
-            tb_json = {
-                "exception_type": type(exception).__name__,
-                "exception_message": str(exception),
-                "frames": frames,
-            }
             logger.error(
-                "Unhandled exception trace_id=%s user=%s %s %s: %s traceback=%s",
-                trace_id,
-                user.username if user else "anonymous",
-                request.method,
-                request.path,
-                f"{type(exception).__name__}: {exception}",
-                json.dumps(tb_json),
+                "unhandled_exception",
+                trace_id=trace_id,
+                user=user.username if user else "anonymous",
+                method=request.method,
+                path=request.path,
+                exception_type=type(exception).__name__,
+                exception_message=str(exception),
+                traceback_frames=frames,
             )
         except Exception:
             logger.debug("Failed to create bug report from exception", exc_info=True)

@@ -1,6 +1,6 @@
 """LLM message types for conversation handling."""
 import json
-import logging
+import structlog
 from typing import Literal, Optional, Any
 from os import getenv
 import re
@@ -11,7 +11,7 @@ import uuid
 
 from .tools import LLMTool, ToolChoice, ToolResultDict
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _TOOL_ARGS_RENDER_MAX = 512
 

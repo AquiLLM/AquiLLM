@@ -1,6 +1,6 @@
 """API views for document management."""
 import json
-import logging
+import structlog
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
@@ -10,7 +10,7 @@ from django.views.decorators.http import require_http_methods
 from apps.collections.models import Collection
 from apps.documents.models import Document
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @login_required

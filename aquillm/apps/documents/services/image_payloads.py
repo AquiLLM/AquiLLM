@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import base64
-import logging
+import structlog
 import mimetypes
 from os import getenv
 from typing import Any
 
 from django.core.files.storage import default_storage
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

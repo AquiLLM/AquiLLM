@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import io
-import logging
+import structlog
 from typing import Iterator
 
 from .pdf_geometry import (
@@ -19,7 +19,7 @@ from .pdf_geometry import (
 )
 from .types import ExtractedFigure
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def extract_raster_images(doc, page, page_num: int, extracted_xrefs: set) -> Iterator[ExtractedFigure]:

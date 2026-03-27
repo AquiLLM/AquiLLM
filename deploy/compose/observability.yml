@@ -101,10 +101,40 @@ services:
       - ../observability/promtail/promtail-config.yml:/etc/promtail/config.yml
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - pg_logs:/var/log/postgresql:ro
     command: -config.file=/etc/promtail/config.yml
     depends_on:
       loki:
         condition: service_started
+
+  # ── Infrastructure overrides (structured logging) ────────────────────
+
+  db:
+    command:
+      - postgres
+      - -c
+      - log_destination=jsonlog
+      - -c
+      - logging_collector=on
+      - -c
+      - log_directory=/var/log/postgresql
+      - -c
+      - log_filename=postgresql.log
+      - -c
+      - log_rotation_age=1440
+      - -c
+      - log_rotation_size=50000
+      - -c
+      - log_truncate_on_rotation=on
+      - -c
+      - log_statement=mod
+      - -c
+      - log_min_duration_statement=100
+      - -c
+      - log_file_mode=0644
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - pg_logs:/var/log/postgresql
 
   # ── App service overrides (add observability env vars) ────────────────
 
@@ -115,6 +145,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
       PYROSCOPE_SERVER_ADDRESS: http://pyroscope:4040
       PYROSCOPE_APPLICATION_NAME: aquillm.web
+      LOKI_PUSH_URL: http://loki:3100/loki/api/v1/push
     depends_on:
       loki:
         condition: service_started
@@ -130,6 +161,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
       PYROSCOPE_SERVER_ADDRESS: http://pyroscope:4040
       PYROSCOPE_APPLICATION_NAME: aquillm.worker
+      LOKI_PUSH_URL: http://loki:3100/loki/api/v1/push
     depends_on:
       loki:
         condition: service_started
@@ -144,3 +176,4 @@ volumes:
   tempo_data:
   pyroscope_data:
   kafka_data:
+  pg_logs:

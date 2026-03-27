@@ -1,7 +1,7 @@
 """Page views for document ingestion."""
 import gzip
 import io
-import logging
+import structlog
 import re
 import tarfile
 from xml.dom import minidom
@@ -34,7 +34,7 @@ from aquillm.forms import (
 )
 from aquillm import vtt
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def insert_one_from_arxiv(arxiv_id, collection, user):

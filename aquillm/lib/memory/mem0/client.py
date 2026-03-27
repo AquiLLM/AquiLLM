@@ -2,11 +2,11 @@
 Mem0 client management for cloud and OSS SDK.
 """
 
-import logging
+import structlog
 from os import getenv
 from typing import Optional, Any
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _MEM0_CLIENT = None
 _MEM0_INIT_ATTEMPTED = False

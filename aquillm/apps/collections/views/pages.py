@@ -1,5 +1,5 @@
 """Page views for collection management."""
-import logging
+import structlog
 
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
@@ -10,7 +10,7 @@ from django.views.decorators.http import require_http_methods
 from apps.collections.models import Collection, CollectionPermission
 from aquillm.forms import NewCollectionForm
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @require_http_methods(['GET', 'POST'])

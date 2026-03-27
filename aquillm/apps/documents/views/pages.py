@@ -1,5 +1,5 @@
 """Page views for document management."""
-import logging
+import structlog
 import mimetypes
 
 from django.contrib.auth.decorators import login_required
@@ -10,7 +10,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.documents.models import DESCENDED_FROM_DOCUMENT
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def get_doc(request, doc_id):

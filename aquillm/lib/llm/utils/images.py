@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import base64
 import io
-import logging
+import structlog
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def resize_image_data_url_for_llm(

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import logging
+import structlog
 import uuid
 from typing import TYPE_CHECKING, List, Optional, Any
 
@@ -15,7 +15,7 @@ from django.db import models
 if TYPE_CHECKING:
     from .chunks import TextChunk
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _get_document_types():

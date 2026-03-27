@@ -3,7 +3,7 @@ Qwen vision model OCR provider.
 """
 
 import base64
-import logging
+import structlog
 from typing import Any, Dict
 
 from openai import OpenAI
@@ -11,7 +11,7 @@ from openai import OpenAI
 from .config import get_qwen_config
 from .image_utils import get_image_mime_type, resize_image_for_ocr
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _extract_chat_text_from_completion(response: Any) -> str:

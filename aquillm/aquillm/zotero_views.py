@@ -15,9 +15,9 @@ from .zotero_tasks import sync_zotero_library
 from .zotero_client import ZoteroAPIClient
 from .zotero_sync_helpers import fetch_library_data
 
-import logging
+import structlog
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @login_required

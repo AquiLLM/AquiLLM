@@ -7,35 +7,34 @@ complete no-op when the observability stack is not running.
 
 from __future__ import annotations
 
-import logging
 import os
 
-logger = logging.getLogger(__name__)
+import structlog
+
+logger = structlog.stdlib.get_logger(__name__)
 
 
-class TraceContextFilter(logging.Filter):
-    """Inject OpenTelemetry trace/span IDs into every log record.
+def add_otel_trace_context(logger, method_name, event_dict):
+    """Inject OpenTelemetry trace/span IDs into the structlog event dict.
 
     This enables Grafana's derived-fields feature to link log lines
     in Loki to the corresponding trace in Tempo.
     """
+    try:
+        from opentelemetry import trace
 
-    def filter(self, record):
-        try:
-            from opentelemetry import trace
-
-            span = trace.get_current_span()
-            ctx = span.get_span_context()
-            record.otel_trace_id = (
-                format(ctx.trace_id, "032x") if ctx.trace_id else "0"
-            )
-            record.otel_span_id = (
-                format(ctx.span_id, "016x") if ctx.span_id else "0"
-            )
-        except Exception:
-            record.otel_trace_id = "0"
-            record.otel_span_id = "0"
-        return True
+        span = trace.get_current_span()
+        ctx = span.get_span_context()
+        event_dict["trace_id"] = (
+            format(ctx.trace_id, "032x") if ctx.trace_id else "0"
+        )
+        event_dict["span_id"] = (
+            format(ctx.span_id, "016x") if ctx.span_id else "0"
+        )
+    except Exception:
+        event_dict["trace_id"] = "0"
+        event_dict["span_id"] = "0"
+    return event_dict
 
 
 def _init_tracing():
@@ -73,7 +72,16 @@ def _init_tracing():
     from opentelemetry.instrumentation.redis import RedisInstrumentor
 
     CeleryInstrumentor().instrument()
-    Psycopg2Instrumentor().instrument()
+    Psycopg2Instrumentor().instrument(
+        enable_commenter=True,
+        commenter_options={
+            "db_driver": False,
+            "dbapi_threadsafety": False,
+            "dbapi_level": False,
+            "driver_paramstyle": False,
+            "libpq_version": False,
+        },
+    )
     RedisInstrumentor().instrument()
 
     logger.info("OpenTelemetry tracing initialized (endpoint=%s)", endpoint)

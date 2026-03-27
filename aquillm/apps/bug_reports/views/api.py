@@ -1,6 +1,6 @@
 """API views for bug reports."""
 import json
-import logging
+import structlog
 import os
 
 from django.contrib.auth.decorators import login_required
@@ -10,7 +10,7 @@ from django.views.decorators.http import require_http_methods
 from apps.bug_reports.models import BugReport
 from apps.bug_reports.tracing import get_current_trace_id
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _PAGE_SIZE = 25
 
@@ -176,3 +176,11 @@ def delete_bug_report(request, report_id):
 def test_exception(request):
     """DEBUG-only view that raises an exception to test the bug report middleware."""
     raise RuntimeError("Intentional test exception for bug report middleware.")
+
+
+def test_celery_task(request):
+    """DEBUG-only view that fires a Celery task to test worker observability."""
+    from apps.bug_reports.tasks import debug_celery_task
+
+    result = debug_celery_task.delay()
+    return JsonResponse({"ok": True, "task_id": result.id})

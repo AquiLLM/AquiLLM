@@ -5,7 +5,7 @@ Vector search, trigram similarity, and reranking live in apps.documents.services
 """
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import TYPE_CHECKING, Callable, List, Optional
 
 from django.contrib.postgres.indexes import GinIndex
@@ -16,7 +16,7 @@ from pgvector.django import HnswIndex, VectorField
 if TYPE_CHECKING:
     from django.db.models.query import QuerySet
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class TextChunkQuerySet(models.QuerySet):

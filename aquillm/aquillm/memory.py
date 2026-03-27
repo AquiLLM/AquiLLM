@@ -10,7 +10,7 @@ Optional backend:
 This module integrates lib/memory (pure Python) with Django models.
 """
 
-import logging
+import structlog
 from typing import TYPE_CHECKING, Optional
 
 from django.contrib.auth.models import User
@@ -39,7 +39,7 @@ from lib.memory import (
 if TYPE_CHECKING:
     from .llm import Conversation
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 # Re-export for backward compatibility
 __all__ = [

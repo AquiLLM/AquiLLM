@@ -1,13 +1,13 @@
 """Figure extraction hooks for ingestion parsers (lazy-imports figure pipeline)."""
 from __future__ import annotations
 
-import logging
+import structlog
 
 from lib.parsers import get_stem as _stem
 
 from .types import ExtractedTextPayload
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def extract_figure_payloads_for_format(

@@ -1,6 +1,6 @@
 """API views for collection management."""
 import json
-import logging
+import structlog
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
@@ -18,7 +18,7 @@ from apps.collections.services.collection_api_payloads import (
 from apps.documents.models import DESCENDED_FROM_DOCUMENT
 from aquillm.task_ingest_helpers import sync_figure_subcollection_permissions_from_parent
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @login_required

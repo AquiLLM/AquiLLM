@@ -11,12 +11,12 @@ Usage (async):
 The exception is re-raised after being recorded so that the caller's own
 error handling still runs normally.
 """
-import logging
+import structlog
 from contextlib import asynccontextmanager, contextmanager
 
 from .tracing import get_current_trace_id
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _create_report(exception, user=None, context=''):

@@ -1,7 +1,7 @@
 """Google Gemini LLM interface."""
 from typing import Optional, override
 import uuid
-import logging
+import structlog
 import base64
 
 from google.genai import types as genai_types
@@ -12,7 +12,7 @@ from ..types.response import LLMResponse
 from .base import LLMInterface
 
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class GeminiInterface(LLMInterface):

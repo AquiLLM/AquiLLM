@@ -5,7 +5,7 @@ This module provides the main embedding interface for the application,
 integrating lib/embeddings with Django app configuration for Cohere fallback.
 """
 
-import logging
+import structlog
 from typing import Any
 
 from django.apps import apps
@@ -20,7 +20,7 @@ from lib.embeddings import (
     fit_embedding_dims,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def get_multimodal_embedding(

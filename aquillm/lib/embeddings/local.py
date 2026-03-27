@@ -2,7 +2,7 @@
 Local OpenAI-compatible embedding provider.
 """
 
-import logging
+import structlog
 from typing import Any
 
 from openai import OpenAI
@@ -16,7 +16,7 @@ from .config import (
     _env_int,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _LOCAL_OPENAI_CLIENT: OpenAI | None = None
 _LOCAL_OPENAI_CLIENT_CFG: tuple[str, str] | None = None
