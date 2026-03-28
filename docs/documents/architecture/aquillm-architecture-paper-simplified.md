@@ -71,21 +71,21 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  A["1. Add documents and other sources"] --> B["2. Extract text, images, and metadata"]
-  B --> C["3. Break content into searchable passages<br/>and create search embeddings"]
-  C --> D[("4. Searchable knowledge base<br/>document text + vectors + file records")]
+  A["1. Add documents and other sources<br/>technical: PDFs, web pages, media, notes, arXiv"] --> B["2. Read the source content and pull out useful data<br/>technical: parsing + OCR + transcription + metadata extraction"]
+  B --> C["3. Break content into searchable passages<br/>and create search embeddings<br/>technical: chunking + embedding generation"]
+  C --> D[("4. Build the searchable knowledge base<br/>document text + vectors + file records<br/>technical: pgvector + PostgreSQL + object storage")]
 
-  E["5. User asks a question"] --> F["6. Gather conversation history,<br/>collection scope, and user memory"]
-  F --> G["7. Find the most relevant passages<br/>for this question"]
+  E["5. User asks a question<br/>technical: query input"] --> F["6. Gather the conversation, scope,<br/>and remembered user context<br/>technical: context assembly + memory retrieval"]
+  F --> G["7. Find the most relevant passages<br/>for this question<br/>technical: retrieval + reranking + context selection"]
   D --> G
-  G --> H["8. Build the answer prompt<br/>and call the language model"]
-  H --> I{"Tool call?"}
-  I -->|Yes| J["Use a tool, then try again<br/>with the new result"]
+  G --> H["8. Build the answer request<br/>and call the language model<br/>technical: prompt assembly + model inference"]
+  H --> I{"Need a tool?"}
+  I -->|Yes| J["Use a tool, then continue with the new result<br/>technical: tool execution + orchestration loop"]
   J --> H
-  I -->|No| K["9. Return an answer with references"]
-  K --> L["10. Save the conversation<br/>and stream the response to the interface"]
-  L --> M["11. Collect feedback and quality signals"]
-  M --> N["12. Improve document splitting,<br/>search, and prompting over time"]
+  I -->|No| K["9. Return an answer with references<br/>technical: grounded response + citations"]
+  K --> L["10. Save the conversation<br/>and stream the response to the interface<br/>technical: persistence + streaming"]
+  L --> M["11. Collect feedback and quality signals<br/>technical: ratings + monitoring + offline evaluation"]
+  M --> N["12. Improve document splitting,<br/>search, memory, and prompting over time<br/>technical: tuning + optimization"]
 
   classDef ingest fill:#f8e8d9,stroke:#ad6a28,stroke-width:1.3px,color:#2a2a2a;
   classDef store fill:#e4f7ef,stroke:#1f8a70,stroke-width:1.3px,color:#173d33;
