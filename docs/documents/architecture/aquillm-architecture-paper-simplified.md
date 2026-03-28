@@ -70,58 +70,22 @@ flowchart LR
 ### 3.1 End-to-End System Flow (Moderate Detail)
 
 ```mermaid
-%%{init: {'theme': 'base', 'flowchart': {'curve': 'basis'}} }%%
-flowchart TB
-  subgraph A["1) Ingestion Pipeline"]
-    I1["Source upload"]
-    I2["Async parse and extraction"]
-    I3["Normalize content"]
-    I4["Chunk and embed"]
-    I1 --> I2 --> I3 --> I4
-  end
+flowchart LR
+  A["1. Sources ingested"] --> B["2. Parse and extract"]
+  B --> C["3. Normalize, chunk, and embed"]
+  C --> D[("4. Indexed corpus<br/>vectors + metadata + files")]
 
-  subgraph B["2) Storage and Index"]
-    S1[("Vector Index")]
-    S2[("Metadata DB")]
-    S3[("Object Store")]
-    S4["Ingestion status to UI"]
-  end
-
-  subgraph C["3) Conversational RAG Serving"]
-    Q1(["User question"])
-    Q2["Load history and scope"]
-    Q3["Retrieve memory context"]
-    Q4["Retrieve top-k chunks"]
-    Q5["Rerank and pack context"]
-    Q6["Prompt and generation"]
-    D{"Tool call?"}
-    T["Run tool and append result"]
-    Q7["Grounded answer + citations"]
-    Q8["Stream and persist turn"]
-    M1["Async memory write"]
-    M2[("Memory Store")]
-
-    Q1 --> Q2 --> Q3 --> Q4 --> Q5 --> Q6 --> D
-    D -->|Yes| T --> Q6
-    D -->|No| Q7 --> Q8 --> M1 --> M2 --> Q3
-  end
-
-  subgraph D1["4) Evaluation and Improvement"]
-    E1["Capture feedback"]
-    E2["Offline eval and monitoring"]
-    E3["Tune chunking, retrieval, prompts"]
-    E1 --> E2 --> E3
-  end
-
-  I3 --> S2
-  I3 --> S3
-  I4 --> S1
-  S2 --> S4
-  S2 -. history and citation metadata .-> Q2
-  S1 -. retrieval source .-> Q4
-  Q8 --> E1
-  E3 -. improve indexing .-> I4
-  E3 -. improve serving .-> Q5
+  E["5. User question"] --> F["6. Load history, scope, and memory"]
+  F --> G["7. Retrieve and rerank context"]
+  D --> G
+  G --> H["8. Build prompt and call LLM"]
+  H --> I{"Tool call?"}
+  I -->|Yes| J["Run tool and append result"]
+  J --> H
+  I -->|No| K["9. Grounded answer with citations"]
+  K --> L["10. Stream response and persist turn"]
+  L --> M["11. Feedback and evaluation"]
+  M --> N["12. Tune chunking, retrieval, and prompts"]
 
   classDef ingest fill:#f8e8d9,stroke:#ad6a28,stroke-width:1.3px,color:#2a2a2a;
   classDef store fill:#e4f7ef,stroke:#1f8a70,stroke-width:1.3px,color:#173d33;
@@ -129,11 +93,11 @@ flowchart TB
   classDef decision fill:#fff4cc,stroke:#a67c00,stroke-width:1.5px,color:#332b00;
   classDef eval fill:#efe4ff,stroke:#6a4fb3,stroke-width:1.3px,color:#2f1d56;
 
-  class I1,I2,I3,I4 ingest;
-  class S1,S2,S3,S4 store;
-  class Q1,Q2,Q3,Q4,Q5,Q6,Q7,Q8,T,M1,M2 runtime;
-  class D decision;
-  class E1,E2,E3 eval;
+  class A,B,C ingest;
+  class D store;
+  class E,F,G,H,J,K,L runtime;
+  class I decision;
+  class M,N eval;
 ```
 
 ### 3.2 Ingestion Flow (Simplified)
