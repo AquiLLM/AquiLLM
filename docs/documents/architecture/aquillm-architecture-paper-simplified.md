@@ -67,16 +67,94 @@ flowchart LR
 
 ## 3) High-Level Runtime Flows
 
-### 3.1 Chat Flow (Simplified)
+### 3.1 End-to-End System Flow (Moderate Detail)
 
 ```mermaid
-flowchart TD
-  A["User message"] --> B["Context assembly (history + retrieval + memory)"]
-  B --> C["LLM generation with optional tool calls"]
-  C --> D{"Tool call needed?"}
-  D -->|Yes| E["Execute tool and append result"]
-  E --> C
-  D -->|No| F["Persist response and stream to UI"]
+%%{init: {'theme': 'base', 'flowchart': {'curve': 'basis'}} }%%
+flowchart TB
+  subgraph A["A. Source Onboarding and Ingestion"]
+    I1["User adds sources (PDF, web, arXiv, media)"]
+    I2["Ingestion API validates request and creates batch"]
+    I3["Async workers parse content"]
+    I4["Modality extraction (text, OCR, transcription, figures)"]
+    I5["Normalize document schema"]
+
+    I1 --> I2 --> I3 --> I4 --> I5
+  end
+
+  subgraph B["B. Storage and Index Build"]
+    S1["Chunk documents"]
+    S2["Generate embeddings"]
+    S3[("Vector store (pgvector)")]
+    S4[("Metadata DB (PostgreSQL)")]
+    S5[("Object store (MinIO)")]
+    S6["Broadcast ingestion progress to UI"]
+
+    I5 --> S1 --> S2 --> S3
+    I5 --> S4
+    I5 --> S5
+    S1 --> S4
+    S2 --> S4
+    S4 --> S6
+  end
+
+  subgraph C["C. Conversational RAG Serving"]
+    Q1(["User asks question"])
+    Q2["Load conversation history + collection scope"]
+    Q3["Retrieve user memory context"]
+    Q4["Embed query"]
+    Q5["Retrieve top-k chunks"]
+    Q6["Rerank + dedupe + token-budget packing"]
+    Q7["Assemble prompt (system + history + memory + context)"]
+    Q8["LLM generation"]
+    D{"Tool call needed?"}
+    T["Execute tool and append result"]
+    Q9["Grounded answer with citations"]
+    Q10["Stream response to UI"]
+    Q11["Persist messages + usage metadata"]
+
+    Q1 --> Q2 --> Q3 --> Q4 --> Q5 --> Q6 --> Q7 --> Q8 --> D
+    D -->|Yes| T --> Q7
+    D -->|No| Q9 --> Q10 --> Q11
+  end
+
+  subgraph D1["D. Feedback, Evaluation, and Optimization"]
+    E1["Capture ratings and user feedback"]
+    E2["Run offline evaluation (LLM-as-judge + metrics)"]
+    E3["Monitor dashboard (faithfulness, hit@k, latency, cost)"]
+    E4["Tune chunking, reranking, prompts, and model settings"]
+
+    Q11 --> E1 --> E2 --> E3 --> E4
+  end
+
+  M1[("Memory store (local or Mem0)")]
+  M2["Async memory extraction task"]
+
+  S3 -. retrieval source .-> Q5
+  S4 -. history and access scope .-> Q2
+  S4 -. citation metadata .-> Q9
+  Q11 --> M2 --> M1 --> Q3
+  E4 -. improve indexing .-> S1
+  E4 -. improve retrieval .-> Q6
+  E4 -. improve prompting .-> Q7
+
+  style A fill:#fffdf7,stroke:#b97138,stroke-width:2px,stroke-dasharray: 6 4
+  style B fill:#f4fbff,stroke:#2f6fa2,stroke-width:2px,stroke-dasharray: 6 4
+  style C fill:#f7fcff,stroke:#2d6da8,stroke-width:2px,stroke-dasharray: 6 4
+  style D1 fill:#faf6ff,stroke:#6b4ba6,stroke-width:2px,stroke-dasharray: 6 4
+
+  classDef ingest fill:#f8e8d9,stroke:#ad6a28,stroke-width:1.8px,color:#2a2a2a;
+  classDef store fill:#e4f7ef,stroke:#1f8a70,stroke-width:1.8px,color:#173d33;
+  classDef runtime fill:#dff0fb,stroke:#2d6da8,stroke-width:1.8px,color:#1d2b38;
+  classDef decision fill:#fff4cc,stroke:#a67c00,stroke-width:2px,color:#332b00;
+  classDef eval fill:#efe4ff,stroke:#6a4fb3,stroke-width:1.8px,color:#2f1d56;
+
+  class I1,I2,I3,I4,I5 ingest;
+  class S1,S2,S6 store;
+  class S3,S4,S5,M1 store;
+  class Q1,Q2,Q3,Q4,Q5,Q6,Q7,Q8,Q9,Q10,Q11,T,M2 runtime;
+  class D decision;
+  class E1,E2,E3,E4 eval;
 ```
 
 ### 3.2 Ingestion Flow (Simplified)
@@ -128,4 +206,3 @@ You can use this document to seed:
 2. A methods subsection for chat/runtime behavior (use Chat Flow).
 3. A methods subsection for ingestion/data processing (use Ingestion Flow).
 4. A limitations paragraph (adapt Section 6).
-
