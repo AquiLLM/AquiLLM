@@ -71,68 +71,67 @@ flowchart LR
 
 ```mermaid
 %%{init: {'theme': 'base', 'flowchart': {'curve': 'basis'}} }%%
-flowchart LR
-  subgraph A["1) Source Onboarding and Ingestion"]
-    I1["Source upload<br/>PDF, web, arXiv, media"]
-    I2["Async parse + extraction<br/>text, OCR, transcription, figures"]
-    I3["Normalize documents<br/>chunk + embed"]
-    I1 --> I2 --> I3
+flowchart TB
+  subgraph A["1) Ingestion Pipeline"]
+    I1["Source upload"]
+    I2["Async parse and extraction"]
+    I3["Normalize content"]
+    I4["Chunk and embed"]
+    I1 --> I2 --> I3 --> I4
   end
 
   subgraph B["2) Storage and Index"]
-    S1[("Vector store<br/>pgvector")]
-    S2[("Metadata DB<br/>PostgreSQL")]
-    S3[("Object store<br/>MinIO")]
-    S4["Ingestion status updates to UI"]
+    S1[("Vector Index")]
+    S2[("Metadata DB")]
+    S3[("Object Store")]
+    S4["Ingestion status to UI"]
   end
 
   subgraph C["3) Conversational RAG Serving"]
-    Q1(["User question + collection scope"])
-    Q2["Load history + memory context"]
-    Q3["Embed query + retrieve top-k chunks"]
-    Q4["Rerank, dedupe, and pack context"]
-    Q5["Prompt assembly + LLM generation"]
-    D{"Tool call needed?"}
-    T["Execute tool and append result"]
-    Q6["Grounded answer with citations"]
-    Q7["Stream response + persist turn"]
+    Q1(["User question"])
+    Q2["Load history and scope"]
+    Q3["Retrieve memory context"]
+    Q4["Retrieve top-k chunks"]
+    Q5["Rerank and pack context"]
+    Q6["Prompt and generation"]
+    D{"Tool call?"}
+    T["Run tool and append result"]
+    Q7["Grounded answer + citations"]
+    Q8["Stream and persist turn"]
+    M1["Async memory write"]
+    M2[("Memory Store")]
 
-    Q1 --> Q2 --> Q3 --> Q4 --> Q5 --> D
-    D -->|Yes| T --> Q5
-    D -->|No| Q6 --> Q7
+    Q1 --> Q2 --> Q3 --> Q4 --> Q5 --> Q6 --> D
+    D -->|Yes| T --> Q6
+    D -->|No| Q7 --> Q8 --> M1 --> M2 --> Q3
   end
 
-  subgraph D1["4) Feedback, Evaluation, Optimization"]
-    E1["Capture ratings + feedback"]
-    E2["Offline eval<br/>LLM-as-judge + retrieval metrics"]
-    E3["Tune chunking, retrieval, prompts, model settings"]
+  subgraph D1["4) Evaluation and Improvement"]
+    E1["Capture feedback"]
+    E2["Offline eval and monitoring"]
+    E3["Tune chunking, retrieval, prompts"]
     E1 --> E2 --> E3
   end
 
-  M1["Async memory extraction"]
-  M2[("Memory store<br/>local or Mem0")]
-
-  I3 --> S1
   I3 --> S2
   I3 --> S3
+  I4 --> S1
   S2 --> S4
-  S1 -. retrieval source .-> Q3
-  S2 -. history + citation metadata .-> Q2
-  S2 -. citation metadata .-> Q6
-  Q7 --> M1 --> M2 --> Q2
-  Q7 --> E1
-  E3 -. improve indexing .-> I3
-  E3 -. improve serving .-> Q4
+  S2 -. history and citation metadata .-> Q2
+  S1 -. retrieval source .-> Q4
+  Q8 --> E1
+  E3 -. improve indexing .-> I4
+  E3 -. improve serving .-> Q5
 
-  classDef ingest fill:#f8e8d9,stroke:#ad6a28,stroke-width:1.5px,color:#2a2a2a;
-  classDef store fill:#e4f7ef,stroke:#1f8a70,stroke-width:1.5px,color:#173d33;
-  classDef runtime fill:#dff0fb,stroke:#2d6da8,stroke-width:1.5px,color:#1d2b38;
-  classDef decision fill:#fff4cc,stroke:#a67c00,stroke-width:1.8px,color:#332b00;
-  classDef eval fill:#efe4ff,stroke:#6a4fb3,stroke-width:1.5px,color:#2f1d56;
+  classDef ingest fill:#f8e8d9,stroke:#ad6a28,stroke-width:1.3px,color:#2a2a2a;
+  classDef store fill:#e4f7ef,stroke:#1f8a70,stroke-width:1.3px,color:#173d33;
+  classDef runtime fill:#dff0fb,stroke:#2d6da8,stroke-width:1.3px,color:#1d2b38;
+  classDef decision fill:#fff4cc,stroke:#a67c00,stroke-width:1.5px,color:#332b00;
+  classDef eval fill:#efe4ff,stroke:#6a4fb3,stroke-width:1.3px,color:#2f1d56;
 
-  class I1,I2,I3 ingest;
-  class S1,S2,S3,S4,M2 store;
-  class Q1,Q2,Q3,Q4,Q5,Q6,Q7,T,M1 runtime;
+  class I1,I2,I3,I4 ingest;
+  class S1,S2,S3,S4 store;
+  class Q1,Q2,Q3,Q4,Q5,Q6,Q7,Q8,T,M1,M2 runtime;
   class D decision;
   class E1,E2,E3 eval;
 ```
