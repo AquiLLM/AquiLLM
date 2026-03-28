@@ -71,21 +71,21 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  A["1. Sources ingested"] --> B["2. Parse and extract"]
-  B --> C["3. Normalize, chunk, and embed"]
-  C --> D[("4. Indexed corpus<br/>vectors + metadata + files")]
+  A["1. Add documents and other sources"] --> B["2. Extract text, images, and metadata"]
+  B --> C["3. Break content into searchable passages<br/>and create search embeddings"]
+  C --> D[("4. Searchable knowledge base<br/>document text + vectors + file records")]
 
-  E["5. User question"] --> F["6. Load history, scope, and memory"]
-  F --> G["7. Retrieve and rerank context"]
+  E["5. User asks a question"] --> F["6. Gather conversation history,<br/>collection scope, and user memory"]
+  F --> G["7. Find the most relevant passages<br/>for this question"]
   D --> G
-  G --> H["8. Build prompt and call LLM"]
+  G --> H["8. Build the answer prompt<br/>and call the language model"]
   H --> I{"Tool call?"}
-  I -->|Yes| J["Run tool and append result"]
+  I -->|Yes| J["Use a tool, then try again<br/>with the new result"]
   J --> H
-  I -->|No| K["9. Grounded answer with citations"]
-  K --> L["10. Stream response and persist turn"]
-  L --> M["11. Feedback and evaluation"]
-  M --> N["12. Tune chunking, retrieval, and prompts"]
+  I -->|No| K["9. Return an answer with references"]
+  K --> L["10. Save the conversation<br/>and stream the response to the interface"]
+  L --> M["11. Collect feedback and quality signals"]
+  M --> N["12. Improve document splitting,<br/>search, and prompting over time"]
 
   classDef ingest fill:#f8e8d9,stroke:#ad6a28,stroke-width:1.3px,color:#2a2a2a;
   classDef store fill:#e4f7ef,stroke:#1f8a70,stroke-width:1.3px,color:#173d33;
