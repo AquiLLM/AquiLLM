@@ -3,6 +3,7 @@ Qwen vision model OCR provider.
 """
 
 import base64
+import os
 import structlog
 from typing import Any, Dict
 
@@ -12,6 +13,19 @@ from .config import get_qwen_config
 from .image_utils import get_image_mime_type, resize_image_for_ocr
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+def _qwen_ocr_extra_body(model_name: str) -> Dict[str, Any] | None:
+    """Return model-specific chat template overrides for OCR requests."""
+    configured_model = (
+        os.getenv("OCR_VLLM_MODEL")
+        or os.getenv("VLLM_MODEL")
+        or ""
+    ).strip().lower()
+    requested_model = (model_name or "").strip().lower()
+    if "qwen3.5" in requested_model or "qwen3.5" in configured_model:
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+    return None
 
 
 def _extract_chat_text_from_completion(response: Any) -> str:
@@ -40,17 +54,18 @@ def _qwen_ocr_completion(file_content: bytes, prompt: str, max_tokens: int = 204
     """Execute Qwen OCR completion request."""
     base_url, api_key, model, timeout_seconds = get_qwen_config()
     client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout_seconds)
+    extra_body = _qwen_ocr_extra_body(model)
     
     resized_content = resize_image_for_ocr(file_content)
     image_mime = get_image_mime_type(resized_content)
     image_data = base64.b64encode(resized_content).decode("utf-8")
     image_url = f"data:{image_mime};base64,{image_data}"
 
-    response = client.chat.completions.create(
-        model=model,
-        temperature=0.0,
-        max_tokens=max_tokens,
-        messages=[
+    request_kwargs: Dict[str, Any] = {
+        "model": model,
+        "temperature": 0.0,
+        "max_tokens": max_tokens,
+        "messages": [
             {
                 "role": "system",
                 "content": "You are an OCR assistant. Transcribe faithfully and avoid hallucinations.",
@@ -63,7 +78,11 @@ def _qwen_ocr_completion(file_content: bytes, prompt: str, max_tokens: int = 204
                 ],
             },
         ],
-    )
+    }
+    if extra_body is not None:
+        request_kwargs["extra_body"] = extra_body
+
+    response = client.chat.completions.create(**request_kwargs)
     return _extract_chat_text_from_completion(response)
 
 
