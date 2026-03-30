@@ -2,7 +2,7 @@
 set -e
 
 if [ "${RUN_CELERY_IN_WEB:-1}" = "1" ]; then
-  celery -A aquillm worker --loglevel=info &
+  /opt/venv/bin/celery -A aquillm worker --loglevel=info &
 fi
 
 cd /app/react
@@ -14,6 +14,6 @@ npx tailwindcss -o /app/aquillm/aquillm/static/index.css
 
 cd /app/aquillm
 
-python ./manage.py migrate --noinput
-python ./manage.py collectstatic --noinput
-exec python -m uvicorn aquillm.asgi:application --host 0.0.0.0 --port ${PORT:-8080}
+/opt/venv/bin/python ./manage.py migrate --noinput
+/opt/venv/bin/python ./manage.py collectstatic --noinput
+exec /opt/venv/bin/python -m uvicorn aquillm.asgi:application --host 0.0.0.0 --port ${PORT:-8080}
