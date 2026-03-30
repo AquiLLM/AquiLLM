@@ -3,6 +3,8 @@ FROM astral/uv:0.8.17-python3.12-bookworm
 # Set environment variables
 
 ENV PORT=${PORT}
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV PATH=/opt/venv/bin:$PATH
 # Set working directory
 WORKDIR /app
 

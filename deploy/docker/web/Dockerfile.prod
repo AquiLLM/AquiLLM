@@ -1,6 +1,8 @@
 FROM astral/uv:0.8.17-python3.12-bookworm
 
 ENV PORT=${PORT}
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
