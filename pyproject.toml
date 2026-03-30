@@ -74,9 +74,6 @@ dependencies = [
     "django-prometheus",
 ]
 
-[tool.uv]
-torch-backend = "auto"
-
 [dependency-groups]
 dev = [
     "pyrefly>=0.58.0",
