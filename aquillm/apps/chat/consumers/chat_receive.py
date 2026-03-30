@@ -54,11 +54,9 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 for file in data["files"]
             ]
             await _save_files(files)
-        active_tools = (
-            consumer.tools
-            if selected_collections
-            else [tool for tool in consumer.tools if tool not in consumer.doc_tools]
-        )
+        # Keep the default tool set even when no collections are selected.
+        # Restricting to non-document tools here caused an astronomy-only default.
+        active_tools = consumer.tools
         consumer.convo[-1].tools = active_tools
         consumer.convo[-1].files = [(file.name, file.id) for file in files]
         consumer.convo[-1].tool_choice = ToolChoice(type="auto")
