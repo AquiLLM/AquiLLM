@@ -1,7 +1,7 @@
 """Sync Zotero library items and PDF attachments into AquiLLM."""
 from __future__ import annotations
 
-import logging
+import structlog
 
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
@@ -11,7 +11,7 @@ from apps.documents.models import PDFDocument
 
 from aquillm.zotero_client import ZoteroAPIClient
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def sync_items_from_library(

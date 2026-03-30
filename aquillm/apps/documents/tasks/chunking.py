@@ -1,7 +1,7 @@
 """Celery task: build embeddings and TextChunk rows for a document."""
 from __future__ import annotations
 
-import logging
+import structlog
 import uuid
 from typing import Optional
 
@@ -26,7 +26,7 @@ from apps.documents.services.document_meta import (
 )
 from apps.documents.services.image_payloads import _env_bool, _env_int, doc_image_data_url
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @app.task(serializer="json", bind=True, track_started=True)

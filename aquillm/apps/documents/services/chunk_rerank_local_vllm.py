@@ -1,7 +1,7 @@
 """Local vLLM / OpenAI-compatible rerank HTTP client."""
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import Any, Type, TYPE_CHECKING
 
 import requests
@@ -26,7 +26,7 @@ from apps.documents.services.chunk_rerank_payload import rerank_document_payload
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list, top_k: int):

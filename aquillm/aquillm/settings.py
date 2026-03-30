@@ -128,6 +128,7 @@ else:
 # Application definition
 
 INSTALLED_APPS = [
+    "django_prometheus",
     "daphne",
     "chat",
     "ingest",
@@ -149,6 +150,7 @@ INSTALLED_APPS = [
     "apps.platform_admin",
     "apps.core",
     "apps.integrations.zotero",
+    "apps.bug_reports",
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -161,6 +163,7 @@ if DEBUG:
     INSTALLED_APPS = list(INSTALLED_APPS) + ["debug_toolbar"]
 
 MIDDLEWARE = [
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -170,6 +173,8 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     'allauth.account.middleware.AccountMiddleware',
+    'apps.bug_reports.middleware.BugReportMiddleware',
+    "django_prometheus.middleware.PrometheusAfterMiddleware",
 ]
 
 if DEBUG:
@@ -211,7 +216,7 @@ POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "aquillm")
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        "ENGINE": "django_prometheus.db.backends.postgresql",
         "NAME": POSTGRES_NAME,
         "USER": POSTGRES_USER,
         "PASSWORD": POSTGRES_PASSWORD,
@@ -364,6 +369,8 @@ CELERY_RESULT_SERIALIZER = "json"
 # - ZOTERO_CLIENT_SECRET: Your Zotero OAuth client secret
 # Register your app at https://www.zotero.org/oauth/apps
 
-from aquillm.settings_logging import LOGGING, LOGS_DIR
+from aquillm.settings_logging import LOGGING  # noqa: F401
 
-os.makedirs(LOGS_DIR, exist_ok=True)
+from aquillm.observability import setup as _setup_observability
+
+_setup_observability()

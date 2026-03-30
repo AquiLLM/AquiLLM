@@ -2,12 +2,12 @@
 Embedding system configuration from environment variables.
 """
 
-import logging
+import structlog
 import re
 from os import getenv
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _CONTEXT_LIMIT_RE = re.compile(
     r"maximum input length of\s*(\d+)\s*tokens|context length is only\s*(\d+)\s*tokens",

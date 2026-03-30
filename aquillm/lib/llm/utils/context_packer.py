@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-import logging
+import structlog
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -11,7 +11,7 @@ from tiktoken import encoding_for_model
 
 from lib.llm.providers.openai_tokens import context_reserve_tokens, estimate_prompt_tokens
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 _ENC = encoding_for_model("gpt-4o")
 
 

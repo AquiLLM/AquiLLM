@@ -1,7 +1,7 @@
 """WebSocket receive handler for chat append / rate / feedback actions."""
 from __future__ import annotations
 
-import logging
+import structlog
 from base64 import b64decode
 from json import loads
 from time import perf_counter
@@ -22,7 +22,7 @@ from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import ConversationFile
 from apps.chat.services.feedback import apply_message_feedback_text, apply_message_rating
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 async def handle_chat_receive(consumer: Any, text_data: str) -> None:

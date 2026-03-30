@@ -1,0 +1,41 @@
+target: all
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: "0.0.0.0:4318"
+
+ingest:
+  kafka:
+    address: "kafka:9092"
+    topic: "tempo-traces"
+
+memberlist:
+  bind_addr:
+    - "0.0.0.0"
+  bind_port: 7946
+  join_members: []
+
+storage:
+  trace:
+    backend: s3
+    s3:
+      endpoint: storage:9000
+      bucket: tempo
+      access_key: dev
+      secret_key: rickbailey
+      insecure: true
+      forcepathstyle: true
+    wal:
+      path: /var/tempo/wal
+
+metrics_generator:
+  storage:
+    path: /var/tempo/metrics
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write

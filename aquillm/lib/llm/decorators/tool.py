@@ -4,13 +4,13 @@ from types import GenericAlias
 from functools import wraps
 import inspect
 
-import logging
+import structlog
 
 from pydantic import ValidationError, validate_call
 
 from ..types.tools import LLMTool, ToolResultDict
 
-_logger = logging.getLogger(__name__)
+_logger = structlog.stdlib.get_logger(__name__)
 
 
 # Import DEBUG setting - will be None if Django not configured

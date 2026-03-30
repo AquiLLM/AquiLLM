@@ -1,0 +1,32 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  storage:
+    s3:
+      endpoint: storage:9000
+      bucketnames: loki
+      access_key_id: dev
+      secret_access_key: rickbailey
+      insecure: true
+      s3forcepathstyle: true
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: "2020-10-24"
+      store: tsdb
+      object_store: s3
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 168h

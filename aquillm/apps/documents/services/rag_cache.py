@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
+import structlog
 import uuid
 from collections import defaultdict
 from typing import Any, Mapping, Sequence
@@ -11,7 +11,7 @@ from typing import Any, Mapping, Sequence
 from django.conf import settings
 from django.core.cache import cache
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _MET_QUERY_EMBED = "rag_cache.query_embed"
 _MET_DOC_ACCESS = "rag_cache.doc_access"

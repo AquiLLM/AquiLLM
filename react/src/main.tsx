@@ -13,6 +13,8 @@ import WhitelistEmails from './components/WhitelistEmails';
 import ChatComponent from './features/chat/components/ChatShell';
 import UserSettings from './components/UserSettings';
 import ChatFileUpload from './components/ChatFileUpload';
+import BugReportButton from './components/BugReportButton';
+import BugReportsAdmin from './components/BugReportsAdmin';
 // Type for the components mapping
 type ComponentsMap = {
   [key: string]: React.ComponentType<any>;
@@ -45,6 +47,8 @@ window.mountReactComponent = (
     ChatComponent: ChatComponent,
     UserSettings: UserSettings,
     ChatFileUpload: ChatFileUpload,
+    BugReportButton: BugReportButton,
+    BugReportsAdmin: BugReportsAdmin,
     // Add other components here
   };
   

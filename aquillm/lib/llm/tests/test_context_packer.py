@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+import structlog
+
 from lib.llm.utils.context_packer import ContextPackerConfig, pack_messages_for_budget
 
 

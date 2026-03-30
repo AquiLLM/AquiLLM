@@ -1,0 +1,92 @@
+[project]
+name = "aquillm"
+version = "0.1.0"
+description = "AquiLLM"
+requires-python = ">=3.12"
+dependencies = [
+    "django",
+    "psycopg2-binary",
+    "cohere",
+    "python-dotenv",
+    "pgvector",
+    "pypdf",
+    "django-extensions",
+    "Werkzeug",
+    "django-allauth[socialaccount]",
+    "openai",
+    "django-debug-toolbar",
+    "anthropic[bedrock]",
+    "tenacity",
+    "uvicorn",
+    "whitenoise",
+    "typeguard",
+    "pydantic",
+    "channels",
+    "daphne",
+    "google-generativeai",
+    "django-storages[google]",
+    "django-storages[s3]",
+    "pytest",
+    "pytest-cov",
+    "pytest-django",
+    "pytest-asyncio",
+    "boto3",
+    "websockets",
+    "debugpy",
+    "channels-redis",
+    "celery[redis]",
+    "pdf2image",
+    "pillow",
+    "google-genai",
+    "chardet",
+    "tiktoken",
+    "trafilatura",
+    "beautifulsoup4",
+    "selenium>=4.0.0",
+    "webdriver-manager>=4.0.0",
+    "astropy",
+    "numpy",
+    "requests-oauthlib",
+    "mem0ai",
+    "python-docx",
+    "openpyxl",
+    "xlrd",
+    "odfpy",
+    "python-pptx",
+    "ebooklib",
+    "PyYAML",
+    "PyMuPDF>=1.24.0",
+    "llmlingua",
+    "dotenv",
+    "pytesseract",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-django",
+    "opentelemetry-instrumentation-celery",
+    "opentelemetry-instrumentation-psycopg2",
+    "opentelemetry-instrumentation-redis",
+    "opentelemetry-instrumentation-asgi",
+    "pyroscope-io",
+    "pyroscope-otel",
+    "structlog>=24.1.0",
+    "python-logging-loki>=0.3.1",
+    "django-prometheus",
+]
+
+[tool.uv]
+torch-backend = "auto"
+
+[dependency-groups]
+dev = [
+    "pyrefly>=0.58.0",
+    "ruff>=0.15.7",
+]
+
+[tool.ruff]
+src = ["aquillm"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+

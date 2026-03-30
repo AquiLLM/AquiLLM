@@ -6,7 +6,7 @@ LLM-based extraction or heuristic fallback.
 """
 
 import json
-import logging
+import structlog
 import re
 from os import getenv
 from typing import Optional
@@ -16,7 +16,7 @@ import requests
 from ..config import MEM0_TIMEOUT_SECONDS
 from ..mem0.client import _normalize_openai_base_url
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _extract_json_object(text: str) -> dict:

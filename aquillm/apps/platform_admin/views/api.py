@@ -1,5 +1,5 @@
 """API views for platform administration."""
-import logging
+import structlog
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
@@ -17,7 +17,7 @@ from apps.platform_admin.services.feedback_export import (
     stream_feedback_csv_lines,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _client_accepts_gzip(request) -> bool:

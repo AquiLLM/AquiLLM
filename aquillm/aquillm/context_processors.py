@@ -1,7 +1,7 @@
 """Template context processors: navigation, URLs exposed to the client, theme."""
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import Any
 from uuid import UUID
 
@@ -9,7 +9,7 @@ from django.urls import NoReverseMatch, reverse
 
 from .models import UserSettings, WSConversation
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _PLACEHOLDER_DOC_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -60,6 +60,10 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_ingest_webpage", "api_ingest_webpage", None),
     # Page-backed ingest (not under /api/ but consumed like an API URL by the React app)
     ("api_ingest_handwritten_notes", "ingest_handwritten_notes", None),
+    ("api_bug_reports", "api_bug_reports", None),
+    ("api_bug_reports_list", "api_bug_reports_list", None),
+    ("api_bug_report_detail", "api_bug_report_detail", {"report_id": 0}),
+    ("api_bug_report_delete", "api_bug_report_delete", {"report_id": 0}),
 ]
 
 # Named page routes for window.pageUrls (non-API aquillm pages).
@@ -91,6 +95,7 @@ _PAGE_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("zotero_disconnect", "zotero_disconnect", None),
     ("zotero_sync", "zotero_sync", None),
     ("zotero_sync_status", "zotero_sync_status", None),
+    ("bug_reports_admin", "bug_reports_admin", None),
 ]
 
 

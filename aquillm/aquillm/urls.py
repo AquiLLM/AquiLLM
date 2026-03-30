@@ -38,6 +38,8 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("new_ws_convo/", new_ws_convo, name="new_ws_convo"),
 
+    path("", include("django_prometheus.urls")),
+
     path("health/", views.health_check, name="health"),
     path("ready/", views.health_check, name="ready"),
     path("health", views.health_check),
@@ -59,7 +61,11 @@ if DEBUG:
     # DJANGO_DEBUG is off (debug_toolbar must be in INSTALLED_APPS only then).
     from debug_toolbar.toolbar import debug_toolbar_urls
 
+    from apps.bug_reports.views.api import test_celery_task, test_exception
+
     urlpatterns += debug_toolbar_urls()
     urlpatterns += [
         path("debug_models/", views.debug_models, name="debug_models"),
+        path("debug_exception/", test_exception, name="debug_exception"),
+        path("debug_celery/", test_celery_task, name="debug_celery_task"),
     ]

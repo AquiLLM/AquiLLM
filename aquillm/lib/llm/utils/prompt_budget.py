@@ -1,7 +1,7 @@
 """Provider-agnostic preflight history trimming using OpenAI-shaped token estimates."""
 from __future__ import annotations
 
-import logging
+import structlog
 from os import getenv
 from typing import Any
 
@@ -13,7 +13,7 @@ from lib.llm.providers.openai_tokens import (
     trim_messages_for_overflow,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 _ENC = encoding_for_model("gpt-4o")
 
 

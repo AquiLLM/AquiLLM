@@ -3,10 +3,10 @@ Image processing utilities for OCR.
 """
 
 import io
-import logging
+import structlog
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def read_image_bytes(image_input: Any) -> bytes:

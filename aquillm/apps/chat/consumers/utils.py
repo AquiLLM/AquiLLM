@@ -1,13 +1,13 @@
 """Shared helpers for the chat WebSocket consumer (env, text, UUID parsing, images)."""
 from __future__ import annotations
 
-import logging
+import structlog
 from os import getenv
 
 from lib.llm.utils.images import resize_image_data_url_for_llm
 from lib.tools.documents.ids import clean_and_parse_doc_id
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def env_int(name: str, default: int) -> int:

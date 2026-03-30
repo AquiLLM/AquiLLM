@@ -5,7 +5,7 @@ Supports two extraction methods:
 2. Caption-based rendering - detects figure captions and renders the figure region
 """
 
-import logging
+import structlog
 from typing import Iterator
 
 from .pdf_page_extractors import (
@@ -15,7 +15,7 @@ from .pdf_page_extractors import (
 )
 from .types import ExtractedFigure
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def extract_figures(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:

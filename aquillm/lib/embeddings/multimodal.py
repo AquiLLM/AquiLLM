@@ -2,13 +2,13 @@
 Multimodal (text + image) embedding support.
 """
 
-import logging
+import structlog
 
 import requests
 
 from .config import get_local_embed_config
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _format_qwen_vl_embed_prompt(instruction: str, text: str, has_image: bool) -> str:

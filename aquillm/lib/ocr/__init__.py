@@ -10,7 +10,7 @@ Provides:
 For Django integration with API usage logging, use aquillm.ocr_utils.
 """
 
-import logging
+import structlog
 from typing import Any, Dict
 
 from .config import get_ocr_provider, set_usage_logger
@@ -19,7 +19,7 @@ from .tesseract import extract_text_with_tesseract
 from .qwen import extract_text_with_qwen
 from .gemini import extract_text_with_gemini, GeminiCostTracker, cost_tracker
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def extract_text_from_image(image_input: Any, convert_to_latex: bool = False) -> Dict[str, Any]:

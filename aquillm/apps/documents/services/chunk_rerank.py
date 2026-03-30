@@ -1,7 +1,7 @@
 """Reranking for vector/trigram chunk candidates (local vLLM, Cohere, fallbacks)."""
 from __future__ import annotations
 
-import logging
+import structlog
 from os import getenv
 from typing import TYPE_CHECKING, Type
 
@@ -17,7 +17,7 @@ _fallback_rerank = fallback_rerank
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def rerank_chunks(model_cls: Type[TextChunk], query: str, chunks, top_k: int):

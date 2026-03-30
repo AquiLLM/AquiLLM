@@ -2,10 +2,10 @@
 Memory system configuration from environment variables.
 """
 
-import logging
+import structlog
 from os import getenv
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _env_int(name: str, default: int, min_value: int = 1) -> int:

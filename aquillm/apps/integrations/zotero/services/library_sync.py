@@ -1,7 +1,7 @@
 """Orchestrate a full Zotero library sync (collections, downloads, PDF saves on main thread)."""
 from __future__ import annotations
 
-import logging
+import structlog
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -15,7 +15,7 @@ from apps.integrations.zotero.models import ZoteroConnection
 
 from aquillm.zotero_client import ZoteroAPIClient
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None) -> dict:

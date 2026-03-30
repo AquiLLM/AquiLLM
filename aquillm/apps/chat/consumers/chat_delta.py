@@ -1,7 +1,7 @@
 """Build and send WebSocket conversation deltas after LLM turns."""
 from __future__ import annotations
 
-import logging
+import structlog
 from json import dumps
 from time import perf_counter
 from typing import Any
@@ -11,7 +11,7 @@ from channels.db import aclose_old_connections
 from aquillm.llm import Conversation
 from aquillm.message_adapters import pydantic_message_to_frontend_dict
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 async def send_conversation_delta(

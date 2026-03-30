@@ -1,10 +1,10 @@
 """PDF page geometry: captions, regions, and raster rendering helpers."""
 from __future__ import annotations
 
-import logging
+import structlog
 import re
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 MIN_IMAGE_WIDTH = 100
 MIN_IMAGE_HEIGHT = 100

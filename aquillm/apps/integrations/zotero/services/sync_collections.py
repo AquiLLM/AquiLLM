@@ -1,7 +1,7 @@
 """Sync Zotero collections into AquiLLM with parent/child hierarchy."""
 from __future__ import annotations
 
-import logging
+import structlog
 
 from django.contrib.auth.models import User
 
@@ -9,7 +9,7 @@ from apps.collections.models import Collection, CollectionPermission
 
 from aquillm.zotero_client import ZoteroAPIClient
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def sync_collections_with_hierarchy(

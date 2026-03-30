@@ -4,9 +4,9 @@ Zotero OAuth 1.0a client for authentication flow
 import os
 from typing import Dict, Tuple
 from requests_oauthlib import OAuth1Session
-import logging
+import structlog
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class ZoteroOAuthClient:

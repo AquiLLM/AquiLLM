@@ -36,3 +36,9 @@ application = ProtocolTypeRouter(
 
     }
 )
+
+# Wrap the full ASGI application with OpenTelemetry tracing if enabled.
+if os.environ.get("OTEL_ENABLED", "").strip().lower() in ("1", "true", "yes"):
+    from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
+
+    application = OpenTelemetryMiddleware(application)

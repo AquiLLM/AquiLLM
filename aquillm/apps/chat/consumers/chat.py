@@ -1,7 +1,7 @@
 """WebSocket consumer for chat functionality."""
 from __future__ import annotations
 
-import logging
+import structlog
 from json import dumps
 from os import getenv
 from time import perf_counter
@@ -27,7 +27,7 @@ from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
 from lib.tools.debug.weather import get_debug_weather_tool
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class ChatConsumer(AsyncWebsocketConsumer):

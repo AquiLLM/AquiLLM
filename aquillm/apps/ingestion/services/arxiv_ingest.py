@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import gzip
 import io
-import logging
+import structlog
 import tarfile
 from typing import Any
 from xml.dom import minidom
@@ -15,7 +15,7 @@ from django.core.files.base import ContentFile
 from apps.collections.models import Collection
 from apps.documents.models import PDFDocument, TeXDocument
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def insert_one_from_arxiv(arxiv_id: str, collection: Collection, user: Any) -> dict:

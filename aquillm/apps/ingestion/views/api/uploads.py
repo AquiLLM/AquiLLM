@@ -1,5 +1,5 @@
 """File upload and ingestion-monitor API views."""
-import logging
+import structlog
 import os
 
 from django.contrib.auth.decorators import login_required
@@ -24,7 +24,7 @@ from apps.ingestion.models import IngestionBatch
 from apps.ingestion.services.upload_batches import enqueue_upload_batch_files
 from aquillm.vtt import coalesce_captions, parse, to_text
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @login_required
