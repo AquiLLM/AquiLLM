@@ -7,6 +7,10 @@ DAEMON_JSON="/etc/docker/daemon.json"
 DRY_RUN=0
 ASSUME_YES=0
 KEEP_OLD_LINK=0
+POST_CHECKS=0
+COMPOSE_FILE=""
+ENV_FILE=".env"
+SERVICES="web worker"
 
 usage() {
   cat <<'EOF'
@@ -22,6 +26,10 @@ Options:
   --yes                   Do not prompt for confirmation
   --dry-run               Print planned actions without changing anything
   --keep-old-link         Keep symlink from old path to backup directory after migration
+  --post-checks           Run docker compose recreate + venv checks after migration
+  --compose-file <path>   Compose file for post checks (e.g. deploy/compose/production.yml)
+  --env-file <path>       Env file for post checks (default: .env)
+  --services "<list>"     Services for post checks (default: "web worker")
   -h, --help              Show this help
 
 Notes:
@@ -84,6 +92,22 @@ while [[ $# -gt 0 ]]; do
       KEEP_OLD_LINK=1
       shift
       ;;
+    --post-checks)
+      POST_CHECKS=1
+      shift
+      ;;
+    --compose-file)
+      COMPOSE_FILE="${2:?missing value for --compose-file}"
+      shift 2
+      ;;
+    --env-file)
+      ENV_FILE="${2:?missing value for --env-file}"
+      shift 2
+      ;;
+    --services)
+      SERVICES="${2:?missing value for --services}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -104,9 +128,15 @@ fi
 need_cmd systemctl
 need_cmd rsync
 need_cmd python3
+need_cmd docker
 
 if [[ ! -d "$SOURCE_ROOT" ]]; then
   echo "Source Docker root does not exist: $SOURCE_ROOT" >&2
+  exit 1
+fi
+
+if [[ "$POST_CHECKS" -eq 1 && -z "$COMPOSE_FILE" ]]; then
+  echo "--post-checks requires --compose-file <path>" >&2
   exit 1
 fi
 
@@ -200,3 +230,11 @@ log "Verify with: docker info | grep 'Docker Root Dir'"
 log "Backup retained at: $backup_root"
 log "After validation, you can reclaim space by deleting backup:"
 log "  sudo rm -rf \"$backup_root\""
+
+if [[ "$POST_CHECKS" -eq 1 ]]; then
+  log "Running post-migration compose checks..."
+  run "docker compose --env-file \"$ENV_FILE\" -f \"$COMPOSE_FILE\" up -d --force-recreate $SERVICES"
+  run "docker compose --env-file \"$ENV_FILE\" -f \"$COMPOSE_FILE\" exec web sh -c 'echo \"PATH=\$PATH\"; which python; /opt/venv/bin/python -c \"import django; print(django.__version__)\"'"
+  run "docker compose --env-file \"$ENV_FILE\" -f \"$COMPOSE_FILE\" ps"
+  log "Post-checks complete."
+fi
