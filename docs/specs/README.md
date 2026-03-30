@@ -1,6 +1,6 @@
 # Specs Index
 
-Last updated: 2026-03-26
+Last updated: 2026-03-30
 
 ## Status legend
 
@@ -32,6 +32,9 @@ Last updated: 2026-03-26
 | `2026-03-26-multi-backend-inference-deploy-strategy-design.md` | Planned | (implementation plan not yet created) |
 | `2026-03-26-ingestion-work-queue-batching-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-26-ingestion-work-queue-batching-implementation.md` |
 | `2026-03-26-langgraph-mcp-tools-orchestration-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-25-langgraph-research-orchestration.md` |
+| `2026-03-30-adaptive-tool-call-budget-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-30-adaptive-tool-call-budget-implementation.md` |
+| `2026-03-29-semantic-versioning-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-29-semantic-versioning-implementation.md` |
+| `2026-03-30-whisperx-transcription-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-30-whisperx-transcription-implementation.md` |
 
 ## Notes
 
