@@ -11,6 +11,7 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
+      - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       # LM-Lingua2 / transformers: keep Hub downloads on a host bind (set WEB_HF_CACHE_HOST_PATH in .env).
       - HF_HOME=/root/.cache/huggingface
     # Allow web container to reach host services (e.g., host-run vLLM endpoints).
@@ -61,6 +62,7 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
+      - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -89,7 +91,7 @@ services:
         required: false
     volumes:
       - ../..:/app
-    command: sh -c "cd /app/aquillm && celery -A aquillm worker --loglevel=info"
+    command: sh -c "cd /app/aquillm && /opt/venv/bin/celery -A aquillm worker --loglevel=info"
   
   nginx:
       image: nginx:stable-bookworm
