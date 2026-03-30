@@ -11,6 +11,9 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
+      # Bind mount brings host .venv; force uv + tools to use the image venv from Dockerfile.
+      - UV_PROJECT_ENVIRONMENT=/opt/venv
+      - VIRTUAL_ENV=/opt/venv
       - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       # LM-Lingua2 / transformers: keep Hub downloads on a host bind (set WEB_HF_CACHE_HOST_PATH in .env).
       - HF_HOME=/root/.cache/huggingface
@@ -43,6 +46,8 @@ services:
         required: false
     volumes:
       - ../..:/app
+      # Hide host .venv so /opt/venv from the image is the only project env (avoids uv using /app/.venv).
+      - /app/.venv
       # Persist Hugging Face hub cache for web (LM-Lingua2). Override WEB_HF_CACHE_HOST_PATH in .env (e.g. Jetstream volume).
       - ${WEB_HF_CACHE_HOST_PATH:-../../data/hf_web}:/root/.cache/huggingface
     healthcheck:
@@ -62,6 +67,8 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
+      - UV_PROJECT_ENVIRONMENT=/opt/venv
+      - VIRTUAL_ENV=/opt/venv
       - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -91,6 +98,7 @@ services:
         required: false
     volumes:
       - ../..:/app
+      - /app/.venv
     command: sh -c "cd /app/aquillm && /opt/venv/bin/celery -A aquillm worker --loglevel=info"
   
   nginx:
