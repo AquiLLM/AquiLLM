@@ -7,6 +7,7 @@ Last updated: 2026-03-25
 - `docs/documents/architecture/aquillm-current-architecture-mermaid.md`
 - `docs/documents/architecture/aquillm-current-architecture.drawio`
 - `docs/documents/architecture/aquillm-architecture-paper-simplified.md`
+- `docs/documents/architecture/aquillm-architecture-paper-simplified.drawio`
 - `docs/documents/architecture/aquillm-architecture-mermaid-draft.md`
 - `docs/documents/architecture/mcp-skills-agents-runtime.md`
 
