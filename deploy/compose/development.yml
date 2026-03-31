@@ -194,7 +194,7 @@ services:
       - ${MEM0_QDRANT_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/qdrant}:/qdrant/storage
 
   memgraph:
-    image: memgraph/memgraph-mage:latest
+    image: ${MEM0_MEMGRAPH_IMAGE:-memgraph/memgraph:3.8.1}
     restart: unless-stopped
     profiles:
       - memgraph
