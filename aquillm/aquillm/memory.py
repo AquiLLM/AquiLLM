@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Optional
 
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import User
+from django.db import IntegrityError
 from pgvector.django import L2Distance
 
 from .models import UserMemoryFact, EpisodicMemory
@@ -57,6 +58,12 @@ __all__ = [
     'augment_conversation_with_memory_async',
     'create_episodic_memories_for_conversation',
 ]
+
+
+def _is_duplicate_episodic_memory_error(exc: IntegrityError) -> bool:
+    """Check whether an IntegrityError is the assistant-message dedupe race."""
+    message = str(exc)
+    return "unique_episodic_per_assistant_msg" in message
 
 
 def _add_mem0_memory(
@@ -272,10 +279,19 @@ def create_episodic_memories_for_conversation(db_convo) -> None:
                 assistant_message_uuid=str(msg_uuid),
             )
         if (not use_mem0()) or MEM0_DUAL_WRITE_LOCAL:
-            EpisodicMemory.objects.create(
-                user=db_convo.owner,
-                content=memory_content,
-                conversation=db_convo,
-                assistant_message_uuid=msg_uuid,
-            )
+            try:
+                EpisodicMemory.objects.create(
+                    user=db_convo.owner,
+                    content=memory_content,
+                    conversation=db_convo,
+                    assistant_message_uuid=msg_uuid,
+                )
+            except IntegrityError as exc:
+                if not _is_duplicate_episodic_memory_error(exc):
+                    raise
+                logger.info(
+                    "Skipping duplicate episodic memory insert after race: user_id=%s assistant_message_uuid=%s",
+                    db_convo.owner_id,
+                    msg_uuid,
+                )
         prev_content = ""
