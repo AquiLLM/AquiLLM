@@ -10,9 +10,13 @@ Optional backend:
 This module integrates lib/memory (pure Python) with Django models.
 """
 
+from __future__ import annotations
+
+import asyncio
 import structlog
 from typing import TYPE_CHECKING, Optional
 
+from channels.db import database_sync_to_async
 from django.contrib.auth.models import User
 from pgvector.django import L2Distance
 
@@ -27,6 +31,7 @@ from lib.memory import (
     MEM0_DUAL_WRITE_LOCAL,
     use_mem0,
     search_mem0_episodic_memories,
+    search_mem0_episodic_memories_async,
     add_mem0_raw_facts,
     add_mem0_memory_with_client,
     extract_stable_facts,
@@ -46,9 +51,11 @@ __all__ = [
     'RetrievedEpisodicMemory',
     'get_user_profile_facts',
     'get_episodic_memories',
+    'get_episodic_memories_async',
     'format_memories_for_system',
     'get_last_user_message_text',
     'augment_conversation_with_memory',
+    'augment_conversation_with_memory_async',
     'create_episodic_memories_for_conversation',
 ]
 
@@ -102,6 +109,23 @@ def get_user_profile_facts(user: User):
     return list(UserMemoryFact.objects.filter(user=user).order_by('category', 'created_at'))
 
 
+def _get_episodic_memories_pgvector(
+    user: User,
+    query: str,
+    top_k: int,
+    exclude_conversation_id: Optional[int],
+):
+    """Local pgvector episodic retrieval (no Mem0)."""
+    qs = EpisodicMemory.objects.filter(user=user).exclude(embedding__isnull=True)
+    if exclude_conversation_id is not None:
+        qs = qs.exclude(conversation_id=exclude_conversation_id)
+    try:
+        embedding = get_embedding(query, input_type='search_query')
+        return list(qs.order_by(L2Distance('embedding', embedding))[:top_k])
+    except Exception:
+        return []
+
+
 def get_episodic_memories(
     user: User,
     query: str,
@@ -123,14 +147,32 @@ def get_episodic_memories(
         )
         if mem0_results:
             return mem0_results
-    qs = EpisodicMemory.objects.filter(user=user).exclude(embedding__isnull=True)
-    if exclude_conversation_id is not None:
-        qs = qs.exclude(conversation_id=exclude_conversation_id)
-    try:
-        embedding = get_embedding(query.strip(), input_type='search_query')
-        return list(qs.order_by(L2Distance('embedding', embedding))[:top_k])
-    except Exception:
+    return _get_episodic_memories_pgvector(
+        user, query.strip(), top_k, exclude_conversation_id
+    )
+
+
+async def get_episodic_memories_async(
+    user: User,
+    query: str,
+    top_k: int = EPISODIC_TOP_K,
+    exclude_conversation_id: Optional[int] = None,
+):
+    """Async episodic retrieval: Mem0 async SDK first, then pgvector via sync_to_async."""
+    if not query or not query.strip():
         return []
+    if use_mem0():
+        mem0_results = await search_mem0_episodic_memories_async(
+            user_id=str(user.id),
+            query=query.strip(),
+            top_k=top_k,
+            exclude_conversation_id=exclude_conversation_id,
+        )
+        if mem0_results:
+            return mem0_results
+    return await database_sync_to_async(_get_episodic_memories_pgvector)(
+        user, query.strip(), top_k, exclude_conversation_id
+    )
 
 
 def get_last_user_message_text(convo: 'Conversation') -> str:
@@ -159,6 +201,33 @@ def augment_conversation_with_memory(
     episodic = get_episodic_memories(user, query, top_k=EPISODIC_TOP_K, exclude_conversation_id=exclude_conversation_id)
     logger.info(
         "Memory injection: user_id=%s query=%r profile_facts=%d episodic_memories=%d",
+        user.id,
+        query[:180] if isinstance(query, str) else "",
+        len(profile_facts),
+        len(episodic),
+    )
+    block = format_memories_for_system(profile_facts, episodic)
+    convo.system = (base_system or "").rstrip() + block
+
+
+async def augment_conversation_with_memory_async(
+    convo: 'Conversation',
+    user: User,
+    base_system: str,
+    exclude_conversation_id: Optional[int] = None,
+) -> None:
+    """
+    Like augment_conversation_with_memory but overlaps profile ORM load with async Mem0/pgvector episodic fetch.
+    Prefer this from Channels/WebSocket handlers to reduce wall-clock latency before the LLM call.
+    """
+    query = get_last_user_message_text(convo)
+    profile_task = database_sync_to_async(get_user_profile_facts)(user)
+    episodic_task = get_episodic_memories_async(
+        user, query, top_k=EPISODIC_TOP_K, exclude_conversation_id=exclude_conversation_id
+    )
+    profile_facts, episodic = await asyncio.gather(profile_task, episodic_task)
+    logger.info(
+        "Memory injection (async): user_id=%s query=%r profile_facts=%d episodic_memories=%d",
         user.id,
         query[:180] if isinstance(query, str) else "",
         len(profile_facts),
