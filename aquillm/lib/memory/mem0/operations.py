@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import queue
 import structlog
+import threading
 from os import getenv
 import time
 from typing import Any, Optional
@@ -343,12 +345,63 @@ async def search_mem0_episodic_memories_async(
     return await search_mem0_via_oss_async(
         user_id=user_id, query=query, top_k=top_k, exclude_conversation_id=exclude_conversation_id
     )
+
+
+def _run_mem0_add_call_with_timeout(add_callable: Any, *args: Any, **kwargs: Any) -> Any:
+    timeout_s = float(MEM0_TIMEOUT_SECONDS)
+    result_queue: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def _target() -> None:
+        try:
+            result_queue.put((True, add_callable(*args, **kwargs)))
+        except Exception as exc:
+            result_queue.put((False, exc))
+
+    thread = threading.Thread(target=_target, daemon=True)
+    thread.start()
+    thread.join(timeout_s)
+    if thread.is_alive():
+        raise TimeoutError(f"Mem0 add timed out after {timeout_s:.1f}s")
+
+    ok, value = result_queue.get_nowait()
+    if ok:
+        return value
+    raise value
+
+
+def _payload_shape_error(exc: Exception) -> bool:
+    if isinstance(exc, TypeError):
+        return True
+    return "string indices must be integers" in str(exc)
+
+
+def _messages_to_transcript(messages: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip().lower()
+        content = str(item.get("content", "") or "").strip()
+        if not role or not content:
+            continue
+        lines.append(f"{role.capitalize()}: {content}")
+    return "\n".join(lines)
+
+
+def _message_payload_candidates(messages: list[dict[str, Any]]) -> list[Any]:
+    candidates: list[Any] = [messages]
+    transcript = _messages_to_transcript(messages)
+    if transcript:
+        candidates.append(transcript)
+    return candidates
+
+
 def _add_mem0_fact(mem0: Any, fact: str, user_id: str, metadata: dict[str, Any], enable_graph: Optional[bool]) -> Any:
     add_kwargs = {"user_id": user_id, "metadata": metadata, "infer": False}
     if enable_graph is not None:
         add_kwargs["enable_graph"] = enable_graph
     try:
-        return mem0.add(fact, **add_kwargs)  # type: ignore[attr-defined]
+        return _run_mem0_add_call_with_timeout(mem0.add, fact, **add_kwargs)  # type: ignore[attr-defined]
     except TypeError:
         if enable_graph is None:
             raise
@@ -376,15 +429,25 @@ def _add_mem0_messages_payload(
     add_kwargs = {"user_id": user_id, "metadata": metadata, "infer": True}
     if enable_graph is not None:
         add_kwargs["enable_graph"] = enable_graph
-    try:
-        return mem0.add(messages, **add_kwargs)  # type: ignore[attr-defined]
-    except TypeError:
+    last_exc: Exception | None = None
+    for payload in _message_payload_candidates(messages):
         try:
-            return mem0.add(messages=messages, **add_kwargs)  # type: ignore[attr-defined]
-        except TypeError:
-            if enable_graph is None:
+            return _run_mem0_add_call_with_timeout(mem0.add, payload, **add_kwargs)  # type: ignore[attr-defined]
+        except TypeError as exc:
+            last_exc = exc
+            try:
+                return _run_mem0_add_call_with_timeout(mem0.add, messages=payload, **add_kwargs)  # type: ignore[attr-defined]
+            except Exception as keyword_exc:
+                last_exc = keyword_exc
+                if not _payload_shape_error(keyword_exc):
+                    raise
+        except Exception as exc:
+            last_exc = exc
+            if not _payload_shape_error(exc):
                 raise
-            return _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=None)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Mem0 intelligent write had no payload candidates")
 
 
 def _mem0_add_result_has_writes(result: Any) -> bool:

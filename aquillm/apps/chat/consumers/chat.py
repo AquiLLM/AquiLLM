@@ -17,7 +17,7 @@ from aquillm.llm import LLMInterface, LLMTool, message_to_user
 from aquillm.memory import augment_conversation_with_memory_async
 from aquillm.message_adapters import load_conversation_from_db, pydantic_message_to_frontend_dict
 from aquillm.settings import DEBUG
-from aquillm.tasks import create_conversation_memories_task
+from aquillm.tasks import enqueue_conversation_memories_task
 from apps.chat.consumers.chat_delta import send_conversation_delta
 from apps.chat.consumers.chat_receive import handle_chat_receive
 from apps.chat.consumers.chat_ws_errors import send_connect_error
@@ -53,7 +53,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         save_conversation_to_db(self.convo, self.db_convo)
         if create_memories:
             try:
-                create_conversation_memories_task.delay(self.db_convo.id)
+                enqueue_conversation_memories_task(
+                    conversation_id=self.db_convo.id,
+                    queued_updated_at=self.db_convo.updated_at.isoformat(),
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to queue memory extraction task for convo %s: %s",
