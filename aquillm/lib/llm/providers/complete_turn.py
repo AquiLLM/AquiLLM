@@ -243,7 +243,10 @@ async def complete_conversation_turn(
                 messages_for_bot=messages_for_bot,
                 partial_text=response_text,
                 max_tokens=continuation_budget,
+                stream_message_uuid=stream_message_uuid,
             )
+            if continuation_response is not None and not continuation_response.message_uuid:
+                continuation_response.message_uuid = stream_message_uuid
             continuation_text = (
                 (continuation_response.text or "").strip() if continuation_response else ""
             )

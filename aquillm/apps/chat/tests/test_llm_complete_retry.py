@@ -113,3 +113,38 @@ class CutoffContinuationTests(SimpleTestCase):
         self.assertEqual(llm.calls[1]["max_tokens"], 640)
         self.assertIn('1. Ingestion and preprocessing', updated[-1].content)
         self.assertIn('2. Claim parsing and structured extraction.', updated[-1].content)
+
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_continuation_reuses_stream_message_uuid_for_single_bubble(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text='Intro section that gets cut',
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=' and then continues cleanly.',
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Give me a long answer that may be cut off.')],
+        )
+
+        async def _noop_stream(_payload: dict):
+            return None
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048, stream_func=_noop_stream)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        first_uuid = llm.calls[0].get("stream_message_uuid")
+        self.assertTrue(first_uuid)
+        self.assertEqual(llm.calls[1].get("stream_message_uuid"), first_uuid)
+        self.assertEqual(updated[-1].message_uuid, first_uuid)

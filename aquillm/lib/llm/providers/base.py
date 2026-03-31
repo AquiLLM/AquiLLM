@@ -50,6 +50,7 @@ class LLMInterface(ABC):
         messages_for_bot: list[LLM_Message],
         partial_text: str,
         max_tokens: int,
+        stream_message_uuid: Optional[str] = None,
     ) -> Optional[LLMResponse]:
         if not partial_text.strip():
             return None
@@ -74,6 +75,7 @@ class LLMInterface(ABC):
                         "messages": continuation_messages,
                         "messages_pydantic": continuation_messages_pydantic,
                         "max_tokens": max_tokens,
+                        "stream_message_uuid": stream_message_uuid,
                     }
                 )
             )
