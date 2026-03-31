@@ -68,7 +68,7 @@ const ChatCollectionsModal: React.FC<ChatCollectionsModalProps> = ({
                   onChange={() => onToggleCollection(collectionId)}
                   className={`w-4 h-4 mt-[3px] shrink-0 rounded cursor-pointer relative border ${
                     isSelected
-                      ? "bg-accent border-accent after:content-['\\2713'] after:absolute after:text-white after:text-xs after:top-[-1px] after:left-[3px]"
+                      ? "bg-accent border-accent after:content-[''] after:absolute after:left-[4px] after:top-[1px] after:h-[8px] after:w-[4px] after:rotate-45 after:border-r-2 after:border-b-2 after:border-white"
                       : 'bg-scheme-shade_5 border-border-mid_contrast'
                   }`}
                   style={{
