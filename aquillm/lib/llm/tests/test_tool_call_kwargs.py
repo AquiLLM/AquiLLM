@@ -43,3 +43,55 @@ def test_search_single_document_coerces_top_k_string():
         },
     )
     assert out["top_k"] == 4
+
+
+def test_search_single_document_maps_aliases():
+    out = normalize_tool_call_kwargs(
+        "search_single_document",
+        {
+            "documentId": "550e8400-e29b-41d4-a716-446655440000",
+            "query": "peas",
+            "k": "6",
+        },
+    )
+    assert out["doc_id"] == "550e8400-e29b-41d4-a716-446655440000"
+    assert out["search_string"] == "peas"
+    assert out["top_k"] == 6
+
+
+def test_search_single_document_extracts_doc_id_from_citation_ref():
+    out = normalize_tool_call_kwargs(
+        "search_single_document",
+        {
+            "ref": "[doc:550e8400-e29b-41d4-a716-446655440000 chunk:42]",
+            "search": "inheritance",
+            "limit": 3,
+        },
+    )
+    assert out["doc_id"] == "550e8400-e29b-41d4-a716-446655440000"
+    assert out["search_string"] == "inheritance"
+    assert out["top_k"] == 3
+
+
+def test_more_context_maps_common_aliases_and_coerces_ints():
+    out = normalize_tool_call_kwargs(
+        "more_context",
+        {
+            "chunkId": "42",
+            "k": "3",
+        },
+    )
+    assert out["chunk_id"] == 42
+    assert out["adjacent_chunks"] == 3
+
+
+def test_more_context_extracts_chunk_id_from_citation_ref():
+    out = normalize_tool_call_kwargs(
+        "more_context",
+        {
+            "citation": "[doc:550e8400-e29b-41d4-a716-446655440000 chunk:6715]",
+            "adjacentChunks": 2.0,
+        },
+    )
+    assert out["chunk_id"] == 6715
+    assert out["adjacent_chunks"] == 2
