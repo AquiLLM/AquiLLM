@@ -102,6 +102,11 @@ def response_has_required_citations(answer_text: str | None, allowed_citations: 
 
 
 def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
+    """
+    Balanced policy:
+    - Require citations for factual list items (bullets/enumerated claims).
+    - Allow uncited connective prose between cited claims.
+    """
     if not answer_text:
         return []
     uncited: list[str] = []
@@ -119,8 +124,10 @@ def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
             continue
         if not re.search(r"[A-Za-z]", line):
             continue
+        if not _BULLET_OR_ENUM_RE.match(line):
+            continue
         words = re.findall(r"[A-Za-z0-9]+", line)
-        if len(words) < 6 and not _BULLET_OR_ENUM_RE.match(line):
+        if len(words) < 4:
             continue
         if _first_citation_token(line):
             continue

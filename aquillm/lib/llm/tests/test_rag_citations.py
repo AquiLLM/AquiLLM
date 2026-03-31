@@ -79,6 +79,15 @@ def test_response_has_required_citations_rejects_uncited_bullets():
     assert not response_has_required_citations(answer, allowed)
 
 
+def test_response_has_required_citations_allows_uncited_connective_sentence():
+    allowed = {"[doc:doc-a chunk:7]"}
+    answer = (
+        "- Core finding from the paper [doc:doc-a chunk:7]\n"
+        "Overall, this suggests the pattern is robust across experiments."
+    )
+    assert response_has_required_citations(answer, allowed)
+
+
 def test_synthesize_cited_extract_from_results_includes_refs():
     convo = Conversation(
         system="sys",
@@ -156,3 +165,47 @@ async def test_complete_turn_retries_when_post_tool_answer_lacks_required_citati
     assert changed == "changed"
     assert updated[-1].content == "Cited answer [doc:doc-a chunk:7]."
     assert llm.get_message.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_uses_higher_default_post_tool_token_budget(monkeypatch):
+    monkeypatch.delenv("LLM_POST_TOOL_MAX_TOKENS", raising=False)
+    seen_max_tokens: list[int] = []
+
+    async def _fake_get_message(**kwargs):
+        seen_max_tokens.append(int(kwargs.get("max_tokens", 0)))
+        return LLMResponse(
+            text="Cited answer [doc:doc-a chunk:7].",
+            tool_call={},
+            stop_reason="stop",
+            input_usage=1,
+            output_usage=1,
+            model="fake",
+        )
+
+    llm = SimpleNamespace(base_args={}, get_message=AsyncMock(side_effect=_fake_get_message))
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="What does the source say?"),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={
+                    "result": [
+                        {
+                            "chunk_id": 7,
+                            "doc_id": "doc-a",
+                            "title": "Doc A",
+                            "text": "Alpha finding with supporting detail.",
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+    _updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
+    assert changed == "changed"
+    assert seen_max_tokens
+    assert seen_max_tokens[0] == 1536

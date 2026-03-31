@@ -68,9 +68,9 @@ async def complete_conversation_turn(
     except Exception:
         tool_step_max_tokens = 512
     try:
-        post_tool_max_tokens = max(256, int(getenv("LLM_POST_TOOL_MAX_TOKENS", "1024")))
+        post_tool_max_tokens = max(256, int(getenv("LLM_POST_TOOL_MAX_TOKENS", "1536")))
     except Exception:
-        post_tool_max_tokens = 1024
+        post_tool_max_tokens = 1536
     request_max_tokens = max_tokens
     if isinstance(last_message, UserMessage) and last_message.tools:
         request_max_tokens = min(max_tokens, tool_step_max_tokens)
