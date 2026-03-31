@@ -96,14 +96,17 @@ def _promote_profile_facts(user: User, facts: list[str]) -> None:
         )
 
 
-def _add_mem0_memory(
-    user: User,
+def promote_profile_facts_for_turn(
+    user_id: int,
     user_content: str,
     assistant_content: str,
-    conversation_id: int,
-    assistant_message_uuid: str,
-) -> None:
-    """Promote durable facts locally and send the raw turn to Mem0 intelligent infer."""
+) -> int:
+    """Extract and persist durable facts for a completed turn."""
+    user = User.objects.filter(id=user_id).first()
+    if user is None:
+        logger.warning("Skipping profile fact promotion; user_id=%s was not found.", user_id)
+        return 0
+
     facts = extract_stable_facts(user_content, assistant_content)
     facts = clean_stable_facts(list(dict.fromkeys(facts)))
     if not facts and has_remember_intent(user_content):
@@ -120,6 +123,53 @@ def _add_mem0_memory(
     facts = clean_stable_facts(list(dict.fromkeys(facts)))
     if facts:
         _promote_profile_facts(user, facts)
+    return len(facts)
+
+
+def _enqueue_profile_fact_promotion(
+    user_id: int,
+    user_content: str,
+    assistant_content: str,
+) -> None:
+    """Send durable-fact promotion to a lower-priority worker queue."""
+    try:
+        from .tasks import promote_profile_facts_task
+
+        promote_profile_facts_task.delay(
+            user_id=user_id,
+            user_content=user_content,
+            assistant_content=assistant_content,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to queue deferred profile fact promotion for user_id=%s; running inline. Error: %s",
+            user_id,
+            exc,
+        )
+        fact_count = promote_profile_facts_for_turn(
+            user_id=user_id,
+            user_content=user_content,
+            assistant_content=assistant_content,
+        )
+        logger.info(
+            "Inline profile fact promotion fallback completed with %d fact(s).",
+            fact_count,
+        )
+
+
+def _add_mem0_memory(
+    user: User,
+    user_content: str,
+    assistant_content: str,
+    conversation_id: int,
+    assistant_message_uuid: str,
+) -> None:
+    """Queue profile promotion separately and send the raw turn to Mem0 intelligent infer."""
+    _enqueue_profile_fact_promotion(
+        user_id=user.id,
+        user_content=user_content,
+        assistant_content=assistant_content,
+    )
 
     if add_mem0_memory_with_client(
         user_id=str(user.id),
@@ -128,13 +178,10 @@ def _add_mem0_memory(
         conversation_id=conversation_id,
         assistant_message_uuid=assistant_message_uuid,
     ):
-        logger.info("Mem0 intelligent write succeeded with %d promoted fact(s).", len(facts))
+        logger.info("Mem0 intelligent write succeeded; profile fact promotion was deferred.")
         return
 
-    if facts:
-        logger.warning("Mem0 intelligent write produced no ADD events for %d promoted fact(s).", len(facts))
-    else:
-        logger.warning("Mem0 intelligent write produced no ADD events for a turn with no promoted facts.")
+    logger.warning("Mem0 intelligent write produced no ADD events; profile fact promotion was deferred.")
 
 
 def get_user_profile_facts(user: User):

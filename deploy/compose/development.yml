@@ -105,7 +105,54 @@ services:
     volumes:
       - ../..:/app
       - /app/.venv
-    command: sh -c "cd /app/aquillm && /opt/venv/bin/celery -A aquillm worker --loglevel=info"
+    command: sh -c "cd /app/aquillm && /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues=celery --hostname=worker-main@%h"
+
+  worker_memory_promotion:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web/Dockerfile.prod
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      - C_FORCE_ROOT=1
+      - RUN_CELERY_IN_WEB=0
+      - UV_PROJECT_ENVIRONMENT=/opt/venv
+      - VIRTUAL_ENV=/opt/venv
+      - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      memgraph:
+        condition: service_started
+        required: false
+      vllm:
+        condition: service_healthy
+        required: false
+      vllm_ocr:
+        condition: service_healthy
+        required: false
+      vllm_transcribe:
+        condition: service_healthy
+        required: false
+      vllm_embed:
+        condition: service_healthy
+        required: false
+      vllm_rerank:
+        condition: service_healthy
+        required: false
+    volumes:
+      - ../..:/app
+      - /app/.venv
+    command: sh -c "cd /app/aquillm && /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues=memory-promotion --concurrency=1 --prefetch-multiplier=1 --hostname=worker-memory-promotion@%h"
   
   nginx:
       image: nginx:stable-bookworm

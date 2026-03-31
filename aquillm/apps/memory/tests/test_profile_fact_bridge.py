@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from aquillm import memory as memory_module
+from aquillm import tasks as tasks_module
 
 
 class _FakeMessages:
@@ -218,5 +219,102 @@ def test_create_episodic_memories_still_writes_intelligent_mem0_when_no_facts_pr
             "assistant_content": "Here is a summary of the last thing we discussed.",
             "conversation_id": 99,
             "assistant_message_uuid": str(assistant_uuid),
+        }
+    ]
+
+
+def test_create_episodic_memories_defers_profile_fact_extraction_to_background_task(monkeypatch):
+    assistant_uuid = uuid4()
+    db_convo = SimpleNamespace(
+        owner_id=1,
+        owner=SimpleNamespace(id=1),
+        id=99,
+        db_messages=_FakeMessages(
+            [
+                {
+                    "sequence_number": 0,
+                    "role": "user",
+                    "content": "Remember that we use Qdrant and Memgraph for memory.",
+                    "message_uuid": uuid4(),
+                },
+                {
+                    "sequence_number": 1,
+                    "role": "assistant",
+                    "content": "I will remember your memory stack.",
+                    "message_uuid": assistant_uuid,
+                },
+            ]
+        ),
+    )
+
+    queued_promotions: list[dict[str, object]] = []
+    captured_write: list[dict[str, object]] = []
+
+    monkeypatch.setattr(memory_module, "use_mem0", lambda: True)
+    monkeypatch.setattr(
+        memory_module,
+        "extract_stable_facts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("profile fact extraction should be deferred")
+        ),
+    )
+    monkeypatch.setattr(
+        memory_module,
+        "_enqueue_profile_fact_promotion",
+        lambda **kwargs: queued_promotions.append(kwargs),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        memory_module,
+        "add_mem0_memory_with_client",
+        lambda **kwargs: captured_write.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        memory_module.EpisodicMemory.objects,
+        "filter",
+        lambda **_kwargs: SimpleNamespace(exists=lambda: False),
+    )
+
+    memory_module.create_episodic_memories_for_conversation(db_convo)
+
+    assert queued_promotions == [
+        {
+            "user_id": 1,
+            "user_content": "Remember that we use Qdrant and Memgraph for memory.",
+            "assistant_content": "I will remember your memory stack.",
+        }
+    ]
+    assert captured_write == [
+        {
+            "user_id": "1",
+            "user_content": "Remember that we use Qdrant and Memgraph for memory.",
+            "assistant_content": "I will remember your memory stack.",
+            "conversation_id": 99,
+            "assistant_message_uuid": str(assistant_uuid),
+        }
+    ]
+
+
+def test_promote_profile_facts_task_extracts_and_persists_durable_facts(monkeypatch):
+    captured_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        memory_module,
+        "promote_profile_facts_for_turn",
+        lambda **kwargs: captured_calls.append(kwargs),
+        raising=False,
+    )
+
+    tasks_module.promote_profile_facts_task(
+        user_id=7,
+        user_content="Remember that I prefer concise updates.",
+        assistant_content="I will keep responses concise.",
+    )
+
+    assert captured_calls == [
+        {
+            "user_id": 7,
+            "user_content": "Remember that I prefer concise updates.",
+            "assistant_content": "I will keep responses concise.",
         }
     ]
