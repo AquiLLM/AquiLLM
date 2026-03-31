@@ -65,6 +65,14 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
     def _create_vector_index_with_compatibility(self, index_name: str, embedding_dims: int) -> None:
         queries = [
             (
+                "single-field-dimension",
+                f'CREATE VECTOR INDEX {index_name} ON :Entity(embedding) WITH CONFIG {{"dimension": {embedding_dims}}};',
+            ),
+            (
+                "single-field-dimensions",
+                f'CREATE VECTOR INDEX {index_name} ON :Entity(embedding) WITH CONFIG {{"dimensions": {embedding_dims}}};',
+            ),
+            (
                 "current-docs-json-dimension",
                 f'CREATE VECTOR INDEX {index_name} ON :Entity(embedding) WITH CONFIG {{"dimension": {embedding_dims}, "capacity": 1000, "metric": "cos"}};',
             ),
