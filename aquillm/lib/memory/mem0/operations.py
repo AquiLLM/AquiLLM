@@ -18,6 +18,10 @@ logger = structlog.stdlib.get_logger(__name__)
 _NO_RESPONSE = object()
 
 
+class _EnableGraphKwargUnsupported(TypeError):
+    """Raised when Mem0 search does not accept the enable_graph kwarg."""
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = getenv(name)
     if raw is None:
@@ -81,7 +85,7 @@ def _call_mem0_search_sync(
         except TypeError:
             continue
     if enable_graph is not None:
-        return _call_mem0_search_sync(mem0, query, user_id, top_k, enable_graph=None)
+        raise _EnableGraphKwargUnsupported()
     return _NO_RESPONSE
 
 
@@ -129,6 +133,42 @@ def _run_mem0_search_call(search_callable: Any, *args: Any, **kwargs: Any) -> An
         raise
 
 
+async def _run_mem0_search_call_async(search_callable: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run an async Mem0 search callable directly so timeouts can cancel it."""
+    mode = kwargs.pop("_mode", "default")
+    attempt = kwargs.pop("_attempt", 0)
+    query_chars = kwargs.pop("_query_chars", 0)
+    top_k = kwargs.pop("_top_k", 0)
+    started_at = time.perf_counter()
+    try:
+        resolved = await _await_result(search_callable(*args, **kwargs))
+        logger.info(
+            "Mem0 raw search call completed: mode=%s attempt=%d elapsed_ms=%.2f "
+            "query_chars=%d top_k=%d",
+            mode,
+            attempt,
+            (time.perf_counter() - started_at) * 1000.0,
+            query_chars,
+            top_k,
+        )
+        return resolved
+    except TypeError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Mem0 raw search call failed: mode=%s attempt=%d elapsed_ms=%.2f "
+            "query_chars=%d top_k=%d error_type=%s error=%s",
+            mode,
+            attempt,
+            (time.perf_counter() - started_at) * 1000.0,
+            query_chars,
+            top_k,
+            type(exc).__name__,
+            exc,
+        )
+        raise
+
+
 async def _call_mem0_search_async(
     mem0: Any, query: str, user_id: str, top_k: int, enable_graph: Optional[bool]
 ) -> Any:
@@ -136,23 +176,28 @@ async def _call_mem0_search_async(
     timeout = _graph_search_timeout_seconds() if enable_graph else float(MEM0_TIMEOUT_SECONDS)
     mode = _search_mode_label(enable_graph)
     query_chars = len(query or "")
+    search_callable = mem0.search  # type: ignore[attr-defined]
+    is_async_search = inspect.iscoroutinefunction(search_callable)
     for attempt_number, (args, kwargs) in enumerate(attempts, start=1):
         try:
+            call_kwargs = kwargs | {
+                "_mode": mode,
+                "_attempt": attempt_number,
+                "_query_chars": query_chars,
+                "_top_k": top_k,
+            }
+            if is_async_search:
+                return await asyncio.wait_for(
+                    _run_mem0_search_call_async(search_callable, *args, **call_kwargs),
+                    timeout=timeout,
+                )
             return await asyncio.wait_for(
                 asyncio.to_thread(
                     _run_mem0_search_call,
-                    mem0.search,
+                    search_callable,
                     *args,
-                    **(
-                        kwargs
-                        | {
-                            "_mode": mode,
-                            "_attempt": attempt_number,
-                            "_query_chars": query_chars,
-                            "_top_k": top_k,
-                        }
-                    ),
-                ),  # type: ignore[attr-defined]
+                    **call_kwargs,
+                ),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
@@ -169,7 +214,7 @@ async def _call_mem0_search_async(
         except TypeError:
             continue
     if enable_graph is not None:
-        return await _call_mem0_search_async(mem0, query, user_id, top_k, enable_graph=None)
+        raise _EnableGraphKwargUnsupported()
     return _NO_RESPONSE
 def search_mem0_via_oss(
     user_id: str, query: str, top_k: int, exclude_conversation_id: Optional[int]
@@ -181,6 +226,17 @@ def search_mem0_via_oss(
     enable_graph = _search_enable_graph()
     try:
         response = _call_mem0_search_sync(mem0, query, user_id, top_k, enable_graph=enable_graph)
+    except _EnableGraphKwargUnsupported:
+        if enable_graph and _graph_fail_open():
+            logger.warning("Mem0 OSS search does not support enable_graph kwarg; retrying default search.")
+            try:
+                response = _call_mem0_search_sync(mem0, query, user_id, top_k, enable_graph=None)
+            except Exception as retry_exc:
+                logger.warning("Mem0 OSS default-search retry failed; falling back. Error: %s", retry_exc)
+                return []
+        else:
+            logger.warning("Mem0 OSS search does not support enable_graph kwarg; falling back.")
+            return []
     except Exception as exc:
         if enable_graph and _graph_fail_open():
             logger.warning("Mem0 OSS graph search failed; retrying vector-only. Error: %s", exc)
@@ -225,6 +281,23 @@ async def search_mem0_via_oss_async(
                 len(query or ""),
                 top_k,
             )
+    except _EnableGraphKwargUnsupported:
+        if enable_graph and _graph_fail_open():
+            logger.warning("Mem0 OSS async search does not support enable_graph kwarg; retrying default search.")
+            try:
+                response = await _call_mem0_search_async(mem0, query, user_id, top_k, enable_graph=None)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Mem0 OSS async default-search retry timed out after %.1fs; falling back.",
+                    float(MEM0_TIMEOUT_SECONDS),
+                )
+                return []
+            except Exception as retry_exc:
+                logger.warning("Mem0 OSS async default-search retry failed; falling back. Error: %s", retry_exc)
+                return []
+        else:
+            logger.warning("Mem0 OSS async search does not support enable_graph kwarg; falling back.")
+            return []
     except asyncio.TimeoutError:
         if enable_graph and _graph_fail_open():
             logger.warning(

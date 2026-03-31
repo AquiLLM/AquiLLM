@@ -79,6 +79,50 @@ async def test_search_async_graph_failure_retries_vector_only(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_async_enable_graph_unsupported_retries_default(monkeypatch):
+    ops_module = _reload_mem0_operations(
+        monkeypatch,
+        MEM0_GRAPH_ENABLED=1,
+        MEM0_GRAPH_SEARCH_ENABLED=1,
+        MEM0_GRAPH_FAIL_OPEN=1,
+    )
+
+    warnings: list[tuple[str, tuple[Any, ...]]] = []
+    seen_kwargs: list[dict[str, Any]] = []
+
+    class FakeMem0:
+        async def search(self, *_args, **kwargs):
+            seen_kwargs.append(dict(kwargs))
+            if "enable_graph" in kwargs:
+                raise TypeError("unexpected keyword argument 'enable_graph'")
+            return {"results": [{"memory": "default fallback"}]}
+
+    async def fake_get_mem0_oss_async():
+        return FakeMem0()
+
+    monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
+    monkeypatch.setattr(
+        ops_module.logger,
+        "warning",
+        lambda message, *args: warnings.append((message, args)),
+    )
+
+    results = await ops_module.search_mem0_via_oss_async(
+        user_id="1",
+        query="status",
+        top_k=3,
+        exclude_conversation_id=None,
+    )
+
+    assert results[0].content == "default fallback"
+    assert any("enable_graph" in kwargs for kwargs in seen_kwargs)
+    assert any("enable_graph" not in kwargs for kwargs in seen_kwargs)
+    assert warnings[0][0] == (
+        "Mem0 OSS async search does not support enable_graph kwarg; retrying default search."
+    )
+
+
+@pytest.mark.asyncio
 async def test_search_async_graph_attempt_uses_shorter_timeout_budget(monkeypatch):
     """Async graph-enabled search should time out sooner than the full Mem0 timeout."""
     ops_module = _reload_mem0_operations(
@@ -267,6 +311,35 @@ async def test_call_mem0_search_async_logs_timed_out_mode(monkeypatch):
         "query_chars=%d top_k=%d"
     )
     assert warnings[0][1] == ("graph", 1, 3.0, 29, 3)
+
+
+@pytest.mark.asyncio
+async def test_call_mem0_search_async_awaits_async_search_directly(monkeypatch):
+    ops_module = _reload_mem0_operations(
+        monkeypatch,
+        MEM0_GRAPH_ENABLED=1,
+        MEM0_GRAPH_SEARCH_ENABLED=1,
+        MEM0_GRAPH_FAIL_OPEN=1,
+    )
+
+    class FakeMem0:
+        async def search(self, *_args, **kwargs):
+            return {"results": [{"memory": kwargs.get("enable_graph")}]}
+
+    async def fail_to_thread(*_args, **_kwargs):
+        raise AssertionError("async mem0.search should not use to_thread")
+
+    monkeypatch.setattr(ops_module.asyncio, "to_thread", fail_to_thread)
+
+    result = await ops_module._call_mem0_search_async(
+        FakeMem0(),
+        query="status",
+        user_id="1",
+        top_k=3,
+        enable_graph=True,
+    )
+
+    assert result["results"][0]["memory"] is True
 
 
 @pytest.mark.asyncio
