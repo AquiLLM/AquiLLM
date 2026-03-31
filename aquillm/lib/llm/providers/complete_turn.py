@@ -53,8 +53,6 @@ def _append_citation_sources_if_missing(
     base = (text or "").rstrip()
     if not allowed_citations:
         return base
-    if citations.extract_citations(base):
-        return base
     if "Sources:" in base:
         return base
     source_refs = _select_source_refs_for_response(base, allowed_citations)

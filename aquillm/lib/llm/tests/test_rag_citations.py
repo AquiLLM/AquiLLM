@@ -505,8 +505,12 @@ async def test_complete_turn_live_stream_appends_sources_on_done_only():
     assert llm.get_message.await_count == 1
     assert len(stream_payloads) == 2
     assert stream_payloads[0]["content"] == "Partial answer"
-    assert stream_payloads[-1]["content"] == "Final answer [doc:doc-a chunk:7]."
-    assert updated[-1].content == "Final answer [doc:doc-a chunk:7]."
+    assert stream_payloads[-1]["content"] == (
+        "Final answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
+    )
+    assert updated[-1].content == (
+        "Final answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
+    )
 
 
 @pytest.mark.asyncio
@@ -630,6 +634,7 @@ async def test_complete_turn_streaming_appends_used_sources_when_present():
     assert llm.get_message.await_count == 1
     assert len(stream_payloads) == 1
     streamed = stream_payloads[0]["content"]
-    assert "Sources:" not in streamed
-    assert streamed == "Summary with one inline cite [doc:doc-a chunk:1]."
-    assert updated[-1].content.count("[doc:") == 1
+    assert "Sources:" in streamed
+    assert "- [doc:doc-a chunk:1]" in streamed
+    assert "- [doc:doc-g chunk:7]" not in streamed
+    assert updated[-1].content.count("[doc:") == 2
