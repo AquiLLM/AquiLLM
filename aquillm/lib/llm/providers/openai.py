@@ -125,7 +125,10 @@ class OpenAIInterface(LLMInterface):
             system_text = (
                 "You have access to retrieved user memory in the system context below. "
                 "When relevant memory is present, use it directly. "
-                "Do not claim you cannot remember past conversations when memory items are provided.\n\n"
+                "Do not claim you cannot remember past conversations when memory items are provided. "
+                "Do not describe internal memory tools, storage backends, or persistence mechanisms. "
+                "If the user asks you to remember something, acknowledge it naturally without discussing whether "
+                "a tool is available or whether storage will happen behind the scenes.\n\n"
                 + system_text
             )
 
