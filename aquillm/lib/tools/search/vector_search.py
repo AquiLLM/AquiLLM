@@ -16,6 +16,23 @@ def _compact_items_default() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def _doc_has_renderable_image(doc: Any) -> bool:
+    image_file = getattr(doc, "image_file", None)
+    if not image_file:
+        return False
+    name = getattr(image_file, "name", "")
+    if not name:
+        return False
+    storage = getattr(image_file, "storage", None)
+    exists = getattr(storage, "exists", None) if storage is not None else None
+    if callable(exists):
+        try:
+            return bool(exists(name))
+        except Exception:
+            return False
+    return True
+
+
 def pack_chunk_search_results(
     results: Sequence[Any],
     *,
@@ -30,6 +47,7 @@ def pack_chunk_search_results(
     use_compact = _compact_items_default() if compact_items is None else compact_items
     items: list[dict[str, Any]] = []
     has_image_results = False
+    image_renderable_by_doc_id: dict[Any, bool] = {}
     for i, chunk in enumerate(results):
         rank = i + 1
         title = titles_by_doc_id.get(chunk.doc_id, "Untitled Document")
@@ -53,9 +71,13 @@ def pack_chunk_search_results(
                 "citation": f"[doc:{chunk.doc_id} chunk:{chunk.id}]",
             }
 
+        doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
+        if chunk.doc_id not in image_renderable_by_doc_id:
+            image_renderable_by_doc_id[chunk.doc_id] = _doc_has_renderable_image(doc_for_chunk)
+        has_renderable_image = image_renderable_by_doc_id[chunk.doc_id]
+
         if chunk.modality == image_modality:
-            doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
-            if doc_for_chunk is not None and getattr(doc_for_chunk, "image_file", None):
+            if has_renderable_image:
                 display_url = f"{image_url_prefix}{chunk.doc_id}/"
                 has_image_results = True
 
@@ -83,8 +105,7 @@ def pack_chunk_search_results(
                 else:
                     items.append({**base, "text": truncate(chunk.content)})
         else:
-            doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
-            if doc_for_chunk is not None and getattr(doc_for_chunk, "image_file", None):
+            if has_renderable_image:
                 has_image_results = True
                 u = f"{image_url_prefix}{chunk.doc_id}/"
                 if use_compact:
