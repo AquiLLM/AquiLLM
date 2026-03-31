@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import structlog
 from os import getenv
+import time
 from typing import Any, Optional
 
 from ..config import MEM0_TIMEOUT_SECONDS
@@ -144,16 +145,38 @@ async def search_mem0_via_oss_async(
         return []
 
     enable_graph = _search_enable_graph()
+    graph_timeout_seconds = _graph_search_timeout_seconds() if enable_graph else float(MEM0_TIMEOUT_SECONDS)
+    graph_started_at = time.perf_counter()
     try:
         response = await _call_mem0_search_async(mem0, query, user_id, top_k, enable_graph=enable_graph)
+        if enable_graph:
+            logger.info(
+                "Mem0 OSS async graph search completed: graph_timeout_s=%.1f overall_timeout_s=%.1f "
+                "elapsed_ms=%.2f query_chars=%d top_k=%d",
+                graph_timeout_seconds,
+                float(MEM0_TIMEOUT_SECONDS),
+                (time.perf_counter() - graph_started_at) * 1000.0,
+                len(query or ""),
+                top_k,
+            )
     except asyncio.TimeoutError:
         if enable_graph and _graph_fail_open():
             logger.warning(
-                "Mem0 OSS async graph search timed out after %ss; retrying vector-only.",
-                MEM0_TIMEOUT_SECONDS,
+                "Mem0 OSS async graph search timed out after %.1fs; retrying vector-only "
+                "(overall timeout %.1fs).",
+                graph_timeout_seconds,
+                float(MEM0_TIMEOUT_SECONDS),
             )
             try:
+                retry_started_at = time.perf_counter()
                 response = await _call_mem0_search_async(mem0, query, user_id, top_k, enable_graph=False)
+                logger.info(
+                    "Mem0 OSS async vector-only retry completed after graph timeout: "
+                    "elapsed_ms=%.2f query_chars=%d top_k=%d",
+                    (time.perf_counter() - retry_started_at) * 1000.0,
+                    len(query or ""),
+                    top_k,
+                )
             except Exception as retry_exc:
                 logger.warning("Mem0 OSS async vector-only retry failed; falling back. Error: %s", retry_exc)
                 return []
@@ -162,9 +185,21 @@ async def search_mem0_via_oss_async(
             return []
     except Exception as exc:
         if enable_graph and _graph_fail_open():
-            logger.warning("Mem0 OSS async graph search failed; retrying vector-only. Error: %s", exc)
+            logger.warning(
+                "Mem0 OSS async graph search failed after %.2fms; retrying vector-only. Error: %s",
+                (time.perf_counter() - graph_started_at) * 1000.0,
+                exc,
+            )
             try:
+                retry_started_at = time.perf_counter()
                 response = await _call_mem0_search_async(mem0, query, user_id, top_k, enable_graph=False)
+                logger.info(
+                    "Mem0 OSS async vector-only retry completed after graph failure: "
+                    "elapsed_ms=%.2f query_chars=%d top_k=%d",
+                    (time.perf_counter() - retry_started_at) * 1000.0,
+                    len(query or ""),
+                    top_k,
+                )
             except Exception as retry_exc:
                 logger.warning("Mem0 OSS async vector-only retry failed; falling back. Error: %s", retry_exc)
                 return []

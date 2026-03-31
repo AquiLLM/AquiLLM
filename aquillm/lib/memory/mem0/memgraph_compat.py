@@ -6,6 +6,7 @@ import logging
 import math
 from os import getenv
 import re
+import time
 from typing import Any
 
 from mem0.memory.memgraph_memory import MemoryGraph as UpstreamMemoryGraph
@@ -217,9 +218,9 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
     ) -> list[dict[str, Any]]:
         return list(self.graph.query(query, params=params))
 
-    def _fetch_candidate_nodes(
+    def _fetch_candidate_nodes_with_stats(
         self, filters: dict[str, Any], node_list: list[str] | None = None
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         props = self._node_props(filters)
         generic_query = f"""
         MATCH (n:Entity {{{props}}})
@@ -229,9 +230,11 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
         LIMIT $candidate_limit
         RETURN n.name AS name, id(n) AS node_id, n.embedding AS embedding
         """
-        params = self._base_params(filters) | {"candidate_limit": _graph_search_candidate_limit()}
+        candidate_limit = _graph_search_candidate_limit()
+        params = self._base_params(filters) | {"candidate_limit": candidate_limit}
 
         seed_names, seed_tokens = _query_seed_terms(node_list)
+        fetch_started_at = time.perf_counter()
         if seed_names or seed_tokens:
             seeded_query = f"""
             MATCH (n:Entity {{{props}}})
@@ -251,9 +254,30 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
             }
             seeded = self._run_candidate_query(filters, seeded_query, seeded_params)
             if seeded:
-                return seeded
+                return seeded, {
+                    "strategy": "seeded",
+                    "candidate_limit": candidate_limit,
+                    "seed_name_count": len(seed_names),
+                    "seed_token_count": len(seed_tokens),
+                    "fetched_candidate_count": len(seeded),
+                    "fetch_ms": (time.perf_counter() - fetch_started_at) * 1000.0,
+                }
 
-        return self._run_candidate_query(filters, generic_query, params)
+        generic = self._run_candidate_query(filters, generic_query, params)
+        return generic, {
+            "strategy": "generic",
+            "candidate_limit": candidate_limit,
+            "seed_name_count": len(seed_names),
+            "seed_token_count": len(seed_tokens),
+            "fetched_candidate_count": len(generic),
+            "fetch_ms": (time.perf_counter() - fetch_started_at) * 1000.0,
+        }
+
+    def _fetch_candidate_nodes(
+        self, filters: dict[str, Any], node_list: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        candidates, _stats = self._fetch_candidate_nodes_with_stats(filters, node_list=node_list)
+        return candidates
 
     def _nearest_nodes_python(
         self, candidates: list[dict[str, Any]], query_embedding: list[float], threshold: float, limit: int
@@ -272,27 +296,49 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
         scored.sort(key=lambda item: item["similarity"], reverse=True)
         return scored[:limit]
 
-    def _nearest_nodes(
+    def _nearest_nodes_with_stats(
         self,
         query_embedding: list[float],
         filters: dict[str, Any],
         threshold: float,
         limit: int,
         candidates: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         candidates = list(candidates or self._fetch_candidate_nodes(filters))
+        score_started_at = time.perf_counter()
+        candidate_count = len(candidates)
         if not candidates:
-            return []
+            return [], {
+                "mode": "empty",
+                "candidate_count": 0,
+                "valid_candidate_count": 0,
+                "passed_threshold_count": 0,
+                "score_ms": 0.0,
+            }
         if np is None:
-            return self._nearest_nodes_python(candidates, query_embedding, threshold, limit)
+            results = self._nearest_nodes_python(candidates, query_embedding, threshold, limit)
+            return results, {
+                "mode": "python_no_numpy",
+                "candidate_count": candidate_count,
+                "valid_candidate_count": candidate_count,
+                "passed_threshold_count": len(results),
+                "score_ms": (time.perf_counter() - score_started_at) * 1000.0,
+            }
 
         try:
             query_vector = np.asarray(query_embedding, dtype=np.float32)
             if query_vector.ndim != 1 or query_vector.size == 0:
-                return self._nearest_nodes_python(candidates, query_embedding, threshold, limit)
+                results = self._nearest_nodes_python(candidates, query_embedding, threshold, limit)
+                return results, {
+                    "mode": "python_invalid_query",
+                    "candidate_count": candidate_count,
+                    "valid_candidate_count": candidate_count,
+                    "passed_threshold_count": len(results),
+                    "score_ms": (time.perf_counter() - score_started_at) * 1000.0,
+                }
 
             valid_candidates: list[dict[str, Any]] = []
-            valid_embeddings: list[np.ndarray] = []
+            valid_embeddings: list[Any] = []
             for candidate in candidates:
                 embedding = candidate.get("embedding")
                 candidate_vector = np.asarray(embedding, dtype=np.float32)
@@ -302,16 +348,34 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
                 valid_embeddings.append(candidate_vector)
 
             if not valid_candidates:
-                return []
+                return [], {
+                    "mode": "numpy",
+                    "candidate_count": candidate_count,
+                    "valid_candidate_count": 0,
+                    "passed_threshold_count": 0,
+                    "score_ms": (time.perf_counter() - score_started_at) * 1000.0,
+                }
 
             matrix = np.vstack(valid_embeddings)
             query_norm = np.linalg.norm(query_vector)
             if float(query_norm) == 0.0:
-                return []
+                return [], {
+                    "mode": "numpy",
+                    "candidate_count": candidate_count,
+                    "valid_candidate_count": len(valid_candidates),
+                    "passed_threshold_count": 0,
+                    "score_ms": (time.perf_counter() - score_started_at) * 1000.0,
+                }
             candidate_norms = np.linalg.norm(matrix, axis=1)
             nonzero_mask = candidate_norms > 0
             if not np.any(nonzero_mask):
-                return []
+                return [], {
+                    "mode": "numpy",
+                    "candidate_count": candidate_count,
+                    "valid_candidate_count": len(valid_candidates),
+                    "passed_threshold_count": 0,
+                    "score_ms": (time.perf_counter() - score_started_at) * 1000.0,
+                }
 
             matrix = matrix[nonzero_mask]
             candidate_norms = candidate_norms[nonzero_mask]
@@ -329,31 +393,90 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
                 if float(similarity) >= threshold
             ]
             scored.sort(key=lambda item: item["similarity"], reverse=True)
-            return scored[:limit]
+            limited = scored[:limit]
+            return limited, {
+                "mode": "numpy",
+                "candidate_count": candidate_count,
+                "valid_candidate_count": len(filtered_candidates),
+                "passed_threshold_count": len(limited),
+                "score_ms": (time.perf_counter() - score_started_at) * 1000.0,
+            }
         except Exception:
-            return self._nearest_nodes_python(candidates, query_embedding, threshold, limit)
+            results = self._nearest_nodes_python(candidates, query_embedding, threshold, limit)
+            return results, {
+                "mode": "python_error",
+                "candidate_count": candidate_count,
+                "valid_candidate_count": candidate_count,
+                "passed_threshold_count": len(results),
+                "score_ms": (time.perf_counter() - score_started_at) * 1000.0,
+            }
+
+    def _nearest_nodes(
+        self,
+        query_embedding: list[float],
+        filters: dict[str, Any],
+        threshold: float,
+        limit: int,
+        candidates: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        results, _stats = self._nearest_nodes_with_stats(
+            query_embedding,
+            filters,
+            threshold,
+            limit,
+            candidates=candidates,
+        )
+        return results
 
     def _search_graph_db(self, node_list, filters, limit=100):
         """Search related graph edges using Python-side vector similarity."""
+        total_started_at = time.perf_counter()
         node_similarity: dict[int, float] = {}
-        candidate_nodes = self._fetch_candidate_nodes(filters, node_list=list(node_list or []))
+        candidate_nodes, fetch_stats = self._fetch_candidate_nodes_with_stats(filters, node_list=list(node_list or []))
+        score_modes: list[str] = []
+        max_valid_candidates = 0
+        passed_threshold_total = 0
+        score_ms_total = 0.0
         for node in node_list:
             node_embedding = self.embedding_model.embed(node)
-            nearest = self._nearest_nodes(
+            nearest, score_stats = self._nearest_nodes_with_stats(
                 node_embedding,
                 filters,
                 self.threshold,
                 limit,
                 candidates=candidate_nodes,
             )
+            score_modes.append(score_stats.get("mode", "unknown"))
+            max_valid_candidates = max(max_valid_candidates, int(score_stats.get("valid_candidate_count", 0)))
+            passed_threshold_total += int(score_stats.get("passed_threshold_count", 0))
+            score_ms_total += float(score_stats.get("score_ms", 0.0))
             for candidate in nearest:
                 node_id = candidate["node_id"]
                 similarity = candidate["similarity"]
                 node_similarity[node_id] = max(node_similarity.get(node_id, -1.0), similarity)
 
         if not node_similarity:
+            logger.info(
+                "Memgraph graph search stats: strategy=%s candidate_limit=%d seed_names=%d "
+                "seed_tokens=%d fetched_candidates=%d score_mode=%s valid_candidates=%d "
+                "passed_threshold=%d query_nodes=%d fetch_ms=%.2f score_ms=%.2f edge_query_ms=%.2f total_ms=%.2f",
+                fetch_stats.get("strategy", "generic"),
+                int(fetch_stats.get("candidate_limit", 0)),
+                int(fetch_stats.get("seed_name_count", 0)),
+                int(fetch_stats.get("seed_token_count", 0)),
+                int(fetch_stats.get("fetched_candidate_count", 0)),
+                ",".join(sorted(set(score_modes))) if score_modes else "empty",
+                max_valid_candidates,
+                passed_threshold_total,
+                len(list(node_list or [])),
+                float(fetch_stats.get("fetch_ms", 0.0)),
+                score_ms_total,
+                0.0,
+                (time.perf_counter() - total_started_at) * 1000.0,
+            )
             return []
 
+        edge_started_at = time.perf_counter()
         params = self._base_params(filters) | {"node_ids": list(node_similarity)}
         props = self._node_props(filters)
         outgoing = self.graph.query(
@@ -386,6 +509,25 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
             row["similarity"] = similarity
             result_relations.append(row)
         result_relations.sort(key=lambda item: item.get("similarity", -1.0), reverse=True)
+        edge_query_ms = (time.perf_counter() - edge_started_at) * 1000.0
+        logger.info(
+            "Memgraph graph search stats: strategy=%s candidate_limit=%d seed_names=%d "
+            "seed_tokens=%d fetched_candidates=%d score_mode=%s valid_candidates=%d "
+            "passed_threshold=%d query_nodes=%d fetch_ms=%.2f score_ms=%.2f edge_query_ms=%.2f total_ms=%.2f",
+            fetch_stats.get("strategy", "generic"),
+            int(fetch_stats.get("candidate_limit", 0)),
+            int(fetch_stats.get("seed_name_count", 0)),
+            int(fetch_stats.get("seed_token_count", 0)),
+            int(fetch_stats.get("fetched_candidate_count", 0)),
+            ",".join(sorted(set(score_modes))) if score_modes else "empty",
+            max_valid_candidates,
+            passed_threshold_total,
+            len(list(node_list or [])),
+            float(fetch_stats.get("fetch_ms", 0.0)),
+            score_ms_total,
+            edge_query_ms,
+            (time.perf_counter() - total_started_at) * 1000.0,
+        )
         return result_relations[:limit]
 
     def _search_source_node(self, source_embedding, filters, threshold=0.9):

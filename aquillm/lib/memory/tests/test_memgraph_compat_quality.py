@@ -195,3 +195,50 @@ def test_fetch_candidate_nodes_falls_back_to_generic_scan_when_no_useful_seeds(m
 
     assert "seed_tokens" not in captured["params"]
     assert "any(token IN $seed_tokens" not in captured["cypher"]
+
+
+def test_search_graph_db_logs_timing_breakdown(monkeypatch):
+    module = _load_memgraph_compat_module(monkeypatch)
+
+    info_logs: list[tuple[str, tuple[object, ...]]] = []
+
+    graph_obj = module.CompatibleMemgraphMemoryGraph.__new__(module.CompatibleMemgraphMemoryGraph)
+    graph_obj.graph = types.SimpleNamespace(query=lambda *_args, **_kwargs: [])
+    graph_obj.embedding_model = types.SimpleNamespace(embed=lambda _node: [0.1, 0.2])
+    graph_obj.threshold = 0.7
+    graph_obj._fetch_candidate_nodes_with_stats = lambda filters, node_list=None: (
+        [{"name": "memgraph", "node_id": 1, "embedding": [0.1, 0.2]}],
+        {
+            "strategy": "seeded",
+            "candidate_limit": 17,
+            "seed_name_count": 1,
+            "seed_token_count": 2,
+            "fetched_candidate_count": 1,
+            "fetch_ms": 1.5,
+        },
+    )
+    graph_obj._nearest_nodes_with_stats = lambda *_args, **_kwargs: (
+        [{"node_id": 1, "similarity": 0.95}],
+        {
+            "mode": "numpy",
+            "candidate_count": 1,
+            "valid_candidate_count": 1,
+            "passed_threshold_count": 1,
+            "score_ms": 0.7,
+        },
+    )
+    graph_obj._base_params = lambda filters: {"user_id": filters["user_id"]}
+    graph_obj._node_props = lambda filters, name_param=None: "user_id: $user_id"
+    monkeypatch.setattr(
+        module.logger,
+        "info",
+        lambda message, *args: info_logs.append((message, args)),
+    )
+
+    graph_obj._search_graph_db(["memgraph"], {"user_id": "1"}, limit=5)
+
+    assert info_logs[0][0] == (
+        "Memgraph graph search stats: strategy=%s candidate_limit=%d seed_names=%d "
+        "seed_tokens=%d fetched_candidates=%d score_mode=%s valid_candidates=%d "
+        "passed_threshold=%d query_nodes=%d fetch_ms=%.2f score_ms=%.2f edge_query_ms=%.2f total_ms=%.2f"
+    )

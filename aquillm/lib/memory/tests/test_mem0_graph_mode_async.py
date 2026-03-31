@@ -123,6 +123,55 @@ async def test_search_async_graph_attempt_uses_shorter_timeout_budget(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_search_async_timeout_log_reports_actual_graph_budget(monkeypatch):
+    """Timeout warning should report the real graph-attempt timeout, not just the overall timeout."""
+    ops_module = _reload_mem0_operations(
+        monkeypatch,
+        MEM0_GRAPH_ENABLED=1,
+        MEM0_GRAPH_SEARCH_ENABLED=1,
+        MEM0_GRAPH_FAIL_OPEN=1,
+        MEM0_TIMEOUT_SECONDS=15,
+    )
+
+    warnings: list[tuple[str, tuple[Any, ...]]] = []
+
+    class FakeMem0:
+        async def search(self, *_args, **kwargs):
+            return {"results": [{"memory": "vector fallback"}]}
+
+    async def fake_get_mem0_oss_async():
+        return FakeMem0()
+
+    async def fake_wait_for(awaitable, timeout):
+        if timeout < 15:
+            awaitable.close()
+            raise asyncio.TimeoutError()
+        return await awaitable
+
+    monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
+    monkeypatch.setattr(ops_module.asyncio, "wait_for", fake_wait_for)
+    monkeypatch.setattr(
+        ops_module.logger,
+        "warning",
+        lambda message, *args: warnings.append((message, args)),
+    )
+
+    results = await ops_module.search_mem0_via_oss_async(
+        user_id="1",
+        query="status",
+        top_k=3,
+        exclude_conversation_id=None,
+    )
+
+    assert results[0].content == "vector fallback"
+    assert warnings[0][0] == (
+        "Mem0 OSS async graph search timed out after %.1fs; retrying vector-only "
+        "(overall timeout %.1fs)."
+    )
+    assert warnings[0][1] == (5.0, 15.0)
+
+
+@pytest.mark.asyncio
 async def test_search_async_offloads_mem0_call_to_thread(monkeypatch):
     """Async search should offload Mem0 work so graph search cannot block the event loop."""
     ops_module = _reload_mem0_operations(
