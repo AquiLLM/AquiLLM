@@ -62,6 +62,18 @@ def _append_citation_sources_if_missing(
     return f"{base}\n\n{sources_block}"
 
 
+def _continuation_separator(partial_text: str, continuation_text: str) -> str:
+    if not partial_text:
+        return ""
+    if partial_text.endswith(("\n", " ")):
+        return ""
+    if imgctx.has_unterminated_markdown_image(partial_text):
+        return ""
+    if continuation_text.startswith((")", "]", "/", ".", ",", ":", ";", "!", "?")):
+        return ""
+    return "\n"
+
+
 async def complete_conversation_turn(
     llm: Any,
     conversation: Conversation,
@@ -255,7 +267,7 @@ async def complete_conversation_turn(
                 (continuation_response.text or "").strip() if continuation_response else ""
             )
         if continuation_text and not fb.looks_like_deferred_tool_intent(continuation_text):
-            separator = "\n" if response_text and not response_text.endswith(("\n", " ")) else ""
+            separator = _continuation_separator(response_text, continuation_text)
             response_text = f"{response_text.rstrip()}{separator}{continuation_text}"
             response = continuation_response
         elif not preserve_partial_response:

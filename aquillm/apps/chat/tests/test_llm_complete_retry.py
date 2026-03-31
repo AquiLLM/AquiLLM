@@ -204,3 +204,36 @@ class CutoffContinuationTests(SimpleTestCase):
         self.assertIn('Intro section that gets cut', stream_payloads[-1]["content"])
         self.assertIn('and then continues cleanly.', stream_payloads[-1]["content"])
         self.assertIn('and then continues cleanly.', updated[-1].content)
+
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_continuation_does_not_break_truncated_markdown_image_url(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text='![Figure 7](https://aquillm/document_image/b4a',
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text='65cf7-c884-49cf-af76-e477e5a21b25/)',
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Show me Figure 7 in chat.')],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertIn(
+            '![Figure 7](https://aquillm/document_image/b4a65cf7-c884-49cf-af76-e477e5a21b25/)',
+            updated[-1].content,
+        )
+        self.assertNotIn('/document_image/b4a\n65cf7', updated[-1].content)
