@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+import re
 from os import getenv
 from typing import Any, Awaitable, Callable, Literal, Optional
 
@@ -21,6 +22,9 @@ except ImportError:
 
 if DEBUG:
     from pprint import pp
+
+
+_DOC_IMAGE_URL_RE = re.compile(r"/aquillm/document_image/([^/]+)/")
 
 
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
@@ -44,6 +48,56 @@ def _select_source_refs_for_response(text: str, allowed_citations: set[str]) -> 
     if used:
         return used
     return allowed_citations
+
+
+def _doc_ref(doc_id: Any) -> str | None:
+    if doc_id is None:
+        return None
+    doc_text = str(doc_id).strip()
+    if not doc_text:
+        return None
+    return f"[doc:{doc_text}]"
+
+
+def _extract_doc_ref_from_image_url(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = _DOC_IMAGE_URL_RE.search(value)
+    if not match:
+        return None
+    return _doc_ref(match.group(1))
+
+
+def _collect_source_refs_from_tool_message(tool_message: ToolMessage) -> set[str]:
+    refs: set[str] = set()
+
+    if isinstance(tool_message.arguments, dict):
+        direct_doc_ref = _doc_ref(tool_message.arguments.get("doc_id"))
+        if direct_doc_ref:
+            refs.add(direct_doc_ref)
+
+    result_dict = tool_message.result_dict if isinstance(tool_message.result_dict, dict) else {}
+    payload = result_dict.get("result")
+    payload_rows: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        payload_rows = [payload]
+    elif isinstance(payload, list):
+        payload_rows = [row for row in payload if isinstance(row, dict)]
+
+    for row in payload_rows[:40]:
+        row_doc_ref = _doc_ref(row.get("doc_id") or row.get("d"))
+        if row_doc_ref:
+            refs.add(row_doc_ref)
+        image_url_ref = _extract_doc_ref_from_image_url(row.get("image_url") or row.get("u"))
+        if image_url_ref:
+            refs.add(image_url_ref)
+
+    if not refs and isinstance(payload, str):
+        image_url_ref = _extract_doc_ref_from_image_url(payload)
+        if image_url_ref:
+            refs.add(image_url_ref)
+
+    return refs
 
 
 def _append_citation_sources_if_missing(
@@ -130,6 +184,7 @@ async def complete_conversation_turn(
         isinstance(last_message, ToolMessage) and last_message.for_whom == "assistant"
     )
     citation_allowlist: set[str] = set()
+    source_allowlist: set[str] = set()
     enforce_citations = False
     request_system_prompt = system_prompt
     if is_post_tool_result_turn and citations.citation_enforcement_enabled():
@@ -140,7 +195,10 @@ async def complete_conversation_turn(
                 f"{system_prompt}\n\n"
                 f"{citations.build_citation_system_suffix(citation_allowlist)}"
             )
-    use_live_citation_stream = bool(enforce_citations and callable(stream_func))
+    source_allowlist = set(citation_allowlist)
+    if is_post_tool_result_turn and not source_allowlist:
+        source_allowlist = _collect_source_refs_from_tool_message(last_message)
+    use_live_citation_stream = bool(source_allowlist and callable(stream_func))
     effective_stream_func = stream_func
     if use_live_citation_stream and callable(stream_func):
         async def _live_citation_stream(payload: dict) -> Any:
@@ -149,7 +207,7 @@ async def complete_conversation_turn(
             stop_reason = str(out.get("stop_reason", "")).strip().lower()
             is_cutoff_done = stop_reason in {"length", "max_tokens"}
             if out.get("done") and (not is_cutoff_done):
-                out["content"] = _append_citation_sources_if_missing(content, citation_allowlist)
+                out["content"] = _append_citation_sources_if_missing(content, source_allowlist)
             await stream_func(out)
 
         effective_stream_func = _live_citation_stream
@@ -379,8 +437,8 @@ async def complete_conversation_turn(
         markdown_images = imgctx.recent_tool_image_markdown(conversation, max_images=3)
         if markdown_images:
             response_text = response_text.rstrip() + "\n\n" + "\n".join(markdown_images)
-    if use_live_citation_stream and enforce_citations and (not response_tool_call):
-        response_text = _append_citation_sources_if_missing(response_text, citation_allowlist)
+    if use_live_citation_stream and (not response_tool_call):
+        response_text = _append_citation_sources_if_missing(response_text, source_allowlist)
     new_msg = AssistantMessage(
         content=response_text,
         stop_reason=response.stop_reason,

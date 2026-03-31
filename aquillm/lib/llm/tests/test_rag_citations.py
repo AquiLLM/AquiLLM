@@ -774,6 +774,71 @@ async def test_complete_turn_streaming_cutoff_continuation_restart_still_appends
 
 
 @pytest.mark.asyncio
+async def test_complete_turn_streaming_whole_document_continuation_appends_doc_source():
+    async def _noop_stream(_payload: dict):
+        return None
+
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            return_value=LLMResponse(
+                text=(
+                    "Figure 1 from TurboQuant Paper\n\n"
+                    "Context and Analysis\n"
+                    "This figure compares the distribution characteristics"
+                ),
+                tool_call={},
+                stop_reason="max_tokens",
+                input_usage=2,
+                output_usage=2,
+                model="fake",
+            )
+        ),
+        _continue_cutoff_response=AsyncMock(
+            return_value=LLMResponse(
+                text=(
+                    " across bit-width settings and highlights the bias-variance tradeoff in retrieval."
+                ),
+                tool_call={},
+                stop_reason="stop",
+                input_usage=1,
+                output_usage=1,
+                model="fake",
+            )
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Show me figure 1 and explain it."),
+            ToolMessage(
+                content="{}",
+                tool_name="whole_document",
+                for_whom="assistant",
+                arguments={"doc_id": "doc-whole-123"},
+                result_dict={
+                    "result": {
+                        "type": "image_document",
+                        "text": "full text",
+                        "image_url": "/aquillm/document_image/doc-whole-123/",
+                    }
+                },
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(
+        llm,
+        convo,
+        max_tokens=1024,
+        stream_func=_noop_stream,
+    )
+    assert changed == "changed"
+    assert "Sources:" in updated[-1].content
+    assert "- [doc:doc-whole-123]" in updated[-1].content
+
+
+@pytest.mark.asyncio
 async def test_complete_turn_preserves_substantial_cutoff_draft_when_continuation_fails(monkeypatch):
     async def _fake_compact_summary(_llm, _conversation, _max_tokens):
         return "Compressed fallback that should not replace the richer draft."
