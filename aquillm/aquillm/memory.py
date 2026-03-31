@@ -30,6 +30,7 @@ from lib.memory import (
     EPISODIC_TOP_K,
     EPISODIC_MEMORY_MAX_CHARS,
     MEM0_DUAL_WRITE_LOCAL,
+    clean_stable_facts,
     use_mem0,
     search_mem0_episodic_memories,
     search_mem0_episodic_memories_async,
@@ -66,6 +67,35 @@ def _is_duplicate_episodic_memory_error(exc: IntegrityError) -> bool:
     return "unique_episodic_per_assistant_msg" in message
 
 
+def _categorize_profile_fact(fact: str) -> str:
+    """Map a durable fact into the closest existing profile-memory category."""
+    lowered = (fact or "").strip().lower()
+    if not lowered:
+        return "general"
+    if lowered.startswith(("i prefer", "i like", "i want", "i need")):
+        return "preference"
+    if any(token in lowered for token in ("we use", "our stack", "project", "memory", "tool", "database", "qdrant", "memgraph")):
+        return "project"
+    if any(token in lowered for token in ("tone", "style", "concise", "verbose")):
+        return "tone"
+    if any(token in lowered for token in ("goal", "working on", "building", "trying to")):
+        return "goals"
+    return "general"
+
+
+def _promote_profile_facts(user: User, facts: list[str]) -> None:
+    """Persist durable facts into local profile memory for prompt injection."""
+    for fact in facts:
+        normalized = (fact or "").strip()
+        if not normalized:
+            continue
+        UserMemoryFact.objects.get_or_create(
+            user=user,
+            fact=normalized,
+            defaults={"category": _categorize_profile_fact(normalized)},
+        )
+
+
 def _add_mem0_memory(
     user: User,
     user_content: str,
@@ -75,7 +105,7 @@ def _add_mem0_memory(
 ) -> None:
     """Write memory to Mem0 with fact extraction."""
     facts = extract_stable_facts(user_content, assistant_content)
-    facts = list(dict.fromkeys(facts))
+    facts = clean_stable_facts(list(dict.fromkeys(facts)))
     if not facts and has_remember_intent(user_content):
         remembered = normalize_remember_fact(user_content)
         if remembered:
@@ -86,6 +116,10 @@ def _add_mem0_memory(
         facts = heuristic_facts_from_turn(user_content, assistant_content)
         if facts:
             logger.info("Using heuristic memory extraction fallback; extracted %d fact(s).", len(facts))
+
+    facts = clean_stable_facts(list(dict.fromkeys(facts)))
+    if facts:
+        _promote_profile_facts(user, facts)
 
     if facts and add_mem0_raw_facts(
         user_id=str(user.id),
