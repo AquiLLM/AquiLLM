@@ -31,6 +31,21 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
     return max(minimum, value)
 
 
+def _citation_stream_mode() -> str:
+    mode = (getenv("LLM_CITATION_STREAM_MODE", "buffered") or "").strip().lower()
+    if mode in {"live", "buffered"}:
+        return mode
+    return "buffered"
+
+
+def _build_sources_block(allowed_citations: set[str]) -> str:
+    refs = sorted(allowed_citations)
+    if not refs:
+        return ""
+    source_lines = "\n".join(f"- {ref}" for ref in refs)
+    return f"Sources:\n{source_lines}"
+
+
 def _append_citation_sources_if_missing(
     text: str,
     allowed_citations: set[str],
@@ -40,11 +55,10 @@ def _append_citation_sources_if_missing(
         return base
     if "Sources:" in base:
         return base
-    refs = sorted(allowed_citations)
-    if not refs:
+    sources_block = _build_sources_block(allowed_citations)
+    if not sources_block:
         return base
-    source_lines = "\n".join(f"- {ref}" for ref in refs)
-    return f"{base}\n\nSources:\n{source_lines}"
+    return f"{base}\n\n{sources_block}"
 
 
 async def complete_conversation_turn(
@@ -87,8 +101,25 @@ async def complete_conversation_turn(
                 f"{system_prompt}\n\n"
                 f"{citations.build_citation_system_suffix(citation_allowlist)}"
             )
-    buffer_stream_until_citations = bool(enforce_citations and callable(stream_func))
+    citation_stream_mode = _citation_stream_mode()
+    use_live_citation_stream = bool(
+        enforce_citations and callable(stream_func) and citation_stream_mode == "live"
+    )
+    buffer_stream_until_citations = bool(
+        enforce_citations and callable(stream_func) and not use_live_citation_stream
+    )
     effective_stream_func = None if buffer_stream_until_citations else stream_func
+    if use_live_citation_stream and callable(stream_func):
+        sources_block = _build_sources_block(citation_allowlist)
+
+        async def _live_citation_stream(payload: dict) -> Any:
+            out = dict(payload)
+            content = str(out.get("content", ""))
+            if sources_block:
+                out["content"] = f"{sources_block}\n\n{content}" if content else sources_block
+            await stream_func(out)
+
+        effective_stream_func = _live_citation_stream
     tool_step_max_tokens = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 512, minimum=128)
     post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 1536, minimum=256)
     continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 768, minimum=128)
