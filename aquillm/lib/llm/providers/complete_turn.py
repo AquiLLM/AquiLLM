@@ -23,6 +23,14 @@ if DEBUG:
     from pprint import pp
 
 
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(getenv(name, str(default)))
+    except Exception:
+        value = default
+    return max(minimum, value)
+
+
 async def complete_conversation_turn(
     llm: Any,
     conversation: Conversation,
@@ -63,14 +71,10 @@ async def complete_conversation_turn(
                 f"{system_prompt}\n\n"
                 f"{citations.build_citation_system_suffix(citation_allowlist)}"
             )
-    try:
-        tool_step_max_tokens = max(128, int(getenv("LLM_TOOL_STEP_MAX_TOKENS", "512")))
-    except Exception:
-        tool_step_max_tokens = 512
-    try:
-        post_tool_max_tokens = max(256, int(getenv("LLM_POST_TOOL_MAX_TOKENS", "1536")))
-    except Exception:
-        post_tool_max_tokens = 1536
+    tool_step_max_tokens = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 512, minimum=128)
+    post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 1536, minimum=256)
+    continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 768, minimum=128)
+    citation_retry_prior_max_chars = _env_int("LLM_CITATION_RETRY_PRIOR_MAX_CHARS", 2400, minimum=512)
     request_max_tokens = max_tokens
     if isinstance(last_message, UserMessage) and last_message.tools:
         request_max_tokens = min(max_tokens, tool_step_max_tokens)
@@ -190,12 +194,13 @@ async def complete_conversation_turn(
         continuation_response: Optional[LLMResponse] = None
         continuation_text = ""
         if fb.continue_on_cutoff_enabled():
+            continuation_budget = min(max_tokens, post_tool_max_tokens, continuation_max_tokens)
             continuation_response = await llm._continue_cutoff_response(
                 system_prompt=request_system_prompt,
                 message_dicts=message_dicts,
                 messages_for_bot=messages_for_bot,
                 partial_text=response_text,
-                max_tokens=max_tokens,
+                max_tokens=continuation_budget,
             )
             continuation_text = (
                 (continuation_response.text or "").strip() if continuation_response else ""
@@ -216,8 +221,11 @@ async def complete_conversation_turn(
         citations_valid = citations.response_has_required_citations(response_text, citation_allowlist)
         if not citations_valid:
             invalid = citations.find_invalid_citations(response_text, citation_allowlist)
+            prior_for_retry = response_text
+            if len(prior_for_retry) > citation_retry_prior_max_chars:
+                prior_for_retry = prior_for_retry[:citation_retry_prior_max_chars].rstrip() + "\n[Truncated for citation retry.]"
             retry_prompt = citations.build_citation_retry_prompt(
-                prior_answer=response_text,
+                prior_answer=prior_for_retry,
                 allowed_citations=citation_allowlist,
                 invalid_citations=invalid,
             )

@@ -209,3 +209,59 @@ async def test_complete_turn_uses_higher_default_post_tool_token_budget(monkeypa
     assert changed == "changed"
     assert seen_max_tokens
     assert seen_max_tokens[0] == 1536
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_truncates_long_prior_answer_in_citation_retry(monkeypatch):
+    monkeypatch.setenv("LLM_CITATION_RETRY_PRIOR_MAX_CHARS", "120")
+    captured_retry_prompt: dict[str, str] = {}
+
+    async def _fake_get_message(**kwargs):
+        messages = kwargs.get("messages") or []
+        if len(messages) >= 2:
+            maybe_retry = messages[-1].get("content") if isinstance(messages[-1], dict) else ""
+            if isinstance(maybe_retry, str) and "Allow-list:" in maybe_retry:
+                captured_retry_prompt["text"] = maybe_retry
+                return LLMResponse(
+                    text="Cited answer [doc:doc-a chunk:7].",
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=1,
+                    output_usage=1,
+                    model="fake",
+                )
+        return LLMResponse(
+            text=("Very long uncited draft sentence. " * 200).strip(),
+            tool_call={},
+            stop_reason="stop",
+            input_usage=1,
+            output_usage=1,
+            model="fake",
+        )
+
+    llm = SimpleNamespace(base_args={}, get_message=AsyncMock(side_effect=_fake_get_message))
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={
+                    "result": [
+                        {
+                            "chunk_id": 7,
+                            "doc_id": "doc-a",
+                            "title": "Doc A",
+                            "text": "Alpha finding with supporting detail.",
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+    _updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
+    assert changed == "changed"
+    prompt_text = captured_retry_prompt.get("text", "")
+    assert "[Truncated for citation retry.]" in prompt_text

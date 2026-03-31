@@ -1,4 +1,6 @@
 """LLMInterface.complete() retry behavior and max-token cutoff continuation."""
+from unittest.mock import patch
+
 from django.test import SimpleTestCase
 from asgiref.sync import async_to_sync
 
@@ -81,6 +83,7 @@ class ToolUseRetryTests(SimpleTestCase):
 
 
 class CutoffContinuationTests(SimpleTestCase):
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
     def test_continues_cutoff_response_before_compact_fallback(self):
         llm = _FakeLLMInterface([
             LLMResponse(
@@ -107,5 +110,6 @@ class CutoffContinuationTests(SimpleTestCase):
 
         self.assertEqual(changed, 'changed')
         self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[1]["max_tokens"], 640)
         self.assertIn('1. Ingestion and preprocessing', updated[-1].content)
         self.assertIn('2. Claim parsing and structured extraction.', updated[-1].content)
