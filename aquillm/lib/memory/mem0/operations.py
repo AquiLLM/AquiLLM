@@ -368,6 +368,40 @@ async def _add_mem0_fact_async(
         if enable_graph is None:
             raise
         return await _add_mem0_fact_async(mem0, fact, user_id, metadata, enable_graph=None)
+
+
+def _add_mem0_messages_payload(
+    mem0: Any, messages: list[dict[str, Any]], user_id: str, metadata: dict[str, Any], enable_graph: Optional[bool]
+) -> Any:
+    add_kwargs = {"user_id": user_id, "metadata": metadata, "infer": True}
+    if enable_graph is not None:
+        add_kwargs["enable_graph"] = enable_graph
+    try:
+        return mem0.add(messages, **add_kwargs)  # type: ignore[attr-defined]
+    except TypeError:
+        try:
+            return mem0.add(messages=messages, **add_kwargs)  # type: ignore[attr-defined]
+        except TypeError:
+            if enable_graph is None:
+                raise
+            return _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=None)
+
+
+def _mem0_add_result_has_writes(result: Any) -> bool:
+    if isinstance(result, dict):
+        events = result.get("results")
+        if isinstance(events, list):
+            for item in events:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("event") in {"ADD", "UPDATE", "UPSERT"}:
+                    return True
+            return bool(events)
+    if isinstance(result, list):
+        return bool(result)
+    return bool(result)
+
+
 def add_mem0_raw_facts(
     user_id: str,
     facts: list[str],
@@ -420,6 +454,46 @@ def add_mem0_raw_facts(
         else:
             wrote_any = True
     return wrote_any
+
+
+def add_mem0_messages(
+    user_id: str,
+    messages: list[dict[str, Any]],
+    conversation_id: int,
+    assistant_message_uuid: str,
+) -> bool:
+    mem0 = get_mem0_oss()
+    if mem0 is None:
+        return False
+    if not messages:
+        logger.info("No Mem0 messages supplied for intelligent write; skipping add call.")
+        return False
+
+    metadata = {
+        "conversation_id": conversation_id,
+        "assistant_message_uuid": assistant_message_uuid,
+        "source": "aquillm",
+        "memory_type": "episodic",
+    }
+
+    enable_graph = _add_enable_graph()
+    try:
+        result = _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=enable_graph)
+    except Exception as exc:
+        if enable_graph and _graph_fail_open():
+            logger.warning("Mem0 graph add failed for intelligent write; retrying vector-only. Error: %s", exc)
+            try:
+                result = _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=False)
+            except Exception as retry_exc:
+                logger.warning("Mem0 vector-only intelligent write retry failed: %s", retry_exc)
+                return False
+        else:
+            logger.warning("Mem0 intelligent write failed: %s", exc)
+            return False
+
+    return _mem0_add_result_has_writes(result)
+
+
 async def add_mem0_raw_facts_async(
     user_id: str,
     facts: list[str],
@@ -473,8 +547,18 @@ def add_mem0_memory_with_client(
     assistant_content: str,
     conversation_id: int,
     assistant_message_uuid: str,
-) -> None:
-    logger.info("Mem0 cloud fallback disabled; skipping cloud add for user_id=%s", user_id)
+) -> bool:
+    """Write a raw conversation turn to OSS Mem0 with inference enabled."""
+    messages = [
+        {"role": "user", "content": user_content},
+        {"role": "assistant", "content": assistant_content},
+    ]
+    return add_mem0_messages(
+        user_id=user_id,
+        messages=messages,
+        conversation_id=conversation_id,
+        assistant_message_uuid=assistant_message_uuid,
+    )
 
 
 __all__ = [
@@ -482,6 +566,7 @@ __all__ = [
     "search_mem0_episodic_memories_async",
     "search_mem0_via_oss",
     "search_mem0_via_oss_async",
+    "add_mem0_messages",
     "add_mem0_raw_facts",
     "add_mem0_raw_facts_async",
     "add_mem0_memory_with_client",

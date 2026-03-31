@@ -34,7 +34,7 @@ from lib.memory import (
     use_mem0,
     search_mem0_episodic_memories,
     search_mem0_episodic_memories_async,
-    add_mem0_raw_facts,
+    add_mem0_memory_with_client,
     extract_stable_facts,
     heuristic_facts_from_turn,
     has_remember_intent,
@@ -103,7 +103,7 @@ def _add_mem0_memory(
     conversation_id: int,
     assistant_message_uuid: str,
 ) -> None:
-    """Write memory to Mem0 with fact extraction."""
+    """Promote durable facts locally and send the raw turn to Mem0 intelligent infer."""
     facts = extract_stable_facts(user_content, assistant_content)
     facts = clean_stable_facts(list(dict.fromkeys(facts)))
     if not facts and has_remember_intent(user_content):
@@ -121,19 +121,20 @@ def _add_mem0_memory(
     if facts:
         _promote_profile_facts(user, facts)
 
-    if facts and add_mem0_raw_facts(
+    if add_mem0_memory_with_client(
         user_id=str(user.id),
-        facts=facts,
+        user_content=user_content,
+        assistant_content=assistant_content,
         conversation_id=conversation_id,
         assistant_message_uuid=assistant_message_uuid,
     ):
-        logger.info("Mem0 raw-fact write succeeded with %d fact(s).", len(facts))
+        logger.info("Mem0 intelligent write succeeded with %d promoted fact(s).", len(facts))
         return
 
     if facts:
-        logger.warning("Mem0 raw-fact write produced no ADD events for %d fact(s).", len(facts))
+        logger.warning("Mem0 intelligent write produced no ADD events for %d promoted fact(s).", len(facts))
     else:
-        logger.info("No memory facts extracted for this turn; skipping Mem0 write.")
+        logger.warning("Mem0 intelligent write produced no ADD events for a turn with no promoted facts.")
 
 
 def get_user_profile_facts(user: User):
