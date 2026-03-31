@@ -39,6 +39,13 @@ def _build_sources_block(allowed_citations: set[str]) -> str:
     return f"Sources:\n{source_lines}"
 
 
+def _select_source_refs_for_response(text: str, allowed_citations: set[str]) -> set[str]:
+    used = {c for c in citations.extract_citations(text or "") if c in allowed_citations}
+    if used:
+        return used
+    return allowed_citations
+
+
 def _append_citation_sources_if_missing(
     text: str,
     allowed_citations: set[str],
@@ -48,7 +55,8 @@ def _append_citation_sources_if_missing(
         return base
     if "Sources:" in base:
         return base
-    sources_block = _build_sources_block(allowed_citations)
+    source_refs = _select_source_refs_for_response(base, allowed_citations)
+    sources_block = _build_sources_block(source_refs)
     if not sources_block:
         return base
     return f"{base}\n\n{sources_block}"
@@ -97,13 +105,11 @@ async def complete_conversation_turn(
     use_live_citation_stream = bool(enforce_citations and callable(stream_func))
     effective_stream_func = stream_func
     if use_live_citation_stream and callable(stream_func):
-        sources_block = _build_sources_block(citation_allowlist)
-
         async def _live_citation_stream(payload: dict) -> Any:
             out = dict(payload)
             content = str(out.get("content", ""))
-            if sources_block:
-                out["content"] = f"{sources_block}\n\n{content}" if content else sources_block
+            if out.get("done"):
+                out["content"] = _append_citation_sources_if_missing(content, citation_allowlist)
             await stream_func(out)
 
         effective_stream_func = _live_citation_stream

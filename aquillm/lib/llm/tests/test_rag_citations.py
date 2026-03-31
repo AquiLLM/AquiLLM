@@ -446,7 +446,7 @@ async def test_complete_turn_streaming_invalid_citations_get_note_not_full_fallb
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_live_stream_prefixes_sources():
+async def test_complete_turn_live_stream_appends_sources_on_done_only():
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict):
@@ -504,9 +504,10 @@ async def test_complete_turn_live_stream_prefixes_sources():
     assert changed == "changed"
     assert llm.get_message.await_count == 1
     assert len(stream_payloads) == 2
-    assert stream_payloads[0]["content"].startswith("Sources:\n- [doc:doc-a chunk:7]\n\n")
-    assert "Partial answer" in stream_payloads[0]["content"]
-    assert "Final answer [doc:doc-a chunk:7]." in stream_payloads[-1]["content"]
+    assert stream_payloads[0]["content"] == "Partial answer"
+    assert stream_payloads[-1]["content"] == (
+        "Final answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
+    )
     assert updated[-1].content == "Final answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
 
 
@@ -570,7 +571,7 @@ async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answ
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_appends_all_gathered_sources():
+async def test_complete_turn_streaming_appends_used_sources_when_present():
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict):
@@ -633,5 +634,5 @@ async def test_complete_turn_streaming_appends_all_gathered_sources():
     streamed = stream_payloads[0]["content"]
     assert "Sources:" in streamed
     assert "- [doc:doc-a chunk:1]" in streamed
-    assert "- [doc:doc-g chunk:7]" in streamed
-    assert updated[-1].content.count("[doc:") == 8
+    assert "- [doc:doc-g chunk:7]" not in streamed
+    assert updated[-1].content.count("[doc:") == 2
