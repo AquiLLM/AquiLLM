@@ -53,6 +53,8 @@ def _append_citation_sources_if_missing(
     base = (text or "").rstrip()
     if not allowed_citations:
         return base
+    if citations.extract_citations(base):
+        return base
     if "Sources:" in base:
         return base
     source_refs = _select_source_refs_for_response(base, allowed_citations)
@@ -334,7 +336,7 @@ async def complete_conversation_turn(
         markdown_images = imgctx.recent_tool_image_markdown(conversation, max_images=3)
         if markdown_images:
             response_text = response_text.rstrip() + "\n\n" + "\n".join(markdown_images)
-    if enforce_citations and (not response_tool_call):
+    if use_live_citation_stream and enforce_citations and (not response_tool_call):
         response_text = _append_citation_sources_if_missing(response_text, citation_allowlist)
     new_msg = AssistantMessage(
         content=response_text,
