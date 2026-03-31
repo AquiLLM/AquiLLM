@@ -225,8 +225,6 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
       - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
-    ports:
-      - "8000:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -268,8 +266,6 @@ services:
       - VLLM_TRUST_REMOTE_CODE=${OCR_VLLM_TRUST_REMOTE_CODE:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "8004:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -311,8 +307,6 @@ services:
       - VLLM_TRUST_REMOTE_CODE=${TRANSCRIBE_VLLM_TRUST_REMOTE_CODE:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "8005:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -355,8 +349,6 @@ services:
       - VLLM_TRUST_REMOTE_CODE=${MEM0_EMBED_VLLM_TRUST_REMOTE_CODE:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "8002:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -400,8 +392,6 @@ services:
       - VLLM_TRUST_REMOTE_CODE=${APP_RERANK_VLLM_TRUST_REMOTE_CODE:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "8003:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -414,5 +404,4 @@ volumes:
   minio_data:
   qdrant_data:
   certs:
-
 
