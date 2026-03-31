@@ -358,3 +358,88 @@ async def test_complete_turn_does_not_force_extractive_fallback_for_incomplete_b
     assert changed == "changed"
     assert "I can only provide claims directly supported by retrieved chunks" not in updated[-1].content
     assert llm.get_message.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_streaming_skips_citation_rewrite_retry():
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            return_value=LLMResponse(
+                text="- One cited point [doc:doc-a chunk:7]\n- One uncited point",
+                tool_call={},
+                stop_reason="stop",
+                input_usage=1,
+                output_usage=1,
+                model="fake",
+            )
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+            ),
+        ],
+    )
+
+    async def _noop_stream(_payload: dict):
+        return None
+
+    updated, changed = await complete_conversation_turn(
+        llm,
+        convo,
+        max_tokens=1024,
+        stream_func=_noop_stream,
+    )
+    assert changed == "changed"
+    assert llm.get_message.await_count == 1
+    assert "One uncited point" in updated[-1].content
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_streaming_invalid_citations_get_note_not_full_fallback():
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            return_value=LLMResponse(
+                text="Claim with fabricated cite [doc:doc-a chunk:999].",
+                tool_call={},
+                stop_reason="stop",
+                input_usage=1,
+                output_usage=1,
+                model="fake",
+            )
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+            ),
+        ],
+    )
+
+    async def _noop_stream(_payload: dict):
+        return None
+
+    updated, changed = await complete_conversation_turn(
+        llm,
+        convo,
+        max_tokens=1024,
+        stream_func=_noop_stream,
+    )
+    assert changed == "changed"
+    assert llm.get_message.await_count == 1
+    assert "could not be verified" in updated[-1].content
+    assert "I can only provide claims directly supported by retrieved chunks" not in updated[-1].content

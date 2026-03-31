@@ -218,6 +218,7 @@ async def complete_conversation_turn(
                 if synthesized:
                     response_text = synthesized
     if enforce_citations and (not response_tool_call):
+        is_streaming_turn = callable(stream_func)
         original_response_text = (response_text or "").strip()
         citations_valid = citations.response_has_required_citations(response_text, citation_allowlist)
         original_invalid = citations.find_invalid_citations(original_response_text, citation_allowlist)
@@ -230,7 +231,7 @@ async def complete_conversation_turn(
         )
         if should_soft_accept_original:
             citations_valid = True
-        if not citations_valid:
+        if (not citations_valid) and (not is_streaming_turn):
             invalid = citations.find_invalid_citations(response_text, citation_allowlist)
             prior_for_retry = response_text
             if len(prior_for_retry) > citation_retry_prior_max_chars:
@@ -263,10 +264,16 @@ async def complete_conversation_turn(
                 response_tool_call = {}
         retry_invalid = citations.find_invalid_citations(response_text, citation_allowlist)
         if retry_invalid and (not citations.response_has_required_citations(response_text, citation_allowlist)):
-            cited_extract = citations.synthesize_cited_extract_from_results(conversation)
-            if cited_extract:
-                response_text = cited_extract
-                response_tool_call = {}
+            if is_streaming_turn:
+                response_text = (
+                    response_text.rstrip()
+                    + "\n\n[Note: Some citation tokens could not be verified against retrieved chunks.]"
+                )
+            else:
+                cited_extract = citations.synthesize_cited_extract_from_results(conversation)
+                if cited_extract:
+                    response_text = cited_extract
+                    response_tool_call = {}
     if (
         (
             is_post_tool_result_turn
