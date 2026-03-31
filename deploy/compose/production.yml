@@ -191,7 +191,6 @@ services:
     restart: unless-stopped
     profiles:
       - memgraph
-    command: ["--schema-info-enabled=True"]
     ports:
       - "127.0.0.1:7687:7687"
     volumes:
