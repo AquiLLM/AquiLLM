@@ -126,6 +126,21 @@ def test_build_config_includes_graph_store_when_enabled(monkeypatch):
     assert graph_store["config"]["threshold"] == 0.75
 
 
+def test_build_config_override_disables_graph_store(monkeypatch):
+    client_module = _reload_mem0_client(
+        monkeypatch,
+        MEM0_GRAPH_ENABLED=1,
+        MEM0_GRAPH_PROVIDER="memgraph",
+        MEM0_GRAPH_URL="bolt://memgraph:7687",
+        MEM0_GRAPH_USERNAME="memgraph",
+        MEM0_GRAPH_PASSWORD="secret",
+    )
+
+    config, _ = client_module._build_mem0_oss_config_dict(graph_enabled_override=False)
+
+    assert "graph_store" not in config
+
+
 def test_build_config_invalid_graph_fail_open(monkeypatch):
     """Invalid graph config should fail open and omit graph_store."""
     client_module = _reload_mem0_client(
@@ -177,8 +192,8 @@ def test_register_memgraph_compat_provider(monkeypatch):
     )
 
 
-def test_search_uses_enable_graph_when_enabled(monkeypatch):
-    """OSS search should pass enable_graph=True when graph search is enabled."""
+def test_search_uses_graph_client_when_enabled(monkeypatch):
+    """OSS search should prefer the graph-configured client when graph search is enabled."""
     ops_module = _reload_mem0_operations(
         monkeypatch,
         MEM0_GRAPH_ENABLED=1,
@@ -186,14 +201,15 @@ def test_search_uses_enable_graph_when_enabled(monkeypatch):
         MEM0_GRAPH_FAIL_OPEN=1,
     )
 
-    captured: list[dict[str, Any]] = []
-
     class FakeMem0:
-        def search(self, *_args, **kwargs):
-            captured.append(kwargs)
-            return {"results": [{"memory": "graph answer"}]}
+        def __init__(self, memory):
+            self.memory = memory
 
-    monkeypatch.setattr(ops_module, "get_mem0_oss", lambda: FakeMem0())
+        def search(self, *_args, **_kwargs):
+            return {"results": [{"memory": self.memory}]}
+
+    monkeypatch.setattr(ops_module, "get_mem0_oss", lambda: FakeMem0("graph answer"))
+    monkeypatch.setattr(ops_module, "get_mem0_oss_vector", lambda: FakeMem0("vector answer"))
 
     results = ops_module.search_mem0_via_oss(
         user_id="1",
@@ -203,11 +219,10 @@ def test_search_uses_enable_graph_when_enabled(monkeypatch):
     )
 
     assert results[0].content == "graph answer"
-    assert captured[0]["enable_graph"] is True
 
 
-def test_search_graph_failure_retries_vector_only(monkeypatch):
-    """When graph search fails, fail-open should retry with enable_graph=False."""
+def test_search_graph_failure_retries_vector_client(monkeypatch):
+    """When graph search fails, fail-open should retry with the vector-only client."""
     ops_module = _reload_mem0_operations(
         monkeypatch,
         MEM0_GRAPH_ENABLED=1,
@@ -215,16 +230,20 @@ def test_search_graph_failure_retries_vector_only(monkeypatch):
         MEM0_GRAPH_FAIL_OPEN=1,
     )
 
-    seen_enable_graph: list[Any] = []
+    seen_clients: list[str] = []
 
-    class FakeMem0:
-        def search(self, *_args, **kwargs):
-            seen_enable_graph.append(kwargs.get("enable_graph"))
-            if kwargs.get("enable_graph") is True:
-                raise RuntimeError("graph backend unavailable")
-            return {"results": [{"memory": "vector fallback"}]}
+    class FakeGraphMem0:
+        def search(self, *_args, **_kwargs):
+            seen_clients.append("graph")
+            raise RuntimeError("graph backend unavailable")
 
-    monkeypatch.setattr(ops_module, "get_mem0_oss", lambda: FakeMem0())
+    class FakeVectorMem0:
+        def search(self, *_args, **_kwargs):
+            seen_clients.append("vector")
+            return {"results": [{"memory": "graph answer"}]}
+
+    monkeypatch.setattr(ops_module, "get_mem0_oss", lambda: FakeGraphMem0())
+    monkeypatch.setattr(ops_module, "get_mem0_oss_vector", lambda: FakeVectorMem0())
 
     results = ops_module.search_mem0_via_oss(
         user_id="1",
@@ -233,8 +252,8 @@ def test_search_graph_failure_retries_vector_only(monkeypatch):
         exclude_conversation_id=None,
     )
 
-    assert [flag for flag in seen_enable_graph if isinstance(flag, bool)] == [True, False]
-    assert results[0].content == "vector fallback"
+    assert seen_clients == ["graph", "vector"]
+    assert results[0].content == "graph answer"
 
 
 def test_add_uses_enable_graph_when_enabled(monkeypatch):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Any
 
@@ -11,8 +12,8 @@ from .test_mem0_graph_mode import _reload_mem0_operations
 
 
 @pytest.mark.asyncio
-async def test_search_async_uses_enable_graph_when_enabled(monkeypatch):
-    """Async OSS search should pass enable_graph=True when graph search is enabled."""
+async def test_search_async_uses_graph_client_when_enabled(monkeypatch):
+    """Async OSS search should prefer the graph-configured client when enabled."""
     ops_module = _reload_mem0_operations(
         monkeypatch,
         MEM0_GRAPH_ENABLED=1,
@@ -20,17 +21,21 @@ async def test_search_async_uses_enable_graph_when_enabled(monkeypatch):
         MEM0_GRAPH_FAIL_OPEN=1,
     )
 
-    captured: list[dict[str, Any]] = []
-
     class FakeMem0:
-        async def search(self, *_args, **kwargs):
-            captured.append(kwargs)
-            return {"results": [{"memory": "graph answer"}]}
+        def __init__(self, memory):
+            self.memory = memory
+
+        async def search(self, *_args, **_kwargs):
+            return {"results": [{"memory": self.memory}]}
 
     async def fake_get_mem0_oss_async():
-        return FakeMem0()
+        return FakeMem0("graph answer")
+
+    async def fake_get_mem0_oss_async_vector():
+        return FakeMem0("vector answer")
 
     monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
+    monkeypatch.setattr(ops_module, "get_mem0_oss_async_vector", fake_get_mem0_oss_async_vector)
 
     results = await ops_module.search_mem0_via_oss_async(
         user_id="1",
@@ -40,12 +45,11 @@ async def test_search_async_uses_enable_graph_when_enabled(monkeypatch):
     )
 
     assert results[0].content == "graph answer"
-    assert captured[0]["enable_graph"] is True
 
 
 @pytest.mark.asyncio
-async def test_search_async_graph_failure_retries_vector_only(monkeypatch):
-    """Async graph search should retry once with enable_graph=False when fail-open is on."""
+async def test_search_async_graph_failure_retries_vector_client(monkeypatch):
+    """Async graph search should retry with the vector-only client when fail-open is on."""
     ops_module = _reload_mem0_operations(
         monkeypatch,
         MEM0_GRAPH_ENABLED=1,
@@ -53,19 +57,26 @@ async def test_search_async_graph_failure_retries_vector_only(monkeypatch):
         MEM0_GRAPH_FAIL_OPEN=1,
     )
 
-    seen_enable_graph: list[Any] = []
+    seen_clients: list[str] = []
 
-    class FakeMem0:
-        async def search(self, *_args, **kwargs):
-            seen_enable_graph.append(kwargs.get("enable_graph"))
-            if kwargs.get("enable_graph") is True:
-                raise RuntimeError("graph backend unavailable")
+    class FakeGraphMem0:
+        async def search(self, *_args, **_kwargs):
+            seen_clients.append("graph")
+            raise RuntimeError("graph backend unavailable")
+
+    async def fake_get_mem0_oss_async():
+        return FakeGraphMem0()
+
+    class FakeVectorMem0:
+        async def search(self, *_args, **_kwargs):
+            seen_clients.append("vector")
             return {"results": [{"memory": "vector fallback"}]}
 
-    async def fake_get_mem0_oss_async():
-        return FakeMem0()
+    async def fake_get_mem0_oss_async_vector():
+        return FakeVectorMem0()
 
     monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
+    monkeypatch.setattr(ops_module, "get_mem0_oss_async_vector", fake_get_mem0_oss_async_vector)
 
     results = await ops_module.search_mem0_via_oss_async(
         user_id="1",
@@ -74,52 +85,8 @@ async def test_search_async_graph_failure_retries_vector_only(monkeypatch):
         exclude_conversation_id=None,
     )
 
-    assert [flag for flag in seen_enable_graph if isinstance(flag, bool)] == [True, False]
+    assert seen_clients == ["graph", "vector"]
     assert results[0].content == "vector fallback"
-
-
-@pytest.mark.asyncio
-async def test_search_async_enable_graph_unsupported_retries_default(monkeypatch):
-    ops_module = _reload_mem0_operations(
-        monkeypatch,
-        MEM0_GRAPH_ENABLED=1,
-        MEM0_GRAPH_SEARCH_ENABLED=1,
-        MEM0_GRAPH_FAIL_OPEN=1,
-    )
-
-    warnings: list[tuple[str, tuple[Any, ...]]] = []
-    seen_kwargs: list[dict[str, Any]] = []
-
-    class FakeMem0:
-        async def search(self, *_args, **kwargs):
-            seen_kwargs.append(dict(kwargs))
-            if "enable_graph" in kwargs:
-                raise TypeError("unexpected keyword argument 'enable_graph'")
-            return {"results": [{"memory": "default fallback"}]}
-
-    async def fake_get_mem0_oss_async():
-        return FakeMem0()
-
-    monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
-    monkeypatch.setattr(
-        ops_module.logger,
-        "warning",
-        lambda message, *args: warnings.append((message, args)),
-    )
-
-    results = await ops_module.search_mem0_via_oss_async(
-        user_id="1",
-        query="status",
-        top_k=3,
-        exclude_conversation_id=None,
-    )
-
-    assert results[0].content == "default fallback"
-    assert any("enable_graph" in kwargs for kwargs in seen_kwargs)
-    assert any("enable_graph" not in kwargs for kwargs in seen_kwargs)
-    assert warnings[0][0] == (
-        "Mem0 OSS async search does not support enable_graph kwarg; retrying default search."
-    )
 
 
 @pytest.mark.asyncio
@@ -134,15 +101,23 @@ async def test_search_async_graph_attempt_uses_shorter_timeout_budget(monkeypatc
     )
 
     seen_timeouts: list[float] = []
-    seen_enable_graph: list[Any] = []
+    seen_clients: list[str] = []
 
-    class FakeMem0:
-        async def search(self, *_args, **kwargs):
-            seen_enable_graph.append(kwargs.get("enable_graph"))
+    class FakeGraphMem0:
+        async def search(self, *_args, **_kwargs):
+            seen_clients.append("graph")
+            return {"results": [{"memory": "vector fallback"}]}
+
+    class FakeVectorMem0:
+        async def search(self, *_args, **_kwargs):
+            seen_clients.append("vector")
             return {"results": [{"memory": "vector fallback"}]}
 
     async def fake_get_mem0_oss_async():
-        return FakeMem0()
+        return FakeGraphMem0()
+
+    async def fake_get_mem0_oss_async_vector():
+        return FakeVectorMem0()
 
     async def fake_wait_for(awaitable, timeout):
         seen_timeouts.append(timeout)
@@ -151,6 +126,7 @@ async def test_search_async_graph_attempt_uses_shorter_timeout_budget(monkeypatc
         return await awaitable
 
     monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
+    monkeypatch.setattr(ops_module, "get_mem0_oss_async_vector", fake_get_mem0_oss_async_vector)
     monkeypatch.setattr(ops_module.asyncio, "wait_for", fake_wait_for)
 
     results = await ops_module.search_mem0_via_oss_async(
@@ -161,7 +137,7 @@ async def test_search_async_graph_attempt_uses_shorter_timeout_budget(monkeypatc
     )
 
     assert results[0].content == "vector fallback"
-    assert seen_enable_graph == [False]
+    assert seen_clients == ["vector"]
     assert seen_timeouts[0] < 15
     assert seen_timeouts[1] == 15
 
@@ -186,6 +162,9 @@ async def test_search_async_timeout_log_reports_actual_graph_budget(monkeypatch)
     async def fake_get_mem0_oss_async():
         return FakeMem0()
 
+    async def fake_get_mem0_oss_async_vector():
+        return FakeMem0()
+
     async def fake_wait_for(awaitable, timeout):
         if timeout < 15:
             awaitable.close()
@@ -193,6 +172,7 @@ async def test_search_async_timeout_log_reports_actual_graph_budget(monkeypatch)
         return await awaitable
 
     monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
+    monkeypatch.setattr(ops_module, "get_mem0_oss_async_vector", fake_get_mem0_oss_async_vector)
     monkeypatch.setattr(ops_module.asyncio, "wait_for", fake_wait_for)
     monkeypatch.setattr(
         ops_module.logger,
@@ -236,11 +216,15 @@ async def test_search_async_vector_only_retry_timeout_logs_explicitly(monkeypatc
     async def fake_get_mem0_oss_async():
         return FakeMem0()
 
+    async def fake_get_mem0_oss_async_vector():
+        return FakeMem0()
+
     async def fake_wait_for(awaitable, timeout):
         awaitable.close()
         raise asyncio.TimeoutError()
 
     monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
+    monkeypatch.setattr(ops_module, "get_mem0_oss_async_vector", fake_get_mem0_oss_async_vector)
     monkeypatch.setattr(ops_module.asyncio, "wait_for", fake_wait_for)
     monkeypatch.setattr(
         ops_module.logger,
@@ -324,7 +308,7 @@ async def test_call_mem0_search_async_awaits_async_search_directly(monkeypatch):
 
     class FakeMem0:
         async def search(self, *_args, **kwargs):
-            return {"results": [{"memory": kwargs.get("enable_graph")}]}
+            return {"results": [{"memory": "async answer"}]}
 
     async def fail_to_thread(*_args, **_kwargs):
         raise AssertionError("async mem0.search should not use to_thread")
@@ -339,7 +323,7 @@ async def test_call_mem0_search_async_awaits_async_search_directly(monkeypatch):
         enable_graph=True,
     )
 
-    assert result["results"][0]["memory"] is True
+    assert result["results"][0]["memory"] == "async answer"
 
 
 @pytest.mark.asyncio
@@ -381,7 +365,7 @@ async def test_search_async_offloads_mem0_call_to_thread(monkeypatch):
 
     assert results[0].content == "graph answer"
     assert seen["used_to_thread"] is True
-    assert seen["kwargs"]["enable_graph"] is True
+    assert "limit" in seen["kwargs"] or "top_k" in seen["kwargs"] or "user_id" in seen["kwargs"]
 
 
 @pytest.mark.asyncio

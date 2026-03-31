@@ -80,8 +80,8 @@ def clear_mem0_embedding_dims_override(value: Any, seen: Optional[set[int]] = No
         clear_mem0_embedding_dims_override(child_dict, seen)
 
 
-def _build_mem0_graph_store() -> dict[str, Any] | None:
-    graph_enabled = _env_bool("MEM0_GRAPH_ENABLED", False)
+def _build_mem0_graph_store(graph_enabled_override: bool | None = None) -> dict[str, Any] | None:
+    graph_enabled = _env_bool("MEM0_GRAPH_ENABLED", False) if graph_enabled_override is None else graph_enabled_override
     fail_open = _env_bool("MEM0_GRAPH_FAIL_OPEN", True)
     add_enabled = _env_bool("MEM0_GRAPH_ADD_ENABLED", True)
     search_enabled = _env_bool("MEM0_GRAPH_SEARCH_ENABLED", True)
@@ -150,7 +150,7 @@ def _build_mem0_graph_store() -> dict[str, Any] | None:
     return graph_store
 
 
-def build_mem0_oss_config_dict() -> tuple[dict[str, Any], bool]:
+def build_mem0_oss_config_dict(graph_enabled_override: bool | None = None) -> tuple[dict[str, Any], bool]:
     """
     Build Mem0 OSS SDK config dict for Memory / AsyncMemory.
 
@@ -233,7 +233,7 @@ def build_mem0_oss_config_dict() -> tuple[dict[str, Any], bool]:
         "embedder": {"provider": embed_provider, "config": embed_config},
         "vector_store": {"provider": "qdrant", "config": vector_store_config},
     }
-    graph_store = _build_mem0_graph_store()
+    graph_store = _build_mem0_graph_store(graph_enabled_override=graph_enabled_override)
     if graph_store is not None:
         config["graph_store"] = graph_store
     return config, clear_openai_embed_dims

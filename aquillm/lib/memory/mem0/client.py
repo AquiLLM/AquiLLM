@@ -19,14 +19,19 @@ _MEM0_CLIENT = None
 _MEM0_INIT_ATTEMPTED = False
 _MEM0_OSS = None
 _MEM0_OSS_INIT_ATTEMPTED = False
+_MEM0_OSS_VECTOR = None
+_MEM0_OSS_VECTOR_INIT_ATTEMPTED = False
 
 _MEM0_CLIENT_ASYNC = None
 _MEM0_CLIENT_ASYNC_INIT_ATTEMPTED = False
 _MEM0_OSS_ASYNC = None
 _MEM0_OSS_ASYNC_INIT_ATTEMPTED = False
+_MEM0_OSS_ASYNC_VECTOR = None
+_MEM0_OSS_ASYNC_VECTOR_INIT_ATTEMPTED = False
 
 _mem0_client_async_lock: asyncio.Lock | None = None
 _mem0_oss_async_lock: asyncio.Lock | None = None
+_mem0_oss_async_vector_lock: asyncio.Lock | None = None
 
 
 def _register_memgraph_compat_provider() -> None:
@@ -56,8 +61,15 @@ def _get_mem0_oss_async_lock() -> asyncio.Lock:
     return _mem0_oss_async_lock
 
 
-def _build_mem0_oss_config_dict():
-    return build_mem0_oss_config_dict()
+def _get_mem0_oss_async_vector_lock() -> asyncio.Lock:
+    global _mem0_oss_async_vector_lock
+    if _mem0_oss_async_vector_lock is None:
+        _mem0_oss_async_vector_lock = asyncio.Lock()
+    return _mem0_oss_async_vector_lock
+
+
+def _build_mem0_oss_config_dict(graph_enabled_override: bool | None = None):
+    return build_mem0_oss_config_dict(graph_enabled_override=graph_enabled_override)
 
 
 def _normalize_openai_base_url(url: str) -> str:
@@ -146,6 +158,26 @@ def get_mem0_oss():
         return _handle_oss_init_exception(exc)
 
 
+def get_mem0_oss_vector():
+    """Create a local OSS Mem0 SDK client configured without graph_store."""
+    global _MEM0_OSS_VECTOR, _MEM0_OSS_VECTOR_INIT_ATTEMPTED
+    if _MEM0_OSS_VECTOR_INIT_ATTEMPTED:
+        return _MEM0_OSS_VECTOR
+    _MEM0_OSS_VECTOR_INIT_ATTEMPTED = True
+
+    try:
+        from mem0 import Memory  # type: ignore
+
+        _register_memgraph_compat_provider()
+        config, clear_dims = _build_mem0_oss_config_dict(graph_enabled_override=False)
+        _MEM0_OSS_VECTOR = Memory.from_config(config)  # type: ignore[attr-defined]
+        if clear_dims:
+            _clear_mem0_embedding_dims_override(_MEM0_OSS_VECTOR)
+        return _MEM0_OSS_VECTOR
+    except Exception as exc:
+        return _handle_oss_init_exception(exc)
+
+
 async def get_mem0_oss_async():
     """Async local OSS Mem0 SDK client singleton."""
     global _MEM0_OSS_ASYNC, _MEM0_OSS_ASYNC_INIT_ATTEMPTED
@@ -167,11 +199,34 @@ async def get_mem0_oss_async():
             return _handle_oss_init_exception(exc)
 
 
+async def get_mem0_oss_async_vector():
+    """Async local OSS Mem0 SDK client configured without graph_store."""
+    global _MEM0_OSS_ASYNC_VECTOR, _MEM0_OSS_ASYNC_VECTOR_INIT_ATTEMPTED
+    async with _get_mem0_oss_async_vector_lock():
+        if _MEM0_OSS_ASYNC_VECTOR_INIT_ATTEMPTED:
+            return _MEM0_OSS_ASYNC_VECTOR
+        _MEM0_OSS_ASYNC_VECTOR_INIT_ATTEMPTED = True
+
+        try:
+            from mem0 import AsyncMemory  # type: ignore
+
+            _register_memgraph_compat_provider()
+            config, clear_dims = _build_mem0_oss_config_dict(graph_enabled_override=False)
+            _MEM0_OSS_ASYNC_VECTOR = await AsyncMemory.from_config(config)  # type: ignore[attr-defined]
+            if clear_dims:
+                _clear_mem0_embedding_dims_override(_MEM0_OSS_ASYNC_VECTOR)
+            return _MEM0_OSS_ASYNC_VECTOR
+        except Exception as exc:
+            return _handle_oss_init_exception(exc)
+
+
 __all__ = [
     "get_mem0_client",
     "get_mem0_client_async",
     "get_mem0_oss",
+    "get_mem0_oss_vector",
     "get_mem0_oss_async",
+    "get_mem0_oss_async_vector",
     "_build_mem0_oss_config_dict",
     "_normalize_openai_base_url",
     "_clear_mem0_embedding_dims_override",

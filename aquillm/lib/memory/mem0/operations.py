@@ -10,16 +10,12 @@ from typing import Any, Optional
 from ..config import MEM0_TIMEOUT_SECONDS
 from ..extraction import clean_stable_facts
 from ..types import RetrievedEpisodicMemory
-from .client import get_mem0_oss, get_mem0_oss_async
+from .client import get_mem0_oss, get_mem0_oss_async, get_mem0_oss_async_vector, get_mem0_oss_vector
 from .search_parsing import parse_mem0_search_items, response_to_raw_items
 
 logger = structlog.stdlib.get_logger(__name__)
 
 _NO_RESPONSE = object()
-
-
-class _EnableGraphKwargUnsupported(TypeError):
-    """Raised when Mem0 search does not accept the enable_graph kwarg."""
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -60,32 +56,23 @@ def _search_mode_label(enable_graph: Optional[bool]) -> str:
     return "default"
 
 
-def _build_search_call_attempts(
-    query: str, user_id: str, top_k: int, enable_graph: Optional[bool]
-) -> list[tuple[tuple[Any, ...], dict[str, Any]]]:
-    search_kwargs: dict[str, Any] = {}
-    if enable_graph is not None:
-        search_kwargs["enable_graph"] = enable_graph
+def _build_search_call_attempts(query: str, user_id: str, top_k: int) -> list[tuple[tuple[Any, ...], dict[str, Any]]]:
     return [
-        ((), {"query": query, "user_id": user_id, "limit": top_k, **search_kwargs}),
-        ((), {"query": query, "user_id": user_id, "top_k": top_k, **search_kwargs}),
-        ((), {"query": query, "user_id": user_id, **search_kwargs}),
-        ((query,), {"user_id": user_id, "limit": top_k, **search_kwargs}),
-        ((query,), {"user_id": user_id, **search_kwargs}),
+        ((), {"query": query, "user_id": user_id, "limit": top_k}),
+        ((), {"query": query, "user_id": user_id, "top_k": top_k}),
+        ((), {"query": query, "user_id": user_id}),
+        ((query,), {"user_id": user_id, "limit": top_k}),
+        ((query,), {"user_id": user_id}),
     ]
 
 
-def _call_mem0_search_sync(
-    mem0: Any, query: str, user_id: str, top_k: int, enable_graph: Optional[bool]
-) -> Any:
-    attempts = _build_search_call_attempts(query, user_id, top_k, enable_graph=enable_graph)
+def _call_mem0_search_sync(mem0: Any, query: str, user_id: str, top_k: int) -> Any:
+    attempts = _build_search_call_attempts(query, user_id, top_k)
     for args, kwargs in attempts:
         try:
             return mem0.search(*args, **kwargs)  # type: ignore[attr-defined]
         except TypeError:
             continue
-    if enable_graph is not None:
-        raise _EnableGraphKwargUnsupported()
     return _NO_RESPONSE
 
 
@@ -172,7 +159,7 @@ async def _run_mem0_search_call_async(search_callable: Any, *args: Any, **kwargs
 async def _call_mem0_search_async(
     mem0: Any, query: str, user_id: str, top_k: int, enable_graph: Optional[bool]
 ) -> Any:
-    attempts = _build_search_call_attempts(query, user_id, top_k, enable_graph=enable_graph)
+    attempts = _build_search_call_attempts(query, user_id, top_k)
     timeout = _graph_search_timeout_seconds() if enable_graph else float(MEM0_TIMEOUT_SECONDS)
     mode = _search_mode_label(enable_graph)
     query_chars = len(query or "")
@@ -213,35 +200,25 @@ async def _call_mem0_search_async(
             raise
         except TypeError:
             continue
-    if enable_graph is not None:
-        raise _EnableGraphKwargUnsupported()
     return _NO_RESPONSE
 def search_mem0_via_oss(
     user_id: str, query: str, top_k: int, exclude_conversation_id: Optional[int]
 ) -> list[RetrievedEpisodicMemory]:
-    mem0 = get_mem0_oss()
+    enable_graph = _search_enable_graph()
+    mem0 = get_mem0_oss() if enable_graph else get_mem0_oss_vector()
     if mem0 is None:
         return []
 
-    enable_graph = _search_enable_graph()
     try:
-        response = _call_mem0_search_sync(mem0, query, user_id, top_k, enable_graph=enable_graph)
-    except _EnableGraphKwargUnsupported:
-        if enable_graph and _graph_fail_open():
-            logger.warning("Mem0 OSS search does not support enable_graph kwarg; retrying default search.")
-            try:
-                response = _call_mem0_search_sync(mem0, query, user_id, top_k, enable_graph=None)
-            except Exception as retry_exc:
-                logger.warning("Mem0 OSS default-search retry failed; falling back. Error: %s", retry_exc)
-                return []
-        else:
-            logger.warning("Mem0 OSS search does not support enable_graph kwarg; falling back.")
-            return []
+        response = _call_mem0_search_sync(mem0, query, user_id, top_k)
     except Exception as exc:
         if enable_graph and _graph_fail_open():
             logger.warning("Mem0 OSS graph search failed; retrying vector-only. Error: %s", exc)
             try:
-                response = _call_mem0_search_sync(mem0, query, user_id, top_k, enable_graph=False)
+                vector_mem0 = get_mem0_oss_vector()
+                if vector_mem0 is None:
+                    return []
+                response = _call_mem0_search_sync(vector_mem0, query, user_id, top_k)
             except Exception as retry_exc:
                 logger.warning("Mem0 OSS vector-only retry failed; falling back. Error: %s", retry_exc)
                 return []
@@ -262,11 +239,11 @@ async def search_mem0_via_oss_async(
     user_id: str, query: str, top_k: int, exclude_conversation_id: Optional[int]
 ) -> list[RetrievedEpisodicMemory]:
     """Async variant of search_mem0_via_oss using AsyncMemory."""
-    mem0 = await get_mem0_oss_async()
+    enable_graph = _search_enable_graph()
+    mem0 = await (get_mem0_oss_async() if enable_graph else get_mem0_oss_async_vector())
     if mem0 is None:
         return []
 
-    enable_graph = _search_enable_graph()
     graph_timeout_seconds = _graph_search_timeout_seconds() if enable_graph else float(MEM0_TIMEOUT_SECONDS)
     graph_started_at = time.perf_counter()
     try:
@@ -281,23 +258,6 @@ async def search_mem0_via_oss_async(
                 len(query or ""),
                 top_k,
             )
-    except _EnableGraphKwargUnsupported:
-        if enable_graph and _graph_fail_open():
-            logger.warning("Mem0 OSS async search does not support enable_graph kwarg; retrying default search.")
-            try:
-                response = await _call_mem0_search_async(mem0, query, user_id, top_k, enable_graph=None)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "Mem0 OSS async default-search retry timed out after %.1fs; falling back.",
-                    float(MEM0_TIMEOUT_SECONDS),
-                )
-                return []
-            except Exception as retry_exc:
-                logger.warning("Mem0 OSS async default-search retry failed; falling back. Error: %s", retry_exc)
-                return []
-        else:
-            logger.warning("Mem0 OSS async search does not support enable_graph kwarg; falling back.")
-            return []
     except asyncio.TimeoutError:
         if enable_graph and _graph_fail_open():
             logger.warning(
@@ -308,7 +268,10 @@ async def search_mem0_via_oss_async(
             )
             try:
                 retry_started_at = time.perf_counter()
-                response = await _call_mem0_search_async(mem0, query, user_id, top_k, enable_graph=False)
+                vector_mem0 = await get_mem0_oss_async_vector()
+                if vector_mem0 is None:
+                    return []
+                response = await _call_mem0_search_async(vector_mem0, query, user_id, top_k, enable_graph=False)
                 logger.info(
                     "Mem0 OSS async vector-only retry completed after graph timeout: "
                     "elapsed_ms=%.2f query_chars=%d top_k=%d",
@@ -337,7 +300,10 @@ async def search_mem0_via_oss_async(
             )
             try:
                 retry_started_at = time.perf_counter()
-                response = await _call_mem0_search_async(mem0, query, user_id, top_k, enable_graph=False)
+                vector_mem0 = await get_mem0_oss_async_vector()
+                if vector_mem0 is None:
+                    return []
+                response = await _call_mem0_search_async(vector_mem0, query, user_id, top_k, enable_graph=False)
                 logger.info(
                     "Mem0 OSS async vector-only retry completed after graph failure: "
                     "elapsed_ms=%.2f query_chars=%d top_k=%d",
