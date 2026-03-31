@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import structlog
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -134,3 +135,12 @@ def theme_settings(request):
     else:
         settings = None
     return {"user_theme_settings": settings}
+
+
+def react_bundle_version(request):
+    bundle_path = Path(__file__).resolve().parent / "static" / "js" / "dist" / "main.js"
+    try:
+        version = str(bundle_path.stat().st_mtime_ns)
+    except OSError:
+        version = ""
+    return {"react_bundle_version": version}
