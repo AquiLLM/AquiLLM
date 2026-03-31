@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import sys
+import types
 from typing import Any
 
 import pytest
@@ -154,6 +156,25 @@ def test_build_config_invalid_graph_strict_raises(monkeypatch):
 
     with pytest.raises(ValueError):
         client_module._build_mem0_oss_config_dict()
+
+
+def test_register_memgraph_compat_provider(monkeypatch):
+    """Mem0 memgraph provider should be redirected to the local compatibility shim."""
+    client_module = _reload_mem0_client(monkeypatch)
+    fake_factory_module = types.ModuleType("mem0.utils.factory")
+
+    class FakeGraphStoreFactory:
+        provider_to_class = {"memgraph": "mem0.memory.memgraph_memory.MemoryGraph"}
+
+    fake_factory_module.GraphStoreFactory = FakeGraphStoreFactory
+    monkeypatch.setitem(sys.modules, "mem0.utils.factory", fake_factory_module)
+
+    client_module._register_memgraph_compat_provider()
+
+    assert (
+        FakeGraphStoreFactory.provider_to_class["memgraph"]
+        == "lib.memory.mem0.memgraph_compat.CompatibleMemgraphMemoryGraph"
+    )
 
 
 def test_search_uses_enable_graph_when_enabled(monkeypatch):

@@ -29,6 +29,19 @@ _mem0_client_async_lock: asyncio.Lock | None = None
 _mem0_oss_async_lock: asyncio.Lock | None = None
 
 
+def _register_memgraph_compat_provider() -> None:
+    """Route Mem0's memgraph provider through our local compatibility shim."""
+    try:
+        from mem0.utils.factory import GraphStoreFactory  # type: ignore
+
+        GraphStoreFactory.provider_to_class["memgraph"] = (
+            "lib.memory.mem0.memgraph_compat.CompatibleMemgraphMemoryGraph"
+        )
+    except Exception:
+        # If Mem0 is unavailable we will fall through to the normal init error path.
+        pass
+
+
 def _get_mem0_client_async_lock() -> asyncio.Lock:
     global _mem0_client_async_lock
     if _mem0_client_async_lock is None:
@@ -123,6 +136,7 @@ def get_mem0_oss():
     try:
         from mem0 import Memory  # type: ignore
 
+        _register_memgraph_compat_provider()
         config, clear_dims = _build_mem0_oss_config_dict()
         _MEM0_OSS = Memory.from_config(config)  # type: ignore[attr-defined]
         if clear_dims:
@@ -143,6 +157,7 @@ async def get_mem0_oss_async():
         try:
             from mem0 import AsyncMemory  # type: ignore
 
+            _register_memgraph_compat_provider()
             config, clear_dims = _build_mem0_oss_config_dict()
             _MEM0_OSS_ASYNC = await AsyncMemory.from_config(config)  # type: ignore[attr-defined]
             if clear_dims:
