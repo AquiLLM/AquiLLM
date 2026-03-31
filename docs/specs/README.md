@@ -1,6 +1,6 @@
 # Specs Index
 
-Last updated: 2026-03-30
+Last updated: 2026-03-30 (Mem0 async pipeline)
 
 ## Status legend
 
@@ -36,6 +36,8 @@ Last updated: 2026-03-30
 | `2026-03-31-rag-citation-enforcement-design.md` | Implemented | `docs/roadmap/plans/completed/2026-03-31-rag-citation-enforcement-implementation.md` |
 | `2026-03-29-semantic-versioning-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-29-semantic-versioning-implementation.md` |
 | `2026-03-30-whisperx-transcription-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-30-whisperx-transcription-implementation.md` |
+| `2026-03-30-self-hosted-mem0-graph-memory-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-30-self-hosted-mem0-graph-memory-implementation.md` |
+| `2026-03-30-mem0-async-memory-pipeline-design.md` | Implemented | (see spec; async Mem0 in WebSocket chat path) |
 
 ## Notes
 
