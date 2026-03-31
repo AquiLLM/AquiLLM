@@ -82,14 +82,6 @@ def _largest_suffix_prefix_overlap(left: str, right: str, min_chars: int = 1) ->
     return 0
 
 
-def _largest_prefix_present_in_text(text: str, candidate: str, min_chars: int = 1) -> int:
-    max_size = min(len(text), len(candidate))
-    for size in range(max_size, max(min_chars, 1) - 1, -1):
-        if candidate[:size] in text:
-            return size
-    return 0
-
-
 def _trim_duplicate_continuation_prefix(partial_text: str, continuation_text: str) -> str:
     partial = partial_text or ""
     continuation = continuation_text or ""
@@ -101,14 +93,6 @@ def _trim_duplicate_continuation_prefix(partial_text: str, continuation_text: st
     suffix_overlap = _largest_suffix_prefix_overlap(partial, continuation, min_chars=overlap_floor)
     if suffix_overlap:
         continuation = continuation[suffix_overlap:]
-        trimmed = True
-    if not continuation:
-        return ""
-
-    restart_floor = max(24, min(160, min(len(partial), len(continuation)) // 2))
-    repeated_prefix = _largest_prefix_present_in_text(partial, continuation, min_chars=restart_floor)
-    if repeated_prefix:
-        continuation = continuation[repeated_prefix:]
         trimmed = True
 
     if trimmed:

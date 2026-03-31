@@ -711,6 +711,69 @@ async def test_complete_turn_streaming_does_not_append_sources_on_cutoff_done_ch
 
 
 @pytest.mark.asyncio
+async def test_complete_turn_streaming_cutoff_continuation_restart_still_appends_sources():
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            return_value=LLMResponse(
+                text=(
+                    "# The GalaxiesML Dataset: Comprehensive Technical Analysis\n"
+                    "Dataset Construction and Provenance\n"
+                    "Source Survey: HSC-PDR2 Wide Survey\n"
+                    "Performance Requirements Context\n"
+                    "The paper establishes **LS"
+                ),
+                tool_call={},
+                stop_reason="max_tokens",
+                input_usage=2,
+                output_usage=2,
+                model="fake",
+            )
+        ),
+        _continue_cutoff_response=AsyncMock(
+            return_value=LLMResponse(
+                text=(
+                    "# The GalaxiesML Dataset: Comprehensive Technical Analysis\n"
+                    "Dataset Construction and Provenance\n"
+                    "Source Survey: HSC-PDR2 Wide Survey\n"
+                    "Performance Requirements Context\n"
+                    "The paper establishes **LSST deployment thresholds and acceptance criteria [doc:doc-a chunk:7]."
+                ),
+                tool_call={},
+                stop_reason="stop",
+                input_usage=1,
+                output_usage=1,
+                model="fake",
+            )
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(
+        llm,
+        convo,
+        max_tokens=1024,
+        stream_func=AsyncMock(),
+    )
+    assert changed == "changed"
+    content = updated[-1].content
+    assert content.count("# The GalaxiesML Dataset: Comprehensive Technical Analysis") == 1
+    assert "Sources:" in content
+    assert "[doc:doc-a chunk:7]" in content
+
+
+@pytest.mark.asyncio
 async def test_complete_turn_preserves_substantial_cutoff_draft_when_continuation_fails(monkeypatch):
     async def _fake_compact_summary(_llm, _conversation, _max_tokens):
         return "Compressed fallback that should not replace the richer draft."
