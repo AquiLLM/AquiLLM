@@ -41,6 +41,7 @@ def pack_chunk_search_results(
                 "d": str(chunk.doc_id),
                 "c": chunk.chunk_number,
                 "n": title,
+                "ref": f"[doc:{chunk.doc_id} chunk:{chunk.id}]",
             }
         else:
             base = {
@@ -49,6 +50,7 @@ def pack_chunk_search_results(
                 "doc_id": str(chunk.doc_id),
                 "chunk": chunk.chunk_number,
                 "title": title,
+                "citation": f"[doc:{chunk.doc_id} chunk:{chunk.id}]",
             }
 
         if chunk.modality == image_modality:

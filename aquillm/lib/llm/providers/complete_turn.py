@@ -11,6 +11,7 @@ from ..types.response import LLMResponse
 from ..types.tools import dump_tool_choice
 from . import fallback_heuristics as fb
 from . import image_context as imgctx
+from . import rag_citations as citations
 from .summary import generate_compact_tool_summary
 
 try:
@@ -51,6 +52,17 @@ async def complete_conversation_turn(
     is_post_tool_result_turn = (
         isinstance(last_message, ToolMessage) and last_message.for_whom == "assistant"
     )
+    citation_allowlist: set[str] = set()
+    enforce_citations = False
+    request_system_prompt = system_prompt
+    if is_post_tool_result_turn and citations.citation_enforcement_enabled():
+        citation_allowlist = citations.collect_allowed_chunk_citations(conversation)
+        if citation_allowlist:
+            enforce_citations = True
+            request_system_prompt = (
+                f"{system_prompt}\n\n"
+                f"{citations.build_citation_system_suffix(citation_allowlist)}"
+            )
     try:
         tool_step_max_tokens = max(128, int(getenv("LLM_TOOL_STEP_MAX_TOKENS", "512")))
     except Exception:
@@ -77,7 +89,7 @@ async def complete_conversation_turn(
             llm.base_args
             | tools
             | {
-                "system": system_prompt,
+                "system": request_system_prompt,
                 "messages": message_dicts,
                 "messages_pydantic": messages_for_bot,
                 "max_tokens": request_max_tokens,
@@ -113,7 +125,7 @@ async def complete_conversation_turn(
             finalize_messages = message_dicts + [{"role": "user", "content": finalize_prompt}]
             finalize_pydantic_messages = messages_for_bot + [UserMessage(content=finalize_prompt)]
             finalize_args = llm.base_args | {
-                "system": system_prompt,
+                "system": request_system_prompt,
                 "messages": finalize_messages,
                 "messages_pydantic": finalize_pydantic_messages,
                 "max_tokens": min(max_tokens, post_tool_max_tokens),
@@ -179,7 +191,7 @@ async def complete_conversation_turn(
         continuation_text = ""
         if fb.continue_on_cutoff_enabled():
             continuation_response = await llm._continue_cutoff_response(
-                system_prompt=system_prompt,
+                system_prompt=request_system_prompt,
                 message_dicts=message_dicts,
                 messages_for_bot=messages_for_bot,
                 partial_text=response_text,
@@ -200,6 +212,41 @@ async def complete_conversation_turn(
                 synthesized = fb.synthesize_from_recent_tool_results(conversation)
                 if synthesized:
                     response_text = synthesized
+    if enforce_citations and (not response_tool_call):
+        citations_valid = citations.response_has_required_citations(response_text, citation_allowlist)
+        if not citations_valid:
+            invalid = citations.find_invalid_citations(response_text, citation_allowlist)
+            retry_prompt = citations.build_citation_retry_prompt(
+                prior_answer=response_text,
+                allowed_citations=citation_allowlist,
+                invalid_citations=invalid,
+            )
+            retry_messages = message_dicts + [
+                {"role": "assistant", "content": response_text},
+                {"role": "user", "content": retry_prompt},
+            ]
+            retry_pydantic_messages = messages_for_bot + [
+                AssistantMessage(content=response_text, stop_reason="stop"),
+                UserMessage(content=retry_prompt),
+            ]
+            retry_args = llm.base_args | {
+                "system": request_system_prompt,
+                "messages": retry_messages,
+                "messages_pydantic": retry_pydantic_messages,
+                "max_tokens": min(max_tokens, post_tool_max_tokens),
+                "stream_callback": stream_func,
+                "stream_message_uuid": stream_message_uuid,
+            }
+            retry_response = await llm.get_message(**retry_args)
+            if retry_response and (not retry_response.tool_call):
+                response = retry_response
+                response_text = (retry_response.text or "").strip()
+                response_tool_call = {}
+        if not citations.response_has_required_citations(response_text, citation_allowlist):
+            cited_extract = citations.synthesize_cited_extract_from_results(conversation)
+            if cited_extract:
+                response_text = cited_extract
+                response_tool_call = {}
     if (
         (
             is_post_tool_result_turn

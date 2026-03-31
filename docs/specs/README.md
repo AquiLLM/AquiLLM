@@ -33,6 +33,7 @@ Last updated: 2026-03-30
 | `2026-03-26-ingestion-work-queue-batching-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-26-ingestion-work-queue-batching-implementation.md` |
 | `2026-03-26-langgraph-mcp-tools-orchestration-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-25-langgraph-research-orchestration.md` |
 | `2026-03-30-adaptive-tool-call-budget-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-30-adaptive-tool-call-budget-implementation.md` |
+| `2026-03-31-rag-citation-enforcement-design.md` | Implemented | `docs/roadmap/plans/completed/2026-03-31-rag-citation-enforcement-implementation.md` |
 | `2026-03-29-semantic-versioning-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-29-semantic-versioning-implementation.md` |
 | `2026-03-30-whisperx-transcription-design.md` | Planned | `docs/roadmap/plans/pending/2026-03-30-whisperx-transcription-implementation.md` |
 
@@ -41,4 +42,3 @@ Last updated: 2026-03-30
 - Canonical progress tracking is maintained in `docs/roadmap/roadmap-status.md`.
 - If spec intent changes after implementation, update this index and link the updated execution notes.
 - `docs/specs/canceled/` currently has no files.
-
