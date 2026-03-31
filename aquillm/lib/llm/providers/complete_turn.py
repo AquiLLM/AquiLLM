@@ -34,15 +34,13 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
 def _append_citation_sources_if_missing(
     text: str,
     allowed_citations: set[str],
-    *,
-    max_refs: int = 6,
 ) -> str:
     base = (text or "").rstrip()
     if not allowed_citations:
         return base
-    if citations.extract_citations(base):
+    if "Sources:" in base:
         return base
-    refs = sorted(allowed_citations)[:max_refs]
+    refs = sorted(allowed_citations)
     if not refs:
         return base
     source_lines = "\n".join(f"- {ref}" for ref in refs)
