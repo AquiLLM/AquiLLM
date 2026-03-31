@@ -6,10 +6,10 @@ LLM-based extraction or heuristic fallback.
 """
 
 import json
-import structlog
 import re
 from os import getenv
-from typing import Optional
+
+import structlog
 
 import requests
 
@@ -17,6 +17,51 @@ from ..config import MEM0_TIMEOUT_SECONDS
 from ..mem0.client import _normalize_openai_base_url
 
 logger = structlog.stdlib.get_logger(__name__)
+_REMEMBER_PREFIX_RE = re.compile(
+    r"^\s*(please\s+)?remember(\s+this)?(\s+going\s+forward)?\s*[:,-]?\s*",
+    flags=re.IGNORECASE,
+)
+_REMEMBER_THAT_RE = re.compile(r"^\s*that\s+", flags=re.IGNORECASE)
+_LOW_VALUE_FACT_PATTERNS = (
+    re.compile(r"^user asked to remember:", flags=re.IGNORECASE),
+    re.compile(r"^remembered context:", flags=re.IGNORECASE),
+    re.compile(r"\byou should remember this\b", flags=re.IGNORECASE),
+    re.compile(r"\bremember this\b", flags=re.IGNORECASE),
+    re.compile(r"\bi(?:'| a)?ll remember that\b", flags=re.IGNORECASE),
+    re.compile(r"\bkeep that in mind\b", flags=re.IGNORECASE),
+)
+
+
+def _normalize_fact_text(text: str) -> str:
+    """Normalize a candidate fact into a compact fact-first sentence."""
+    normalized = re.sub(r"\s+", " ", (text or "").strip())
+    normalized = _REMEMBER_PREFIX_RE.sub("", normalized).strip()
+    normalized = _REMEMBER_THAT_RE.sub("", normalized).strip()
+    normalized = normalized.strip(" \t\r\n\"'")
+    return normalized
+
+
+def _is_low_value_fact(text: str) -> bool:
+    """Reject vague or reflexive memory candidates."""
+    normalized = _normalize_fact_text(text)
+    lowered = normalized.lower().strip(" .!?,:;")
+    if not lowered:
+        return True
+    if lowered in {"this", "that", "it", "remember this", "remember that"}:
+        return True
+    return any(pattern.search(normalized) for pattern in _LOW_VALUE_FACT_PATTERNS)
+
+
+def _clean_fact_candidates(facts: list[str]) -> list[str]:
+    """Normalize and deduplicate candidate facts while dropping obvious noise."""
+    out: list[str] = []
+    for fact in facts:
+        normalized = _normalize_fact_text(fact)
+        if _is_low_value_fact(normalized):
+            continue
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return out
 
 
 def _extract_json_object(text: str) -> dict:
@@ -106,7 +151,7 @@ def extract_stable_facts(user_content: str, assistant_content: str) -> list[str]
                     item = item.strip()
                     if item:
                         out.append(item)
-        return out
+        return _clean_fact_candidates(out)
     except Exception as exc:
         logger.warning("Stable-fact extraction failed: %s", exc)
         return []
@@ -124,7 +169,9 @@ def heuristic_facts_from_turn(user_content: str, assistant_content: str) -> list
     facts: list[str] = []
 
     if any(token in lowered for token in ("remember", "going forward", "from now on")):
-        facts.append(f"User asked to remember: {user_text}")
+        remembered = normalize_remember_fact(user_text)
+        if remembered:
+            facts.append(remembered)
 
     pattern_map = [
         (r"\bi prefer\b.+", "preference"),
@@ -144,12 +191,12 @@ def heuristic_facts_from_turn(user_content: str, assistant_content: str) -> list
             if candidate:
                 facts.append(candidate[0].upper() + candidate[1:] if len(candidate) > 1 else candidate.upper())
 
-    if facts and "remember" in lowered and assistant_content:
-        assistant_snippet = re.sub(r"\s+", " ", assistant_content).strip()[:220]
-        if assistant_snippet:
-            facts.append(f"Remembered context: {assistant_snippet}")
+    return _clean_fact_candidates(facts)
 
-    return list(dict.fromkeys(facts))
+
+def clean_stable_facts(facts: list[str]) -> list[str]:
+    """Normalize and filter externally supplied stable-fact candidates."""
+    return _clean_fact_candidates(facts)
 
 
 def has_remember_intent(text: str) -> bool:
@@ -165,16 +212,12 @@ def normalize_remember_fact(user_content: str) -> str:
     text = (user_content or "").strip()
     if not text:
         return ""
-    text = re.sub(
-        r"^\s*(please\s+)?remember(\s+this)?(\s+going\s+forward)?\s*[:,-]?\s*",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    ).strip()
+    text = _normalize_fact_text(text)
     return text or (user_content or "").strip()
 
 
 __all__ = [
+    'clean_stable_facts',
     'extract_stable_facts',
     'heuristic_facts_from_turn',
     'has_remember_intent',

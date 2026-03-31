@@ -6,6 +6,7 @@ from os import getenv
 from typing import Any, Optional
 
 from ..config import MEM0_TIMEOUT_SECONDS
+from ..extraction import clean_stable_facts
 from ..types import RetrievedEpisodicMemory
 from .client import get_mem0_oss, get_mem0_oss_async
 from .search_parsing import parse_mem0_search_items, response_to_raw_items
@@ -203,7 +204,18 @@ def add_mem0_raw_facts(
 
     wrote_any = False
     enable_graph = _add_enable_graph()
-    for fact in facts:
+    cleaned_facts = clean_stable_facts(facts)
+    filtered_count = max(len(facts) - len(cleaned_facts), 0)
+    logger.info(
+        "Mem0 raw fact candidates prepared: extracted=%d filtered=%d graph_enabled=%s",
+        len(facts),
+        filtered_count,
+        enable_graph,
+    )
+    if not cleaned_facts:
+        logger.info("Mem0 raw fact candidates filtered before write; skipping add call.")
+        return False
+    for fact in cleaned_facts:
         try:
             result = _add_mem0_fact(mem0, fact, user_id, metadata, enable_graph=enable_graph)
         except Exception as exc:
@@ -242,7 +254,18 @@ async def add_mem0_raw_facts_async(
     }
     wrote_any = False
     enable_graph = _add_enable_graph()
-    for fact in facts:
+    cleaned_facts = clean_stable_facts(facts)
+    filtered_count = max(len(facts) - len(cleaned_facts), 0)
+    logger.info(
+        "Mem0 raw fact candidates prepared (async): extracted=%d filtered=%d graph_enabled=%s",
+        len(facts),
+        filtered_count,
+        enable_graph,
+    )
+    if not cleaned_facts:
+        logger.info("Mem0 raw fact candidates filtered before async write; skipping add call.")
+        return False
+    for fact in cleaned_facts:
         try:
             result = await _add_mem0_fact_async(mem0, fact, user_id, metadata, enable_graph=enable_graph)
         except Exception as exc:

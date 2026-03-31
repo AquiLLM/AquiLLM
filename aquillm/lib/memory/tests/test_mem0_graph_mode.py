@@ -257,7 +257,7 @@ def test_add_uses_enable_graph_when_enabled(monkeypatch):
 
     wrote = ops_module.add_mem0_raw_facts(
         user_id="1",
-        facts=["remember this"],
+        facts=["Please remember that AquiLLM uses Qdrant and Memgraph for memory."],
         conversation_id=9,
         assistant_message_uuid="abc-123",
     )
@@ -288,13 +288,70 @@ def test_add_graph_failure_retries_vector_only(monkeypatch):
 
     wrote = ops_module.add_mem0_raw_facts(
         user_id="1",
-        facts=["remember this"],
+        facts=["Please remember that AquiLLM uses Qdrant and Memgraph for memory."],
         conversation_id=9,
         assistant_message_uuid="abc-123",
     )
 
     assert wrote is True
     assert [flag for flag in seen_enable_graph if isinstance(flag, bool)] == [True, False]
+
+
+def test_add_filters_low_value_facts_before_graph_write(monkeypatch):
+    """Low-value remember noise should be dropped before Mem0 add calls."""
+    ops_module = _reload_mem0_operations(
+        monkeypatch,
+        MEM0_GRAPH_ENABLED=1,
+        MEM0_GRAPH_ADD_ENABLED=1,
+        MEM0_GRAPH_FAIL_OPEN=1,
+    )
+
+    added_facts: list[str] = []
+
+    class FakeMem0:
+        def add(self, fact, **_kwargs):
+            added_facts.append(fact)
+            return {"results": [{"event": "ADD"}]}
+
+    monkeypatch.setattr(ops_module, "get_mem0_oss", lambda: FakeMem0())
+
+    wrote = ops_module.add_mem0_raw_facts(
+        user_id="1",
+        facts=[
+            "Please remember that you should remember this going forward.",
+            "AquiLLM uses Qdrant and Memgraph for memory.",
+        ],
+        conversation_id=9,
+        assistant_message_uuid="abc-123",
+    )
+
+    assert wrote is True
+    assert added_facts == ["AquiLLM uses Qdrant and Memgraph for memory."]
+
+
+def test_add_returns_false_when_all_facts_are_filtered(monkeypatch):
+    """Pure remember-noise should short-circuit before any Mem0 write attempt."""
+    ops_module = _reload_mem0_operations(
+        monkeypatch,
+        MEM0_GRAPH_ENABLED=1,
+        MEM0_GRAPH_ADD_ENABLED=1,
+        MEM0_GRAPH_FAIL_OPEN=1,
+    )
+
+    class FakeMem0:
+        def add(self, _fact, **_kwargs):
+            raise AssertionError("add should not be called for filtered-only facts")
+
+    monkeypatch.setattr(ops_module, "get_mem0_oss", lambda: FakeMem0())
+
+    wrote = ops_module.add_mem0_raw_facts(
+        user_id="1",
+        facts=["Please remember that you should remember this going forward."],
+        conversation_id=9,
+        assistant_message_uuid="abc-123",
+    )
+
+    assert wrote is False
 
 
 def test_search_mem0_episodic_memories_remains_oss_only(monkeypatch):

@@ -44,6 +44,7 @@ from .mem0 import (
     search_mem0_via_oss_async,
 )
 from .extraction import (
+    clean_stable_facts,
     extract_stable_facts,
     heuristic_facts_from_turn,
     has_remember_intent,
@@ -85,6 +86,7 @@ __all__ = [
     "add_mem0_raw_facts_async",
     "add_mem0_memory_with_client",
     # Extraction
+    'clean_stable_facts',
     'extract_stable_facts',
     'heuristic_facts_from_turn',
     'has_remember_intent',

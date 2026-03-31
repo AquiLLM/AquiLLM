@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from typing import Any
 
 from mem0.memory.memgraph_memory import MemoryGraph as UpstreamMemoryGraph
@@ -18,6 +19,61 @@ except ImportError as exc:  # pragma: no cover - exercised in container builds
 
 
 logger = logging.getLogger(__name__)
+_PLACEHOLDER_ENTITIES = {
+    "assistant": "assistant",
+    "me": "user",
+    "myself": "user",
+    "the assistant": "assistant",
+    "the user": "user",
+    "user": "user",
+}
+_WEAK_RELATIONSHIPS = {"HAS", "IS", "NAME", "RELATED_TO"}
+_RELATION_ALIASES = {
+    "likes": "PREFERS",
+    "prefers": "PREFERS",
+    "profession": "PROFESSION",
+    "uses": "USES",
+    "work_on": "WORKS_ON",
+    "working_on": "WORKS_ON",
+    "works_on": "WORKS_ON",
+}
+
+
+def normalize_entity_name(name: Any) -> str:
+    """Normalize entity names for consistent graph filtering and merges."""
+    normalized = re.sub(r"\s+", " ", str(name or "").strip()).strip("`'\"")
+    normalized = re.sub(r"[^A-Za-z0-9_.+\- ]+", "", normalized)
+    normalized = normalized.lower().strip()
+    return _PLACEHOLDER_ENTITIES.get(normalized, normalized)
+
+
+def normalize_relationship_name(relationship: Any) -> str:
+    """Normalize relation names to Memgraph-safe uppercase identifiers."""
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", str(relationship or "").strip().lower()).strip("_")
+    if not normalized:
+        return ""
+    return _RELATION_ALIASES.get(normalized, normalized.upper())
+
+
+def prepare_graph_relation(item: dict[str, Any]) -> dict[str, str] | None:
+    """Normalize a relation candidate and drop low-value graph edges."""
+    source = normalize_entity_name(item.get("source"))
+    relationship = normalize_relationship_name(item.get("relationship"))
+    destination = normalize_entity_name(item.get("destination"))
+
+    if not source or not relationship or not destination:
+        return None
+    if relationship in _WEAK_RELATIONSHIPS:
+        return None
+    if source == destination:
+        return None
+    if source in _PLACEHOLDER_ENTITIES.values() and destination in _PLACEHOLDER_ENTITIES.values():
+        return None
+    return {
+        "source": source,
+        "relationship": relationship,
+        "destination": destination,
+    }
 
 
 class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
@@ -168,12 +224,20 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
         results = []
 
         for item in to_be_added:
-            source = item["source"]
-            destination = item["destination"]
-            relationship = item["relationship"]
+            prepared = prepare_graph_relation(item)
+            if prepared is None:
+                logger.info("Dropping low-value graph relation candidate: %r", item)
+                continue
 
-            source_type = entity_type_map.get(source, "__User__")
-            destination_type = entity_type_map.get(destination, "__User__")
+            source = prepared["source"]
+            destination = prepared["destination"]
+            relationship = prepared["relationship"]
+
+            source_type = entity_type_map.get(item["source"], entity_type_map.get(source, "__User__"))
+            destination_type = entity_type_map.get(
+                item["destination"],
+                entity_type_map.get(destination, "__User__"),
+            )
             source_embedding = self.embedding_model.embed(source)
             destination_embedding = self.embedding_model.embed(destination)
 

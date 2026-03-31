@@ -89,7 +89,7 @@ def test_add_mem0_raw_facts_uses_oss_sdk(monkeypatch):
     
     result = add_mem0_raw_facts(
         user_id="42",
-        facts=["remember this"],
+        facts=["Please remember that AquiLLM uses Qdrant and Memgraph for memory."],
         conversation_id=9,
         assistant_message_uuid="abc-123",
     )

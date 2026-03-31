@@ -101,7 +101,7 @@ async def test_add_async_uses_enable_graph_when_enabled(monkeypatch):
 
     wrote = await ops_module.add_mem0_raw_facts_async(
         user_id="1",
-        facts=["remember this"],
+        facts=["Please remember that AquiLLM uses Qdrant and Memgraph for memory."],
         conversation_id=9,
         assistant_message_uuid="abc-123",
     )
@@ -136,7 +136,7 @@ async def test_add_async_graph_failure_retries_vector_only(monkeypatch):
 
     wrote = await ops_module.add_mem0_raw_facts_async(
         user_id="1",
-        facts=["remember this"],
+        facts=["Please remember that AquiLLM uses Qdrant and Memgraph for memory."],
         conversation_id=9,
         assistant_message_uuid="abc-123",
     )
