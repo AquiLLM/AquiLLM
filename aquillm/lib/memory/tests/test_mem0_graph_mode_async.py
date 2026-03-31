@@ -79,6 +79,50 @@ async def test_search_async_graph_failure_retries_vector_only(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_async_graph_attempt_uses_shorter_timeout_budget(monkeypatch):
+    """Async graph-enabled search should time out sooner than the full Mem0 timeout."""
+    ops_module = _reload_mem0_operations(
+        monkeypatch,
+        MEM0_GRAPH_ENABLED=1,
+        MEM0_GRAPH_SEARCH_ENABLED=1,
+        MEM0_GRAPH_FAIL_OPEN=1,
+        MEM0_TIMEOUT_SECONDS=15,
+    )
+
+    seen_timeouts: list[float] = []
+    seen_enable_graph: list[Any] = []
+
+    class FakeMem0:
+        async def search(self, *_args, **kwargs):
+            seen_enable_graph.append(kwargs.get("enable_graph"))
+            return {"results": [{"memory": "vector fallback"}]}
+
+    async def fake_get_mem0_oss_async():
+        return FakeMem0()
+
+    async def fake_wait_for(awaitable, timeout):
+        seen_timeouts.append(timeout)
+        if timeout < 15:
+            raise asyncio.TimeoutError()
+        return await awaitable
+
+    monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
+    monkeypatch.setattr(ops_module.asyncio, "wait_for", fake_wait_for)
+
+    results = await ops_module.search_mem0_via_oss_async(
+        user_id="1",
+        query="status",
+        top_k=3,
+        exclude_conversation_id=None,
+    )
+
+    assert results[0].content == "vector fallback"
+    assert seen_enable_graph == [False]
+    assert seen_timeouts[0] < 15
+    assert seen_timeouts[1] == 15
+
+
+@pytest.mark.asyncio
 async def test_search_async_offloads_mem0_call_to_thread(monkeypatch):
     """Async search should offload Mem0 work so graph search cannot block the event loop."""
     ops_module = _reload_mem0_operations(

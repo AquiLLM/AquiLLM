@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import logging
 import math
+from os import getenv
 import re
 from typing import Any
 
 from mem0.memory.memgraph_memory import MemoryGraph as UpstreamMemoryGraph
 from mem0.utils.factory import EmbedderFactory, LlmFactory
+
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - numpy is a project dependency in runtime environments
+    np = None
 
 try:
     from langchain_memgraph.graphs.memgraph import Memgraph
@@ -37,6 +43,19 @@ _RELATION_ALIASES = {
     "working_on": "WORKS_ON",
     "works_on": "WORKS_ON",
 }
+
+_DEFAULT_GRAPH_SEARCH_CANDIDATE_LIMIT = 256
+
+
+def _graph_search_candidate_limit() -> int:
+    """Return the maximum number of graph candidates to score per query."""
+    raw = (getenv("MEM0_GRAPH_SEARCH_CANDIDATE_LIMIT", "") or "").strip()
+    if not raw:
+        return _DEFAULT_GRAPH_SEARCH_CANDIDATE_LIMIT
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return _DEFAULT_GRAPH_SEARCH_CANDIDATE_LIMIT
 
 
 def normalize_entity_name(name: Any) -> str:
@@ -150,14 +169,17 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
         query = f"""
         MATCH (n:Entity {{{props}}})
         WHERE n.embedding IS NOT NULL
+        WITH n
+        ORDER BY id(n) DESC
+        LIMIT $candidate_limit
         RETURN n.name AS name, id(n) AS node_id, n.embedding AS embedding
         """
-        return list(self.graph.query(query, params=self._base_params(filters)))
+        params = self._base_params(filters) | {"candidate_limit": _graph_search_candidate_limit()}
+        return list(self.graph.query(query, params=params))
 
-    def _nearest_nodes(
-        self, query_embedding: list[float], filters: dict[str, Any], threshold: float, limit: int
+    def _nearest_nodes_python(
+        self, candidates: list[dict[str, Any]], query_embedding: list[float], threshold: float, limit: int
     ) -> list[dict[str, Any]]:
-        candidates = self._fetch_candidate_nodes(filters)
         scored: list[dict[str, Any]] = []
         for candidate in candidates:
             similarity = self._cosine_similarity(candidate.get("embedding"), query_embedding)
@@ -171,6 +193,62 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
                 )
         scored.sort(key=lambda item: item["similarity"], reverse=True)
         return scored[:limit]
+
+    def _nearest_nodes(
+        self, query_embedding: list[float], filters: dict[str, Any], threshold: float, limit: int
+    ) -> list[dict[str, Any]]:
+        candidates = self._fetch_candidate_nodes(filters)
+        if not candidates:
+            return []
+        if np is None:
+            return self._nearest_nodes_python(candidates, query_embedding, threshold, limit)
+
+        try:
+            query_vector = np.asarray(query_embedding, dtype=np.float32)
+            if query_vector.ndim != 1 or query_vector.size == 0:
+                return self._nearest_nodes_python(candidates, query_embedding, threshold, limit)
+
+            valid_candidates: list[dict[str, Any]] = []
+            valid_embeddings: list[np.ndarray] = []
+            for candidate in candidates:
+                embedding = candidate.get("embedding")
+                candidate_vector = np.asarray(embedding, dtype=np.float32)
+                if candidate_vector.ndim != 1 or candidate_vector.shape != query_vector.shape:
+                    continue
+                valid_candidates.append(candidate)
+                valid_embeddings.append(candidate_vector)
+
+            if not valid_candidates:
+                return []
+
+            matrix = np.vstack(valid_embeddings)
+            query_norm = np.linalg.norm(query_vector)
+            if float(query_norm) == 0.0:
+                return []
+            candidate_norms = np.linalg.norm(matrix, axis=1)
+            nonzero_mask = candidate_norms > 0
+            if not np.any(nonzero_mask):
+                return []
+
+            matrix = matrix[nonzero_mask]
+            candidate_norms = candidate_norms[nonzero_mask]
+            filtered_candidates = [
+                candidate for candidate, keep in zip(valid_candidates, nonzero_mask.tolist()) if keep
+            ]
+            similarities = (matrix @ query_vector) / (candidate_norms * query_norm)
+            scored = [
+                {
+                    "name": candidate.get("name"),
+                    "node_id": candidate.get("node_id"),
+                    "similarity": float(similarity),
+                }
+                for candidate, similarity in zip(filtered_candidates, similarities.tolist())
+                if float(similarity) >= threshold
+            ]
+            scored.sort(key=lambda item: item["similarity"], reverse=True)
+            return scored[:limit]
+        except Exception:
+            return self._nearest_nodes_python(candidates, query_embedding, threshold, limit)
 
     def _search_graph_db(self, node_list, filters, limit=100):
         """Search related graph edges using Python-side vector similarity."""

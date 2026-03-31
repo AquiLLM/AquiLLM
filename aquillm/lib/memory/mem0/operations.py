@@ -34,6 +34,19 @@ def _search_enable_graph() -> bool:
 
 def _add_enable_graph() -> bool:
     return _env_bool("MEM0_GRAPH_ENABLED", False) and _env_bool("MEM0_GRAPH_ADD_ENABLED", True)
+
+
+def _graph_search_timeout_seconds() -> float:
+    """Use a shorter timeout for graph-enabled async search before vector fallback."""
+    raw = getenv("MEM0_GRAPH_SEARCH_TIMEOUT_SECONDS")
+    if raw is not None and raw.strip():
+        try:
+            return max(1.0, min(float(MEM0_TIMEOUT_SECONDS), float(raw)))
+        except ValueError:
+            pass
+    return max(1.0, min(float(MEM0_TIMEOUT_SECONDS), float(MEM0_TIMEOUT_SECONDS) / 3.0))
+
+
 def _build_search_call_attempts(
     query: str, user_id: str, top_k: int, enable_graph: Optional[bool]
 ) -> list[tuple[tuple[Any, ...], dict[str, Any]]]:
@@ -79,11 +92,12 @@ async def _call_mem0_search_async(
     mem0: Any, query: str, user_id: str, top_k: int, enable_graph: Optional[bool]
 ) -> Any:
     attempts = _build_search_call_attempts(query, user_id, top_k, enable_graph=enable_graph)
+    timeout = _graph_search_timeout_seconds() if enable_graph else float(MEM0_TIMEOUT_SECONDS)
     for args, kwargs in attempts:
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(_run_mem0_search_call, mem0.search, *args, **kwargs),  # type: ignore[attr-defined]
-                timeout=float(MEM0_TIMEOUT_SECONDS),
+                timeout=timeout,
             )
         except TypeError:
             continue

@@ -103,3 +103,25 @@ def test_search_graph_db_batches_edge_queries(monkeypatch):
     assert query_calls[0]["node_ids"] == [1, 3]
     assert query_calls[1]["node_ids"] == [1, 3]
     assert [row["similarity"] for row in results] == [0.95, 0.91]
+
+
+def test_fetch_candidate_nodes_respects_candidate_cap(monkeypatch):
+    monkeypatch.setenv("MEM0_GRAPH_SEARCH_CANDIDATE_LIMIT", "17")
+    module = _load_memgraph_compat_module(monkeypatch)
+
+    captured: dict[str, object] = {}
+
+    def fake_query(cypher, params=None):
+        captured["cypher"] = cypher
+        captured["params"] = params or {}
+        return []
+
+    graph_obj = module.CompatibleMemgraphMemoryGraph.__new__(module.CompatibleMemgraphMemoryGraph)
+    graph_obj.graph = types.SimpleNamespace(query=fake_query)
+    graph_obj._base_params = lambda filters: {"user_id": filters["user_id"]}
+    graph_obj._node_props = lambda filters, name_param=None: "user_id: $user_id"
+
+    graph_obj._fetch_candidate_nodes({"user_id": "1"})
+
+    assert "LIMIT $candidate_limit" in captured["cypher"]
+    assert captured["params"]["candidate_limit"] == 17
