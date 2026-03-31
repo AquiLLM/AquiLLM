@@ -20,11 +20,16 @@ from .config import (
     use_mem0,
 )
 from .mem0 import (
-    get_mem0_client,
-    get_mem0_oss,
-    search_mem0_episodic_memories,
-    add_mem0_raw_facts,
     add_mem0_memory_with_client,
+    add_mem0_raw_facts,
+    get_mem0_client,
+    get_mem0_client_async,
+    get_mem0_oss,
+    get_mem0_oss_async,
+    search_mem0_episodic_memories,
+    search_mem0_episodic_memories_async,
+    search_mem0_via_oss,
+    search_mem0_via_oss_async,
 )
 from .extraction import (
     extract_stable_facts,
@@ -45,11 +50,16 @@ __all__ = [
     'MEM0_TIMEOUT_SECONDS',
     'use_mem0',
     # Mem0 client
-    'get_mem0_client',
-    'get_mem0_oss',
-    'search_mem0_episodic_memories',
-    'add_mem0_raw_facts',
-    'add_mem0_memory_with_client',
+    "get_mem0_client",
+    "get_mem0_client_async",
+    "get_mem0_oss",
+    "get_mem0_oss_async",
+    "search_mem0_episodic_memories",
+    "search_mem0_episodic_memories_async",
+    "search_mem0_via_oss",
+    "search_mem0_via_oss_async",
+    "add_mem0_raw_facts",
+    "add_mem0_memory_with_client",
     # Extraction
     'extract_stable_facts',
     'heuristic_facts_from_turn',
