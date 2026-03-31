@@ -174,34 +174,49 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
 
     def _search_graph_db(self, node_list, filters, limit=100):
         """Search related graph edges using Python-side vector similarity."""
-        result_relations = []
+        node_similarity: dict[int, float] = {}
         for node in node_list:
             node_embedding = self.embedding_model.embed(node)
             nearest = self._nearest_nodes(node_embedding, filters, self.threshold, limit)
             for candidate in nearest:
-                params = self._base_params(filters) | {"node_id": candidate["node_id"]}
-                props = self._node_props(filters)
-                outgoing = self.graph.query(
-                    f"""
-                    MATCH (n:Entity)-[r]->(m:Entity {{{props}}})
-                    WHERE id(n) = $node_id
-                    RETURN n.name AS source, id(n) AS source_id, type(r) AS relationship,
-                           id(r) AS relation_id, m.name AS destination, id(m) AS destination_id
-                    """,
-                    params=params,
-                )
-                incoming = self.graph.query(
-                    f"""
-                    MATCH (m:Entity {{{props}}})-[r]->(n:Entity)
-                    WHERE id(n) = $node_id
-                    RETURN m.name AS source, id(m) AS source_id, type(r) AS relationship,
-                           id(r) AS relation_id, n.name AS destination, id(n) AS destination_id
-                    """,
-                    params=params,
-                )
-                for row in [*outgoing, *incoming]:
-                    row["similarity"] = candidate["similarity"]
-                    result_relations.append(row)
+                node_id = candidate["node_id"]
+                similarity = candidate["similarity"]
+                node_similarity[node_id] = max(node_similarity.get(node_id, -1.0), similarity)
+
+        if not node_similarity:
+            return []
+
+        params = self._base_params(filters) | {"node_ids": list(node_similarity)}
+        props = self._node_props(filters)
+        outgoing = self.graph.query(
+            f"""
+            UNWIND $node_ids AS node_id
+            MATCH (n:Entity)-[r]->(m:Entity {{{props}}})
+            WHERE id(n) = node_id
+            RETURN n.name AS source, id(n) AS source_id, type(r) AS relationship,
+                   id(r) AS relation_id, m.name AS destination, id(m) AS destination_id
+            """,
+            params=params,
+        )
+        incoming = self.graph.query(
+            f"""
+            UNWIND $node_ids AS node_id
+            MATCH (m:Entity {{{props}}})-[r]->(n:Entity)
+            WHERE id(n) = node_id
+            RETURN m.name AS source, id(m) AS source_id, type(r) AS relationship,
+                   id(r) AS relation_id, n.name AS destination, id(n) AS destination_id
+            """,
+            params=params,
+        )
+        result_relations = []
+        for row in outgoing:
+            similarity = node_similarity.get(row.get("source_id"), -1.0)
+            row["similarity"] = similarity
+            result_relations.append(row)
+        for row in incoming:
+            similarity = node_similarity.get(row.get("destination_id"), -1.0)
+            row["similarity"] = similarity
+            result_relations.append(row)
         result_relations.sort(key=lambda item: item.get("similarity", -1.0), reverse=True)
         return result_relations[:limit]
 

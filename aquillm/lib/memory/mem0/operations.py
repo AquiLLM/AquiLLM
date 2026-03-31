@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import structlog
 from os import getenv
 from typing import Any, Optional
@@ -14,6 +15,8 @@ from .search_parsing import parse_mem0_search_items, response_to_raw_items
 logger = structlog.stdlib.get_logger(__name__)
 
 _NO_RESPONSE = object()
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = getenv(name)
     if raw is None:
@@ -58,6 +61,20 @@ def _call_mem0_search_sync(
     if enable_graph is not None:
         return _call_mem0_search_sync(mem0, query, user_id, top_k, enable_graph=None)
     return _NO_RESPONSE
+
+
+async def _await_result(result: Any) -> Any:
+    return await result
+
+
+def _run_mem0_search_call(search_callable: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run a Mem0 search callable in a worker thread, awaiting coroutine results there."""
+    result = search_callable(*args, **kwargs)
+    if inspect.isawaitable(result):
+        return asyncio.run(_await_result(result))
+    return result
+
+
 async def _call_mem0_search_async(
     mem0: Any, query: str, user_id: str, top_k: int, enable_graph: Optional[bool]
 ) -> Any:
@@ -65,7 +82,7 @@ async def _call_mem0_search_async(
     for args, kwargs in attempts:
         try:
             return await asyncio.wait_for(
-                mem0.search(*args, **kwargs),  # type: ignore[attr-defined]
+                asyncio.to_thread(_run_mem0_search_call, mem0.search, *args, **kwargs),  # type: ignore[attr-defined]
                 timeout=float(MEM0_TIMEOUT_SECONDS),
             )
         except TypeError:

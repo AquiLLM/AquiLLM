@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pytest
@@ -75,6 +76,48 @@ async def test_search_async_graph_failure_retries_vector_only(monkeypatch):
 
     assert [flag for flag in seen_enable_graph if isinstance(flag, bool)] == [True, False]
     assert results[0].content == "vector fallback"
+
+
+@pytest.mark.asyncio
+async def test_search_async_offloads_mem0_call_to_thread(monkeypatch):
+    """Async search should offload Mem0 work so graph search cannot block the event loop."""
+    ops_module = _reload_mem0_operations(
+        monkeypatch,
+        MEM0_GRAPH_ENABLED=1,
+        MEM0_GRAPH_SEARCH_ENABLED=1,
+        MEM0_GRAPH_FAIL_OPEN=1,
+    )
+
+    seen: dict[str, Any] = {}
+
+    class FakeMem0:
+        def search(self, *_args, **kwargs):
+            seen["kwargs"] = kwargs
+            return {"results": [{"memory": "graph answer"}]}
+
+    async def fake_get_mem0_oss_async():
+        return FakeMem0()
+
+    async def fake_to_thread(func, *args, **kwargs):
+        seen["used_to_thread"] = True
+        result = func(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return result
+        return result
+
+    monkeypatch.setattr(ops_module, "get_mem0_oss_async", fake_get_mem0_oss_async)
+    monkeypatch.setattr(ops_module.asyncio, "to_thread", fake_to_thread)
+
+    results = await ops_module.search_mem0_via_oss_async(
+        user_id="1",
+        query="who do i collaborate with?",
+        top_k=3,
+        exclude_conversation_id=None,
+    )
+
+    assert results[0].content == "graph answer"
+    assert seen["used_to_thread"] is True
+    assert seen["kwargs"]["enable_graph"] is True
 
 
 @pytest.mark.asyncio
