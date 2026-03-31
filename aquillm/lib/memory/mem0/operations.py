@@ -48,6 +48,14 @@ def _graph_search_timeout_seconds() -> float:
     return max(1.0, min(float(MEM0_TIMEOUT_SECONDS), float(MEM0_TIMEOUT_SECONDS) / 3.0))
 
 
+def _search_mode_label(enable_graph: Optional[bool]) -> str:
+    if enable_graph is True:
+        return "graph"
+    if enable_graph is False:
+        return "vector_only"
+    return "default"
+
+
 def _build_search_call_attempts(
     query: str, user_id: str, top_k: int, enable_graph: Optional[bool]
 ) -> list[tuple[tuple[Any, ...], dict[str, Any]]]:
@@ -83,10 +91,42 @@ async def _await_result(result: Any) -> Any:
 
 def _run_mem0_search_call(search_callable: Any, *args: Any, **kwargs: Any) -> Any:
     """Run a Mem0 search callable in a worker thread, awaiting coroutine results there."""
-    result = search_callable(*args, **kwargs)
-    if inspect.isawaitable(result):
-        return asyncio.run(_await_result(result))
-    return result
+    mode = kwargs.pop("_mode", "default")
+    attempt = kwargs.pop("_attempt", 0)
+    query_chars = kwargs.pop("_query_chars", 0)
+    top_k = kwargs.pop("_top_k", 0)
+    started_at = time.perf_counter()
+    try:
+        result = search_callable(*args, **kwargs)
+        if inspect.isawaitable(result):
+            resolved = asyncio.run(_await_result(result))
+        else:
+            resolved = result
+        logger.info(
+            "Mem0 raw search call completed: mode=%s attempt=%d elapsed_ms=%.2f "
+            "query_chars=%d top_k=%d",
+            mode,
+            attempt,
+            (time.perf_counter() - started_at) * 1000.0,
+            query_chars,
+            top_k,
+        )
+        return resolved
+    except TypeError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Mem0 raw search call failed: mode=%s attempt=%d elapsed_ms=%.2f "
+            "query_chars=%d top_k=%d error_type=%s error=%s",
+            mode,
+            attempt,
+            (time.perf_counter() - started_at) * 1000.0,
+            query_chars,
+            top_k,
+            type(exc).__name__,
+            exc,
+        )
+        raise
 
 
 async def _call_mem0_search_async(
@@ -94,12 +134,38 @@ async def _call_mem0_search_async(
 ) -> Any:
     attempts = _build_search_call_attempts(query, user_id, top_k, enable_graph=enable_graph)
     timeout = _graph_search_timeout_seconds() if enable_graph else float(MEM0_TIMEOUT_SECONDS)
-    for args, kwargs in attempts:
+    mode = _search_mode_label(enable_graph)
+    query_chars = len(query or "")
+    for attempt_number, (args, kwargs) in enumerate(attempts, start=1):
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(_run_mem0_search_call, mem0.search, *args, **kwargs),  # type: ignore[attr-defined]
+                asyncio.to_thread(
+                    _run_mem0_search_call,
+                    mem0.search,
+                    *args,
+                    **(
+                        kwargs
+                        | {
+                            "_mode": mode,
+                            "_attempt": attempt_number,
+                            "_query_chars": query_chars,
+                            "_top_k": top_k,
+                        }
+                    ),
+                ),  # type: ignore[attr-defined]
                 timeout=timeout,
             )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Mem0 raw search attempt timed out: mode=%s attempt=%d timeout_s=%.1f "
+                "query_chars=%d top_k=%d",
+                mode,
+                attempt_number,
+                timeout,
+                query_chars,
+                top_k,
+            )
+            raise
         except TypeError:
             continue
     if enable_graph is not None:
@@ -177,6 +243,12 @@ async def search_mem0_via_oss_async(
                     len(query or ""),
                     top_k,
                 )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Mem0 OSS async vector-only retry timed out after %.1fs; falling back.",
+                    float(MEM0_TIMEOUT_SECONDS),
+                )
+                return []
             except Exception as retry_exc:
                 logger.warning("Mem0 OSS async vector-only retry failed; falling back. Error: %s", retry_exc)
                 return []
@@ -200,6 +272,12 @@ async def search_mem0_via_oss_async(
                     len(query or ""),
                     top_k,
                 )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Mem0 OSS async vector-only retry timed out after %.1fs; falling back.",
+                    float(MEM0_TIMEOUT_SECONDS),
+                )
+                return []
             except Exception as retry_exc:
                 logger.warning("Mem0 OSS async vector-only retry failed; falling back. Error: %s", retry_exc)
                 return []
