@@ -237,3 +237,90 @@ class CutoffContinuationTests(SimpleTestCase):
             updated[-1].content,
         )
         self.assertNotIn('/document_image/b4a\n65cf7', updated[-1].content)
+
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_continuation_restart_prefix_is_deduplicated_before_merge(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text=(
+                    "# The GalaxiesML Dataset: Comprehensive Technical Analysis\n\n"
+                    "Dataset Construction and Provenance\n"
+                    "Source Survey: HSC-PDR2 Wide Survey\n\n"
+                    "Performance Requirements Context\n"
+                    "The paper establishes **LS"
+                ),
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=(
+                    "# The GalaxiesML Dataset: Comprehensive Technical Analysis\n\n"
+                    "Dataset Construction and Provenance\n"
+                    "Source Survey: HSC-PDR2 Wide Survey\n\n"
+                    "Performance Requirements Context\n"
+                    "The paper establishes **LSST deployment thresholds and acceptance criteria."
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Provide a detailed technical analysis of GalaxiesML.')],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(
+            updated[-1].content.count('# The GalaxiesML Dataset: Comprehensive Technical Analysis'),
+            1,
+        )
+        self.assertIn('The paper establishes **LSST deployment thresholds', updated[-1].content)
+
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_duplicate_only_continuation_keeps_partial_without_repeating(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text=(
+                    "Comprehensive rollout plan:\n"
+                    "- Validate ingestion pipeline behavior across three cohorts.\n"
+                    "- Measure retrieval recall and precision against reference judgments.\n"
+                    "- Stress-test latency under sustained concurrent traffic.\n"
+                    "- Document risk mitigations and fallback controls for production.\n"
+                    "Next, we should ev"
+                ),
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=(
+                    "Comprehensive rollout plan:\n"
+                    "- Validate ingestion pipeline behavior across three cohorts.\n"
+                    "- Measure retrieval recall and precision against reference judgments.\n"
+                    "- Stress-test latency under sustained concurrent traffic.\n"
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Give me a detailed rollout plan.')],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(updated[-1].content.count('Comprehensive rollout plan:'), 1)
+        self.assertIn('Next, we should ev', updated[-1].content)

@@ -74,6 +74,48 @@ def _continuation_separator(partial_text: str, continuation_text: str) -> str:
     return "\n"
 
 
+def _largest_suffix_prefix_overlap(left: str, right: str, min_chars: int = 1) -> int:
+    max_size = min(len(left), len(right))
+    for size in range(max_size, max(min_chars, 1) - 1, -1):
+        if left.endswith(right[:size]):
+            return size
+    return 0
+
+
+def _largest_prefix_present_in_text(text: str, candidate: str, min_chars: int = 1) -> int:
+    max_size = min(len(text), len(candidate))
+    for size in range(max_size, max(min_chars, 1) - 1, -1):
+        if candidate[:size] in text:
+            return size
+    return 0
+
+
+def _trim_duplicate_continuation_prefix(partial_text: str, continuation_text: str) -> str:
+    partial = partial_text or ""
+    continuation = continuation_text or ""
+    if (not partial) or (not continuation):
+        return continuation
+
+    trimmed = False
+    overlap_floor = max(16, min(96, min(len(partial), len(continuation)) // 3))
+    suffix_overlap = _largest_suffix_prefix_overlap(partial, continuation, min_chars=overlap_floor)
+    if suffix_overlap:
+        continuation = continuation[suffix_overlap:]
+        trimmed = True
+    if not continuation:
+        return ""
+
+    restart_floor = max(24, min(160, min(len(partial), len(continuation)) // 2))
+    repeated_prefix = _largest_prefix_present_in_text(partial, continuation, min_chars=restart_floor)
+    if repeated_prefix:
+        continuation = continuation[repeated_prefix:]
+        trimmed = True
+
+    if trimmed:
+        continuation = continuation.lstrip("\r\n")
+    return continuation
+
+
 async def complete_conversation_turn(
     llm: Any,
     conversation: Conversation,
@@ -263,9 +305,12 @@ async def complete_conversation_turn(
             )
             if continuation_response is not None and not continuation_response.message_uuid:
                 continuation_response.message_uuid = stream_message_uuid
-            continuation_text = (
+            raw_continuation_text = (
                 (continuation_response.text or "").strip() if continuation_response else ""
             )
+            continuation_text = _trim_duplicate_continuation_prefix(response_text, raw_continuation_text)
+            if raw_continuation_text and (not continuation_text):
+                preserve_partial_response = True
         if continuation_text and not fb.looks_like_deferred_tool_intent(continuation_text):
             separator = _continuation_separator(response_text, continuation_text)
             response_text = f"{response_text.rstrip()}{separator}{continuation_text}"
