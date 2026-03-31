@@ -194,9 +194,7 @@ services:
     ports:
       - "127.0.0.1:7687:7687"
     volumes:
-      # Use a dedicated subdirectory so Memgraph starts against a clean store even if the
-      # parent path contains leftovers from previous images or failed boots.
-      - ${MEM0_MEMGRAPH_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/memgraph}/data:/var/lib/memgraph
+      - ${MEM0_MEMGRAPH_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/memgraph}:/var/lib/memgraph
 
   createbuckets:
     image: minio/mc
