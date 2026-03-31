@@ -187,14 +187,16 @@ services:
       - ${MEM0_QDRANT_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/qdrant}:/qdrant/storage
 
   memgraph:
-    image: ${MEM0_MEMGRAPH_IMAGE:-memgraph/memgraph:3.8.1}
+    image: ${MEM0_MEMGRAPH_IMAGE:-memgraph/memgraph-mage:3.8.1}
     restart: unless-stopped
     profiles:
       - memgraph
     ports:
       - "127.0.0.1:7687:7687"
     volumes:
-      - ${MEM0_MEMGRAPH_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/memgraph}:/var/lib/memgraph
+      # Use a dedicated subdirectory so Memgraph starts against a clean store even if the
+      # parent path contains leftovers from previous images or failed boots.
+      - ${MEM0_MEMGRAPH_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/memgraph}/data:/var/lib/memgraph
 
   createbuckets:
     image: minio/mc
