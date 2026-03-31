@@ -31,6 +31,24 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
     return max(minimum, value)
 
 
+def _append_citation_sources_if_missing(
+    text: str,
+    allowed_citations: set[str],
+    *,
+    max_refs: int = 6,
+) -> str:
+    base = (text or "").rstrip()
+    if not allowed_citations:
+        return base
+    if citations.extract_citations(base):
+        return base
+    refs = sorted(allowed_citations)[:max_refs]
+    if not refs:
+        return base
+    source_lines = "\n".join(f"- {ref}" for ref in refs)
+    return f"{base}\n\nSources:\n{source_lines}"
+
+
 async def complete_conversation_turn(
     llm: Any,
     conversation: Conversation,
@@ -291,6 +309,8 @@ async def complete_conversation_turn(
         markdown_images = imgctx.recent_tool_image_markdown(conversation, max_images=3)
         if markdown_images:
             response_text = response_text.rstrip() + "\n\n" + "\n".join(markdown_images)
+    if buffer_stream_until_citations and enforce_citations and (not response_tool_call):
+        response_text = _append_citation_sources_if_missing(response_text, citation_allowlist)
     if buffer_stream_until_citations and callable(stream_func) and (not response_tool_call):
         await stream_func(
             {
