@@ -17,7 +17,7 @@ User = get_user_model()
 @pytest.mark.asyncio
 @pytest.mark.django_db
 @patch("apps.chat.consumers.chat.create_conversation_memories_task.delay")
-@patch("apps.chat.consumers.chat.augment_conversation_with_memory", new_callable=AsyncMock)
+@patch("apps.chat.consumers.chat.augment_conversation_with_memory_async", new_callable=AsyncMock)
 async def test_append_without_files_does_not_raise(_augment, _mem_task):
     user = User.objects.create_user(username="appendtest", password="pass")
     db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
@@ -54,7 +54,7 @@ async def test_append_without_files_does_not_raise(_augment, _mem_task):
 @pytest.mark.asyncio
 @pytest.mark.django_db
 @patch("apps.chat.consumers.chat.create_conversation_memories_task.delay")
-@patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory")
+@patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async")
 async def test_append_without_selected_collections_keeps_doc_tools(_augment, _mem_task):
     user = User.objects.create_user(username="appendtools", password="pass")
     db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")

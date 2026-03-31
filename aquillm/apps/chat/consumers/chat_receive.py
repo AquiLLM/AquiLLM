@@ -12,7 +12,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 
 from aquillm.llm import ToolChoice, UserMessage
-from aquillm.memory import augment_conversation_with_memory
+from aquillm.memory import augment_conversation_with_memory_async
 from apps.chat.consumers.chat_delta import send_conversation_delta
 from apps.chat.consumers.chat_ws_errors import (
     send_receive_error,
@@ -105,7 +105,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             if action == "append":
                 await append(data)
                 augment_start = perf_counter()
-                await database_sync_to_async(augment_conversation_with_memory)(
+                await augment_conversation_with_memory_async(
                     consumer.convo,
                     consumer.user,
                     consumer.db_convo.system_prompt,

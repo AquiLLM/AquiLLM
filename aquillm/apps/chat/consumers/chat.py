@@ -14,7 +14,7 @@ from django.apps import apps
 from django.contrib.auth.models import User
 
 from aquillm.llm import LLMInterface, LLMTool, message_to_user
-from aquillm.memory import augment_conversation_with_memory
+from aquillm.memory import augment_conversation_with_memory_async
 from aquillm.message_adapters import load_conversation_from_db, pydantic_message_to_frontend_dict
 from aquillm.settings import DEBUG
 from aquillm.tasks import create_conversation_memories_task
@@ -121,7 +121,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 )
             )
             augment_start = perf_counter()
-            await database_sync_to_async(augment_conversation_with_memory)(
+            await augment_conversation_with_memory_async(
                 self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
             )
             logger.info(
