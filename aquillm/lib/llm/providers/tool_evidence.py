@@ -32,6 +32,21 @@ def select_evidence_snippet(text: str, max_chars: int = 420) -> str:
     return snippet
 
 
+def _row_source(row: dict, default: str) -> str:
+    title = row.get("title")
+    if title is None:
+        title = row.get("n")
+    source = str(title or "").strip()
+    return source or default
+
+
+def _row_text(row: dict) -> str:
+    text = row.get("text")
+    if text is None:
+        text = row.get("x")
+    return str(text or "")
+
+
 def extract_recent_tool_evidence(
     conversation: Conversation,
     max_snippets: int = 10,
@@ -60,12 +75,17 @@ def extract_recent_tool_evidence(
         result_dict = tool_msg.result_dict if isinstance(tool_msg.result_dict, dict) else {}
         payload = result_dict.get("result")
         entries: list[tuple[str, str]] = []
-        if isinstance(payload, dict):
+        if isinstance(payload, list):
+            for row in payload[:12]:
+                if not isinstance(row, dict):
+                    continue
+                entries.append((_row_source(row, tool_msg.tool_name), _row_text(row)))
+        elif isinstance(payload, dict):
             entries = [(str(k), str(v)) for k, v in list(payload.items())[:12]]
         elif isinstance(payload, str):
             entries = [(tool_msg.tool_name, payload)]
         for key_text, raw_text in entries:
-            source = tool_msg.tool_name
+            source = key_text
             title_match = title_re.search(key_text)
             if title_match and title_match.group(1).strip():
                 source = title_match.group(1).strip()

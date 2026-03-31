@@ -767,3 +767,72 @@ async def test_complete_turn_preserves_substantial_cutoff_draft_when_continuatio
     assert changed == "changed"
     assert updated[-1].content == partial
     assert "Compressed fallback" not in updated[-1].content
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_recovers_from_blank_post_tool_answer_using_list_vector_search_evidence():
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            side_effect=[
+                LLMResponse(
+                    text="",
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=1,
+                    output_usage=1,
+                    model="fake",
+                ),
+                LLMResponse(
+                    text="",
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=1,
+                    output_usage=1,
+                    model="fake",
+                ),
+                LLMResponse(
+                    text=(
+                        "- Radick argues that Mendelism's triumph was historically contingent, not inevitable.\n"
+                        "- The excerpts suggest Weldonian alternatives were crowded out rather than simply disproved."
+                    ),
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=1,
+                    output_usage=1,
+                    model="fake",
+                ),
+            ]
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="What is the central thesis of this book?"),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={
+                    "result": [
+                        {
+                            "chunk_id": 7,
+                            "doc_id": "doc-a",
+                            "title": "Disputed Inheritance",
+                            "text": (
+                                "Radick argues that the victory of Mendelian genetics was not the only path biology could "
+                                "have taken, and that alternative traditions such as Weldonian biology were historically possible."
+                            ),
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=1024)
+
+    assert changed == "changed"
+    assert "historically contingent" in updated[-1].content
+    assert "could not generate a final answer" not in updated[-1].content
+    assert llm.get_message.await_count == 3
