@@ -25,6 +25,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      memgraph:
+        condition: service_started
+        required: false
       vllm:
         condition: service_healthy
         required: false
@@ -74,6 +77,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      memgraph:
+        condition: service_started
+        required: false
       vllm:
         condition: service_healthy
         required: false
@@ -178,7 +184,18 @@ services:
     ports:
       - "6333:6333"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ${MEM0_QDRANT_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/qdrant}:/qdrant/storage
+
+  memgraph:
+    image: memgraph/memgraph-mage:latest
+    restart: unless-stopped
+    profiles:
+      - memgraph
+    command: ["--schema-info-enabled=True"]
+    ports:
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - ${MEM0_MEMGRAPH_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/memgraph}:/var/lib/memgraph
 
   createbuckets:
     image: minio/mc
@@ -390,7 +407,5 @@ services:
 volumes:
   postgres_data:
   minio_data:
-  qdrant_data:
   certs:
   vllm_data:
-

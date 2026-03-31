@@ -33,7 +33,6 @@ from lib.memory import (
     search_mem0_episodic_memories,
     search_mem0_episodic_memories_async,
     add_mem0_raw_facts,
-    add_mem0_memory_with_client,
     extract_stable_facts,
     heuristic_facts_from_turn,
     has_remember_intent,
@@ -94,14 +93,6 @@ def _add_mem0_memory(
         logger.warning("Mem0 raw-fact write produced no ADD events for %d fact(s).", len(facts))
     else:
         logger.info("No memory facts extracted for this turn; skipping Mem0 write.")
-
-    add_mem0_memory_with_client(
-        user_id=str(user.id),
-        user_content=user_content,
-        assistant_content=assistant_content,
-        conversation_id=conversation_id,
-        assistant_message_uuid=assistant_message_uuid,
-    )
 
 
 def get_user_profile_facts(user: User):
