@@ -201,7 +201,7 @@ services:
     ports:
       - "7687:7687"
     volumes:
-      - ${MEM0_MEMGRAPH_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/memgraph}:/var/lib/memgraph
+      - memgraph_data:/var/lib/memgraph
 
   createbuckets:
     image: minio/mc
@@ -419,3 +419,4 @@ volumes:
   postgres_data:
   minio_data:
   certs:
+  memgraph_data:
