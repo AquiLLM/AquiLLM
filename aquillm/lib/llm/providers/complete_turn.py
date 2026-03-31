@@ -71,6 +71,8 @@ async def complete_conversation_turn(
                 f"{system_prompt}\n\n"
                 f"{citations.build_citation_system_suffix(citation_allowlist)}"
             )
+    buffer_stream_until_citations = bool(enforce_citations and callable(stream_func))
+    effective_stream_func = None if buffer_stream_until_citations else stream_func
     tool_step_max_tokens = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 512, minimum=128)
     post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 1536, minimum=256)
     continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 768, minimum=128)
@@ -97,7 +99,7 @@ async def complete_conversation_turn(
                 "messages": message_dicts,
                 "messages_pydantic": messages_for_bot,
                 "max_tokens": request_max_tokens,
-                "stream_callback": stream_func,
+                "stream_callback": effective_stream_func,
                 "stream_message_uuid": stream_message_uuid,
             }
         )
@@ -133,7 +135,7 @@ async def complete_conversation_turn(
                 "messages": finalize_messages,
                 "messages_pydantic": finalize_pydantic_messages,
                 "max_tokens": min(max_tokens, post_tool_max_tokens),
-                "stream_callback": stream_func,
+                "stream_callback": effective_stream_func,
                 "stream_message_uuid": stream_message_uuid,
             }
             response = await llm.get_message(**finalize_args)
@@ -254,7 +256,7 @@ async def complete_conversation_turn(
                 "messages": retry_messages,
                 "messages_pydantic": retry_pydantic_messages,
                 "max_tokens": min(max_tokens, post_tool_max_tokens),
-                "stream_callback": stream_func,
+                "stream_callback": effective_stream_func,
                 "stream_message_uuid": stream_message_uuid,
             }
             retry_response = await llm.get_message(**retry_args)
@@ -289,6 +291,16 @@ async def complete_conversation_turn(
         markdown_images = imgctx.recent_tool_image_markdown(conversation, max_images=3)
         if markdown_images:
             response_text = response_text.rstrip() + "\n\n" + "\n".join(markdown_images)
+    if buffer_stream_until_citations and callable(stream_func) and (not response_tool_call):
+        await stream_func(
+            {
+                "message_uuid": stream_message_uuid,
+                "role": "assistant",
+                "content": response_text,
+                "done": True,
+                "usage": int(response.input_usage or 0) + int(response.output_usage or 0),
+            }
+        )
     new_msg = AssistantMessage(
         content=response_text,
         stop_reason=response.stop_reason,

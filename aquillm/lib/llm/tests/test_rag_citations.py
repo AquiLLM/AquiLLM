@@ -443,3 +443,50 @@ async def test_complete_turn_streaming_invalid_citations_get_note_not_full_fallb
     assert llm.get_message.await_count == 1
     assert "could not be verified" in updated[-1].content
     assert "I can only provide claims directly supported by retrieved chunks" not in updated[-1].content
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_buffers_stream_until_citations_finalize():
+    stream_payloads: list[dict] = []
+
+    async def _capture_stream(payload: dict):
+        stream_payloads.append(payload)
+
+    async def _fake_get_message(**kwargs):
+        assert kwargs.get("stream_callback") is None
+        return LLMResponse(
+            text="Final cited answer [doc:doc-a chunk:7].",
+            tool_call={},
+            stop_reason="stop",
+            input_usage=5,
+            output_usage=7,
+            model="fake",
+        )
+
+    llm = SimpleNamespace(base_args={}, get_message=AsyncMock(side_effect=_fake_get_message))
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(
+        llm,
+        convo,
+        max_tokens=1024,
+        stream_func=_capture_stream,
+    )
+    assert changed == "changed"
+    assert llm.get_message.await_count == 1
+    assert len(stream_payloads) == 1
+    assert stream_payloads[0]["done"] is True
+    assert stream_payloads[0]["content"] == "Final cited answer [doc:doc-a chunk:7]."
+    assert stream_payloads[0]["usage"] == 12
+    assert updated[-1].content == "Final cited answer [doc:doc-a chunk:7]."
