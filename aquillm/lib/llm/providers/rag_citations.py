@@ -9,6 +9,7 @@ from ..types.conversation import Conversation
 from ..types.messages import ToolMessage
 
 _CITATION_RE = re.compile(r"\[doc:[^\]\s]+\s+chunk:\d+\]")
+_BULLET_OR_ENUM_RE = re.compile(r"^(\s*[-*]\s+|\s*\d+\.\s+)")
 
 
 def citation_enforcement_enabled() -> bool:
@@ -16,7 +17,20 @@ def citation_enforcement_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _first_citation_token(text: Any) -> str | None:
+    if not isinstance(text, str):
+        return None
+    match = _CITATION_RE.search(text.strip())
+    if not match:
+        return None
+    return match.group(0)
+
+
 def _chunk_citation_from_row(row: dict[str, Any]) -> str | None:
+    for key in ("citation", "ref"):
+        citation = _first_citation_token(row.get(key))
+        if citation:
+            return citation
     doc_id = row.get("doc_id")
     if doc_id is None:
         doc_id = row.get("d")
@@ -82,7 +96,36 @@ def response_has_required_citations(answer_text: str | None, allowed_citations: 
     citations = extract_citations(answer_text)
     if not citations:
         return False
-    return not find_invalid_citations(answer_text, allowed_citations)
+    if find_invalid_citations(answer_text, allowed_citations):
+        return False
+    return not find_uncited_factual_lines(answer_text)
+
+
+def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
+    if not answer_text:
+        return []
+    uncited: list[str] = []
+    in_code_block = False
+    for raw_line in answer_text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("```"):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block or not line:
+            continue
+        if line.startswith("#") or line.startswith("!["):
+            continue
+        if line.endswith(":"):
+            continue
+        if not re.search(r"[A-Za-z]", line):
+            continue
+        words = re.findall(r"[A-Za-z0-9]+", line)
+        if len(words) < 6 and not _BULLET_OR_ENUM_RE.match(line):
+            continue
+        if _first_citation_token(line):
+            continue
+        uncited.append(line)
+    return uncited
 
 
 def build_citation_system_suffix(allowed_citations: set[str], max_refs: int = 24) -> str:
@@ -188,8 +231,8 @@ __all__ = [
     "citation_enforcement_enabled",
     "collect_allowed_chunk_citations",
     "extract_citations",
+    "find_uncited_factual_lines",
     "find_invalid_citations",
     "response_has_required_citations",
     "synthesize_cited_extract_from_results",
 ]
-

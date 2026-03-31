@@ -40,6 +40,28 @@ def test_collect_allowed_chunk_citations_from_verbose_and_compact_rows():
     assert "[doc:doc-b chunk:9]" in allowed
 
 
+def test_collect_allowed_chunk_citations_accepts_explicit_ref_fields():
+    convo = Conversation(
+        system="sys",
+        messages=[
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={
+                    "result": [
+                        {"citation": "[doc:doc-c chunk:11]", "text": "gamma"},
+                        {"ref": "prefix [doc:doc-d chunk:12] suffix", "x": "delta"},
+                    ]
+                },
+            )
+        ],
+    )
+    allowed = collect_allowed_chunk_citations(convo)
+    assert "[doc:doc-c chunk:11]" in allowed
+    assert "[doc:doc-d chunk:12]" in allowed
+
+
 def test_response_has_required_citations_and_rejects_unknown_refs():
     allowed = {"[doc:doc-a chunk:7]"}
     assert response_has_required_citations("Fact from source [doc:doc-a chunk:7].", allowed)
@@ -49,6 +71,12 @@ def test_response_has_required_citations_and_rejects_unknown_refs():
         allowed,
     )
     assert invalid == ["[doc:doc-a chunk:999]"]
+
+
+def test_response_has_required_citations_rejects_uncited_bullets():
+    allowed = {"[doc:doc-a chunk:7]"}
+    answer = "- Supported claim [doc:doc-a chunk:7]\n- Unsupported claim without cite"
+    assert not response_has_required_citations(answer, allowed)
 
 
 def test_synthesize_cited_extract_from_results_includes_refs():
@@ -128,4 +156,3 @@ async def test_complete_turn_retries_when_post_tool_answer_lacks_required_citati
     assert changed == "changed"
     assert updated[-1].content == "Cited answer [doc:doc-a chunk:7]."
     assert llm.get_message.await_count == 2
-
