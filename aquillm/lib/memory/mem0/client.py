@@ -7,6 +7,7 @@ from os import getenv
 
 import structlog
 
+from .graph_payloads import normalize_graph_search_results_payload
 from .config_builder import (
     build_mem0_oss_config_dict,
     clear_mem0_embedding_dims_override,
@@ -42,6 +43,24 @@ def _register_memgraph_compat_provider() -> None:
         GraphStoreFactory.provider_to_class["memgraph"] = (
             "lib.memory.mem0.memgraph_compat.CompatibleMemgraphMemoryGraph"
         )
+    except Exception:
+        # If Mem0 is unavailable we will fall through to the normal init error path.
+        pass
+
+    try:
+        from mem0.memory.memgraph_memory import MemoryGraph  # type: ignore
+
+        if getattr(MemoryGraph, "_aquillm_payload_normalizer_patched", False):
+            return
+
+        original = MemoryGraph._retrieve_nodes_from_data
+
+        def _wrapped_retrieve_nodes_from_data(self, search_results, *args, **kwargs):
+            normalized = normalize_graph_search_results_payload(search_results)
+            return original(self, normalized, *args, **kwargs)
+
+        MemoryGraph._retrieve_nodes_from_data = _wrapped_retrieve_nodes_from_data
+        MemoryGraph._aquillm_payload_normalizer_patched = True
     except Exception:
         # If Mem0 is unavailable we will fall through to the normal init error path.
         pass
