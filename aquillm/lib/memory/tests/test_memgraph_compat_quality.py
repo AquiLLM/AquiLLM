@@ -105,6 +105,28 @@ def test_search_graph_db_batches_edge_queries(monkeypatch):
     assert [row["similarity"] for row in results] == [0.95, 0.91]
 
 
+def test_search_graph_db_fetches_seeded_candidates_once(monkeypatch):
+    module = _load_memgraph_compat_module(monkeypatch)
+
+    fetch_calls: list[list[str]] = []
+
+    def fake_query(_cypher, _params=None):
+        return []
+
+    graph_obj = module.CompatibleMemgraphMemoryGraph.__new__(module.CompatibleMemgraphMemoryGraph)
+    graph_obj.graph = types.SimpleNamespace(query=fake_query)
+    graph_obj.embedding_model = types.SimpleNamespace(embed=lambda _node: [0.1, 0.2])
+    graph_obj.threshold = 0.7
+    graph_obj._fetch_candidate_nodes = lambda filters, node_list=None: fetch_calls.append(list(node_list or [])) or []
+    graph_obj._nearest_nodes = lambda *_args, **_kwargs: []
+    graph_obj._base_params = lambda filters: {"user_id": filters["user_id"]}
+    graph_obj._node_props = lambda filters, name_param=None: "user_id: $user_id"
+
+    graph_obj._search_graph_db(["memgraph", "qdrant"], {"user_id": "1"}, limit=5)
+
+    assert fetch_calls == [["memgraph", "qdrant"]]
+
+
 def test_fetch_candidate_nodes_respects_candidate_cap(monkeypatch):
     monkeypatch.setenv("MEM0_GRAPH_SEARCH_CANDIDATE_LIMIT", "17")
     module = _load_memgraph_compat_module(monkeypatch)
@@ -125,3 +147,51 @@ def test_fetch_candidate_nodes_respects_candidate_cap(monkeypatch):
 
     assert "LIMIT $candidate_limit" in captured["cypher"]
     assert captured["params"]["candidate_limit"] == 17
+
+
+def test_fetch_candidate_nodes_uses_query_seeds_when_available(monkeypatch):
+    monkeypatch.setenv("MEM0_GRAPH_SEARCH_CANDIDATE_LIMIT", "17")
+    module = _load_memgraph_compat_module(monkeypatch)
+
+    captured: dict[str, object] = {}
+
+    def fake_query(cypher, params=None):
+        captured["cypher"] = cypher
+        captured["params"] = params or {}
+        if params and "seed_tokens" in params:
+            return [{"name": "memgraph", "node_id": 1, "embedding": [0.1, 0.2]}]
+        return []
+
+    graph_obj = module.CompatibleMemgraphMemoryGraph.__new__(module.CompatibleMemgraphMemoryGraph)
+    graph_obj.graph = types.SimpleNamespace(query=fake_query)
+    graph_obj._base_params = lambda filters: {"user_id": filters["user_id"]}
+    graph_obj._node_props = lambda filters, name_param=None: "user_id: $user_id"
+
+    graph_obj._fetch_candidate_nodes({"user_id": "1"}, node_list=["What do you remember about Memgraph and Qdrant?"])
+
+    assert "seed_tokens" in captured["params"]
+    assert "memgraph" in captured["params"]["seed_tokens"]
+    assert "qdrant" in captured["params"]["seed_tokens"]
+    assert "any(token IN $seed_tokens" in captured["cypher"]
+
+
+def test_fetch_candidate_nodes_falls_back_to_generic_scan_when_no_useful_seeds(monkeypatch):
+    monkeypatch.setenv("MEM0_GRAPH_SEARCH_CANDIDATE_LIMIT", "17")
+    module = _load_memgraph_compat_module(monkeypatch)
+
+    captured: dict[str, object] = {}
+
+    def fake_query(cypher, params=None):
+        captured["cypher"] = cypher
+        captured["params"] = params or {}
+        return []
+
+    graph_obj = module.CompatibleMemgraphMemoryGraph.__new__(module.CompatibleMemgraphMemoryGraph)
+    graph_obj.graph = types.SimpleNamespace(query=fake_query)
+    graph_obj._base_params = lambda filters: {"user_id": filters["user_id"]}
+    graph_obj._node_props = lambda filters, name_param=None: "user_id: $user_id"
+
+    graph_obj._fetch_candidate_nodes({"user_id": "1"}, node_list=["I", "A"])
+
+    assert "seed_tokens" not in captured["params"]
+    assert "any(token IN $seed_tokens" not in captured["cypher"]

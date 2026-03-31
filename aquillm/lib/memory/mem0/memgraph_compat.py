@@ -45,6 +45,32 @@ _RELATION_ALIASES = {
 }
 
 _DEFAULT_GRAPH_SEARCH_CANDIDATE_LIMIT = 256
+_QUERY_SEED_STOPWORDS = {
+    "about",
+    "and",
+    "are",
+    "do",
+    "for",
+    "from",
+    "have",
+    "how",
+    "into",
+    "me",
+    "remember",
+    "tell",
+    "that",
+    "the",
+    "their",
+    "them",
+    "they",
+    "this",
+    "use",
+    "what",
+    "who",
+    "with",
+    "you",
+    "your",
+}
 
 
 def _graph_search_candidate_limit() -> int:
@@ -56,6 +82,28 @@ def _graph_search_candidate_limit() -> int:
         return max(1, int(raw))
     except ValueError:
         return _DEFAULT_GRAPH_SEARCH_CANDIDATE_LIMIT
+
+
+def _query_seed_terms(node_list: list[str] | None) -> tuple[list[str], list[str]]:
+    """Extract exact-name and token seeds from the incoming query node list."""
+    seed_names: list[str] = []
+    seed_tokens: list[str] = []
+    for raw in node_list or []:
+        normalized = normalize_entity_name(raw)
+        if not normalized:
+            continue
+
+        tokens = [
+            token
+            for token in re.findall(r"[a-z0-9_.+\-]+", normalized)
+            if len(token) >= 3 and token not in _QUERY_SEED_STOPWORDS and token not in _PLACEHOLDER_ENTITIES.values()
+        ]
+        if len(tokens) == 1 and tokens[0] not in seed_names:
+            seed_names.append(tokens[0])
+        for token in tokens:
+            if token not in seed_tokens:
+                seed_tokens.append(token)
+    return seed_names, seed_tokens
 
 
 def normalize_entity_name(name: Any) -> str:
@@ -164,9 +212,16 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
             return -1.0
         return dot / (lhs_norm * rhs_norm)
 
-    def _fetch_candidate_nodes(self, filters: dict[str, Any]) -> list[dict[str, Any]]:
+    def _run_candidate_query(
+        self, filters: dict[str, Any], query: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        return list(self.graph.query(query, params=params))
+
+    def _fetch_candidate_nodes(
+        self, filters: dict[str, Any], node_list: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         props = self._node_props(filters)
-        query = f"""
+        generic_query = f"""
         MATCH (n:Entity {{{props}}})
         WHERE n.embedding IS NOT NULL
         WITH n
@@ -175,7 +230,30 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
         RETURN n.name AS name, id(n) AS node_id, n.embedding AS embedding
         """
         params = self._base_params(filters) | {"candidate_limit": _graph_search_candidate_limit()}
-        return list(self.graph.query(query, params=params))
+
+        seed_names, seed_tokens = _query_seed_terms(node_list)
+        if seed_names or seed_tokens:
+            seeded_query = f"""
+            MATCH (n:Entity {{{props}}})
+            WHERE n.embedding IS NOT NULL
+              AND (
+                toLower(n.name) IN $seed_names
+                OR any(token IN $seed_tokens WHERE toLower(n.name) CONTAINS token)
+              )
+            WITH n, CASE WHEN toLower(n.name) IN $seed_names THEN 0 ELSE 1 END AS seed_rank
+            ORDER BY seed_rank ASC, id(n) DESC
+            LIMIT $candidate_limit
+            RETURN n.name AS name, id(n) AS node_id, n.embedding AS embedding
+            """
+            seeded_params = params | {
+                "seed_names": seed_names,
+                "seed_tokens": seed_tokens,
+            }
+            seeded = self._run_candidate_query(filters, seeded_query, seeded_params)
+            if seeded:
+                return seeded
+
+        return self._run_candidate_query(filters, generic_query, params)
 
     def _nearest_nodes_python(
         self, candidates: list[dict[str, Any]], query_embedding: list[float], threshold: float, limit: int
@@ -195,9 +273,14 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
         return scored[:limit]
 
     def _nearest_nodes(
-        self, query_embedding: list[float], filters: dict[str, Any], threshold: float, limit: int
+        self,
+        query_embedding: list[float],
+        filters: dict[str, Any],
+        threshold: float,
+        limit: int,
+        candidates: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        candidates = self._fetch_candidate_nodes(filters)
+        candidates = list(candidates or self._fetch_candidate_nodes(filters))
         if not candidates:
             return []
         if np is None:
@@ -253,9 +336,16 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
     def _search_graph_db(self, node_list, filters, limit=100):
         """Search related graph edges using Python-side vector similarity."""
         node_similarity: dict[int, float] = {}
+        candidate_nodes = self._fetch_candidate_nodes(filters, node_list=list(node_list or []))
         for node in node_list:
             node_embedding = self.embedding_model.embed(node)
-            nearest = self._nearest_nodes(node_embedding, filters, self.threshold, limit)
+            nearest = self._nearest_nodes(
+                node_embedding,
+                filters,
+                self.threshold,
+                limit,
+                candidates=candidate_nodes,
+            )
             for candidate in nearest:
                 node_id = candidate["node_id"]
                 similarity = candidate["similarity"]
