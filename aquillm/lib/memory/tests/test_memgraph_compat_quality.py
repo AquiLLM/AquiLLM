@@ -7,9 +7,9 @@ import sys
 import types
 
 
-def _load_memgraph_compat_module(monkeypatch):
+def _load_memgraph_compat_module(monkeypatch, upstream_base_class=None):
     fake_memgraph_memory = types.ModuleType("mem0.memory.memgraph_memory")
-    fake_memgraph_memory.MemoryGraph = type("MemoryGraph", (), {})
+    fake_memgraph_memory.MemoryGraph = upstream_base_class or type("MemoryGraph", (), {})
 
     fake_factory = types.ModuleType("mem0.utils.factory")
     fake_factory.EmbedderFactory = types.SimpleNamespace(create=lambda *_args, **_kwargs: None)
@@ -73,6 +73,36 @@ def test_prepare_graph_relation_normalizes_entities_and_relation_names(monkeypat
         "relationship": "WORKS_ON",
         "destination": "aquillm",
     }
+
+
+def test_retrieve_nodes_from_data_normalizes_single_entity_payload(monkeypatch):
+    class FakeUpstreamMemoryGraph:
+        def _retrieve_nodes_from_data(self, search_results, *args, **kwargs):
+            return search_results
+
+    module = _load_memgraph_compat_module(monkeypatch, upstream_base_class=FakeUpstreamMemoryGraph)
+    graph_obj = module.CompatibleMemgraphMemoryGraph.__new__(module.CompatibleMemgraphMemoryGraph)
+
+    normalized = graph_obj._retrieve_nodes_from_data(
+        {
+            "content": None,
+            "tool_calls": [
+                {
+                    "name": "extract_entities",
+                    "arguments": {
+                        "entities": {
+                            "entity": "1",
+                            "entity_type": "PERSON",
+                        }
+                    },
+                }
+            ],
+        }
+    )
+
+    assert normalized["tool_calls"][0]["arguments"]["entities"] == [
+        {"entity": "1", "entity_type": "PERSON"}
+    ]
 
 
 def test_search_graph_db_batches_edge_queries(monkeypatch):

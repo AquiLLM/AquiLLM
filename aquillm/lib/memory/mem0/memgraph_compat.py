@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from os import getenv
@@ -202,6 +203,55 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
 
     def _label_expr(self, entity_type: str) -> str:
         return f":`{entity_type}`:Entity"
+
+    def _normalize_extract_entities_arguments(self, arguments: Any) -> Any:
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except Exception:
+                return arguments
+        if not isinstance(arguments, dict):
+            return arguments
+
+        entities = arguments.get("entities")
+        if isinstance(entities, dict):
+            normalized_entities = [entities]
+        elif isinstance(entities, list):
+            normalized_entities = [item for item in entities if isinstance(item, dict)]
+        else:
+            return arguments
+        return arguments | {"entities": normalized_entities}
+
+    def _normalize_search_results_payload(self, search_results: Any) -> Any:
+        if not isinstance(search_results, dict):
+            return search_results
+
+        tool_calls = search_results.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            return search_results
+
+        changed = False
+        normalized_tool_calls: list[Any] = []
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                normalized_tool_calls.append(tool_call)
+                continue
+
+            normalized_arguments = self._normalize_extract_entities_arguments(tool_call.get("arguments"))
+            if normalized_arguments is tool_call.get("arguments"):
+                normalized_tool_calls.append(tool_call)
+                continue
+
+            changed = True
+            normalized_tool_calls.append(tool_call | {"arguments": normalized_arguments})
+
+        if not changed:
+            return search_results
+        return search_results | {"tool_calls": normalized_tool_calls}
+
+    def _retrieve_nodes_from_data(self, search_results: Any, *args: Any, **kwargs: Any):
+        normalized_results = self._normalize_search_results_payload(search_results)
+        return super()._retrieve_nodes_from_data(normalized_results, *args, **kwargs)
 
     def _cosine_similarity(self, lhs: list[float] | None, rhs: list[float] | None) -> float:
         if not lhs or not rhs or len(lhs) != len(rhs):
