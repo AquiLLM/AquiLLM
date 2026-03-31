@@ -103,6 +103,7 @@ async def consume_streaming_completion(
             "role": "assistant",
             "content": text or "",
             "done": True,
+            "stop_reason": finish_reason,
             "usage": input_usage + output_usage,
         }
     )

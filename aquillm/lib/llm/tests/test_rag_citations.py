@@ -638,3 +638,73 @@ async def test_complete_turn_streaming_appends_used_sources_when_present():
     assert "- [doc:doc-a chunk:1]" in streamed
     assert "- [doc:doc-g chunk:7]" not in streamed
     assert updated[-1].content.count("[doc:") == 2
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_streaming_does_not_append_sources_on_cutoff_done_chunk():
+    stream_payloads: list[dict] = []
+
+    async def _capture_stream(payload: dict):
+        stream_payloads.append(payload)
+
+    async def _fake_get_message(**kwargs):
+        cb = kwargs.get("stream_callback")
+        assert callable(cb)
+        await cb(
+            {
+                "message_uuid": "m",
+                "role": "assistant",
+                "content": "![fig. 6: 1), based at the recently established University (Page 168) Source: Gre",
+                "done": True,
+                "stop_reason": "max_tokens",
+                "usage": 4,
+            }
+        )
+        return LLMResponse(
+            text="![fig. 6: 1), based at the recently established University (Page 168) Source: Gre",
+            tool_call={},
+            stop_reason="max_tokens",
+            input_usage=2,
+            output_usage=2,
+            model="fake",
+        )
+
+    async def _fake_continue_cutoff_response(**_kwargs):
+        return LLMResponse(
+            text="en and then completed [doc:doc-a chunk:7].",
+            tool_call={},
+            stop_reason="stop",
+            input_usage=1,
+            output_usage=1,
+            model="fake",
+        )
+
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(side_effect=_fake_get_message),
+        _continue_cutoff_response=AsyncMock(side_effect=_fake_continue_cutoff_response),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(
+        llm,
+        convo,
+        max_tokens=1024,
+        stream_func=_capture_stream,
+    )
+    assert changed == "changed"
+    assert stream_payloads
+    assert stream_payloads[0]["done"] is True
+    assert "Sources:" not in stream_payloads[0]["content"]
+    assert "Sources:" in updated[-1].content

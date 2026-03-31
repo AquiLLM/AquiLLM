@@ -108,7 +108,9 @@ async def complete_conversation_turn(
         async def _live_citation_stream(payload: dict) -> Any:
             out = dict(payload)
             content = str(out.get("content", ""))
-            if out.get("done"):
+            stop_reason = str(out.get("stop_reason", "")).strip().lower()
+            is_cutoff_done = stop_reason in {"length", "max_tokens"}
+            if out.get("done") and (not is_cutoff_done):
                 out["content"] = _append_citation_sources_if_missing(content, citation_allowlist)
             await stream_func(out)
 
