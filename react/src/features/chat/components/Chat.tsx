@@ -216,6 +216,9 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
       const newSelected = new Set(prev);
       if (newSelected.has(normalizedCollectionId)) {
         newSelected.delete(normalizedCollectionId);
+        getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
+          newSelected.delete(descendantId);
+        });
       } else {
         newSelected.add(normalizedCollectionId);
         getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
