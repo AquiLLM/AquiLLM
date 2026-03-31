@@ -4,6 +4,8 @@ from __future__ import annotations
 import copy
 import structlog
 import re
+
+from aquillm.metrics import context_pack_tokens
 from dataclasses import dataclass
 from typing import Any
 
@@ -373,19 +375,20 @@ def pack_messages_for_budget(
             slack,
             active_scores,
         )
+        context_pack_tokens.labels(stage="before").set(stats.get("before_tokens", 0))
+        context_pack_tokens.labels(stage="after").set(stats.get("after_tokens", 0))
         logger.info(
-            "context_pack stats before_tokens=%s after_tokens=%s pinned_count=%s "
-            "dropped_history=%s stage_fit=%s stages=%s",
-            stats.get("before_tokens"),
-            stats.get("after_tokens"),
-            stats.get("pinned_count"),
-            stats.get("dropped_history"),
-            stats.get("stage_fit"),
-            ",".join(stats.get("stages_applied") or []),
+            "obs.llm.context_pack",
+            before_tokens=stats.get("before_tokens"),
+            after_tokens=stats.get("after_tokens"),
+            pinned_count=stats.get("pinned_count"),
+            dropped_history=stats.get("dropped_history"),
+            stage_fit=stats.get("stage_fit"),
+            stages=",".join(stats.get("stages_applied") or []),
         )
         return {"messages": msgs, "max_tokens": mt, "stats": stats}
     except Exception as exc:
-        logger.warning("context_packer fail-open: %s", type(exc).__name__)
+        logger.warning("obs.llm.context_pack_error", error_type=type(exc).__name__)
         return {
             "messages": copy.deepcopy(message_dicts),
             "max_tokens": max_tokens,

@@ -28,23 +28,23 @@ def extract_figures(data: bytes, filename: str = "") -> Iterator[ExtractedFigure
     try:
         import fitz
     except ImportError:
-        logger.warning("PyMuPDF not installed; skipping PDF figure extraction")
+        logger.warning("obs.ingest.pdf_dependency_missing", dependency="PyMuPDF")
         return
 
     try:
         doc = fitz.open(stream=data, filetype="pdf")
     except Exception as exc:
-        logger.warning("Failed to open PDF for figure extraction: %s", exc)
+        logger.warning("obs.ingest.pdf_open_failed", error_type=type(exc).__name__, error=str(exc))
         return
 
-    logger.info("Starting figure extraction for PDF %s (%d pages)", filename, len(doc))
+    logger.info("obs.ingest.figures_pdf_start", filename=filename, page_count=len(doc))
     total_extracted = 0
     extracted_xrefs: set[int] = set()
 
     try:
         for page_num, page in enumerate(doc, start=1):
             if total_extracted >= MAX_IMAGES_PER_DOCUMENT:
-                logger.info("Reached max image limit (%d) for PDF", MAX_IMAGES_PER_DOCUMENT)
+                logger.info("obs.ingest.figures_pdf_limit", filename=filename, max_limit=MAX_IMAGES_PER_DOCUMENT)
                 break
 
             raster_regions: list[tuple] = []
@@ -76,9 +76,9 @@ def extract_figures(data: bytes, filename: str = "") -> Iterator[ExtractedFigure
         doc.close()
 
     if total_extracted > 0:
-        logger.info("Extracted %d figures from PDF %s", total_extracted, filename)
+        logger.info("obs.ingest.figures_pdf_done", filename=filename, figure_count=total_extracted)
     else:
-        logger.info("No figures extracted from PDF %s", filename)
+        logger.info("obs.ingest.figures_pdf_none", filename=filename)
 
 
 __all__ = ["extract_figures"]

@@ -76,8 +76,7 @@ def get_multimodal_embedding_via_vllm_pooling(
                 "image": image_data_url,
             },
         }
-        logger.debug("Attempting multimodal embedding (multi_modal_data format) with prompt length %d", 
-                     len(formatted_prompt))
+        logger.debug("obs.embed.multimodal_attempt", format="multi_modal_data", prompt_length=len(formatted_prompt))
         response = requests.post(
             f"{vllm_base}/v1/embeddings",
             headers=headers,
@@ -89,12 +88,12 @@ def get_multimodal_embedding_via_vllm_pooling(
             if "data" in data and len(data["data"]) > 0:
                 embedding = data["data"][0].get("embedding")
                 if embedding:
-                    logger.info("Multimodal embedding succeeded via /v1/embeddings (multi_modal_data format)")
+                    logger.info("obs.embed.multimodal_success", format="multi_modal_data")
                     return embedding
         else:
-            logger.debug("Multimodal /v1/embeddings (multi_modal_data) returned %s: %s", response.status_code, response.text[:500])
+            logger.debug("obs.embed.multimodal_http_error", format="multi_modal_data", status_code=response.status_code, response_text=response.text[:500])
     except Exception as exc:
-        logger.debug("Multimodal /v1/embeddings (multi_modal_data) failed: %s", exc)
+        logger.debug("obs.embed.multimodal_error", format="multi_modal_data", error_type=type(exc).__name__, error=str(exc))
     
     # Try /v1/embeddings with OpenAI-style content blocks (alternative format)
     try:
@@ -105,7 +104,7 @@ def get_multimodal_embedding_via_vllm_pooling(
                 {"type": "image_url", "image_url": {"url": image_data_url}},
             ],
         }
-        logger.debug("Attempting multimodal embedding (OpenAI content format)")
+        logger.debug("obs.embed.multimodal_attempt", format="openai_content")
         response = requests.post(
             f"{vllm_base}/v1/embeddings",
             headers=headers,
@@ -117,14 +116,14 @@ def get_multimodal_embedding_via_vllm_pooling(
             if "data" in data and len(data["data"]) > 0:
                 embedding = data["data"][0].get("embedding")
                 if embedding:
-                    logger.info("Multimodal embedding succeeded via /v1/embeddings (OpenAI content format)")
+                    logger.info("obs.embed.multimodal_success", format="openai_content")
                     return embedding
         else:
-            logger.debug("Multimodal /v1/embeddings (OpenAI content) returned %s: %s", response.status_code, response.text[:500])
+            logger.debug("obs.embed.multimodal_http_error", format="openai_content", status_code=response.status_code, response_text=response.text[:500])
     except Exception as exc:
-        logger.debug("Multimodal /v1/embeddings (OpenAI content) failed: %s", exc)
+        logger.debug("obs.embed.multimodal_error", format="openai_content", error_type=type(exc).__name__, error=str(exc))
     
-    logger.debug("Multimodal embedding via HTTP API did not succeed; vLLM may not support multimodal in /v1/embeddings endpoint")
+    logger.debug("obs.embed.multimodal_unsupported")
     
     return None
 

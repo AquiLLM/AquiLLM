@@ -105,7 +105,7 @@ class GeminiInterface(LLMInterface):
                                         text=f"[Image {img.get('result_index', '?')}: {img.get('title', 'Image')}]"
                                     ))
                             except Exception as e:
-                                logger.warning("Failed to parse image data URL for Gemini: %s", e)
+                                logger.warning("obs.llm.gemini_parse_error", error_type=type(e).__name__, error=str(e))
                 
                 contents.append(genai_types.Content(role='user', parts=parts))
             else:

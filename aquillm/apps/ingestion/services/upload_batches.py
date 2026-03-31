@@ -1,9 +1,13 @@
 """Queue uploaded files into an ingestion batch."""
 from __future__ import annotations
 
+import structlog
 from typing import Any
 
+logger = structlog.stdlib.get_logger(__name__)
+
 from apps.ingestion.models import IngestionBatch, IngestionBatchItem
+from aquillm.metrics import ingestion_items
 from aquillm.tasks import ingest_uploaded_file_task
 
 
@@ -54,6 +58,8 @@ def enqueue_upload_batch_files(
 
     if not queued_items:
         batch.delete()
+        ingestion_items.labels(source="upload", status="rejected").inc(len(rejected_items))
+        logger.info("obs.ingest.batch_empty", rejected_count=len(rejected_items))
         return (
             {
                 "status": "error",
@@ -64,6 +70,10 @@ def enqueue_upload_batch_files(
             },
             400,
         )
+
+    ingestion_items.labels(source="upload", status="queued").inc(len(queued_items))
+    ingestion_items.labels(source="upload", status="rejected").inc(len(rejected_items))
+    logger.info("obs.ingest.batch_queued", batch_id=batch.id, queued_count=len(queued_items), rejected_count=len(rejected_items))
 
     return (
         {

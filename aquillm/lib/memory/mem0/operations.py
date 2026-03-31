@@ -84,11 +84,11 @@ def search_mem0_via_oss(
         except TypeError:
             continue
         except Exception as exc:
-            logger.warning("Mem0 OSS search failed; falling back. Error: %s", exc)
+            logger.warning("obs.memory.mem0_search_error", error_type=type(exc).__name__, error=str(exc))
             return []
 
     if response is None:
-        logger.warning("Mem0 OSS search call signature not supported; falling back.")
+        logger.warning("obs.memory.mem0_search_unsupported")
         return []
 
     if isinstance(response, dict):
@@ -145,7 +145,7 @@ def search_mem0_episodic_memories(
             exclude_conversation_id=exclude_conversation_id,
         )
     except Exception as exc:
-        logger.warning("Mem0 search failed; falling back to local memory. Error: %s", exc)
+        logger.warning("obs.memory.mem0_search_fallback", error_type=type(exc).__name__, error=str(exc))
         return []
 
 
@@ -181,7 +181,7 @@ def add_mem0_raw_facts(
             else:
                 wrote_any = True
         except Exception as exc:
-            logger.warning("Mem0 raw fact add failed for fact=%r: %s", fact, exc)
+            logger.warning("obs.memory.mem0_fact_add_error", fact=fact, error_type=type(exc).__name__, error=str(exc))
     return wrote_any
 
 
@@ -213,7 +213,7 @@ def add_mem0_memory_with_client(
             },
         )
     except Exception as exc:
-        logger.warning("Mem0 add failed; continuing with local memory. Error: %s", exc)
+        logger.warning("obs.memory.mem0_add_error", error_type=type(exc).__name__, error=str(exc))
 
 
 __all__ = [

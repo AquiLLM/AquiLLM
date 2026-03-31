@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: AquiLLM
+    folder: AquiLLM
+    type: file
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

@@ -40,9 +40,9 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
     cached_ranked = rag_cache.get_cached_rerank_result(qsig, cand_ids, top_k, rm)
     if cached_ranked:
         logger.info(
-            "rerank_local_vllm cache_hit=1 candidates=%d top_k=%d",
-            len(cand_ids),
-            top_k,
+            "obs.rag.rerank_local_cache_hit",
+            candidates=len(cand_ids),
+            top_k=top_k,
         )
         return ordered_queryset_from_ids(model_cls, cached_ranked)
 
@@ -275,7 +275,7 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
             continue
 
     if first_http_error:
-        logger.warning("All local rerank requests failed. First error: %s", first_http_error)
+        logger.warning("obs.rag.rerank_local_all_failed", first_error=first_http_error)
 
     return model_cls.objects.none()
 

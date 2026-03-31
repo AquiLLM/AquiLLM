@@ -137,7 +137,7 @@ def create_chunks(self, doc_id: str):
                 done_chunks[0] += 1
                 send_progress()
         except Exception as exc:
-            logger.warning("Batch embedding failed for document %s: %s", doc.id, exc)
+            logger.warning("obs.ingest.embed_batch_error", doc_id=doc.id, error_type=type(exc).__name__, error=str(exc))
             for chunk in chunks:
                 chunk.get_chunk_embedding()
                 done_chunks[0] += 1
@@ -147,7 +147,7 @@ def create_chunks(self, doc_id: str):
             try:
                 image_chunk.get_chunk_embedding()
             except Exception as exc:
-                logger.warning("Image embedding failed for document %s: %s", doc.id, exc)
+                logger.warning("obs.ingest.embed_image_error", doc_id=doc.id, error_type=type(exc).__name__, error=str(exc))
                 image_chunk.embedding = get_embedding(image_chunk.content, input_type="search_document")
             chunks.append(image_chunk)
             done_chunks[0] += 1
@@ -159,7 +159,7 @@ def create_chunks(self, doc_id: str):
         doc.save(dont_rechunk=True)
         notify_ingest_monitor_complete(doc.id)
     except Exception as exc:
-        logger.error("Error creating chunks for document %s: %s", doc.id, exc)
+        logger.error("obs.ingest.chunk_error", doc_id=doc.id, error_type=type(exc).__name__, error=str(exc))
         self.update_state(state=FAILURE)
         doc.ingestion_complete = True
         doc.full_text += f"\n\nERROR DURING PROCESSING: {exc}"

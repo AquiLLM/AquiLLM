@@ -71,7 +71,7 @@ def get_mem0_client():
 
     api_key = getenv("MEM0_API_KEY")
     if not api_key:
-        logger.warning("MEMORY_BACKEND=mem0 but MEM0_API_KEY is not set; falling back to local memory.")
+        logger.warning("obs.memory.mem0_no_key")
         return None
 
     try:
@@ -80,7 +80,7 @@ def get_mem0_client():
         _MEM0_CLIENT = MemoryClient(api_key=api_key)
         return _MEM0_CLIENT
     except Exception as exc:
-        logger.warning("Failed to initialize Mem0 client; using local memory. Error: %s", exc)
+        logger.warning("obs.memory.mem0_init_error", error_type=type(exc).__name__, error=str(exc))
         return None
 
 
@@ -152,17 +152,13 @@ def get_mem0_oss():
                     if embed_provider == "openai" and not allow_embed_dims_override:
                         vector_store_config["embedding_model_dims"] = embed_dims
                         embed_config["embedding_dims"] = None
-                        logger.info(
-                            "Ignoring embedder-level MEM0_EMBED_DIMS for OpenAI-compatible embedder; "
-                            "keeping vector-store dims override and set "
-                            "MEM0_EMBED_ALLOW_DIMENSIONS_OVERRIDE=1 to also force the embed request."
-                        )
+                        logger.info("obs.memory.mem0_dims_ignored", embed_dims=embed_dims)
                     else:
                         if embed_provider == "openai":
                             embed_config["embedding_dims"] = embed_dims
                         vector_store_config["embedding_model_dims"] = embed_dims
             except Exception:
-                logger.warning("Invalid MEM0_EMBED_DIMS=%r; ignoring.", embed_dims_raw)
+                logger.warning("obs.memory.mem0_dims_invalid", embed_dims_raw=embed_dims_raw)
 
         if embed_provider == "openai" and not allow_embed_dims_override and "embedding_dims" not in embed_config:
             embed_config["embedding_dims"] = None
@@ -187,7 +183,7 @@ def get_mem0_oss():
             _clear_mem0_embedding_dims_override(_MEM0_OSS)
         return _MEM0_OSS
     except Exception as exc:
-        logger.warning("Failed to initialize OSS Mem0 client; using local memory. Error: %s", exc)
+        logger.warning("obs.memory.mem0_oss_init_error", error_type=type(exc).__name__, error=str(exc))
         return None
 
 

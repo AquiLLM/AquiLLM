@@ -55,10 +55,10 @@ def resize_image_data_url_for_llm(
                 if len(result_bytes) <= max_bytes:
                     encoded = base64.b64encode(result_bytes).decode("ascii")
                     logger.debug(
-                        "Resized image for LLM context: %d -> %d bytes (quality=%d)",
-                        len(image_bytes),
-                        len(result_bytes),
-                        quality,
+                        "obs.llm.image_resize",
+                        bytes_before=len(image_bytes),
+                        bytes_after=len(result_bytes),
+                        quality=quality,
                     )
                     return f"data:image/jpeg;base64,{encoded}"
 
@@ -68,14 +68,14 @@ def resize_image_data_url_for_llm(
             result_bytes = output.getvalue()
             encoded = base64.b64encode(result_bytes).decode("ascii")
             logger.debug(
-                "Aggressively resized image for LLM context: %d -> %d bytes",
-                len(image_bytes),
-                len(result_bytes),
+                "obs.llm.image_resize_aggressive",
+                bytes_before=len(image_bytes),
+                bytes_after=len(result_bytes),
             )
             return f"data:image/jpeg;base64,{encoded}"
 
     except Exception as e:
-        logger.warning("Failed to resize image for LLM context: %s", e)
+        logger.warning("obs.llm.image_resize_error", error_type=type(e).__name__, error=str(e))
         return None
 
 

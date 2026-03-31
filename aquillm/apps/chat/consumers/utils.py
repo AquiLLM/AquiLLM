@@ -17,7 +17,7 @@ def env_int(name: str, default: int) -> int:
     try:
         value = int(raw)
     except ValueError:
-        logger.warning("Invalid %s=%r; using default %d", name, raw, default)
+        logger.warning("obs.chat.param_fallback", param=name, raw_value=raw, default=default)
         return default
     return value if value > 0 else default
 

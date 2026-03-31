@@ -67,12 +67,12 @@ def extract_figure_payloads_for_format(
             figure_count += 1
 
         if figure_count > 0:
-            logger.info("Extracted %d figures from %s %s", figure_count, source_format.upper(), filename)
+            logger.info("obs.ingest.figures_extracted", figure_count=figure_count, format=source_format.upper(), filename=filename)
 
     except ImportError:
-        logger.debug("Figure extraction not available for %s", filename)
+        logger.debug("obs.ingest.figures_unavailable", filename=filename)
     except Exception as exc:
-        logger.warning("Figure extraction failed for %s: %s", filename, exc)
+        logger.warning("obs.ingest.figures_error", filename=filename, error_type=type(exc).__name__, error=str(exc))
 
 
 __all__ = ["extract_figure_payloads_for_format"]

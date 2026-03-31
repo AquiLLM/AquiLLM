@@ -50,51 +50,51 @@ def _normalize_image(image_bytes: bytes, media_type: str) -> tuple[bytes, str]:
 def extract_figures_epub(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
     """
     Extract figures from an EPUB file.
-    
+
     Args:
         data: Raw EPUB bytes
         filename: Optional filename for logging
-        
+
     Yields:
         ExtractedFigure for each valid image found
     """
     try:
         from ebooklib import epub, ITEM_IMAGE
     except ImportError:
-        logger.warning("ebooklib not installed; skipping EPUB figure extraction")
+        logger.warning("obs.ingest.epub_dependency_missing", dependency="ebooklib")
         return
-    
+
     try:
         book = epub.read_epub(io.BytesIO(data))
     except Exception as exc:
-        logger.warning("Failed to open EPUB for figure extraction: %s", exc)
+        logger.warning("obs.ingest.epub_open_failed", error_type=type(exc).__name__, error=str(exc))
         return
-    
+
     total_extracted = 0
-    
+
     try:
         for item in book.get_items():
             if total_extracted >= MAX_IMAGES_PER_DOCUMENT:
                 break
-            
+
             if item.get_type() != ITEM_IMAGE:
                 continue
-            
+
             try:
                 image_bytes = item.get_content()
-                
+
                 if not image_bytes or len(image_bytes) < MIN_IMAGE_BYTES:
                     continue
-                
+
                 width, height = _get_image_dimensions(image_bytes)
                 if width < MIN_IMAGE_WIDTH or height < MIN_IMAGE_HEIGHT:
                     continue
-                
+
                 media_type = item.media_type or 'image/png'
                 image_bytes, img_format = _normalize_image(image_bytes, media_type)
-                
+
                 item_name = item.get_name() or ""
-                
+
                 yield ExtractedFigure(
                     image_bytes=image_bytes,
                     image_format=img_format,
@@ -104,15 +104,15 @@ def extract_figures_epub(data: bytes, filename: str = "") -> Iterator[ExtractedF
                     height=height,
                     location_metadata={"item_name": item_name},
                 )
-                
+
                 total_extracted += 1
-                
+
             except Exception as exc:
-                logger.debug("Failed to extract EPUB image: %s", exc)
+                logger.debug("obs.ingest.epub_image_extract_failed", error_type=type(exc).__name__, error=str(exc))
                 continue
-                
+
     except Exception as exc:
-        logger.warning("EPUB figure extraction failed: %s", exc)
-    
+        logger.warning("obs.ingest.epub_extraction_failed", error_type=type(exc).__name__, error=str(exc))
+
     if total_extracted > 0:
-        logger.info("Extracted %d figures from EPUB %s", total_extracted, filename)
+        logger.info("obs.ingest.figures_epub_done", filename=filename, figure_count=total_extracted)

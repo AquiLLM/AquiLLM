@@ -31,7 +31,7 @@ def sync_items_from_library(
     pdfs_downloaded = 0
     errors = 0
 
-    logger.info("Syncing items from %s library...", library_type)
+    logger.info("obs.zotero.sync_items_start", library_type=library_type)
     items = client.get_top_level_items(group_id=library_id)
 
     for item in items:
@@ -70,7 +70,7 @@ def sync_items_from_library(
             ).first()
 
             if existing_doc:
-                logger.debug("Item %s already synced, skipping", item_key)
+                logger.debug("obs.zotero.sync_item_skip", item_key=item_key)
                 continue
 
             children = client.get_item_children(item_key, group_id=library_id)
@@ -83,10 +83,10 @@ def sync_items_from_library(
                         attachment_key = child["key"]
 
                         if PDFDocument.objects.filter(zotero_item_key=attachment_key).exists():
-                            logger.debug("PDF attachment %s already synced", attachment_key)
+                            logger.debug("obs.zotero.sync_item_skip", item_key=attachment_key)
                             continue
 
-                        logger.info("Downloading PDF: %s", title)
+                        logger.info("obs.zotero.download_file", title=title)
                         pdf_content = client.download_file(attachment_key, group_id=library_id)
 
                         if pdf_content:
@@ -104,15 +104,15 @@ def sync_items_from_library(
                             pdf_doc.save()
 
                             pdfs_downloaded += 1
-                            logger.info("Created PDFDocument for: %s", title)
+                            logger.info("obs.zotero.sync_document_created", title=title)
 
             items_synced += 1
 
         except Exception as e:
             logger.error(
-                "Error syncing item %s: %s",
-                item.get("key", "unknown"),
-                str(e),
+                "obs.zotero.sync_item_error",
+                item_key=item.get("key", "unknown"),
+                error=str(e),
             )
             errors += 1
 

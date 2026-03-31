@@ -98,7 +98,7 @@ def _get_compressor():
             use_llmlingua2=True,
         )
     except Exception as exc:
-        logger.warning("LM-Lingua2 init failed (fail-open): %s", exc)
+        logger.warning("obs.llm.lingua2_init_error", error_type=type(exc).__name__, error=str(exc))
         _COMPRESSOR_FAILED = True
         return None
     return _COMPRESSOR
@@ -115,7 +115,7 @@ def _compress_plain_text(text: str) -> str | None:
             use_context_level_filter=True,
         )
     except Exception as exc:
-        logger.warning("LM-Lingua2 compress failed (fail-open): %s", exc)
+        logger.warning("obs.llm.lingua2_compress_error", error_type=type(exc).__name__, error=str(exc))
         return None
     if isinstance(out, dict):
         for key in ("compressed_prompt", "compressed_context", "compressed_prompt_list"):
@@ -149,10 +149,10 @@ def maybe_compress_openai_style_messages(messages: list[dict[str, Any]]) -> bool
             msg["content"] = compressed
             changed = True
             logger.info(
-                "lm_lingua2 compressed role=%s chars %s -> %s",
-                role,
-                len(content),
-                len(compressed),
+                "obs.llm.lingua2_compress",
+                role=role,
+                chars_before=len(content),
+                chars_after=len(compressed),
             )
     return changed
 

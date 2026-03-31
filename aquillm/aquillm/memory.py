@@ -67,12 +67,12 @@ def _add_mem0_memory(
         remembered = normalize_remember_fact(user_content)
         if remembered:
             facts = [remembered]
-            logger.info("Using direct remember fallback; storing user content as memory fact.")
+            logger.info("obs.memory.direct_remember")
 
     if not facts:
         facts = heuristic_facts_from_turn(user_content, assistant_content)
         if facts:
-            logger.info("Using heuristic memory extraction fallback; extracted %d fact(s).", len(facts))
+            logger.info("obs.memory.heuristic_extract", fact_count=len(facts))
 
     if facts and add_mem0_raw_facts(
         user_id=str(user.id),
@@ -80,13 +80,13 @@ def _add_mem0_memory(
         conversation_id=conversation_id,
         assistant_message_uuid=assistant_message_uuid,
     ):
-        logger.info("Mem0 raw-fact write succeeded with %d fact(s).", len(facts))
+        logger.info("obs.memory.write_success", fact_count=len(facts))
         return
 
     if facts:
-        logger.warning("Mem0 raw-fact write produced no ADD events for %d fact(s).", len(facts))
+        logger.warning("obs.memory.write_no_events", fact_count=len(facts))
     else:
-        logger.info("No memory facts extracted for this turn; skipping Mem0 write.")
+        logger.info("obs.memory.no_facts")
 
     add_mem0_memory_with_client(
         user_id=str(user.id),
@@ -158,11 +158,11 @@ def augment_conversation_with_memory(
     query = get_last_user_message_text(convo)
     episodic = get_episodic_memories(user, query, top_k=EPISODIC_TOP_K, exclude_conversation_id=exclude_conversation_id)
     logger.info(
-        "Memory injection: user_id=%s query=%r profile_facts=%d episodic_memories=%d",
-        user.id,
-        query[:180] if isinstance(query, str) else "",
-        len(profile_facts),
-        len(episodic),
+        "obs.memory.injection",
+        user_id=user.id,
+        query=query[:180] if isinstance(query, str) else "",
+        profile_facts=len(profile_facts),
+        episodic_memories=len(episodic),
     )
     block = format_memories_for_system(profile_facts, episodic)
     convo.system = (base_system or "").rstrip() + block

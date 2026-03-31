@@ -74,7 +74,7 @@ if DEBUG:
     def debug_models(request):
         models = apps.get_models()
         model_instances = {model.__name__: list(model.objects.all()) for model in models}
-        logger.debug("debug_models loaded %d model classes", len(model_instances))
+        logger.debug("obs.debug.models_loaded", count=len(model_instances))
         return HttpResponse(
             f"debug_models: {len(models)} model classes registered",
             status=200,

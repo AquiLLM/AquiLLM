@@ -29,7 +29,7 @@ def rerank_chunks(model_cls: Type[TextChunk], query: str, chunks, top_k: int):
             if local_results.exists():
                 return local_results
         except Exception as exc:
-            logger.warning("Local rerank failed; trying Cohere fallback. Error: %s", exc)
+            logger.warning("obs.rag.rerank_local_fallback", error_type=type(exc).__name__, error=str(exc))
         if provider in ("local", "vllm"):
             return fallback_rerank(model_cls, chunks_list, top_k)
 
@@ -50,7 +50,7 @@ def rerank_chunks(model_cls: Type[TextChunk], query: str, chunks, top_k: int):
             return fallback_rerank(model_cls, chunks_list, top_k)
         return ordered_queryset_from_ids(model_cls, ranked_list)
     except Exception as exc:
-        logger.warning("Cohere rerank failed; using fallback order. Error: %s", exc)
+        logger.warning("obs.rag.rerank_cohere_fallback", error_type=type(exc).__name__, error=str(exc))
         return fallback_rerank(model_cls, chunks_list, top_k)
 
 
