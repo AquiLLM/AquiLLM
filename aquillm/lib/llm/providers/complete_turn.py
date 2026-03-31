@@ -235,6 +235,7 @@ async def complete_conversation_turn(
         and stop_reason_normalized in {"length", "max_tokens"}
         and fb.looks_cut_off(response_text)
     ):
+        preserve_partial_response = fb.should_preserve_cutoff_partial(response_text)
         continuation_response: Optional[LLMResponse] = None
         continuation_text = ""
         if fb.continue_on_cutoff_enabled():
@@ -245,6 +246,7 @@ async def complete_conversation_turn(
                 messages_for_bot=messages_for_bot,
                 partial_text=response_text,
                 max_tokens=continuation_budget,
+                stream_callback=effective_stream_func,
                 stream_message_uuid=stream_message_uuid,
             )
             if continuation_response is not None and not continuation_response.message_uuid:
@@ -256,7 +258,7 @@ async def complete_conversation_turn(
             separator = "\n" if response_text and not response_text.endswith(("\n", " ")) else ""
             response_text = f"{response_text.rstrip()}{separator}{continuation_text}"
             response = continuation_response
-        else:
+        elif not preserve_partial_response:
             compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
             if compact_summary:
                 response_text = compact_summary

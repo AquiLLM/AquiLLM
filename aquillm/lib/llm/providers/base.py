@@ -55,6 +55,7 @@ class LLMInterface(ABC):
         partial_text: str,
         max_tokens: int,
         stream_message_uuid: Optional[str] = None,
+        stream_callback: Optional[Callable[[dict], Awaitable[Any]]] = None,
     ) -> Optional[LLMResponse]:
         if not partial_text.strip():
             return None
@@ -70,6 +71,15 @@ class LLMInterface(ABC):
             AssistantMessage(content=partial_text, stop_reason="max_tokens"),
             UserMessage(content=continuation_prompt),
         ]
+        continuation_stream_callback = stream_callback
+        if callable(stream_callback):
+            async def _prepend_partial_to_stream(payload: dict) -> Any:
+                out = dict(payload)
+                content = str(out.get("content", ""))
+                out["content"] = f"{partial_text}{content}"
+                await stream_callback(out)
+
+            continuation_stream_callback = _prepend_partial_to_stream
         try:
             return await self.get_message(
                 **(
@@ -79,6 +89,7 @@ class LLMInterface(ABC):
                         "messages": continuation_messages,
                         "messages_pydantic": continuation_messages_pydantic,
                         "max_tokens": max_tokens,
+                        "stream_callback": continuation_stream_callback,
                         "stream_message_uuid": stream_message_uuid,
                     }
                 )

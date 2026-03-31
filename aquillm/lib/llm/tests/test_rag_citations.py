@@ -708,3 +708,62 @@ async def test_complete_turn_streaming_does_not_append_sources_on_cutoff_done_ch
     assert stream_payloads[0]["done"] is True
     assert "Sources:" not in stream_payloads[0]["content"]
     assert "Sources:" in updated[-1].content
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_preserves_substantial_cutoff_draft_when_continuation_fails(monkeypatch):
+    async def _fake_compact_summary(_llm, _conversation, _max_tokens):
+        return "Compressed fallback that should not replace the richer draft."
+
+    monkeypatch.setattr(
+        "lib.llm.providers.complete_turn.generate_compact_tool_summary",
+        _fake_compact_summary,
+    )
+
+    partial = (
+        "- The book frames heredity as a live historical controversy rather than a settled legacy [doc:doc-a chunk:7]\n"
+        "- Radick shows Mendelian ideas being used in everyday disputes, including arguments about parentage [doc:doc-a chunk:7]\n"
+        "- Schoolbook rules about dark and light eyes were treated as decisive evidence in cases that were much messier in practice [doc:doc-a chunk:7]\n"
+        "- The available excerpts are still narrow, so broader claims about Mendel's full legacy remain provisional [doc:doc-a chunk:7]"
+    )
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            return_value=LLMResponse(
+                text=partial,
+                tool_call={},
+                stop_reason="max_tokens",
+                input_usage=1,
+                output_usage=1,
+                model="fake",
+            )
+        ),
+        _continue_cutoff_response=AsyncMock(return_value=None),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize the Gregory Radick evidence with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={
+                    "result": [
+                        {
+                            "chunk_id": 7,
+                            "doc_id": "doc-a",
+                            "title": "Doc A",
+                            "text": "Alpha finding with supporting detail.",
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
+
+    assert changed == "changed"
+    assert updated[-1].content == partial
+    assert "Compressed fallback" not in updated[-1].content

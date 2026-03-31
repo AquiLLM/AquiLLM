@@ -148,3 +148,59 @@ class CutoffContinuationTests(SimpleTestCase):
         self.assertTrue(first_uuid)
         self.assertEqual(llm.calls[1].get("stream_message_uuid"), first_uuid)
         self.assertEqual(updated[-1].message_uuid, first_uuid)
+
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_streaming_cutoff_continuation_keeps_streaming_same_bubble(self):
+        class _StreamingFakeLLM(_FakeLLMInterface):
+            async def get_message(self, *args, **kwargs):
+                self.calls.append(kwargs)
+                response = self.responses[len(self.calls) - 1]
+                callback = kwargs.get("stream_callback")
+                if callable(callback):
+                    await callback(
+                        {
+                            "message_uuid": kwargs.get("stream_message_uuid"),
+                            "role": "assistant",
+                            "content": response.text or "",
+                            "done": True,
+                            "stop_reason": response.stop_reason,
+                            "usage": response.input_usage + response.output_usage,
+                        }
+                    )
+                return response
+
+        llm = _StreamingFakeLLM([
+            LLMResponse(
+                text='Intro section that gets cut',
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=' and then continues cleanly.',
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Give me a long answer that may be cut off.')],
+        )
+        stream_payloads = []
+
+        async def _capture_stream(payload: dict):
+            stream_payloads.append(payload)
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048, stream_func=_capture_stream)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertTrue(callable(llm.calls[1].get("stream_callback")))
+        self.assertEqual(len(stream_payloads), 2)
+        self.assertEqual(stream_payloads[0]["message_uuid"], stream_payloads[1]["message_uuid"])
+        self.assertIn('Intro section that gets cut', stream_payloads[-1]["content"])
+        self.assertIn('and then continues cleanly.', stream_payloads[-1]["content"])
+        self.assertIn('and then continues cleanly.', updated[-1].content)
