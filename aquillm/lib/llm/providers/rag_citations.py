@@ -111,6 +111,7 @@ def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
         return []
     uncited: list[str] = []
     in_code_block = False
+    inherited_citation: str | None = None
     for raw_line in answer_text.splitlines():
         line = raw_line.strip()
         if line.startswith("```"):
@@ -120,14 +121,19 @@ def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
             continue
         if line.startswith("#") or line.startswith("!["):
             continue
+        # A cited, non-bullet heading/claim can anchor following indented sub-bullets.
+        if not _BULLET_OR_ENUM_RE.match(line):
+            cited_here = _first_citation_token(line)
+            inherited_citation = cited_here if cited_here else None
+            continue
         if line.endswith(":"):
             continue
         if not re.search(r"[A-Za-z]", line):
             continue
-        if not _BULLET_OR_ENUM_RE.match(line):
-            continue
         words = re.findall(r"[A-Za-z0-9]+", line)
         if len(words) < 4:
+            continue
+        if inherited_citation and (raw_line[:1].isspace() or raw_line.startswith("\t")):
             continue
         if _first_citation_token(line):
             continue

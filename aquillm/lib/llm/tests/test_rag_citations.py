@@ -88,6 +88,17 @@ def test_response_has_required_citations_allows_uncited_connective_sentence():
     assert response_has_required_citations(answer, allowed)
 
 
+def test_response_has_required_citations_allows_indented_sub_bullets_under_cited_heading():
+    allowed = {"[doc:doc-a chunk:7]"}
+    answer = (
+        "Figure 27 - Degrees of wrinkledness [doc:doc-a chunk:7]\n"
+        "    - Telegraph seeds 1-4\n"
+        "    - Telephone seeds 5-6\n"
+        "    - Lightning seeds 13-15"
+    )
+    assert response_has_required_citations(answer, allowed)
+
+
 def test_synthesize_cited_extract_from_results_includes_refs():
     convo = Conversation(
         system="sys",
@@ -265,3 +276,85 @@ async def test_complete_turn_truncates_long_prior_answer_in_citation_retry(monke
     assert changed == "changed"
     prompt_text = captured_retry_prompt.get("text", "")
     assert "[Truncated for citation retry.]" in prompt_text
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_soft_accepts_high_quality_without_invalid_citations():
+    long_answer = (
+        "- The book tracks how Mendelism became politically loaded in public debate [doc:doc-a chunk:7]\n"
+        "- Radick emphasizes that scientific authority was shaped by institutions and networks\n"
+        "- Statistical and biometric traditions repeatedly intersected with heredity arguments [doc:doc-a chunk:7]\n"
+        "- The narrative ties laboratory claims to broader social consequences in Britain [doc:doc-a chunk:7]\n"
+    )
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            return_value=LLMResponse(
+                text=long_answer,
+                tool_call={},
+                stop_reason="stop",
+                input_usage=1,
+                output_usage=1,
+                model="fake",
+            )
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+            ),
+        ],
+    )
+    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
+    assert changed == "changed"
+    assert updated[-1].content == long_answer
+    assert llm.get_message.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_does_not_force_extractive_fallback_for_incomplete_but_non_fabricated_citations():
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            side_effect=[
+                LLMResponse(
+                    text="- One cited point [doc:doc-a chunk:7]\n- One uncited point",
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=1,
+                    output_usage=1,
+                    model="fake",
+                ),
+                LLMResponse(
+                    text="- Revised cited point [doc:doc-a chunk:7]\n- Still uncited point",
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=1,
+                    output_usage=1,
+                    model="fake",
+                ),
+            ]
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+            ),
+        ],
+    )
+    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=1024)
+    assert changed == "changed"
+    assert "I can only provide claims directly supported by retrieved chunks" not in updated[-1].content
+    assert llm.get_message.await_count == 2

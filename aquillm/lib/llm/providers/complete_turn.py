@@ -218,7 +218,18 @@ async def complete_conversation_turn(
                 if synthesized:
                     response_text = synthesized
     if enforce_citations and (not response_tool_call):
+        original_response_text = (response_text or "").strip()
         citations_valid = citations.response_has_required_citations(response_text, citation_allowlist)
+        original_invalid = citations.find_invalid_citations(original_response_text, citation_allowlist)
+        original_has_any_citation = bool(citations.extract_citations(original_response_text))
+        should_soft_accept_original = (
+            (not citations_valid)
+            and (not original_invalid)
+            and original_has_any_citation
+            and fb.is_high_quality_summary(original_response_text)
+        )
+        if should_soft_accept_original:
+            citations_valid = True
         if not citations_valid:
             invalid = citations.find_invalid_citations(response_text, citation_allowlist)
             prior_for_retry = response_text
@@ -250,7 +261,8 @@ async def complete_conversation_turn(
                 response = retry_response
                 response_text = (retry_response.text or "").strip()
                 response_tool_call = {}
-        if not citations.response_has_required_citations(response_text, citation_allowlist):
+        retry_invalid = citations.find_invalid_citations(response_text, citation_allowlist)
+        if retry_invalid and (not citations.response_has_required_citations(response_text, citation_allowlist)):
             cited_extract = citations.synthesize_cited_extract_from_results(conversation)
             if cited_extract:
                 response_text = cited_extract
