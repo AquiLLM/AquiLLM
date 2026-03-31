@@ -446,8 +446,7 @@ async def test_complete_turn_streaming_invalid_citations_get_note_not_full_fallb
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_live_stream_prefixes_sources(monkeypatch):
-    monkeypatch.setenv("LLM_CITATION_STREAM_MODE", "live")
+async def test_complete_turn_live_stream_prefixes_sources():
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict):
@@ -508,24 +507,34 @@ async def test_complete_turn_live_stream_prefixes_sources(monkeypatch):
     assert stream_payloads[0]["content"].startswith("Sources:\n- [doc:doc-a chunk:7]\n\n")
     assert "Partial answer" in stream_payloads[0]["content"]
     assert "Final answer [doc:doc-a chunk:7]." in stream_payloads[-1]["content"]
-    assert updated[-1].content == "Final answer [doc:doc-a chunk:7]."
+    assert updated[-1].content == "Final answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_buffers_stream_until_citations_finalize():
+async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answer():
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict):
         stream_payloads.append(payload)
 
     async def _fake_get_message(**kwargs):
-        assert kwargs.get("stream_callback") is None
+        cb = kwargs.get("stream_callback")
+        assert callable(cb)
+        await cb(
+            {
+                "message_uuid": "m",
+                "role": "assistant",
+                "content": "Narrative summary with no inline citations.",
+                "done": True,
+                "usage": 5,
+            }
+        )
         return LLMResponse(
-            text="Final cited answer [doc:doc-a chunk:7].",
+            text="Narrative summary with no inline citations.",
             tool_call={},
             stop_reason="stop",
-            input_usage=5,
-            output_usage=7,
+            input_usage=2,
+            output_usage=3,
             model="fake",
         )
 
@@ -553,77 +562,32 @@ async def test_complete_turn_buffers_stream_until_citations_finalize():
     assert llm.get_message.await_count == 1
     assert len(stream_payloads) == 1
     assert stream_payloads[0]["done"] is True
-    assert stream_payloads[0]["content"] == (
-        "Final cited answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
-    )
-    assert stream_payloads[0]["usage"] == 12
-    assert updated[-1].content == (
-        "Final cited answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
-    )
-
-
-@pytest.mark.asyncio
-async def test_complete_turn_buffered_stream_appends_sources_when_no_citations_in_answer():
-    stream_payloads: list[dict] = []
-
-    async def _capture_stream(payload: dict):
-        stream_payloads.append(payload)
-
-    async def _fake_get_message(**kwargs):
-        assert kwargs.get("stream_callback") is None
-        return LLMResponse(
-            text="Narrative summary with no inline citations.",
-            tool_call={},
-            stop_reason="stop",
-            input_usage=2,
-            output_usage=3,
-            model="fake",
-        )
-
-    llm = SimpleNamespace(base_args={}, get_message=AsyncMock(side_effect=_fake_get_message))
-    convo = Conversation(
-        system="sys",
-        messages=[
-            UserMessage(content="Summarize with citations."),
-            ToolMessage(
-                content="{}",
-                tool_name="vector_search",
-                for_whom="assistant",
-                result_dict={
-                    "result": [
-                        {"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"},
-                        {"chunk_id": 9, "doc_id": "doc-b", "text": "beta"},
-                    ]
-                },
-            ),
-        ],
-    )
-
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_capture_stream,
-    )
-    assert changed == "changed"
-    assert llm.get_message.await_count == 1
-    assert len(stream_payloads) == 1
     streamed = stream_payloads[0]["content"]
+    assert "Narrative summary with no inline citations." in streamed
     assert "Sources:" in streamed
     assert "[doc:doc-a chunk:7]" in streamed
-    assert "[doc:doc-b chunk:9]" in streamed
     assert "Sources:" in updated[-1].content
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_buffered_stream_appends_all_gathered_sources():
+async def test_complete_turn_streaming_appends_all_gathered_sources():
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict):
         stream_payloads.append(payload)
 
     async def _fake_get_message(**kwargs):
-        assert kwargs.get("stream_callback") is None
+        cb = kwargs.get("stream_callback")
+        assert callable(cb)
+        await cb(
+            {
+                "message_uuid": "m",
+                "role": "assistant",
+                "content": "Summary with one inline cite [doc:doc-a chunk:1].",
+                "done": True,
+                "usage": 5,
+            }
+        )
         return LLMResponse(
             text="Summary with one inline cite [doc:doc-a chunk:1].",
             tool_call={},

@@ -31,13 +31,6 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
     return max(minimum, value)
 
 
-def _citation_stream_mode() -> str:
-    mode = (getenv("LLM_CITATION_STREAM_MODE", "buffered") or "").strip().lower()
-    if mode in {"live", "buffered"}:
-        return mode
-    return "buffered"
-
-
 def _build_sources_block(allowed_citations: set[str]) -> str:
     refs = sorted(allowed_citations)
     if not refs:
@@ -101,14 +94,8 @@ async def complete_conversation_turn(
                 f"{system_prompt}\n\n"
                 f"{citations.build_citation_system_suffix(citation_allowlist)}"
             )
-    citation_stream_mode = _citation_stream_mode()
-    use_live_citation_stream = bool(
-        enforce_citations and callable(stream_func) and citation_stream_mode == "live"
-    )
-    buffer_stream_until_citations = bool(
-        enforce_citations and callable(stream_func) and not use_live_citation_stream
-    )
-    effective_stream_func = None if buffer_stream_until_citations else stream_func
+    use_live_citation_stream = bool(enforce_citations and callable(stream_func))
+    effective_stream_func = stream_func
     if use_live_citation_stream and callable(stream_func):
         sources_block = _build_sources_block(citation_allowlist)
 
@@ -338,18 +325,8 @@ async def complete_conversation_turn(
         markdown_images = imgctx.recent_tool_image_markdown(conversation, max_images=3)
         if markdown_images:
             response_text = response_text.rstrip() + "\n\n" + "\n".join(markdown_images)
-    if buffer_stream_until_citations and enforce_citations and (not response_tool_call):
+    if enforce_citations and (not response_tool_call):
         response_text = _append_citation_sources_if_missing(response_text, citation_allowlist)
-    if buffer_stream_until_citations and callable(stream_func) and (not response_tool_call):
-        await stream_func(
-            {
-                "message_uuid": stream_message_uuid,
-                "role": "assistant",
-                "content": response_text,
-                "done": True,
-                "usage": int(response.input_usage or 0) + int(response.output_usage or 0),
-            }
-        )
     new_msg = AssistantMessage(
         content=response_text,
         stop_reason=response.stop_reason,
