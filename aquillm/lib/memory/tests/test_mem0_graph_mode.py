@@ -118,6 +118,7 @@ def test_build_config_includes_graph_store_when_enabled(monkeypatch):
     assert graph_store["config"]["url"] == "bolt://memgraph:7687"
     assert graph_store["config"]["username"] == "memgraph"
     assert graph_store["config"]["password"] == "secret"
+    assert graph_store["config"]["refresh_schema"] is False
     assert graph_store["config"]["database"] == "mem0"
     assert graph_store["custom_prompt"] == "extract graph relations"
     assert graph_store["config"]["threshold"] == 0.75

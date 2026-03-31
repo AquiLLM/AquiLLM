@@ -128,6 +128,10 @@ def _build_mem0_graph_store() -> dict[str, Any] | None:
         "url": url,
         "username": username,
         "password": password,
+        # Mem0's Memgraph adapter initializes langchain-memgraph under the hood.
+        # Explicitly disable schema refresh because its bootstrap query has been
+        # incompatible with the Memgraph version we run in Docker.
+        "refresh_schema": False,
     }
     if database:
         graph_config["database"] = database
