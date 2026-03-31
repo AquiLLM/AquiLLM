@@ -10,6 +10,7 @@ from openai import OpenAI
 from .config import (
     get_local_embed_config,
     get_target_dims,
+    allow_embed_dimensions_override,
     max_embed_input_chars,
     is_context_limit_error,
     extract_context_limit_tokens,
@@ -44,6 +45,8 @@ def _shrink_text_for_retry(text: str) -> str:
 
 def _dims_kwargs() -> dict:
     """Return dimensions kwarg for OpenAI API if APP_EMBED_DIMS is set."""
+    if not allow_embed_dimensions_override():
+        return {}
     dims = get_target_dims()
     return {"dimensions": dims} if dims else {}
 

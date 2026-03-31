@@ -30,7 +30,7 @@ PORT="${VLLM_PORT:-8000}"
 
 # If OCR_VLLM_EXTRA_ARGS is omitted, keep OCR startup VRAM-friendly with fp8 KV + 4-bit weights.
 # Same baseline as .env.example.
-_DEFAULT_OCR_VLLM_EXTRA_ARGS="--kv-cache-dtype fp8 --quantization bitsandbytes --load-format bitsandbytes --dtype float16 --model-loader-extra-config '{\"load_in_4bit\":true,\"bnb_4bit_compute_dtype\":\"float16\",\"bnb_4bit_quant_type\":\"nf4\",\"bnb_4bit_use_double_quant\":true}'"
+_DEFAULT_OCR_VLLM_EXTRA_ARGS="--kv-cache-dtype fp8 --compilation-config '{\"cudagraph_mode\":\"PIECEWISE\"}' --quantization bitsandbytes --load-format bitsandbytes --dtype float16 --model-loader-extra-config '{\"load_in_4bit\":true,\"bnb_4bit_compute_dtype\":\"float16\",\"bnb_4bit_quant_type\":\"nf4\",\"bnb_4bit_use_double_quant\":true}'"
 
 # Compose sometimes injects VLLM_EXTRA_ARGS="" when ${VAR:-} interpolation is empty on the host,
 # which overrides env_file. Recover from the service-specific *VLLM_EXTRA_ARGS in the same .env.

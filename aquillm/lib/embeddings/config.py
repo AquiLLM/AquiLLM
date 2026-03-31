@@ -64,6 +64,17 @@ def get_target_dims() -> int:
     return target_dims
 
 
+def allow_embed_dimensions_override() -> bool:
+    """Whether to send the dimensions kwarg to the embedding endpoint."""
+    raw = (getenv("APP_EMBED_ALLOW_DIMENSIONS_OVERRIDE") or "").strip().lower()
+    if raw:
+        return raw in ("1", "true", "yes", "on")
+    model = (getenv("APP_EMBED_MODEL") or getenv("MEM0_EMBED_MODEL") or "").lower()
+    if "qwen3-vl-embedding" in model:
+        return False
+    return True
+
+
 def max_embed_input_chars() -> int:
     """Get optional explicit hard cap for local embedding inputs."""
     explicit = _env_int("APP_EMBED_MAX_INPUT_CHARS", 0)
@@ -96,6 +107,7 @@ def extract_context_limit_tokens(exc: Exception) -> int | None:
 __all__ = [
     'get_local_embed_config',
     'get_target_dims',
+    'allow_embed_dimensions_override',
     'max_embed_input_chars',
     'is_context_limit_error',
     'extract_context_limit_tokens',
