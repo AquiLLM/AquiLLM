@@ -8,6 +8,7 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 RUN UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_INSTALLS=1 uv sync --frozen --no-dev --no-cache
+RUN /opt/venv/bin/pip install --no-cache-dir langchain-memgraph
 RUN apt update && apt install -y curl nodejs npm tesseract-ocr \
     libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui
 COPY . .
