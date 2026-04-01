@@ -147,3 +147,51 @@ class ToolImageMarkdownInjectionTests(SimpleTestCase):
         self.assertIn("I can summarize what I found.", updated[-1].content)
         self.assertIn("![", updated[-1].content)
         self.assertIn("/aquillm/document_image/00000000-0000-0000-0000-000000000002/", updated[-1].content)
+
+    def test_complete_appends_tool_backed_image_when_model_markdown_uses_placeholder_url(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text=(
+                    "Here is the figure:\n\n"
+                    "![Figure5.2 - Galton's ancestral heredity]"
+                    "(https://example.com/image/927f673-2776-45fb-a7ec-efc043858fa7)"
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=9,
+                output_usage=18,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[
+                UserMessage(content='Show me Figure 5.2'),
+                ToolMessage(
+                    content='{"result": {"type":"image"}}',
+                    tool_name='vector_search',
+                    arguments={"search_string": "Figure 5.2", "top_k": 5},
+                    for_whom='assistant',
+                    result_dict={
+                        "result": [
+                            {
+                                "rank": 1,
+                                "chunk_id": 34,
+                                "doc_id": "00000000-0000-0000-0000-000000000099",
+                                "chunk": 34,
+                                "title": "Paper",
+                                "type": "image",
+                                "text": "Figure 5.2 - Galton's ancestral heredity",
+                                "image_url": "/aquillm/document_image/00000000-0000-0000-0000-000000000099/",
+                            }
+                        ],
+                        "_image_instruction": "Use markdown image syntax.",
+                    },
+                ),
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 1024)
+
+        self.assertEqual(changed, 'changed')
+        self.assertIn("https://example.com/image/927f673-2776-45fb-a7ec-efc043858fa7", updated[-1].content)
+        self.assertIn("/aquillm/document_image/00000000-0000-0000-0000-000000000099/", updated[-1].content)

@@ -68,6 +68,15 @@ def _extract_doc_ref_from_image_url(value: Any) -> str | None:
     return _doc_ref(match.group(1))
 
 
+def _collect_doc_refs_from_embedded_images(text: str) -> set[str]:
+    refs: set[str] = set()
+    for match in _DOC_IMAGE_URL_RE.finditer(text or ""):
+        ref = _doc_ref(match.group(1))
+        if ref:
+            refs.add(ref)
+    return refs
+
+
 def _collect_source_refs_from_tool_message(tool_message: ToolMessage) -> set[str]:
     refs: set[str] = set()
 
@@ -432,11 +441,18 @@ async def complete_conversation_turn(
         )
         and (not response_tool_call)
         and response_text.strip()
-        and (not imgctx.contains_markdown_image(response_text))
     ):
         markdown_images = imgctx.recent_tool_image_markdown(conversation, max_images=3)
         if markdown_images:
-            response_text = response_text.rstrip() + "\n\n" + "\n".join(markdown_images)
+            existing_image_refs = _collect_doc_refs_from_embedded_images(response_text)
+            missing_markdown_images: list[str] = []
+            for line in markdown_images:
+                image_ref = _extract_doc_ref_from_image_url(line)
+                if image_ref and image_ref in existing_image_refs:
+                    continue
+                missing_markdown_images.append(line)
+            if missing_markdown_images:
+                response_text = response_text.rstrip() + "\n\n" + "\n".join(missing_markdown_images)
     if use_live_citation_stream and (not response_tool_call):
         response_text = _append_citation_sources_if_missing(response_text, source_allowlist)
     new_msg = AssistantMessage(
