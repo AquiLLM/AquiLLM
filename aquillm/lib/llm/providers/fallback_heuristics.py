@@ -112,6 +112,27 @@ def continue_on_cutoff_enabled() -> bool:
     return getenv("LLM_CONTINUE_ON_CUTOFF", "1").strip().lower() in ("1", "true", "yes", "on")
 
 
+def should_preserve_cutoff_partial(text: Optional[str]) -> bool:
+    candidate = (text or "").strip()
+    if len(candidate) < 180:
+        return False
+    if looks_like_deferred_tool_intent(candidate):
+        return False
+    lowered = candidate.lower()
+    if lowered.startswith("here are the key points from the retrieved passages"):
+        return False
+    if "i retrieved supporting passages but could not generate a final answer" in lowered:
+        return False
+    if "please retry and i will provide a full summary" in lowered:
+        return False
+    if is_high_quality_summary(candidate):
+        return True
+    bullet_count = candidate.count("\n- ") + candidate.count("\n* ")
+    citation_count = candidate.count("[doc:")
+    nonempty_lines = len([line for line in candidate.splitlines() if line.strip()])
+    return bullet_count >= 3 or citation_count >= 3 or (len(candidate) >= 260 and nonempty_lines >= 4)
+
+
 def synthesize_from_recent_tool_results(conversation: Conversation) -> Optional[str]:
     tool_messages = [
         msg
@@ -171,5 +192,6 @@ __all__ = [
     "is_useful_fallback_sentence",
     "looks_cut_off",
     "looks_like_deferred_tool_intent",
+    "should_preserve_cutoff_partial",
     "synthesize_from_recent_tool_results",
 ]

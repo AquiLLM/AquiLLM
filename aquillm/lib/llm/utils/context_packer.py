@@ -11,7 +11,11 @@ from typing import Any
 
 from tiktoken import encoding_for_model
 
-from lib.llm.providers.openai_tokens import context_reserve_tokens, estimate_prompt_tokens
+from lib.llm.providers.openai_tokens import (
+    context_reserve_tokens,
+    estimate_prompt_tokens,
+    flatten_content_for_token_estimate,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 _ENC = encoding_for_model("gpt-4o")
@@ -94,6 +98,14 @@ def _compute_pinned_indices(msgs: list[dict[str, Any]], cfg: ContextPackerConfig
 
 def _estimate_list_tokens(messages: list[dict[str, Any]]) -> int:
     return estimate_prompt_tokens(messages, _ENC)
+
+
+def _estimate_message_tokens(msg: dict[str, Any]) -> int:
+    if not isinstance(msg, dict):
+        return 0
+    role = str(msg.get("role", ""))
+    content = flatten_content_for_token_estimate(msg.get("content", ""))
+    return 6 + len(_ENC.encode(role)) + len(_ENC.encode(content))
 
 
 def _dedupe_adjacent_tool_headers(msgs: list[dict[str, Any]]) -> bool:
@@ -207,9 +219,11 @@ def _prompt_budget_tokens(context_limit: int, max_tokens: int, slack: int) -> in
     return max(0, raw)
 
 
-def _tokens_for_indices(msgs: list[dict[str, Any]], indices: set[int]) -> int:
-    sub = [msgs[i] for i in sorted(indices) if 0 <= i < len(msgs)]
-    return _estimate_list_tokens(sub) if sub else 0
+def _tokens_for_indices(message_tokens: list[int], indices: set[int]) -> int:
+    selected = [i for i in indices if 0 <= i < len(message_tokens)]
+    if not selected:
+        return 0
+    return 12 + sum(message_tokens[i] for i in selected)
 
 
 def _pack_core(
@@ -222,7 +236,9 @@ def _pack_core(
     salience_scores: dict[int, float] | None,
 ) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
     msgs = copy.deepcopy(message_dicts)
-    system_msg = [{"role": "system", "content": system_text}]
+    system_row = {"role": "system", "content": system_text}
+    system_tokens = _estimate_message_tokens(system_row)
+    base_tokens = 12 + system_tokens
     budget = _prompt_budget_tokens(context_limit, max_tokens, slack)
     stats: dict[str, Any] = {
         "pinned_count": 0,
@@ -233,10 +249,16 @@ def _pack_core(
         "stages_applied": [],
     }
 
-    def total_prompt_tokens() -> int:
-        return _estimate_list_tokens(system_msg + msgs)
+    message_tokens: list[int] = []
+    total_tokens = base_tokens
 
-    stats["before_tokens"] = total_prompt_tokens()
+    def _recompute_message_tokens() -> None:
+        nonlocal message_tokens, total_tokens
+        message_tokens = [_estimate_message_tokens(m) for m in msgs]
+        total_tokens = base_tokens + sum(message_tokens)
+
+    _recompute_message_tokens()
+    stats["before_tokens"] = total_tokens
     if budget <= 0 or not msgs:
         stats["after_tokens"] = stats["before_tokens"]
         stats["pinned_count"] = len(_compute_pinned_indices(msgs, cfg))
@@ -245,7 +267,7 @@ def _pack_core(
     hist_cap = max(256, cfg.budget_history_tokens)
     tool_cap = max(128, cfg.budget_tool_evidence_tokens)
     denom = hist_cap + tool_cap
-    avail = budget - _estimate_list_tokens(system_msg)
+    avail = budget - base_tokens
     if avail < 256:
         avail = max(256, budget // 2)
     if denom > 0:
@@ -254,6 +276,7 @@ def _pack_core(
         tool_cap = max(128, int(tool_cap * scale))
 
     stats["stages_applied"].extend(_run_staged_pruning(msgs, salience_scores))
+    _recompute_message_tokens()
 
     pinned = _compute_pinned_indices(msgs, cfg)
     stats["pinned_count"] = len(pinned)
@@ -270,12 +293,14 @@ def _pack_core(
         return sorted(idxs, key=lambda i: (salience_scores.get(i, 0.0), i))
 
     def remove_best_candidate(pool: set[int]) -> bool:
-        nonlocal pinned, salience_scores
+        nonlocal pinned, salience_scores, total_tokens
         unpinned = [i for i in pool if i not in pinned]
         if not unpinned:
             return False
         victim = drop_priority_order(unpinned)[0]
+        total_tokens -= message_tokens[victim]
         del msgs[victim]
+        del message_tokens[victim]
         pinned = {p if p < victim else p - 1 for p in pinned if p != victim}
         if salience_scores:
             remapped: dict[int, float] = {}
@@ -292,9 +317,9 @@ def _pack_core(
     while True:
         t_idx = tool_indices()
         h_idx = history_indices()
-        tool_tok = _tokens_for_indices(msgs, t_idx)
-        hist_tok = _tokens_for_indices(msgs, h_idx)
-        tot = total_prompt_tokens()
+        tool_tok = _tokens_for_indices(message_tokens, t_idx)
+        hist_tok = _tokens_for_indices(message_tokens, h_idx)
+        tot = total_tokens
         if tot <= budget and tool_tok <= tool_cap and hist_tok <= hist_cap:
             break
         if tool_tok > tool_cap:
@@ -316,7 +341,7 @@ def _pack_core(
     stats["dropped_history"] = orig_len - len(msgs)
 
     trim_loops = 0
-    while total_prompt_tokens() > budget and trim_loops < 48:
+    while total_tokens > budget and trim_loops < 48:
         victim: int | None = None
         best = 0
         for i, m in enumerate(msgs):
@@ -328,17 +353,20 @@ def _pack_core(
                 victim = i
         if victim is None:
             break
-        overflow = max(1, total_prompt_tokens() - budget)
+        overflow = max(1, total_tokens - budget)
         trim_chars = max(128, overflow * 12)
         c = str(msgs[victim].get("content", ""))
+        old_tokens = message_tokens[victim]
         if len(c) <= trim_chars:
             msgs[victim]["content"] = "[Earlier context trimmed due to token limit.]"
         else:
             msgs[victim]["content"] = c[trim_chars:]
+        message_tokens[victim] = _estimate_message_tokens(msgs[victim])
+        total_tokens += message_tokens[victim] - old_tokens
         trim_loops += 1
         stats["stages_applied"].append("hard_trim")
 
-    stats["after_tokens"] = total_prompt_tokens()
+    stats["after_tokens"] = total_tokens
     if stats["after_tokens"] <= budget:
         stats["stage_fit"] = stats["stages_applied"][-1] if stats["stages_applied"] else "pack"
     return msgs, max_tokens, stats

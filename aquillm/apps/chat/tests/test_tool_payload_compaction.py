@@ -39,6 +39,7 @@ class PackChunkSearchTests(SimpleTestCase):
         self.assertEqual(row["chunk"], 2)
         self.assertEqual(row["text"], "body text")
         self.assertEqual(row["title"], "My Doc")
+        self.assertEqual(row["citation"], f"[doc:{did} chunk:99]")
         self.assertNotIn("type", row)
 
     def test_pack_chunk_search_results_compact_fields_preserved(self):
@@ -65,6 +66,7 @@ class PackChunkSearchTests(SimpleTestCase):
         self.assertEqual(row["c"], 2)
         self.assertEqual(row["x"], "body text")
         self.assertEqual(row["n"], "My Doc")
+        self.assertEqual(row["ref"], f"[doc:{did} chunk:99]")
 
     def test_pack_includes_image_fields_when_modality_matches(self):
         did = uuid.uuid4()

@@ -29,6 +29,8 @@ This protects against infinite loops, but the flat per-tool cap can stop valid w
 - Replacing the existing `complete_conversation_turn` fallback/synthesis behavior.
 - Changing `LLMTool` definitions or tool wiring contracts.
 - Introducing long-running graph orchestration (this remains in separate LangGraph work).
+- Changing citation/streaming UX semantics (no early `Sources:` prelude injection; append sources at finalized output).
+- Changing continuation UX from single-bubble behavior (cutoff continuation must preserve the same streamed message identity/UUID).
 
 ## Current-State Anchors
 
@@ -179,6 +181,8 @@ Ensure existing chat flow remains unchanged when new env vars are absent.
    - Mitigation: tune threshold and treat non-empty novel results as progress.
 3. **Risk: config complexity**
    - Mitigation: all new settings optional, clear defaults, strict parsing with warnings.
+4. **Risk: provider-loop refactor regresses streaming/citation UX**
+   - Mitigation: add explicit regression checks for final-only `Sources:` append and continuation UUID continuity.
 
 ## Success Criteria
 
@@ -186,4 +190,3 @@ Ensure existing chat flow remains unchanged when new env vars are absent.
 - Tool loops terminate deterministically with explicit stop reasons.
 - Existing deployments remain stable without env migration.
 - Median answer quality improves on multi-step retrieval prompts with bounded cost increase.
-

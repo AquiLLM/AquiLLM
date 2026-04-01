@@ -55,29 +55,34 @@ const ChatCollectionsModal: React.FC<ChatCollectionsModalProps> = ({
         </div>
 
         <div className="p-2 border rounded-lg bg-scheme-shade_3 border-border-mid_contrast max-h-[400px] overflow-y-auto">
-          {filteredCollections.map((collection) => (
-            <div key={collection.id} className="flex items-start gap-2 p-2 hover:bg-scheme-shade_4 rounded">
-              <input
-                type="checkbox"
-                id={`collection-${collection.id}`}
-                checked={selectedCollections.has(collection.id)}
-                onChange={() => onToggleCollection(collection.id)}
-                className={`w-4 h-4 mt-[3px] shrink-0 rounded cursor-pointer relative border ${
-                  selectedCollections.has(collection.id)
-                    ? "bg-accent border-accent after:content-['✓'] after:absolute after:text-white after:text-xs after:top-[-1px] after:left-[3px]"
-                    : 'bg-scheme-shade_5 border-border-mid_contrast'
-                }`}
-                style={{
-                  appearance: 'none',
-                  WebkitAppearance: 'none',
-                  MozAppearance: 'none',
-                }}
-              />
-              <label htmlFor={`collection-${collection.id}`} className="text-sm leading-6 text-text-normal cursor-pointer">
-                {collection.name}
-              </label>
-            </div>
-          ))}
+          {filteredCollections.map((collection) => {
+            const collectionId = String(collection.id);
+            const isSelected = selectedCollections.has(collectionId);
+
+            return (
+              <div key={collectionId} className="flex items-start gap-2 p-2 hover:bg-scheme-shade_4 rounded">
+                <input
+                  type="checkbox"
+                  id={`collection-${collectionId}`}
+                  checked={isSelected}
+                  onChange={() => onToggleCollection(collectionId)}
+                  className={`w-4 h-4 mt-[3px] shrink-0 rounded cursor-pointer relative border ${
+                    isSelected
+                      ? "bg-accent border-accent after:content-[''] after:absolute after:left-[5px] after:top-[2px] after:h-[7px] after:w-[3px] after:rotate-45 after:border-r after:border-b after:border-white"
+                      : 'bg-scheme-shade_5 border-border-mid_contrast'
+                  }`}
+                  style={{
+                    appearance: 'none',
+                    WebkitAppearance: 'none',
+                    MozAppearance: 'none',
+                  }}
+                />
+                <label htmlFor={`collection-${collectionId}`} className="text-sm leading-6 text-text-normal cursor-pointer">
+                  {collection.name}
+                </label>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

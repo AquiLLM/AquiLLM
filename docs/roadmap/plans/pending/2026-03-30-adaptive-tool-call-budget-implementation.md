@@ -82,8 +82,11 @@ pytest lib/llm/tests/test_tool_budget.py -q
 - [ ] **Step 2:** Replace ad-hoc per-tool and repeat logic with policy event updates.
 - [ ] **Step 3:** Keep global `while calls < max_func_calls` hard ceiling.
 - [ ] **Step 4:** Preserve existing post-loop synthesis behavior.
-- [ ] **Step 5:** Add compact structured logging for stop reason + counters.
-- [ ] **Step 6:** Run tests.
+- [ ] **Step 5:** Preserve stream UX invariants while refactoring loop control:
+  - continuation keeps single-bubble behavior via `stream_message_uuid` continuity
+  - citation streaming keeps final-only `Sources:` append behavior (no early prelude injection)
+- [ ] **Step 6:** Add compact structured logging for stop reason + counters.
+- [ ] **Step 7:** Run tests.
 
 Run:
 ```bash
@@ -143,6 +146,12 @@ pytest lib/llm/tests/test_tool_budget.py lib/llm/tests/test_spin_tool_budget.py 
 - [ ] Existing `lib/llm` test suite passes.
 - [ ] No regression in chat flow when new env vars are absent.
 - [ ] Stop reasons are observable in logs without sensitive payload text.
+- [ ] Continuation single-bubble regression remains green:
+  - `apps/chat/tests/test_llm_complete_retry.py`
+- [ ] Citation streaming UX regressions remain green:
+  - `lib/llm/tests/test_rag_citations.py`
+  - no early `Sources:` injection during partial streaming
+  - final output still appends `Sources:` block
 
 Run:
 ```bash
@@ -164,4 +173,3 @@ pytest lib/llm/tests -q
 - Adaptive policy allows valid multi-step retrieval without hardcoding low caps.
 - Tool loops still terminate deterministically under all tested failure modes.
 - Operator tuning is available through additive env settings only.
-

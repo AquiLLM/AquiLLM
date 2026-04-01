@@ -291,7 +291,18 @@ To keep a copy of episodic memories in AquiLLM's local pgvector tables as well:
 MEM0_DUAL_WRITE_LOCAL=1
 ```
 
-**5. Relaunch Mem0 (OSS mode)**
+**5. Balanced graph quality defaults**
+
+When optional Mem0 graph mode is enabled, AquiLLM now applies balanced quality gates before facts and graph edges are persisted:
+
+- explicit remember directives are normalized into substantive facts instead of `"User asked to remember ..."` wrapper text
+- durable project, tooling, preference, and background facts are kept
+- vague remember noise and assistant paraphrase echoes are filtered before Mem0 add
+- low-value graph edges such as self loops and generic identity edges are dropped before Memgraph persist
+
+Useful graph relations should still survive, for example `user -> WORKS_ON -> aquillm` or `jack -> USES -> memgraph`.
+
+**6. Relaunch Mem0 (OSS mode)**
 
 In OSS mode, relaunching Mem0 means recreating AquiLLM services that host/use it (`qdrant`, `web`, `worker`).
 
@@ -311,6 +322,31 @@ For standard development launches with local vLLM services in serial order, use:
 ```bash
 bash deploy/scripts/start_dev.sh
 ```
+
+**7. Verify balanced graph-memory behavior**
+
+Run the focused memory suite:
+
+```bash
+python -m pytest aquillm/lib/memory/tests -q
+```
+
+Then do a simple smoke test with a durable fact such as:
+
+```text
+Please remember that AquiLLM uses Qdrant and Memgraph for memory.
+```
+
+Inspect Memgraph to confirm useful edges are present and reflexive junk is absent:
+
+```bash
+docker compose exec memgraph mgconsole
+MATCH (n:Entity)-[r]->(m:Entity)
+RETURN n.name, type(r), m.name
+LIMIT 20;
+```
+
+Healthy runs should also avoid repeated `falling back` or `retrying vector-only` warnings in `web` and `worker` logs.
 
 ### Summary: key env vars for Mem0 + vLLM
 

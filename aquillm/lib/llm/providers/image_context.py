@@ -38,6 +38,10 @@ def contains_markdown_image(text: str) -> bool:
     return bool(re.search(r"!\[[^\]]*\]\([^)]+\)", text or ""))
 
 
+def has_unterminated_markdown_image(text: str) -> bool:
+    return bool(re.search(r"!\[[^\]]*\]\([^)]*$", text or ""))
+
+
 def looks_like_image_display_request(text: str) -> bool:
     normalized = (text or "").strip().lower()
     if not normalized:
@@ -131,6 +135,7 @@ def recent_tool_image_markdown(conversation: Conversation, max_images: int = 3) 
 
 __all__ = [
     "contains_markdown_image",
+    "has_unterminated_markdown_image",
     "looks_like_image_display_request",
     "recent_tool_image_markdown",
     "sanitize_data_urls_for_llm_text",

@@ -175,6 +175,8 @@ react/node_modules/
 /aquillm/tmp/
 
 .playwright-mcp/
+.pydeps/
+.pydeps_local/
 
 # Local Hugging Face cache bind default for compose (LM-Lingua2 / web)
 /data/hf_web/

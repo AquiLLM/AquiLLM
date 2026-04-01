@@ -39,6 +39,7 @@ for arg in "$@"; do
 done
 
 AQUILLM_COMPOSE_FILE="${AQUILLM_COMPOSE_FILE:-deploy/compose/development.yml}"
+AQUILLM_ENV_FILE="${AQUILLM_ENV_FILE:-.env}"
 USE_VLLM="${USE_VLLM:-1}"
 USE_OBSERVABILITY="${USE_OBSERVABILITY:-0}"
 USE_EDGE="${USE_EDGE:-0}"
@@ -62,9 +63,14 @@ if [ ! -f "$AQUILLM_COMPOSE_FILE" ]; then
   exit 1
 fi
 
+if [ ! -f "$AQUILLM_ENV_FILE" ]; then
+  echo "ERROR: env file '$AQUILLM_ENV_FILE' was not found in $(pwd)." >&2
+  exit 1
+fi
+
 compose_cmd=(
   docker compose
-  --env-file .env
+  --env-file "$AQUILLM_ENV_FILE"
   -f "$AQUILLM_COMPOSE_FILE"
 )
 

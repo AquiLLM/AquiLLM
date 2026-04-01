@@ -9,10 +9,12 @@ from os import getenv
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 from pydantic import validate_call
+import structlog
 
 from ..types.conversation import Conversation
 from ..types.messages import AssistantMessage, LLM_Message, ToolMessage, UserMessage
 from ..types.response import LLMResponse
+from .tool_budget import ToolBudgetConfig, ToolBudgetPolicy, ToolCallObservation
 from . import image_context as imgctx
 from .complete_turn import complete_conversation_turn
 from ..utils.tool_call_kwargs import normalize_tool_call_kwargs
@@ -21,6 +23,8 @@ try:
     from aquillm.settings import DEBUG
 except ImportError:
     DEBUG = False
+
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class LLMInterface(ABC):
@@ -50,6 +54,8 @@ class LLMInterface(ABC):
         messages_for_bot: list[LLM_Message],
         partial_text: str,
         max_tokens: int,
+        stream_message_uuid: Optional[str] = None,
+        stream_callback: Optional[Callable[[dict], Awaitable[Any]]] = None,
     ) -> Optional[LLMResponse]:
         if not partial_text.strip():
             return None
@@ -65,6 +71,15 @@ class LLMInterface(ABC):
             AssistantMessage(content=partial_text, stop_reason="max_tokens"),
             UserMessage(content=continuation_prompt),
         ]
+        continuation_stream_callback = stream_callback
+        if callable(stream_callback):
+            async def _prepend_partial_to_stream(payload: dict) -> Any:
+                out = dict(payload)
+                content = str(out.get("content", ""))
+                out["content"] = f"{partial_text}{content}"
+                await stream_callback(out)
+
+            continuation_stream_callback = _prepend_partial_to_stream
         try:
             return await self.get_message(
                 **(
@@ -74,6 +89,8 @@ class LLMInterface(ABC):
                         "messages": continuation_messages,
                         "messages_pydantic": continuation_messages_pydantic,
                         "max_tokens": max_tokens,
+                        "stream_callback": continuation_stream_callback,
+                        "stream_message_uuid": stream_message_uuid,
                     }
                 )
             )
@@ -155,38 +172,43 @@ class LLMInterface(ABC):
     ) -> None:
         """Spin the conversation, executing tool calls until complete."""
         calls = 0
-        repeated_tool_call_count = 0
-        prev_tool_signature: Optional[str] = None
-        tool_name_call_counts: dict[str, int] = {}
-        try:
-            repeat_break_threshold = max(1, int(getenv("LLM_REPEAT_TOOL_BREAK_THRESHOLD", "3")))
-        except Exception:
-            repeat_break_threshold = 3
-        try:
-            max_calls_per_tool_name = max(1, int(getenv("LLM_MAX_CALLS_PER_TOOL_NAME", "2")))
-        except Exception:
-            max_calls_per_tool_name = 2
+        stop_reason: Optional[str] = None
+        budget_policy = ToolBudgetPolicy(ToolBudgetConfig.from_env(max_func_calls=max_func_calls))
         while calls < max_func_calls:
             convo, changed = await self.complete(convo, max_tokens, stream_func=stream_func)
             await send_func(convo)
             if changed == "unchanged":
+                logger.info(
+                    "tool_loop_ended stop_reason=%s calls=%d policy=%s",
+                    stop_reason or "unchanged",
+                    calls,
+                    budget_policy.summary(),
+                )
                 return
             last_message = convo[-1]
             if isinstance(last_message, AssistantMessage) and last_message.tool_call_id:
                 sig = f"{last_message.tool_call_name}|{dumps(last_message.tool_call_input or {}, sort_keys=True, ensure_ascii=True)}"
-                if sig == prev_tool_signature:
-                    repeated_tool_call_count += 1
-                else:
-                    repeated_tool_call_count = 0
-                prev_tool_signature = sig
                 tool_name = str(last_message.tool_call_name or "").strip().lower()
-                if tool_name:
-                    tool_name_call_counts[tool_name] = tool_name_call_counts.get(tool_name, 0) + 1
-                    if tool_name_call_counts[tool_name] >= max_calls_per_tool_name:
-                        break
-                if repeated_tool_call_count >= repeat_break_threshold:
+                latest_tool_result = _latest_tool_result_for_name(convo, tool_name)
+                decision = budget_policy.observe_tool_call(
+                    ToolCallObservation(
+                        tool_name=tool_name,
+                        signature=sig,
+                        latest_result_dict=latest_tool_result,
+                    )
+                )
+                if not decision.should_continue:
+                    stop_reason = decision.stop_reason
                     break
                 calls += 1
+        if stop_reason is None and calls >= max_func_calls:
+            stop_reason = "max_func_calls_reached"
+        logger.info(
+            "tool_loop_ended stop_reason=%s calls=%d policy=%s",
+            stop_reason or "loop_exited",
+            calls,
+            budget_policy.summary(),
+        )
         last = convo[-1]
         if isinstance(last, AssistantMessage) and last.tool_call_id:
             convo, _ = await self.complete(convo, max_tokens, stream_func=stream_func)
@@ -195,6 +217,19 @@ class LLMInterface(ABC):
             convo[-1].tool_choice = None
             convo, _ = await self.complete(convo, max_tokens, stream_func=stream_func)
             await send_func(convo)
+
+
+def _latest_tool_result_for_name(convo: Conversation, tool_name: str) -> Optional[dict]:
+    if not tool_name:
+        return None
+    for message in reversed(list(convo)):
+        if (
+            isinstance(message, ToolMessage)
+            and message.for_whom == "assistant"
+            and str(message.tool_name or "").strip().lower() == tool_name
+        ):
+            return message.result_dict if isinstance(message.result_dict, dict) else None
+    return None
 
 
 __all__ = ["LLMInterface"]

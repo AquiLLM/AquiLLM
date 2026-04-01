@@ -141,3 +141,32 @@ def test_context_packer_logs_stats_without_prompt_body(caplog):
     assert "system also hidden" not in joined
 
 
+def test_context_packer_limits_token_estimator_calls_under_pressure(monkeypatch):
+    import lib.llm.utils.context_packer as cp
+
+    real_estimate = cp.estimate_prompt_tokens
+    call_counter = {"count": 0}
+
+    def wrapped_estimate(messages, encoder):
+        call_counter["count"] += 1
+        return real_estimate(messages, encoder)
+
+    monkeypatch.setattr(cp, "estimate_prompt_tokens", wrapped_estimate)
+
+    msgs = [{"role": "user", "content": f"turn {i} " + ("data " * 220)} for i in range(18)]
+    out = cp.pack_messages_for_budget(
+        "short system",
+        msgs,
+        context_limit=1200,
+        max_tokens=128,
+        cfg=ContextPackerConfig(
+            pin_last_turns=1,
+            budget_history_tokens=320,
+            budget_tool_evidence_tokens=320,
+        ),
+        slack=24,
+    )
+    assert out["stats"].get("fail_open") is not True
+    assert call_counter["count"] <= 12
+
+

@@ -93,10 +93,7 @@ def maybe_pack_message_dicts_for_context(
 
         cfg = load_context_packer_config()
         mt = min(max(int(max_tokens), 1), prompt_budget_max_tokens_cap())
-        before_tok = estimate_prompt_tokens(
-            [{"role": "system", "content": system_text}] + list(message_dicts),
-            _ENC,
-        )
+        before_messages = list(message_dicts)
         out = pack_messages_for_budget(
             system_text,
             message_dicts,
@@ -108,11 +105,7 @@ def maybe_pack_message_dicts_for_context(
         packed = out["messages"]
         new_max = int(out["max_tokens"])
         message_dicts[:] = packed
-        after_tok = estimate_prompt_tokens(
-            [{"role": "system", "content": system_text}] + message_dicts,
-            _ENC,
-        )
-        changed = after_tok != before_tok or new_max != max_tokens
+        changed = packed != before_messages or new_max != max_tokens
         return (changed, new_max)
     except Exception as exc:
         logger.warning("obs.llm.prompt_budget_error", error_type=type(exc).__name__)

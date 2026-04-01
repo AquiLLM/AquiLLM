@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 import type { Message, Collection, Conversation, ChatProps } from '../types';
 import { MessageBubble } from './MessageBubble';
@@ -7,6 +7,13 @@ import ChatInputDock from './ChatInputDock';
 import { groupMessages, shouldShowSpinner } from '../utils';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
 import ChatCollectionsModal from './ChatCollectionsModal';
+
+const normalizeCollectionId = (collectionId: string | number): string => String(collectionId);
+
+const toPayloadCollectionId = (collectionId: string): string | number => {
+  const numericId = Number(collectionId);
+  return Number.isInteger(numericId) && String(numericId) === collectionId ? numericId : collectionId;
+};
 
 const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const [conversation, setConversation] = useState<Conversation>({ messages: [] });
@@ -61,6 +68,45 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     fetchCollections();
   }, []);
 
+  const childrenByParentCollectionId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    collections.forEach((collection) => {
+      if (collection.parent == null) return;
+
+      const parentId = normalizeCollectionId(collection.parent);
+      const childId = normalizeCollectionId(collection.id);
+      const siblings = map.get(parentId);
+
+      if (siblings) {
+        siblings.push(childId);
+      } else {
+        map.set(parentId, [childId]);
+      }
+    });
+    return map;
+  }, [collections]);
+
+  const getDescendantCollectionIds = (collectionId: string): string[] => {
+    const descendants: string[] = [];
+    const visited = new Set<string>();
+    const queue = [...(childrenByParentCollectionId.get(collectionId) ?? [])];
+
+    while (queue.length > 0) {
+      const currentId = queue.shift();
+      if (!currentId || visited.has(currentId)) continue;
+
+      visited.add(currentId);
+      descendants.push(currentId);
+
+      const children = childrenByParentCollectionId.get(currentId);
+      if (children) {
+        queue.push(...children);
+      }
+    }
+
+    return descendants;
+  };
+
   const autoResizeTextarea = () => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -113,7 +159,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     const payload = {
       action: 'append',
       message: newMessage,
-      collections: Array.from(selectedCollections),
+      collections: Array.from(selectedCollections).map(toPayloadCollectionId),
       files: [],
     };
 
@@ -165,12 +211,19 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   };
 
   const handleCollectionToggle = (collectionId: string) => {
+    const normalizedCollectionId = normalizeCollectionId(collectionId);
     setSelectedCollections((prev) => {
       const newSelected = new Set(prev);
-      if (newSelected.has(collectionId)) {
-        newSelected.delete(collectionId);
+      if (newSelected.has(normalizedCollectionId)) {
+        newSelected.delete(normalizedCollectionId);
+        getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
+          newSelected.delete(descendantId);
+        });
       } else {
-        newSelected.add(collectionId);
+        newSelected.add(normalizedCollectionId);
+        getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
+          newSelected.add(descendantId);
+        });
       }
       return newSelected;
     });
