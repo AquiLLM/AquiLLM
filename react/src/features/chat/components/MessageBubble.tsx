@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import formatUrl from '../../../utils/formatUrl';
+import { linkifyRagCitations } from '../../../utils/linkifyRagCitations';
 import { resolveSiteAbsoluteUrl } from '../../../utils/resolveSiteAbsoluteUrl';
 import { Collapsible, ToolResult, AquillmLogo, UserLogo } from '../../../shared/components';
 import { RatingButtons } from './RatingButtons';
@@ -107,7 +108,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
                 },
               }}
             >
-              {message.content}
+              {linkifyRagCitations(message.content)}
             </ReactMarkdown>
           </div>
         )}

@@ -8,7 +8,7 @@ from django.http import HttpResponse, Http404
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
-from apps.documents.models import DESCENDED_FROM_DOCUMENT
+from apps.documents.models import DESCENDED_FROM_DOCUMENT, TextChunk
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -67,7 +67,11 @@ def document_image(request, doc_id):
 def document(request, doc_id):
     """Display a document detail page."""
     doc = get_doc(request, doc_id)
-    context = {'document': doc}
+    highlight_chunk = None
+    raw_chunk = request.GET.get('chunk')
+    if raw_chunk is not None and raw_chunk.isdigit():
+        highlight_chunk = TextChunk.objects.filter(pk=int(raw_chunk, 10), doc_id=doc_id).first()
+    context = {'document': doc, 'highlight_chunk': highlight_chunk}
     return render(request, 'aquillm/document.html', context)
 
 
