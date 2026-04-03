@@ -514,6 +514,61 @@ async def test_complete_turn_live_stream_appends_sources_on_done_only():
 
 
 @pytest.mark.asyncio
+async def test_complete_turn_streaming_skips_appending_sources_when_flag_disabled(monkeypatch):
+    monkeypatch.setenv("RAG_APPEND_CITATION_SOURCES", "0")
+    stream_payloads: list[dict] = []
+
+    async def _capture_stream(payload: dict):
+        stream_payloads.append(payload)
+
+    async def _fake_get_message(**kwargs):
+        cb = kwargs.get("stream_callback")
+        assert callable(cb)
+        await cb(
+            {
+                "message_uuid": "m",
+                "role": "assistant",
+                "content": "Narrative summary with no inline citations.",
+                "done": True,
+                "usage": 5,
+            }
+        )
+        return LLMResponse(
+            text="Narrative summary with no inline citations.",
+            tool_call={},
+            stop_reason="stop",
+            input_usage=2,
+            output_usage=3,
+            model="fake",
+        )
+
+    llm = SimpleNamespace(base_args={}, get_message=AsyncMock(side_effect=_fake_get_message))
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(
+        llm,
+        convo,
+        max_tokens=1024,
+        stream_func=_capture_stream,
+    )
+    assert changed == "changed"
+    assert stream_payloads[0]["content"] == "Narrative summary with no inline citations."
+    assert "Sources:" not in stream_payloads[0]["content"]
+    assert "Sources:" not in updated[-1].content
+
+
+@pytest.mark.asyncio
 async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answer():
     stream_payloads: list[dict] = []
 
