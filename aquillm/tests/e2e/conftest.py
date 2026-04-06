@@ -1,7 +1,16 @@
+import os
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import Client, override_settings
 from playwright.sync_api import sync_playwright
+
+# pytest-asyncio (auto mode) starts an event loop for the session.  Django's
+# sync-safety guard then raises SynchronousOnlyOperation when pytest-django
+# tries to create/tear-down the test database from within that loop context.
+# E2E tests use synchronous Playwright only, so it is safe to allow sync DB
+# access from the event loop.
+os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
 
 User = get_user_model()
 
