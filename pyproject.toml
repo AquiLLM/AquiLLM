@@ -30,6 +30,8 @@ dependencies = [
     "pytest-cov",
     "pytest-django",
     "pytest-asyncio",
+    "pytest-xdist",
+    "playwright",
     "boto3",
     "websockets",
     "debugpy",
