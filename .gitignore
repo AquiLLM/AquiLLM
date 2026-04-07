@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# E2E test failure screenshots
+aquillm/tests/e2e/screenshots/
+
 # C extensions
 *.so
 
