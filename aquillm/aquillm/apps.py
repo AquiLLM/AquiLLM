@@ -124,6 +124,9 @@ class AquillmConfig(AppConfig):
                 openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key),
                 local_served_model_name,
             )
+        elif llm_choice == 'ECHO':
+            from apps.chat.tests.chat_message_test_support import _EchoLLMInterface
+            self.llm_interface = _EchoLLMInterface()
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 

@@ -6,6 +6,9 @@ __pycache__/
 # E2E test failure screenshots
 aquillm/tests/e2e/screenshots/
 
+# Claude Code config
+CLAUDE.md
+
 # C extensions
 *.so
 
