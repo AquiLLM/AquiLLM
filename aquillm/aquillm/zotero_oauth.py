@@ -81,11 +81,11 @@ class ZoteroOAuthClient:
                     separator = '&' if '?' in auth_url else '?'
                     auth_url = f"{auth_url}{separator}{'&'.join(permission_params)}"
 
-            logger.info(f"Generated Zotero authorization URL for callback: {callback_url}")
+            logger.info("obs.zotero.oauth_authorize", callback_url=callback_url)
             return auth_url, oauth_token, oauth_token_secret
 
         except Exception as e:
-            logger.error(f"Error getting Zotero authorization URL: {str(e)}")
+            logger.error("obs.zotero.oauth_authorize_error", error=str(e))
             raise
 
     def get_access_token(self, oauth_token: str, oauth_token_secret: str, oauth_verifier: str) -> Dict[str, str]:
@@ -122,7 +122,7 @@ class ZoteroOAuthClient:
             user_id = response.get('userID')
             username = response.get('username')
 
-            logger.info(f"Successfully obtained Zotero access token for user: {username} (ID: {user_id})")
+            logger.info("obs.zotero.oauth_token_success", username=username, user_id=user_id)
 
             return {
                 'api_key': api_key,
@@ -131,5 +131,5 @@ class ZoteroOAuthClient:
             }
 
         except Exception as e:
-            logger.error(f"Error exchanging Zotero OAuth token: {str(e)}")
+            logger.error("obs.zotero.oauth_token_error", error=str(e))
             raise

@@ -59,9 +59,9 @@ def _init_tracing():
         from pyroscope.otel import PyroscopeSpanProcessor
 
         provider.add_span_processor(PyroscopeSpanProcessor())
-        logger.info("PyroscopeSpanProcessor attached to TracerProvider")
+        logger.info("obs.observability.pyroscope_attached")
     except Exception:
-        logger.debug("pyroscope-otel not available, span profiling disabled")
+        logger.debug("obs.observability.pyroscope_unavailable")
 
     trace.set_tracer_provider(provider)
 
@@ -84,7 +84,7 @@ def _init_tracing():
     )
     RedisInstrumentor().instrument()
 
-    logger.info("OpenTelemetry tracing initialized (endpoint=%s)", endpoint)
+    logger.info("obs.observability.tracing_init", endpoint=endpoint)
 
 
 def _init_pyroscope():
@@ -101,7 +101,7 @@ def _init_pyroscope():
         server_address=server_address,
         tags={"service": os.environ.get("OTEL_SERVICE_NAME", "aquillm")},
     )
-    logger.info("Pyroscope profiling initialized (server=%s)", server_address)
+    logger.info("obs.observability.pyroscope_init", server=server_address)
 
 
 def _init_pyroscope_celery_hook():
@@ -156,19 +156,19 @@ def setup():
     try:
         _init_tracing()
     except Exception:
-        logger.exception("Failed to initialize OpenTelemetry tracing")
+        logger.exception("obs.observability.tracing_init_error")
 
     try:
         _init_pyroscope()
     except Exception:
-        logger.exception("Failed to initialize Pyroscope profiling")
+        logger.exception("obs.observability.pyroscope_init_error")
 
     try:
         _init_pyroscope_celery_hook()
     except Exception:
-        logger.exception("Failed to initialize Pyroscope Celery hook")
+        logger.exception("obs.observability.pyroscope_celery_hook_error")
 
     try:
         _init_celery_user_tagging()
     except Exception:
-        logger.exception("Failed to initialize Celery user tagging")
+        logger.exception("obs.observability.celery_user_tagging_error")

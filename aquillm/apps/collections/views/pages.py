@@ -65,7 +65,7 @@ def collection(request, col_id):
             'available_collections': available_collections,
         })
     except Exception as e:
-        logger.error(f"Error in collection view: {str(e)}")
+        logger.error("obs.collections.view_error", error_type=type(e).__name__, error=str(e))
         return JsonResponse({'error': str(e)}, status=500)
 
 

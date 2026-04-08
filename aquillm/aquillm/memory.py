@@ -104,7 +104,7 @@ def promote_profile_facts_for_turn(
     """Extract and persist durable facts for a completed turn."""
     user = User.objects.filter(id=user_id).first()
     if user is None:
-        logger.warning("Skipping profile fact promotion; user_id=%s was not found.", user_id)
+        logger.warning("obs.memory.user_not_found", user_id=user_id)
         return 0
 
     facts = extract_stable_facts(user_content, assistant_content)
@@ -113,12 +113,12 @@ def promote_profile_facts_for_turn(
         remembered = normalize_remember_fact(user_content)
         if remembered:
             facts = [remembered]
-            logger.info("Using direct remember fallback; storing user content as memory fact.")
+            logger.info("obs.memory.direct_remember")
 
     if not facts:
         facts = heuristic_facts_from_turn(user_content, assistant_content)
         if facts:
-            logger.info("Using heuristic memory extraction fallback; extracted %d fact(s).", len(facts))
+            logger.info("obs.memory.heuristic_extract", fact_count=len(facts))
 
     facts = clean_stable_facts(list(dict.fromkeys(facts)))
     if facts:
@@ -141,20 +141,13 @@ def _enqueue_profile_fact_promotion(
             assistant_content=assistant_content,
         )
     except Exception as exc:
-        logger.warning(
-            "Failed to queue deferred profile fact promotion for user_id=%s; running inline. Error: %s",
-            user_id,
-            exc,
-        )
+        logger.warning("obs.memory.promotion_queue_failed", user_id=user_id, error_type=type(exc).__name__, error=str(exc))
         fact_count = promote_profile_facts_for_turn(
             user_id=user_id,
             user_content=user_content,
             assistant_content=assistant_content,
         )
-        logger.info(
-            "Inline profile fact promotion fallback completed with %d fact(s).",
-            fact_count,
-        )
+        logger.info("obs.memory.promotion_inline_fallback", fact_count=fact_count)
 
 
 def _add_mem0_memory(
@@ -178,10 +171,10 @@ def _add_mem0_memory(
         conversation_id=conversation_id,
         assistant_message_uuid=assistant_message_uuid,
     ):
-        logger.info("Mem0 intelligent write succeeded; profile fact promotion was deferred.")
+        logger.info("obs.memory.mem0_write_success")
         return
 
-    logger.warning("Mem0 intelligent write produced no ADD events; profile fact promotion was deferred.")
+    logger.warning("obs.memory.mem0_write_no_events")
 
 
 def get_user_profile_facts(user: User):
@@ -279,13 +272,7 @@ def augment_conversation_with_memory(
     profile_facts = get_user_profile_facts(user)
     query = get_last_user_message_text(convo)
     episodic = get_episodic_memories(user, query, top_k=EPISODIC_TOP_K, exclude_conversation_id=exclude_conversation_id)
-    logger.info(
-        "Memory injection: user_id=%s query=%r profile_facts=%d episodic_memories=%d",
-        user.id,
-        query[:180] if isinstance(query, str) else "",
-        len(profile_facts),
-        len(episodic),
-    )
+    logger.info("obs.memory.injection", user_id=user.id, query=query[:180] if isinstance(query, str) else "", profile_facts=len(profile_facts), episodic_memories=len(episodic))
     block = format_memories_for_system(profile_facts, episodic)
     convo.system = (base_system or "").rstrip() + block
 
@@ -306,13 +293,7 @@ async def augment_conversation_with_memory_async(
         user, query, top_k=EPISODIC_TOP_K, exclude_conversation_id=exclude_conversation_id
     )
     profile_facts, episodic = await asyncio.gather(profile_task, episodic_task)
-    logger.info(
-        "Memory injection (async): user_id=%s query=%r profile_facts=%d episodic_memories=%d",
-        user.id,
-        query[:180] if isinstance(query, str) else "",
-        len(profile_facts),
-        len(episodic),
-    )
+    logger.info("obs.memory.injection_async", user_id=user.id, query=query[:180] if isinstance(query, str) else "", profile_facts=len(profile_facts), episodic_memories=len(episodic))
     block = format_memories_for_system(profile_facts, episodic)
     convo.system = (base_system or "").rstrip() + block
 
@@ -371,9 +352,5 @@ def create_episodic_memories_for_conversation(db_convo) -> None:
             except IntegrityError as exc:
                 if not _is_duplicate_episodic_memory_error(exc):
                     raise
-                logger.info(
-                    "Skipping duplicate episodic memory insert after race: user_id=%s assistant_message_uuid=%s",
-                    db_convo.owner_id,
-                    msg_uuid,
-                )
+                logger.info("obs.memory.episodic_dedupe", user_id=db_convo.owner_id, assistant_message_uuid=msg_uuid)
         prev_content = ""

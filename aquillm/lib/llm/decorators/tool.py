@@ -51,7 +51,7 @@ def llm_tool(
         @wraps(type_checked_func)
         def wrapper(*args, **kwargs) -> ToolResultDict:
             if DEBUG:
-                _logger.debug("%s called", func_name)
+                _logger.debug("obs.llm.tool_called", func_name=func_name)
             try:
                 return type_checked_func(*args, **kwargs)
             except Exception as e:

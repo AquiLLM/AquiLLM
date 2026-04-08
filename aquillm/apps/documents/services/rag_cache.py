@@ -5,6 +5,8 @@ import hashlib
 import json
 import structlog
 import uuid
+
+from aquillm.metrics import rag_cache_ops
 from collections import defaultdict
 from typing import Any, Mapping, Sequence
 
@@ -40,7 +42,7 @@ def cache_get(key: str) -> Any | None:
     try:
         return cache.get(key)
     except Exception as exc:
-        logger.warning("cache_get failed (fail-open) key=%s err=%s", key[:120], exc)
+        logger.warning("obs.rag.cache_get_error", key_prefix=key[:120], error=str(exc))
         return None
 
 
@@ -50,16 +52,18 @@ def cache_set(key: str, value: Any, timeout: int) -> None:
     try:
         cache.set(key, value, timeout=timeout)
     except Exception as exc:
-        logger.warning("cache_set failed (fail-open) key=%s err=%s", key[:120], exc)
+        logger.warning("obs.rag.cache_set_error", key_prefix=key[:120], error=str(exc))
 
 
 def _log_hit_miss(metric: str, hit: bool) -> None:
     if not _rag_enabled():
         return
     if hit:
-        logger.info("%s hit", metric)
+        logger.info("obs.rag.cache_op", metric=metric, result="hit")
+        rag_cache_ops.labels(metric=metric, result="hit").inc()
     else:
-        logger.debug("%s miss", metric)
+        logger.debug("obs.rag.cache_op", metric=metric, result="miss")
+        rag_cache_ops.labels(metric=metric, result="miss").inc()
 
 
 def query_embedding_cache_key(query: str, input_type: str, model_signature: str) -> str:

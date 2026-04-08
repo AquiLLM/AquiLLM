@@ -153,7 +153,7 @@ def extract_stable_facts(user_content: str, assistant_content: str) -> list[str]
                         out.append(item)
         return _clean_fact_candidates(out)
     except Exception as exc:
-        logger.warning("Stable-fact extraction failed: %s", exc)
+        logger.warning("obs.memory.stable_fact_error", error_type=type(exc).__name__, error=str(exc))
         return []
 
 

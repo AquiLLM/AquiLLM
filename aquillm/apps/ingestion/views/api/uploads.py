@@ -58,10 +58,10 @@ def ingest_pdf(request):
     try:
         doc.save()
     except DuplicateDocumentError as e:
-        logger.error(e.message)
+        logger.error("obs.ingest.upload_view_error", error_type=type(e).__name__, error=e.message)
         return JsonResponse({"error": e.message}, status=200)
     except DatabaseError as e:
-        logger.error("Database error: %s", e)
+        logger.error("obs.ingest.upload_view_error", error_type=type(e).__name__, error=str(e))
         return JsonResponse({"error": "Database error occurred while saving PDFDocument"}, status=500)
 
     return JsonResponse({"status_message": "Success"})
@@ -103,7 +103,7 @@ def ingest_vtt(request):
     try:
         doc.save()
     except DatabaseError as e:
-        logger.error("Database error: %s", e)
+        logger.error("obs.ingest.upload_view_error", error_type=type(e).__name__, error=str(e))
         return JsonResponse({"error": "Database error occurred while saving VTTDocument"}, status=500)
 
     return JsonResponse({"status_message": "Success"})

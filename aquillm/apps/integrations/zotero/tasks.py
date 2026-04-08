@@ -23,13 +23,13 @@ def sync_zotero_library(self, user_id: int, library_config: Optional[dict] = Non
     try:
         return run_zotero_library_sync(user_id, library_config)
     except User.DoesNotExist:
-        logger.error("User %s not found", user_id)
+        logger.error("obs.zotero.task_user_not_found", user_id=user_id)
         raise
     except ZoteroConnection.DoesNotExist:
-        logger.error("No Zotero connection for user %s", user_id)
+        logger.error("obs.zotero.task_no_connection", user_id=user_id)
         raise
     except Exception as e:
-        logger.error("Unexpected error during Zotero sync: %s", str(e))
+        logger.error("obs.zotero.task_error", error_type=type(e).__name__, error=str(e))
         raise
 
 

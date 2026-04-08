@@ -426,6 +426,64 @@ python -m pytest aquillm/tests aquillm/apps/chat/tests aquillm/apps/ingestion/te
 
 To ensure generated paths such as `node_modules/` are not committed, run `pwsh -ExecutionPolicy Bypass -File scripts/check_hygiene.ps1` from the repository root.
 
+## Observability
+
+AquiLLM ships an optional observability stack (Grafana, Prometheus, Loki, Tempo, Pyroscope) as a Docker Compose overlay. When enabled, it provides metrics, logs, traces, and continuous profiling with no external services required.
+
+### Enabling the stack
+
+Layer `deploy/compose/observability.yml` on top of your base compose file:
+
+```bash
+# Manual:
+docker compose -f deploy/compose/no_gpu_dev.yml -f deploy/compose/observability.yml --profile web up
+
+# Via start_dev.sh:
+bash deploy/scripts/start_dev.sh --no-gpu --observability
+```
+
+### Service URLs
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Grafana | `http://localhost:3000` | Anonymous admin access, no login required |
+| Prometheus | `http://localhost:9090` | Metrics storage and queries |
+| Pyroscope | `http://localhost:4040` | Continuous profiling |
+
+### What's provisioned
+
+- **Datasources**: Loki (logs), Tempo (traces), Pyroscope (profiles), and Prometheus (metrics) are auto-configured with cross-linking (log→trace, trace→profile, trace→metrics)
+- **Dashboard**: "AquiLLM Runtime Overview" in the AquiLLM folder — HTTP rates, latency percentiles, chunk search performance, RAG cache hit rates, ingestion throughput, and chat latency
+- **Metrics endpoint**: `/metrics` (Prometheus text format, scraped automatically)
+
+### Verifying
+
+1. Start the stack with observability enabled
+2. Confirm `/metrics` returns Prometheus text format: `curl -s http://localhost:8080/metrics | head`
+3. Open Grafana at `http://localhost:3000` and check the AquiLLM Runtime Overview dashboard
+4. Send a chat message — dashboard panels should show data points within 30 seconds
+
+### Disabling
+
+Omit the `-f deploy/compose/observability.yml` overlay. The application runs identically without it — all instrumentation is gated by environment variables (`OTEL_ENABLED`, `PYROSCOPE_SERVER_ADDRESS`, `LOKI_PUSH_URL`) that are only set in the overlay.
+
+### Environment variables
+
+See the `# Observability` and `# Logging` sections in `.env.example` for all available toggles. Key variables:
+
+- `LOG_LEVEL` — floor level for app loggers (`DEBUG`, `INFO`, `WARNING`, `ERROR`)
+- `LOG_JSON` — force JSON output on console (logs are always JSON when shipped to Loki)
+
+### Production
+
+The same overlay works with `production.yml`:
+
+```bash
+docker compose -f deploy/compose/production.yml -f deploy/compose/observability.yml up -d
+```
+
+For shared access, consider pointing Grafana at an external Prometheus/Loki instance instead of using the bundled stack.
+
 ## Contributors
 
 ### Project Leads

@@ -92,8 +92,11 @@ def resize_image_for_ocr(file_content: bytes, max_dimension: int = 2048, quality
             if (new_width, new_height) != (width, height):
                 image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
                 logger.debug(
-                    "Resized image from %dx%d to %dx%d for OCR",
-                    width, height, new_width, new_height
+                    "obs.ocr.image_resized",
+                    original_width=width,
+                    original_height=height,
+                    new_width=new_width,
+                    new_height=new_height,
                 )
             
             output = io.BytesIO()
@@ -108,7 +111,7 @@ def resize_image_for_ocr(file_content: bytes, max_dimension: int = 2048, quality
             
             return output.getvalue()
     except Exception as exc:
-        logger.warning("Failed to resize image for OCR: %s", exc)
+        logger.warning("obs.ocr.resize_error", error=str(exc))
         return file_content
 
 

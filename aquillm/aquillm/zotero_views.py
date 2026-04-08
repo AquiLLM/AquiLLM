@@ -81,7 +81,7 @@ def zotero_connect(request: HttpRequest) -> HttpResponse:
         return redirect(auth_url)
 
     except Exception as e:
-        logger.error(f"Error initiating Zotero OAuth: {str(e)}")
+        logger.error("obs.zotero.view_error", view="zotero_connect", error=str(e))
         messages.error(request, f"Failed to connect to Zotero: {str(e)}")
         return redirect('zotero_settings')
 
@@ -136,7 +136,7 @@ def zotero_callback(request: HttpRequest) -> HttpResponse:
         return redirect('zotero_settings')
 
     except Exception as e:
-        logger.error(f"Error completing Zotero OAuth: {str(e)}")
+        logger.error("obs.zotero.view_error", view="zotero_callback", error=str(e))
         messages.error(request, f"Failed to complete Zotero connection: {str(e)}")
         return redirect('zotero_settings')
 
@@ -188,7 +188,7 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
                         fetch_library_data(client, "personal", "Personal Library", "user", None)
                     )
                 except Exception as e:
-                    logger.error("Error fetching personal library: %s", e)
+                    logger.error("obs.zotero.view_error", view="zotero_sync", error=str(e))
 
                 for group in groups:
                     group_id = str(group["id"])
@@ -199,7 +199,7 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
                             )
                         )
                     except Exception as e:
-                        logger.error("Error fetching library %s: %s", group_id, e)
+                        logger.error("obs.zotero.view_error", view="zotero_sync", library_id=group_id, error=str(e))
 
                 # Sort so personal library appears first
                 libraries.sort(key=lambda lib: (0 if lib['id'] == 'personal' else 1, lib['name']))
@@ -211,7 +211,7 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
                 return render(request, 'zotero/sync.html', context)
 
             except Exception as e:
-                logger.error(f"Error fetching Zotero libraries: {str(e)}")
+                logger.error("obs.zotero.view_error", view="zotero_sync", error=str(e))
                 messages.error(request, f"Failed to fetch libraries: {str(e)}")
                 return redirect('zotero_settings')
 
@@ -240,7 +240,7 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
             )
 
             messages.info(request, "Zotero sync started. This may take a few minutes depending on your library size.")
-            logger.info(f"Started Zotero sync for user {request.user.id} with collections: {library_config} (task: {task.id})")
+            logger.info("obs.zotero.sync_start", user_id=request.user.id, task_id=task.id)
 
             return redirect('zotero_settings')
 
@@ -248,7 +248,7 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
         messages.error(request, "Please connect your Zotero account first")
         return redirect('zotero_settings')
     except Exception as e:
-        logger.error(f"Error starting Zotero sync: {str(e)}")
+        logger.error("obs.zotero.view_error", view="zotero_sync", error=str(e))
         messages.error(request, f"Failed to start sync: {str(e)}")
         return redirect('zotero_settings')
 

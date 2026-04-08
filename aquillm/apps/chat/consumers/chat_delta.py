@@ -9,6 +9,7 @@ from typing import Any
 from channels.db import aclose_old_connections
 
 from aquillm.llm import Conversation
+from aquillm.metrics import chat_latency
 from aquillm.message_adapters import pydantic_message_to_frontend_dict
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -23,13 +24,13 @@ async def send_conversation_delta(
 ) -> None:
     if close_db:
         await aclose_old_connections()
-    logger.debug("send_func called")
+    logger.debug("obs.chat.delta_start")
     consumer.convo = convo
     save_start = perf_counter()
     await consumer._save_conversation(create_memories=create_memories)
     new_messages = convo.messages[consumer.last_sent_sequence + 1 :]
     if not new_messages:
-        logger.debug("send_func skipped; no new messages to send")
+        logger.debug("obs.chat.delta_skip")
         return
     usage = next(
         (
@@ -46,12 +47,10 @@ async def send_conversation_delta(
         delta["usage"] = usage
     await consumer.send(text_data=dumps({"delta": delta}))
     consumer.last_sent_sequence = len(convo) - 1
-    logger.info(
-        "Chat send_func persisted+sent delta in %.1fms (messages=%d)",
-        (perf_counter() - save_start) * 1000,
-        len(new_messages),
-    )
-    logger.debug("send_func completed")
+    delta_elapsed = (perf_counter() - save_start) * 1000
+    logger.info("obs.chat.delta_persist", latency_ms=delta_elapsed, message_count=len(new_messages))
+    chat_latency.labels(phase="delta_persist").observe(delta_elapsed / 1000)
+    logger.debug("obs.chat.delta_complete")
 
 
 __all__ = ["send_conversation_delta"]

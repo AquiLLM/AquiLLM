@@ -26,7 +26,7 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
     user = User.objects.get(id=user_id)
     connection = ZoteroConnection.objects.get(user=user)
 
-    logger.info("Starting Zotero sync for user %s (ID: %s)", user.username, user_id)
+    logger.info("obs.zotero.sync_start", username=user.username, user_id=user_id)
 
     client = ZoteroAPIClient(
         api_key=connection.api_key,
@@ -43,7 +43,7 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
 
     collection_map = {}
 
-    logger.info("Processing library config: %s", library_config)
+    logger.info("obs.zotero.sync_config", library_config=library_config)
 
     for library_id, selected_collection_keys in library_config.items():
         if library_id == "personal":
@@ -57,18 +57,18 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
             group = next((g for g in all_groups if str(g["id"]) == library_id), None)
             library_name = group["data"]["name"] if group else f"Group {library_id}"
 
-        logger.info("Syncing from %s...", library_name)
+        logger.info("obs.zotero.sync_library", library_name=library_name)
 
         all_collections = client.get_collections(group_id=group_id)
 
         if "ALL" in selected_collection_keys:
             selected_collections = all_collections
-            logger.info("Syncing ALL collections (%s total)", len(all_collections))
+            logger.info("obs.zotero.sync_all_collections", count=len(all_collections))
         else:
             selected_collections = [
                 col for col in all_collections if col["key"] in selected_collection_keys
             ]
-            logger.info("Syncing %s selected collection(s)", len(selected_collections))
+            logger.info("obs.zotero.sync_selected", count=len(selected_collections))
 
         collections_to_sync = set()
         for col in selected_collections:
@@ -116,15 +116,15 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
 
                 if created:
                     stats["collections_created"] += 1
-                    logger.info("Created collection: %s", full_name)
+                    logger.info("obs.zotero.sync_collection_created", collection_name=full_name)
                 else:
                     stats["collections_updated"] += 1
 
             except Exception as e:
                 logger.error(
-                    "Error syncing collection %s: %s",
-                    col.get("key", "unknown"),
-                    str(e),
+                    "obs.zotero.sync_collection_error",
+                    collection_key=col.get("key", "unknown"),
+                    error=str(e),
                 )
                 stats["errors"] += 1
 
@@ -138,7 +138,7 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
             ):
                 items_to_sync.append(item)
 
-        logger.info("Fetching children for %s items...", len(items_to_sync))
+        logger.info("obs.zotero.sync_fetch_children", count=len(items_to_sync))
         item_children_map = {}
         with ThreadPoolExecutor(max_workers=16) as executor:
             future_to_item = {
@@ -150,7 +150,7 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
                 try:
                     item_children_map[item["key"]] = future.result()
                 except Exception as e:
-                    logger.error("Error fetching children for %s: %s", item["key"], e)
+                    logger.error("obs.zotero.sync_fetch_children_error", item_key=item["key"], error=str(e))
                     item_children_map[item["key"]] = []
 
         pdf_attachments = []
@@ -165,7 +165,7 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
                     if not PDFDocument.objects.filter(zotero_item_key=attachment_key).exists():
                         pdf_attachments.append((item, child))
 
-        logger.info("Downloading %s PDFs...", len(pdf_attachments))
+        logger.info("obs.zotero.sync_download_pdfs", count=len(pdf_attachments))
         pdf_content_map = {}
         with ThreadPoolExecutor(max_workers=16) as executor:
             future_to_attachment = {
@@ -182,9 +182,9 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
                     if content:
                         pdf_content_map[(item["key"], child["key"])] = content
                     else:
-                        logger.warning("Could not download PDF for attachment %s", child["key"])
+                        logger.warning("obs.zotero.download_not_found", item_key=child["key"])
                 except Exception as e:
-                    logger.error("Error downloading %s: %s", child["key"], e)
+                    logger.error("obs.zotero.download_error", item_key=child["key"], error=str(e))
 
         unfiled_collection = None
         if any(
@@ -239,15 +239,15 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
             pdf_doc.save()
             return title
 
-        logger.info("Saving %s PDF documents (main thread; no threaded ORM)...", len(pdf_attachments))
+        logger.info("obs.zotero.sync_save_documents", count=len(pdf_attachments))
         for item, child in pdf_attachments:
             try:
                 title = save_pdf_document(item, child)
                 if title:
                     stats["pdfs_downloaded"] += 1
-                    logger.info("Created document: %s", title)
+                    logger.info("obs.zotero.sync_document_created", title=title)
             except Exception as e:
-                logger.error("Error saving document for %s: %s", child["key"], e)
+                logger.error("obs.zotero.sync_save_error", item_key=child["key"], error=str(e))
                 stats["errors"] += 1
 
         stats["items_synced"] += len(items_to_sync)
@@ -255,19 +255,19 @@ def run_zotero_library_sync(user_id: int, library_config: Optional[dict] = None)
     connection.last_synced_at = timezone.now()
     connection.save()
 
-    logger.info("Cleaning up empty collections...")
+    logger.info("obs.zotero.sync_cleanup_start")
     empty_collections_deleted = 0
     for collection in collection_map.values():
         if not collection.documents:
             has_content = any(child.documents for child in collection.get_all_children())
             if not has_content:
-                logger.info("Deleting empty collection: %s", collection.name)
+                logger.info("obs.zotero.sync_collection_deleted", collection_name=collection.name)
                 collection.delete()
                 empty_collections_deleted += 1
 
     stats["empty_collections_deleted"] = empty_collections_deleted
 
-    logger.info("Zotero sync completed for user %s. Stats: %s", user.username, stats)
+    logger.info("obs.zotero.sync_complete", username=user.username, **stats)
     return stats
 
 

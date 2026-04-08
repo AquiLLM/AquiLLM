@@ -12,6 +12,7 @@ from django.core.exceptions import ValidationError
 from django.db import DatabaseError
 from pgvector.django import L2Distance
 
+from aquillm.metrics import chunk_search_duration
 from apps.documents.services.chunk_rerank import _fallback_rerank, rerank_chunks
 
 if TYPE_CHECKING:
@@ -66,11 +67,9 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
                 .order_by(L2Distance("embedding", query_embedding))[:vector_limit]
             )  # type: ignore
             vector_ms = (perf_counter() - vector_start) * 1000
+            chunk_search_duration.labels(phase="vector").observe(vector_ms / 1000)
         except Exception as exc:
-            logger.warning(
-                "Vector embed/search failed; continuing with trigram-only retrieval. Error: %s",
-                exc,
-            )
+            logger.warning("obs.rag.vector_fallback", error=str(exc))
             vector_results = model_cls.objects.none()
             vector_ms = (perf_counter() - total_start) * 1000
         trigram_start = perf_counter()
@@ -82,6 +81,7 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             .order_by("-similarity")[:trigram_limit]
         )
         trigram_ms = (perf_counter() - trigram_start) * 1000
+        chunk_search_duration.labels(phase="trigram").observe(trigram_ms / 1000)
         combined_candidates = list(vector_results) + list(trigram_results)
         pre_dedupe_count = len(combined_candidates)
         deduped_candidates = []
@@ -99,28 +99,29 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             rerank_start = perf_counter()
             reranked_results = rerank_chunks(model_cls, query, combined_candidates, top_k)
             rerank_ms = (perf_counter() - rerank_start) * 1000
+            chunk_search_duration.labels(phase="rerank").observe(rerank_ms / 1000)
         total_ms = (perf_counter() - total_start) * 1000
+        chunk_search_duration.labels(phase="total").observe(total_ms / 1000)
         logger.info(
-            "text_chunk_search latency %.1fms (vector=%.1fms trigram=%.1fms rerank=%.1fms "
-            "docs=%d top_k=%d pre_dedupe=%d candidates=%d)",
-            total_ms,
-            vector_ms,
-            trigram_ms,
-            rerank_ms,
-            len(docs),
-            top_k,
-            pre_dedupe_count,
-            len(combined_candidates),
+            "obs.rag.chunk_search",
+            total_ms=total_ms,
+            vector_ms=vector_ms,
+            trigram_ms=trigram_ms,
+            rerank_ms=rerank_ms,
+            doc_count=len(docs),
+            top_k=top_k,
+            pre_dedupe=pre_dedupe_count,
+            candidates=len(combined_candidates),
         )
         return vector_results, trigram_results, reranked_results
     except DatabaseError as e:
-        logger.error(f"Database error during search: {str(e)}")
+        logger.error("obs.rag.search_error", error_type="database", error=str(e))
         raise e
     except ValidationError as e:
-        logger.error(f"Validation error during search: {str(e)}")
+        logger.error("obs.rag.search_error", error_type="validation", error=str(e))
         raise e
     except Exception as e:
-        logger.error(f"Unexpected error during search: {str(e)}")
+        logger.error("obs.rag.search_error", error_type="unexpected", error=str(e))
         raise e
 
 

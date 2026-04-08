@@ -6,18 +6,42 @@ set -euo pipefail
 # (chat -> ocr -> transcribe -> embed -> rerank), waiting for each
 # to become healthy before moving on, then starts web/worker.
 #
+# CLI arguments:
+#   --no-gpu          Use no_gpu_dev.yml compose file, disable vLLM
+#   --observability   Layer observability stack (Grafana, Prometheus, etc.)
+#
 # Optional env vars:
 #   AQUILLM_COMPOSE_FILE=deploy/compose/development.yml
 #   USE_VLLM=1
+#   USE_OBSERVABILITY=0
 #   USE_EDGE=0
 #   RUN_CERTBOT=0
 #   BUILD=0
 #   FORCE_RECREATE=1
 #   WAIT_TIMEOUT_SECONDS=1800
 
+# Parse CLI arguments
+for arg in "$@"; do
+  case "$arg" in
+    --no-gpu)
+      AQUILLM_COMPOSE_FILE="deploy/compose/no_gpu_dev.yml"
+      USE_VLLM=0
+      ;;
+    --observability)
+      USE_OBSERVABILITY=1
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      echo "Usage: $0 [--no-gpu] [--observability]" >&2
+      exit 1
+      ;;
+  esac
+done
+
 AQUILLM_COMPOSE_FILE="${AQUILLM_COMPOSE_FILE:-deploy/compose/development.yml}"
 AQUILLM_ENV_FILE="${AQUILLM_ENV_FILE:-.env}"
 USE_VLLM="${USE_VLLM:-1}"
+USE_OBSERVABILITY="${USE_OBSERVABILITY:-0}"
 USE_EDGE="${USE_EDGE:-0}"
 RUN_CERTBOT="${RUN_CERTBOT:-0}"
 BUILD="${BUILD:-0}"
@@ -49,6 +73,10 @@ compose_cmd=(
   --env-file "$AQUILLM_ENV_FILE"
   -f "$AQUILLM_COMPOSE_FILE"
 )
+
+if [ "$USE_OBSERVABILITY" = "1" ]; then
+  compose_cmd+=(-f deploy/compose/observability.yml)
+fi
 
 if [ "$USE_VLLM" = "1" ]; then
   compose_cmd+=(--profile vllm)

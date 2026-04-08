@@ -131,7 +131,7 @@ class Document(models.Model):
                 create_chunks.delay(str(self.id))
                 return
             except Exception as e:
-                logger.error(f"Error creating chunks for document {self.id}: {str(e)}")
+                logger.error("obs.documents.chunk_error", doc_id=self.id, error_type=type(e).__name__, error=str(e))
                 self.ingestion_complete = False
                 self.save(dont_rechunk=True, update_fields=['ingestion_complete'])
 

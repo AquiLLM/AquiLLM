@@ -12,6 +12,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 
 from aquillm.llm import ToolChoice, UserMessage
+from aquillm.metrics import chat_latency
 from aquillm.memory import augment_conversation_with_memory_async
 from apps.chat.consumers.chat_delta import send_conversation_delta
 from apps.chat.consumers.chat_ws_errors import (
@@ -26,8 +27,6 @@ logger = structlog.stdlib.get_logger(__name__)
 
 
 async def handle_chat_receive(consumer: Any, text_data: str) -> None:
-    logger.debug("ChatConsumer.receive() called with data: %s...", text_data[:100])
-
     @database_sync_to_async
     def _save_files(files: list[ConversationFile]) -> list[ConversationFile]:
         for file in files:
@@ -35,7 +34,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         return files
 
     async def append(data: dict):
-        logger.debug("append() called with collections: %s", data.get("collections", []))
+        logger.debug("obs.chat.receive", collections=data.get("collections", []))
 
         assert consumer.convo is not None
 
@@ -62,7 +61,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         consumer.convo[-1].tool_choice = ToolChoice(type="auto")
         await consumer._save_conversation(create_memories=False)
         consumer.last_sent_sequence = len(consumer.convo) - 1
-        logger.debug("append() completed, message added")
+        logger.debug("obs.chat.append_completed")
 
     async def rate(data: dict):
         assert consumer.convo is not None
@@ -101,7 +100,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         try:
             data = loads(text_data)
             action = data.pop("action", None)
-            logger.debug("Action: %s", action)
+            logger.debug("obs.chat.action", action=action)
             if action == "append":
                 await append(data)
                 augment_start = perf_counter()
@@ -111,11 +110,10 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                     consumer.db_convo.system_prompt,
                     consumer.db_convo.id,
                 )
-                logger.info(
-                    "Memory augmentation took %.1fms in receive()",
-                    (perf_counter() - augment_start) * 1000,
-                )
-                logger.debug("About to call llm_if.spin() in receive()")
+                augment_elapsed = (perf_counter() - augment_start) * 1000
+                logger.info("obs.chat.memory_augment", latency_ms=augment_elapsed)
+                chat_latency.labels(phase="memory_augmentation").observe(augment_elapsed / 1000)
+                logger.debug("obs.chat.receive_spin_start")
                 llm_start = perf_counter()
                 await consumer.llm_if.spin(
                     consumer.convo,
@@ -126,7 +124,9 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                     ),
                     stream_func=consumer._send_stream_payload,
                 )
-                logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
+                llm_elapsed = (perf_counter() - llm_start) * 1000
+                logger.info("obs.chat.llm_spin", latency_ms=llm_elapsed)
+                chat_latency.labels(phase="llm_spin").observe(llm_elapsed / 1000)
                 await consumer._save_conversation(create_memories=True)
             elif action == "rate":
                 await rate(data)
@@ -134,13 +134,13 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 await feedback(data)
             else:
                 raise ValueError(f'Invalid action "{action}"')
-            logger.debug("receive() action completed")
+            logger.debug("obs.chat.receive_action_completed")
         except ValidationError as e:
             msg = e.messages[0] if getattr(e, "messages", None) else str(e)
-            logger.warning("Validation error in receive(): %s", msg)
+            logger.warning("obs.chat.receive_error", error_type="validation", error=str(msg))
             await send_receive_validation_error(consumer, msg)
         except Exception as e:
-            logger.error("Exception in receive(): %s", e, exc_info=True)
+            logger.error("obs.chat.receive_error", error_type=type(e).__name__, error=str(e), exc_info=True)
             await send_receive_error(consumer, e)
 
 

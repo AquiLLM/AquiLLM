@@ -145,7 +145,7 @@ def render_region(page, rect, dpi: int = RENDER_DPI) -> tuple[bytes, int, int] |
             return None
         return png_bytes, pix.width, pix.height
     except Exception as exc:
-        logger.debug("Failed to render PDF region: %s", exc)
+        logger.debug("obs.ingest.pdf_render_failed", error_type=type(exc).__name__, error=str(exc))
         return None
 
 

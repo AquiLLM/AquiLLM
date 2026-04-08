@@ -8,6 +8,8 @@ import structlog
 from aquillm.observability import add_otel_trace_context
 
 DEBUG = os.environ.get("DJANGO_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
+LOG_JSON = os.environ.get("LOG_JSON", "").strip().lower() in ("1", "true", "yes")
 
 # --------------------------------------------------------------------------- #
 # Shared structlog processors (used by both structlog loggers and stdlib       #
@@ -74,7 +76,7 @@ LOGGING = {
             "processors": [
                 structlog.stdlib.ProcessorFormatter.remove_processors_meta,
                 structlog.dev.ConsoleRenderer()
-                if DEBUG
+                if DEBUG and not LOG_JSON
                 else structlog.processors.JSONRenderer(),
             ],
             "foreign_pre_chain": shared_processors,
@@ -101,28 +103,33 @@ LOGGING = {
         },
         "aquillm": {
             "handlers": _default_handlers,
-            "level": "DEBUG",
+            "level": LOG_LEVEL,
             "propagate": True,
+        },
+        "apps": {
+            "handlers": _default_handlers,
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "lib": {
+            "handlers": _default_handlers,
+            "level": LOG_LEVEL,
+            "propagate": False,
         },
         "chat": {
             "handlers": _default_handlers,
-            "level": "DEBUG",
+            "level": LOG_LEVEL,
             "propagate": True,
         },
         "celery": {
             "handlers": _default_handlers,
-            "level": "DEBUG",
+            "level": LOG_LEVEL,
             "propagate": True,
         },
         "ingest": {
             "handlers": _default_handlers,
-            "level": "DEBUG",
+            "level": LOG_LEVEL,
             "propagate": True,
-        },
-        "lib.llm.utils": {
-            "handlers": _default_handlers,
-            "level": "INFO",
-            "propagate": False,
         },
         "kombu": {
             "handlers": ["console"],

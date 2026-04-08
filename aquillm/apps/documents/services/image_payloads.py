@@ -37,7 +37,7 @@ def _extract_image_bytes(doc: Any) -> tuple[bytes, str] | None:
             with default_storage.open(file_name, "rb") as f:
                 return f.read(), file_name
     except Exception as exc:
-        logger.warning("_extract_image_bytes storage read failed for %r: %s", file_name, exc)
+        logger.warning("obs.documents.image_read_error", file_name=file_name, error_type=type(exc).__name__, error=str(exc))
 
     if hasattr(image_file, "read"):
         position = None
@@ -50,7 +50,7 @@ def _extract_image_bytes(doc: Any) -> tuple[bytes, str] | None:
             if isinstance(data, bytes) and data:
                 return data, file_name
         except Exception as exc:
-            logger.warning("_extract_image_bytes file-object read failed: %s", exc)
+            logger.warning("obs.documents.image_read_error", source="file_object", error_type=type(exc).__name__, error=str(exc))
             return None
         finally:
             try:
@@ -96,7 +96,7 @@ def _resize_image_to_fit(image_bytes: bytes, max_bytes: int, file_name: str = ""
                 max_dimension = int(max_dimension * 0.75)
                 quality = max(40, quality - 10)
     except Exception as exc:
-        logger.warning("Failed resizing image %r: %s", file_name, exc)
+        logger.warning("obs.documents.image_resize_error", file_name=file_name, error_type=type(exc).__name__, error=str(exc))
     return None
 
 

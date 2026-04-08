@@ -47,7 +47,7 @@ def insert_one_from_arxiv(arxiv_id, collection, user):
         status_message += "ERROR: 404 from ArXiv, is the DOI correct?"
     elif tex_req.status_code not in [200, 404] or pdf_req.status_code not in [200, 404] or metadata_req.status_code not in [200, 404]:
         error_str = f"ERROR -- DOI {arxiv_id}: LaTeX status code {tex_req.status_code}, PDF status code {pdf_req.status_code}, metadata status code {metadata_req.status_code}"
-        logger.error(error_str)
+        logger.error("obs.ingest.view_error", arxiv_id=arxiv_id, tex_status=tex_req.status_code, pdf_status=pdf_req.status_code, metadata_status=metadata_req.status_code)
         status_message += error_str
     else:
         xmldoc = minidom.parseString(metadata_req.content)

@@ -125,10 +125,11 @@ class TextChunk(models.Model):
                 self.get_chunk_embedding()
             except Exception as exc:
                 logger.warning(
-                    "Chunk embedding failed (doc_id=%s chunk=%s); saving without embedding. Error: %s",
-                    self.doc_id,
-                    self.chunk_number,
-                    exc,
+                    "obs.documents.chunk_warning",
+                    doc_id=str(self.doc_id),
+                    chunk_number=self.chunk_number,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
                 )
 
         super().save(*args, **kwargs)

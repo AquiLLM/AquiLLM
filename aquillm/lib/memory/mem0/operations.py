@@ -96,28 +96,26 @@ def _run_mem0_search_call(search_callable: Any, *args: Any, **kwargs: Any) -> An
         else:
             resolved = result
         logger.info(
-            "Mem0 raw search call completed: mode=%s attempt=%d elapsed_ms=%.2f "
-            "query_chars=%d top_k=%d",
-            mode,
-            attempt,
-            (time.perf_counter() - started_at) * 1000.0,
-            query_chars,
-            top_k,
+            "obs.memory.mem0_search_call",
+            mode=mode,
+            attempt=attempt,
+            latency_ms=(time.perf_counter() - started_at) * 1000.0,
+            query_chars=query_chars,
+            top_k=top_k,
         )
         return resolved
     except TypeError:
         raise
     except Exception as exc:
         logger.warning(
-            "Mem0 raw search call failed: mode=%s attempt=%d elapsed_ms=%.2f "
-            "query_chars=%d top_k=%d error_type=%s error=%s",
-            mode,
-            attempt,
-            (time.perf_counter() - started_at) * 1000.0,
-            query_chars,
-            top_k,
-            type(exc).__name__,
-            exc,
+            "obs.memory.mem0_search_error",
+            mode=mode,
+            attempt=attempt,
+            latency_ms=(time.perf_counter() - started_at) * 1000.0,
+            query_chars=query_chars,
+            top_k=top_k,
+            error_type=type(exc).__name__,
+            error=str(exc),
         )
         raise
 
@@ -132,28 +130,26 @@ async def _run_mem0_search_call_async(search_callable: Any, *args: Any, **kwargs
     try:
         resolved = await _await_result(search_callable(*args, **kwargs))
         logger.info(
-            "Mem0 raw search call completed: mode=%s attempt=%d elapsed_ms=%.2f "
-            "query_chars=%d top_k=%d",
-            mode,
-            attempt,
-            (time.perf_counter() - started_at) * 1000.0,
-            query_chars,
-            top_k,
+            "obs.memory.mem0_search_call",
+            mode=mode,
+            attempt=attempt,
+            latency_ms=(time.perf_counter() - started_at) * 1000.0,
+            query_chars=query_chars,
+            top_k=top_k,
         )
         return resolved
     except TypeError:
         raise
     except Exception as exc:
         logger.warning(
-            "Mem0 raw search call failed: mode=%s attempt=%d elapsed_ms=%.2f "
-            "query_chars=%d top_k=%d error_type=%s error=%s",
-            mode,
-            attempt,
-            (time.perf_counter() - started_at) * 1000.0,
-            query_chars,
-            top_k,
-            type(exc).__name__,
-            exc,
+            "obs.memory.mem0_search_error",
+            mode=mode,
+            attempt=attempt,
+            latency_ms=(time.perf_counter() - started_at) * 1000.0,
+            query_chars=query_chars,
+            top_k=top_k,
+            error_type=type(exc).__name__,
+            error=str(exc),
         )
         raise
 
@@ -191,13 +187,12 @@ async def _call_mem0_search_async(
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "Mem0 raw search attempt timed out: mode=%s attempt=%d timeout_s=%.1f "
-                "query_chars=%d top_k=%d",
-                mode,
-                attempt_number,
-                timeout,
-                query_chars,
-                top_k,
+                "obs.memory.mem0_search_timeout",
+                mode=mode,
+                attempt=attempt_number,
+                timeout_s=timeout,
+                query_chars=query_chars,
+                top_k=top_k,
             )
             raise
         except TypeError:
@@ -215,21 +210,21 @@ def search_mem0_via_oss(
         response = _call_mem0_search_sync(mem0, query, user_id, top_k)
     except Exception as exc:
         if enable_graph and _graph_fail_open():
-            logger.warning("Mem0 OSS graph search failed; retrying vector-only. Error: %s", exc)
+            logger.warning("obs.memory.mem0_graph_search_fallback", error_type=type(exc).__name__, error=str(exc))
             try:
                 vector_mem0 = get_mem0_oss_vector()
                 if vector_mem0 is None:
                     return []
                 response = _call_mem0_search_sync(vector_mem0, query, user_id, top_k)
             except Exception as retry_exc:
-                logger.warning("Mem0 OSS vector-only retry failed; falling back. Error: %s", retry_exc)
+                logger.warning("obs.memory.mem0_vector_retry_failed", error_type=type(retry_exc).__name__, error=str(retry_exc))
                 return []
         else:
-            logger.warning("Mem0 OSS search failed; falling back. Error: %s", exc)
+            logger.warning("obs.memory.mem0_search_failed", error_type=type(exc).__name__, error=str(exc))
             return []
 
     if response is _NO_RESPONSE:
-        logger.warning("Mem0 OSS search call signature not supported; falling back.")
+        logger.warning("obs.memory.mem0_search_unsupported")
         return []
 
     return parse_mem0_search_items(
@@ -252,21 +247,19 @@ async def search_mem0_via_oss_async(
         response = await _call_mem0_search_async(mem0, query, user_id, top_k, enable_graph=enable_graph)
         if enable_graph:
             logger.info(
-                "Mem0 OSS async graph search completed: graph_timeout_s=%.1f overall_timeout_s=%.1f "
-                "elapsed_ms=%.2f query_chars=%d top_k=%d",
-                graph_timeout_seconds,
-                float(MEM0_TIMEOUT_SECONDS),
-                (time.perf_counter() - graph_started_at) * 1000.0,
-                len(query or ""),
-                top_k,
+                "obs.memory.mem0_async_graph_search",
+                graph_timeout_s=graph_timeout_seconds,
+                overall_timeout_s=float(MEM0_TIMEOUT_SECONDS),
+                latency_ms=(time.perf_counter() - graph_started_at) * 1000.0,
+                query_chars=len(query or ""),
+                top_k=top_k,
             )
     except asyncio.TimeoutError:
         if enable_graph and _graph_fail_open():
             logger.warning(
-                "Mem0 OSS async graph search timed out after %.1fs; retrying vector-only "
-                "(overall timeout %.1fs).",
-                graph_timeout_seconds,
-                float(MEM0_TIMEOUT_SECONDS),
+                "obs.memory.mem0_async_graph_search_timeout",
+                graph_timeout_s=graph_timeout_seconds,
+                overall_timeout_s=float(MEM0_TIMEOUT_SECONDS),
             )
             try:
                 retry_started_at = time.perf_counter()
@@ -275,30 +268,30 @@ async def search_mem0_via_oss_async(
                     return []
                 response = await _call_mem0_search_async(vector_mem0, query, user_id, top_k, enable_graph=False)
                 logger.info(
-                    "Mem0 OSS async vector-only retry completed after graph timeout: "
-                    "elapsed_ms=%.2f query_chars=%d top_k=%d",
-                    (time.perf_counter() - retry_started_at) * 1000.0,
-                    len(query or ""),
-                    top_k,
+                    "obs.memory.mem0_async_vector_retry",
+                    latency_ms=(time.perf_counter() - retry_started_at) * 1000.0,
+                    query_chars=len(query or ""),
+                    top_k=top_k,
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    "Mem0 OSS async vector-only retry timed out after %.1fs; falling back.",
-                    float(MEM0_TIMEOUT_SECONDS),
+                    "obs.memory.mem0_async_vector_retry_timeout",
+                    timeout_s=float(MEM0_TIMEOUT_SECONDS),
                 )
                 return []
             except Exception as retry_exc:
-                logger.warning("Mem0 OSS async vector-only retry failed; falling back. Error: %s", retry_exc)
+                logger.warning("obs.memory.mem0_async_vector_retry_failed", error_type=type(retry_exc).__name__, error=str(retry_exc))
                 return []
         else:
-            logger.warning("Mem0 OSS async search timed out after %ss", MEM0_TIMEOUT_SECONDS)
+            logger.warning("obs.memory.mem0_async_search_timeout", timeout_s=float(MEM0_TIMEOUT_SECONDS))
             return []
     except Exception as exc:
         if enable_graph and _graph_fail_open():
             logger.warning(
-                "Mem0 OSS async graph search failed after %.2fms; retrying vector-only. Error: %s",
-                (time.perf_counter() - graph_started_at) * 1000.0,
-                exc,
+                "obs.memory.mem0_async_graph_search_failed",
+                latency_ms=(time.perf_counter() - graph_started_at) * 1000.0,
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
             try:
                 retry_started_at = time.perf_counter()
@@ -307,27 +300,26 @@ async def search_mem0_via_oss_async(
                     return []
                 response = await _call_mem0_search_async(vector_mem0, query, user_id, top_k, enable_graph=False)
                 logger.info(
-                    "Mem0 OSS async vector-only retry completed after graph failure: "
-                    "elapsed_ms=%.2f query_chars=%d top_k=%d",
-                    (time.perf_counter() - retry_started_at) * 1000.0,
-                    len(query or ""),
-                    top_k,
+                    "obs.memory.mem0_async_vector_retry_after_failure",
+                    latency_ms=(time.perf_counter() - retry_started_at) * 1000.0,
+                    query_chars=len(query or ""),
+                    top_k=top_k,
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    "Mem0 OSS async vector-only retry timed out after %.1fs; falling back.",
-                    float(MEM0_TIMEOUT_SECONDS),
+                    "obs.memory.mem0_async_vector_retry_timeout",
+                    timeout_s=float(MEM0_TIMEOUT_SECONDS),
                 )
                 return []
             except Exception as retry_exc:
-                logger.warning("Mem0 OSS async vector-only retry failed; falling back. Error: %s", retry_exc)
+                logger.warning("obs.memory.mem0_async_vector_retry_failed", error_type=type(retry_exc).__name__, error=str(retry_exc))
                 return []
         else:
-            logger.warning("Mem0 OSS async search failed; falling back. Error: %s", exc)
+            logger.warning("obs.memory.mem0_async_search_failed", error_type=type(exc).__name__, error=str(exc))
             return []
 
     if response is _NO_RESPONSE:
-        logger.warning("Mem0 OSS async search call signature not supported; falling back.")
+        logger.warning("obs.memory.mem0_async_search_unsupported")
         return []
 
     return parse_mem0_search_items(
@@ -487,27 +479,27 @@ def add_mem0_raw_facts(
     cleaned_facts = clean_stable_facts(facts)
     filtered_count = max(len(facts) - len(cleaned_facts), 0)
     logger.info(
-        "Mem0 raw fact candidates prepared: extracted=%d filtered=%d graph_enabled=%s",
-        len(facts),
-        filtered_count,
-        enable_graph,
+        "obs.memory.mem0_facts_prepared",
+        extracted=len(facts),
+        filtered=filtered_count,
+        graph_enabled=enable_graph,
     )
     if not cleaned_facts:
-        logger.info("Mem0 raw fact candidates filtered before write; skipping add call.")
+        logger.info("obs.memory.mem0_facts_filtered")
         return False
     for fact in cleaned_facts:
         try:
             result = _add_mem0_fact(mem0, fact, user_id, metadata, enable_graph=enable_graph)
         except Exception as exc:
             if enable_graph and _graph_fail_open():
-                logger.warning("Mem0 graph add failed for fact=%r; retrying vector-only. Error: %s", fact, exc)
+                logger.warning("obs.memory.mem0_graph_add_fallback", fact=fact, error_type=type(exc).__name__, error=str(exc))
                 try:
                     result = _add_mem0_fact(mem0, fact, user_id, metadata, enable_graph=False)
                 except Exception as retry_exc:
-                    logger.warning("Mem0 vector-only add retry failed for fact=%r: %s", fact, retry_exc)
+                    logger.warning("obs.memory.mem0_vector_add_retry_failed", fact=fact, error_type=type(retry_exc).__name__, error=str(retry_exc))
                     continue
             else:
-                logger.warning("Mem0 raw fact add failed for fact=%r: %s", fact, exc)
+                logger.warning("obs.memory.mem0_fact_add_error", fact=fact, error_type=type(exc).__name__, error=str(exc))
                 continue
 
         if isinstance(result, dict):
@@ -529,7 +521,7 @@ def add_mem0_messages(
     if mem0 is None:
         return False
     if not messages:
-        logger.info("No Mem0 messages supplied for intelligent write; skipping add call.")
+        logger.info("obs.memory.mem0_messages_empty")
         return False
 
     metadata = {
@@ -544,14 +536,14 @@ def add_mem0_messages(
         result = _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=enable_graph)
     except Exception as exc:
         if enable_graph and _graph_fail_open():
-            logger.warning("Mem0 graph add failed for intelligent write; retrying vector-only. Error: %s", exc)
+            logger.warning("obs.memory.mem0_graph_write_fallback", error_type=type(exc).__name__, error=str(exc))
             try:
                 result = _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=False)
             except Exception as retry_exc:
-                logger.warning("Mem0 vector-only intelligent write retry failed: %s", retry_exc)
+                logger.warning("obs.memory.mem0_vector_write_retry_failed", error_type=type(retry_exc).__name__, error=str(retry_exc))
                 return False
         else:
-            logger.warning("Mem0 intelligent write failed: %s", exc)
+            logger.warning("obs.memory.mem0_write_failed", error_type=type(exc).__name__, error=str(exc))
             return False
 
     return _mem0_add_result_has_writes(result)
@@ -577,26 +569,26 @@ async def add_mem0_raw_facts_async(
     cleaned_facts = clean_stable_facts(facts)
     filtered_count = max(len(facts) - len(cleaned_facts), 0)
     logger.info(
-        "Mem0 raw fact candidates prepared (async): extracted=%d filtered=%d graph_enabled=%s",
-        len(facts),
-        filtered_count,
-        enable_graph,
+        "obs.memory.mem0_facts_prepared_async",
+        extracted=len(facts),
+        filtered=filtered_count,
+        graph_enabled=enable_graph,
     )
     if not cleaned_facts:
-        logger.info("Mem0 raw fact candidates filtered before async write; skipping add call.")
+        logger.info("obs.memory.mem0_facts_filtered_async")
         return False
     for fact in cleaned_facts:
         try:
             result = await _add_mem0_fact_async(mem0, fact, user_id, metadata, enable_graph=enable_graph)
         except Exception as exc:
             if not (enable_graph and _graph_fail_open()):
-                logger.warning("Mem0 raw fact add failed for fact=%r: %s", fact, exc)
+                logger.warning("obs.memory.mem0_fact_add_error_async", fact=fact, error_type=type(exc).__name__, error=str(exc))
                 continue
-            logger.warning("Mem0 graph add failed for fact=%r; retrying vector-only. Error: %s", fact, exc)
+            logger.warning("obs.memory.mem0_graph_add_fallback_async", fact=fact, error_type=type(exc).__name__, error=str(exc))
             try:
                 result = await _add_mem0_fact_async(mem0, fact, user_id, metadata, enable_graph=False)
             except Exception as retry_exc:
-                logger.warning("Mem0 vector-only add retry failed for fact=%r: %s", fact, retry_exc)
+                logger.warning("obs.memory.mem0_vector_add_retry_failed_async", fact=fact, error_type=type(retry_exc).__name__, error=str(retry_exc))
                 continue
         if isinstance(result, dict):
             events = result.get("results") or []

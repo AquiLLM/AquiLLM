@@ -59,9 +59,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 )
             except Exception as exc:
                 logger.warning(
-                    "Failed to queue memory extraction task for convo %s: %s",
-                    self.db_convo.id,
-                    exc,
+                    "obs.chat.memory_task_failed",
+                    convo_id=self.db_convo.id,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
                 )
         if len(self.convo) >= 2 and not self.db_convo.name:
             self.db_convo.set_name()
@@ -85,15 +86,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         ]
 
     async def connect(self):
-        logger.debug("ChatConsumer.connect() called")
+        logger.debug("obs.chat.ws_connect", status="started")
 
         await self.accept()
-        logger.debug("WebSocket accepted")
+        logger.debug("obs.chat.ws_connect", status="accepted")
         self.user = self.scope["user"]
         assert self.user is not None
-        logger.debug("User: %s", self.user)
+        logger.debug("obs.chat.ws_connect", status="authenticated", user=str(self.user))
         await self.__get_all_user_collections()
-        logger.debug("Collections loaded: %s", self.col_ref.collections)
+        logger.debug("obs.chat.ws_connect", status="collections_loaded", collection_count=len(self.col_ref.collections))
         self.doc_tools = build_document_tools(self.user, self.col_ref, ChatRef(self))
         self.tools = self.doc_tools + build_astronomy_tools(self)
         if getenv("LLM_CHOICE") == "GEMMA3":
@@ -101,10 +102,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if DEBUG:
             self.tools.append(get_debug_weather_tool())
         convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
-        logger.debug("Convo ID: %s", convo_id)
+        logger.debug("obs.chat.ws_connect", status="convo_lookup", convo_id=convo_id)
         self.db_convo = await self.__get_convo(convo_id, self.user)
         if self.db_convo is None:
-            logger.error("Invalid conversation ID: %s", convo_id)
+            logger.error("obs.chat.ws_error", reason="invalid_convo_id", convo_id=convo_id)
             self.dead = True
             await self.send('{"exception": "Invalid chat_id"}')
             return
@@ -128,11 +129,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
             )
             logger.info(
-                "Memory augmentation took %.1fms in connect()",
-                (perf_counter() - augment_start) * 1000,
+                "obs.chat.connect_augment",
+                latency_ms=round((perf_counter() - augment_start) * 1000, 1),
             )
             self.convo.rebind_tools(self.tools)
-            logger.debug("About to call llm_if.spin() in connect()")
+            logger.debug("obs.chat.connect_llm_spin", status="started")
             before_spin_len = len(self.convo)
             llm_start = perf_counter()
             await self.llm_if.spin(
@@ -144,17 +145,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 ),
                 stream_func=self._send_stream_payload,
             )
-            logger.info("LLM spin took %.1fms in connect()", (perf_counter() - llm_start) * 1000)
+            logger.info("obs.chat.connect_llm_spin", latency_ms=round((perf_counter() - llm_start) * 1000, 1))
             await self._save_conversation(create_memories=len(self.convo) > before_spin_len)
-            logger.debug("llm_if.spin() completed in connect()")
+            logger.debug("obs.chat.connect_llm_spin", status="completed")
             return
         except OverloadedError as e:
-            logger.error("LLM overloaded: %s", e)
+            logger.error("obs.chat.ws_error", reason="llm_overloaded", error_type=type(e).__name__, error=str(e))
             self.dead = True
             await self.send('{"exception": "LLM provider is currently overloaded. Try again later."}')
             return
         except Exception as e:
-            logger.error("Exception in connect(): %s", e, exc_info=True)
+            logger.error("obs.chat.ws_error", reason="connect_exception", error_type=type(e).__name__, error=str(e), exc_info=True)
             await send_connect_error(self, e)
             return
 

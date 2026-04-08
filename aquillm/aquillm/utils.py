@@ -48,12 +48,12 @@ def get_multimodal_embedding(
     try:
         embedding = get_multimodal_embedding_via_vllm_pooling(prompt, image_data_url)
         if embedding:
-            logger.info("Successfully generated multimodal embedding")
+            logger.info("obs.embed.multimodal_success")
             return fit_embedding_dims(embedding)
     except Exception as exc:
-        logger.debug("vLLM multimodal embedding attempt failed: %s", exc)
+        logger.debug("obs.embed.multimodal_fallback", error_type=type(exc).__name__, error=str(exc))
     
-    logger.debug("Multimodal embedding not available; using text caption embedding")
+    logger.debug("obs.embed.multimodal_fallback")
     return get_embedding(prompt, input_type=input_type)
 
 
@@ -65,7 +65,7 @@ def get_embedding(query: Any, input_type: str = "search_query"):
     try:
         return fit_embedding_dims(get_embedding_via_local_openai(query))
     except Exception as exc:
-        logger.warning("Local embed request failed; trying Cohere fallback. Error: %s", exc)
+        logger.warning("obs.embed.local_fallback", error_type=type(exc).__name__, error=str(exc))
 
     if not isinstance(query, str):
         raise RuntimeError(
@@ -88,7 +88,7 @@ def get_embeddings(queries: list[Any], input_type: str = "search_query") -> list
     try:
         return [fit_embedding_dims(emb) for emb in get_embeddings_via_local_openai(queries)]
     except Exception as exc:
-        logger.warning("Local embed batch request failed; trying Cohere fallback. Error: %s", exc)
+        logger.warning("obs.embed.batch_fallback", error_type=type(exc).__name__, error=str(exc))
     if not all(isinstance(q, str) for q in queries):
         raise RuntimeError(
             "All embedding providers failed: local provider rejected non-text embedding payloads "

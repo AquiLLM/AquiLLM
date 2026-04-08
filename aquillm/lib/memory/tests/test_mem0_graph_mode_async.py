@@ -153,7 +153,7 @@ async def test_search_async_timeout_log_reports_actual_graph_budget(monkeypatch)
         MEM0_TIMEOUT_SECONDS=15,
     )
 
-    warnings: list[tuple[str, tuple[Any, ...]]] = []
+    warnings: list[tuple[str, dict[str, Any]]] = []
 
     class FakeMem0:
         async def search(self, *_args, **kwargs):
@@ -177,7 +177,7 @@ async def test_search_async_timeout_log_reports_actual_graph_budget(monkeypatch)
     monkeypatch.setattr(
         ops_module.logger,
         "warning",
-        lambda message, *args: warnings.append((message, args)),
+        lambda message, **kwargs: warnings.append((message, kwargs)),
     )
 
     results = await ops_module.search_mem0_via_oss_async(
@@ -188,12 +188,10 @@ async def test_search_async_timeout_log_reports_actual_graph_budget(monkeypatch)
     )
 
     assert results[0].content == "vector fallback"
-    timeout_warnings = [entry for entry in warnings if "graph search timed out after" in entry[0]]
-    assert timeout_warnings[0][0] == (
-        "Mem0 OSS async graph search timed out after %.1fs; retrying vector-only "
-        "(overall timeout %.1fs)."
-    )
-    assert timeout_warnings[0][1] == (5.0, 15.0)
+    timeout_warnings = [entry for entry in warnings if entry[0] == "obs.memory.mem0_async_graph_search_timeout"]
+    assert len(timeout_warnings) == 1
+    assert timeout_warnings[0][1]["graph_timeout_s"] == 5.0
+    assert timeout_warnings[0][1]["overall_timeout_s"] == 15.0
 
 
 @pytest.mark.asyncio
@@ -207,7 +205,7 @@ async def test_search_async_vector_only_retry_timeout_logs_explicitly(monkeypatc
         MEM0_GRAPH_SEARCH_TIMEOUT_SECONDS=3,
     )
 
-    warnings: list[tuple[str, tuple[Any, ...]]] = []
+    warnings: list[tuple[str, dict[str, Any]]] = []
 
     class FakeMem0:
         async def search(self, *_args, **kwargs):
@@ -229,7 +227,7 @@ async def test_search_async_vector_only_retry_timeout_logs_explicitly(monkeypatc
     monkeypatch.setattr(
         ops_module.logger,
         "warning",
-        lambda message, *args: warnings.append((message, args)),
+        lambda message, **kwargs: warnings.append((message, kwargs)),
     )
 
     results = await ops_module.search_mem0_via_oss_async(
@@ -240,17 +238,13 @@ async def test_search_async_vector_only_retry_timeout_logs_explicitly(monkeypatc
     )
 
     assert results == []
-    graph_timeout_warnings = [entry for entry in warnings if "graph search timed out after" in entry[0]]
-    assert graph_timeout_warnings[0][0] == (
-        "Mem0 OSS async graph search timed out after %.1fs; retrying vector-only "
-        "(overall timeout %.1fs)."
-    )
-    assert graph_timeout_warnings[0][1] == (3.0, 15.0)
-    vector_timeout_warnings = [entry for entry in warnings if "vector-only retry timed out after" in entry[0]]
-    assert vector_timeout_warnings[0][0] == (
-        "Mem0 OSS async vector-only retry timed out after %.1fs; falling back."
-    )
-    assert vector_timeout_warnings[0][1] == (15.0,)
+    graph_timeout_warnings = [entry for entry in warnings if entry[0] == "obs.memory.mem0_async_graph_search_timeout"]
+    assert len(graph_timeout_warnings) == 1
+    assert graph_timeout_warnings[0][1]["graph_timeout_s"] == 3.0
+    assert graph_timeout_warnings[0][1]["overall_timeout_s"] == 15.0
+    vector_timeout_warnings = [entry for entry in warnings if entry[0] == "obs.memory.mem0_async_vector_retry_timeout"]
+    assert len(vector_timeout_warnings) == 1
+    assert vector_timeout_warnings[0][1]["timeout_s"] == 15.0
 
 
 @pytest.mark.asyncio
@@ -264,7 +258,7 @@ async def test_call_mem0_search_async_logs_timed_out_mode(monkeypatch):
         MEM0_GRAPH_SEARCH_TIMEOUT_SECONDS=3,
     )
 
-    warnings: list[tuple[str, tuple[Any, ...]]] = []
+    warnings: list[tuple[str, dict[str, Any]]] = []
 
     class FakeMem0:
         async def search(self, *_args, **kwargs):
@@ -278,7 +272,7 @@ async def test_call_mem0_search_async_logs_timed_out_mode(monkeypatch):
     monkeypatch.setattr(
         ops_module.logger,
         "warning",
-        lambda message, *args: warnings.append((message, args)),
+        lambda message, **kwargs: warnings.append((message, kwargs)),
     )
 
     with pytest.raises(asyncio.TimeoutError):
@@ -290,11 +284,12 @@ async def test_call_mem0_search_async_logs_timed_out_mode(monkeypatch):
             enable_graph=True,
         )
 
-    assert warnings[0][0] == (
-        "Mem0 raw search attempt timed out: mode=%s attempt=%d timeout_s=%.1f "
-        "query_chars=%d top_k=%d"
-    )
-    assert warnings[0][1] == ("graph", 1, 3.0, 29, 3)
+    assert warnings[0][0] == "obs.memory.mem0_search_timeout"
+    assert warnings[0][1]["mode"] == "graph"
+    assert warnings[0][1]["attempt"] == 1
+    assert warnings[0][1]["timeout_s"] == 3.0
+    assert warnings[0][1]["query_chars"] == 29
+    assert warnings[0][1]["top_k"] == 3
 
 
 @pytest.mark.asyncio
