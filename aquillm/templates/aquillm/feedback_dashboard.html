@@ -1,0 +1,86 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Feedback Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mx-auto p-4 text-text-normal">
+    <h1 class="text-3xl font-bold mb-6">Feedback Dashboard</h1>
+
+    {% if query_text %}
+    <div class="mb-4 p-4 rounded-lg bg-scheme-shade_3 element-border font-mono text-sm whitespace-pre-wrap">{{ query_text }}</div>
+    {% endif %}
+
+    {% if error %}
+    <div class="mb-4 p-4 rounded-lg bg-red-900/40 border border-red-500 text-red-300">
+        <strong>Error:</strong> {{ error }}
+    </div>
+    {% endif %}
+
+    {% if results %}
+    <p class="mb-2 text-sm text-text-muted">{{ row_count }} row{{ row_count|pluralize }}</p>
+    <div class="overflow-x-auto rounded-lg element-border">
+        <table class="w-full text-sm">
+            <thead class="bg-scheme-shade_3">
+                <tr>
+                    {% for col in columns %}
+                    <th class="px-3 py-2 text-left font-semibold">{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in results %}
+                <tr class="border-t border-scheme-contrast/20 hover:bg-scheme-shade_3/50">
+                    {% for cell in row %}
+                    <td class="px-3 py-2 max-w-xs truncate cursor-pointer hover:text-deep-secondary"
+                        onclick="showCell(this)"
+                        data-value="{{ cell|default_if_none:'' }}">{{ cell|default_if_none:"—" }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% elif query_text and not error %}
+    <p class="text-text-muted">No results.</p>
+    {% endif %}
+
+    {% if not query_text %}
+    <div class="mt-8 p-4 rounded-lg bg-scheme-shade_3 element-border text-sm text-text-muted">
+        <p>Pass a query via <code>?q=&lt;base64-encoded query&gt;</code>.</p>
+        <p class="mt-1">Example: <code>messages | where rating &lt; 3 | limit 20</code></p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Cell expand modal -->
+<div id="cell-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60" onclick="closeCell(event)">
+    <div class="bg-scheme-shade_2 element-border rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto" onclick="event.stopPropagation()">
+        <pre id="cell-modal-content" class="whitespace-pre-wrap text-sm text-text-normal font-mono break-words"></pre>
+        <button onclick="document.getElementById('cell-modal').classList.add('hidden'); document.getElementById('cell-modal').classList.remove('flex');"
+                class="mt-4 px-4 py-1.5 rounded-lg bg-scheme-shade_5 hover:bg-scheme-shade_6 text-sm transition-all">
+            Close
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showCell(td) {
+    const val = td.dataset.value;
+    if (!val) return;
+    document.getElementById('cell-modal-content').textContent = val;
+    const modal = document.getElementById('cell-modal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+function closeCell(e) {
+    const modal = document.getElementById('cell-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeCell();
+});
+</script>
+{% endblock %}
