@@ -1,5 +1,6 @@
 """Page views for platform administration."""
 import base64
+import json
 import structlog
 
 from django.contrib.auth.decorators import login_required, user_passes_test
@@ -7,7 +8,7 @@ from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
 from aquillm.ocr_utils import get_gemini_cost_stats
-from ..feedbackql.parser import parse
+from ..feedbackql.parser import parse, SummarizeClause
 from ..feedbackql.executor import execute
 from ..feedbackql.exceptions import FeedbackQLSyntaxError
 
@@ -31,16 +32,19 @@ def email_whitelist(request):
 
 
 @login_required
-@user_passes_test(lambda u: u.is_superuser)
 @require_http_methods(['GET'])
 def feedback_dashboard(request):
     """Feedback dashboard — run a query and show results."""
+    if not request.user.is_superuser:
+        return render(request, 'aquillm/feedback_dashboard.html', {'access_denied': True})
+
     raw_q = request.GET.get('q', '').strip()
 
     query_text = ''
     results = []
     columns = []
     error = None
+    chart_json = None
 
     if raw_q:
         try:
@@ -51,10 +55,30 @@ def feedback_dashboard(request):
         if not error:
             try:
                 parsed = parse(query_text)
-                results = execute(parsed)
-                if results:
-                    columns = list(results[0].keys())
-                    results = [[row.get(col) for col in columns] for row in results]
+                results_dicts = execute(parsed)
+
+                if results_dicts:
+                    columns = list(results_dicts[0].keys())
+
+                    # Build chart data when the query groups by one or more fields
+                    summarize = next(
+                        (c for c in parsed.clauses if isinstance(c, SummarizeClause)), None
+                    )
+                    if summarize and summarize.by:
+                        by_field = summarize.by[0]
+                        agg_aliases = [agg.alias for agg in summarize.aggregations]
+                        labels = [
+                            str(r.get(by_field)) if r.get(by_field) is not None else '(none)'
+                            for r in results_dicts
+                        ]
+                        datasets = [
+                            {'label': alias, 'data': [r.get(alias) for r in results_dicts]}
+                            for alias in agg_aliases
+                        ]
+                        chart_json = json.dumps({'labels': labels, 'datasets': datasets})
+
+                    results = [[row.get(col) for col in columns] for row in results_dicts]
+
             except FeedbackQLSyntaxError as exc:
                 error = str(exc)
             except Exception as exc:
@@ -67,6 +91,7 @@ def feedback_dashboard(request):
         'columns': columns,
         'error': error,
         'row_count': len(results),
+        'chart_json': chart_json,
     })
 
 

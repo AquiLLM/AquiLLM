@@ -336,3 +336,22 @@ class TestExecutorSummarize:
     def test_select_and_summarize_raises(self):
         with pytest.raises(FeedbackQLSyntaxError):
             run('messages | select rating | summarize n = count()')
+
+    def test_where_null_eq(self, user_a):
+        """rating == null returns only messages with no rating."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'a', 1, rating=None)
+        _msg(conv, 'assistant', 'b', 2, rating=4)
+        results = run('messages | where rating == null | select rating')
+        assert all(r['rating'] is None for r in results)
+        assert len(results) == 1
+
+    def test_where_null_neq(self, user_a):
+        """rating != null returns only messages that have a rating."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'a', 1, rating=None)
+        _msg(conv, 'assistant', 'b', 2, rating=4)
+        _msg(conv, 'assistant', 'c', 3, rating=2)
+        results = run('messages | where rating != null | select rating')
+        assert all(r['rating'] is not None for r in results)
+        assert len(results) == 2

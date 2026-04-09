@@ -100,6 +100,14 @@ def _condition_to_q(cond: Condition):
     path = _orm(cond.field)
     op = cond.op
 
+    # null comparisons map to IS NULL / IS NOT NULL
+    if cond.value is None:
+        if op == '==':
+            return Q(**{f'{path}__isnull': True})
+        if op == '!=':
+            return Q(**{f'{path}__isnull': False})
+        raise FeedbackQLSyntaxError(f"Operator {op!r} cannot be used with null")
+
     if op == '==':
         return Q(**{path: cond.value})
     if op == '!=':

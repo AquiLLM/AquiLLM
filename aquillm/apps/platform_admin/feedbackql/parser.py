@@ -358,8 +358,8 @@ class _TokenStream:
 
 def _parse_value(ts: _TokenStream) -> Any:
     """
-    Parse a single literal value: a number or a quoted string.
-    Returns a Python int, float, or str.
+    Parse a single literal value: a number, a quoted string, or null.
+    Returns a Python int, float, str, or None.
     """
     t = ts.peek()
     if t is None:
@@ -370,6 +370,9 @@ def _parse_value(ts: _TokenStream) -> Any:
     if t[0] == 'STRING':
         ts.advance()
         return t[1][1:-1]  # strip the surrounding quote characters
+    if t[0] == 'IDENT' and t[1].lower() == 'null':
+        ts.advance()
+        return None
     raise FeedbackQLSyntaxError(f"Expected a string or number value, got {t[1]!r}")
 
 
