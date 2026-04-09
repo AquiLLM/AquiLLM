@@ -1,8 +1,8 @@
-﻿# AquiLLM Program Roadmap (Implemented vs Planned)
+# AquiLLM Program Roadmap (Implemented vs Planned)
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this roadmap in execution mode. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Snapshot Date:** 2026-03-26
+**Snapshot Date:** 2026-03-30
 **Scope:** All roadmap/spec/plan artifacts currently in `docs/roadmap/*`, `docs/specs/*`, and `docs/roadmap/plans/*`  
 **Method:** Status determined from repository evidence (current files, tests, env/contracts, and recent commits), not checkbox completion state in plan markdown.
 
@@ -29,6 +29,7 @@
 | Codebase refactor (`apps/` + `lib/`) | `2026-03-18-codebase-refactor.md`, `2026-03-18-codebase-refactor-handoff.md` | **Implemented** | `aquillm/apps/*`, `aquillm/lib/*`, wrapper compatibility modules, refactor commits (`297af88`) | Remaining cleanup/perf passes, but core migration is done |
 | Unified multi-format ingestion | `2026-03-17-unified-multiformat-ingestion.md`, `docs/roadmap/plans/completed/2026-03-16-auto-ingest-implementation-plan.md` | **Implemented (with evolution)** | `aquillm/aquillm/ingestion/parsers.py`, `apps/ingestion/tests/test_unified_ingestion_*`, ingestion batch tests and APIs | Align legacy docs with post-refactor file paths and current endpoint names |
 | Full multimodal storage + ingestion | `2026-03-17-full-multimodal-storage-and-ingestion.md` | **Implemented** | `vllm_ocr` + `vllm_transcribe` env/tests, media/transcribe modules, `test_multimodal_ingestion_media_storage.py`, compose launch checks | Add explicit operational SLOs and capacity guidance |
+| Mem0 self-hosted graph memory extension | `docs/roadmap/plans/pending/2026-03-30-self-hosted-mem0-graph-memory-implementation.md`, design spec `docs/specs/2026-03-30-self-hosted-mem0-graph-memory-design.md` | **Not started** | New design and execution plan exist; current Mem0 client remains vector-store only without `graph_store` wiring | Implement optional graph config, fail-open operation fallback, and compose/docs/test coverage |
 | Unified document figure extraction | `2026-03-18-unified-document-figure-extraction.md` (supersedes PDF-only plan) | **Implemented** | `apps/documents/models/document_types/figure.py`, `aquillm/ingestion/figure_extraction/*`, `apps/ingestion/tests/test_figure_extraction.py` | Improve performance tuning and observability around figure extraction cost |
 | PDF-only figure extraction | `2026-03-18-pdf-figure-extraction.md` | **Superseded** | Functionality exists under unified figure extraction architecture | Archive as historical, keep only unresolved test/perf tasks |
 | Structure + code-quality remediation | `2026-03-19-aquillm-structure-code-quality-remediation.md`, `2026-03-19-structure-and-code-quality-remediation-execution-notes.md` | **Implemented (baseline complete)** | Remediation sequence and under-300-line budget closure are commit-backed, including `5792895` and related split/refactor commits | Ongoing hygiene only (no open blocker from this track) |
@@ -175,6 +176,10 @@ Reassess math sandbox plan after extensibility primitives are live.
 ### Batch D (Deployment + orchestration foundation)
 - [ ] Start Kubernetes baseline (`deploy/k8s/base` + overlays) from pending k8s plans.
 - [ ] Sequence new pending orchestration/ingestion plans (`2026-03-25-langgraph-research-orchestration.md`, `2026-03-26-ingestion-work-queue-batching-implementation.md`) behind Batch A/B prerequisites.
+
+### Batch E (Memory graph enrichment)
+- [ ] Execute `docs/roadmap/plans/pending/2026-03-30-self-hosted-mem0-graph-memory-implementation.md` with graph mode disabled by default.
+- [ ] Validate Memgraph fail-open behavior and no-regression vector-only memory path before any environment enables `MEM0_GRAPH_ENABLED=1`.
 
 ---
 
