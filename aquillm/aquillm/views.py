@@ -59,6 +59,7 @@ from apps.ingestion.views.pages import (
 from apps.platform_admin.views.pages import (
     gemini_cost_monitor,
     email_whitelist,
+    feedback_dashboard,
 )
 
 from .settings import DEBUG
@@ -80,7 +81,8 @@ urlpatterns = [
     path("ingestion_dashboard/", ingestion_dashboard, name="ingestion_dashboard"),
     path("email_whitelist/", email_whitelist, name="email_whitelist"),
     path("ingest_handwritten_notes/", ingest_handwritten_notes, name="ingest_handwritten_notes"),
-    path('gemini-costs/', gemini_cost_monitor, name='gemini_cost_monitor')
+    path('gemini-costs/', gemini_cost_monitor, name='gemini_cost_monitor'),
+    path("feedback-dashboard/", feedback_dashboard, name="feedback_dashboard"),
 ]
 
 if DEBUG:

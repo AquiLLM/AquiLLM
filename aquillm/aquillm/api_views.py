@@ -45,6 +45,10 @@ from apps.platform_admin.views.api import (
     search_users,
     whitelisted_emails,
     whitelisted_email,
+    feedback_dashboard_rows,
+    feedback_dashboard_summary,
+    feedback_dashboard_filters,
+    feedback_dashboard_export,   
 )
 
 # Re-export chat views
@@ -79,4 +83,8 @@ urlpatterns = [
     path('user-settings/', user_settings_api, name='api-user-settings'),
     path('conversation_file/<int:convo_file_id>/', conversation_file, name='api_conversation_file'),
     path("ingest_webpage/", ingest_webpage, name="api_ingest_webpage"),
+    path("feedback/dashboard/rows/", feedback_dashboard_rows, name="api_feedback_dashboard_rows"),
+    path("feedback/dashboard/summary/", feedback_dashboard_summary, name="api_feedback_dashboard_summary"),
+    path("feedback/dashboard/filters/", feedback_dashboard_filters, name="api_feedback_dashboard_filters"),
+    path("feedback/dashboard/export/", feedback_dashboard_export, name="api_feedback_dashboard_export"),
 ]

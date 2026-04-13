@@ -147,16 +147,16 @@ class FeedbackFilters:
         self.has_feedback_text = has_feedback_text
 
     @classmethod
+    @classmethod
     def from_request_params(cls, params: dict[str, Any]) -> "FeedbackFilters":
         """
         build a FeedbackFilters from a flat dict of request GET params
 
         coerces string values to correct types,
         invalid or empty values are treated as none silently,
-        safe to call with raw request.GET.dict()
+        call with request.GET.dict() not dict(request.GET) to avoid
+        receiving lists instead of strings from the QueryDict
         """
-        # reuse the existing date parser from the export service
-        # so date handling is identical across export and dashboard
         from apps.platform_admin.services.feedback_export import parse_query_bounds
 
         start_date, end_date = parse_query_bounds(
@@ -166,6 +166,8 @@ class FeedbackFilters:
 
         def _int(key: str) -> int | None:
             v = params.get(key)
+            if isinstance(v, list):
+                v = v[0] if v else None
             if v in (None, ""):
                 return None
             try:
@@ -175,12 +177,16 @@ class FeedbackFilters:
 
         def _str(key: str) -> str | None:
             v = params.get(key)
+            if isinstance(v, list):
+                v = v[0] if v else None
             if not v or not str(v).strip():
                 return None
             return str(v).strip()
 
         def _bool(key: str) -> bool | None:
             v = params.get(key)
+            if isinstance(v, list):
+                v = v[0] if v else None
             if v in (None, ""):
                 return None
             if isinstance(v, bool):
