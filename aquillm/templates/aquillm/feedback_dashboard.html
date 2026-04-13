@@ -2,17 +2,16 @@
 {% block title %}AquiLLM — Feedback Dashboard{% endblock %}
 
 {% block content %}
-{# mount point for the FeedbackDashboard react component #}
 <div id="feedback-dashboard-mount" class="h-full"></div>
 {% endblock %}
 
 {% block scripts %}
 <script>
     mountReactComponent('feedback-dashboard-mount', 'FeedbackDashboard', {
-        apiRows:    window.apiUrls.api_feedback_dashboard_rows,
+        apiRows: window.apiUrls.api_feedback_dashboard_rows,
         apiSummary: window.apiUrls.api_feedback_dashboard_summary,
         apiFilters: window.apiUrls.api_feedback_dashboard_filters,
-        apiExport:  window.apiUrls.api_feedback_dashboard_export,
+        apiExport: window.apiUrls.api_feedback_dashboard_export,
     });
 </script>
 {% endblock %}
