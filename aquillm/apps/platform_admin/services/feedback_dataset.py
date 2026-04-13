@@ -147,7 +147,6 @@ class FeedbackFilters:
         self.has_feedback_text = has_feedback_text
 
     @classmethod
-    @classmethod
     def from_request_params(cls, params: dict[str, Any]) -> "FeedbackFilters":
         """
         build a FeedbackFilters from a flat dict of request GET params
