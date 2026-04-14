@@ -370,6 +370,8 @@ CELERY_RESULT_SERIALIZER = "json"
 # - ZOTERO_CLIENT_SECRET: Your Zotero OAuth client secret
 # Register your app at https://www.zotero.org/oauth/apps
 
+from aquillm.version import VERSION as AQUILLM_VERSION  # noqa: F401
+
 from aquillm.settings_logging import LOGGING  # noqa: F401
 
 from aquillm.observability import setup as _setup_observability

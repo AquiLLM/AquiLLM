@@ -4,7 +4,7 @@
 
 **Goal:** Establish a single canonical SemVer product version for AquiLLM, align frontend metadata and documentation, and document the release/tag/changelog workflow so MAJOR/MINOR/PATCH bumps are consistent and auditable.
 
-**Architecture:** Keep versioning lightweight: one version source for the Python package root, mirror to `react/package.json` at release time, optional exposure via Django settings/health for operators. No requirement to publish to PyPI or npm for this effort unless already part of release process.
+**Architecture:** Keep versioning lightweight: one version source for the Python package root, mirror to `react/package.json` at release time, expose via Django settings and structured logs for operators. No requirement to publish to PyPI or npm for this effort unless already part of release process.
 
 **Tech Stack:** Python (Django), npm (React), Git tags, Markdown docs.
 
@@ -39,10 +39,11 @@
 |------|--------|------------------|
 | `aquillm/aquillm/version.py` (or repo-root `VERSION`) | Create | Canonical `VERSION` string |
 | `aquillm/aquillm/__init__.py` | Modify | Export `__version__` from canonical source |
-| `aquillm/aquillm/settings/*.py` or base settings | Modify (optional) | `AQUILLM_VERSION` or similar for templates |
+| `aquillm/aquillm/settings.py` | Modify | `AQUILLM_VERSION` setting for templates/health |
+| `aquillm/aquillm/settings_logging.py` | Modify | Add version processor to structured logs |
 | `react/package.json` | Modify | Match product version at initial adoption |
-| `CONTRIBUTING.md` or `docs/documents/...` | Modify / create | SemVer bump + tag + changelog checklist |
-| `aquillm/aquillm/tests/test_version.py` (or similar) | Create (optional) | Format assertion |
+| `CONTRIBUTING.md` | Create | SemVer bump + tag + changelog checklist |
+| `aquillm/tests/test_version.py` | Create | Format assertion |
 
 ---
 
@@ -76,33 +77,38 @@
 
 ---
 
-## Chunk 3: Optional hardening
+## Chunk 3: Structured logging and settings
 
-### Task 3: Settings hook and tests
+### Task 3: Attach version to structured logs and Django settings
 
 **Files:**
 
-- Modify: settings module (optional)
-- Create: `aquillm/aquillm/tests/test_version.py` (optional)
+- Modify: `aquillm/aquillm/settings_logging.py`
+- Modify: `aquillm/aquillm/settings.py`
 
-- [ ] **Step 1 (optional):** Expose version on Django settings for use in health/debug views.
-- [ ] **Step 2 (optional):** Add test that `__version__` matches SemVer 2.0.0 pattern (simple regex).
-- [ ] **Step 3:** Run `pytest` for new tests if added.
-
-Run:
-
-```bash
-cd aquillm
-pytest aquillm/tests/test_version.py -q
-```
-
-(Adjust path if test file location differs.)
+- [ ] **Step 1:** In `settings_logging.py`, import `VERSION` from `aquillm.version` and add a processor function `add_product_version` that sets `event_dict["version"] = VERSION`. Insert it into the `shared_processors` list so every log event (structlog and stdlib) gets the version field.
+- [ ] **Step 2:** In `settings.py`, import `VERSION` from `aquillm.version` and set `AQUILLM_VERSION = VERSION` for use in templates/health views.
+- [ ] **Step 3:** Verify logs include the version field by starting the dev server and checking JSON output.
 
 ---
 
-## Chunk 4: Verification and handoff
+## Chunk 4: Tests
 
-### Task 4: Validate release discipline
+### Task 4: Version format test
+
+**Files:**
+
+- Create: `aquillm/tests/test_version.py`
+
+- [ ] **Step 1:** Add test that `aquillm.__version__` matches SemVer 2.0.0 pattern (`^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$`).
+- [ ] **Step 2:** Add test that `aquillm.version.VERSION` equals `aquillm.__version__`.
+- [ ] **Step 3:** Run `pytest aquillm/tests/test_version.py -q`.
+
+---
+
+## Chunk 5: Verification and handoff
+
+### Task 5: Validate release discipline
 
 - [ ] **Step 1:** Confirm `docs/specs/README.md` lists this spec and plan with status Planned.
 - [ ] **Step 2:** Dry-run: describe in docs the manual steps to tag `vX.Y.Z` after bumping `VERSION` and `react/package.json` together.
@@ -115,4 +121,6 @@ pytest aquillm/tests/test_version.py -q
 - [ ] Canonical version exists and is importable as `aquillm.__version__`.
 - [ ] `react/package.json` matches the adopted baseline version.
 - [ ] Written instructions exist for contributors (bump + tag + changelog).
-- [ ] Optional tests/settings landed or explicitly deferred with a one-line note in the plan checklist.
+- [ ] Version test passes.
+- [ ] Product version appears in structured log output.
+- [ ] `AQUILLM_VERSION` is available in Django settings.

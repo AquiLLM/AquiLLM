@@ -75,9 +75,9 @@ Internal **schema or connector API versions** (e.g. research connectors) may kee
 - **Security fixes** that do not change the public contract are normally **PATCH**.
 - **Security fixes** that require operators to change config, rotate secrets, or accept new defaults may be **MINOR** (if compatible) or **MAJOR** (if existing deployments would be insecure or broken without action—call this out in release notes).
 
-## Observability (optional)
+## Observability
 
-Exposing the product version via a standard health or metadata endpoint (and structured logs) is recommended so incidents can be correlated with a tag; this can be implemented in the rollout plan.
+The product version **must** be attached to every structured log event via a structlog processor so that incidents can be correlated with a specific release. Exposing the version via a health or metadata endpoint is optional but recommended.
 
 ## Open questions (resolve during implementation)
 
@@ -89,3 +89,4 @@ Exposing the product version via a standard health or metadata endpoint (and str
 - [ ] Canonical version string exists in-repo and matches release tags for tagged releases.
 - [ ] CONTRIBUTING or release docs describe MAJOR/MINOR/PATCH rules with AquiLLM-specific examples.
 - [ ] Changelog practice is documented and at least one release path validated (manual tag acceptable).
+- [ ] Product version is attached to every structured log event.

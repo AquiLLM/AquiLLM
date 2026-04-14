@@ -6,8 +6,16 @@ import os
 import structlog
 
 from aquillm.observability import add_otel_trace_context
+from aquillm.version import VERSION
 
 DEBUG = os.environ.get("DJANGO_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def add_product_version(logger, method_name, event_dict):
+    """Attach the canonical product version to every log event."""
+    event_dict["version"] = VERSION
+    return event_dict
+
 
 # --------------------------------------------------------------------------- #
 # Shared structlog processors (used by both structlog loggers and stdlib       #
@@ -15,6 +23,7 @@ DEBUG = os.environ.get("DJANGO_DEBUG", "").strip().lower() in ("1", "true", "yes
 # --------------------------------------------------------------------------- #
 shared_processors: list = [
     structlog.contextvars.merge_contextvars,
+    add_product_version,
     structlog.stdlib.add_logger_name,
     structlog.stdlib.add_log_level,
     structlog.stdlib.PositionalArgumentsFormatter(),
