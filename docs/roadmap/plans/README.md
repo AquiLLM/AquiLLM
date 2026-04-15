@@ -1,6 +1,6 @@
 # Plan Archive
 
-Last audit: 2026-03-25
+Last audit: 2026-03-30
 
 This folder is organized by execution status, with status decisions checked against commit history.
 
@@ -39,3 +39,7 @@ This folder is organized by execution status, with status decisions checked agai
 
 - `active/2026-03-16-observability-implementation-plan.md`
 - `active/2026-03-25-gcp-secret-management-implementation.md`
+
+## Newly added pending plans
+
+- `pending/2026-03-30-self-hosted-mem0-graph-memory-implementation.md`

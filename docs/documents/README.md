@@ -1,6 +1,6 @@
 # Documents Index
 
-Last updated: 2026-03-25
+Last updated: 2026-04-09
 
 ## Architecture
 
@@ -10,6 +10,8 @@ Last updated: 2026-03-25
 - `docs/documents/architecture/aquillm-architecture-paper-simplified.drawio`
 - `docs/documents/architecture/aquillm-architecture-mermaid-draft.md`
 - `docs/documents/architecture/mcp-skills-agents-runtime.md`
+- `docs/documents/architecture/2026-04-09-knowledge-graph-index-overlay-design.md`
+- `docs/documents/architecture/2026-04-09-knowledge-graph-index-overlay-implementation-plan.md`
 
 ## Standards
 
