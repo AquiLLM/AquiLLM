@@ -17,6 +17,12 @@ def citation_enforcement_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def citation_sources_append_enabled() -> bool:
+    """When false, do not append a trailing ``Sources:`` block (chunk citation list) to replies."""
+    value = (getenv("RAG_APPEND_CITATION_SOURCES", "1") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _first_citation_token(text: Any) -> str | None:
     if not isinstance(text, str):
         return None
@@ -242,6 +248,7 @@ __all__ = [
     "build_citation_retry_prompt",
     "build_citation_system_suffix",
     "citation_enforcement_enabled",
+    "citation_sources_append_enabled",
     "collect_allowed_chunk_citations",
     "extract_citations",
     "find_uncited_factual_lines",

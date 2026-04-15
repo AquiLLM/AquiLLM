@@ -207,7 +207,9 @@ async def complete_conversation_turn(
     source_allowlist = set(citation_allowlist)
     if is_post_tool_result_turn and not source_allowlist:
         source_allowlist = _collect_source_refs_from_tool_message(last_message)
-    use_live_citation_stream = bool(source_allowlist and callable(stream_func))
+    use_live_citation_stream = bool(
+        source_allowlist and callable(stream_func) and citations.citation_sources_append_enabled()
+    )
     effective_stream_func = stream_func
     if use_live_citation_stream and callable(stream_func):
         async def _live_citation_stream(payload: dict) -> Any:
