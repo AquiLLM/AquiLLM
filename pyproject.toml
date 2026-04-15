@@ -30,6 +30,8 @@ dependencies = [
     "pytest-cov",
     "pytest-django",
     "pytest-asyncio",
+    "pytest-xdist",
+    "playwright",
     "boto3",
     "websockets",
     "debugpy",
@@ -55,6 +57,7 @@ dependencies = [
     "python-pptx",
     "ebooklib",
     "PyYAML",
+    "reportlab",
     "PyMuPDF>=1.24.0",
     "llmlingua",
     "dotenv",
@@ -77,8 +80,28 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pyrefly>=0.58.0",
+    "reportlab>=4.0",
     "ruff>=0.15.7",
 ]
+
+[tool.coverage.run]
+source = ["aquillm", "apps", "chat"]
+omit = [
+    "*/tests/*",
+    "*/migrations/*",
+    "*/management/*",
+    "manage.py",
+    "aquillm/asgi.py",
+    "aquillm/wsgi.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 0
+
+[tool.coverage.html]
+directory = "htmlcov"
 
 [tool.ruff]
 src = ["aquillm"]
