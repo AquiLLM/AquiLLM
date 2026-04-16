@@ -186,6 +186,12 @@ def _compute_agg(func: str, values: list) -> Any:
 # Row-level execution path (no summarize clause)
 # ---------------------------------------------------------------------------
 
+# These fields are always fetched and included in row-level results so the
+# conversation viewer can open the full thread for any result row, even when
+# the user's query didn't explicitly select them.
+_THREAD_META_FIELDS: frozenset[str] = frozenset({'conversation_id', 'message_uuid'})
+
+
 def _execute_row_level(
     qs,
     select: SelectClause | None,
@@ -198,14 +204,18 @@ def _execute_row_level(
     If no select clause, all allowed fields are returned.
     The order field is included in the DB fetch even if not in the select list
     (so the DB can sort correctly), then stripped from the output if needed.
+    conversation_id and message_uuid are always fetched and included so the
+    conversation viewer works regardless of the user's select clause.
     """
     output_fields = select.fields if select else sorted(ALLOWED_FIELDS)
 
     # Make sure the order field is fetched from the DB even if it's not in
     # the select list — we need it for sorting, then strip it from output.
+    # Also always fetch thread metadata fields for the conversation viewer.
     fetch_fields = set(output_fields)
     if order:
         fetch_fields.add(order.field)
+    fetch_fields |= _THREAD_META_FIELDS
 
     orm_fields = [_orm(f) for f in fetch_fields]
 
@@ -221,13 +231,16 @@ def _execute_row_level(
     rows = list(qs[:cap])
 
     # Django returns ORM paths as keys (e.g. 'conversation__owner_id').
-    # Remap them to user-facing names (e.g. 'user_id'), then drop any
-    # fields that were fetched for ordering but not in the select list.
+    # Remap them to user-facing names (e.g. 'user_id'), then keep fields that
+    # were in the select list OR are thread metadata (always included).
     output_field_set = set(output_fields)
     result = []
     for row in rows:
         remapped = {_ORM_TO_FIELD.get(k, k): v for k, v in row.items()}
-        result.append({k: v for k, v in remapped.items() if k in output_field_set})
+        result.append({
+            k: v for k, v in remapped.items()
+            if k in output_field_set or k in _THREAD_META_FIELDS
+        })
 
     return result
 

@@ -219,7 +219,9 @@ class TestExecutorRowLevel:
 
         results = run('messages | select rating, model')
         assert results
-        assert set(results[0].keys()) == {'rating', 'model'}
+        # conversation_id and message_uuid are always included as thread-viewer metadata
+        assert {'rating', 'model'}.issubset(results[0].keys())
+        assert results[0].keys() <= {'rating', 'model', 'conversation_id', 'message_uuid'}
 
     def test_order_by_rating_asc(self, user_a):
         conv = WSConversation.objects.create(owner=user_a)

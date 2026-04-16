@@ -4,7 +4,7 @@ export interface TestComponentProps {
 
 export interface IngestionDashboardProps {
   wsUrl: string;
-  onNewDocument: () => void;
+  onNewDocument?: () => void;
 }
 
 export interface IngestionDashboardLauncherProps {
@@ -16,10 +16,6 @@ export interface IngestionMessage {
   progress?: number;
   exception?: string;
   complete?: boolean;
-}
-
-export interface IngestionDashboardProps {
-  wsUrl: string;
 }
 
 export interface PDFIngestionMonitorProps {
