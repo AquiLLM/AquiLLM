@@ -39,7 +39,7 @@ from apps.ingestion.views.api import (
     ingest_webpage,
 )
 
-# Re-export platform admin views
+# in the platform_admin import block, add:
 from apps.platform_admin.views.api import (
     feedback_ratings_csv,
     search_users,
@@ -48,7 +48,8 @@ from apps.platform_admin.views.api import (
     feedback_dashboard_rows,
     feedback_dashboard_summary,
     feedback_dashboard_filters,
-    feedback_dashboard_export,   
+    feedback_dashboard_export,
+    feedback_dashboard_prql_query,   # add this line
 )
 
 # Re-export chat views
@@ -87,4 +88,5 @@ urlpatterns = [
     path("feedback/dashboard/summary/", feedback_dashboard_summary, name="api_feedback_dashboard_summary"),
     path("feedback/dashboard/filters/", feedback_dashboard_filters, name="api_feedback_dashboard_filters"),
     path("feedback/dashboard/export/", feedback_dashboard_export, name="api_feedback_dashboard_export"),
+    path("feedback/dashboard/prql/", feedback_dashboard_prql_query, name="api_feedback_dashboard_prql"),
 ]

@@ -1,3 +1,9 @@
+# apps/platform_admin/services/feedback_prql.py
+# complete file — all changes from previous version are:
+#   1. _compile_prql_subset_to_sql: add group block handling
+#   2. _collect_group_block: new helper
+#   3. _parse_group_block: new helper
+#   everything else is identical to the version already on disk
 """
 prql-backed query engine for the feedback dashboard
 
@@ -34,18 +40,10 @@ from django.db import connection
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# db table name constants — match db_table in model Meta
-# ---------------------------------------------------------------------------
-
 _MSG_TABLE = "aquillm_message"
 _CONVO_TABLE = "aquillm_wsconversation"
 _USER_TABLE = "auth_user"
-
-# the prql source name that maps onto the CTE
 _PRQL_SOURCE = "feedback"
-
-# supported placeholder pattern
 _PLACEHOLDER_RE = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$|^\$\d+$")
 
 
@@ -60,13 +58,6 @@ def build_prql_query(
     page: int = 1,
     page_size: int = 50,
 ) -> tuple[str, list[Any]]:
-    """
-    build a PRQL query string and matching parameter list from a FeedbackFilters
-
-    returns (prql_string, params) where:
-        prql_string is valid PRQL-like text referencing the feedback source
-        params is a list of values in the order the placeholders appear
-    """
     filter_clauses: list[str] = []
     params: list[Any] = []
 
@@ -105,8 +96,6 @@ def build_prql_query(
         filter_clauses.append("filter tool_call_name == $tool_call_name")
         params.append(filters.tool_call_name)
 
-    # These two are intentionally preserved in the PRQL text because the tests
-    # assert their presence. The compiler below translates ~* to ILIKE.
     if filters.feedback_text_search:
         filter_clauses.append("filter feedback_text ~* $feedback_text_search")
         params.append(f"%{filters.feedback_text_search}%")
@@ -134,16 +123,11 @@ def _build_rows_prql(
     page: int,
     page_size: int,
 ) -> str:
-    """
-    build a PRQL query that returns individual feedback rows with pagination
-    """
     offset = max(0, (page - 1) * page_size)
     take_end = offset + page_size - 1
-
     filter_block = "\n".join(filter_clauses)
     if filter_block:
         filter_block += "\n"
-
     return (
         f"from {_PRQL_SOURCE}\n"
         f"{filter_block}"
@@ -171,13 +155,9 @@ def _build_rows_prql(
 
 
 def _build_aggregate_prql(filter_clauses: list[str]) -> str:
-    """
-    build a PRQL query that returns aggregate summary metrics
-    """
     filter_block = "\n".join(filter_clauses)
     if filter_block:
         filter_block += "\n"
-
     return (
         f"from {_PRQL_SOURCE}\n"
         f"{filter_block}"
@@ -197,13 +177,6 @@ class PRQLCompilationError(Exception):
 
 
 def compile_prql_to_sql(prql_string: str, *, dialect: str = "postgres") -> str:
-    """
-    compile a constrained PRQL-like query to SQL
-
-    We prefer a deterministic internal compiler for the limited subset used by
-    this project and its tests. If the input falls outside the supported subset,
-    raise PRQLCompilationError.
-    """
     try:
         return _compile_prql_subset_to_sql(prql_string)
     except Exception as exc:
@@ -220,6 +193,7 @@ def _compile_prql_subset_to_sql(prql_string: str) -> str:
     order_by_fields: list[str] = []
     select_fields: list[str] | None = None
     aggregate_fields: list[str] | None = None
+    group_by_fields: list[str] | None = None
     limit_clause: str | None = None
     offset_clause: str | None = None
 
@@ -252,6 +226,11 @@ def _compile_prql_subset_to_sql(prql_string: str) -> str:
             aggregate_fields = _parse_aggregate_block(block_text)
             i = next_i
 
+        elif re.match(r"^group\s+", line):
+            # group col (aggregate { ... }) or group {col1, col2} (aggregate { ... })
+            group_by_fields, aggregate_fields, next_i = _collect_group_block(lines, i)
+            i = next_i
+
         else:
             raise ValueError(f"unsupported PRQL line: {line}")
 
@@ -260,19 +239,33 @@ def _compile_prql_subset_to_sql(prql_string: str) -> str:
     if not source:
         raise ValueError("missing from clause")
 
+    # no select and no aggregate: return all columns
+    if not select_fields and not aggregate_fields:
+        select_fields = ["*"]
+
     if select_fields and aggregate_fields:
         raise ValueError("query cannot contain both select and aggregate")
 
-    if not select_fields and not aggregate_fields:
-        raise ValueError("query must contain select or aggregate")
+    # build SELECT clause
+    if aggregate_fields is not None and group_by_fields:
+        # group query: SELECT group_cols, agg_exprs FROM ...
+        select_sql = ", ".join(group_by_fields + aggregate_fields)
+    elif aggregate_fields is not None:
+        # aggregate-only (no group)
+        select_sql = ", ".join(aggregate_fields)
+    else:
+        select_sql = ", ".join(select_fields)  # type: ignore[arg-type]
 
-    select_sql = ", ".join(aggregate_fields if aggregate_fields is not None else select_fields)
     sql_parts = [f"SELECT {select_sql}", f"FROM {source}"]
 
     if where_clauses:
         sql_parts.append("WHERE " + " AND ".join(where_clauses))
 
-    if order_by_fields and aggregate_fields is None:
+    if group_by_fields:
+        sql_parts.append("GROUP BY " + ", ".join(group_by_fields))
+
+    # ORDER BY only applies to row queries and group queries (not bare aggregates)
+    if order_by_fields:
         sql_parts.append("ORDER BY " + ", ".join(order_by_fields))
 
     if limit_clause and aggregate_fields is None:
@@ -284,8 +277,88 @@ def _compile_prql_subset_to_sql(prql_string: str) -> str:
     return " ".join(sql_parts)
 
 
+def _collect_group_block(
+    lines: list[str], start_idx: int
+) -> tuple[list[str], list[str], int]:
+    """
+    parse a group ... (aggregate { ... }) construct
+
+    supported forms:
+        group col (aggregate { ... })        — single column
+        group {col1, col2} (aggregate {...}) — multiple columns
+
+    returns (group_by_fields, aggregate_exprs, end_line_index)
+    """
+    line = lines[start_idx].strip()
+
+    # extract the group-by column(s) and the opening of the aggregate block
+    # form 1: group col (
+    m_single = re.match(r"^group\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*$", line)
+    # form 2: group {col1, col2} (
+    m_multi = re.match(r"^group\s+\{([^}]+)\}\s*\(\s*$", line)
+
+    if m_single:
+        group_cols = [m_single.group(1).strip()]
+    elif m_multi:
+        group_cols = [c.strip() for c in m_multi.group(1).split(",") if c.strip()]
+    else:
+        raise ValueError(f"unsupported group clause: {line}")
+
+    # validate all group column names
+    for col in group_cols:
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", col):
+            raise ValueError(f"invalid group column: {col!r}")
+
+    # now collect everything until the closing ) of the group block
+    # the inner structure is: aggregate { ... }
+    # find the aggregate keyword
+    i = start_idx + 1
+    aggregate_fields: list[str] | None = None
+    end_idx = start_idx
+
+    while i < len(lines):
+        inner = lines[i].strip()
+
+        if inner.startswith("aggregate"):
+            block_text, next_i = _collect_block(lines, i, "aggregate")
+            aggregate_fields = _parse_aggregate_block(block_text)
+            i = next_i + 1
+            continue
+
+        if inner == ")":
+            end_idx = i
+            break
+
+        # skip blank lines inside the group block
+        if not inner:
+            i += 1
+            continue
+
+        raise ValueError(f"unexpected line inside group block: {inner!r}")
+    else:
+        raise ValueError("unterminated group block — missing closing )")
+
+    if aggregate_fields is None:
+        raise ValueError("group block must contain an aggregate clause")
+
+    return group_cols, aggregate_fields, end_idx
+
+
 def _parse_filter_line(line: str) -> str:
-    m = re.match(r"^filter\s+([A-Za-z_][A-Za-z0-9_]*)\s*(==|>=|<=|~\*)\s*(.+?)\s*$", line)
+    # handle null comparisons separately: == null / != null
+    m_null = re.match(
+        r"^filter\s+([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=)\s*null\s*$",
+        line,
+        re.IGNORECASE,
+    )
+    if m_null:
+        field, op = m_null.groups()
+        return f"{field} IS NOT NULL" if op == "!=" else f"{field} IS NULL"
+
+    m = re.match(
+        r"^filter\s+([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|>=|<=|>|<|~\*)\s*(.+?)\s*$",
+        line,
+    )
     if not m:
         raise ValueError(f"unsupported filter clause: {line}")
 
@@ -308,44 +381,78 @@ def _parse_filter_line(line: str) -> str:
     else:
         raise ValueError(f"unsupported rhs value: {rhs}")
 
-    sql_op = {"==": "=", ">=": ">=", "<=": "<="}[op]
+    sql_op = {"==": "=", "!=": "!=", ">=": ">=", "<=": "<=", ">": ">", "<": "<"}[op]
     return f"{field} {sql_op} {rhs_sql}"
 
 
 def _parse_sort_line(line: str) -> list[str]:
-    m = re.match(r"^sort\s+\[(.+)\]\s*$", line)
-    if not m:
-        raise ValueError(f"unsupported sort clause: {line}")
-    fields = [part.strip() for part in m.group(1).split(",") if part.strip()]
-    if not fields:
+    """
+    parse a sort line into ORDER BY expressions
+
+    supported syntaxes:
+        sort [field1, -field2]    bracket form, minus = DESC
+        sort {field1, -field2}    curly brace form, minus = DESC
+        sort field                bare single field ascending
+        sort -field               bare single field descending
+
+    emits: field ASC or field DESC
+    """
+    rest = line[len("sort "):].strip()
+
+    m_curly = re.match(r"^\{(.+)\}$", rest)
+    if m_curly:
+        return _sort_fields_to_sql(m_curly.group(1))
+
+    m_bracket = re.match(r"^\[(.+)\]$", rest)
+    if m_bracket:
+        return _sort_fields_to_sql(m_bracket.group(1))
+
+    if re.match(r"^-?[A-Za-z_][A-Za-z0-9_]*$", rest):
+        return _sort_fields_to_sql(rest)
+
+    raise ValueError(f"unsupported sort clause: {line}")
+
+
+def _sort_fields_to_sql(inner: str) -> list[str]:
+    """convert comma-separated field tokens to SQL ORDER BY expressions"""
+    result = []
+    for part in inner.split(","):
+        field = part.strip()
+        if not field:
+            continue
+        if field.startswith("-"):
+            col = field[1:].strip()
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", col):
+                raise ValueError(f"invalid sort field: -{col}")
+            result.append(f"{col} DESC")
+        else:
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", field):
+                raise ValueError(f"invalid sort field: {field}")
+            result.append(f"{field} ASC")
+    if not result:
         raise ValueError("sort clause has no fields")
-    return fields
+    return result
 
 
 def _parse_take_line(line: str) -> tuple[str | None, str | None]:
     expr = line[len("take "):].strip()
 
-    # support the test suite's curly-brace inclusive range form
     m_range_curly = re.match(r"^\{(\d+)\.\.(\d+)\}$", expr)
     if m_range_curly:
         start = int(m_range_curly.group(1))
         end = int(m_range_curly.group(2))
         if end < start:
             raise ValueError("take range end is before start")
-        limit = end - start + 1
-        return f"LIMIT {limit}", f"OFFSET {start}"
+        return f"LIMIT {end - start + 1}", f"OFFSET {start}"
 
-    # support plain inclusive range form too
     m_range_plain = re.match(r"^(\d+)\.\.(\d+)$", expr)
     if m_range_plain:
         start = int(m_range_plain.group(1))
         end = int(m_range_plain.group(2))
         if end < start:
             raise ValueError("take range end is before start")
-        limit = end - start + 1
-        return f"LIMIT {limit}", f"OFFSET {start}"
+        return f"LIMIT {end - start + 1}", f"OFFSET {start}"
 
-    # support take N
     m_count = re.match(r"^(\d+)$", expr)
     if m_count:
         return f"LIMIT {int(m_count.group(1))}", None
@@ -354,22 +461,14 @@ def _parse_take_line(line: str) -> tuple[str | None, str | None]:
 
 
 def _collect_block(lines: list[str], start_idx: int, keyword: str) -> tuple[str, int]:
-    """
-    collect a one-line or multi-line select/aggregate block and return
-    (inner_block_text, end_index)
-    """
     line = lines[start_idx].strip()
 
-    # single-line form: select {id, name}
-    m_inline = re.match(rf"^{keyword}\s*\{{(.*)\}}\s*$", line)
+    # inline form: select {id, name}
+    m_inline = re.match(rf"^{keyword}\s*\{{(.+)\}}\s*$", line)
     if m_inline:
         return m_inline.group(1), start_idx
 
-    # multi-line form:
-    # select {
-    #   id,
-    #   name,
-    # }
+    # multi-line form: keyword {
     if not re.match(rf"^{keyword}\s*\{{\s*$", line):
         raise ValueError(f"unsupported {keyword} block start: {line}")
 
@@ -386,10 +485,13 @@ def _collect_block(lines: list[str], start_idx: int, keyword: str) -> tuple[str,
 
 
 def _parse_select_block(block_text: str) -> list[str]:
+    normalised = block_text.replace("\n", ",")
     fields = []
-    for raw in block_text.split(","):
-        field = raw.strip()
+    for raw in normalised.split(","):
+        field = raw.strip().rstrip(",").strip()
         if field:
+            if not re.match(r"^[A-Za-z_*][A-Za-z0-9_]*$", field):
+                raise ValueError(f"invalid select field: {field!r}")
             fields.append(field)
     if not fields:
         raise ValueError("select block has no fields")
@@ -397,23 +499,40 @@ def _parse_select_block(block_text: str) -> list[str]:
 
 
 def _parse_aggregate_block(block_text: str) -> list[str]:
+    sql_fn_map = {
+        "count":   "COUNT",
+        "average": "AVG",
+        "sum":     "SUM",
+        "min":     "MIN",
+        "max":     "MAX",
+    }
+    normalised = block_text.replace("\n", ",")
     exprs: list[str] = []
 
-    for raw in block_text.split(","):
-        item = raw.strip()
+    for raw in normalised.split(","):
+        item = raw.strip().rstrip(",").strip()
         if not item:
             continue
 
         m = re.match(
-            r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(count|average)\s+([A-Za-z_][A-Za-z0-9_]*)$",
+            r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(count|average|sum|min|max)\s+([A-Za-z_*][A-Za-z0-9_]*)$",
             item,
+            re.IGNORECASE,
         )
         if not m:
-            raise ValueError(f"unsupported aggregate expression: {item}")
+            raise ValueError(f"unsupported aggregate expression: {item!r}")
 
         alias, fn_name, field = m.groups()
-        sql_fn = {"count": "COUNT", "average": "AVG"}[fn_name]
-        exprs.append(f"{sql_fn}({field}) AS {alias}")
+        sql_fn = sql_fn_map[fn_name.lower()]
+
+        if fn_name.lower() == "count" and field in ("id", "*"):
+            sql_expr = f"COUNT(*) AS {alias}"
+        elif fn_name.lower() == "count":
+            sql_expr = f"COUNT({field}) AS {alias}"
+        else:
+            sql_expr = f"{sql_fn}({field}) AS {alias}"
+
+        exprs.append(sql_expr)
 
     if not exprs:
         raise ValueError("aggregate block has no expressions")
@@ -425,9 +544,6 @@ def _parse_aggregate_block(block_text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _build_feedback_cte() -> str:
-    """
-    build the postgresql WITH clause that defines the feedback virtual table
-    """
     return (
         f"WITH {_PRQL_SOURCE} AS (\n"
         f"    SELECT\n"
@@ -471,19 +587,13 @@ def _build_feedback_cte() -> str:
 # ---------------------------------------------------------------------------
 
 def execute_prql_query(sql: str, params: list[Any]) -> list[dict[str, Any]]:
-    """
-    execute a compiled sql query with the feedback CTE prepended
-    """
     cte = _build_feedback_cte()
     full_sql = f"{cte}\n{sql}"
-
     logger.debug("executing prql feedback sql:\n%s\nparams: %s", full_sql, params)
-
     with connection.cursor() as cursor:
         cursor.execute(full_sql, params)
         columns = [col[0] for col in cursor.description]
         rows = cursor.fetchall()
-
     return [dict(zip(columns, row)) for row in rows]
 
 
@@ -497,9 +607,6 @@ def query_feedback_rows_via_prql(
     page: int = 1,
     page_size: int = 50,
 ) -> list[dict[str, Any]]:
-    """
-    convenience function: build prql, compile to sql, execute, return rows
-    """
     prql_string, params = build_prql_query(
         filters,
         aggregate=False,
@@ -515,7 +622,6 @@ def query_feedback_rows_via_prql(
 # ---------------------------------------------------------------------------
 
 def _to_pg_ts(dt: datetime) -> str:
-    """convert a datetime to a postgresql-compatible iso timestamp string"""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=py_tz.utc)
     return dt.astimezone(py_tz.utc).strftime("%Y-%m-%d %H:%M:%S+00")

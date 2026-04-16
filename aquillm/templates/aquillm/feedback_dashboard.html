@@ -7,11 +7,12 @@
 
 {% block scripts %}
 <script>
-    mountReactComponent('feedback-dashboard-mount', 'FeedbackDashboard', {
-        apiRows: window.apiUrls.api_feedback_dashboard_rows,
-        apiSummary: window.apiUrls.api_feedback_dashboard_summary,
-        apiFilters: window.apiUrls.api_feedback_dashboard_filters,
-        apiExport: window.apiUrls.api_feedback_dashboard_export,
-    });
+  mountReactComponent('feedback-dashboard-mount', 'FeedbackDashboard', {
+    apiRows:    window.apiUrls.api_feedback_dashboard_rows,
+    apiSummary: window.apiUrls.api_feedback_dashboard_summary,
+    apiFilters: window.apiUrls.api_feedback_dashboard_filters,
+    apiExport:  window.apiUrls.api_feedback_dashboard_export,
+    apiPrql:    window.apiUrls.api_feedback_dashboard_prql,
+  });
 </script>
 {% endblock %}

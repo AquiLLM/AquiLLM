@@ -56,6 +56,7 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_feedback_dashboard_summary", "api_feedback_dashboard_summary", None),
     ("api_feedback_dashboard_filters", "api_feedback_dashboard_filters", None),
     ("api_feedback_dashboard_export", "api_feedback_dashboard_export", None),
+    ("api_feedback_dashboard_prql", "api_feedback_dashboard_prql", None),
     ("api_ingest_vtt", "api_ingest_vtt", None),
     ("api_ingest_uploads", "api_ingest_uploads", None),
     ("api_ingest_uploads_status", "api_ingest_uploads_status", {"batch_id": 0}),

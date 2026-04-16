@@ -14,6 +14,7 @@ import UserSettings from './components/UserSettings';
 import ChatFileUpload from './components/ChatFileUpload';
 import FeedbackDashboard from './components/FeedbackDashboard';
 
+// Type for the components mapping
 type ComponentsMap = {
   [key: string]: React.ComponentType<any>;
 };
@@ -29,7 +30,6 @@ window.mountReactComponent = (
     console.error(`Element with id '${elementId}' not found`);
     return;
   }
-
   const root = createRoot(element);
 
   const components: ComponentsMap = {
@@ -46,6 +46,7 @@ window.mountReactComponent = (
     UserSettings: UserSettings,
     ChatFileUpload: ChatFileUpload,
     FeedbackDashboard: FeedbackDashboard,
+    // Add other components here
   };
 
   const Component = components[componentName];

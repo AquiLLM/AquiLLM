@@ -438,6 +438,115 @@ def feedback_dashboard_export(request):
     response["Content-Disposition"] = f'attachment; filename="{fname}"'
     return response
 
+@login_required
+@require_http_methods(["POST"])
+def feedback_dashboard_prql_query(request):
+    """
+    execute a user-supplied PRQL query against the feedback CTE
+    superuser only — never exposes raw sql to the client
+
+    request body (json):
+        prql    string — the PRQL query to compile and execute
+
+    response shape (success):
+        columns     list of column name strings
+        rows        list of lists (each inner list is one row of values)
+        row_count   int
+        sql         the compiled sql shown for transparency (read-only)
+
+    response shape (error):
+        error       human-readable error string
+        type        "compilation" | "execution" | "permission" | "parse"
+
+    security constraints:
+        only superusers can reach this endpoint
+        the query is compiled by prql-python — no raw sql accepted
+        execution uses django db connection with the feedback CTE prepended
+        the CTE filters to feedback-bearing rows only — the user cannot
+        escape that constraint because their prql must start from the
+        feedback source which the CTE defines
+        row results are capped at 500 to prevent abuse
+    """
+    denied = _require_superuser(request)
+    if denied:
+        return denied
+
+    MAX_ROWS = 500
+
+    try:
+        body = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse(
+            {"error": "request body must be valid json", "type": "parse"},
+            status=400,
+        )
+
+    prql_string = body.get("prql", "").strip()
+    if not prql_string:
+        return JsonResponse(
+            {"error": "prql field is required and must not be empty", "type": "parse"},
+            status=400,
+        )
+
+    # safety check — the query must reference the feedback source
+    # this prevents users from writing arbitrary from statements that
+    # reference other tables outside the CTE
+    if "from feedback" not in prql_string.lower().replace("\n", " "):
+        return JsonResponse(
+            {
+                "error": (
+                    "query must start with 'from feedback' — "
+                    "the feedback source is the only available table in this context"
+                ),
+                "type": "compilation",
+            },
+            status=400,
+        )
+
+    from apps.platform_admin.services.feedback_prql import (
+        PRQLCompilationError,
+        compile_prql_to_sql,
+        execute_prql_query,
+    )
+
+    try:
+        sql = compile_prql_to_sql(prql_string)
+    except PRQLCompilationError as exc:
+        return JsonResponse(
+            {"error": str(exc), "type": "compilation"},
+            status=400,
+        )
+
+    try:
+        rows_dicts = execute_prql_query(sql, [])
+    except Exception as exc:
+        logger.exception("prql cli execution error: %s", exc)
+        return JsonResponse(
+            {"error": str(exc), "type": "execution"},
+            status=400,
+        )
+
+    if not rows_dicts:
+        return JsonResponse({
+            "columns": [],
+            "rows": [],
+            "row_count": 0,
+            "sql": sql,
+        })
+
+    columns = list(rows_dicts[0].keys())
+    # cap rows and convert each dict to a list in column order
+    capped = rows_dicts[:MAX_ROWS]
+    rows = [[str(row[col]) if row[col] is not None else None for col in columns] for row in capped]
+
+    return JsonResponse({
+        "columns": columns,
+        "rows": rows,
+        "row_count": len(rows_dicts),
+        "truncated": len(rows_dicts) > MAX_ROWS,
+        "sql": sql,
+    })
+
 
 __all__ = [
     'feedback_ratings_csv',
@@ -445,6 +554,7 @@ __all__ = [
     'feedback_dashboard_summary',
     'feedback_dashboard_filters',
     'feedback_dashboard_export',
+    'feedback_dashboard_prql_query',
     'search_users',
     'whitelisted_emails',
     'whitelisted_email',

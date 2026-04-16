@@ -14,6 +14,7 @@ from django.db.models import Avg, Count, Max, Min, Q
 from apps.platform_admin.services.feedback_dataset import (
     FeedbackFilters,
     get_filtered_queryset,
+    feedback_dataset_queryset,
 )
 
 
@@ -21,9 +22,8 @@ def get_summary_metrics(filters: FeedbackFilters) -> dict[str, Any]:
     """
     return the aggregate summary metrics for the current filter state
 
-    runs two queries:
-        one for counts, avg, and date range
-        one for per-rating counts (the distribution)
+    runs one query using conditional aggregation for counts, avg, date
+    range, and per-rating distribution all in a single round trip
 
     returns a dict with keys:
         total_count         total feedback-bearing rows matching filters
@@ -36,7 +36,6 @@ def get_summary_metrics(filters: FeedbackFilters) -> dict[str, Any]:
     """
     qs = get_filtered_queryset(filters)
 
-    # single query for scalar aggregates
     agg = qs.aggregate(
         total_count=Count("id"),
         rated_count=Count("id", filter=Q(rating__isnull=False)),
@@ -47,7 +46,6 @@ def get_summary_metrics(filters: FeedbackFilters) -> dict[str, Any]:
         ),
         date_min=Min("effective_date"),
         date_max=Max("effective_date"),
-        # per-rating counts in the same query to avoid a second round trip
         r1=Count("id", filter=Q(rating=1)),
         r2=Count("id", filter=Q(rating=2)),
         r3=Count("id", filter=Q(rating=3)),
@@ -81,22 +79,21 @@ def get_filter_options() -> dict[str, Any]:
     always operates on the full unfiltered dataset so dropdowns always
     show the complete universe of available values
 
-    returns a dict with keys:
-        users       list of dicts with id and username
-        roles       sorted list of role strings
-        models      sorted list of non-null model strings
-        tool_names  sorted list of non-null tool_call_name strings
-        ratings     sorted list of int rating values present in data
+    the critical fix here is calling .order_by() with no arguments before
+    .values_list().distinct() — this clears the default ordering on
+    (effective_date, id) that the base queryset applies, which would otherwise
+    be included in the DISTINCT clause and produce one row per message
+    instead of one row per unique value
     """
-    from apps.platform_admin.services.feedback_dataset import feedback_dataset_queryset
-
-    # use the base queryset with no filters so all options are visible
     qs = feedback_dataset_queryset()
 
-    # users: distinct combinations of user_id and username
-    # these annotations already exist on the queryset from the base function
+    # users — distinct combinations of user_id and username
+    # we must clear ordering before values() + distinct() to avoid the
+    # effective_date and id columns leaking into the DISTINCT ON clause
     users_qs = (
-        qs.values("user_id", "username")
+        qs
+        .order_by()
+        .values("user_id", "username")
         .distinct()
         .order_by("username")
     )
@@ -105,21 +102,32 @@ def get_filter_options() -> dict[str, Any]:
         for row in users_qs
     ]
 
+    # roles — clear ordering, get distinct non-null values, sort in python
     roles = sorted(
-        set(qs.values_list("role", flat=True).distinct())
+        set(
+            v for v in qs.order_by().values_list("role", flat=True).distinct()
+            if v
+        )
     )
 
-    # filter out null and empty strings for models and tool names
+    # models — clear ordering first so DISTINCT works on the model column only
     models = sorted(
-        v for v in qs.values_list("model", flat=True).distinct() if v
+        v
+        for v in qs.order_by().values_list("model", flat=True).distinct()
+        if v
     )
 
+    # tool names — same pattern
     tool_names = sorted(
-        v for v in qs.values_list("tool_call_name", flat=True).distinct() if v
+        v
+        for v in qs.order_by().values_list("tool_call_name", flat=True).distinct()
+        if v
     )
 
+    # ratings — integer values 1-5 present in data, sorted ascending
     ratings = sorted(
-        v for v in qs.values_list("rating", flat=True).distinct()
+        v
+        for v in qs.order_by().values_list("rating", flat=True).distinct()
         if v is not None
     )
 

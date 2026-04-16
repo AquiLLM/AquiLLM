@@ -253,12 +253,6 @@
                                 Email Whitelist
                             </a>
                             {% endif %}
-                            {% if user.is_superuser %}
-                            {# feedback dashboard link is only visible to superusers #}
-                            <a href="{% url 'feedback_dashboard' %}" class="my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
-                                Feedback Dashboard
-                            </a>
-                            {% endif %}
                         {% endif %}
                     </div>
                 </div>
