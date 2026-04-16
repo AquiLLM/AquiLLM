@@ -10,7 +10,7 @@ from django.views.decorators.http import require_http_methods
 
 from aquillm.ocr_utils import get_gemini_cost_stats
 from apps.chat.models import Message
-from ..feedbackql.parser import parse, SummarizeClause
+from ..feedbackql.parser import parse, SelectClause, SummarizeClause
 from ..feedbackql.executor import execute
 from ..feedbackql.exceptions import FeedbackQLSyntaxError
 
@@ -71,10 +71,16 @@ def feedback_dashboard(request):
 
                 if results_dicts:
                     if is_row_level:
-                        # Executor always includes conversation_id and message_uuid —
-                        # strip them from the display columns but keep as row metadata.
+                        # Executor always includes conversation_id and message_uuid as
+                        # hidden metadata for the thread viewer. Only strip them from
+                        # display columns if the user didn't explicitly ask for them.
                         meta = {'conversation_id', 'message_uuid'}
-                        columns = [k for k in results_dicts[0].keys() if k not in meta]
+                        select_clause = next(
+                            (c for c in parsed.clauses if isinstance(c, SelectClause)), None
+                        )
+                        explicitly_requested = set(select_clause.fields) if select_clause else set()
+                        hidden_meta = meta - explicitly_requested
+                        columns = [k for k in results_dicts[0].keys() if k not in hidden_meta]
                         rows_for_template = [
                             {
                                 'cells': [row.get(col) for col in columns],
