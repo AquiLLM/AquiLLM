@@ -5,7 +5,6 @@ import PDFIngestionMonitor from './components/PDFIngestionMonitor';
 import CollectionsPage from './components/CollectionsPage';
 import CollectionView from './features/collections/components/CollectionView';
 import SearchPage from './components/SearchPage';
-
 import IngestionDashboard from './components/IngestionDashboard';
 import IngestionDashboardLauncher from './components/IngestionDashboardLauncher';
 import IngestRowContainer from './features/ingestion/components/IngestRowsContainer';
@@ -13,6 +12,8 @@ import WhitelistEmails from './components/WhitelistEmails';
 import ChatComponent from './features/chat/components/ChatShell';
 import UserSettings from './components/UserSettings';
 import ChatFileUpload from './components/ChatFileUpload';
+import FeedbackDashboard from './components/FeedbackDashboard';
+
 import BugReportButton from './components/BugReportButton';
 import BugReportsAdmin from './components/BugReportsAdmin';
 // Type for the components mapping
@@ -31,9 +32,8 @@ window.mountReactComponent = (
     console.error(`Element with id '${elementId}' not found`);
     return;
   }
-
   const root = createRoot(element);
-  
+
   const components: ComponentsMap = {
     TestComponent: TestComponent,
     PDFIngestionMonitor: PDFIngestionMonitor,
@@ -47,11 +47,12 @@ window.mountReactComponent = (
     ChatComponent: ChatComponent,
     UserSettings: UserSettings,
     ChatFileUpload: ChatFileUpload,
+    FeedbackDashboard: FeedbackDashboard,
     BugReportButton: BugReportButton,
     BugReportsAdmin: BugReportsAdmin,
     // Add other components here
   };
-  
+
   const Component = components[componentName];
   if (Component) {
     root.render(<Component {...props} />);
