@@ -78,6 +78,10 @@ FIELD_MAP: dict[str, str] = {
 # e.g. 'conversation__owner_id' → 'user_id'
 _ORM_TO_FIELD = {v: k for k, v in FIELD_MAP.items()}
 
+# Virtual fields exist in ALLOWED_FIELDS for where-clause use but have no DB column.
+# They must never appear in select, summarize, or the default output field list.
+VIRTUAL_FIELDS = frozenset({'conversation_tool'})
+
 # Safety cap — even without a LIMIT clause we never return more than this many rows.
 # Prevents accidentally dumping the entire table.
 MAX_ROWS = 10_000
@@ -102,8 +106,34 @@ def _condition_to_q(cond: Condition):
             f"Unknown field {cond.field!r} in pre-summarize where clause. "
             f"Allowed fields: {', '.join(sorted(ALLOWED_FIELDS))}"
         )
-    path = _orm(cond.field)
     op = cond.op
+
+    # conversation_tool is a virtual field with no DB column.
+    # We translate it to a conversation_id __in subquery so it composes cleanly
+    # with Q objects using & and |.
+    if cond.field == 'conversation_tool':
+        if op not in ('==', '!='):
+            raise FeedbackQLSyntaxError(
+                f"conversation_tool only supports == and != operators, got {op!r}"
+            )
+        if cond.value is None:
+            # conv_ids = convs that used any tool at all
+            # == null  → not in that set (no tools used)
+            # != null  → in that set (any tool was used)
+            conv_ids = Message.objects.filter(
+                tool_call_name__isnull=False
+            ).values('conversation_id')
+            q = Q(conversation_id__in=conv_ids)
+            return ~q if op == '==' else q
+        else:
+            # conv_ids = convs that used this specific tool
+            conv_ids = Message.objects.filter(
+                tool_call_name=cond.value
+            ).values('conversation_id')
+            q = Q(conversation_id__in=conv_ids)
+            return q if op == '==' else ~q
+
+    path = _orm(cond.field)
 
     # null comparisons map to IS NULL / IS NOT NULL
     if cond.value is None:
@@ -283,7 +313,7 @@ def _finalise_row_level(qs, select: SelectClause | None) -> list[dict]:
     queryset have already been applied. We just need to project the right
     columns and remap ORM paths back to user-facing names.
     """
-    output_fields = select.fields if select else sorted(ALLOWED_FIELDS)
+    output_fields = select.fields if select else sorted(ALLOWED_FIELDS - VIRTUAL_FIELDS)
 
     # Always fetch thread metadata fields for the conversation viewer
     fetch_fields = set(output_fields) | _THREAD_META_FIELDS
@@ -382,6 +412,16 @@ def execute(query: Query) -> list[dict]:
     post_summarize_keys: set[str] = set()
 
     select_clause: SelectClause | None = None
+
+    for clause in query.clauses:
+        if isinstance(clause, SelectClause) and 'conversation_tool' in clause.fields:
+            raise FeedbackQLSyntaxError(
+                "conversation_tool is a filter-only field — use it in a where clause, not select"
+            )
+        if isinstance(clause, SummarizeClause) and 'conversation_tool' in clause.by:
+            raise FeedbackQLSyntaxError(
+                "conversation_tool is a filter-only field — use it in a where clause, not summarize by"
+            )
 
     for clause in query.clauses:
         if isinstance(clause, WhereClause):

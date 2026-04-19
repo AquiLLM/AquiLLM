@@ -464,3 +464,94 @@ class TestExecutorPostSummarize:
         )
         models = sorted(r['model'] for r in results)
         assert models == ['m1', 'm3']
+
+
+@pytest.mark.django_db
+class TestConversationTool:
+    """Tests for the conversation_tool virtual field."""
+
+    def test_eq_specific_tool_matches_conversations_using_that_tool(self, user_a):
+        """conversation_tool == "vector_search" returns messages from convs that used it."""
+        conv_with_tool = WSConversation.objects.create(owner=user_a)
+        _msg(conv_with_tool, 'assistant', 'searching...', 1, tool_call_name='vector_search')
+        rated = _msg(conv_with_tool, 'assistant', 'answer', 2, rating=3)
+
+        conv_without_tool = WSConversation.objects.create(owner=user_a)
+        _msg(conv_without_tool, 'assistant', 'plain answer', 1, rating=4)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'and conversation_tool == "vector_search"'
+        )
+        assert len(results) == 1
+        assert results[0]['message_uuid'] == rated.message_uuid
+
+    def test_neq_specific_tool_excludes_conversations_using_that_tool(self, user_a):
+        """conversation_tool != "vector_search" excludes messages from convs that used it."""
+        conv_with_tool = WSConversation.objects.create(owner=user_a)
+        _msg(conv_with_tool, 'assistant', 'searching...', 1, tool_call_name='vector_search')
+        _msg(conv_with_tool, 'assistant', 'answer', 2, rating=3)
+
+        conv_without_tool = WSConversation.objects.create(owner=user_a)
+        plain = _msg(conv_without_tool, 'assistant', 'plain answer', 1, rating=4)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'and conversation_tool != "vector_search"'
+        )
+        assert len(results) == 1
+        assert results[0]['message_uuid'] == plain.message_uuid
+
+    def test_neq_null_matches_conversations_with_any_tool(self, user_a):
+        """conversation_tool != null returns messages from convs that used any tool."""
+        conv_tools = WSConversation.objects.create(owner=user_a)
+        _msg(conv_tools, 'assistant', 'searching...', 1, tool_call_name='more_context')
+        rated = _msg(conv_tools, 'assistant', 'answer', 2, rating=2)
+
+        conv_plain = WSConversation.objects.create(owner=user_a)
+        _msg(conv_plain, 'assistant', 'plain answer', 1, rating=5)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'and conversation_tool != null'
+        )
+        assert len(results) == 1
+        assert results[0]['message_uuid'] == rated.message_uuid
+
+    def test_eq_null_matches_conversations_with_no_tools(self, user_a):
+        """conversation_tool == null returns messages from convs that used no tools."""
+        conv_tools = WSConversation.objects.create(owner=user_a)
+        _msg(conv_tools, 'assistant', 'searching...', 1, tool_call_name='vector_search')
+        _msg(conv_tools, 'assistant', 'answer', 2, rating=3)
+
+        conv_plain = WSConversation.objects.create(owner=user_a)
+        plain = _msg(conv_plain, 'assistant', 'plain answer', 1, rating=5)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'and conversation_tool == null'
+        )
+        assert len(results) == 1
+        assert results[0]['message_uuid'] == plain.message_uuid
+
+    def test_multiple_tools_still_matches(self, user_a):
+        """conversation_tool == "vector_search" still matches when multiple tools were used."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'step 1', 1, tool_call_name='vector_search')
+        _msg(conv, 'assistant', 'step 2', 2, tool_call_name='more_context')
+        rated = _msg(conv, 'assistant', 'final answer', 3, rating=4)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'and conversation_tool == "vector_search"'
+        )
+        assert len(results) == 1
+        assert results[0]['message_uuid'] == rated.message_uuid
+
+    def test_conversation_tool_in_select_raises(self):
+        with pytest.raises(FeedbackQLSyntaxError, match="filter-only"):
+            run('messages | select rating, conversation_tool')
+
+    def test_conversation_tool_in_summarize_by_raises(self):
+        with pytest.raises(FeedbackQLSyntaxError, match="filter-only"):
+            run('messages | summarize n = count() by conversation_tool')

@@ -103,7 +103,8 @@
                         <span>conversation_id</span><span class="text-text-muted/60">— conversation ID</span><span></span>
                         <span>sequence_number</span><span class="text-text-muted/60">— position in conversation</span><span></span>
                         <span>message_uuid</span><span class="text-text-muted/60">— unique message ID</span><span></span>
-                        <span>tool_call_name</span><span class="text-text-muted/60">— tool used (if any)</span><span></span>
+                        <span>tool_call_name</span><span class="text-text-muted/60">— tool used (intermediate messages only)</span><span></span>
+                        <span>conversation_tool</span><span class="text-text-muted/60 col-span-2">— filter-only: did this conversation use a tool? (see below)</span>
                     </div>
                 </div>
 
@@ -142,6 +143,27 @@
                         <div><span class="text-text-normal">median(field)</span> — middle value
                             <span class="text-text-muted/60"> — not in standard KQL (use percentile() there instead)</span></div>
                     </div>
+                </div>
+
+                <div>
+                    <p class="font-semibold text-text-normal mb-1">Filtering by tool use (<code>conversation_tool</code>)</p>
+                    <p class="text-text-muted mb-1.5 leading-relaxed">
+                        When the AI uses a tool (e.g. document search), the tool call is stored on a separate message from the
+                        rated response. <code class="text-text-normal">conversation_tool</code> bridges this gap — it checks whether
+                        the conversation as a whole involved a particular tool. Use it in <code class="text-text-normal">where</code> clauses only.
+                    </p>
+                    <div class="font-mono space-y-0.5">
+                        <div><span class="text-text-normal">conversation_tool == "vector_search"</span> <span class="text-text-muted/60">— conversation used vector search</span></div>
+                        <div><span class="text-text-normal">conversation_tool != "vector_search"</span> <span class="text-text-muted/60">— conversation did not use vector search</span></div>
+                        <div><span class="text-text-normal">conversation_tool != null</span> <span class="text-text-muted/60">— conversation used any tool</span></div>
+                        <div><span class="text-text-normal">conversation_tool == null</span> <span class="text-text-muted/60">— conversation used no tools</span></div>
+                    </div>
+                    <p class="text-text-muted mt-1.5 leading-relaxed">
+                        Available tool names: <code class="text-text-normal">vector_search</code>, <code class="text-text-normal">more_context</code>,
+                        <code class="text-text-normal">document_ids</code>, <code class="text-text-normal">whole_document</code>,
+                        <code class="text-text-normal">search_single_document</code>, <code class="text-text-normal">sky_subtraction</code>,
+                        <code class="text-text-normal">flat_fielding</code>, <code class="text-text-normal">detect_point_sources</code>
+                    </p>
                 </div>
 
                 <div class="font-mono p-2 rounded bg-scheme-shade_2 text-text-muted/70 leading-relaxed">
