@@ -130,7 +130,7 @@ const DetailField: React.FC<DetailFieldProps> = ({ label, value }) => (
 
 // column header with consistent styling
 interface ThProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   className?: string;
 }
 
