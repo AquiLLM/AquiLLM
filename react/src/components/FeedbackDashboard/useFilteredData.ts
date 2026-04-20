@@ -33,21 +33,21 @@ function buildQueryString(filters: FilterState): string {
 }
 
 export interface UseFilteredDataResult {
-  // data
   summary: SummaryMetrics | null;
   rows: FeedbackRow[];
   filterOptions: FilterOptions | null;
   totalCount: number;
   totalPages: number;
   currentPage: number;
-
+  // canonical PRQL string returned by the rows endpoint
+  // represents the current active filter state
+  prql: string;
   loadingRows: boolean;
   loadingSummary: boolean;
   loadingOptions: boolean;
   errorRows: string | null;
   errorSummary: string | null;
   errorOptions: string | null;
-  // the stable query string built from current filters, used by ExportButton
   exportQueryString: string;
 }
 
@@ -57,12 +57,13 @@ export function useFilteredData(
   apiSummary: string,
   apiFilters: string,
 ): UseFilteredDataResult {
-  const [summary, setSummary]           = useState<SummaryMetrics | null>(null);
-  const [rows, setRows]                 = useState<FeedbackRow[]>([]);
+  const [summary, setSummary]             = useState<SummaryMetrics | null>(null);
+  const [rows, setRows]                   = useState<FeedbackRow[]>([]);
   const [filterOptions, setFilterOptions] = useState<FilterOptions | null>(null);
-  const [totalCount, setTotalCount]     = useState(0);
-  const [totalPages, setTotalPages]     = useState(1);
-  const [currentPage, setCurrentPage]   = useState(1);
+  const [totalCount, setTotalCount]       = useState(0);
+  const [totalPages, setTotalPages]       = useState(1);
+  const [currentPage, setCurrentPage]     = useState(1);
+  const [prql, setPrql]                   = useState('');
 
   const [loadingRows, setLoadingRows]         = useState(false);
   const [loadingSummary, setLoadingSummary]   = useState(false);
@@ -106,7 +107,7 @@ export function useFilteredData(
 
   const queryString = buildQueryString(effectiveFilters);
 
-  // fetch rows
+  // fetch rows — also captures the canonical PRQL from the response
   useEffect(() => {
     let cancelled = false;
     setLoadingRows(true);
@@ -127,6 +128,9 @@ export function useFilteredData(
         setTotalCount(data.total_count);
         setTotalPages(data.total_pages);
         setCurrentPage(data.page);
+        // store the canonical PRQL returned by the backend
+        // this is what gets displayed live under the filters
+        if (data.prql) setPrql(data.prql);
       })
       .catch(err => {
         if (cancelled) return;
@@ -195,6 +199,7 @@ export function useFilteredData(
     totalCount,
     totalPages,
     currentPage,
+    prql,
     loadingRows,
     loadingSummary,
     loadingOptions,
