@@ -21,8 +21,12 @@ function cellDisplay(v: unknown): string {
   return s;
 }
 
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 0] as const;   // 0 means "show all"
+
 const ResultsTable: React.FC<Props> = ({ columns, rows, isRowLevel, onOpenThread }) => {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [page, setPage] = useState<number>(1);
 
   useEffect(() => {
     if (expanded === null) return;
@@ -33,8 +37,59 @@ const ResultsTable: React.FC<Props> = ({ columns, rows, isRowLevel, onOpenThread
     return () => window.removeEventListener('keydown', onKey);
   }, [expanded]);
 
+  // Reset to page 1 whenever the underlying result set changes (new query) or page size changes
+  useEffect(() => {
+    setPage(1);
+  }, [rows, pageSize]);
+
+  const total = rows.length;
+  const effectivePageSize = pageSize === 0 ? total : pageSize;
+  const totalPages = effectivePageSize > 0 ? Math.max(1, Math.ceil(total / effectivePageSize)) : 1;
+  const safePage = Math.min(page, totalPages);
+  const startIdx = pageSize === 0 ? 0 : (safePage - 1) * pageSize;
+  const endIdx = pageSize === 0 ? total : Math.min(startIdx + pageSize, total);
+  const visibleRows = rows.slice(startIdx, endIdx);
+
   return (
     <>
+      <div className="flex flex-wrap items-center gap-3 mb-2 text-xs text-text-muted">
+        <label className="flex items-center gap-2">
+          Rows per page
+          <select
+            value={pageSize}
+            onChange={(e) => setPageSize(Number(e.target.value))}
+            className="px-2 py-1 rounded bg-scheme-shade_3 element-border font-mono"
+          >
+            {PAGE_SIZE_OPTIONS.map((n) => (
+              <option key={n} value={n}>{n === 0 ? 'All' : n}</option>
+            ))}
+          </select>
+        </label>
+        <span>
+          Showing {total === 0 ? 0 : startIdx + 1}–{endIdx} of {total}
+        </span>
+        {pageSize !== 0 && totalPages > 1 && (
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="px-2 py-1 rounded bg-scheme-shade_3 hover:bg-scheme-shade_5 disabled:opacity-40 disabled:cursor-not-allowed element-border"
+            >
+              Prev
+            </button>
+            <span className="font-mono">
+              Page {safePage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="px-2 py-1 rounded bg-scheme-shade_3 hover:bg-scheme-shade_5 disabled:opacity-40 disabled:cursor-not-allowed element-border"
+            >
+              Next
+            </button>
+          </div>
+        )}
+      </div>
       <div className="overflow-x-auto rounded-lg element-border">
         <table className="w-full text-sm">
           <thead className="bg-scheme-shade_3">
@@ -48,7 +103,7 @@ const ResultsTable: React.FC<Props> = ({ columns, rows, isRowLevel, onOpenThread
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, rowIdx) => (
+            {visibleRows.map((row, rowIdx) => (
               <tr key={rowIdx} className="border-t border-scheme-contrast/20 hover:bg-scheme-shade_3/50">
                 {isRowLevel && (
                   <td className="px-2 py-2 text-center">
