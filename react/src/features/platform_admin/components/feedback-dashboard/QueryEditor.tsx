@@ -5,9 +5,10 @@ type Props = {
   onChange: (v: string) => void;
   onRun: () => void;
   onCopyLink: () => void;
+  onClear: () => void;
 };
 
-const QueryEditor: React.FC<Props> = ({ value, onChange, onRun, onCopyLink }) => {
+const QueryEditor: React.FC<Props> = ({ value, onChange, onRun, onCopyLink, onClear }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -46,6 +47,12 @@ const QueryEditor: React.FC<Props> = ({ value, onChange, onRun, onCopyLink }) =>
           className="px-4 py-1.5 rounded-lg bg-scheme-shade_5 hover:bg-scheme-shade_6 text-sm transition-all"
         >
           {copied ? 'Copied!' : 'Copy link'}
+        </button>
+        <button
+          onClick={onClear}
+          className="px-4 py-1.5 rounded-lg bg-scheme-shade_5 hover:bg-scheme-shade_6 text-sm transition-all"
+        >
+          Clear
         </button>
       </div>
     </div>

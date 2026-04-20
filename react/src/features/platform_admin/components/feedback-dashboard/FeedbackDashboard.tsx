@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import QueryBuilder from './QueryBuilder';
 import QueryEditor from './QueryEditor';
 import SyntaxReference from './SyntaxReference';
 import ResultsChart from './ResultsChart';
@@ -77,6 +78,12 @@ const FeedbackDashboard: React.FC = () => {
     void executeQuery(trimmed);
   };
 
+  const handleClear = () => {
+    setQueryText('');
+    setResponse(null);
+    window.history.pushState({}, '', window.location.pathname);
+  };
+
   const handleCopyLink = () => {
     const trimmed = queryText.trim();
     if (!trimmed) {
@@ -92,11 +99,14 @@ const FeedbackDashboard: React.FC = () => {
     <div className="container mx-auto p-6 text-text-normal max-w-7xl">
       <h1 className="text-3xl font-bold mb-6">Feedback Dashboard</h1>
 
+      <QueryBuilder value={queryText} onChange={setQueryText} />
+
       <QueryEditor
         value={queryText}
         onChange={setQueryText}
         onRun={handleRun}
         onCopyLink={handleCopyLink}
+        onClear={handleClear}
       />
 
       <SyntaxReference />
