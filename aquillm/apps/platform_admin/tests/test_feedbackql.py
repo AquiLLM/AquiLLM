@@ -773,7 +773,7 @@ class TestConversationsStream:
 
 class TestQueryTipDetection:
     def test_tools_used_equals_triggers_tip(self):
-        from apps.platform_admin.views.pages import _detect_query_tips
+        from apps.platform_admin.views.api import _detect_query_tips
         parsed = parse('conversations | where tools_used == "vector_search"')
         notice = _detect_query_tips(parsed)
         assert notice is not None
@@ -781,7 +781,7 @@ class TestQueryTipDetection:
         assert 'contains' in notice
 
     def test_tools_used_contains_no_tip(self):
-        from apps.platform_admin.views.pages import _detect_query_tips
+        from apps.platform_admin.views.api import _detect_query_tips
         parsed = parse('conversations | where tools_used contains "vector_search"')
         assert _detect_query_tips(parsed) is None
 
@@ -789,11 +789,11 @@ class TestQueryTipDetection:
         """tools_used isn't a messages-stream field; this query won't even parse,
         so the tip detector should never see it. Just check the messages stream
         isn't accidentally flagged by some unrelated comparison."""
-        from apps.platform_admin.views.pages import _detect_query_tips
+        from apps.platform_admin.views.api import _detect_query_tips
         parsed = parse('messages | where rating == 5')
         assert _detect_query_tips(parsed) is None
 
     def test_other_conversations_query_no_tip(self):
-        from apps.platform_admin.views.pages import _detect_query_tips
+        from apps.platform_admin.views.api import _detect_query_tips
         parsed = parse('conversations | where avg_rating < 3')
         assert _detect_query_tips(parsed) is None
