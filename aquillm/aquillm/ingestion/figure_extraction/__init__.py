@@ -8,12 +8,12 @@ Usage:
         print(figure.width, figure.height, figure.location_metadata)
 """
 
-import logging
+import structlog
 from typing import Iterator
 
 from .types import ExtractedFigure
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 __all__ = ["extract_figures_from_document", "ExtractedFigure"]
 

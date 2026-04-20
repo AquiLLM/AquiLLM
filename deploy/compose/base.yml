@@ -1,9 +1,13 @@
 x-common-variables: &db-variables
-  POSTGRES_NAME: postgres
-  POSTGRES_USER: postgres
-  POSTGRES_PASSWORD: jacksonmadden
-  STORAGE_ACCESS_KEY: dev
-  STORAGE_SECRET_KEY: rickbailey
+  POSTGRES_NAME: ${POSTGRES_NAME:?POSTGRES_NAME is required}
+  POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:?STORAGE_ACCESS_KEY is required}
+  STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:?STORAGE_SECRET_KEY is required}
+
+# Satellite vLLM services set VLLM_EXTRA_ARGS from ${OCR_VLLM_EXTRA_ARGS} etc. Compose reads those names
+# from the environment used at parse time — pass repo .env, e.g.  docker compose --env-file .env -f deploy/compose/base.yml …
+# If unset, substitution is empty and /vllm_start.sh still applies *_VLLM_EXTRA_ARGS from the container env_file.
 
 services:
   web:
@@ -19,7 +23,7 @@ services:
       PORT: ${PORT:-8080}
       POSTGRES_HOST: db
       STORAGE_HOST: storage:9000
-      DJANGO_DEBUG: 1
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
       RUN_CELERY_IN_WEB: 0
       C_FORCE_ROOT: 1
       <<: *db-variables
@@ -60,7 +64,7 @@ services:
     environment:
       POSTGRES_HOST: db
       STORAGE_HOST: storage:9000
-      DJANGO_DEBUG: 1
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
       RUN_CELERY_IN_WEB: 0
       C_FORCE_ROOT: 1
       <<: *db-variables
@@ -118,8 +122,8 @@ services:
     env_file:
       - ../../.env
     environment:
-      MINIO_ROOT_USER: dev
-      MINIO_ROOT_PASSWORD: rickbailey
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:?STORAGE_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:?STORAGE_SECRET_KEY is required}
 
     volumes:
       - minio_data:/data
@@ -167,12 +171,12 @@ services:
     env_file:
       - ../../.env
     environment:
+      # Chat vLLM: keep VLLM_EXTRA_ARGS / max_len / trust_remote_code / TP from ../../.env (env_file) only.
+      # (Do not set VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS} here — empty Compose substitution would wipe .env.)
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
-      - VLLM_TENSOR_PARALLEL_SIZE=1
-      - VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-8192}
-      - VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS:-}
-      - VLLM_TRUST_REMOTE_CODE=${VLLM_TRUST_REMOTE_CODE:-0}
+      - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
+      - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
     ports:
       - "8000:8000"
     volumes:
@@ -205,13 +209,13 @@ services:
     environment:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
-      - VLLM_MODEL=${OCR_VLLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
-      - VLLM_SERVED_MODEL_NAME=${OCR_VLLM_SERVED_MODEL_NAME:-qwen-ocr}
-      - VLLM_TOKENIZER=${OCR_VLLM_TOKENIZER:-Qwen/Qwen2.5-VL-7B-Instruct}
+      - VLLM_MODEL=${OCR_VLLM_MODEL:-Qwen/Qwen3.5-4B}
+      - VLLM_SERVED_MODEL_NAME=${OCR_VLLM_SERVED_MODEL_NAME:-qwen3.5-ocr}
+      - VLLM_TOKENIZER=${OCR_VLLM_TOKENIZER:-Qwen/Qwen3.5-4B}
       - VLLM_TENSOR_PARALLEL_SIZE=${OCR_VLLM_TENSOR_PARALLEL_SIZE:-1}
-      - VLLM_GPU_MEMORY_UTILIZATION=${OCR_VLLM_GPU_MEMORY_UTILIZATION:-0.2}
+      - VLLM_GPU_MEMORY_UTILIZATION=${OCR_VLLM_GPU_MEMORY_UTILIZATION:-0.15}
       - VLLM_MAX_MODEL_LEN=${OCR_VLLM_MAX_MODEL_LEN:-4096}
-      - VLLM_EXTRA_ARGS=${OCR_VLLM_EXTRA_ARGS:-}
+      - "VLLM_EXTRA_ARGS=${OCR_VLLM_EXTRA_ARGS}"
       - VLLM_TRUST_REMOTE_CODE=${OCR_VLLM_TRUST_REMOTE_CODE:-1}
     ports:
       - "8004:8000"
@@ -251,7 +255,7 @@ services:
       - VLLM_TENSOR_PARALLEL_SIZE=${TRANSCRIBE_VLLM_TENSOR_PARALLEL_SIZE:-1}
       - VLLM_GPU_MEMORY_UTILIZATION=${TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION:-0.2}
       - VLLM_MAX_MODEL_LEN=${TRANSCRIBE_VLLM_MAX_MODEL_LEN:-4096}
-      - VLLM_EXTRA_ARGS=${TRANSCRIBE_VLLM_EXTRA_ARGS:-}
+      - "VLLM_EXTRA_ARGS=${TRANSCRIBE_VLLM_EXTRA_ARGS}"
       - VLLM_TRUST_REMOTE_CODE=${TRANSCRIBE_VLLM_TRUST_REMOTE_CODE:-1}
     ports:
       - "8005:8000"
@@ -291,7 +295,7 @@ services:
       - VLLM_TENSOR_PARALLEL_SIZE=${MEM0_EMBED_TENSOR_PARALLEL_SIZE:-1}
       - VLLM_GPU_MEMORY_UTILIZATION=${MEM0_EMBED_GPU_MEMORY_UTILIZATION:-0.2}
       - VLLM_MAX_MODEL_LEN=${MEM0_EMBED_MAX_MODEL_LEN:-8192}
-      - VLLM_EXTRA_ARGS=${MEM0_EMBED_VLLM_EXTRA_ARGS:-}
+      - "VLLM_EXTRA_ARGS=${MEM0_EMBED_VLLM_EXTRA_ARGS}"
       - VLLM_TRUST_REMOTE_CODE=${MEM0_EMBED_VLLM_TRUST_REMOTE_CODE:-1}
     ports:
       - "8002:8000"
@@ -329,9 +333,10 @@ services:
       - VLLM_SERVED_MODEL_NAME=${APP_RERANK_MODEL:-Qwen/Qwen3-Reranker-4B}
       - VLLM_TASK=score
       - VLLM_TENSOR_PARALLEL_SIZE=${APP_RERANK_TENSOR_PARALLEL_SIZE:-1}
-      - VLLM_GPU_MEMORY_UTILIZATION=${APP_RERANK_GPU_MEMORY_UTILIZATION:-0.2}
+      # Must be <= free_vram/total_vram at startup (other vLLM/chat procs on same GPU reduce free VRAM).
+      - VLLM_GPU_MEMORY_UTILIZATION=${APP_RERANK_GPU_MEMORY_UTILIZATION:-0.08}
       - VLLM_MAX_MODEL_LEN=${APP_RERANK_MAX_MODEL_LEN:-8192}
-      - VLLM_EXTRA_ARGS=${APP_RERANK_VLLM_EXTRA_ARGS:-}
+      - "VLLM_EXTRA_ARGS=${APP_RERANK_VLLM_EXTRA_ARGS}"
       - VLLM_TRUST_REMOTE_CODE=${APP_RERANK_VLLM_TRUST_REMOTE_CODE:-1}
     ports:
       - "8003:8000"

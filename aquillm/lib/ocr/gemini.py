@@ -4,7 +4,7 @@ Google Gemini OCR provider.
 
 import base64
 import json
-import logging
+import structlog
 import threading
 from typing import Any, Dict
 
@@ -14,7 +14,7 @@ import google.generativeai as genai
 
 from .config import get_gemini_api_key, log_usage
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class GeminiCostTracker:

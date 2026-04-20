@@ -29,6 +29,88 @@ def env_csv(key: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def env_int(key: str, default: int) -> int:
+    try:
+        raw = (os.environ.get(key) or str(default)).strip()
+        value = int(raw)
+    except Exception:
+        return default
+    return value if value >= 0 else default
+
+
+def env_float(key: str, default: float) -> float:
+    try:
+        raw = (os.environ.get(key) or str(default)).strip()
+        value = float(raw)
+    except Exception:
+        return default
+    return value if value >= 0 else default
+
+
+# RAG retrieval caches (fail-open; disabled unless RAG_CACHE_ENABLED=1)
+RAG_CACHE_ENABLED = env_bool("RAG_CACHE_ENABLED", False)
+RAG_QUERY_EMBED_TTL_SECONDS = env_int("RAG_QUERY_EMBED_TTL_SECONDS", 300)
+RAG_DOC_ACCESS_TTL_SECONDS = env_int("RAG_DOC_ACCESS_TTL_SECONDS", 60)
+RAG_IMAGE_DATA_URL_TTL_SECONDS = env_int("RAG_IMAGE_DATA_URL_TTL_SECONDS", 120)
+RAG_RERANK_RESULT_TTL_SECONDS = env_int("RAG_RERANK_RESULT_TTL_SECONDS", 45)
+RAG_RERANK_CAPABILITY_TTL_SECONDS = env_int("RAG_RERANK_CAPABILITY_TTL_SECONDS", 900)
+
+# Hybrid search candidate fan-out (chunk_search); min limits are floors, 0 = unset
+RAG_CANDIDATE_MULTIPLIER = env_float("RAG_CANDIDATE_MULTIPLIER", 3.0)
+RAG_VECTOR_MIN_LIMIT = env_int("RAG_VECTOR_MIN_LIMIT", 0)
+RAG_TRIGRAM_MIN_LIMIT = env_int("RAG_TRIGRAM_MIN_LIMIT", 0)
+RAG_TRIGRAM_SIMILARITY_MIN = env_float("RAG_TRIGRAM_SIMILARITY_MIN", 0.000001)
+RAG_QUERY_SHORT_LEN = env_int("RAG_QUERY_SHORT_LEN", 48)
+RAG_QUERY_LONG_LEN = env_int("RAG_QUERY_LONG_LEN", 160)
+RAG_SHORT_QUERY_CANDIDATE_SCALE = env_float("RAG_SHORT_QUERY_CANDIDATE_SCALE", 0.9)
+RAG_LONG_QUERY_CANDIDATE_SCALE = env_float("RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1)
+
+# Cross-provider prompt token efficiency (Claude/Gemini mirror OpenAI-style preflight trim)
+TOKEN_EFFICIENCY_ENABLED = env_bool("TOKEN_EFFICIENCY_ENABLED", False)
+PROMPT_BUDGET_CONTEXT_LIMIT = env_int("PROMPT_BUDGET_CONTEXT_LIMIT", 0)
+PROMPT_BUDGET_MAX_TOKENS_CAP = env_int("PROMPT_BUDGET_MAX_TOKENS_CAP", 8192)
+PROMPT_BUDGET_SLACK_TOKENS = env_int("PROMPT_BUDGET_SLACK_TOKENS", 384)
+PROMPT_COMPRESS_MIN_CHARS = env_int("PROMPT_COMPRESS_MIN_CHARS", 4000)
+PROMPT_COMPRESS_TARGET_TOKENS = env_int("PROMPT_COMPRESS_TARGET_TOKENS", 2048)
+
+# Salience-aware context packing (preflight); default off, fail-open
+CONTEXT_PACKER_ENABLED = env_bool("CONTEXT_PACKER_ENABLED", False)
+CONTEXT_BUDGET_HISTORY_TOKENS = env_int("CONTEXT_BUDGET_HISTORY_TOKENS", 12000)
+CONTEXT_BUDGET_TOOL_EVIDENCE_TOKENS = env_int("CONTEXT_BUDGET_TOOL_EVIDENCE_TOKENS", 1400)
+CONTEXT_BUDGET_RETRIEVAL_TOKENS = env_int("CONTEXT_BUDGET_RETRIEVAL_TOKENS", 3500)
+CONTEXT_PIN_LAST_TURNS = env_int("CONTEXT_PIN_LAST_TURNS", 2)
+CONTEXT_MAX_SNIPPETS_PER_DOC = env_int("CONTEXT_MAX_SNIPPETS_PER_DOC", 3)
+
+# Optional LM-Lingua2 (llmlingua) extractive compression; default off, fail-open
+LM_LINGUA2_ENABLED = env_bool("LM_LINGUA2_ENABLED", False)
+LM_LINGUA2_MODEL = os.environ.get(
+    "LM_LINGUA2_MODEL",
+    "microsoft/llmlingua-2-xlm-roberta-large-meetingbank",
+).strip()
+# Empty: adapter picks cuda if torch sees a GPU, else cpu (typical in Docker web).
+LM_LINGUA2_DEVICE_MAP = (os.environ.get("LM_LINGUA2_DEVICE_MAP") or "").strip()
+
+# Django cache: Redis when DJANGO_CACHE_REDIS_URL is set; otherwise LocMem (tests/local deterministic)
+DJANGO_CACHE_REDIS_URL = (os.environ.get("DJANGO_CACHE_REDIS_URL") or "").strip()
+if DJANGO_CACHE_REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": DJANGO_CACHE_REDIS_URL,
+            "OPTIONS": {},
+            "KEY_PREFIX": os.environ.get("DJANGO_CACHE_KEY_PREFIX", "aquillm"),
+            "TIMEOUT": 300,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "aquillm-default",
+        }
+    }
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
@@ -46,6 +128,7 @@ else:
 # Application definition
 
 INSTALLED_APPS = [
+    "django_prometheus",
     "daphne",
     "chat",
     "ingest",
@@ -67,6 +150,7 @@ INSTALLED_APPS = [
     "apps.platform_admin",
     "apps.core",
     "apps.integrations.zotero",
+    "apps.bug_reports",
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -79,6 +163,7 @@ if DEBUG:
     INSTALLED_APPS = list(INSTALLED_APPS) + ["debug_toolbar"]
 
 MIDDLEWARE = [
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -88,6 +173,8 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     'allauth.account.middleware.AccountMiddleware',
+    'apps.bug_reports.middleware.BugReportMiddleware',
+    "django_prometheus.middleware.PrometheusAfterMiddleware",
 ]
 
 if DEBUG:
@@ -110,6 +197,7 @@ TEMPLATES = [
                 'aquillm.context_processors.user_conversations',
                 "aquillm.context_processors.api_urls",
                 "aquillm.context_processors.page_urls",
+                "aquillm.context_processors.react_bundle_version",
                 "aquillm.context_processors.theme_settings",
             ],
         },
@@ -129,7 +217,7 @@ POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "aquillm")
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        "ENGINE": "django_prometheus.db.backends.postgresql",
         "NAME": POSTGRES_NAME,
         "USER": POSTGRES_USER,
         "PASSWORD": POSTGRES_PASSWORD,
@@ -282,71 +370,8 @@ CELERY_RESULT_SERIALIZER = "json"
 # - ZOTERO_CLIENT_SECRET: Your Zotero OAuth client secret
 # Register your app at https://www.zotero.org/oauth/apps
 
-LOGS_DIR = os.path.join(BASE_DIR, 'logs')
-os.makedirs(LOGS_DIR, exist_ok=True)
+from aquillm.settings_logging import LOGGING  # noqa: F401
 
+from aquillm.observability import setup as _setup_observability
 
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
-            'style': '{',
-        },
-        'simple': {
-            'format': '{levelname} {message}',
-            'style': '{',
-        },
-    },
-    'handlers': {
-        'file': {
-            'level': 'INFO',
-            'class': 'logging.FileHandler',
-            'filename': os.path.join(LOGS_DIR, 'django.log'),
-            'formatter': 'verbose',
-        },
-        'console': {
-            'level': 'DEBUG',
-            'class': 'logging.StreamHandler',
-            'formatter': 'simple',
-        },
-    },
-    'loggers': {
-        'django': {
-            'handlers': ['file', 'console'],
-            'level': 'INFO',
-            'propagate': True,
-        },
-        'django.request': {
-            'handlers': ['file', 'console'],
-            'level': 'DEBUG',
-            'propagate': False,
-        },
-        'aquillm': {
-            'handlers': ['file', 'console'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
-        'chat': {
-            'handlers': ['file', 'console'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
-        'celery': {
-            'handlers': ['file', 'console'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
-        'ingest': {
-            'handlers': ['file', 'console'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
-        'kombu': {
-            'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': False,
-        },
-    },
-}
+_setup_observability()

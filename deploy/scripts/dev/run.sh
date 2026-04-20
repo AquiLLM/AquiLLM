@@ -12,8 +12,8 @@ npx tailwindcss -o /app/aquillm/aquillm/static/index.css
 /app/deploy/scripts/dev/reload_tailwind.sh &
 
 cd /app/aquillm
-./manage.py migrate --noinput
-./manage.py collectstatic --noinput
+python ./manage.py migrate --noinput
+python ./manage.py collectstatic --noinput
 
 if [ "${RUN_CELERY_IN_WEB:-1}" = "1" ]; then
   celery -A aquillm worker --loglevel=info &

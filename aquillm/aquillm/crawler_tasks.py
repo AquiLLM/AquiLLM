@@ -1,4 +1,4 @@
-import logging
+import structlog
 import requests
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
@@ -26,7 +26,7 @@ from trafilatura import fetch_url, extract, extract_metadata
 from .models import RawTextDocument, Collection, DuplicateDocumentError
 from .celery import app # Ensure Celery app is imported
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 # Constants
 MIN_TEXT_LENGTH = 50 # Minimum characters to consider extraction successful

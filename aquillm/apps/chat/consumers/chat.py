@@ -1,886 +1,165 @@
 """WebSocket consumer for chat functionality."""
+from __future__ import annotations
+
+import structlog
+from json import dumps
 from os import getenv
-from typing import Optional
-from json import loads, dumps
-from uuid import UUID
-from base64 import b64decode
-from asgiref.sync import async_to_sync
-from channels.generic.websocket import AsyncWebsocketConsumer
-from channels.db import database_sync_to_async, aclose_old_connections
-from django.core.files.base import ContentFile
-from django.contrib.auth.models import User
-from django.apps import apps
-
-import aquillm.llm
-from aquillm.llm import (
-    UserMessage,
-    Conversation,
-    LLMTool,
-    LLMInterface,
-    ToolChoice,
-    llm_tool,
-    ToolResultDict,
-    message_to_user,
-)
-from aquillm.settings import DEBUG
 from time import perf_counter
-
-from django.core.exceptions import ValidationError
-
-from apps.chat.models import ConversationFile, WSConversation
-from apps.chat.services.feedback import apply_message_feedback_text, apply_message_rating
-from apps.collections.models import Collection, CollectionPermission
-from apps.documents.models import TextChunk, Document, DocumentChild
-from aquillm.message_adapters import (
-    load_conversation_from_db,
-    save_conversation_to_db,
-    pydantic_message_to_frontend_dict,
-)
-from aquillm.memory import augment_conversation_with_memory
-from aquillm.tasks import create_conversation_memories_task
+from typing import Any, Optional
 
 from anthropic._exceptions import OverloadedError
+from channels.db import database_sync_to_async
+from channels.generic.websocket import AsyncWebsocketConsumer
+from django.apps import apps
+from django.contrib.auth.models import User
 
-import logging
-import sys
-import io
+from aquillm.llm import LLMInterface, LLMTool, message_to_user
+from aquillm.memory import augment_conversation_with_memory_async
+from aquillm.message_adapters import load_conversation_from_db, pydantic_message_to_frontend_dict
+from aquillm.settings import DEBUG
+from aquillm.tasks import enqueue_conversation_memories_task
+from apps.chat.consumers.chat_delta import send_conversation_delta
+from apps.chat.consumers.chat_receive import handle_chat_receive
+from apps.chat.consumers.chat_ws_errors import send_connect_error
+from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
+from apps.chat.models import WSConversation
+from apps.chat.refs import ChatRef, CollectionsRef
+from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
+from lib.tools.debug.weather import get_debug_weather_tool
 
-logger = logging.getLogger(__name__)
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = getenv(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning("Invalid %s=%r; using default %d", name, raw, default)
-        return default
-    return value if value > 0 else default
-
-
-CHAT_MAX_FUNC_CALLS = _env_int("CHAT_MAX_FUNC_CALLS", 5)
-CHAT_MAX_TOKENS = _env_int("CHAT_MAX_TOKENS", 2048)
-TOOL_CHUNK_CHAR_LIMIT = _env_int("TOOL_CHUNK_CHAR_LIMIT", 1500)
-MAX_IMAGES_PER_TOOL_RESULT = _env_int("MAX_IMAGES_PER_TOOL_RESULT", 1)
-LLM_IMAGE_MAX_DIMENSION = _env_int("LLM_IMAGE_MAX_DIMENSION", 384)
-LLM_IMAGE_MAX_BYTES = _env_int("LLM_IMAGE_MAX_BYTES", 50_000)
-
-
-def _truncate_tool_text(text: str) -> str:
-    if len(text) <= TOOL_CHUNK_CHAR_LIMIT:
-        return text
-    return text[:TOOL_CHUNK_CHAR_LIMIT] + "\n...[truncated for context window]..."
-
-
-def _clean_and_parse_doc_id(doc_id: str) -> tuple[UUID | None, str]:
-    """
-    Attempt to parse a document ID, handling common LLM errors like:
-    - Truncated UUIDs
-    - XML tags mixed in (e.g., "uuid</doc_id>")
-    - Extra whitespace
-    
-    Returns (parsed_uuid, error_message). If parsing succeeds, error_message is empty.
-    """
-    import re
-    
-    original = doc_id
-    cleaned = doc_id.strip()
-    
-    cleaned = re.sub(r'</?\w+>', '', cleaned)
-    cleaned = cleaned.strip()
-    
-    cleaned = re.sub(r'[^0-9a-fA-F-]', '', cleaned)
-    
-    try:
-        return UUID(cleaned), ""
-    except (ValueError, AttributeError):
-        pass
-    
-    hex_only = cleaned.replace('-', '')
-    if len(hex_only) >= 28:
-        try:
-            if len(hex_only) < 32:
-                hex_only = hex_only + '0' * (32 - len(hex_only))
-            formatted = f"{hex_only[:8]}-{hex_only[8:12]}-{hex_only[12:16]}-{hex_only[16:20]}-{hex_only[20:32]}"
-            return UUID(formatted), ""
-        except (ValueError, AttributeError):
-            pass
-    
-    return None, f"Invalid document ID: '{original}'. Expected a valid UUID (36 characters with hyphens, e.g., '12345678-1234-5678-1234-567812345678')."
-
-
-def _resize_image_for_llm_context(
-    image_data_url: str, 
-    max_dimension: int | None = None, 
-    max_bytes: int | None = None
-) -> str | None:
-    max_dimension = max_dimension or LLM_IMAGE_MAX_DIMENSION
-    max_bytes = max_bytes or LLM_IMAGE_MAX_BYTES
-    """
-    Resize an image data URL to fit within LLM context limits.
-    
-    Returns a smaller base64 data URL or None if resizing fails.
-    Uses aggressive compression since LLMs don't need high resolution to understand images.
-    """
-    if not image_data_url or not image_data_url.startswith("data:"):
-        return None
-    
-    try:
-        from PIL import Image
-        import io as _io
-        import base64
-        
-        header, b64_data = image_data_url.split(",", 1)
-        image_bytes = base64.b64decode(b64_data)
-        
-        if len(image_bytes) <= max_bytes:
-            return image_data_url
-        
-        with Image.open(_io.BytesIO(image_bytes)) as img:
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            
-            width, height = img.size
-            
-            if width > max_dimension or height > max_dimension:
-                if width > height:
-                    new_width = max_dimension
-                    new_height = int(height * (max_dimension / width))
-                else:
-                    new_height = max_dimension
-                    new_width = int(width * (max_dimension / height))
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            
-            for quality in (70, 50, 35, 20):
-                output = _io.BytesIO()
-                img.save(output, format="JPEG", quality=quality, optimize=True)
-                result_bytes = output.getvalue()
-                
-                if len(result_bytes) <= max_bytes:
-                    encoded = base64.b64encode(result_bytes).decode("ascii")
-                    logger.debug("Resized image for LLM context: %d -> %d bytes (quality=%d)", 
-                                len(image_bytes), len(result_bytes), quality)
-                    return f"data:image/jpeg;base64,{encoded}"
-            
-            img = img.resize((256, int(256 * height / width)), Image.Resampling.LANCZOS)
-            output = _io.BytesIO()
-            img.save(output, format="JPEG", quality=20, optimize=True)
-            result_bytes = output.getvalue()
-            encoded = base64.b64encode(result_bytes).decode("ascii")
-            logger.debug("Aggressively resized image for LLM context: %d -> %d bytes", 
-                        len(image_bytes), len(result_bytes))
-            return f"data:image/jpeg;base64,{encoded}"
-            
-    except Exception as e:
-        logger.warning("Failed to resize image for LLM context: %s", e)
-        return None
-
-
-class CollectionsRef:
-    """Reference holder for collections, allowing mutation inside closures."""
-    def __init__(self, collections: list[int]):
-        self.collections = collections
-
-
-class ChatRef:
-    """Reference holder for ChatConsumer, allowing mutation inside closures."""
-    def __init__(self, chat: 'ChatConsumer'):
-        self.chat = chat
-
-
-def get_vector_search_func(user: User, col_ref: CollectionsRef): 
-    @llm_tool(
-        param_descs={
-            "search_string": "The string to search by. Often it helps to phrase it as a question.",
-            "top_k": "The number of results to return. Start with 5 for simple questions, 8-10 for broad or multi-part questions. Increase if the desired information is not found. Go no higher than 15."
-        },
-        required=['search_string', 'top_k'],
-        for_whom='assistant'
-    )
-    def vector_search(search_string: str, top_k: int) -> ToolResultDict:
-        """
-        Uses a combination of vector search, trigram search and reranking to search the documents available to the user.
-        Returns text chunks and image chunks. For image chunks, both the image and its OCR-extracted text are provided.
-        When returning results to the user that include images, use markdown image syntax: ![description](image_url)
-        """
-        if top_k < 1 or top_k > 15:
-            return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
-        if not search_string.strip():
-            return {"exception": "search_string must not be empty"}
-        docs = Collection.get_user_accessible_documents(user, Collection.objects.filter(id__in=col_ref.collections))
-        if not docs:
-            return {"exception": "No documents to search! Either no collections were selected, or the selected collections are empty."}
-        _,_,results = TextChunk.text_chunk_search(search_string, top_k, docs)
-        titles_by_doc_id = {doc.id: doc.title for doc in docs}
-        docs_by_doc_id = {doc.id: doc for doc in docs}
-        
-        result_items = {}
-        has_image_results = False
-        for i, chunk in enumerate(results):
-            title = titles_by_doc_id.get(chunk.doc_id, 'Untitled Document')
-            key = f"[Result {i+1}] -- {title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}"
-            
-            if chunk.modality == TextChunk.Modality.IMAGE:
-                display_url = f"/aquillm/document_image/{chunk.doc_id}/"
-                has_image_results = True
-                
-                result_items[key] = {
-                    "type": "image",
-                    "text": _truncate_tool_text(chunk.content),
-                    "image_url": display_url,
-                    "doc_id": str(chunk.doc_id),
-                }
-            else:
-                doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
-                if doc_for_chunk is not None and getattr(doc_for_chunk, "image_file", None):
-                    has_image_results = True
-                    result_items[key] = {
-                        "type": "text_with_image",
-                        "text": _truncate_tool_text(chunk.content),
-                        "image_url": f"/aquillm/document_image/{chunk.doc_id}/",
-                        "doc_id": str(chunk.doc_id),
-                    }
-                else:
-                    result_items[key] = _truncate_tool_text(chunk.content)
-        
-        ret = {"result": result_items}
-        if has_image_results:
-            ret["_image_instruction"] = (
-                "One or more results include an image_url. "
-                "When discussing those image results, include them in markdown with "
-                "![description](image_url) using the image_url field from the result."
-            )
-
-        return ret
-    
-    return vector_search
-
-
-def get_document_ids_func(user: User, col_ref: CollectionsRef) -> LLMTool:
-    @llm_tool(
-        for_whom='assistant',
-        required=[],
-        param_descs={}
-    )
-    def document_ids() -> ToolResultDict:
-        """
-        Get the names and IDs of all documents in the selected collections. When a user asks to see a document in full, or to search a single document, use this to get its ID.
-        """
-        docs = Collection.get_user_accessible_documents(user, Collection.objects.filter(id__in=col_ref.collections))
-        if not docs:
-            return {"exception": "No documents to search! Either no collections were selected, or the selected collections are empty."}
-        return {"result": {doc.title: str(doc.id) for doc in docs}}
-    return document_ids
-
-
-def get_whole_document_func(user: User, chat_ref: ChatRef) -> LLMTool:
-    @llm_tool(
-        for_whom='assistant',
-        required=['doc_id'],
-        param_descs={'doc_id': 'UUID (as as string) of the document to return in full'}
-    )
-    def whole_document(doc_id: str) -> ToolResultDict:
-        """
-        Get the full text of a document. Use when a user asks you to get a full document. 
-        For image documents, this includes both the extracted text and the image itself.
-        When returning an image to the user, use markdown: ![description](image_url)
-        """
-        doc_uuid, error_msg = _clean_and_parse_doc_id(doc_id)
-        if doc_uuid is None:
-            return {"exception": error_msg}
-        doc: Optional[DocumentChild] = Document.get_by_id(doc_uuid)
-        if doc is None:
-            return {"exception": f"Document {doc_id} does not exist!"}
-        if not doc.collection.user_can_view(user):
-            return {"exception": f"User cannot access document {doc_id}!"}
-        token_count = async_to_sync(chat_ref.chat.llm_if.token_count)(chat_ref.chat.convo, doc.full_text)
-        if token_count > 150000:
-            return {"exception": f"Document {doc_id} is too large to open in this chat."}
-        
-        ret = {"result": doc.full_text}
-        
-        image_file = getattr(doc, "image_file", None)
-        if image_file:
-            display_url = f"/aquillm/document_image/{doc.id}/"
-            ret["result"] = {
-                "text": doc.full_text,
-                "type": "image_document",
-                "image_url": display_url,
-            }
-            ret["_image_instruction"] = (
-                f"This is an image document. The image is shown above. "
-                f"When showing this to the user, include the image using markdown: "
-                f"![{doc.title}]({display_url})"
-            )
-        
-        return ret
-    
-    return whole_document
-
-
-def get_search_single_document_func(user: User) -> LLMTool:
-    @llm_tool(
-        for_whom='assistant',
-        required=['doc_id', 'search_string', 'top_k'],
-        param_descs={
-            'doc_id': 'UUID (as a string) of the document to search.',
-            'search_string': 'String to search the contents of the document by.',
-            'top_k': 'Number of search results to return.'
-        }
-    )
-    def search_single_document(doc_id: str, search_string: str, top_k: int) -> ToolResultDict:
-        """
-        Use vector search to search the text of a single document.
-        Returns text chunks and image chunks. For image chunks, both the image and its OCR-extracted text are provided.
-        When returning results to the user that include images, use markdown image syntax: ![description](image_url)
-        """
-        if top_k < 1 or top_k > 15:
-            return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
-        if not search_string.strip():
-            return {"exception": "search_string must not be empty"}
-        doc_uuid, error_msg = _clean_and_parse_doc_id(doc_id)
-        if doc_uuid is None:
-            return {"exception": error_msg}
-        doc = Document.get_by_id(doc_uuid)
-        if doc is None:
-            return {"exception": f"Document {doc_id} does not exist!"}
-        if not doc.collection.user_can_view(user):
-            return {"exception": f"User cannot access document {doc_id}!"}
-        _,_,results = TextChunk.text_chunk_search(search_string, top_k, [doc])
-        
-        result_items = {}
-        has_image_results = False
-        for i, chunk in enumerate(results):
-            key = f"[Result {i+1}] -- {doc.title} chunk #: {chunk.chunk_number} chunk_id:{chunk.id}"
-            
-            if chunk.modality == TextChunk.Modality.IMAGE:
-                display_url = f"/aquillm/document_image/{chunk.doc_id}/"
-                has_image_results = True
-                
-                result_items[key] = {
-                    "type": "image",
-                    "text": _truncate_tool_text(chunk.content),
-                    "image_url": display_url,
-                    "doc_id": str(chunk.doc_id),
-                }
-            else:
-                if getattr(doc, "image_file", None):
-                    has_image_results = True
-                    result_items[key] = {
-                        "type": "text_with_image",
-                        "text": _truncate_tool_text(chunk.content),
-                        "image_url": f"/aquillm/document_image/{chunk.doc_id}/",
-                        "doc_id": str(chunk.doc_id),
-                    }
-                else:
-                    result_items[key] = _truncate_tool_text(chunk.content)
-
-        ret = {"result": result_items}
-        if has_image_results:
-            ret["_image_instruction"] = (
-                "One or more results include an image_url. "
-                "When discussing those image results, include them in markdown with "
-                "![description](image_url) using the image_url field from the result."
-            )
-
-        return ret
-
-    return search_single_document
-
-
-def get_more_context_func(user: User) -> LLMTool:
-    @llm_tool(
-        for_whom='assistant',
-        required=['adjacent_chunks', 'chunk_id'],
-        param_descs={
-            'chunk_id': 'ID number of the chunk for which more context is desired',
-            'adjacent_chunks': 'How many chunks on either side to return. Start small and work up, if you think expanding the context will provide more useful info. Go no higher than 10.'
-        },
-    )
-    def more_context(chunk_id: int, adjacent_chunks: int) -> ToolResultDict:
-        """
-        Get adjacent text chunks on either side of a given chunk.
-        Use this when a search returned something relevant, but it seemed like the information was cut off.
-        """
-        if adjacent_chunks < 1 or adjacent_chunks > 10:
-            return {"exception": f"Invalid value for adjacent_chunks!"}
-        central_chunk = TextChunk.objects.filter(id=chunk_id).first()
-        if central_chunk is None:
-            return {"exception": f"Text chunk {chunk_id} does not exist!"}
-        doc = Document.get_by_id(central_chunk.doc_id)
-        if doc is None:
-            return {"exception": f"Document for chunk {chunk_id} does not exist!"}
-        if not doc.collection.user_can_view(user):
-            return {"exception": f"User cannot access document containing {chunk_id}!"}
-        central_chunk_number = central_chunk.chunk_number
-        bottom = central_chunk_number - adjacent_chunks
-        top = central_chunk_number + adjacent_chunks
-        window = list(
-            TextChunk.objects.filter(doc_id=central_chunk.doc_id, chunk_number__in=range(bottom, top+1))
-            .order_by('chunk_number')
-            .only('chunk_number', 'content')
-        )
-        if not window:
-            return {"exception": f"No nearby chunks found for chunk {chunk_id}."}
-        text_blob = "".join([chunk.content for chunk in window])
-        text_blob = _truncate_tool_text(text_blob)
-        return {"result": f"chunk_numbers:{window[0].chunk_number} -> {window[-1].chunk_number} \n\n {text_blob}"}
-    return more_context
-
-
-def get_sky_subtraction_func(chat_consumer: 'ChatConsumer') -> LLMTool:
-    @llm_tool(
-        for_whom='assistant',
-        required=['object_id', 'sky_id'],
-        param_descs={
-            'object_id': 'The file ID of the FITS file containing the object to subtract the sky from',
-            'sky_id': 'The file ID of the FITS file of the sky to subtract from the object'
-        }
-    )
-    def sky_subtraction(object_id: int, sky_id: int) -> ToolResultDict:
-        """
-        Subtracts the sky from a FITS image of an object.
-
-        Use this when a user asks you to subtract the sky from an object, and provides the files, one of the sky and one of the object.
-        Specify the IDs of the files in the parameters.
-        """
-        from astropy.io import fits as fits
-        try:
-            convo = chat_consumer.db_convo
-            object = ConversationFile.objects.filter(id=object_id).first()
-            sky = ConversationFile.objects.filter(id=sky_id).first()
-            if object is None or sky is None:
-                return {"exception": f"One or more files do not exist!"}
-            if object.conversation != convo or sky.conversation != convo:
-                return {"exception": f"One or more files do not belong to this conversation!"}
-            object_file = object.file
-            sky_file = sky.file
-            object_data = fits.getdata(object_file.open('rb'))
-            sky_data = fits.getdata(sky_file.open('rb'))
-            if object_data.shape != sky_data.shape:
-                return {"exception": f"Wrong dimensions! The object and sky files must have the same dimensions."}
-            result = object_data - sky_data
-            result_io = io.BytesIO()
-            fits.writeto(result_io, result, overwrite=True)
-            result_io.seek(0)
-            result_file = ContentFile(result_io.read(), name=f"{object_file.name[:-5]}_sky_subtracted.fits")
-            result_conversation_file = ConversationFile(file=result_file, conversation=convo, name=f"{object_file.name[:-5]}_sky_subtracted.fits")
-            result_conversation_file.save()
-            return {"result": f"Sky subtracted!", 'files': [(result_conversation_file.name, result_conversation_file.id)]}
-        except Exception as e:
-            return {"exception": f"An error occurred while subtracting the sky: {str(e)}"}
-    return sky_subtraction
-
-
-def get_flat_fielding_func(chat_consumer: 'ChatConsumer') -> LLMTool:
-    @llm_tool(
-        for_whom='assistant',
-        required=['science_id', 'flat_id'],
-        param_descs={
-            'science_id': 'The file ID of the FITS image to be flat-field corrected',
-            'flat_id': 'The file ID of the flat-field FITS image to use for correction'
-        }
-    )
-    def flat_fielding(science_id: int, flat_id: int) -> ToolResultDict:
-        """
-        Applies flat-field correction to a FITS image.
-
-        Use this when a user provides a science image and a flat-field image to correct for detector sensitivity variations.
-        """
-        from astropy.io import fits
-        try:
-            convo = chat_consumer.db_convo
-            science = ConversationFile.objects.filter(id=science_id).first()
-            flat = ConversationFile.objects.filter(id=flat_id).first()
-            if science is None or flat is None:
-                return {"exception": f"One or more files do not exist!"}
-            if science.conversation != convo or flat.conversation != convo:
-                return {"exception": f"One or more files do not belong to this conversation!"}
-            science_file = science.file
-            flat_file = flat.file
-            science_data = fits.getdata(science_file.open('rb'))
-            flat_data = fits.getdata(flat_file.open('rb'))
-            if science_data.shape != flat_data.shape:
-                return {"exception": f"Wrong dimensions! Science and flat-field images must have the same shape."}
-            if (flat_data == 0).any():
-                return {"exception": "Flat field image contains zero values, cannot safely divide."}
-
-            result = science_data / flat_data
-            result_io = io.BytesIO()
-            fits.writeto(result_io, result, overwrite=True)
-            result_io.seek(0)
-            result_file = ContentFile(result_io.read(), name=f"{science_file.name[:-5]}_flat_corrected.fits")
-            result_conversation_file = ConversationFile(
-                file=result_file,
-                conversation=convo,
-                name=f"{science_file.name[:-5]}_flat_corrected.fits"
-            )
-            result_conversation_file.save()
-            return {"result": "Flat-fielding applied!", "files": [(result_conversation_file.name, result_conversation_file.id)]}
-        except Exception as e:
-            return {"exception": f"An error occurred during flat-fielding: {str(e)}"}
-    return flat_fielding
-
-
-def get_point_source_detection_func(chat_consumer: 'ChatConsumer') -> LLMTool:
-    @llm_tool(
-        for_whom='assistant',
-        required=['image_id'],
-        param_descs={
-            'image_id': 'The file ID of the sky-subtracted and flat-fielded FITS image to run source detection on.'
-        }
-    )
-    def detect_point_sources(image_id: int) -> ToolResultDict:
-        """
-        Detect point sources in a processed FITS image using DAOStarFinder.
-        Apply the method of sigma clipping with sigma=3.0, using DAOStarFinder with fwhm=3.0 and threshold=5*std
-
-        Use this after sky subtraction and flat-fielding to extract point sources from the image.
-        """
-        from astropy.io import fits
-        from astropy.stats import sigma_clipped_stats
-        from photutils.detection import DAOStarFinder
-        import pandas as pd
-
-        try:
-            convo = chat_consumer.db_convo
-            image = ConversationFile.objects.filter(id=image_id).first()
-            if image is None:
-                return {"exception": f"The file does not exist!"}
-            if image.conversation != convo:
-                return {"exception": f"The file does not belong to this conversation!"}
-
-            image_file = image.file
-            data = fits.getdata(image_file.open('rb'))
-
-            mean, median, std = sigma_clipped_stats(data, sigma=3.0)
-            daofind = DAOStarFinder(fwhm=3.0, threshold=5. * std)
-            sources = daofind(data - median)
-
-            if sources is None or len(sources) == 0:
-                return {"result": "No sources detected."}
-
-            df = sources.to_pandas()
-            csv_io = io.StringIO()
-            df.to_csv(csv_io, index=False)
-            csv_file = ContentFile(csv_io.getvalue().encode('utf-8'),
-                                   name=f"{image_file.name[:-5]}_sources.csv")
-            result_conversation_file = ConversationFile(
-                file=csv_file,
-                conversation=convo,
-                name=csv_file.name
-            )
-            result_conversation_file.save()
-
-            return {
-                "result": f"Detected {len(df)} sources.",
-                "files": [(result_conversation_file.name, result_conversation_file.id)]
-            }
-        except Exception as e:
-            return {"exception": f"An error occurred during source detection: {str(e)}"}
-    return detect_point_sources
-
-
-def get_weather_func() -> LLMTool:
-    """Debug-only tool that always raises. Used to test tool exception handling."""
-    @llm_tool(
-        for_whom='assistant',
-        required=['location'],
-        param_descs={'location': 'The location to get the weather for'}
-    )
-    def get_weather(location: str) -> ToolResultDict:
-        """
-        Get the current weather for a location.
-        """
-        raise RuntimeError(f"This is a debug test exception (location={location})")
-    return get_weather
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
-    llm_if: LLMInterface = apps.get_app_config('aquillm').llm_interface
+    llm_if: LLMInterface = apps.get_app_config("aquillm").llm_interface
     db_convo: Optional[WSConversation] = None
-    convo: Optional[Conversation] = None
+    convo: Optional[Any] = None
     tools: list[LLMTool] = []
     user: Optional[User] = None
 
-    dead: bool = False 
-    
+    dead: bool = False
+
     col_ref = CollectionsRef([])
     last_sent_sequence: int = -1
-    
+
+    async def _send_stream_payload(self, payload: dict) -> None:
+        await self.send(text_data=dumps({"stream": payload}))
+
     @database_sync_to_async
-    def __save(self, create_memories: bool = False):
+    def _save_conversation(self, create_memories: bool = False):
+        from aquillm.message_adapters import save_conversation_to_db
+
         assert self.db_convo is not None
         save_conversation_to_db(self.convo, self.db_convo)
         if create_memories:
             try:
-                create_conversation_memories_task.delay(self.db_convo.id)
+                enqueue_conversation_memories_task(
+                    conversation_id=self.db_convo.id,
+                    queued_updated_at=self.db_convo.updated_at.isoformat(),
+                )
             except Exception as exc:
-                logger.warning("Failed to queue memory extraction task for convo %s: %s", self.db_convo.id, exc)
+                logger.warning(
+                    "Failed to queue memory extraction task for convo %s: %s",
+                    self.db_convo.id,
+                    exc,
+                )
         if len(self.convo) >= 2 and not self.db_convo.name:
             self.db_convo.set_name()
 
     @database_sync_to_async
     def __get_convo(self, convo_id: int, user: User):
         convo = WSConversation.objects.filter(id=convo_id).first()
-        if convo: 
+        if convo:
             if convo.owner == user:
                 return convo
-            else:
-                return None
+            return None
         return convo
-        
+
     @database_sync_to_async
     def __get_all_user_collections(self):
-        self.col_ref.collections = [col_perm.collection.id for col_perm in CollectionPermission.objects.filter(user=self.user)]
+        from apps.collections.models import CollectionPermission
+
+        self.col_ref.collections = [
+            col_perm.collection.id
+            for col_perm in CollectionPermission.objects.filter(user=self.user)
+        ]
 
     async def connect(self):
-        logger.debug(f"ChatConsumer.connect() called")
-
-        async def send_func(convo: Conversation):
-            logger.debug(f"send_func called in connect()")
-            self.convo = convo
-            save_start = perf_counter()
-            await self.__save(create_memories=False)
-            new_messages = convo.messages[self.last_sent_sequence + 1:]
-            if not new_messages:
-                logger.debug("send_func skipped; no new messages to send")
-                return
-            usage = next(
-                (msg.usage for msg in reversed(new_messages) if getattr(msg, 'role', None) == 'assistant' and getattr(msg, 'usage', 0)),
-                None
-            )
-            delta = {
-                "messages": [pydantic_message_to_frontend_dict(msg) for msg in new_messages],
-            }
-            if usage is not None:
-                delta["usage"] = usage
-            await self.send(text_data=dumps({"delta": delta}))
-            self.last_sent_sequence = len(convo) - 1
-            logger.info("Chat send_func persisted+sent delta in %.1fms (messages=%d)", (perf_counter() - save_start) * 1000, len(new_messages))
-            logger.debug(f"send_func completed in connect()")
-
-        async def stream_func(payload: dict):
-            await self.send(text_data=dumps({"stream": payload}))
+        logger.debug("ChatConsumer.connect() called")
 
         await self.accept()
-        logger.debug(f"WebSocket accepted")
-        self.user = self.scope['user']
+        logger.debug("WebSocket accepted")
+        self.user = self.scope["user"]
         assert self.user is not None
-        logger.debug(f"User: {self.user}")
+        logger.debug("User: %s", self.user)
         await self.__get_all_user_collections()
-        logger.debug(f"Collections loaded: {self.col_ref.collections}")
-        self.doc_tools = [
-            get_vector_search_func(self.user, self.col_ref),
-            get_more_context_func(self.user),
-            get_document_ids_func(self.user, self.col_ref),
-            get_whole_document_func(self.user, ChatRef(self)),
-            get_search_single_document_func(self.user),
-        ]
-        self.tools = self.doc_tools + [
-            get_sky_subtraction_func(self),
-            get_flat_fielding_func(self),
-            get_point_source_detection_func(self),
-        ]
-        if getenv('LLM_CHOICE') == 'GEMMA3':
+        logger.debug("Collections loaded: %s", self.col_ref.collections)
+        self.doc_tools = build_document_tools(self.user, self.col_ref, ChatRef(self))
+        self.tools = self.doc_tools + build_astronomy_tools(self)
+        if getenv("LLM_CHOICE") == "GEMMA3":
             self.tools.append(message_to_user)
         if DEBUG:
-            self.tools.append(get_weather_func())
-        convo_id = self.scope['url_route']['kwargs']['convo_id']
-        logger.debug(f"Convo ID: {convo_id}")
+            self.tools.append(get_debug_weather_tool())
+        convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
+        logger.debug("Convo ID: %s", convo_id)
         self.db_convo = await self.__get_convo(convo_id, self.user)
         if self.db_convo is None:
-            logger.error(f"Invalid conversation ID: {convo_id}")
+            logger.error("Invalid conversation ID: %s", convo_id)
             self.dead = True
             await self.send('{"exception": "Invalid chat_id"}')
             return
         try:
             self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
             self.last_sent_sequence = len(self.convo) - 1
-            await self.send(text_data=dumps({
-                "conversation": {
-                    "system": self.db_convo.system_prompt,
-                    "messages": [pydantic_message_to_frontend_dict(msg) for msg in self.convo]
-                }
-            }))
+            await self.send(
+                text_data=dumps(
+                    {
+                        "conversation": {
+                            "system": self.db_convo.system_prompt,
+                            "messages": [
+                                pydantic_message_to_frontend_dict(msg) for msg in self.convo
+                            ],
+                        }
+                    }
+                )
+            )
             augment_start = perf_counter()
-            await database_sync_to_async(augment_conversation_with_memory)(
+            await augment_conversation_with_memory_async(
                 self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
             )
-            logger.info("Memory augmentation took %.1fms in connect()", (perf_counter() - augment_start) * 1000)
+            logger.info(
+                "Memory augmentation took %.1fms in connect()",
+                (perf_counter() - augment_start) * 1000,
+            )
             self.convo.rebind_tools(self.tools)
-            logger.debug(f"About to call llm_if.spin() in connect()")
+            logger.debug("About to call llm_if.spin() in connect()")
             before_spin_len = len(self.convo)
             llm_start = perf_counter()
             await self.llm_if.spin(
                 self.convo,
                 max_func_calls=CHAT_MAX_FUNC_CALLS,
                 max_tokens=CHAT_MAX_TOKENS,
-                send_func=send_func,
-                stream_func=stream_func,
+                send_func=lambda c: send_conversation_delta(
+                    self, c, create_memories=False, close_db=False
+                ),
+                stream_func=self._send_stream_payload,
             )
             logger.info("LLM spin took %.1fms in connect()", (perf_counter() - llm_start) * 1000)
-            await self.__save(create_memories=len(self.convo) > before_spin_len)
-            logger.debug(f"llm_if.spin() completed in connect()")
+            await self._save_conversation(create_memories=len(self.convo) > before_spin_len)
+            logger.debug("llm_if.spin() completed in connect()")
             return
         except OverloadedError as e:
-            logger.error(f"LLM overloaded: {e}")
+            logger.error("LLM overloaded: %s", e)
             self.dead = True
             await self.send('{"exception": "LLM provider is currently overloaded. Try again later."}')
             return
         except Exception as e:
-            logger.error(f"Exception in connect(): {e}", exc_info=True)
-            if DEBUG:
-                from django.views.debug import ExceptionReporter
-                reporter = ExceptionReporter(None, *sys.exc_info())
-                debug_html = reporter.get_traceback_html()
-                await self.send(text_data=dumps({"exception": str(e), "debug_html": debug_html}))
-            else:
-                await self.send(text_data='{"exception": "A server error has occurred. Try reloading the page"}')
+            logger.error("Exception in connect(): %s", e, exc_info=True)
+            await send_connect_error(self, e)
             return
 
     async def receive(self, text_data):
-        logger.debug(f"ChatConsumer.receive() called with data: {text_data[:100]}...")
-
-        @database_sync_to_async
-        def _save_files(files: list[ConversationFile]) -> list[ConversationFile]:
-            for file in files:
-                file.save()
-            return files
-
-        async def send_func(convo: Conversation):
-            logger.debug("send_func called in receive()")
-            await aclose_old_connections()
-            self.convo = convo
-            save_start = perf_counter()
-            await self.__save(create_memories=False)
-            new_messages = convo.messages[self.last_sent_sequence + 1:]
-            if not new_messages:
-                logger.debug("send_func skipped; no new messages to send")
-                return
-            usage = next(
-                (msg.usage for msg in reversed(new_messages) if getattr(msg, 'role', None) == 'assistant' and getattr(msg, 'usage', 0)),
-                None
-            )
-            delta = {
-                "messages": [pydantic_message_to_frontend_dict(msg) for msg in new_messages],
-            }
-            if usage is not None:
-                delta["usage"] = usage
-            await self.send(text_data=dumps({"delta": delta}))
-            self.last_sent_sequence = len(convo) - 1
-            logger.info("Chat send_func persisted+sent delta in %.1fms (messages=%d)", (perf_counter() - save_start) * 1000, len(new_messages))
-            logger.debug("send_func completed in receive()")
-
-        async def stream_func(payload: dict):
-            await self.send(text_data=dumps({"stream": payload}))
-
-        async def append(data: dict):
-            logger.debug(f"append() called with collections: {data.get('collections', [])}")
-
-            assert self.convo is not None
-
-            selected_collections = data['collections']
-            self.col_ref.collections = selected_collections
-            self.convo += UserMessage.model_validate(data['message'])
-            files: list[ConversationFile] = []
-            if 'files' in data:
-                files = [ConversationFile(
-                            file=ContentFile(b64decode(file['base64']),
-                                             name=file['filename']),
-                            conversation=self.db_convo, name=file['filename'][-200:],
-                            message_uuid=self.convo[-1].message_uuid) for file in data['files']]
-                await _save_files(files)
-            active_tools = (
-                self.tools
-                if selected_collections
-                else [tool for tool in self.tools if tool not in self.doc_tools]
-            )
-            self.convo[-1].tools = active_tools
-            self.convo[-1].files = [(file.name, file.id) for file in files]
-            self.convo[-1].tool_choice = ToolChoice(type='auto')
-            await self.__save(create_memories=False)
-            self.last_sent_sequence = len(self.convo) - 1
-            logger.debug("append() completed, message added")
-
-        async def rate(data: dict):
-            assert self.convo is not None
-            uuid_str = data['uuid']
-            rating = data['rating']
-
-            await database_sync_to_async(apply_message_rating)(
-                self.db_convo.id, uuid_str, rating
-            )
-
-            for msg in self.convo:
-                if str(msg.message_uuid) == uuid_str:
-                    msg.rating = int(rating)
-                    break
-
-        async def feedback(data: dict):
-            assert self.convo is not None
-            uuid_str = data['uuid']
-            feedback_text = data['feedback_text']
-
-            await database_sync_to_async(apply_message_feedback_text)(
-                self.db_convo.id, uuid_str, feedback_text
-            )
-
-            for msg in self.convo:
-                if str(msg.message_uuid) == uuid_str:
-                    raw = "" if feedback_text is None else str(feedback_text)
-                    msg.feedback_text = raw.strip() or None
-                    break
-
-        if not self.dead:
-            try:
-                data = loads(text_data)
-                action = data.pop('action', None)
-                logger.debug(f"Action: {action}")
-                if action == 'append':
-                    await append(data)
-                    augment_start = perf_counter()
-                    await database_sync_to_async(augment_conversation_with_memory)(
-                        self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
-                    )
-                    logger.info("Memory augmentation took %.1fms in receive()", (perf_counter() - augment_start) * 1000)
-                    logger.debug("About to call llm_if.spin() in receive()")
-                    llm_start = perf_counter()
-                    await self.llm_if.spin(
-                        self.convo,
-                        max_func_calls=CHAT_MAX_FUNC_CALLS,
-                        max_tokens=CHAT_MAX_TOKENS,
-                        send_func=send_func,
-                        stream_func=stream_func,
-                    )
-                    logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
-                    await self.__save(create_memories=True)
-                elif action == 'rate':
-                    await rate(data)
-                elif action == 'feedback':
-                    await feedback(data)
-                else:
-                    raise ValueError(f'Invalid action "{action}"')
-                logger.debug("receive() action completed")
-            except ValidationError as e:
-                msg = e.messages[0] if getattr(e, "messages", None) else str(e)
-                logger.warning("Validation error in receive(): %s", msg)
-                await self.send(text_data=dumps({"exception": msg}))
-            except Exception as e:
-                logger.error(f"Exception in receive(): {e}", exc_info=True)
-                if DEBUG:
-                    from django.views.debug import ExceptionReporter
-                    reporter = ExceptionReporter(None, *sys.exc_info())
-                    debug_html = reporter.get_traceback_html()
-                    await self.send(text_data=dumps({"exception": str(e), "debug_html": debug_html}))
-                else:
-                    await self.send(text_data='{"exception": "A server error has occurred. Try reloading the page"}')
+        await handle_chat_receive(self, text_data)
 
 
-__all__ = [
-    'ChatConsumer',
-    'CollectionsRef',
-    'ChatRef',
-]
+__all__ = ["ChatConsumer"]

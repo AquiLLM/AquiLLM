@@ -11,6 +11,12 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
+      # Bind mount brings host .venv; force uv + tools to use the image venv from Dockerfile.
+      - UV_PROJECT_ENVIRONMENT=/opt/venv
+      - VIRTUAL_ENV=/opt/venv
+      - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      # LM-Lingua2 / transformers: keep Hub downloads on a host bind (set WEB_HF_CACHE_HOST_PATH in .env).
+      - HF_HOME=/root/.cache/huggingface
     # Allow web container to reach host services (e.g., host-run vLLM endpoints).
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -23,6 +29,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      memgraph:
+        condition: service_started
+        required: false
       vllm:
         condition: service_healthy
         required: false
@@ -40,6 +49,10 @@ services:
         required: false
     volumes:
       - ../..:/app
+      # Hide host .venv so /opt/venv from the image is the only project env (avoids uv using /app/.venv).
+      - /app/.venv
+      # Persist Hugging Face hub cache for web (LM-Lingua2). Override WEB_HF_CACHE_HOST_PATH in .env (e.g. Jetstream volume).
+      - ${WEB_HF_CACHE_HOST_PATH:-../../data/hf_web}:/root/.cache/huggingface
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/health/"]
       interval: 30s
@@ -57,6 +70,9 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
+      - UV_PROJECT_ENVIRONMENT=/opt/venv
+      - VIRTUAL_ENV=/opt/venv
+      - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -68,6 +84,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      memgraph:
+        condition: service_started
+        required: false
       vllm:
         condition: service_healthy
         required: false
@@ -85,7 +104,55 @@ services:
         required: false
     volumes:
       - ../..:/app
-    command: sh -c "cd /app/aquillm && celery -A aquillm worker --loglevel=info"
+      - /app/.venv
+    command: sh -c "cd /app/aquillm && /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues=celery --hostname=worker-main@%h"
+
+  worker_memory_promotion:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web/Dockerfile.prod
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      - C_FORCE_ROOT=1
+      - RUN_CELERY_IN_WEB=0
+      - UV_PROJECT_ENVIRONMENT=/opt/venv
+      - VIRTUAL_ENV=/opt/venv
+      - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      memgraph:
+        condition: service_started
+        required: false
+      vllm:
+        condition: service_healthy
+        required: false
+      vllm_ocr:
+        condition: service_healthy
+        required: false
+      vllm_transcribe:
+        condition: service_healthy
+        required: false
+      vllm_embed:
+        condition: service_healthy
+        required: false
+      vllm_rerank:
+        condition: service_healthy
+        required: false
+    volumes:
+      - ../..:/app
+      - /app/.venv
+    command: sh -c "cd /app/aquillm && /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues=memory-promotion --concurrency=1 --prefetch-multiplier=1 --hostname=worker-memory-promotion@%h"
   
   nginx:
       image: nginx:stable-bookworm
@@ -171,7 +238,17 @@ services:
     ports:
       - "6333:6333"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ${MEM0_QDRANT_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/qdrant}:/qdrant/storage
+
+  memgraph:
+    image: ${MEM0_MEMGRAPH_IMAGE:-memgraph/memgraph-mage:3.8.1}
+    restart: unless-stopped
+    profiles:
+      - memgraph
+    ports:
+      - "7687:7687"
+    volumes:
+      - memgraph_data:/var/lib/memgraph
 
   createbuckets:
     image: minio/mc
@@ -205,10 +282,12 @@ services:
     environment:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
+      - VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.33}
+      - VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-40960}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "8000:8000"
+      - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
+      - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -240,18 +319,16 @@ services:
     environment:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
-      - VLLM_MODEL=${OCR_VLLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
-      - VLLM_SERVED_MODEL_NAME=${OCR_VLLM_SERVED_MODEL_NAME:-qwen-ocr}
-      - VLLM_TOKENIZER=${OCR_VLLM_TOKENIZER:-Qwen/Qwen2.5-VL-7B-Instruct}
+      - VLLM_MODEL=${OCR_VLLM_MODEL:-Qwen/Qwen3.5-4B}
+      - VLLM_SERVED_MODEL_NAME=${OCR_VLLM_SERVED_MODEL_NAME:-qwen3.5-ocr}
+      - VLLM_TOKENIZER=${OCR_VLLM_TOKENIZER:-Qwen/Qwen3.5-4B}
       - VLLM_TENSOR_PARALLEL_SIZE=${OCR_VLLM_TENSOR_PARALLEL_SIZE:-1}
-      - VLLM_GPU_MEMORY_UTILIZATION=${OCR_VLLM_GPU_MEMORY_UTILIZATION:-0.2}
+      - VLLM_GPU_MEMORY_UTILIZATION=${OCR_VLLM_GPU_MEMORY_UTILIZATION:-0.15}
       - VLLM_MAX_MODEL_LEN=${OCR_VLLM_MAX_MODEL_LEN:-4096}
-      - VLLM_EXTRA_ARGS=${OCR_VLLM_EXTRA_ARGS:-}
+      - "VLLM_EXTRA_ARGS=${OCR_VLLM_EXTRA_ARGS}"
       - VLLM_TRUST_REMOTE_CODE=${OCR_VLLM_TRUST_REMOTE_CODE:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "8004:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -283,18 +360,16 @@ services:
     environment:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
-      - VLLM_MODEL=${TRANSCRIBE_VLLM_MODEL:-openai/whisper-large-v3}
-      - VLLM_SERVED_MODEL_NAME=${TRANSCRIBE_VLLM_SERVED_MODEL_NAME:-whisper-large-v3}
-      - VLLM_TOKENIZER=${TRANSCRIBE_VLLM_TOKENIZER:-openai/whisper-large-v3}
+      - VLLM_MODEL=${TRANSCRIBE_VLLM_MODEL:-openai/whisper-large-v3-turbo}
+      - VLLM_SERVED_MODEL_NAME=${TRANSCRIBE_VLLM_SERVED_MODEL_NAME:-whisper-large-v3-turbo}
+      - VLLM_TOKENIZER=${TRANSCRIBE_VLLM_TOKENIZER:-openai/whisper-large-v3-turbo}
       - VLLM_TENSOR_PARALLEL_SIZE=${TRANSCRIBE_VLLM_TENSOR_PARALLEL_SIZE:-1}
-      - VLLM_GPU_MEMORY_UTILIZATION=${TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION:-0.2}
-      - VLLM_MAX_MODEL_LEN=${TRANSCRIBE_VLLM_MAX_MODEL_LEN:-4096}
-      - VLLM_EXTRA_ARGS=${TRANSCRIBE_VLLM_EXTRA_ARGS:-}
+      - VLLM_GPU_MEMORY_UTILIZATION=${TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION:-0.10}
+      - VLLM_MAX_MODEL_LEN=${TRANSCRIBE_VLLM_MAX_MODEL_LEN:-448}
+      - "VLLM_EXTRA_ARGS=${TRANSCRIBE_VLLM_EXTRA_ARGS}"
       - VLLM_TRUST_REMOTE_CODE=${TRANSCRIBE_VLLM_TRUST_REMOTE_CODE:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "8005:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -331,14 +406,12 @@ services:
       - VLLM_TOKENIZER=${MEM0_EMBED_TOKENIZER:-Qwen/Qwen3-VL-Embedding-2B}
       - VLLM_RUNNER=pooling
       - VLLM_TENSOR_PARALLEL_SIZE=${MEM0_EMBED_TENSOR_PARALLEL_SIZE:-1}
-      - VLLM_GPU_MEMORY_UTILIZATION=${MEM0_EMBED_GPU_MEMORY_UTILIZATION:-0.2}
-      - VLLM_MAX_MODEL_LEN=${MEM0_EMBED_MAX_MODEL_LEN:-8192}
-      - VLLM_EXTRA_ARGS=${MEM0_EMBED_VLLM_EXTRA_ARGS:-}
+      - VLLM_GPU_MEMORY_UTILIZATION=${MEM0_EMBED_GPU_MEMORY_UTILIZATION:-0.12}
+      - VLLM_MAX_MODEL_LEN=${MEM0_EMBED_MAX_MODEL_LEN:-2048}
+      - "VLLM_EXTRA_ARGS=${MEM0_EMBED_VLLM_EXTRA_ARGS}"
       - VLLM_TRUST_REMOTE_CODE=${MEM0_EMBED_VLLM_TRUST_REMOTE_CODE:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "8002:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -375,14 +448,13 @@ services:
       - VLLM_TOKENIZER=${APP_RERANK_TOKENIZER:-Qwen/Qwen3-VL-Reranker-2B}
       - VLLM_TASK=score
       - VLLM_TENSOR_PARALLEL_SIZE=${APP_RERANK_TENSOR_PARALLEL_SIZE:-1}
-      - VLLM_GPU_MEMORY_UTILIZATION=${APP_RERANK_GPU_MEMORY_UTILIZATION:-0.2}
-      - VLLM_MAX_MODEL_LEN=${APP_RERANK_MAX_MODEL_LEN:-8192}
-      - VLLM_EXTRA_ARGS=${APP_RERANK_VLLM_EXTRA_ARGS:-}
+      # Must be <= free_vram/total_vram at startup (other vLLM/chat procs on same GPU reduce free VRAM).
+      - VLLM_GPU_MEMORY_UTILIZATION=${APP_RERANK_GPU_MEMORY_UTILIZATION:-0.25}
+      - VLLM_MAX_MODEL_LEN=${APP_RERANK_MAX_MODEL_LEN:-1024}
+      - "VLLM_EXTRA_ARGS=${APP_RERANK_VLLM_EXTRA_ARGS}"
       - VLLM_TRUST_REMOTE_CODE=${APP_RERANK_VLLM_TRUST_REMOTE_CODE:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "8003:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -393,9 +465,5 @@ services:
 volumes:
   postgres_data:
   minio_data:
-  qdrant_data:
   certs:
-
-
-
-
+  memgraph_data:

@@ -4,13 +4,13 @@ from types import GenericAlias
 from functools import wraps
 import inspect
 
-import logging
+import structlog
 
-from pydantic import validate_call
+from pydantic import ValidationError, validate_call
 
 from ..types.tools import LLMTool, ToolResultDict
 
-_logger = logging.getLogger(__name__)
+_logger = structlog.stdlib.get_logger(__name__)
 
 
 # Import DEBUG setting - will be None if Django not configured
@@ -55,10 +55,25 @@ def llm_tool(
             try:
                 return type_checked_func(*args, **kwargs)
             except Exception as e:
+                if isinstance(e, ValidationError):
+                    extra = ""
+                    if func_name == "vector_search":
+                        extra = (
+                            " For vector_search you must pass search_string (non-empty string) "
+                            "and top_k (integer 1-15) in the same tool call."
+                        )
+                    return {
+                        "exception": (
+                            f"Missing or invalid arguments for {func_name}. "
+                            "Pass every required field with correct types (see tool description)."
+                            f"{extra} "
+                            "For many documents use vector_search with those fields; for one document "
+                            "by id, call document_ids first and pass the full UUID."
+                        ),
+                    }
                 if DEBUG:
                     raise e
-                else:
-                    return {"exception": str(e)}
+                return {"exception": str(e)}
         
         def translate_type(t: type | GenericAlias) -> dict:
             allowed_primitives = {

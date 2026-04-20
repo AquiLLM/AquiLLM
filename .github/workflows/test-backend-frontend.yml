@@ -1,0 +1,66 @@
+name: test-backend-frontend
+
+on:
+  push:
+    branches: [main, master, development]
+  pull_request:
+
+jobs:
+  backend-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aquillm
+          POSTGRES_PASSWORD: aquillm
+          POSTGRES_DB: aquillm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aquillm -d aquillm"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 8
+    env:
+      DJANGO_DEBUG: "1"
+      SECRET_KEY: ci-not-secret
+      POSTGRES_HOST: localhost
+      POSTGRES_NAME: aquillm
+      POSTGRES_USER: aquillm
+      POSTGRES_PASSWORD: aquillm
+      OPENAI_API_KEY: ci-dummy
+      GEMINI_API_KEY: ci-dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Django system check
+        working-directory: aquillm
+        run: python manage.py check
+      - name: Architecture + import-boundary tests
+        run: >-
+          python -m pytest
+          aquillm/tests/integration/test_architecture_import_boundaries.py
+          aquillm/tests/integration/test_context_processors_urls.py
+          aquillm/tests/integration/test_document_image_view.py
+          -q --tb=short
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: react
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: react/package-lock.json
+      - run: npm ci
+      - run: npm run build

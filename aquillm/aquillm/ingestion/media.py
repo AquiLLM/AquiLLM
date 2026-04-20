@@ -1,10 +1,10 @@
 import io
-import logging
+import structlog
 from os import getenv
 
 from openai import BadRequestError, OpenAI
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def _provider() -> str:

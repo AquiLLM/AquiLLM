@@ -62,6 +62,14 @@ from apps.core.views.api import (
     user_settings_api,
 )
 
+# Re-export bug report views
+from apps.bug_reports.views.api import (
+    submit_bug_report,
+    list_bug_reports,
+    bug_report_detail,
+    delete_bug_report,
+)
+
 # Backward compatibility URL patterns
 urlpatterns = [
     path("collections/", collections, name="api_collections"),
@@ -89,4 +97,8 @@ urlpatterns = [
     path("feedback/dashboard/filters/", feedback_dashboard_filters, name="api_feedback_dashboard_filters"),
     path("feedback/dashboard/export/", feedback_dashboard_export, name="api_feedback_dashboard_export"),
     path("feedback/dashboard/prql/", feedback_dashboard_prql_query, name="api_feedback_dashboard_prql"),
+    path("bug-reports/", submit_bug_report, name="api_bug_reports"),
+    path("bug-reports/list/", list_bug_reports, name="api_bug_reports_list"),
+    path("bug-reports/<int:report_id>/", bug_report_detail, name="api_bug_report_detail"),
+    path("bug-reports/<int:report_id>/delete/", delete_bug_report, name="api_bug_report_delete"),
 ]

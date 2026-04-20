@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM astral/uv:0.8.17-python3.12-bookworm
 
 # Set environment variables
 
@@ -6,9 +6,9 @@ ENV PORT=${PORT}
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Copy dependency files first to leverage Docker cache
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen
 RUN apt update && apt install -y curl tesseract-ocr
 # Copy the rest of the application
 COPY . .
@@ -17,7 +17,7 @@ COPY . .
 WORKDIR /app/aquillm
 
 # Command to run the application
-CMD pytest -s -v \
+CMD uv run pytest -s -v \
     --ds=aquillm.settings \
     --reuse-db \
     | tee ../test-results.txt

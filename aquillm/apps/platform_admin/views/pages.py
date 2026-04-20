@@ -1,3 +1,5 @@
+"""Page views for platform administration."""
+import structlog
 import logging
 
 from django.contrib.auth.decorators import login_required, user_passes_test
@@ -7,7 +9,7 @@ from django.views.decorators.http import require_http_methods
 
 from aquillm.ocr_utils import get_gemini_cost_stats
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @login_required

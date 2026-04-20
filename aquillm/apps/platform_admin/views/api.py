@@ -1,3 +1,4 @@
+"""API views for platform administration."""
 import csv
 import io
 import json
@@ -5,6 +6,8 @@ import logging
 import math
 import zlib
 from datetime import datetime, timezone as py_tz
+
+import structlog
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
@@ -38,7 +41,7 @@ from apps.platform_admin.services.feedback_prql import (
     get_prql_string_for_filters,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

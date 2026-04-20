@@ -1,8 +1,6 @@
 """
 Views for Zotero OAuth and sync functionality
 """
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -15,10 +13,11 @@ from .models import ZoteroConnection
 from .zotero_oauth import ZoteroOAuthClient
 from .zotero_tasks import sync_zotero_library
 from .zotero_client import ZoteroAPIClient
+from .zotero_sync_helpers import fetch_library_data
 
-import logging
+import structlog
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @login_required
@@ -179,102 +178,28 @@ def zotero_sync(request: HttpRequest) -> HttpResponse:
             )
 
             try:
-                # Helper function to flatten collection tree for template rendering
-                def flatten_collections(collections, items):
-                    """
-                    Flatten hierarchical collections into a list with depth information.
-                    Returns list of dicts with 'key', 'name', 'depth', 'parent', 'item_count'
-                    """
-                    collection_dict = {}
-                    flattened = []
-
-                    # Build a map of collection key -> item count
-                    collection_item_counts = {}
-                    for item in items:
-                        item_collections = item['data'].get('collections', [])
-                        for col_key in item_collections:
-                            collection_item_counts[col_key] = collection_item_counts.get(col_key, 0) + 1
-
-                    # First pass: create dict of all collections
-                    for col in collections:
-                        col_key = col['key']
-                        col_data = col['data']
-                        collection_dict[col_key] = {
-                            'key': col_key,
-                            'name': col_data['name'],
-                            'parent': col_data.get('parentCollection'),
-                            'item_count': collection_item_counts.get(col_key, 0)
-                        }
-
-                    # Helper to recursively add collections in order (parents before children)
-                    def add_collections_recursive(parent_key, depth):
-                        for col_key, col_info in collection_dict.items():
-                            if col_info['parent'] == parent_key:
-                                flattened.append({
-                                    'key': col_key,
-                                    'name': col_info['name'],
-                                    'depth': depth,
-                                    'parent': parent_key,
-                                    'item_count': col_info['item_count']
-                                })
-                                # Recursively add children
-                                add_collections_recursive(col_key, depth + 1)
-
-                    # Add root collections first (no parent)
-                    for col_key, col_info in collection_dict.items():
-                        if not col_info['parent'] or col_info['parent'] not in collection_dict:
-                            flattened.append({
-                                'key': col_key,
-                                'name': col_info['name'],
-                                'depth': 0,
-                                'parent': None,
-                                'item_count': col_info['item_count']
-                            })
-                            # Add children recursively
-                            add_collections_recursive(col_key, 1)
-
-                    return flattened
-
-                def fetch_library_data(lib_id, lib_name, lib_type, group_id):
-                    """Fetch collections and items for a library (runs in thread pool)."""
-                    with ThreadPoolExecutor(max_workers=2) as inner_executor:
-                        collections_future = inner_executor.submit(client.get_collections, group_id=group_id)
-                        items_future = inner_executor.submit(client.get_top_level_items, group_id=group_id)
-                        collections = collections_future.result()
-                        items = items_future.result()
-                    return {
-                        'id': lib_id,
-                        'name': lib_name,
-                        'type': lib_type,
-                        'collections': flatten_collections(collections, items)
-                    }
-
-                # Fetch groups list first (needed to know what to parallelize)
                 groups = client.get_user_groups()
 
-                # Parallel fetch all libraries (personal + all groups)
+                # Sequential library fetches (Zotero API only in threads inside fetch_library_data;
+                # no Django ORM on worker threads).
                 libraries = []
-                with ThreadPoolExecutor(max_workers=min(8, len(groups) + 1)) as executor:
-                    futures = {}
+                try:
+                    libraries.append(
+                        fetch_library_data(client, "personal", "Personal Library", "user", None)
+                    )
+                except Exception as e:
+                    logger.error("Error fetching personal library: %s", e)
 
-                    # Submit personal library fetch
-                    futures[executor.submit(
-                        fetch_library_data, 'personal', 'Personal Library', 'user', None
-                    )] = 'personal'
-
-                    # Submit group library fetches
-                    for group in groups:
-                        group_id = str(group['id'])
-                        futures[executor.submit(
-                            fetch_library_data, group_id, group['data']['name'], 'group', group_id
-                        )] = group_id
-
-                    # Collect results as they complete
-                    for future in as_completed(futures):
-                        try:
-                            libraries.append(future.result())
-                        except Exception as e:
-                            logger.error(f"Error fetching library {futures[future]}: {e}")
+                for group in groups:
+                    group_id = str(group["id"])
+                    try:
+                        libraries.append(
+                            fetch_library_data(
+                                client, group_id, group["data"]["name"], "group", group_id
+                            )
+                        )
+                    except Exception as e:
+                        logger.error("Error fetching library %s: %s", group_id, e)
 
                 # Sort so personal library appears first
                 libraries.sort(key=lambda lib: (0 if lib['id'] == 'personal' else 1, lib['name']))

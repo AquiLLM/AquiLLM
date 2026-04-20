@@ -1,4 +1,6 @@
 """LLM message types for conversation handling."""
+import json
+import structlog
 from typing import Literal, Optional, Any
 from os import getenv
 import re
@@ -8,6 +10,20 @@ from typing import override
 import uuid
 
 from .tools import LLMTool, ToolChoice, ToolResultDict
+
+logger = structlog.stdlib.get_logger(__name__)
+
+_TOOL_ARGS_RENDER_MAX = 512
+
+
+def _compact_tool_prefix(tool_name: str, arguments: Optional[dict]) -> str:
+    head = f"Tool:{tool_name}"
+    if arguments:
+        raw = json.dumps(arguments, ensure_ascii=False, default=str, separators=(",", ":"))
+        if len(raw) > _TOOL_ARGS_RENDER_MAX:
+            raw = raw[:_TOOL_ARGS_RENDER_MAX] + "…"
+        return f"{head}\n{raw}"
+    return head
 
 
 class __LLMMessage(BaseModel, ABC):
@@ -76,7 +92,8 @@ class ToolMessage(__LLMMessage):
         """
         content_parts = []
         
-        text_content = f'The following is the result of a call to tool {self.tool_name}.\nArguments:\n{self.arguments}\n\nResults:\n{self._sanitize_text_for_llm(self.content)}'
+        prefix = _compact_tool_prefix(self.tool_name, self.arguments)
+        text_content = f"{prefix}\n{self._sanitize_text_for_llm(self.content)}"
         
         if self.result_dict and self.result_dict.get("_image_instruction"):
             text_content += f"\n\n{self.result_dict['_image_instruction']}"
@@ -102,15 +119,19 @@ class ToolMessage(__LLMMessage):
         ret = super().render(*args, **kwargs)
         ret['role'] = 'user'  # This is what LLMs expect.
         
+        sanitized = self._sanitize_text_for_llm(self.content)
         if self.has_images():
             ret['content'] = self.render_multimodal_content()
         else:
-            ret['content'] = (
-                f'The following is the result of a call to tool {self.tool_name}.\n'
-                f'Arguments:\n{self.arguments}\n\n'
-                f'Results:\n{self._sanitize_text_for_llm(self.content)}'
-            )
-        
+            prefix = _compact_tool_prefix(self.tool_name, self.arguments)
+            ret['content'] = f"{prefix}\n{sanitized}"
+
+        logger.info(
+            "tool_message_render tool=%s content_chars=%d",
+            self.tool_name,
+            len(sanitized),
+        )
+
         ret.pop('result_dict', None)
         return ret
 

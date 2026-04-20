@@ -28,6 +28,35 @@ IFS='|' read -r MODEL_TO_SERVE SERVED_MODEL_NAME <<< "$(select_model_and_alias)"
 HOST="${VLLM_HOST:-0.0.0.0}"
 PORT="${VLLM_PORT:-8000}"
 
+# If OCR_VLLM_EXTRA_ARGS is omitted, keep OCR startup VRAM-friendly with fp8 KV + 4-bit weights.
+# Same baseline as .env.example.
+_DEFAULT_OCR_VLLM_EXTRA_ARGS="--kv-cache-dtype fp8 --compilation-config '{\"cudagraph_mode\":\"PIECEWISE\"}' --quantization bitsandbytes --load-format bitsandbytes --dtype float16 --model-loader-extra-config '{\"load_in_4bit\":true,\"bnb_4bit_compute_dtype\":\"float16\",\"bnb_4bit_quant_type\":\"nf4\",\"bnb_4bit_use_double_quant\":true}'"
+
+# Compose sometimes injects VLLM_EXTRA_ARGS="" when ${VAR:-} interpolation is empty on the host,
+# which overrides env_file. Recover from the service-specific *VLLM_EXTRA_ARGS in the same .env.
+if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
+  case "${VLLM_TASK:-}" in
+    score) export VLLM_EXTRA_ARGS="${APP_RERANK_VLLM_EXTRA_ARGS:-}" ;;
+  esac
+fi
+if [ -z "${VLLM_EXTRA_ARGS// }" ] && [ "${VLLM_RUNNER:-}" = "pooling" ] && [ -z "${VLLM_TASK:-}" ]; then
+  case "${VLLM_MODEL:-}" in
+    *Embedding*|*embedding*) export VLLM_EXTRA_ARGS="${MEM0_EMBED_VLLM_EXTRA_ARGS:-}" ;;
+  esac
+fi
+if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
+  case "${VLLM_MODEL:-}" in
+    *whisper*|*Whisper*) export VLLM_EXTRA_ARGS="${TRANSCRIBE_VLLM_EXTRA_ARGS:-}" ;;
+    *Qwen2.5-VL*|*Qwen/Qwen2.5-VL*|*Qwen3.5-4B*|*Qwen/Qwen3.5-4B*)
+      if [ -n "${OCR_VLLM_EXTRA_ARGS// }" ]; then
+        export VLLM_EXTRA_ARGS="${OCR_VLLM_EXTRA_ARGS}"
+      else
+        export VLLM_EXTRA_ARGS="${_DEFAULT_OCR_VLLM_EXTRA_ARGS}"
+      fi
+      ;;
+  esac
+fi
+
 detect_python_bin() {
   if [ -n "${VLLM_PYTHON_BIN:-}" ] && command -v "${VLLM_PYTHON_BIN}" >/dev/null 2>&1; then
     echo "${VLLM_PYTHON_BIN}"
@@ -205,6 +234,54 @@ if [ "${VLLM_TRUST_REMOTE_CODE:-0}" = "1" ] || [ "${VLLM_TRUST_REMOTE_CODE:-}" =
   fi
 fi
 
+# vLLM 0.17.x: bitsandbytes + Qwen3-VL sequence-classification reranker fails loading classifier weights
+# (AssertionError: e.g. torch.Size([1, 2048]) vs [512, 1]). Use fp16 for rerank until upstream fixes.
+# Match rerank intents broadly: score task, reranker model id, pooling runner, or known reranker hf_overrides marker.
+_vllm_task_trim="${VLLM_TASK:-}"
+_vllm_task_trim="${_vllm_task_trim%%[$'\r']}"
+_rerank_bnb_strip=0
+if [[ "${VLLM_EXTRA_ARGS:-}" == *[Bb]itsandbytes* ]]; then
+  if [ "${_vllm_task_trim}" = "score" ] \
+    || [[ "${VLLM_MODEL:-}" == *[Rr]eranker* ]] \
+    || [[ "${VLLM_RUNNER:-}" == "pooling" ]] \
+    || [[ "${VLLM_EXTRA_ARGS:-}" == *is_original_qwen3_reranker* ]]; then
+    _rerank_bnb_strip=1
+  fi
+fi
+if [ "${_rerank_bnb_strip}" = "1" ]; then
+  echo "WARN: Removing bitsandbytes flags from rerank VLLM_EXTRA_ARGS; incompatible with Qwen3-VL reranker on vLLM 0.17.x." >&2
+  VLLM_EXTRA_ARGS="$(
+    VLLM_EXTRA_ARGS_IN="${VLLM_EXTRA_ARGS}" "${PYTHON_BIN}" - <<'PY'
+import os
+import shlex
+
+raw = os.environ.get("VLLM_EXTRA_ARGS_IN", "")
+try:
+    toks = shlex.split(raw, posix=True)
+except ValueError:
+    toks = []
+
+out: list[str] = []
+i = 0
+while i < len(toks):
+    if toks[i] in ("--quantization", "--load-format") and i + 1 < len(toks) and toks[i + 1] == "bitsandbytes":
+        i += 2
+        continue
+    if toks[i] == "--model-loader-extra-config" and i + 1 < len(toks):
+        i += 2
+        continue
+    out.append(toks[i])
+    i += 1
+
+has_dtype = any(out[j] == "--dtype" and j + 1 < len(out) for j in range(len(out)))
+if not has_dtype:
+    out.extend(["--dtype", "float16"])
+
+print(shlex.join(out))
+PY
+  )"
+fi
+
 if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
   parser_script="/parse_vllm_extra_args.py"
   if [ -f "${parser_script}" ]; then
@@ -220,6 +297,23 @@ if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
   fi
 fi
 
+# Optional LMCache / KV connector flags (see .env.example: LMCACHE_*).
+if [ "${LMCACHE_ENABLED:-0}" = "1" ] || [ "${LMCACHE_ENABLED:-}" = "true" ] || [ "${LMCACHE_ENABLED:-}" = "TRUE" ]; then
+  if [ -n "${LMCACHE_EXTRA_ARGS:-}" ]; then
+    parser_script="/parse_vllm_extra_args.py"
+    if [ -f "${parser_script}" ]; then
+      mapfile -d '' -t lmc_args < <("${PYTHON_BIN}" "${parser_script}" "${LMCACHE_EXTRA_ARGS}")
+      if [ "${#lmc_args[@]}" -gt 0 ]; then
+        cmd+=("${lmc_args[@]}")
+      fi
+    else
+      # shellcheck disable=SC2206,SC2294
+      eval "lmc_args=( ${LMCACHE_EXTRA_ARGS} )"
+      cmd+=("${lmc_args[@]}")
+    fi
+  fi
+fi
+
 # vLLM's offloading connector requires hybrid KV cache manager to be disabled.
 # Auto-append the flag when KV offloading is enabled so startup doesn't crash.
 if printf '%s\n' "${cmd[@]}" | grep -q -- '--kv-offloading-'; then
@@ -231,6 +325,8 @@ fi
 
 # Avoid vLLM env validation warnings for wrapper-only variables.
 unset \
+  _rerank_bnb_strip \
+  _vllm_task_trim \
   VLLM_HOST \
   VLLM_PORT \
   VLLM_MODEL \
@@ -246,7 +342,9 @@ unset \
   VLLM_TRUST_REMOTE_CODE \
   VLLM_EXTRA_ARGS \
   VLLM_PYTHON_BIN \
-  VLLM_BASE_URL || true
+  VLLM_BASE_URL \
+  LMCACHE_ENABLED \
+  LMCACHE_EXTRA_ARGS || true
 
 echo "Starting vLLM with model='${MODEL_TO_SERVE}' served_as='${SERVED_MODEL_NAME}' on ${HOST}:${PORT}"
 exec "${cmd[@]}"

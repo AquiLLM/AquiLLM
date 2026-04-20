@@ -62,6 +62,11 @@ from apps.platform_admin.views.pages import (
     feedback_dashboard,
 )
 
+# Re-export bug report views
+from apps.bug_reports.views.pages import (
+    bug_reports_admin,
+)
+
 from .settings import DEBUG
 
 # Backward compatibility URL patterns
@@ -83,6 +88,7 @@ urlpatterns = [
     path("ingest_handwritten_notes/", ingest_handwritten_notes, name="ingest_handwritten_notes"),
     path('gemini-costs/', gemini_cost_monitor, name='gemini_cost_monitor'),
     path("feedback-dashboard/", feedback_dashboard, name="feedback_dashboard"),
+    path('bug-reports/', bug_reports_admin, name='bug_reports_admin'),
 ]
 
 if DEBUG:

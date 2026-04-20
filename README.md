@@ -1,4 +1,4 @@
-# AquiLLM
+﻿# AquiLLM
 
 
 ![AquiLLM Logo](aquillm/aquillm/static/images/aquila.svg)
@@ -45,8 +45,24 @@ The unified upload endpoint supports:
 *   **LLM Integration**: Local LLMs, Claude, OpenAI, Gemini as desired
 *   **Asynchronous Tasks**: Celery, Redis, Django Channels
 
+*   **Optional RAG / cost controls**: Django cacheâ€“backed retrieval TTL caches (`RAG_CACHE_*`), cross-provider prompt preflight trimming (`TOKEN_EFFICIENCY_*`), optional LM-Lingua2 compression (`LM_LINGUA2_*`), and optional vLLM LMCache wiring (`LMCACHE_*`). See `.env.example` and `docs/roadmap/plans/active/2026-03-23-caching-rag-token-efficiency-rollout-notes.md` for rollout and rollback.
+
+### RAG retrieval defaults and benchmarking
+
+Default `VECTOR_TOP_K`, `TRIGRAM_TOP_K`, `CHUNK_SIZE`, and `CHUNK_OVERLAP` target a balance of latency and recall for typical research corpora. Tune `RAG_CANDIDATE_MULTIPLIER`, `RAG_*_MIN_LIMIT`, and `RAG_TRIGRAM_SIMILARITY_MIN` when you need more aggressive candidate fan-out or stricter trigram filtering. To compare old versus new defaults without code changes, snapshot your current `.env`, restore prior values (for example higher `VECTOR_TOP_K` / `TRIGRAM_TOP_K`), run the same fixed set of chat queries, and compare p95 end-to-end chat latency plus qualitative answer quality. Enable `RAG_CACHE_ENABLED=1` only after you have a shared cache backend so measurements are not dominated by cold embed calls.
+
 *   **Authentication**: django-allauth
 *   **Containerization**: Docker, Docker Compose
+
+## Module layout and boundaries
+
+* **`aquillm/apps/*`**: Domain Django apps (models, views, consumers, and Celery tasks owned per app). Prefer importing concrete models and services from `apps.<domain>` rather than the `aquillm.models` compatibility module in new application code.
+* **`aquillm/lib/*`**: Shared, provider-style helpers (for example LLM adapters and tool types). Keep this tree free of direct `apps.*` imports; pass Django or ORM behavior in from `apps` callers.
+* **`aquillm/lib/tools/*`**: Reusable tool logic without Django (`search` chunk formatting, `documents` ID parsing and payloads, `astronomy` FITS/array operations, `debug` test tools). Chat-specific binding (collections, `TextChunk`, `ConversationFile`, user permissions) lives in **`aquillm/apps/chat/services/tool_wiring/`** (package: `documents.py`, `astronomy.py`, `__init__.py`). New tool code should stay import-clean under `lib/tools/` and wire through that package.
+* **React `src/features/*`**: Domain UI lives under `react/src/features/<area>/` (for example `features/chat` for the WebSocket chat shell and composer, `features/collections` for collection view, `features/documents` for the filesystem table, `features/platform_admin` for user management, `features/ingestion` for ingest rows). `react/src/components/*.tsx` may re-export shims for Django template mount points; prefer importing from `features/` in new code.
+* **`aquillm/aquillm/models.py`**: Legacy barrel that re-exports models and a few helpers for older call sites. Integration tests under `aquillm/tests/integration/test_architecture_import_boundaries.py` and `scripts/check_import_boundaries.py` discourage new `from aquillm.models import` usage under `apps/` and `lib/`.
+* **WebSockets**: `aquillm/asgi.py` wires `apps.chat.routing` and `apps.ingestion.routing` into the Channels URL router (legacy `chat.routing` / `ingest.routing` remain thin re-exports).
+* **Structure checks** (also run in CI): `python scripts/check_file_lengths.py` and `python scripts/check_import_boundaries.py`.
 
 ## Quick start (development and local use):
 
@@ -64,7 +80,7 @@ This assumes you have Docker and Docker Compose installed.
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` — a simple restart may not pick up the change.
+    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` â€” a simple restart may not pick up the change.
     - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_ocr` (OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker).
     - For image OCR through local vLLM, set `APP_OCR_PROVIDER=qwen` and point `APP_OCR_QWEN_BASE_URL` to `http://vllm_ocr:8000/v1`.
     - For audio/video transcription through local vLLM, set `INGEST_TRANSCRIBE_PROVIDER=openai` and `INGEST_TRANSCRIBE_OPENAI_BASE_URL=http://vllm_transcribe:8000/v1`.
@@ -164,7 +180,7 @@ docker compose -f deploy/compose/production.yml --profile vllm up -d --force-rec
 3.  **Edit the .env file with your specific configuration:**
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
-    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f deploy/compose/production.yml up` — a simple restart may not pick up the change.
+    - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f deploy/compose/production.yml up` â€” a simple restart may not pick up the change.
     - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_ocr` (OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker).
     - GGUF note: set model as `repo:filename.gguf` or `repo:selector` (for example `repo:i1-Q4_K_M`). Startup resolves the best matching GGUF file in the repo, downloads it, and launches vLLM with the local file path.
     - For embedding/reranker models like `Qwen/Qwen3-Embedding-4B` and `Qwen/Qwen3-Reranker-4B`, set `MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1` and `APP_RERANK_VLLM_TRUST_REMOTE_CODE=1`.
@@ -275,7 +291,18 @@ To keep a copy of episodic memories in AquiLLM's local pgvector tables as well:
 MEM0_DUAL_WRITE_LOCAL=1
 ```
 
-**5. Relaunch Mem0 (OSS mode)**
+**5. Balanced graph quality defaults**
+
+When optional Mem0 graph mode is enabled, AquiLLM now applies balanced quality gates before facts and graph edges are persisted:
+
+- explicit remember directives are normalized into substantive facts instead of `"User asked to remember ..."` wrapper text
+- durable project, tooling, preference, and background facts are kept
+- vague remember noise and assistant paraphrase echoes are filtered before Mem0 add
+- low-value graph edges such as self loops and generic identity edges are dropped before Memgraph persist
+
+Useful graph relations should still survive, for example `user -> WORKS_ON -> aquillm` or `jack -> USES -> memgraph`.
+
+**6. Relaunch Mem0 (OSS mode)**
 
 In OSS mode, relaunching Mem0 means recreating AquiLLM services that host/use it (`qdrant`, `web`, `worker`).
 
@@ -295,6 +322,31 @@ For standard development launches with local vLLM services in serial order, use:
 ```bash
 bash deploy/scripts/start_dev.sh
 ```
+
+**7. Verify balanced graph-memory behavior**
+
+Run the focused memory suite:
+
+```bash
+python -m pytest aquillm/lib/memory/tests -q
+```
+
+Then do a simple smoke test with a durable fact such as:
+
+```text
+Please remember that AquiLLM uses Qdrant and Memgraph for memory.
+```
+
+Inspect Memgraph to confirm useful edges are present and reflexive junk is absent:
+
+```bash
+docker compose exec memgraph mgconsole
+MATCH (n:Entity)-[r]->(m:Entity)
+RETURN n.name, type(r), m.name
+LIMIT 20;
+```
+
+Healthy runs should also avoid repeated `falling back` or `retrying vector-only` warnings in `web` and `worker` logs.
 
 ### Summary: key env vars for Mem0 + vLLM
 
@@ -354,7 +406,7 @@ Ratings and free-text feedback on assistant messages are stored on the chat `Mes
 
 - **UI:** While viewing the Email Whitelist page (`/aquillm/email_whitelist/`), superusers see **Download Feedback CSV** in the **top navigation bar** (next to the account control), aligned with the rest of the header.
 - **API:** `GET /api/feedback/ratings.csv` (same permission: Django superuser only; otherwise HTTP 403). If the request sends **`Accept-Encoding: gzip`** (browsers and `curl --compressed` do), the body is **gzip-compressed** with `Content-Encoding: gzip` to keep large exports light on the wire; the payload is still UTF-8 CSV after decompression.
-- **Columns (in order):** `date` (ISO 8601 UTC), `user_number` (conversation owner user id), `rating` (1–5, or empty if only comments were submitted), `question_number` (1-based count of user prompts in that conversation up to and including the assistant turn), `comments`.
+- **Columns (in order):** `date` (ISO 8601 UTC), `user_number` (conversation owner user id), `rating` (1â€“5, or empty if only comments were submitted), `question_number` (1-based count of user prompts in that conversation up to and including the assistant turn), `comments`.
 - **Optional query parameters:** `start_date`, `end_date` (inclusive; `YYYY-MM-DD` or parseable datetime), `min_rating` (integer; rows without a numeric rating are excluded when set), `user_number` (filter by conversation owner id).
 
 Example (after saving session cookies to `cookies.txt`):
@@ -401,3 +453,6 @@ We welcome contributions! AquiLLM is an open-source project, and we appreciate h
 *   **Reporting Bugs**: Please open an issue on GitHub detailing the problem, expected behavior, and steps to reproduce.
 *   **Feature Requests**: Open an issue describing the feature and its potential benefits.
 *   **Pull Requests**: Send a pull request!
+*   **Code style and structure**: Follow [docs/code-style-guide.md](docs/code-style-guide.md) for repository standards and quality gates.
+
+

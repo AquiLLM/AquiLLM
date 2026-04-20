@@ -136,6 +136,21 @@
 {% block content %}
 <div class="w-full h-full text-text-normal p-[20px] md:p-[24px]">
 <h1 class="text-[2.05rem] font-semibold leading-tight mb-3">{{ document.title|default:"Untitled Document" }}</h1>
+{% if highlight_chunk %}
+<div id="rag-cited-chunk" class="mb-6 rounded-xl border-2 border-[var(--color-accent-DEFAULT)] bg-scheme-shade_4 p-4 scroll-mt-20">
+    <h2 class="text-lg font-semibold mb-2 text-text-normal">Cited excerpt</h2>
+    <p class="text-xs text-text-low_contrast mb-2">Chunk {{ highlight_chunk.chunk_number }} · characters {{ highlight_chunk.start_position }}–{{ highlight_chunk.end_position }}</p>
+    <div class="whitespace-pre-wrap break-words text-sm text-text-normal max-h-[min(50vh,28rem)] overflow-y-auto border border-border-mid_contrast rounded-lg p-3 bg-scheme-shade_3">{{ highlight_chunk.content }}</div>
+</div>
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    var el = document.getElementById('rag-cited-chunk');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+</script>
+{% endif %}
 <details class="mb-4">
     <summary class="document-details-summary h-[36px] inline-flex items-center gap-2 px-3 rounded-[18px] bg-scheme-shade_4 text-text-slightly_less_contrast border border-border-mid_contrast hover:bg-scheme-shade_5 hover:text-text-normal transition-colors cursor-pointer">
         <span class="font-semibold">Details</span>

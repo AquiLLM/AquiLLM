@@ -70,14 +70,14 @@ class AquillmConfig(AppConfig):
     default_llm = "CLAUDE"
     
     
-    vector_top_k = _env_int('VECTOR_TOP_K', 30)
-    trigram_top_k = _env_int('TRIGRAM_TOP_K', 30)
+    vector_top_k = _env_int('VECTOR_TOP_K', 12)
+    trigram_top_k = _env_int('TRIGRAM_TOP_K', 12)
     rag_prompt_template = Engine().from_string(RAG_PROMPT_STRING)
 
 
 
     chunk_size = _env_int('CHUNK_SIZE', 2048)
-    chunk_overlap = _env_int('CHUNK_OVERLAP', 512) # at each end.
+    chunk_overlap = _env_int('CHUNK_OVERLAP', 384) # at each end.
 #   |-----------CHUNK-----------|
 #   <---------chunk_size-------->
 #                       <------->  chunk_overlap

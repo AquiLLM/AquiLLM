@@ -21,14 +21,19 @@ def test_create_chunks_avoids_text_image_position_collision(monkeypatch, setting
     }
 
     monkeypatch.setattr("aquillm.models.create_chunks.delay", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("aquillm.models.get_channel_layer", lambda: _DummyChannelLayer())
-    monkeypatch.setattr("aquillm.models._doc_image_data_url", lambda _doc: "data:image/png;base64,AAAA")
     monkeypatch.setattr(
-        "aquillm.models.get_embeddings",
+        "apps.documents.tasks.chunking.get_channel_layer", lambda: _DummyChannelLayer()
+    )
+    monkeypatch.setattr(
+        "apps.documents.services.image_payloads.doc_image_data_url",
+        lambda _doc: "data:image/png;base64,AAAA",
+    )
+    monkeypatch.setattr(
+        "apps.documents.tasks.chunking.get_embeddings",
         lambda texts, input_type=None: [[0.0] * 1024 for _ in texts],
     )
     monkeypatch.setattr(
-        "aquillm.models.get_embedding",
+        "apps.documents.tasks.chunking.get_embedding",
         lambda text, input_type=None: [0.0] * 1024,
     )
     monkeypatch.setenv("APP_RAG_ENABLE_IMAGE_CHUNKS", "1")

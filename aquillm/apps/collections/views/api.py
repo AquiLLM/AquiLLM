@@ -1,6 +1,6 @@
 """API views for collection management."""
 import json
-import logging
+import structlog
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
@@ -11,92 +11,14 @@ from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
 
 from apps.collections.models import Collection, CollectionPermission
-from apps.documents.models import DESCENDED_FROM_DOCUMENT, DocumentFigure
-from apps.ingestion.models import IngestionBatchItem
+from apps.collections.services.collection_api_payloads import (
+    child_collection_parent_document_ids,
+    raw_text_type_overrides,
+)
+from apps.documents.models import DESCENDED_FROM_DOCUMENT
+from aquillm.task_ingest_helpers import sync_figure_subcollection_permissions_from_parent
 
-logger = logging.getLogger(__name__)
-
-
-def _normalized_type_label(normalized_type: str) -> str:
-    raw = (normalized_type or "").strip().lower()
-    if not raw:
-        return ""
-    if raw == "document_figure":
-        return "DocumentFigure"
-    # Most parser normalized types are file-ish identifiers (pptx, docx, jsonl, ...).
-    return raw.upper()
-
-
-def _raw_text_type_overrides(collection: Collection) -> dict[str, str]:
-    """Map document UUID -> parser-derived display type for RawTextDocument rows."""
-    overrides: dict[str, str] = {}
-    items = IngestionBatchItem.objects.filter(
-        batch__collection=collection,
-        status=IngestionBatchItem.Status.SUCCESS,
-    ).only("parser_metadata")
-
-    for item in items:
-        parser_metadata = item.parser_metadata or {}
-        if not isinstance(parser_metadata, dict):
-            continue
-        outputs = parser_metadata.get("outputs") or []
-        if not isinstance(outputs, list):
-            continue
-
-        for output in outputs:
-            if not isinstance(output, dict):
-                continue
-            document_id = str(output.get("document_id") or "").strip()
-            normalized_type = str(output.get("normalized_type") or "").strip()
-            if not document_id or not normalized_type:
-                continue
-            overrides[document_id] = _normalized_type_label(normalized_type)
-
-    return overrides
-
-
-def _child_collection_parent_document_ids(
-    child_collection_ids: list[int],
-    valid_document_ids: set[str],
-    document_title_to_id: dict[str, str],
-) -> dict[int, str]:
-    """Map child collection id -> parent document id (when figures in that child link back to a document)."""
-    if not child_collection_ids:
-        return {}
-
-    def _norm(text: str) -> str:
-        return " ".join((text or "").strip().lower().split())
-
-    def _source_title_from_figure_title(title: str) -> str:
-        marker = " - Figure "
-        if marker not in (title or ""):
-            return ""
-        return title.split(marker, 1)[0].strip()
-
-    mapping: dict[int, str] = {}
-    rows = (
-        DocumentFigure.objects.filter(
-            collection_id__in=child_collection_ids,
-        )
-        .values("collection_id", "parent_object_id", "title")
-    )
-    for row in rows:
-        collection_id = int(row["collection_id"])
-        if collection_id in mapping:
-            continue
-        parent_document_id = str(row["parent_object_id"] or "").strip()
-        if parent_document_id and (not valid_document_ids or parent_document_id in valid_document_ids):
-            mapping[collection_id] = parent_document_id
-            continue
-
-        source_title = _source_title_from_figure_title(str(row.get("title") or ""))
-        if not source_title:
-            continue
-        inferred_id = document_title_to_id.get(_norm(source_title))
-        if inferred_id:
-            mapping[collection_id] = inferred_id
-
-    return mapping
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @login_required
@@ -285,6 +207,8 @@ def collection_permissions(request, col_id):
                     permission='MANAGE'
                 )
 
+            sync_figure_subcollection_permissions_from_parent(collection)
+
         return JsonResponse({'status': 'success'})
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=400)
@@ -299,14 +223,14 @@ def collection_detail(request, col_id):
         if not collection.user_can_view(request.user):
             return JsonResponse({'error': 'Permission denied'}, status=403)
 
-        raw_text_type_overrides = _raw_text_type_overrides(collection)
+        raw_text_display_by_doc_id = raw_text_type_overrides(collection)
         documents = []
         for model in DESCENDED_FROM_DOCUMENT:
             docs = model.objects.filter(collection=collection)
             for doc in docs:
                 model_type = doc.__class__.__name__
                 display_type = (
-                    raw_text_type_overrides.get(str(doc.id), model_type)
+                    raw_text_display_by_doc_id.get(str(doc.id), model_type)
                     if model_type == "RawTextDocument"
                     else model_type
                 )
@@ -325,7 +249,7 @@ def collection_detail(request, col_id):
             normalized_title = " ".join((str(doc.get("title") or "").strip().lower().split()))
             if normalized_title and normalized_title not in document_title_to_id:
                 document_title_to_id[normalized_title] = str(doc["id"])
-        child_to_parent_doc = _child_collection_parent_document_ids(
+        child_to_parent_doc = child_collection_parent_document_ids(
             child_collection_ids=[child.id for child in child_collections],
             valid_document_ids=document_ids,
             document_title_to_id=document_title_to_id,

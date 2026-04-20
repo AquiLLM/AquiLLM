@@ -1,15 +1,23 @@
 """Page views for chat functionality."""
-import logging
+import structlog
 import os
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, HttpResponseForbidden
-from django.shortcuts import render, get_object_or_404
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from apps.chat.models import WSConversation
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
+
+
+@require_http_methods(["GET"])
+@login_required
+def new_ws_convo(request):
+    convo = WSConversation(owner=request.user)
+    convo.save()
+    return redirect("ws_convo", convo_id=convo.id)
 
 
 @require_http_methods(['GET'])
@@ -57,7 +65,8 @@ def user_ws_convos(request):
 
 
 __all__ = [
-    'ws_convo',
-    'delete_ws_convo',
-    'user_ws_convos',
+    "new_ws_convo",
+    "ws_convo",
+    "delete_ws_convo",
+    "user_ws_convos",
 ]

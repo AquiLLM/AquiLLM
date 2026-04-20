@@ -1,5 +1,5 @@
 """Page views for document management."""
-import logging
+import structlog
 import mimetypes
 
 from django.contrib.auth.decorators import login_required
@@ -8,9 +8,9 @@ from django.http import HttpResponse, Http404
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
-from apps.documents.models import DESCENDED_FROM_DOCUMENT
+from apps.documents.models import DESCENDED_FROM_DOCUMENT, TextChunk
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def get_doc(request, doc_id):
@@ -44,16 +44,22 @@ def pdf(request, doc_id):
 def document_image(request, doc_id):
     """Serve the image file for an ImageUploadDocument or HandwrittenNotesDocument."""
     doc = get_doc(request, doc_id)
-    
+
     image_file = getattr(doc, 'image_file', None)
-    if image_file:
-        content_type, _ = mimetypes.guess_type(image_file.name)
-        if not content_type:
-            content_type = 'image/jpeg'
-        response = HttpResponse(image_file.read(), content_type=content_type)
-        return response
-    else:
+    if not image_file:
         raise Http404("Requested document does not have an associated image file")
+
+    content_type, _ = mimetypes.guess_type(image_file.name)
+    if not content_type:
+        content_type = 'image/jpeg'
+    try:
+        with image_file.open("rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        raise Http404("Image file is missing from storage") from None
+    if not data:
+        raise Http404("Image file is empty")
+    return HttpResponse(data, content_type=content_type)
 
 
 @require_http_methods(['GET'])
@@ -61,7 +67,11 @@ def document_image(request, doc_id):
 def document(request, doc_id):
     """Display a document detail page."""
     doc = get_doc(request, doc_id)
-    context = {'document': doc}
+    highlight_chunk = None
+    raw_chunk = request.GET.get('chunk')
+    if raw_chunk is not None and raw_chunk.isdigit():
+        highlight_chunk = TextChunk.objects.filter(pk=int(raw_chunk, 10), doc_id=doc_id).first()
+    context = {'document': doc, 'highlight_chunk': highlight_chunk}
     return render(request, 'aquillm/document.html', context)
 
 
