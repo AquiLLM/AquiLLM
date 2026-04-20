@@ -34,6 +34,9 @@ from apps.platform_admin.services.feedback_aggregates import (
     get_summary_metrics,
     get_filter_options,
 )
+from apps.platform_admin.services.feedback_prql import (
+    get_prql_string_for_filters,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +257,7 @@ def feedback_dashboard_rows(request):
         page_size   rows per page
         total_count total rows matching filters
         total_pages total pages at this page_size
+        prql        canonical PRQL string representing the current query
     """
     denied = _require_superuser(request)
     if denied:
@@ -278,17 +282,26 @@ def feedback_dashboard_rows(request):
         rows = list(qs[offset: offset + page_size])
         total_pages = math.ceil(total_count / page_size) if total_count > 0 else 1
 
+        # generate the canonical PRQL string for the current filter state
+        # this is returned to the frontend for live display under the filters
+        try:
+            prql_string = get_prql_string_for_filters(
+                filters, page=page, page_size=page_size
+            )
+        except Exception:
+            prql_string = ""
+
         return JsonResponse({
             "rows": [_serialize_row(r) for r in rows],
             "page": page,
             "page_size": page_size,
             "total_count": total_count,
             "total_pages": total_pages,
+            "prql": prql_string,
         })
     except Exception as exc:
         logger.exception("error in feedback_dashboard_rows: %s", exc)
         return JsonResponse({"error": "internal server error"}, status=500)
-
 
 @login_required
 @require_http_methods(["GET"])

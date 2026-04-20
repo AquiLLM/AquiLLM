@@ -43,6 +43,7 @@ export interface RowsResponse {
   page_size: number;
   total_count: number;
   total_pages: number;
+  prql: string;
 }
 
 // FilterState uses string for all scalar fields because html inputs are strings.
@@ -87,4 +88,5 @@ export interface DashboardProps {
   apiSummary: string;
   apiFilters: string;
   apiExport: string;
+  apiPrql?: string;
 }

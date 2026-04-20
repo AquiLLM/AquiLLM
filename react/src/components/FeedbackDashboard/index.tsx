@@ -2,17 +2,15 @@ import React, { useState, useCallback } from 'react';
 import { FilterState, EMPTY_FILTERS, DashboardProps } from './types';
 import { useFilteredData } from './useFilteredData';
 import FilterBar from './FilterBar';
+import LivePRQLDisplay from './LivePRQLDisplay';
 import SummaryCards from './SummaryCards';
 import FeedbackTable from './FeedbackTable';
 import ExportButton from './ExportButton';
 import PRQLPanel from './PRQLPanel';
 
-// extend DashboardProps to include the prql endpoint
 interface ExtendedDashboardProps extends DashboardProps {
   apiPrql?: string;
 }
-
-type TabId = 'dashboard' | 'prql';
 
 const FeedbackDashboard: React.FC<ExtendedDashboardProps> = ({
   apiRows,
@@ -22,7 +20,7 @@ const FeedbackDashboard: React.FC<ExtendedDashboardProps> = ({
   apiPrql,
 }) => {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
-  const [activeTab, setActiveTab] = useState<TabId>('dashboard');
+  const [showConsole, setShowConsole] = useState(false);
 
   const handleFilterChange = useCallback((updated: Partial<FilterState>) => {
     setFilters(prev => ({ ...prev, ...updated }));
@@ -43,6 +41,7 @@ const FeedbackDashboard: React.FC<ExtendedDashboardProps> = ({
     totalCount,
     totalPages,
     currentPage,
+    prql,
     loadingRows,
     loadingSummary,
     loadingOptions,
@@ -52,92 +51,106 @@ const FeedbackDashboard: React.FC<ExtendedDashboardProps> = ({
     exportQueryString,
   } = useFilteredData(filters, apiRows, apiSummary, apiFilters);
 
-  const tabs: Array<{ id: TabId; label: string }> = [
-    { id: 'dashboard', label: 'Dashboard' },
-    { id: 'prql',      label: 'PRQL Console' },
-  ];
-
   return (
     <div className="flex flex-col h-full max-h-full overflow-y-auto">
-      {/* page header */}
-      <div className="flex items-center justify-between px-6 pt-6 pb-0 flex-shrink-0">
+
+      {/* ------------------------------------------------------------------ */}
+      {/* page header                                                          */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-border-low_contrast flex-shrink-0">
         <div>
           <h1 className="text-xl font-semibold text-text-normal">Feedback Dashboard</h1>
           <p className="text-sm text-text-low_contrast mt-1">
             Superuser-only analytics view of all user feedback
           </p>
         </div>
-        {activeTab === 'dashboard' && (
-          <ExportButton
-            apiExport={apiExport}
-            exportQueryString={exportQueryString}
-            totalCount={totalCount}
-          />
-        )}
+        <ExportButton
+          apiExport={apiExport}
+          exportQueryString={exportQueryString}
+          totalCount={totalCount}
+        />
       </div>
 
-      {/* tab bar */}
-      <div className="flex gap-1 px-6 pt-4 pb-0 border-b border-border-low_contrast flex-shrink-0">
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 text-sm font-medium rounded-t-[8px] transition-colors border-b-2 -mb-px ${
-              activeTab === tab.id
-                ? 'border-accent text-accent bg-scheme-shade_3'
-                : 'border-transparent text-text-low_contrast hover:text-text-normal hover:bg-scheme-shade_4'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <div className="flex flex-col gap-4 px-6 py-5 flex-grow min-h-0">
 
-      <div className="flex flex-col gap-5 px-6 py-5 flex-grow min-h-0">
-        {activeTab === 'dashboard' && (
-          <>
-            {errorOptions && (
-              <div className="rounded-[8px] bg-scheme-shade_3 border border-border-mid_contrast p-3 text-red text-sm">
-                could not load filter options: {errorOptions}
-              </div>
-            )}
-
-            <FilterBar
-              filters={filters}
-              filterOptions={filterOptions}
-              optionsLoading={loadingOptions}
-              onChange={handleFilterChange}
-              onReset={handleReset}
-            />
-
-            <SummaryCards
-              summary={summary}
-              loading={loadingSummary}
-              error={errorSummary}
-            />
-
-            <FeedbackTable
-              rows={rows}
-              loading={loadingRows}
-              error={errorRows}
-              totalCount={totalCount}
-              totalPages={totalPages}
-              currentPage={currentPage}
-              pageSize={filters.page_size}
-              onPageChange={handlePageChange}
-            />
-          </>
-        )}
-
-        {activeTab === 'prql' && apiPrql && (
-          <PRQLPanel apiPrql={apiPrql} />
-        )}
-
-        {activeTab === 'prql' && !apiPrql && (
-          <div className="text-sm text-text-low_contrast p-4 bg-scheme-shade_3 border border-border-low_contrast rounded-[10px]">
-            PRQL endpoint not configured. Add apiPrql to the component props.
+        {/* filter options error */}
+        {errorOptions && (
+          <div className="rounded-[8px] bg-scheme-shade_3 border border-border-mid_contrast p-3 text-red text-sm">
+            could not load filter options: {errorOptions}
           </div>
         )}
+
+        {/* ---------------------------------------------------------------- */}
+        {/* 1. filter controls                                                */}
+        {/* ---------------------------------------------------------------- */}
+        <FilterBar
+          filters={filters}
+          filterOptions={filterOptions}
+          optionsLoading={loadingOptions}
+          onChange={handleFilterChange}
+          onReset={handleReset}
+        />
+
+        {/* ---------------------------------------------------------------- */}
+        {/* 2. live PRQL display — always visible, always under filters       */}
+        {/* ---------------------------------------------------------------- */}
+        <div style={{ flexShrink: 0, width: '100%' }}>
+          <LivePRQLDisplay prql={prql} loading={loadingRows} />
+        </div>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* 3. PRQL console — collapsible, always positioned here             */}
+        {/* ---------------------------------------------------------------- */}
+        {apiPrql && (
+          <div className="border border-border-mid_contrast rounded-[12px] overflow-hidden">
+            <button
+              onClick={() => setShowConsole(s => !s)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-scheme-shade_4 hover:bg-scheme-shade_5 transition-colors text-left"
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs font-bold text-accent bg-accent/10 px-2 py-0.5 rounded">
+                  PRQL Console
+                </span>
+                <span className="text-xs text-text-low_contrast">
+                  {showConsole ? 'click to collapse' : 'click to open — run custom PRQL queries against the feedback dataset'}
+                </span>
+              </div>
+              <span className="text-text-low_contrast text-sm">
+                {showConsole ? '▾' : '▸'}
+              </span>
+            </button>
+
+            {showConsole && (
+              <div className="p-4 bg-scheme-shade_3 border-t border-border-mid_contrast">
+                <PRQLPanel apiPrql={apiPrql} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ---------------------------------------------------------------- */}
+        {/* 4. summary cards                                                  */}
+        {/* ---------------------------------------------------------------- */}
+        <SummaryCards
+          summary={summary}
+          loading={loadingSummary}
+          error={errorSummary}
+        />
+
+        {/* ---------------------------------------------------------------- */}
+        {/* 5. feedback table                                                 */}
+        {/* ---------------------------------------------------------------- */}
+        <FeedbackTable
+          rows={rows}
+          loading={loadingRows}
+          error={errorRows}
+          totalCount={totalCount}
+          totalPages={totalPages}
+          currentPage={currentPage}
+          pageSize={filters.page_size}
+          onPageChange={handlePageChange}
+        />
+
       </div>
     </div>
   );
