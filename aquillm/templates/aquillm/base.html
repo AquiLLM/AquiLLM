@@ -245,11 +245,6 @@
                                 {% endif %}
                             {% endfor %} 
                             <div id="ingestion-monitor" class="cursor-pointer text-text-normal"></div>
-                            {% if user.is_superuser %}
-                            <a href="{% url 'feedback_dashboard' %}" class="my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
-                                Feedback Dashboard
-                            </a>
-                            {% endif %}
                             {% if user.is_staff %}
                             <a href="{% url 'email_whitelist' %}" class="my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
                                 Email Whitelist
