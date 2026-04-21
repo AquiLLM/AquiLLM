@@ -25,7 +25,7 @@ from ..feedbackql.parser import (
     WhereClause,
 )
 from ..feedbackql.executor import execute
-from ..feedbackql.exceptions import FeedbackQLSyntaxError
+from ..feedbackql.exceptions import FeedbackQLError
 
 # Stable column order used when a row-level query has no select clause.
 # Most-useful-for-admins first; technical IDs last.
@@ -217,7 +217,7 @@ def feedback_dashboard_query(request):
         parsed = parse(query_text)
         notice = _detect_query_tips(parsed)
         results_dicts = execute(parsed)
-    except FeedbackQLSyntaxError as exc:
+    except FeedbackQLError as exc:
         return JsonResponse({'query_text': query_text, 'error': str(exc)}, status=400)
     except Exception as exc:
         logger.exception('feedback_dashboard_query: unexpected error', exc_info=exc)

@@ -34,6 +34,31 @@ function buildShareableUrl(queryText: string): string {
   return `${window.location.origin}${window.location.pathname}?q=${encodeURIComponent(encoded)}`;
 }
 
+// Pull the offending token from a parser error message.
+// Error messages tend to quote the bad identifier in single or double quotes,
+// e.g. "Unknown field 'foo'" or 'Unexpected character: "@"'. Returns null if
+// there's no clear token to highlight.
+function extractBadToken(errorMessage: string): string | null {
+  const match = errorMessage.match(/'([^']+)'|"([^"]+)"/);
+  if (!match) return null;
+  return match[1] ?? match[2] ?? null;
+}
+
+function renderQueryWithHighlight(queryText: string, badToken: string | null): React.ReactNode {
+  if (!badToken) return queryText;
+  const idx = queryText.indexOf(badToken);
+  if (idx === -1) return queryText;
+  return (
+    <>
+      {queryText.slice(0, idx)}
+      <span className="bg-red-500/30 rounded px-0.5 underline decoration-red-400 decoration-wavy">
+        {queryText.slice(idx, idx + badToken.length)}
+      </span>
+      {queryText.slice(idx + badToken.length)}
+    </>
+  );
+}
+
 const FeedbackDashboard: React.FC = () => {
   const [queryText, setQueryText] = useState<string>(() => readQueryFromUrl());
   const [response, setResponse] = useState<QueryResponse | null>(null);
@@ -138,8 +163,13 @@ const FeedbackDashboard: React.FC = () => {
       <SyntaxReference />
 
       {response?.error && (
-        <div className="mb-5 p-4 rounded-lg bg-red-900/40 border border-red-500 text-red-300 text-sm">
-          <strong>Error:</strong> {response.error}
+        <div className="mb-5 p-4 rounded-lg bg-red-900/40 border border-red-500 text-red-300 text-sm space-y-2">
+          {response.query_text && (
+            <pre className="font-mono text-text-normal whitespace-pre-wrap bg-scheme-shade_2 p-2 rounded element-border">
+              {renderQueryWithHighlight(response.query_text, extractBadToken(response.error))}
+            </pre>
+          )}
+          <div><strong>Error:</strong> {response.error}</div>
         </div>
       )}
 
