@@ -797,3 +797,22 @@ class TestQueryTipDetection:
         from apps.platform_admin.views.api import _detect_query_tips
         parsed = parse('conversations | where avg_rating < 3')
         assert _detect_query_tips(parsed) is None
+
+
+@pytest.mark.django_db
+def test_query_api_surfaces_field_whitelist_error():
+    """Regression: the query endpoint must surface FeedbackQLFieldError messages
+    through the 400 response instead of collapsing them into the generic
+    'unexpected error' fallback (broadens the except clause to FeedbackQLError)."""
+    import base64
+    from django.test import Client
+
+    su = User.objects.create_superuser(username='su', email='su@example.com', password='pw')
+    client = Client()
+    client.force_login(su)
+    q = base64.b64encode(b'messages | where foo == 1').decode('ascii')
+    r = client.get(f'/api/feedback/query/?q={q}')
+    assert r.status_code == 400
+    body = r.json()
+    assert 'foo' in body['error']
+    assert 'unexpected error' not in body['error'].lower()

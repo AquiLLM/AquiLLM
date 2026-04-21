@@ -137,6 +137,12 @@ const QueryBuilder: React.FC<Props> = ({ value, onChange }) => {
           and you can still edit the raw text by hand. Clauses should be added in this order:{' '}
           <span className="font-mono text-text-normal">where → summarize → select → order by → limit</span>.
         </p>
+        <p className="text-text-muted/80 leading-relaxed">
+          The builder only generates <span className="font-mono text-text-normal">messages</span>-stream
+          queries. To query at the conversation level, type{' '}
+          <span className="font-mono text-text-normal">conversations | …</span> directly in the editor —
+          see the syntax reference for the full conversations-stream field list.
+        </p>
 
         <div className="p-4 rounded bg-scheme-shade_2 element-border">
           <div className="font-semibold text-text-normal mb-2">Filter rows (where)</div>
