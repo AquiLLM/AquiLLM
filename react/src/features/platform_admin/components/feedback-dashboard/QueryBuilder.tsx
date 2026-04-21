@@ -124,18 +124,21 @@ const QueryBuilder: React.FC<Props> = ({ value, onChange }) => {
   };
 
   return (
-    <details className="mb-3 rounded-lg bg-scheme-shade_3 element-border text-sm">
+    <details className="mb-5 rounded-lg bg-scheme-shade_3 element-border text-sm">
       <summary className="px-4 py-2.5 cursor-pointer font-semibold select-none hover:text-blue-500 transition-colors">
         Visual query builder
       </summary>
-      <div className="px-4 pb-6 pt-2 space-y-4 text-xs">
+      <div
+        className="px-4 pt-2 space-y-5 text-xs"
+        style={{ paddingBottom: '48px' }}
+      >
         <p className="text-text-muted leading-relaxed">
           Click the buttons below to build a query. Each click appends a clause to the raw query box,
           and you can still edit the raw text by hand. Clauses should be added in this order:{' '}
           <span className="font-mono text-text-normal">where → summarize → select → order by → limit</span>.
         </p>
 
-        <div className="p-3 rounded bg-scheme-shade_2 element-border">
+        <div className="p-4 rounded bg-scheme-shade_2 element-border">
           <div className="font-semibold text-text-normal mb-2">Filter rows (where)</div>
           <div className="flex flex-wrap gap-2 items-center">
             <select
@@ -166,23 +169,23 @@ const QueryBuilder: React.FC<Props> = ({ value, onChange }) => {
               onClick={addWhere}
               className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold active:scale-95 transition-all"
             >
-              Add filter
+              Add where
             </button>
           </div>
           {wOp === 'in' ? (
             <p className="text-text-muted/80 mt-2 leading-relaxed">
-              Type the list of allowed values separated by commas — for example{' '}
+              Type the list of allowed values separated by commas, for example{' '}
               <span className="font-mono text-text-normal">1, 2, 3</span> or{' '}
               <span className="font-mono text-text-normal">claude-3, gpt-4o</span>.
             </p>
           ) : wOp === '== null' || wOp === '!= null' ? (
             <p className="text-text-muted/80 mt-2 leading-relaxed">
-              No value needed — matches rows where the field is (or isn't) empty.
+              No value needed. Matches rows where the field is (or isn't) empty.
             </p>
           ) : null}
         </div>
 
-        <div className="p-3 rounded bg-scheme-shade_2 element-border">
+        <div className="p-4 rounded bg-scheme-shade_2 element-border">
           <div className="font-semibold text-text-normal mb-2">Choose columns (select)</div>
           <div className="flex flex-wrap gap-3">
             {SELECTABLE_FIELDS.map((f) => {
@@ -206,13 +209,13 @@ const QueryBuilder: React.FC<Props> = ({ value, onChange }) => {
           </div>
           <button
             onClick={addSelect}
-            className="mt-2 px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold active:scale-95 transition-all"
+            className="mt-4 px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold active:scale-95 transition-all"
           >
             Add select
           </button>
         </div>
 
-        <div className="p-3 rounded bg-scheme-shade_2 element-border">
+        <div className="p-4 rounded bg-scheme-shade_2 element-border">
           <div className="font-semibold text-text-normal mb-2">Group &amp; aggregate (summarize)</div>
           <div className="flex flex-wrap gap-2 items-center">
             <input
@@ -257,7 +260,7 @@ const QueryBuilder: React.FC<Props> = ({ value, onChange }) => {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="p-3 rounded bg-scheme-shade_2 element-border">
+          <div className="p-4 rounded bg-scheme-shade_2 element-border">
             <div className="font-semibold text-text-normal mb-2">Sort (order by)</div>
             <div className="flex flex-wrap gap-2 items-center">
               <input
@@ -282,7 +285,7 @@ const QueryBuilder: React.FC<Props> = ({ value, onChange }) => {
               </button>
             </div>
           </div>
-          <div className="p-3 rounded bg-scheme-shade_2 element-border">
+          <div className="p-4 rounded bg-scheme-shade_2 element-border">
             <div className="font-semibold text-text-normal mb-2">Row cap (limit)</div>
             <div className="flex flex-wrap gap-2 items-center">
               <input

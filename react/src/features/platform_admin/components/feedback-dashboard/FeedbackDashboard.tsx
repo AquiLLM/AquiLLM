@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import QueryBuilder from './QueryBuilder';
+import QueryBuilderHelp from './QueryBuilderHelp';
 import QueryEditor from './QueryEditor';
 import SyntaxReference from './SyntaxReference';
 import ResultsChart from './ResultsChart';
@@ -8,7 +9,21 @@ import ThreadModal from './ThreadModal';
 import { b64decode, b64encode, runQuery } from './api';
 import type { QueryResponse } from './types';
 
+function isPageReload(): boolean {
+  const entries = performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
+  return entries.length > 0 && entries[0].type === 'reload';
+}
+
 function readQueryFromUrl(): string {
+  // A browser refresh should always give a blank slate, even if the URL still
+  // has the ?q= from the last query run. Clean the URL so the shareable-link
+  // behaviour still works for fresh visits.
+  if (isPageReload()) {
+    if (window.location.search) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    return '';
+  }
   const params = new URLSearchParams(window.location.search);
   const q = params.get('q');
   return q ? b64decode(q) : '';
@@ -24,6 +39,7 @@ const FeedbackDashboard: React.FC = () => {
   const [response, setResponse] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [thread, setThread] = useState<{ conversationId: string; messageUuid: string } | null>(null);
+  const [showHelp, setShowHelp] = useState<boolean>(false);
 
   const executeQuery = async (text: string) => {
     const trimmed = text.trim();
@@ -97,7 +113,17 @@ const FeedbackDashboard: React.FC = () => {
 
   return (
     <div className="container mx-auto p-6 text-text-normal max-w-7xl">
-      <h1 className="text-3xl font-bold mb-6">Feedback Dashboard</h1>
+      <div className="flex items-center gap-3 mb-6">
+        <h1 className="text-3xl font-bold">Feedback Dashboard</h1>
+        <button
+          type="button"
+          onClick={() => setShowHelp(true)}
+          title="How does the query language work?"
+          className="w-8 h-8 flex items-center justify-center rounded-full bg-scheme-shade_3 hover:bg-blue-600 text-text-normal font-bold text-sm element-border transition-colors"
+        >
+          ?
+        </button>
+      </div>
 
       <QueryBuilder value={queryText} onChange={setQueryText} />
 
@@ -159,6 +185,8 @@ const FeedbackDashboard: React.FC = () => {
           onClose={() => setThread(null)}
         />
       )}
+
+      {showHelp && <QueryBuilderHelp onClose={() => setShowHelp(false)} />}
     </div>
   );
 };
