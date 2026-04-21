@@ -370,6 +370,11 @@ CELERY_RESULT_SERIALIZER = "json"
 # - ZOTERO_CLIENT_SECRET: Your Zotero OAuth client secret
 # Register your app at https://www.zotero.org/oauth/apps
 
+# MCP (Model Context Protocol) Settings
+MCP_ENABLED = env_bool("MCP_ENABLED", default=False)
+MCP_SERVER_CONFIG = os.environ.get("MCP_SERVER_CONFIG", "")
+MCP_TOOL_TIMEOUT = env_int("MCP_TOOL_TIMEOUT", default=30)
+
 from aquillm.settings_logging import LOGGING  # noqa: F401
 
 from aquillm.observability import setup as _setup_observability

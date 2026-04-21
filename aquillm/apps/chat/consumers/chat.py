@@ -1,6 +1,8 @@
 """WebSocket consumer for chat functionality."""
 from __future__ import annotations
 
+import asyncio
+
 import structlog
 from json import dumps
 from os import getenv
@@ -25,6 +27,9 @@ from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
+from lib.mcp.config import get_mcp_config
+from lib.mcp.client import MCPClient
+from lib.mcp.adapter import mcp_tools_to_llm_tools
 from lib.tools.debug.weather import get_debug_weather_tool
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -38,6 +43,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     user: Optional[User] = None
 
     dead: bool = False
+    _mcp_clients: list[MCPClient]
 
     col_ref = CollectionsRef([])
     last_sent_sequence: int = -1
@@ -100,6 +106,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.tools.append(message_to_user)
         if DEBUG:
             self.tools.append(get_debug_weather_tool())
+        # MCP tool discovery (stdio transport)
+        self._mcp_clients = []
+        mcp_configs = get_mcp_config()
+        logger.info("mcp_discovery_start", enabled=bool(mcp_configs), server_count=len(mcp_configs))
+        for cfg in mcp_configs:
+            try:
+                client = MCPClient(config=cfg)
+                await asyncio.to_thread(client.start)
+                schemas = await asyncio.to_thread(client.list_tools)
+                self.tools.extend(mcp_tools_to_llm_tools(schemas, client))
+                self._mcp_clients.append(client)
+                logger.info("mcp_server_connected", server=cfg.name, tool_count=len(schemas))
+            except Exception as exc:
+                logger.warning("mcp_server_failed", server=cfg.name, error=str(exc))
         convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
         logger.debug("Convo ID: %s", convo_id)
         self.db_convo = await self.__get_convo(convo_id, self.user)
@@ -157,6 +177,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.error("Exception in connect(): %s", e, exc_info=True)
             await send_connect_error(self, e)
             return
+
+    async def disconnect(self, code):
+        for client in getattr(self, "_mcp_clients", []):
+            try:
+                await asyncio.to_thread(client.stop)
+            except Exception as exc:
+                logger.debug("mcp_client_cleanup_error", error=str(exc))
 
     async def receive(self, text_data):
         await handle_chat_receive(self, text_data)
