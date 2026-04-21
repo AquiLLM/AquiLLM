@@ -1,7 +1,10 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import rehypeRaw from 'rehype-raw';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import formatUrl from '../../../utils/formatUrl';
 import { linkifyRagCitations } from '../../../utils/linkifyRagCitations';
 import { resolveSiteAbsoluteUrl } from '../../../utils/resolveSiteAbsoluteUrl';
@@ -17,6 +20,55 @@ interface MessageBubbleProps {
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, onFeedback }) => {
   const displayTime = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const contentRef = useRef<HTMLDivElement>(null);
+  const activeBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+
+    const handleOver = (e: MouseEvent) => {
+      const katex = (e.target as Element).closest?.('.katex');
+      if (!katex || activeBtnRef.current?.parentElement === katex) return;
+      handleOut();
+      const annotation = katex.querySelector('annotation[encoding="application/x-tex"]');
+      if (!annotation) return;
+      const btn = document.createElement('button');
+      btn.className = 'katex-copy-btn katex-copy-btn--visible';
+      btn.textContent = '⧉';
+      btn.title = 'Copy LaTeX';
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        navigator.clipboard.writeText(annotation.textContent ?? '');
+        btn.textContent = '✓';
+        setTimeout(() => { if (btn.parentElement) btn.textContent = '⧉'; }, 1500);
+      });
+      (katex as HTMLElement).style.position = 'relative';
+      katex.appendChild(btn);
+      activeBtnRef.current = btn;
+    };
+
+    const handleOut = (e?: MouseEvent) => {
+      if (e && (e.target as Element).closest?.('.katex-copy-btn')) return;
+      if (activeBtnRef.current) {
+        const parent = activeBtnRef.current.parentElement;
+        if (parent) (parent as HTMLElement).style.position = '';
+        activeBtnRef.current.remove();
+        activeBtnRef.current = null;
+      }
+    };
+
+    el.addEventListener('mouseover', handleOver);
+    el.addEventListener('mouseout', (e: Event) => {
+      const related = (e as MouseEvent).relatedTarget as Element | null;
+      if (related?.closest?.('.katex')) return;
+      handleOut();
+    });
+    return () => {
+      el.removeEventListener('mouseover', handleOver);
+    };
+  }, []);
 
   const getMessageClasses = () => {
     let classes = "w-full p-2 rounded-[10px] shadow-sm whitespace-pre-wrap break-words element-border leading-[1.35] text-[14px]";
@@ -33,7 +85,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
   };
 
   return (
-    <div className="group flex justify-start">
+    <div className="group flex justify-start" ref={contentRef}>
       <div className="w-[88%] flex flex-col items-start">
         <div className="flex items-center gap-1.5 mb-1">
           {message.role === 'user' ? (
@@ -49,16 +101,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
         <div className={getMessageClasses()}>
         {message.role === 'user' && (
           <div className="markdown-cell prose max-w-none whitespace-normal">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
               {message.content}
             </ReactMarkdown>
           </div>
         )}
         {message.role === 'assistant' && !message.tool_call_input && (
           <div className="markdown-cell prose prose-sm md:prose-base max-w-none whitespace-normal leading-relaxed">
-            <ReactMarkdown 
-              remarkPlugins={[remarkGfm]} 
-              rehypePlugins={[rehypeRaw]}
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[[rehypeRaw, { passThrough: ['math', 'inlineMath'] }], rehypeKatex]}
               components={{
                 h1: ({ children, ...props }) => (
                   <h1 {...props} className="mt-0 mb-3 text-[1.75rem] leading-tight font-semibold">

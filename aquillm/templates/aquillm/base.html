@@ -8,6 +8,7 @@
     <title>{% block title %}AquiLLM{% endblock %}</title>
 
     <script src="{% static 'js/dist/main.js' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}"></script>
+    <link rel="stylesheet" href="{% static 'js/dist/main.css' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}" type="text/css" />
     <link rel="icon" type="image/png" href="{% static 'images/aquila-small-light.ico' %}" media="(prefers-color-scheme: dark)"/>
     <link rel="icon" type="image/png" href="{% static 'images/aquila-small-dark.ico' %}" media="(prefers-color-scheme: light)"/>
 
