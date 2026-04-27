@@ -81,6 +81,13 @@ CONTEXT_BUDGET_RETRIEVAL_TOKENS = env_int("CONTEXT_BUDGET_RETRIEVAL_TOKENS", 350
 CONTEXT_PIN_LAST_TURNS = env_int("CONTEXT_PIN_LAST_TURNS", 2)
 CONTEXT_MAX_SNIPPETS_PER_DOC = env_int("CONTEXT_MAX_SNIPPETS_PER_DOC", 3)
 
+# Pluggable LLM skills (`lib.skills`); off by default. See `mcp-skills-agents-runtime.md`.
+SKILLS_ENABLED = env_bool("AQUILLM_SKILLS_ENABLED", False)
+AQUILLM_SKILLS_EXTRA_MODULES = env_csv("AQUILLM_SKILLS_EXTRA_MODULES")
+# Markdown prompt skills: directory of .md files (repo-relative to parent of BASE_DIR, or absolute).
+# See docs/skills/runtime/. Empty = do not load .md skills.
+AQUILLM_SKILLS_MARKDOWN_DIR = (os.environ.get("AQUILLM_SKILLS_MARKDOWN_DIR") or "").strip()
+
 # Optional LM-Lingua2 (llmlingua) extractive compression; default off, fail-open
 LM_LINGUA2_ENABLED = env_bool("LM_LINGUA2_ENABLED", False)
 LM_LINGUA2_MODEL = os.environ.get(
