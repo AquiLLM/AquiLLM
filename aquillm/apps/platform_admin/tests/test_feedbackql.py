@@ -135,9 +135,17 @@ class TestParser:
 
     # --- Error cases ---
 
-    def test_unknown_field_raises(self):
+    def test_unknown_field_in_select_raises(self):
+        # select still validates field names at parse time (no aliases possible)
         with pytest.raises(FeedbackQLFieldError):
-            parse('messages | where password == "secret"')
+            parse('messages | select password')
+
+    def test_unknown_field_in_where_raises_at_execute(self, db):
+        # where defers field validation to the executor so it can support
+        # aliases in post-summarize where clauses. Pre-summarize wheres still
+        # error — just at execute time, with a syntax error rather than a field error.
+        with pytest.raises(FeedbackQLSyntaxError):
+            run('messages | where password == "secret"')
 
     def test_must_start_with_messages(self):
         with pytest.raises(FeedbackQLSyntaxError):
@@ -357,3 +365,102 @@ class TestExecutorSummarize:
         results = run('messages | where rating != null | select rating')
         assert all(r['rating'] is not None for r in results)
         assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# Post-summarize pipeline tests
+# ---------------------------------------------------------------------------
+# A `where`, `order by`, or `limit` after a `summarize` operates on the
+# aggregated rows in memory and may reference aggregation aliases (avg_r, n)
+# or group-by fields. This is the KQL pipeline semantic.
+
+@pytest.mark.django_db
+class TestExecutorPostSummarize:
+    def test_where_on_aggregate_alias(self, user_a):
+        """where avg_r < 3.0 after summarize filters groups by aggregate value."""
+        conv = WSConversation.objects.create(owner=user_a)
+        # gpt-4: avg rating 2 (below threshold)
+        _msg(conv, 'assistant', 'a', 1, model='gpt-4', stop_reason='end_turn', rating=1)
+        _msg(conv, 'assistant', 'b', 2, model='gpt-4', stop_reason='end_turn', rating=3)
+        # claude: avg rating 5 (above threshold)
+        _msg(conv, 'assistant', 'c', 3, model='claude', stop_reason='end_turn', rating=5)
+        _msg(conv, 'assistant', 'd', 4, model='claude', stop_reason='end_turn', rating=5)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'| summarize avg_r = avg(rating), n = count() by model '
+            f'| where avg_r < 3.0 '
+            f'| order by avg_r asc'
+        )
+        models = [r['model'] for r in results]
+        assert models == ['gpt-4']
+        assert results[0]['avg_r'] < 3.0
+
+    def test_where_on_count_alias(self, user_a):
+        """where n >= 2 keeps only groups with at least 2 messages."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'a', 1, model='m1', stop_reason='end_turn', rating=3)
+        _msg(conv, 'assistant', 'b', 2, model='m1', stop_reason='end_turn', rating=4)
+        _msg(conv, 'assistant', 'c', 3, model='m2', stop_reason='end_turn', rating=5)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} '
+            f'| summarize n = count() by model '
+            f'| where n >= 2'
+        )
+        assert len(results) == 1
+        assert results[0]['model'] == 'm1'
+        assert results[0]['n'] == 2
+
+    def test_where_on_group_by_field_after_summarize(self, user_a):
+        """A post-summarize where can reference group-by fields too."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'a', 1, model='gpt-4', stop_reason='end_turn', rating=4)
+        _msg(conv, 'assistant', 'b', 2, model='claude', stop_reason='end_turn', rating=5)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} '
+            f'| summarize avg_r = avg(rating) by model '
+            f'| where model == "gpt-4"'
+        )
+        assert len(results) == 1
+        assert results[0]['model'] == 'gpt-4'
+
+    def test_where_after_summarize_unknown_alias_raises(self, user_a):
+        """Referencing a name that isn't a group-by field or alias errors clearly."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'a', 1, model='m', stop_reason='end_turn', rating=3)
+        with pytest.raises(FeedbackQLSyntaxError):
+            run(
+                f'messages | where user_id == {user_a.id} '
+                f'| summarize avg_r = avg(rating) by model '
+                f'| where unknown_alias < 3'
+            )
+
+    def test_limit_after_summarize(self, user_a):
+        """limit after summarize slices the aggregated dict list."""
+        conv = WSConversation.objects.create(owner=user_a)
+        for i, m in enumerate(['m1', 'm2', 'm3', 'm4']):
+            _msg(conv, 'assistant', f'msg {i}', i, model=m, stop_reason='end_turn', rating=3)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} '
+            f'| summarize n = count() by model '
+            f'| limit 2'
+        )
+        assert len(results) == 2
+
+    def test_where_and_or_on_aliases(self, user_a):
+        """and/or both work on alias-referencing where clauses."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'a', 1, model='m1', stop_reason='end_turn', rating=2)
+        _msg(conv, 'assistant', 'b', 2, model='m2', stop_reason='end_turn', rating=4)
+        _msg(conv, 'assistant', 'c', 3, model='m3', stop_reason='end_turn', rating=5)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} '
+            f'| summarize avg_r = avg(rating), n = count() by model '
+            f'| where avg_r < 3 or avg_r > 4.5'
+        )
+        models = sorted(r['model'] for r in results)
+        assert models == ['m1', 'm3']

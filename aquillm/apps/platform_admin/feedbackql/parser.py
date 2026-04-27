@@ -432,8 +432,12 @@ def _parse_condition(ts: _TokenStream) -> Condition:
         field startswith str (prefix match, case-insensitive)
         field contains str   (substring match, case-insensitive)
         field in [v, v, ...]  (membership test)
+
+    Field name validation is deferred to the executor: a `where` after a
+    `summarize` may legitimately reference an aggregate alias (e.g. `avg_r`)
+    that isn't in ALLOWED_FIELDS but was defined upstream in the pipeline.
     """
-    field_name = _validate_field(ts.expect_ident())  # enforces the whitelist
+    field_name = ts.expect_ident().lower()
 
     t = ts.peek()
     if t is None:

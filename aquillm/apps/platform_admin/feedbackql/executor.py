@@ -5,31 +5,31 @@ FeedbackQL Executor
 This module takes the structured Query object produced by the parser and
 actually runs it against the database, returning results as a list of dicts.
 
-HOW IT WORKS  
+HOW IT WORKS
 --------------------------------
-The executor walks the list of clauses in the Query and translates each one
-into Django ORM calls against the Message table (joined to WSConversation
-and User as needed).
+The executor walks clauses in pipeline order, just like KQL: each stage
+operates on whatever the previous stage produced. The pipeline starts as a
+Django queryset against the Message table (joined to WSConversation and
+User), then transforms into a list of dicts as soon as a `summarize` runs.
 
-There are two execution paths:
-
-  1. Row-level queries (no summarize clause)
-     Each result dict is one message row, e.g.:
-       {'rating': 3, 'model': 'gemma-2', 'user_id': 42, ...}
-
-  2. Aggregate queries (with a summarize clause)
-     Each result dict is a computed summary, e.g.:
-       {'model': 'gemma-2', 'avg_rating': 2.7, 'count': 15}
-
-     Aggregations are computed in Python after fetching the raw rows.
-     This handles `median` cleanly (PostgreSQL's PERCENTILE_DISC is awkward
-     to use with Django ORM), and our dataset is small enough that it's fine.
+  - `where`     before summarize → adds a DB filter on the queryset
+  - `summarize`                   → fetches rows, groups them, returns dicts
+  - `where`     after summarize  → filters the in-memory dicts (can reference
+                                   aggregate aliases like `avg_r` and group-by
+                                   fields, since the queryset is gone)
+  - `order by`  before summarize → ORM order_by on the queryset
+  - `order by`  after summarize  → Python sort on the dict list (alias-aware)
+  - `limit`     before summarize → DB LIMIT
+  - `limit`     after summarize  → slice the dict list
+  - `select`   only valid in row-level queries (no summarize)
 
 SECURITY
 --------
 The executor only ever queries the Message table via Django ORM — no raw SQL.
-Field validation already happened in the parser (before we got here), so we
-can trust that every field name in the AST is in ALLOWED_FIELDS.
+Pre-summarize clauses must reference fields in ALLOWED_FIELDS (validated
+here, since the parser now defers that check to allow alias references in
+post-summarize `where` clauses). Post-summarize clauses are restricted to
+aliases and group-by fields produced by the summarize stage.
 """
 from __future__ import annotations
 
@@ -97,6 +97,11 @@ def _orm(field: str) -> str:
 def _condition_to_q(cond: Condition):
     from django.db.models import Q
 
+    if cond.field not in ALLOWED_FIELDS:
+        raise FeedbackQLSyntaxError(
+            f"Unknown field {cond.field!r} in pre-summarize where clause. "
+            f"Allowed fields: {', '.join(sorted(ALLOWED_FIELDS))}"
+        )
     path = _orm(cond.field)
     op = cond.op
 
@@ -147,6 +152,84 @@ def _apply_where(qs, clause: WhereClause):
 
 
 # ---------------------------------------------------------------------------
+# Python-side WHERE evaluation (used for post-summarize where clauses)
+# ---------------------------------------------------------------------------
+# Once we've run a summarize, the queryset is gone — we have a list of dicts
+# in memory. A `where` after that point has to filter the dicts directly,
+# and is allowed to reference aggregate aliases like `avg_r` in addition to
+# the group-by fields.
+
+def _eval_condition_py(cond: Condition, row: dict, allowed_keys: set[str]) -> bool:
+    """
+    Evaluate a single Condition against an in-memory dict.
+
+    `allowed_keys` is the set of field names this condition is allowed to
+    reference (group-by fields + aggregation aliases produced by summarize).
+    """
+    if cond.field not in allowed_keys:
+        raise FeedbackQLSyntaxError(
+            f"Unknown field {cond.field!r} in post-summarize where clause. "
+            f"Available fields: {', '.join(sorted(allowed_keys))}"
+        )
+    lhs = row.get(cond.field)
+    op = cond.op
+    rhs = cond.value
+
+    # null comparisons
+    if rhs is None:
+        if op == '==':
+            return lhs is None
+        if op == '!=':
+            return lhs is not None
+        raise FeedbackQLSyntaxError(f"Operator {op!r} cannot be used with null")
+
+    # null on the left side never matches anything except the null comparisons above
+    if lhs is None:
+        return False
+
+    if op == '==':
+        return lhs == rhs
+    if op == '!=':
+        return lhs != rhs
+    if op == '<':
+        return lhs < rhs
+    if op == '>':
+        return lhs > rhs
+    if op == '<=':
+        return lhs <= rhs
+    if op == '>=':
+        return lhs >= rhs
+    if op == 'startswith':
+        return isinstance(lhs, str) and lhs.lower().startswith(str(rhs).lower())
+    if op == 'contains':
+        return isinstance(lhs, str) and str(rhs).lower() in lhs.lower()
+    if op == 'in':
+        return lhs in rhs
+
+    raise FeedbackQLSyntaxError(f"Unknown operator: {op!r}")
+
+
+def _apply_where_py(rows: list[dict], clause: WhereClause, allowed_keys: set[str]) -> list[dict]:
+    """
+    Filter an in-memory list of dicts by a WhereClause.
+
+    Mirrors `_apply_where` (which works on a Django queryset) but operates
+    on Python objects so it can reference aggregate aliases.
+    """
+    parts = clause.parts
+
+    def matches(row: dict) -> bool:
+        result = _eval_condition_py(parts[0], row, allowed_keys)
+        for i in range(1, len(parts), 2):
+            connector = parts[i]
+            next_result = _eval_condition_py(parts[i + 1], row, allowed_keys)
+            result = (result and next_result) if connector == 'and' else (result or next_result)
+        return result
+
+    return [r for r in rows if matches(r)]
+
+
+# ---------------------------------------------------------------------------
 # Python-side aggregation
 # ---------------------------------------------------------------------------
 # We fetch rows from the DB and compute aggregations in Python. This is
@@ -183,7 +266,7 @@ def _compute_agg(func: str, values: list) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Row-level execution path (no summarize clause)
+# Row-level finalisation (no summarize ran)
 # ---------------------------------------------------------------------------
 
 # These fields are always fetched and included in row-level results so the
@@ -192,47 +275,23 @@ def _compute_agg(func: str, values: list) -> Any:
 _THREAD_META_FIELDS: frozenset[str] = frozenset({'conversation_id', 'message_uuid'})
 
 
-def _execute_row_level(
-    qs,
-    select: SelectClause | None,
-    order: OrderByClause | None,
-    limit: LimitClause | None,
-) -> list[dict]:
+def _finalise_row_level(qs, select: SelectClause | None) -> list[dict]:
     """
-    Fetch individual message rows, applying select / order / limit.
+    Materialise the queryset into a list of dicts with user-facing field names.
 
-    If no select clause, all allowed fields are returned.
-    The order field is included in the DB fetch even if not in the select list
-    (so the DB can sort correctly), then stripped from the output if needed.
-    conversation_id and message_uuid are always fetched and included so the
-    conversation viewer works regardless of the user's select clause.
+    By the time we get here, all where / order_by / limit operations on the
+    queryset have already been applied. We just need to project the right
+    columns and remap ORM paths back to user-facing names.
     """
     output_fields = select.fields if select else sorted(ALLOWED_FIELDS)
 
-    # Make sure the order field is fetched from the DB even if it's not in
-    # the select list — we need it for sorting, then strip it from output.
-    # Also always fetch thread metadata fields for the conversation viewer.
-    fetch_fields = set(output_fields)
-    if order:
-        fetch_fields.add(order.field)
-    fetch_fields |= _THREAD_META_FIELDS
-
+    # Always fetch thread metadata fields for the conversation viewer
+    fetch_fields = set(output_fields) | _THREAD_META_FIELDS
     orm_fields = [_orm(f) for f in fetch_fields]
 
-    # .values() tells Django to return dicts instead of model objects,
-    # fetching only the columns we actually need.
-    qs = qs.values(*orm_fields)
+    # If no LIMIT was applied to the queryset, cap at MAX_ROWS as a safety net
+    rows = list(qs.values(*orm_fields)[:MAX_ROWS])
 
-    if order:
-        prefix = '-' if order.direction == 'desc' else ''
-        qs = qs.order_by(f'{prefix}{_orm(order.field)}')
-
-    cap = min(limit.n, MAX_ROWS) if limit else MAX_ROWS
-    rows = list(qs[:cap])
-
-    # Django returns ORM paths as keys (e.g. 'conversation__owner_id').
-    # Remap them to user-facing names (e.g. 'user_id'), then keep fields that
-    # were in the select list OR are thread metadata (always included).
     output_field_set = set(output_fields)
     result = []
     for row in rows:
@@ -246,26 +305,18 @@ def _execute_row_level(
 
 
 # ---------------------------------------------------------------------------
-# Summarize (aggregate) execution path
+# Summarize (aggregate) execution
 # ---------------------------------------------------------------------------
 
-def _execute_summarize(
-    qs,
-    summarize: SummarizeClause,
-    order: OrderByClause | None,
-    limit: LimitClause | None,
-) -> list[dict]:
+def _run_summarize(qs, summarize: SummarizeClause) -> list[dict]:
     """
-    Fetch raw rows, group them in Python, and compute aggregations per group.
+    Fetch the queryset, group it in Python, and compute aggregations per group.
 
-    If `summarize.by` is empty, all rows are treated as one group and we
-    return a single result dict with global aggregates (e.g. overall avg rating).
-
-    If `summarize.by` has fields, we group by those fields (like SQL GROUP BY)
-    and return one result dict per group.
+    Returns a list of dicts where each dict's keys are the group-by field
+    names plus the aggregation aliases. From this point onward in the
+    pipeline we work with this list rather than the queryset.
     """
     by_fields = summarize.by
-    # Collect only the fields we actually need from the DB
     agg_fields_needed = {agg.agg_field for agg in summarize.aggregations if agg.agg_field}
     fetch_fields = set(by_fields) | agg_fields_needed
     orm_fields = [_orm(f) for f in fetch_fields]
@@ -276,7 +327,6 @@ def _execute_summarize(
         return []
 
     if by_fields:
-        # Group rows by the 'by' fields using a dict keyed on a tuple of values
         groups: dict[tuple, list[dict]] = defaultdict(list)
         for row in rows:
             key = tuple(row[_orm(f)] for f in by_fields)
@@ -284,9 +334,7 @@ def _execute_summarize(
 
         result = []
         for key, group_rows in groups.items():
-            # Start with the group-by field values
             out: dict = {by_fields[i]: key[i] for i in range(len(by_fields))}
-            # Add each aggregation
             for agg in summarize.aggregations:
                 if agg.func == 'count' and not agg.agg_field:
                     out[agg.alias] = len(group_rows)
@@ -294,80 +342,103 @@ def _execute_summarize(
                     values = [r[_orm(agg.agg_field)] for r in group_rows]  # type: ignore[arg-type]
                     out[agg.alias] = _compute_agg(agg.func, values)
             result.append(out)
-    else:
-        # No 'by' fields — compute one global aggregate over all rows
-        out = {}
-        for agg in summarize.aggregations:
-            if agg.func == 'count' and not agg.agg_field:
-                out[agg.alias] = len(rows)
-            else:
-                values = [r[_orm(agg.agg_field)] for r in rows]  # type: ignore[arg-type]
-                out[agg.alias] = _compute_agg(agg.func, values)
-        result = [out]
+        return result
 
-    # Apply ordering — the order field may be a summarize alias, not a DB field,
-    # so we sort the Python list rather than using ORM order_by.
-    if order:
-        reverse = order.direction == 'desc'
-        result.sort(
-            # Put None values last regardless of direction
-            key=lambda r: (r.get(order.field) is None, r.get(order.field)),
-            reverse=reverse,
-        )
-
-    if limit:
-        result = result[:limit.n]
-
-    return result
+    # No 'by' fields — one global aggregate row over all data
+    out = {}
+    for agg in summarize.aggregations:
+        if agg.func == 'count' and not agg.agg_field:
+            out[agg.alias] = len(rows)
+        else:
+            values = [r[_orm(agg.agg_field)] for r in rows]  # type: ignore[arg-type]
+            out[agg.alias] = _compute_agg(agg.func, values)
+    return [out]
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry point — pipeline-order execution
 # ---------------------------------------------------------------------------
 
 def execute(query: Query) -> list[dict]:
     """
-    Execute a parsed FeedbackQL Query and return results as a list of dicts.
+    Execute a parsed FeedbackQL Query by walking its clauses in pipeline order.
+
+    The pipeline starts as a Django queryset and stays a queryset until a
+    `summarize` runs, at which point it becomes a list of in-memory dicts.
+    Subsequent `where`/`order by`/`limit` clauses operate on whatever shape
+    the previous stage left behind.
 
     Always queries the Message table, joined to WSConversation and User.
     Never executes raw SQL — all database access goes through Django ORM.
-
-    Returns:
-        For row-level queries: one dict per message row.
-        For summarize queries: one dict per group (or one dict total for global aggs).
     """
-    # Base queryset — always Message, always with the conversation + owner joined
+    # Pre-summarize state: a Django queryset
     qs = Message.objects.select_related('conversation', 'conversation__owner')
 
-    # Collect clauses by type
-    where_clauses: list[WhereClause] = []
+    # Post-summarize state: a list of dicts (None until summarize runs)
+    rows: list[dict] | None = None
+
+    # The set of field names a post-summarize where/order can reference
+    # (group-by fields + aggregation aliases). Empty until summarize runs.
+    post_summarize_keys: set[str] = set()
+
     select_clause: SelectClause | None = None
-    summarize_clause: SummarizeClause | None = None
-    order_clause: OrderByClause | None = None
-    limit_clause: LimitClause | None = None
 
     for clause in query.clauses:
         if isinstance(clause, WhereClause):
-            where_clauses.append(clause)       # multiple where clauses are ANDed together
+            if rows is None:
+                qs = _apply_where(qs, clause)
+            else:
+                rows = _apply_where_py(rows, clause, post_summarize_keys)
+
         elif isinstance(clause, SelectClause):
+            if rows is not None:
+                raise FeedbackQLSyntaxError(
+                    "Cannot use 'select' after 'summarize' — use the aggregation "
+                    "aliases in the summarize clause to control output columns"
+                )
+            if select_clause is not None:
+                raise FeedbackQLSyntaxError("Only one 'select' clause is allowed")
             select_clause = clause
+
         elif isinstance(clause, SummarizeClause):
-            summarize_clause = clause
+            if rows is not None:
+                raise FeedbackQLSyntaxError("Only one 'summarize' clause is allowed")
+            if select_clause is not None:
+                raise FeedbackQLSyntaxError(
+                    "Cannot use both 'select' and 'summarize' in the same query"
+                )
+            rows = _run_summarize(qs, clause)
+            post_summarize_keys = set(clause.by) | {agg.alias for agg in clause.aggregations}
+
         elif isinstance(clause, OrderByClause):
-            order_clause = clause
+            if rows is None:
+                if clause.field not in ALLOWED_FIELDS:
+                    raise FeedbackQLSyntaxError(
+                        f"Unknown field {clause.field!r} in order by. "
+                        f"Allowed fields: {', '.join(sorted(ALLOWED_FIELDS))}"
+                    )
+                prefix = '-' if clause.direction == 'desc' else ''
+                qs = qs.order_by(f'{prefix}{_orm(clause.field)}')
+            else:
+                if clause.field not in post_summarize_keys:
+                    raise FeedbackQLSyntaxError(
+                        f"Unknown field {clause.field!r} in post-summarize order by. "
+                        f"Available fields: {', '.join(sorted(post_summarize_keys))}"
+                    )
+                reverse = clause.direction == 'desc'
+                rows.sort(
+                    # Put None values last regardless of direction
+                    key=lambda r: (r.get(clause.field) is None, r.get(clause.field)),
+                    reverse=reverse,
+                )
+
         elif isinstance(clause, LimitClause):
-            limit_clause = clause
+            if rows is None:
+                qs = qs[:clause.n]
+            else:
+                rows = rows[:clause.n]
 
-    # Apply all where filters to the queryset
-    for w in where_clauses:
-        qs = _apply_where(qs, w)
+    if rows is not None:
+        return rows
 
-    if summarize_clause and select_clause:
-        raise FeedbackQLSyntaxError(
-            "Cannot use both 'select' and 'summarize' in the same query"
-        )
-
-    if summarize_clause:
-        return _execute_summarize(qs, summarize_clause, order_clause, limit_clause)
-
-    return _execute_row_level(qs, select_clause, order_clause, limit_clause)
+    return _finalise_row_level(qs, select_clause)
