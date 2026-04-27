@@ -39,12 +39,17 @@ from apps.ingestion.views.api import (
     ingest_webpage,
 )
 
-# Re-export platform admin views
+# in the platform_admin import block, add:
 from apps.platform_admin.views.api import (
     feedback_ratings_csv,
     search_users,
     whitelisted_emails,
     whitelisted_email,
+    feedback_dashboard_rows,
+    feedback_dashboard_summary,
+    feedback_dashboard_filters,
+    feedback_dashboard_export,
+    feedback_dashboard_prql_query,   # add this line
 )
 
 # Re-export chat views
@@ -87,6 +92,11 @@ urlpatterns = [
     path('user-settings/', user_settings_api, name='api-user-settings'),
     path('conversation_file/<int:convo_file_id>/', conversation_file, name='api_conversation_file'),
     path("ingest_webpage/", ingest_webpage, name="api_ingest_webpage"),
+    path("feedback/dashboard/rows/", feedback_dashboard_rows, name="api_feedback_dashboard_rows"),
+    path("feedback/dashboard/summary/", feedback_dashboard_summary, name="api_feedback_dashboard_summary"),
+    path("feedback/dashboard/filters/", feedback_dashboard_filters, name="api_feedback_dashboard_filters"),
+    path("feedback/dashboard/export/", feedback_dashboard_export, name="api_feedback_dashboard_export"),
+    path("feedback/dashboard/prql/", feedback_dashboard_prql_query, name="api_feedback_dashboard_prql"),
     path("bug-reports/", submit_bug_report, name="api_bug_reports"),
     path("bug-reports/list/", list_bug_reports, name="api_bug_reports_list"),
     path("bug-reports/<int:report_id>/", bug_report_detail, name="api_bug_report_detail"),
