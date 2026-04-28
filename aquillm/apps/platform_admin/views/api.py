@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from apps.platform_admin.models import EmailWhitelist
+from apps.platform_admin.services.filter_schema import feedback_filter_fields
 from apps.platform_admin.services.feedback_export import (
     parse_query_bounds,
     stream_feedback_csv_gzip_bytes,
@@ -106,6 +107,16 @@ def whitelisted_email(request, email):
 
 @login_required
 @require_http_methods(["GET"])
+def feedback_filter_schema(request):
+    """Return filterable feedback fields and supported operators."""
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("Superuser access required")
+
+    return JsonResponse({"fields": feedback_filter_fields()})
+
+
+@login_required
+@require_http_methods(["GET"])
 def feedback_ratings_csv(request):
     """Stream CSV of message ratings/feedback (superuser only)."""
     if not request.user.is_superuser:
@@ -161,6 +172,7 @@ def feedback_ratings_csv(request):
 
 
 __all__ = [
+    'feedback_filter_schema',
     'feedback_ratings_csv',
     'search_users',
     'whitelisted_emails',
