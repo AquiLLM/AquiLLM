@@ -21,6 +21,11 @@ from apps.chat.consumers.chat_ws_errors import (
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import ConversationFile
 from apps.chat.services.feedback import apply_message_feedback_text, apply_message_rating
+from lib.skills.commands import (
+    find_skill_for_command,
+    format_activated_skill_block,
+    parse_slash_command,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -34,7 +39,8 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             file.save()
         return files
 
-    async def append(data: dict):
+    async def append(data: dict) -> bool:
+        """Returns True if the spin loop should be skipped (pure slash command)."""
         logger.debug("append() called with collections: %s", data.get("collections", []))
 
         assert consumer.convo is not None
@@ -60,9 +66,36 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         consumer.convo[-1].tools = active_tools
         consumer.convo[-1].files = [(file.name, file.id) for file in files]
         consumer.convo[-1].tool_choice = ToolChoice(type="auto")
+        # Slash command shortcut: /<skill_name> [args] activates a skill body
+        # by appending it to the consumer's effective system prompt. Pure slash
+        # commands skip the LLM call and return an acknowledgment.
+        skip_spin = False
+        msg_text = getattr(consumer.convo[-1], "content", "") or ""
+        parsed = parse_slash_command(msg_text)
+        if parsed is not None and getattr(consumer, "_skills", None):
+            cmd_name, args = parsed
+            skill = find_skill_for_command(consumer._skills, cmd_name)
+            if skill is not None:
+                if skill.name not in consumer._activated_skill_names:
+                    consumer._activated_skill_blocks.append(
+                        format_activated_skill_block(skill, args)
+                    )
+                    consumer._activated_skill_names.add(skill.name)
+                    logger.info("skill_slash_activated", skill=skill.name, args=args)
+                # Pure slash command: skip LLM, send synthetic ack instead
+                from aquillm.llm import AssistantMessage
+
+                ack = (
+                    f"Skill `{skill.name}` activated"
+                    + (f" with args `{args}`" if args else "")
+                    + "."
+                )
+                consumer.convo += AssistantMessage(content=ack, stop_reason="end_turn")
+                skip_spin = True
         await consumer._save_conversation(create_memories=False)
         consumer.last_sent_sequence = len(consumer.convo) - 1
         logger.debug("append() completed, message added")
+        return skip_spin
 
     async def rate(data: dict):
         assert consumer.convo is not None
@@ -103,31 +136,38 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             action = data.pop("action", None)
             logger.debug("Action: %s", action)
             if action == "append":
-                await append(data)
-                augment_start = perf_counter()
-                await augment_conversation_with_memory_async(
-                    consumer.convo,
-                    consumer.user,
-                    consumer.db_convo.system_prompt,
-                    consumer.db_convo.id,
-                )
-                logger.info(
-                    "Memory augmentation took %.1fms in receive()",
-                    (perf_counter() - augment_start) * 1000,
-                )
-                logger.debug("About to call llm_if.spin() in receive()")
-                llm_start = perf_counter()
-                await consumer.llm_if.spin(
-                    consumer.convo,
-                    max_func_calls=CHAT_MAX_FUNC_CALLS,
-                    max_tokens=CHAT_MAX_TOKENS,
-                    send_func=lambda c: send_conversation_delta(
-                        consumer, c, create_memories=False, close_db=True
-                    ),
-                    stream_func=consumer._send_stream_payload,
-                )
-                logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
-                await consumer._save_conversation(create_memories=True)
+                skip_spin = await append(data)
+                if skip_spin:
+                    # Pure slash command: send the synthetic ack message and stop
+                    await send_conversation_delta(
+                        consumer, consumer.convo, create_memories=False, close_db=True
+                    )
+                    logger.debug("Pure slash command — skipping LLM spin")
+                else:
+                    augment_start = perf_counter()
+                    await augment_conversation_with_memory_async(
+                        consumer.convo,
+                        consumer.user,
+                        consumer._effective_system_prompt(),
+                        consumer.db_convo.id,
+                    )
+                    logger.info(
+                        "Memory augmentation took %.1fms in receive()",
+                        (perf_counter() - augment_start) * 1000,
+                    )
+                    logger.debug("About to call llm_if.spin() in receive()")
+                    llm_start = perf_counter()
+                    await consumer.llm_if.spin(
+                        consumer.convo,
+                        max_func_calls=CHAT_MAX_FUNC_CALLS,
+                        max_tokens=CHAT_MAX_TOKENS,
+                        send_func=lambda c: send_conversation_delta(
+                            consumer, c, create_memories=False, close_db=True
+                        ),
+                        stream_func=consumer._send_stream_payload,
+                    )
+                    logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
+                    await consumer._save_conversation(create_memories=True)
             elif action == "rate":
                 await rate(data)
             elif action == "feedback":

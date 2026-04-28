@@ -375,6 +375,10 @@ MCP_ENABLED = env_bool("MCP_ENABLED", default=False)
 MCP_SERVER_CONFIG = os.environ.get("MCP_SERVER_CONFIG", "")
 MCP_TOOL_TIMEOUT = env_int("MCP_TOOL_TIMEOUT", default=30)
 
+# Skills Settings — Claude Code-style markdown skill packs
+SKILLS_ENABLED = env_bool("SKILLS_ENABLED", default=False)
+SKILLS_DIR = os.environ.get("SKILLS_DIR", "")
+
 from aquillm.settings_logging import LOGGING  # noqa: F401
 
 from aquillm.observability import setup as _setup_observability

@@ -30,6 +30,8 @@ from apps.chat.services.tool_wiring import build_astronomy_tools, build_document
 from lib.mcp.config import get_mcp_config
 from lib.mcp.client import MCPClient
 from lib.mcp.adapter import mcp_tools_to_llm_tools
+from lib.skills.loader import build_skills_prompt_extra, load_skills
+from lib.skills.tool import build_load_skill_tool, build_read_skill_file_tool
 from lib.tools.debug.weather import get_debug_weather_tool
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -50,6 +52,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def _send_stream_payload(self, payload: dict) -> None:
         await self.send(text_data=dumps({"stream": payload}))
+
+    def _effective_system_prompt(self) -> str:
+        """db system prompt + skill index + any slash-activated skill bodies."""
+        parts: list[str] = []
+        base = self.db_convo.system_prompt if self.db_convo else ""
+        if base:
+            parts.append(base.rstrip())
+        extra = getattr(self, "_skill_prompt_extra", "") or ""
+        if extra:
+            parts.append(extra)
+        for block in getattr(self, "_activated_skill_blocks", []):
+            parts.append(block)
+        return "\n\n".join(parts)
 
     @database_sync_to_async
     def _save_conversation(self, create_memories: bool = False):
@@ -120,6 +135,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 logger.info("mcp_server_connected", server=cfg.name, tool_count=len(schemas))
             except Exception as exc:
                 logger.warning("mcp_server_failed", server=cfg.name, error=str(exc))
+        # Skill discovery (markdown SKILL.md → progressive disclosure)
+        self._skills = await asyncio.to_thread(load_skills)
+        self._skill_prompt_extra = build_skills_prompt_extra(self._skills)
+        self._activated_skill_blocks: list[str] = []
+        self._activated_skill_names: set[str] = set()
+        if self._skills:
+            self.tools.append(build_load_skill_tool(self._skills))
+            self.tools.append(build_read_skill_file_tool(self._skills))
+        logger.info("skills_loaded", count=len(self._skills))
         convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
         logger.debug("Convo ID: %s", convo_id)
         self.db_convo = await self.__get_convo(convo_id, self.user)
@@ -145,7 +169,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
             augment_start = perf_counter()
             await augment_conversation_with_memory_async(
-                self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
+                self.convo, self.user, self._effective_system_prompt(), self.db_convo.id
             )
             logger.info(
                 "Memory augmentation took %.1fms in connect()",
