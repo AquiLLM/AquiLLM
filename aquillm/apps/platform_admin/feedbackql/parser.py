@@ -62,7 +62,8 @@ from .exceptions import FeedbackQLFieldError, FeedbackQLSyntaxError
 # They correspond to columns on the Message table plus a couple of joined
 # fields from WSConversation and User (user_id, conversation_id).
 
-ALLOWED_FIELDS = frozenset({
+# Fields available on the `messages` stream (one row per message turn)
+MESSAGES_FIELDS = frozenset({
     'rating',               # 1–5 star rating left by the user
     'feedback_text',        # free-text comment alongside the rating
     'feedback_submitted_at',# when the rating was submitted
@@ -82,6 +83,39 @@ ALLOWED_FIELDS = frozenset({
     # In summarize by: each message contributes one row per tool used in its conversation
     'conversation_tool',
 })
+
+# Fields available on the `conversations` stream (one row per conversation).
+# Native fields come from the WSConversation table; derived fields are
+# computed as Django ORM annotations across the conversation's messages.
+CONVERSATIONS_FIELDS = frozenset({
+    # Native columns on WSConversation
+    'conversation_id',      # the conversation's primary key
+    'user_id',              # owner of the conversation
+    'name',                 # auto-generated conversation title
+    'created_at',           # when the conversation started
+    'updated_at',           # most recent activity on the conversation row
+    # Derived from the conversation's messages
+    'message_count',        # total messages in the conversation
+    'rated_count',          # how many messages have a non-null rating
+    'avg_rating',           # average rating across rated messages
+    'min_rating',           # lowest rating in the conversation
+    'max_rating',           # highest rating in the conversation
+    'last_rated_at',        # most recent feedback_submitted_at
+    'tools_used',           # comma-separated list of distinct tools used
+})
+
+# Backwards-compatible alias — existing imports still expect this name.
+ALLOWED_FIELDS = MESSAGES_FIELDS
+
+# Map stream name → its allowed field set. The executor uses this to validate
+# field references against the right whitelist for whichever stream is in use.
+ALLOWED_FIELDS_BY_STREAM: dict[str, frozenset] = {
+    'messages':      MESSAGES_FIELDS,
+    'conversations': CONVERSATIONS_FIELDS,
+}
+
+# Stream names accepted as the first keyword of a query
+STREAMS = frozenset(ALLOWED_FIELDS_BY_STREAM.keys())
 
 # Aggregation functions that are valid inside a summarize clause
 AGGREGATION_FUNCTIONS = frozenset({'avg', 'count', 'min', 'max', 'sum', 'median'})
@@ -198,13 +232,17 @@ class LimitClause:
 @dataclass
 class Query:
     """
-    The top-level result of parsing — a list of clause objects in pipeline order.
+    The top-level result of parsing — the source stream plus an ordered list
+    of clause objects.
 
-    The executor processes `clauses` left-to-right, applying each in turn.
-    The `messages` keyword at the start of every query is not a clause; it
-    just tells the parser this is a FeedbackQL query (and gives us a place to
-    extend the language later if needed).
+    The executor processes `clauses` left-to-right, applying each in turn,
+    starting from the queryset implied by `stream`:
+      - 'messages'      → one row per message turn
+      - 'conversations' → one row per conversation (with derived aggregates)
+
+    Each stream has its own allowed-field whitelist (see ALLOWED_FIELDS_BY_STREAM).
     """
+    stream: str
     clauses: list
 
 # ---------------------------------------------------------------------------
@@ -404,17 +442,19 @@ def _parse_value_list(ts: _TokenStream) -> list:
     return values
 
 
-def _validate_field(name: str) -> str:
+def _validate_field(name: str, allowed: frozenset[str]) -> str:
     """
-    Check that `name` is in ALLOWED_FIELDS. Returns the lowercased name if
-    valid, raises FeedbackQLFieldError if not.
+    Check that `name` is in the given allowed-field set. Returns the
+    lowercased name if valid, raises FeedbackQLFieldError if not.
 
-    This is the whitelist enforcement point for field names.
+    `allowed` is the field set for the current stream — MESSAGES_FIELDS or
+    CONVERSATIONS_FIELDS — so the same parser enforces a different whitelist
+    depending on what the query started with.
     """
     lower = name.lower()
-    if lower not in ALLOWED_FIELDS:
+    if lower not in allowed:
         raise FeedbackQLFieldError(
-            f"Unknown field {name!r}. Allowed fields: {', '.join(sorted(ALLOWED_FIELDS))}"
+            f"Unknown field {name!r}. Allowed fields: {', '.join(sorted(allowed))}"
         )
     return lower
 
@@ -491,16 +531,16 @@ def _parse_where(ts: _TokenStream) -> WhereClause:
     return WhereClause(parts=parts)
 
 
-def _parse_select(ts: _TokenStream) -> SelectClause:
+def _parse_select(ts: _TokenStream, allowed: frozenset[str]) -> SelectClause:
     """Parse: field (, field)*"""
-    fields = [_validate_field(ts.expect_ident())]
+    fields = [_validate_field(ts.expect_ident(), allowed)]
     while not ts.at_end() and ts.peek() and ts.peek()[0] == 'COMMA':
         ts.advance()
-        fields.append(_validate_field(ts.expect_ident()))
+        fields.append(_validate_field(ts.expect_ident(), allowed))
     return SelectClause(fields=fields)
 
 
-def _parse_aggregation(ts: _TokenStream) -> Aggregation:
+def _parse_aggregation(ts: _TokenStream, allowed: frozenset[str]) -> Aggregation:
     """
     Parse one aggregation expression: alias = func(field?)
 
@@ -523,12 +563,12 @@ def _parse_aggregation(ts: _TokenStream) -> Aggregation:
     agg_field = None
     t = ts.peek()
     if t and t[0] == 'IDENT':
-        agg_field = _validate_field(ts.advance()[1])
+        agg_field = _validate_field(ts.advance()[1], allowed)
     ts.expect('RPAREN')
     return Aggregation(alias=alias, func=func, agg_field=agg_field)
 
 
-def _parse_summarize(ts: _TokenStream) -> SummarizeClause:
+def _parse_summarize(ts: _TokenStream, allowed: frozenset[str]) -> SummarizeClause:
     """
     Parse: agg_expr (, agg_expr)* (by field (, field)*)?
 
@@ -537,18 +577,18 @@ def _parse_summarize(ts: _TokenStream) -> SummarizeClause:
         summarize avg_r = avg(rating), n = count() by model
         summarize avg_r = avg(rating) by model, user_id
     """
-    aggs = [_parse_aggregation(ts)]
+    aggs = [_parse_aggregation(ts, allowed)]
     while ts.peek() and ts.peek()[0] == 'COMMA':
         ts.advance()
-        aggs.append(_parse_aggregation(ts))
+        aggs.append(_parse_aggregation(ts, allowed))
 
     by_fields: list[str] = []
     if ts.peek() and ts.peek_value() == 'by':
         ts.advance()
-        by_fields.append(_validate_field(ts.expect_ident()))
+        by_fields.append(_validate_field(ts.expect_ident(), allowed))
         while ts.peek() and ts.peek()[0] == 'COMMA':
             ts.advance()
-            by_fields.append(_validate_field(ts.expect_ident()))
+            by_fields.append(_validate_field(ts.expect_ident(), allowed))
 
     return SummarizeClause(aggregations=aggs, by=by_fields)
 
@@ -579,7 +619,7 @@ def _parse_limit(ts: _TokenStream) -> LimitClause:
     return LimitClause(n=n)
 
 
-def _parse_clause(text: str):
+def _parse_clause(text: str, allowed: frozenset[str]):
     """
     Parse a single pipeline stage (everything between two pipes).
     Looks at the first keyword to determine which kind of clause it is.
@@ -595,10 +635,10 @@ def _parse_clause(text: str):
         return _parse_where(ts)
     if kw == 'select':
         ts.advance()
-        return _parse_select(ts)
+        return _parse_select(ts, allowed)
     if kw == 'summarize':
         ts.advance()
-        return _parse_summarize(ts)
+        return _parse_summarize(ts, allowed)
     if kw == 'order':
         ts.advance()
         return _parse_order_by(ts)
@@ -619,6 +659,11 @@ def parse(text: str) -> Query:
     """
     Parse a FeedbackQL query string and return a Query AST.
 
+    A query starts with the source stream — either `messages` (one row per
+    message turn) or `conversations` (one row per conversation, with derived
+    aggregate fields). Each stream has its own field whitelist; the parser
+    enforces the right one based on the starting keyword.
+
     Raises FeedbackQLSyntaxError if the query is malformed.
     Raises FeedbackQLFieldError if the query references a disallowed field.
 
@@ -629,11 +674,12 @@ def parse(text: str) -> Query:
     if not stages:
         raise FeedbackQLSyntaxError("Empty query")
 
-    if stages[0].lower() != 'messages':
+    stream = stages[0].lower()
+    if stream not in STREAMS:
         raise FeedbackQLSyntaxError(
-            f"Query must start with 'messages', got {stages[0]!r}"
+            f"Query must start with 'messages' or 'conversations', got {stages[0]!r}"
         )
 
-    # Parse each pipeline stage into a clause object
-    clauses = [_parse_clause(stage) for stage in stages[1:]]
-    return Query(clauses=clauses)
+    allowed = ALLOWED_FIELDS_BY_STREAM[stream]
+    clauses = [_parse_clause(stage, allowed) for stage in stages[1:]]
+    return Query(stream=stream, clauses=clauses)

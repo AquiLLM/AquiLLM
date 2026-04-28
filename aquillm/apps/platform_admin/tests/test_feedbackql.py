@@ -632,3 +632,168 @@ class TestConversationTool:
         )
         tools = [r['conversation_tool'] for r in results]
         assert tools == ['vector_search']
+
+
+# ---------------------------------------------------------------------------
+# Conversations stream tests
+# ---------------------------------------------------------------------------
+# A query starting with `conversations` returns one row per conversation,
+# with derived fields (message_count, avg_rating, tools_used, etc.) computed
+# across that conversation's messages. Filtering, summarizing, ordering and
+# limiting work the same as on the messages stream — just over a different
+# base set with a different field whitelist.
+
+@pytest.mark.django_db
+class TestConversationsStream:
+    def test_basic_returns_one_row_per_conversation(self, user_a):
+        """A bare `conversations` query yields one row per WSConversation."""
+        c1 = WSConversation.objects.create(owner=user_a)
+        _msg(c1, 'assistant', 'a', 1, rating=4)
+        c2 = WSConversation.objects.create(owner=user_a)
+        _msg(c2, 'assistant', 'b', 1, rating=5)
+
+        results = run('conversations')
+        ids = {r['conversation_id'] for r in results}
+        assert c1.id in ids and c2.id in ids
+
+    def test_derived_message_count(self, user_a):
+        """message_count counts each message belonging to the conversation."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'user', 'q1', 0)
+        _msg(conv, 'assistant', 'a1', 1, rating=4)
+        _msg(conv, 'assistant', 'a2', 2, rating=3)
+
+        results = run(
+            f'conversations | where conversation_id == {conv.id} | select message_count'
+        )
+        assert results[0]['message_count'] == 3
+
+    def test_derived_avg_min_max_rating(self, user_a):
+        """avg_rating, min_rating, max_rating reflect aggregate of message ratings."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'a', 1, rating=2)
+        _msg(conv, 'assistant', 'b', 2, rating=4)
+        _msg(conv, 'assistant', 'c', 3, rating=5)
+
+        results = run(
+            f'conversations | where conversation_id == {conv.id} '
+            f'| select avg_rating, min_rating, max_rating, rated_count'
+        )
+        assert results[0]['avg_rating'] == pytest.approx(11/3)
+        assert results[0]['min_rating'] == 2
+        assert results[0]['max_rating'] == 5
+        assert results[0]['rated_count'] == 3
+
+    def test_where_on_derived_avg_rating(self, user_a):
+        """Filter conversations by their aggregate rating."""
+        good = WSConversation.objects.create(owner=user_a)
+        _msg(good, 'assistant', 'g', 1, rating=5)
+        bad = WSConversation.objects.create(owner=user_a)
+        _msg(bad, 'assistant', 'b', 1, rating=2)
+
+        results = run(
+            f'conversations | where user_id == {user_a.id} and avg_rating < 3'
+        )
+        ids = {r['conversation_id'] for r in results}
+        assert bad.id in ids
+        assert good.id not in ids
+
+    def test_tools_used_contains(self, user_a):
+        """tools_used surfaces a comma-joined list filterable with contains."""
+        with_tool = WSConversation.objects.create(owner=user_a)
+        _msg(with_tool, 'assistant', 'lookup', 1, tool_call_name='vector_search')
+        _msg(with_tool, 'assistant', 'reply', 2, rating=4)
+        without = WSConversation.objects.create(owner=user_a)
+        _msg(without, 'assistant', 'plain', 1, rating=5)
+
+        results = run(
+            f'conversations | where user_id == {user_a.id} '
+            f'and tools_used contains "vector_search"'
+        )
+        ids = {r['conversation_id'] for r in results}
+        assert ids == {with_tool.id}
+
+    def test_summarize_aggregates_across_conversations(self, user_a):
+        """Aggregate aggregates — sum of message_count across conversations."""
+        c1 = WSConversation.objects.create(owner=user_a)
+        for i in range(3):
+            _msg(c1, 'assistant', f'm{i}', i, rating=4)
+        c2 = WSConversation.objects.create(owner=user_a)
+        for i in range(2):
+            _msg(c2, 'assistant', f'm{i}', i, rating=5)
+
+        results = run(
+            f'conversations | where user_id == {user_a.id} '
+            f'| summarize total_msgs = sum(message_count), n = count()'
+        )
+        assert results[0]['total_msgs'] == 5
+        assert results[0]['n'] == 2
+
+    def test_post_summarize_where_on_alias(self, user_a):
+        """HAVING-style filter on aggregation alias still works on conversations stream."""
+        c1 = WSConversation.objects.create(owner=user_a)
+        _msg(c1, 'assistant', 'a', 1, rating=2)
+        c2 = WSConversation.objects.create(owner=user_a)
+        _msg(c2, 'assistant', 'b', 1, rating=5)
+
+        results = run(
+            f'conversations | where user_id == {user_a.id} '
+            f'| summarize avg_overall = avg(avg_rating) by user_id '
+            f'| where avg_overall > 3'
+        )
+        # avg of (2, 5) = 3.5, passes the > 3 filter
+        assert len(results) == 1
+        assert results[0]['avg_overall'] == pytest.approx(3.5)
+
+    def test_unknown_field_on_conversations_stream_raises(self):
+        """Fields valid on messages but not on conversations stream are rejected."""
+        with pytest.raises(FeedbackQLFieldError):
+            parse('conversations | select content')
+
+    def test_messages_field_not_on_conversations_select(self):
+        """`rating` is a messages-stream field; bare conversations stream doesn't have it."""
+        with pytest.raises(FeedbackQLFieldError):
+            parse('conversations | select rating')
+
+    def test_messages_stream_still_works_after_changes(self, user_a):
+        """Regression: the existing messages stream behaves exactly as before."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'hi', 1, rating=4)
+        results = run(f'messages | where user_id == {user_a.id} | select rating')
+        assert any(r.get('rating') == 4 for r in results)
+
+
+# ---------------------------------------------------------------------------
+# View-level query tip detection
+# ---------------------------------------------------------------------------
+# tools_used == "<tool>" is technically valid but almost always wrong: the
+# field is a comma-separated string, so == only matches conversations that
+# used exactly that one tool. The view surfaces a non-blocking tip instead
+# of erroring so the query still runs.
+
+class TestQueryTipDetection:
+    def test_tools_used_equals_triggers_tip(self):
+        from apps.platform_admin.views.pages import _detect_query_tips
+        parsed = parse('conversations | where tools_used == "vector_search"')
+        notice = _detect_query_tips(parsed)
+        assert notice is not None
+        assert 'tools_used' in notice
+        assert 'contains' in notice
+
+    def test_tools_used_contains_no_tip(self):
+        from apps.platform_admin.views.pages import _detect_query_tips
+        parsed = parse('conversations | where tools_used contains "vector_search"')
+        assert _detect_query_tips(parsed) is None
+
+    def test_tools_used_eq_on_messages_stream_no_tip(self):
+        """tools_used isn't a messages-stream field; this query won't even parse,
+        so the tip detector should never see it. Just check the messages stream
+        isn't accidentally flagged by some unrelated comparison."""
+        from apps.platform_admin.views.pages import _detect_query_tips
+        parsed = parse('messages | where rating == 5')
+        assert _detect_query_tips(parsed) is None
+
+    def test_other_conversations_query_no_tip(self):
+        from apps.platform_admin.views.pages import _detect_query_tips
+        parsed = parse('conversations | where avg_rating < 3')
+        assert _detect_query_tips(parsed) is None

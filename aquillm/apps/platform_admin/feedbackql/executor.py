@@ -35,13 +35,16 @@ from __future__ import annotations
 
 import statistics
 from collections import defaultdict
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
-from apps.chat.models import Message
+from apps.chat.models import Message, WSConversation
 
 from .exceptions import FeedbackQLSyntaxError
 from .parser import (
     ALLOWED_FIELDS,
+    CONVERSATIONS_FIELDS,
+    MESSAGES_FIELDS,
     Condition,
     LimitClause,
     OrderByClause,
@@ -59,7 +62,11 @@ from .parser import (
 #   user_id        → conversation__owner_id  (Message → WSConversation → User)
 #   conversation_id → conversation_id        (FK on Message, same name)
 
-FIELD_MAP: dict[str, str] = {
+# Field mapping for the `messages` stream — most fields map directly to a
+# column on the Message table. Two need a JOIN path with Django's __ notation:
+#   user_id        → conversation__owner_id  (Message → WSConversation → User)
+#   conversation_id → conversation_id        (FK on Message, same name)
+MESSAGES_FIELD_MAP: dict[str, str] = {
     'rating':                'rating',
     'feedback_text':         'feedback_text',
     'feedback_submitted_at': 'feedback_submitted_at',
@@ -74,24 +81,139 @@ FIELD_MAP: dict[str, str] = {
     'conversation_id':       'conversation_id',
 }
 
-# Reverse mapping — used to rename ORM keys back to user-facing names in output.
-# e.g. 'conversation__owner_id' → 'user_id'
-_ORM_TO_FIELD = {v: k for k, v in FIELD_MAP.items()}
+# Field mapping for the `conversations` stream. Native columns on WSConversation
+# map to themselves; derived fields (computed via .annotate() in the queryset
+# builder) are also referenced by their annotation name.
+CONVERSATIONS_FIELD_MAP: dict[str, str] = {
+    # Native columns
+    'conversation_id': 'id',
+    'user_id':         'owner_id',
+    'name':            'name',
+    'created_at':      'created_at',
+    'updated_at':      'updated_at',
+    # Derived (annotation names — set by _build_conversations_queryset)
+    'message_count':   'message_count',
+    'rated_count':     'rated_count',
+    'avg_rating':      'avg_rating',
+    'min_rating':      'min_rating',
+    'max_rating':      'max_rating',
+    'last_rated_at':   'last_rated_at',
+    'tools_used':      'tools_used',
+}
 
-# Virtual fields exist in ALLOWED_FIELDS but have no DB column on Message.
-# They are computed in Python after fetching by looking up values per
-# conversation. Excluded from default `select` output (i.e. when no select
-# clause is given) so a bare `messages` query stays compact.
-VIRTUAL_FIELDS = frozenset({'conversation_tool'})
+# Backwards-compat: a couple of imports still expect FIELD_MAP referring to messages.
+FIELD_MAP = MESSAGES_FIELD_MAP
+
+# Virtual fields exist in ALLOWED_FIELDS but have no DB column. They are
+# computed in Python after fetching by looking up values per conversation.
+# Currently only the `messages` stream has one — `conversation_tool`.
+MESSAGES_VIRTUAL_FIELDS = frozenset({'conversation_tool'})
+CONVERSATIONS_VIRTUAL_FIELDS: frozenset[str] = frozenset()
+# Backwards-compat for code paths expecting the old global name.
+VIRTUAL_FIELDS = MESSAGES_VIRTUAL_FIELDS
 
 # Safety cap — even without a LIMIT clause we never return more than this many rows.
 # Prevents accidentally dumping the entire table.
 MAX_ROWS = 10_000
 
 
+# ---------------------------------------------------------------------------
+# Stream configuration
+# ---------------------------------------------------------------------------
+# Each stream packages up the per-stream knobs the executor needs: the field
+# whitelist, the user-name → ORM-path map, which fields are virtual, and a
+# callable that builds the base queryset (with annotations for derived fields).
+# All other helpers in this module are stream-agnostic — they receive a
+# StreamConfig and look up what they need on it.
+
+@dataclass
+class StreamConfig:
+    name: str
+    allowed_fields: frozenset
+    field_map: dict[str, str]
+    virtual_fields: frozenset
+    base_qs: Callable[[], Any]
+    # Reverse mapping from ORM lookup path → user-facing field name, used to
+    # rename keys back when materialising results.
+    orm_to_field: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.orm_to_field = {v: k for k, v in self.field_map.items()}
+
+    def orm(self, name: str) -> str:
+        """user-facing field name → Django ORM lookup path."""
+        return self.field_map[name]
+
+
+def _build_messages_queryset():
+    return Message.objects.select_related('conversation', 'conversation__owner')
+
+
+def _build_conversations_queryset():
+    """
+    Base queryset for the `conversations` stream — one row per conversation,
+    with derived aggregate fields annotated from the messages relation.
+
+    All annotations are pure Django ORM (Count/Avg/Min/Max/Subquery + a
+    PostgreSQL StringAgg for the tools list) so the resulting SQL stays
+    parameterised and safe.
+    """
+    from django.db.models import Avg, Count, Max, Min, OuterRef, Q, Subquery, Value
+    from django.db.models.aggregates import StringAgg
+
+    # Per-conversation distinct list of tools used, comma-separated.
+    # Using a correlated subquery so each conversation gets its own list,
+    # rather than mixing aggregations that would interact poorly with the
+    # other Count/Avg annotations.
+    tools_subquery = (
+        Message.objects
+        .filter(conversation_id=OuterRef('pk'), tool_call_name__isnull=False)
+        .order_by()
+        .values('conversation_id')
+        .annotate(tools=StringAgg('tool_call_name', delimiter=Value(', '), distinct=True))
+        .values('tools')
+    )
+
+    return WSConversation.objects.annotate(
+        message_count=Count('db_messages', distinct=True),
+        rated_count=Count(
+            'db_messages',
+            filter=Q(db_messages__rating__isnull=False),
+            distinct=True,
+        ),
+        avg_rating=Avg('db_messages__rating'),
+        min_rating=Min('db_messages__rating'),
+        max_rating=Max('db_messages__rating'),
+        last_rated_at=Max('db_messages__feedback_submitted_at'),
+        tools_used=Subquery(tools_subquery),
+    )
+
+
+MESSAGES_STREAM = StreamConfig(
+    name='messages',
+    allowed_fields=MESSAGES_FIELDS,
+    field_map=MESSAGES_FIELD_MAP,
+    virtual_fields=MESSAGES_VIRTUAL_FIELDS,
+    base_qs=_build_messages_queryset,
+)
+
+CONVERSATIONS_STREAM = StreamConfig(
+    name='conversations',
+    allowed_fields=CONVERSATIONS_FIELDS,
+    field_map=CONVERSATIONS_FIELD_MAP,
+    virtual_fields=CONVERSATIONS_VIRTUAL_FIELDS,
+    base_qs=_build_conversations_queryset,
+)
+
+STREAMS: dict[str, StreamConfig] = {
+    'messages': MESSAGES_STREAM,
+    'conversations': CONVERSATIONS_STREAM,
+}
+
+
 def _orm(field: str) -> str:
-    """Convert a user-facing field name to its Django ORM lookup path."""
-    return FIELD_MAP[field]  # always safe — parser already validated the name
+    """Backwards-compat: ORM lookup for the messages stream."""
+    return MESSAGES_FIELD_MAP[field]
 
 
 # ---------------------------------------------------------------------------
@@ -100,42 +222,38 @@ def _orm(field: str) -> str:
 # Django's Q objects let you build filter conditions programmatically.
 # We convert each Condition into a Q, then chain them with & (and) or | (or).
 
-def _condition_to_q(cond: Condition):
+def _condition_to_q(cond: Condition, stream: StreamConfig):
     from django.db.models import Q
 
-    if cond.field not in ALLOWED_FIELDS:
+    if cond.field not in stream.allowed_fields:
         raise FeedbackQLSyntaxError(
-            f"Unknown field {cond.field!r} in pre-summarize where clause. "
-            f"Allowed fields: {', '.join(sorted(ALLOWED_FIELDS))}"
+            f"Unknown field {cond.field!r} in pre-summarize where clause on "
+            f"the {stream.name!r} stream. "
+            f"Allowed fields: {', '.join(sorted(stream.allowed_fields))}"
         )
     op = cond.op
 
-    # conversation_tool is a virtual field with no DB column.
-    # We translate it to a conversation_id __in subquery so it composes cleanly
-    # with Q objects using & and |.
-    if cond.field == 'conversation_tool':
+    # conversation_tool is a virtual field with no DB column on the messages
+    # stream. We translate it to a conversation_id __in subquery so it
+    # composes cleanly with other Q objects using & and |.
+    if stream.name == 'messages' and cond.field == 'conversation_tool':
         if op not in ('==', '!='):
             raise FeedbackQLSyntaxError(
                 f"conversation_tool only supports == and != operators, got {op!r}"
             )
         if cond.value is None:
-            # conv_ids = convs that used any tool at all
-            # == null  → not in that set (no tools used)
-            # != null  → in that set (any tool was used)
             conv_ids = Message.objects.filter(
                 tool_call_name__isnull=False
             ).values('conversation_id')
             q = Q(conversation_id__in=conv_ids)
             return ~q if op == '==' else q
-        else:
-            # conv_ids = convs that used this specific tool
-            conv_ids = Message.objects.filter(
-                tool_call_name=cond.value
-            ).values('conversation_id')
-            q = Q(conversation_id__in=conv_ids)
-            return q if op == '==' else ~q
+        conv_ids = Message.objects.filter(
+            tool_call_name=cond.value
+        ).values('conversation_id')
+        q = Q(conversation_id__in=conv_ids)
+        return q if op == '==' else ~q
 
-    path = _orm(cond.field)
+    path = stream.orm(cond.field)
 
     # null comparisons map to IS NULL / IS NOT NULL
     if cond.value is None:
@@ -167,7 +285,7 @@ def _condition_to_q(cond: Condition):
     raise FeedbackQLSyntaxError(f"Unknown operator: {op!r}")  # shouldn't reach here
 
 
-def _apply_where(qs, clause: WhereClause):
+def _apply_where(qs, clause: WhereClause, stream: StreamConfig):
     """
     Apply a WhereClause to a queryset by building a chain of Q objects.
 
@@ -175,10 +293,10 @@ def _apply_where(qs, clause: WhereClause):
     We combine them left-to-right using & for 'and' and | for 'or'.
     """
     parts = clause.parts
-    q = _condition_to_q(parts[0])
+    q = _condition_to_q(parts[0], stream)
     for i in range(1, len(parts), 2):
         connector = parts[i]
-        next_q = _condition_to_q(parts[i + 1])
+        next_q = _condition_to_q(parts[i + 1], stream)
         q = q & next_q if connector == 'and' else q | next_q
     return qs.filter(q)
 
@@ -330,13 +448,19 @@ def _conversation_tool_lookup(conv_ids) -> dict:
 # Row-level finalisation (no summarize ran)
 # ---------------------------------------------------------------------------
 
-# These fields are always fetched and included in row-level results so the
-# conversation viewer can open the full thread for any result row, even when
-# the user's query didn't explicitly select them.
-_THREAD_META_FIELDS: frozenset[str] = frozenset({'conversation_id', 'message_uuid'})
+# Per-stream "always include" fields — the messages stream always carries
+# conversation_id + message_uuid so the conversation thread viewer can open
+# the full thread for any row. Conversations stream rows are already keyed
+# by conversation_id (it's a regular field), so nothing extra is needed.
+_THREAD_META_FIELDS_BY_STREAM: dict[str, frozenset[str]] = {
+    'messages':      frozenset({'conversation_id', 'message_uuid'}),
+    'conversations': frozenset(),
+}
+# Backwards-compat name for any code path still expecting the messages stream.
+_THREAD_META_FIELDS: frozenset[str] = _THREAD_META_FIELDS_BY_STREAM['messages']
 
 
-def _finalise_row_level(qs, select: SelectClause | None) -> list[dict]:
+def _finalise_row_level(qs, select: SelectClause | None, stream: StreamConfig) -> list[dict]:
     """
     Materialise the queryset into a list of dicts with user-facing field names.
 
@@ -345,35 +469,39 @@ def _finalise_row_level(qs, select: SelectClause | None) -> list[dict]:
     columns and remap ORM paths back to user-facing names.
 
     Virtual fields (no DB column) are computed in Python after fetching by
-    looking up values per conversation. For `conversation_tool` we join the
-    list of distinct tools used in each conversation into a comma-separated
-    string, or leave it null when no tools were used.
+    looking up values per conversation. For `conversation_tool` (messages
+    stream only) we join the list of distinct tools used in each conversation
+    into a comma-separated string, or leave it null when no tools were used.
     """
-    output_fields = select.fields if select else sorted(ALLOWED_FIELDS - VIRTUAL_FIELDS)
+    thread_meta = _THREAD_META_FIELDS_BY_STREAM[stream.name]
+    output_fields = (
+        select.fields if select
+        else sorted(stream.allowed_fields - stream.virtual_fields)
+    )
     output_field_set = set(output_fields)
 
     # Virtual fields can't be fetched from the DB — drop them from orm_fields
     # but keep them in the desired output set. They get populated below.
-    db_fields = (set(output_fields) - VIRTUAL_FIELDS) | _THREAD_META_FIELDS
-    orm_fields = [_orm(f) for f in db_fields]
+    db_fields = (set(output_fields) - stream.virtual_fields) | thread_meta
+    orm_fields = [stream.orm(f) for f in db_fields]
 
     # If no LIMIT was applied to the queryset, cap at MAX_ROWS as a safety net
     rows = list(qs.values(*orm_fields)[:MAX_ROWS])
 
-    # Resolve any virtual field values needed for output
+    # Resolve any virtual field values needed for output (messages stream only)
     tool_map: dict = {}
-    if 'conversation_tool' in output_field_set:
+    if stream.name == 'messages' and 'conversation_tool' in output_field_set:
         tool_map = _conversation_tool_lookup({r.get('conversation_id') for r in rows})
 
     result = []
     for row in rows:
-        remapped = {_ORM_TO_FIELD.get(k, k): v for k, v in row.items()}
-        if 'conversation_tool' in output_field_set:
+        remapped = {stream.orm_to_field.get(k, k): v for k, v in row.items()}
+        if stream.name == 'messages' and 'conversation_tool' in output_field_set:
             tools = tool_map.get(remapped.get('conversation_id'))
             remapped['conversation_tool'] = ', '.join(tools) if tools else None
         result.append({
             k: v for k, v in remapped.items()
-            if k in output_field_set or k in _THREAD_META_FIELDS
+            if k in output_field_set or k in thread_meta
         })
 
     return result
@@ -383,7 +511,7 @@ def _finalise_row_level(qs, select: SelectClause | None) -> list[dict]:
 # Summarize (aggregate) execution
 # ---------------------------------------------------------------------------
 
-def _run_summarize(qs, summarize: SummarizeClause) -> list[dict]:
+def _run_summarize(qs, summarize: SummarizeClause, stream: StreamConfig) -> list[dict]:
     """
     Fetch the queryset, group it in Python, and compute aggregations per group.
 
@@ -391,29 +519,30 @@ def _run_summarize(qs, summarize: SummarizeClause) -> list[dict]:
     names plus the aggregation aliases. From this point onward in the
     pipeline we work with this list rather than the queryset.
 
-    Multi-value virtual fields (currently just `conversation_tool`) are
-    unnested before grouping when used in `by`: a message in a conversation
-    that used N tools contributes N rows, one per tool. Conversations with
-    no tool calls contribute one row with the value None.
+    Multi-value virtual fields (currently just `conversation_tool` on the
+    messages stream) are unnested before grouping when used in `by`:
+    a message in a conversation that used N tools contributes N rows,
+    one per tool. Conversations with no tool calls contribute one row with
+    the value None.
     """
     by_fields = summarize.by
     agg_fields_needed = {agg.agg_field for agg in summarize.aggregations if agg.agg_field}
-    fetch_fields = (set(by_fields) | agg_fields_needed) - VIRTUAL_FIELDS
+    fetch_fields = (set(by_fields) | agg_fields_needed) - stream.virtual_fields
     # If a virtual field is in `by`, we need conversation_id to look up its values
-    if 'conversation_tool' in by_fields:
+    if stream.name == 'messages' and 'conversation_tool' in by_fields:
         fetch_fields.add('conversation_id')
-    orm_fields = [_orm(f) for f in fetch_fields]
+    orm_fields = [stream.orm(f) for f in fetch_fields]
 
     rows = list(qs.values(*orm_fields)[:MAX_ROWS])
 
     if not rows:
         return []
 
-    # Unnest virtual fields in `by` before grouping
-    if 'conversation_tool' in by_fields:
-        tool_map = _conversation_tool_lookup({r.get(_orm('conversation_id')) for r in rows})
+    # Unnest virtual fields in `by` before grouping (messages stream only)
+    if stream.name == 'messages' and 'conversation_tool' in by_fields:
+        conv_orm = stream.orm('conversation_id')
+        tool_map = _conversation_tool_lookup({r.get(conv_orm) for r in rows})
         expanded = []
-        conv_orm = _orm('conversation_id')
         for row in rows:
             tools = tool_map.get(row.get(conv_orm))
             if tools:
@@ -429,10 +558,10 @@ def _run_summarize(qs, summarize: SummarizeClause) -> list[dict]:
 
     # Virtual fields live under their own key after unnest; real fields are
     # under the ORM lookup path returned by qs.values()
-    def _row_key(row: dict, field: str):
-        if field in VIRTUAL_FIELDS:
-            return row.get(field)
-        return row[_orm(field)]
+    def _row_key(row: dict, fname: str):
+        if fname in stream.virtual_fields:
+            return row.get(fname)
+        return row[stream.orm(fname)]
 
     if by_fields:
         groups: dict[tuple, list[dict]] = defaultdict(list)
@@ -447,7 +576,7 @@ def _run_summarize(qs, summarize: SummarizeClause) -> list[dict]:
                 if agg.func == 'count' and not agg.agg_field:
                     out[agg.alias] = len(group_rows)
                 else:
-                    values = [r[_orm(agg.agg_field)] for r in group_rows]  # type: ignore[arg-type]
+                    values = [r[stream.orm(agg.agg_field)] for r in group_rows]  # type: ignore[arg-type]
                     out[agg.alias] = _compute_agg(agg.func, values)
             result.append(out)
         return result
@@ -458,7 +587,7 @@ def _run_summarize(qs, summarize: SummarizeClause) -> list[dict]:
         if agg.func == 'count' and not agg.agg_field:
             out[agg.alias] = len(rows)
         else:
-            values = [r[_orm(agg.agg_field)] for r in rows]  # type: ignore[arg-type]
+            values = [r[stream.orm(agg.agg_field)] for r in rows]  # type: ignore[arg-type]
             out[agg.alias] = _compute_agg(agg.func, values)
     return [out]
 
@@ -471,16 +600,20 @@ def execute(query: Query) -> list[dict]:
     """
     Execute a parsed FeedbackQL Query by walking its clauses in pipeline order.
 
-    The pipeline starts as a Django queryset and stays a queryset until a
-    `summarize` runs, at which point it becomes a list of in-memory dicts.
-    Subsequent `where`/`order by`/`limit` clauses operate on whatever shape
-    the previous stage left behind.
+    The pipeline starts as a Django queryset (built from the source stream —
+    `messages` or `conversations`) and stays a queryset until a `summarize`
+    runs, at which point it becomes a list of in-memory dicts. Subsequent
+    where/order by/limit clauses operate on whatever shape the previous
+    stage left behind.
 
-    Always queries the Message table, joined to WSConversation and User.
     Never executes raw SQL — all database access goes through Django ORM.
     """
-    # Pre-summarize state: a Django queryset
-    qs = Message.objects.select_related('conversation', 'conversation__owner')
+    stream = STREAMS.get(query.stream)
+    if stream is None:
+        raise FeedbackQLSyntaxError(f"Unknown stream {query.stream!r}")
+
+    # Pre-summarize state: a Django queryset built per stream
+    qs = stream.base_qs()
 
     # Post-summarize state: a list of dicts (None until summarize runs)
     rows: list[dict] | None = None
@@ -494,7 +627,7 @@ def execute(query: Query) -> list[dict]:
     for clause in query.clauses:
         if isinstance(clause, WhereClause):
             if rows is None:
-                qs = _apply_where(qs, clause)
+                qs = _apply_where(qs, clause, stream)
             else:
                 rows = _apply_where_py(rows, clause, post_summarize_keys)
 
@@ -515,18 +648,19 @@ def execute(query: Query) -> list[dict]:
                 raise FeedbackQLSyntaxError(
                     "Cannot use both 'select' and 'summarize' in the same query"
                 )
-            rows = _run_summarize(qs, clause)
+            rows = _run_summarize(qs, clause, stream)
             post_summarize_keys = set(clause.by) | {agg.alias for agg in clause.aggregations}
 
         elif isinstance(clause, OrderByClause):
             if rows is None:
-                if clause.field not in ALLOWED_FIELDS:
+                if clause.field not in stream.allowed_fields:
                     raise FeedbackQLSyntaxError(
-                        f"Unknown field {clause.field!r} in order by. "
-                        f"Allowed fields: {', '.join(sorted(ALLOWED_FIELDS))}"
+                        f"Unknown field {clause.field!r} in order by on the "
+                        f"{stream.name!r} stream. "
+                        f"Allowed fields: {', '.join(sorted(stream.allowed_fields))}"
                     )
                 prefix = '-' if clause.direction == 'desc' else ''
-                qs = qs.order_by(f'{prefix}{_orm(clause.field)}')
+                qs = qs.order_by(f'{prefix}{stream.orm(clause.field)}')
             else:
                 if clause.field not in post_summarize_keys:
                     raise FeedbackQLSyntaxError(
@@ -549,4 +683,4 @@ def execute(query: Query) -> list[dict]:
     if rows is not None:
         return rows
 
-    return _finalise_row_level(qs, select_clause)
+    return _finalise_row_level(qs, select_clause, stream)

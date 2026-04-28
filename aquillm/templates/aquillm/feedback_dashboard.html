@@ -85,33 +85,74 @@
                         since user messages have no model and would otherwise appear as a separate group.
                     </p>
                 </div>
+                <div class="md:col-span-2">
+                    <p class="font-sans font-semibold text-text-normal mb-1 text-xs">Conversations stream example</p>
+                    <pre class="leading-relaxed text-text-muted bg-scheme-shade_2 rounded p-2">conversations
+| where rated_count &gt; 0 and avg_rating &lt; 3
+| select conversation_id, name, message_count, avg_rating, tools_used
+| order by avg_rating asc</pre>
+                    <p class="font-sans text-text-muted mt-2 text-xs leading-relaxed">
+                        One row per conversation, with derived fields like <span class="text-text-normal">avg_rating</span>,
+                        <span class="text-text-normal">message_count</span>, and <span class="text-text-normal">tools_used</span> aggregated across that
+                        conversation's messages. This finds rated conversations whose overall rating dropped below 3 — useful for
+                        spotting conversations with a poor experience overall, not just isolated bad turns.
+                    </p>
+                </div>
             </div>
 
             <div class="space-y-3 text-text-muted">
 
                 <div>
-                    <p class="font-semibold text-text-normal mb-1">Available fields</p>
-                    <div class="font-mono grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-0.5">
-                        <span>rating</span><span class="text-text-muted/60">— 1–5 star rating</span><span></span>
-                        <span>feedback_text</span><span class="text-text-muted/60">— written comment</span><span></span>
-                        <span>feedback_submitted_at</span><span class="text-text-muted/60">— when rating/feedback was submitted</span><span></span>
-                        <span>model</span><span class="text-text-muted/60">— AI model used</span><span></span>
-                        <span>role</span><span class="text-text-muted/60">— user / assistant / tool</span><span></span>
-                        <span>content</span><span class="text-text-muted/60">— message text</span><span></span>
-                        <span>created_at</span><span class="text-text-muted/60">— message timestamp</span><span></span>
-                        <span>user_id</span><span class="text-text-muted/60">— user account ID</span><span></span>
-                        <span>conversation_id</span><span class="text-text-muted/60">— conversation ID</span><span></span>
-                        <span>sequence_number</span><span class="text-text-muted/60">— position in conversation</span><span></span>
-                        <span>message_uuid</span><span class="text-text-muted/60">— unique message ID</span><span></span>
-                        <span>tool_call_name</span><span class="text-text-muted/60">— tool used (intermediate messages only)</span><span></span>
-                        <span>conversation_tool</span><span class="text-text-muted/60 col-span-2">— tools used in this message's conversation (see below)</span>
+                    <p class="font-semibold text-text-normal mb-1">Streams &amp; their fields</p>
+                    <p class="text-text-muted mb-2 leading-relaxed">
+                        Every query starts with a <em>stream</em>, which determines what each result row represents
+                        and which fields you can use.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <p class="font-mono text-text-normal mb-1"><span class="text-text-normal">messages</span></p>
+                            <p class="text-text-muted/80 mb-1.5 leading-relaxed">One row per message turn (user message, assistant reply, or tool call).</p>
+                            <div class="font-mono grid grid-cols-2 gap-x-3 gap-y-0.5">
+                                <span>rating</span><span class="text-text-muted/60">— 1–5 stars</span>
+                                <span>feedback_text</span><span class="text-text-muted/60">— written comment</span>
+                                <span>feedback_submitted_at</span><span class="text-text-muted/60">— rating timestamp</span>
+                                <span>model</span><span class="text-text-muted/60">— AI model</span>
+                                <span>role</span><span class="text-text-muted/60">— user / assistant / tool</span>
+                                <span>content</span><span class="text-text-muted/60">— message text</span>
+                                <span>created_at</span><span class="text-text-muted/60">— message timestamp</span>
+                                <span>user_id</span><span class="text-text-muted/60">— user account ID</span>
+                                <span>conversation_id</span><span class="text-text-muted/60">— conversation ID</span>
+                                <span>sequence_number</span><span class="text-text-muted/60">— position in conv.</span>
+                                <span>message_uuid</span><span class="text-text-muted/60">— unique message ID</span>
+                                <span>tool_call_name</span><span class="text-text-muted/60">— tool used (intermediate)</span>
+                                <span>conversation_tool</span><span class="text-text-muted/60">— tools used in conv. (see below)</span>
+                            </div>
+                        </div>
+                        <div>
+                            <p class="font-mono text-text-normal mb-1"><span class="text-text-normal">conversations</span></p>
+                            <p class="text-text-muted/80 mb-1.5 leading-relaxed">One row per conversation, with derived aggregates across its messages.</p>
+                            <div class="font-mono grid grid-cols-2 gap-x-3 gap-y-0.5">
+                                <span>conversation_id</span><span class="text-text-muted/60">— conversation ID</span>
+                                <span>user_id</span><span class="text-text-muted/60">— owner</span>
+                                <span>name</span><span class="text-text-muted/60">— auto title</span>
+                                <span>created_at</span><span class="text-text-muted/60">— start time</span>
+                                <span>updated_at</span><span class="text-text-muted/60">— last activity</span>
+                                <span>message_count</span><span class="text-text-muted/60">— total turns</span>
+                                <span>rated_count</span><span class="text-text-muted/60">— turns with a rating</span>
+                                <span>avg_rating</span><span class="text-text-muted/60">— mean rating</span>
+                                <span>min_rating</span><span class="text-text-muted/60">— lowest rating</span>
+                                <span>max_rating</span><span class="text-text-muted/60">— highest rating</span>
+                                <span>last_rated_at</span><span class="text-text-muted/60">— most recent rating time</span>
+                                <span>tools_used</span><span class="text-text-muted/60">— comma-list of tools used</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 <div>
                     <p class="font-semibold text-text-normal mb-1">Clauses (in order)</p>
                     <div class="space-y-1 font-mono">
-                        <div><span class="text-text-normal">messages</span> — every query must start with this</div>
+                        <div><span class="text-text-normal">messages</span> / <span class="text-text-normal">conversations</span> — every query must start with one of these</div>
                         <div><span class="text-text-normal">| where</span> <em>condition</em> — filter rows; chain with <span class="text-text-normal">and</span> / <span class="text-text-normal">or</span></div>
                         <div><span class="text-text-normal">| select</span> <em>field, field, …</em> — choose which columns to return (omit to get all)</div>
                         <div><span class="text-text-normal">| summarize</span> <em>alias = func(field), …</em> <span class="text-text-normal">by</span> <em>field</em> — aggregate; omit <span class="text-text-normal">by</span> for a global total</div>
@@ -165,6 +206,14 @@
                         <code class="text-text-normal">search_single_document</code>, <code class="text-text-normal">sky_subtraction</code>,
                         <code class="text-text-normal">flat_fielding</code>, <code class="text-text-normal">detect_point_sources</code>
                     </p>
+                    <p class="text-text-muted mt-2 leading-relaxed">
+                        On the <code class="text-text-normal">conversations</code> stream the equivalent field is
+                        <code class="text-text-normal">tools_used</code> — a comma-separated string of every distinct tool the
+                        conversation used. Filter it with <code class="text-text-normal">contains</code> rather than
+                        <code class="text-text-normal">==</code>, e.g. <code class="text-text-normal">where tools_used contains "vector_search"</code>.
+                        <code class="text-text-normal">==</code> only matches conversations that used <em>exactly</em> that one tool, so
+                        any multi-tool conversation gets silently dropped.
+                    </p>
                 </div>
 
                 <div class="font-mono p-2 rounded bg-scheme-shade_2 text-text-muted/70 leading-relaxed">
@@ -184,6 +233,13 @@
     {% if error %}
     <div class="mb-5 p-4 rounded-lg bg-red-900/40 border border-red-500 text-red-300 text-sm">
         <strong>Error:</strong> {{ error }}
+    </div>
+    {% endif %}
+
+    <!-- ── Tip / non-blocking advisory ───────────────────────────────── -->
+    {% if notice %}
+    <div class="mb-5 p-4 rounded-lg bg-amber-900/30 border border-amber-500/60 text-amber-200 text-sm">
+        {{ notice }}
     </div>
     {% endif %}
 

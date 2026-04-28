@@ -10,7 +10,13 @@ from django.views.decorators.http import require_http_methods
 
 from aquillm.ocr_utils import get_gemini_cost_stats
 from apps.chat.models import Message
-from ..feedbackql.parser import parse, SelectClause, SummarizeClause
+from ..feedbackql.parser import (
+    parse,
+    Condition,
+    SelectClause,
+    SummarizeClause,
+    WhereClause,
+)
 from ..feedbackql.executor import execute
 from ..feedbackql.exceptions import FeedbackQLSyntaxError
 
@@ -45,6 +51,7 @@ def feedback_dashboard(request):
     query_text = ''
     columns = []
     error = None
+    notice = None
     chart_json = None
 
     # rows_for_template: list of dicts with 'cells' (display values) and
@@ -62,6 +69,7 @@ def feedback_dashboard(request):
         if not error:
             try:
                 parsed = parse(query_text)
+                notice = _detect_query_tips(parsed)
                 results_dicts = execute(parsed)
 
                 summarize = next(
@@ -121,10 +129,51 @@ def feedback_dashboard(request):
         'rows': rows_for_template,
         'columns': columns,
         'error': error,
+        'notice': notice,
         'row_count': len(rows_for_template),
         'chart_json': chart_json,
         'is_row_level': is_row_level,
     })
+
+
+def _iter_conditions(clause):
+    """Yield every Condition reachable from a parsed clause's parts list."""
+    parts = getattr(clause, 'parts', None)
+    if not parts:
+        return
+    for part in parts:
+        if isinstance(part, Condition):
+            yield part
+
+
+def _detect_query_tips(parsed):
+    """
+    Return a friendly tip string when the query has a likely-wrong but
+    syntactically-valid pattern. Returns None if there's nothing to flag.
+
+    Currently detects: `tools_used == "<tool>"` on the conversations stream.
+    `tools_used` is a comma-separated string, so == only matches conversations
+    that used *exactly* that one tool — silently dropping any conversation
+    that combined it with another tool. Suggest `contains` instead.
+    """
+    if parsed.stream != 'conversations':
+        return None
+    for clause in parsed.clauses:
+        if not isinstance(clause, WhereClause):
+            continue
+        for cond in _iter_conditions(clause):
+            if (cond.field == 'tools_used'
+                    and cond.op == '=='
+                    and isinstance(cond.value, str)):
+                return (
+                    f'Tip: tools_used is a comma-separated list of every tool '
+                    f'a conversation used, so "tools_used == \"{cond.value}\"" '
+                    f'only matches conversations that used exactly that one '
+                    f'tool — multi-tool conversations are silently dropped. '
+                    f'For "any conversation that used {cond.value}", use '
+                    f'"tools_used contains \"{cond.value}\"" instead.'
+                )
+    return None
 
 
 @login_required
