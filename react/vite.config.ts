@@ -4,6 +4,7 @@ import tailwindcss from "tailwindcss"
 
 export default defineConfig({
   plugins: [react()],
+  base: '/static/js/dist/',
   build: {
     outDir: '../aquillm/aquillm/static/js/dist/',
     assetsDir: '',

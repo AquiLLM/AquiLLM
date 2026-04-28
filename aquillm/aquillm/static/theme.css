@@ -599,6 +599,36 @@
     color: var(--color-text-normal) !important;
 }
 
+/* KaTeX hover border + copy button */
+.markdown-cell .katex {
+    border-radius: 4px;
+    transition: outline-color 0.15s;
+    outline: 1px solid transparent;
+}
+.markdown-cell .katex:hover {
+    outline-color: var(--color-border-low_contrast, rgba(255,255,255,0.15));
+}
+.katex-copy-btn {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    background: var(--color-scheme-shade_5, #333);
+    border: 1px solid var(--color-border-mid_contrast, #555);
+    border-radius: 4px;
+    padding: 2px 4px;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--color-text-low_contrast, #aaa);
+    z-index: 1;
+    opacity: 0;
+    pointer-events: none;
+}
+.katex-copy-btn--visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
 .markdown-cell table {
     width: 100%;
     border-collapse: collapse;
