@@ -78,8 +78,10 @@ FIELD_MAP: dict[str, str] = {
 # e.g. 'conversation__owner_id' → 'user_id'
 _ORM_TO_FIELD = {v: k for k, v in FIELD_MAP.items()}
 
-# Virtual fields exist in ALLOWED_FIELDS for where-clause use but have no DB column.
-# They must never appear in select, summarize, or the default output field list.
+# Virtual fields exist in ALLOWED_FIELDS but have no DB column on Message.
+# They are computed in Python after fetching by looking up values per
+# conversation. Excluded from default `select` output (i.e. when no select
+# clause is given) so a bare `messages` query stays compact.
 VIRTUAL_FIELDS = frozenset({'conversation_tool'})
 
 # Safety cap — even without a LIMIT clause we never return more than this many rows.
@@ -296,6 +298,35 @@ def _compute_agg(func: str, values: list) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Virtual field resolution (multi-value lookups)
+# ---------------------------------------------------------------------------
+# Virtual fields like `conversation_tool` have no DB column on Message — they
+# describe something about the message's *conversation*. To display them in
+# select or group by them in summarize, we look up the values per conversation
+# and attach them to message rows after fetching.
+
+def _conversation_tool_lookup(conv_ids) -> dict:
+    """
+    Build a {conversation_id: sorted list of distinct tool names} map.
+
+    Conversations with no tool calls are absent from the map (callers should
+    treat absence as the empty list / a null group).
+    """
+    conv_id_set = {c for c in conv_ids if c is not None}
+    if not conv_id_set:
+        return {}
+    pairs = (
+        Message.objects
+        .filter(conversation_id__in=conv_id_set, tool_call_name__isnull=False)
+        .values_list('conversation_id', 'tool_call_name')
+    )
+    grouped: dict = defaultdict(set)
+    for conv_id, tool in pairs:
+        grouped[conv_id].add(tool)
+    return {cid: sorted(tools) for cid, tools in grouped.items()}
+
+
+# ---------------------------------------------------------------------------
 # Row-level finalisation (no summarize ran)
 # ---------------------------------------------------------------------------
 
@@ -312,20 +343,34 @@ def _finalise_row_level(qs, select: SelectClause | None) -> list[dict]:
     By the time we get here, all where / order_by / limit operations on the
     queryset have already been applied. We just need to project the right
     columns and remap ORM paths back to user-facing names.
+
+    Virtual fields (no DB column) are computed in Python after fetching by
+    looking up values per conversation. For `conversation_tool` we join the
+    list of distinct tools used in each conversation into a comma-separated
+    string, or leave it null when no tools were used.
     """
     output_fields = select.fields if select else sorted(ALLOWED_FIELDS - VIRTUAL_FIELDS)
+    output_field_set = set(output_fields)
 
-    # Always fetch thread metadata fields for the conversation viewer
-    fetch_fields = set(output_fields) | _THREAD_META_FIELDS
-    orm_fields = [_orm(f) for f in fetch_fields]
+    # Virtual fields can't be fetched from the DB — drop them from orm_fields
+    # but keep them in the desired output set. They get populated below.
+    db_fields = (set(output_fields) - VIRTUAL_FIELDS) | _THREAD_META_FIELDS
+    orm_fields = [_orm(f) for f in db_fields]
 
     # If no LIMIT was applied to the queryset, cap at MAX_ROWS as a safety net
     rows = list(qs.values(*orm_fields)[:MAX_ROWS])
 
-    output_field_set = set(output_fields)
+    # Resolve any virtual field values needed for output
+    tool_map: dict = {}
+    if 'conversation_tool' in output_field_set:
+        tool_map = _conversation_tool_lookup({r.get('conversation_id') for r in rows})
+
     result = []
     for row in rows:
         remapped = {_ORM_TO_FIELD.get(k, k): v for k, v in row.items()}
+        if 'conversation_tool' in output_field_set:
+            tools = tool_map.get(remapped.get('conversation_id'))
+            remapped['conversation_tool'] = ', '.join(tools) if tools else None
         result.append({
             k: v for k, v in remapped.items()
             if k in output_field_set or k in _THREAD_META_FIELDS
@@ -345,10 +390,18 @@ def _run_summarize(qs, summarize: SummarizeClause) -> list[dict]:
     Returns a list of dicts where each dict's keys are the group-by field
     names plus the aggregation aliases. From this point onward in the
     pipeline we work with this list rather than the queryset.
+
+    Multi-value virtual fields (currently just `conversation_tool`) are
+    unnested before grouping when used in `by`: a message in a conversation
+    that used N tools contributes N rows, one per tool. Conversations with
+    no tool calls contribute one row with the value None.
     """
     by_fields = summarize.by
     agg_fields_needed = {agg.agg_field for agg in summarize.aggregations if agg.agg_field}
-    fetch_fields = set(by_fields) | agg_fields_needed
+    fetch_fields = (set(by_fields) | agg_fields_needed) - VIRTUAL_FIELDS
+    # If a virtual field is in `by`, we need conversation_id to look up its values
+    if 'conversation_tool' in by_fields:
+        fetch_fields.add('conversation_id')
     orm_fields = [_orm(f) for f in fetch_fields]
 
     rows = list(qs.values(*orm_fields)[:MAX_ROWS])
@@ -356,10 +409,35 @@ def _run_summarize(qs, summarize: SummarizeClause) -> list[dict]:
     if not rows:
         return []
 
+    # Unnest virtual fields in `by` before grouping
+    if 'conversation_tool' in by_fields:
+        tool_map = _conversation_tool_lookup({r.get(_orm('conversation_id')) for r in rows})
+        expanded = []
+        conv_orm = _orm('conversation_id')
+        for row in rows:
+            tools = tool_map.get(row.get(conv_orm))
+            if tools:
+                for tool in tools:
+                    new_row = dict(row)
+                    new_row['conversation_tool'] = tool
+                    expanded.append(new_row)
+            else:
+                new_row = dict(row)
+                new_row['conversation_tool'] = None
+                expanded.append(new_row)
+        rows = expanded
+
+    # Virtual fields live under their own key after unnest; real fields are
+    # under the ORM lookup path returned by qs.values()
+    def _row_key(row: dict, field: str):
+        if field in VIRTUAL_FIELDS:
+            return row.get(field)
+        return row[_orm(field)]
+
     if by_fields:
         groups: dict[tuple, list[dict]] = defaultdict(list)
         for row in rows:
-            key = tuple(row[_orm(f)] for f in by_fields)
+            key = tuple(_row_key(row, f) for f in by_fields)
             groups[key].append(row)
 
         result = []
@@ -412,16 +490,6 @@ def execute(query: Query) -> list[dict]:
     post_summarize_keys: set[str] = set()
 
     select_clause: SelectClause | None = None
-
-    for clause in query.clauses:
-        if isinstance(clause, SelectClause) and 'conversation_tool' in clause.fields:
-            raise FeedbackQLSyntaxError(
-                "conversation_tool is a filter-only field — use it in a where clause, not select"
-            )
-        if isinstance(clause, SummarizeClause) and 'conversation_tool' in clause.by:
-            raise FeedbackQLSyntaxError(
-                "conversation_tool is a filter-only field — use it in a where clause, not summarize by"
-            )
 
     for clause in query.clauses:
         if isinstance(clause, WhereClause):

@@ -75,11 +75,12 @@ ALLOWED_FIELDS = frozenset({
     'tool_call_name',       # if this was a tool-use message, which tool was called
     'user_id',              # ID of the user who owns the conversation
     'conversation_id',      # ID of the conversation this message belongs to
-    # Virtual filter-only field — not a real column. Use in where clauses only.
-    # conversation_tool == "vector_search"  → conversation included that tool call
-    # conversation_tool != null             → conversation used any tool
-    # conversation_tool == null             → conversation used no tools
-    'conversation_tool',    # virtual: did this conversation involve a specific tool call?
+    # Virtual field — describes the tools used in this message's conversation.
+    # Has no DB column on Message; the executor resolves it via a per-conversation lookup.
+    # In where:    conversation_tool == "vector_search" / != null / == null
+    # In select:   comma-separated string of tools used (or null if none)
+    # In summarize by: each message contributes one row per tool used in its conversation
+    'conversation_tool',
 })
 
 # Aggregation functions that are valid inside a summarize clause

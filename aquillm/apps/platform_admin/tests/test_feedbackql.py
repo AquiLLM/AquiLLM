@@ -548,10 +548,87 @@ class TestConversationTool:
         assert len(results) == 1
         assert results[0]['message_uuid'] == rated.message_uuid
 
-    def test_conversation_tool_in_select_raises(self):
-        with pytest.raises(FeedbackQLSyntaxError, match="filter-only"):
-            run('messages | select rating, conversation_tool')
+    def test_select_returns_comma_separated_tools(self, user_a):
+        """select conversation_tool returns the tools used in each message's conversation."""
+        conv_with_tools = WSConversation.objects.create(owner=user_a)
+        _msg(conv_with_tools, 'assistant', 'lookup', 1, tool_call_name='vector_search')
+        _msg(conv_with_tools, 'assistant', 'more', 2, tool_call_name='more_context')
+        _msg(conv_with_tools, 'assistant', 'answer', 3, rating=4)
 
-    def test_conversation_tool_in_summarize_by_raises(self):
-        with pytest.raises(FeedbackQLSyntaxError, match="filter-only"):
-            run('messages | summarize n = count() by conversation_tool')
+        conv_no_tools = WSConversation.objects.create(owner=user_a)
+        _msg(conv_no_tools, 'assistant', 'plain', 1, rating=5)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'| select rating, conversation_tool'
+        )
+        by_rating = {r['rating']: r['conversation_tool'] for r in results}
+        # multi-tool conversation joins distinct tools alphabetically
+        assert by_rating[4] == 'more_context, vector_search'
+        # tool-free conversation shows null
+        assert by_rating[5] is None
+
+    def test_select_null_when_no_tools_used(self, user_a):
+        """conversation_tool is null for messages whose conversation used no tools."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'plain', 1, rating=3)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'| select rating, conversation_tool'
+        )
+        assert results[0]['conversation_tool'] is None
+
+    def test_summarize_by_unnests_each_tool(self, user_a):
+        """A message in a conversation with N tools contributes N rows to the group-by."""
+        conv = WSConversation.objects.create(owner=user_a)
+        _msg(conv, 'assistant', 'lookup', 1, tool_call_name='vector_search')
+        _msg(conv, 'assistant', 'more', 2, tool_call_name='more_context')
+        _msg(conv, 'assistant', 'answer', 3, rating=4)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'| summarize n = count() by conversation_tool'
+        )
+        by_tool = {r['conversation_tool']: r['n'] for r in results}
+        # The single rated message contributes once per tool used in its conversation
+        assert by_tool == {'vector_search': 1, 'more_context': 1}
+
+    def test_summarize_by_groups_tool_free_conversations_under_none(self, user_a):
+        """Conversations with no tools form a single (None) group, not an error."""
+        conv_no_tools = WSConversation.objects.create(owner=user_a)
+        _msg(conv_no_tools, 'assistant', 'plain1', 1, rating=3)
+        _msg(conv_no_tools, 'assistant', 'plain2', 2, rating=5)
+
+        conv_with_tool = WSConversation.objects.create(owner=user_a)
+        _msg(conv_with_tool, 'assistant', 'lookup', 1, tool_call_name='vector_search')
+        _msg(conv_with_tool, 'assistant', 'answer', 2, rating=4)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'| summarize n = count(), avg_r = avg(rating) by conversation_tool'
+        )
+        by_tool = {r['conversation_tool']: r for r in results}
+        assert by_tool[None]['n'] == 2
+        assert by_tool[None]['avg_r'] == pytest.approx(4.0)
+        assert by_tool['vector_search']['n'] == 1
+        assert by_tool['vector_search']['avg_r'] == pytest.approx(4.0)
+
+    def test_summarize_by_with_post_summarize_filter_on_alias(self, user_a):
+        """Unnested groups compose with post-summarize where on aggregate aliases."""
+        conv1 = WSConversation.objects.create(owner=user_a)
+        _msg(conv1, 'assistant', 'lookup', 1, tool_call_name='vector_search')
+        _msg(conv1, 'assistant', 'r1', 2, rating=2)
+        _msg(conv1, 'assistant', 'r2', 3, rating=3)
+
+        conv2 = WSConversation.objects.create(owner=user_a)
+        _msg(conv2, 'assistant', 'morecontext', 1, tool_call_name='more_context')
+        _msg(conv2, 'assistant', 'r3', 2, rating=5)
+
+        results = run(
+            f'messages | where user_id == {user_a.id} and rating != null '
+            f'| summarize avg_r = avg(rating) by conversation_tool '
+            f'| where avg_r < 4'
+        )
+        tools = [r['conversation_tool'] for r in results]
+        assert tools == ['vector_search']
