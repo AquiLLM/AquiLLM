@@ -1,4 +1,5 @@
 """API views for platform administration."""
+import json
 import structlog
 
 from django.contrib.auth import get_user_model
@@ -11,6 +12,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from apps.platform_admin.models import EmailWhitelist
+from apps.platform_admin.services.feedback_prql import build_feedback_prql
 from apps.platform_admin.services.feedback_export import (
     parse_query_bounds,
     stream_feedback_csv_gzip_bytes,
@@ -160,7 +162,28 @@ def feedback_ratings_csv(request):
     return response
 
 
+@login_required
+@require_http_methods(["GET"])
+def feedback_dashboard_prql(request):
+    """Return display-only PRQL for the feedback dashboard filters."""
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("Superuser access required")
+
+    raw_filters = request.GET.get("filters", "[]")
+    try:
+        filters = json.loads(raw_filters)
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Invalid filters JSON")
+
+    if not isinstance(filters, list):
+        return HttpResponseBadRequest("filters must be a JSON list")
+
+    prql = build_feedback_prql(filters)
+    return JsonResponse({"prql": prql})
+
+
 __all__ = [
+    'feedback_dashboard_prql',
     'feedback_ratings_csv',
     'search_users',
     'whitelisted_emails',
