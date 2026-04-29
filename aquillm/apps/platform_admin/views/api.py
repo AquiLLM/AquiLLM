@@ -16,6 +16,7 @@ from apps.platform_admin.services.feedback_export import (
     stream_feedback_csv_gzip_bytes,
     stream_feedback_csv_lines,
 )
+from apps.platform_admin.services.feedback_aggregates import get_filter_options
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -160,7 +161,18 @@ def feedback_ratings_csv(request):
     return response
 
 
+@login_required
+@require_http_methods(["GET"])
+def feedback_dashboard_filters(request):
+    """Return available filter option values for the feedback dashboard."""
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("Superuser access required")
+
+    return JsonResponse(get_filter_options())
+
+
 __all__ = [
+    'feedback_dashboard_filters',
     'feedback_ratings_csv',
     'search_users',
     'whitelisted_emails',
