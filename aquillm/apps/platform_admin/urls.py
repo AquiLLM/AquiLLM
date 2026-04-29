@@ -18,4 +18,5 @@ api_urlpatterns = [
 page_urlpatterns = [
     path("gemini-costs/", page_views.gemini_cost_monitor, name="gemini_cost_monitor"),
     path("email_whitelist/", page_views.email_whitelist, name="email_whitelist"),
+    path("feedback-dashboard/", page_views.feedback_dashboard, name="feedback_dashboard"),
 ]
