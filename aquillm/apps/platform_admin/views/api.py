@@ -1,4 +1,5 @@
 """API views for platform administration."""
+import math
 import structlog
 
 from django.contrib.auth import get_user_model
@@ -16,8 +17,64 @@ from apps.platform_admin.services.feedback_export import (
     stream_feedback_csv_gzip_bytes,
     stream_feedback_csv_lines,
 )
+from apps.platform_admin.services.feedback_dataset import (
+    FeedbackFilters,
+    get_filtered_queryset,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+def _require_superuser(request):
+    """Return a 403 response when the current user is not a superuser."""
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("Superuser access required")
+    return None
+
+
+def _to_iso_utc(dt):
+    """Convert a datetime to an ISO-8601 UTC string."""
+    if dt is None:
+        return None
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_positive_int(value, *, default: int, maximum: int | None = None) -> int:
+    """Parse a positive integer query parameter with a default and optional cap."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+
+    parsed = max(1, parsed)
+    if maximum is not None:
+        parsed = min(maximum, parsed)
+    return parsed
+
+
+def _serialize_feedback_row(message) -> dict:
+    """Serialize an annotated Message row for the dashboard table."""
+    return {
+        "id": message.id,
+        "message_uuid": str(message.message_uuid),
+        "conversation_id": message.conversation_id,
+        "conversation_name": message.conversation_name,
+        "user_id": message.user_id,
+        "username": message.username,
+        "rating": message.rating,
+        "feedback_text": message.feedback_text,
+        "feedback_submitted_at": _to_iso_utc(message.feedback_submitted_at),
+        "created_at": _to_iso_utc(message.created_at),
+        "effective_date": _to_iso_utc(message.effective_date),
+        "role": message.role,
+        "content_snippet": message.content_snippet,
+        "model": message.model,
+        "tool_call_name": message.tool_call_name,
+        "usage": message.usage,
+        "has_feedback_text": message.has_feedback_text,
+    }
 
 
 def _client_accepts_gzip(request) -> bool:
@@ -160,7 +217,40 @@ def feedback_ratings_csv(request):
     return response
 
 
+@login_required
+@require_http_methods(["GET"])
+def feedback_dashboard_rows(request):
+    """Return paginated feedback rows for the dashboard table."""
+    denied = _require_superuser(request)
+    if denied:
+        return denied
+
+    page = _parse_positive_int(request.GET.get("page"), default=1)
+    page_size = _parse_positive_int(
+        request.GET.get("page_size"),
+        default=50,
+        maximum=200,
+    )
+
+    filters = FeedbackFilters.from_request_params(request.GET.dict())
+    queryset = get_filtered_queryset(filters)
+
+    total_count = queryset.count()
+    offset = (page - 1) * page_size
+    rows = queryset[offset:offset + page_size]
+    total_pages = math.ceil(total_count / page_size) if total_count else 1
+
+    return JsonResponse({
+        "rows": [_serialize_feedback_row(row) for row in rows],
+        "page": page,
+        "page_size": page_size,
+        "total_count": total_count,
+        "total_pages": total_pages,
+    })
+
+
 __all__ = [
+    'feedback_dashboard_rows',
     'feedback_ratings_csv',
     'search_users',
     'whitelisted_emails',
