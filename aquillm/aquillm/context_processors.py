@@ -84,6 +84,7 @@ _PAGE_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("pdf_ingestion_monitor", "pdf_ingestion_monitor", {"doc_id": 0}),
     ("ingestion_dashboard", "ingestion_dashboard", None),
     ("email_whitelist", "email_whitelist", None),
+    ("feedback_dashboard", "feedback_dashboard", None),
     ("ingest_handwritten_notes", "ingest_handwritten_notes", None),
     ("gemini_cost_monitor", "gemini_cost_monitor", None),
     ("new_ws_convo", "new_ws_convo", None),
