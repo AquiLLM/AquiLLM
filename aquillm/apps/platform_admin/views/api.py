@@ -16,6 +16,8 @@ from apps.platform_admin.services.feedback_export import (
     stream_feedback_csv_gzip_bytes,
     stream_feedback_csv_lines,
 )
+from apps.platform_admin.services.feedback_dataset import FeedbackFilters
+from apps.platform_admin.services.feedback_aggregates import get_summary_metrics
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -160,7 +162,26 @@ def feedback_ratings_csv(request):
     return response
 
 
+@login_required
+@require_http_methods(["GET"])
+def feedback_dashboard_summary(request):
+    """Return aggregate summary metrics for the feedback dashboard."""
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("Superuser access required")
+
+    filters = FeedbackFilters.from_request_params(request.GET.dict())
+    summary = get_summary_metrics(filters)
+
+    summary["rating_distribution"] = {
+        str(rating): count
+        for rating, count in summary["rating_distribution"].items()
+    }
+
+    return JsonResponse(summary)
+
+
 __all__ = [
+    'feedback_dashboard_summary',
     'feedback_ratings_csv',
     'search_users',
     'whitelisted_emails',
