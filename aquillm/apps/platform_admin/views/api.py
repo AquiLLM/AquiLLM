@@ -21,6 +21,7 @@ from apps.platform_admin.services.feedback_dataset import (
     FeedbackFilters,
     get_filtered_queryset,
 )
+from apps.platform_admin.services.feedback_prql import build_feedback_prql
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -75,6 +76,97 @@ def _serialize_feedback_row(message) -> dict:
         "usage": message.usage,
         "has_feedback_text": message.has_feedback_text,
     }
+
+
+
+def _feedback_filters_to_prql_specs(filters: FeedbackFilters) -> list[dict]:
+    """Convert parsed dashboard filters into display-only PRQL filter specs."""
+    specs = []
+
+    if filters.start_date:
+        specs.append({
+            "field": "effective_date",
+            "operator": "on_or_after",
+            "value": filters.start_date,
+        })
+
+    if filters.end_date:
+        specs.append({
+            "field": "effective_date",
+            "operator": "on_or_before",
+            "value": filters.end_date,
+        })
+
+    if filters.user_id is not None:
+        specs.append({
+            "field": "user_id",
+            "operator": "equals",
+            "value": filters.user_id,
+        })
+
+    if filters.exact_rating is not None:
+        specs.append({
+            "field": "rating",
+            "operator": "equals",
+            "value": filters.exact_rating,
+        })
+    else:
+        if filters.min_rating is not None:
+            specs.append({
+                "field": "rating",
+                "operator": "greater_than_or_equal",
+                "value": filters.min_rating,
+            })
+        if filters.max_rating is not None:
+            specs.append({
+                "field": "rating",
+                "operator": "less_than_or_equal",
+                "value": filters.max_rating,
+            })
+
+    if filters.feedback_text_search:
+        specs.append({
+            "field": "feedback_text",
+            "operator": "contains",
+            "value": filters.feedback_text_search,
+        })
+
+    if filters.conversation_name_search:
+        specs.append({
+            "field": "conversation_name",
+            "operator": "contains",
+            "value": filters.conversation_name_search,
+        })
+
+    if filters.role:
+        specs.append({
+            "field": "role",
+            "operator": "equals",
+            "value": filters.role,
+        })
+
+    if filters.model:
+        specs.append({
+            "field": "model",
+            "operator": "equals",
+            "value": filters.model,
+        })
+
+    if filters.tool_call_name:
+        specs.append({
+            "field": "tool_call_name",
+            "operator": "equals",
+            "value": filters.tool_call_name,
+        })
+
+    if filters.has_feedback_text is not None:
+        specs.append({
+            "field": "has_feedback_text",
+            "operator": "equals",
+            "value": filters.has_feedback_text,
+        })
+
+    return specs
 
 
 def _client_accepts_gzip(request) -> bool:
@@ -240,12 +332,15 @@ def feedback_dashboard_rows(request):
     rows = queryset[offset:offset + page_size]
     total_pages = math.ceil(total_count / page_size) if total_count else 1
 
+    prql = build_feedback_prql(_feedback_filters_to_prql_specs(filters))
+
     return JsonResponse({
         "rows": [_serialize_feedback_row(row) for row in rows],
         "page": page,
         "page_size": page_size,
         "total_count": total_count,
         "total_pages": total_pages,
+        "prql": prql,
     })
 
 
