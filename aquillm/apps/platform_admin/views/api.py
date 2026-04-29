@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from apps.platform_admin.models import EmailWhitelist
+from apps.platform_admin.services.feedback_dataset import FeedbackFilters, get_filtered_queryset
 from apps.platform_admin.services.feedback_export import (
     parse_query_bounds,
     stream_feedback_csv_gzip_bytes,
@@ -19,6 +20,62 @@ from apps.platform_admin.services.feedback_export import (
 
 logger = structlog.stdlib.get_logger(__name__)
 
+
+
+def _feedback_dashboard_csv_rows(filters):
+    """Yield feedback dashboard rows as CSV text."""
+    import csv
+    import io
+
+    header = [
+        "id",
+        "message_uuid",
+        "conversation_id",
+        "conversation_name",
+        "user_id",
+        "username",
+        "rating",
+        "feedback_text",
+        "feedback_submitted_at",
+        "created_at",
+        "effective_date",
+        "role",
+        "content_snippet",
+        "model",
+        "tool_call_name",
+        "usage",
+        "has_feedback_text",
+    ]
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(header)
+    yield buffer.getvalue()
+
+    queryset = get_filtered_queryset(filters)
+    for message in queryset.iterator(chunk_size=1000):
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, lineterminator="\n")
+        writer.writerow([
+            message.id,
+            str(message.message_uuid),
+            message.conversation_id,
+            message.conversation_name,
+            message.user_id,
+            message.username,
+            "" if message.rating is None else message.rating,
+            message.feedback_text or "",
+            message.feedback_submitted_at.isoformat() if message.feedback_submitted_at else "",
+            message.created_at.isoformat() if message.created_at else "",
+            message.effective_date.isoformat() if message.effective_date else "",
+            message.role,
+            message.content_snippet or "",
+            message.model or "",
+            message.tool_call_name or "",
+            message.usage,
+            message.has_feedback_text,
+        ])
+        yield buffer.getvalue()
 
 def _client_accepts_gzip(request) -> bool:
     """True if Accept-Encoding lists gzip (or x-gzip) with q > 0."""
@@ -160,7 +217,25 @@ def feedback_ratings_csv(request):
     return response
 
 
+@login_required
+@require_http_methods(["GET"])
+def feedback_dashboard_export(request):
+    """Export filtered feedback dashboard rows as CSV."""
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("Superuser access required")
+
+    filters = FeedbackFilters.from_request_params(request.GET.dict())
+    response = StreamingHttpResponse(
+        _feedback_dashboard_csv_rows(filters),
+        content_type="text/csv; charset=utf-8",
+    )
+    fname = f'feedback_dashboard_{timezone.now().strftime("%Y%m%d")}.csv'
+    response["Content-Disposition"] = f'attachment; filename="{fname}"'
+    return response
+
+
 __all__ = [
+    'feedback_dashboard_export',
     'feedback_ratings_csv',
     'search_users',
     'whitelisted_emails',
