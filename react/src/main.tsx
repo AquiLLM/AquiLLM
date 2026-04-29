@@ -15,6 +15,7 @@ import UserSettings from './components/UserSettings';
 import ChatFileUpload from './components/ChatFileUpload';
 import BugReportButton from './components/BugReportButton';
 import BugReportsAdmin from './components/BugReportsAdmin';
+import FeedbackDashboard from './features/platform_admin/components/feedback-dashboard/FeedbackDashboard';
 // Type for the components mapping
 type ComponentsMap = {
   [key: string]: React.ComponentType<any>;
@@ -49,6 +50,7 @@ window.mountReactComponent = (
     ChatFileUpload: ChatFileUpload,
     BugReportButton: BugReportButton,
     BugReportsAdmin: BugReportsAdmin,
+    FeedbackDashboard: FeedbackDashboard,
     // Add other components here
   };
   
