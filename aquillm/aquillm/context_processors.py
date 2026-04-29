@@ -53,6 +53,7 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_whitelist_email", "api_whitelist_email", {"email": "placeholder@example.com"}),
     ("api_whitelist_emails", "api_whitelist_emails", None),
     ("api_feedback_ratings_csv", "api_feedback_ratings_csv", None),
+    ("api_feedback_dashboard_export", "api_feedback_dashboard_export", None),
     ("api_ingest_vtt", "api_ingest_vtt", None),
     ("api_ingest_uploads", "api_ingest_uploads", None),
     ("api_ingest_uploads_status", "api_ingest_uploads_status", {"batch_id": 0}),
