@@ -1,0 +1,628 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Feedback Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mx-auto p-6 text-text-normal max-w-7xl">
+
+    <!-- ── Header ──────────────────────────────────────────────────── -->
+    <h1 class="text-3xl font-bold mb-6">Feedback Dashboard</h1>
+
+    {% if access_denied %}
+    <!-- ── Access denied ────────────────────────────────────────────── -->
+    <div class="p-6 rounded-lg bg-scheme-shade_3 element-border text-center">
+        <p class="text-lg font-semibold mb-1">Admin access only</p>
+        <p class="text-sm text-text-muted">Only site administrators can view this page.</p>
+    </div>
+    {% else %}
+
+    <!-- ── Query editor ────────────────────────────────────────────── -->
+    <div class="mb-4">
+        <div class="relative">
+            <textarea
+                id="query-editor"
+                rows="4"
+                spellcheck="false"
+                placeholder="messages | where rating < 3 | limit 20"
+                class="w-full font-mono text-sm rounded-lg px-4 py-3 bg-scheme-shade_3 element-border
+                       text-text-normal placeholder-text-muted resize-y focus:outline-none
+                       focus:ring-2 focus:ring-blue-500/50"
+            >{{ query_text }}</textarea>
+        </div>
+        <div class="flex items-center gap-3 mt-2">
+            <button id="run-btn"
+                    class="px-5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm
+                           font-semibold active:scale-95 transition-all shadow-sm">
+                Run
+            </button>
+            <button id="copy-link-btn"
+                    class="px-4 py-1.5 rounded-lg bg-scheme-shade_5 hover:bg-scheme-shade_6
+                           text-sm transition-all">
+                Copy link
+            </button>
+        </div>
+    </div>
+
+    <!-- ── Syntax quick reference ───────────────────────────────────── -->
+    <details class="mb-5 rounded-lg bg-scheme-shade_3 element-border text-sm">
+        <summary class="px-4 py-2.5 cursor-pointer font-semibold select-none hover:text-blue-500 transition-colors">
+            Syntax quick reference
+        </summary>
+        <div class="px-4 pb-5 pt-3 space-y-5 text-xs">
+
+            <div class="p-3 rounded bg-scheme-shade_2 element-border text-text-muted leading-relaxed">
+                <span class="font-semibold text-text-normal">Note: </span>
+                This query language is modeled on
+                <a href="https://learn.microsoft.com/en-us/azure/data-explorer/kusto/query/"
+                   target="_blank" class="text-blue-500 hover:underline">KQL (Kusto Query Language)</a>
+                but is a simplified subset with a few differences noted below.
+                KQL documentation and examples online will mostly apply here, but not all KQL features exist.
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono">
+                <div>
+                    <p class="font-sans font-semibold text-text-normal mb-1 text-xs">Row query example</p>
+                    <pre class="leading-relaxed text-text-muted bg-scheme-shade_2 rounded p-2">messages
+| where rating &lt; 3
+| select rating, model, feedback_text
+| order by rating asc
+| limit 50</pre>
+                    <p class="font-sans text-text-muted mt-2 text-xs leading-relaxed">
+                        Finds the worst-rated messages, showing which model produced them and what the user said in their feedback.
+                        Useful for quickly identifying pain points — the messages users were most unhappy with.
+                    </p>
+                </div>
+                <div>
+                    <p class="font-sans font-semibold text-text-normal mb-1 text-xs">Aggregate query example</p>
+                    <pre class="leading-relaxed text-text-muted bg-scheme-shade_2 rounded p-2">messages
+| where rating != null
+| summarize n = count() by rating
+| order by rating asc</pre>
+                    <p class="font-sans text-text-muted mt-2 text-xs leading-relaxed">
+                        Produces a rating distribution — how many messages received each star score (1 through 5).
+                        Useful for understanding overall user sentiment at a glance, and will produce a histogram chart.
+                        Note: always filter out null models when grouping by model (<span class="text-text-normal">where model != null</span>),
+                        since user messages have no model and would otherwise appear as a separate group.
+                    </p>
+                </div>
+                <div class="md:col-span-2">
+                    <p class="font-sans font-semibold text-text-normal mb-1 text-xs">Conversations stream example</p>
+                    <pre class="leading-relaxed text-text-muted bg-scheme-shade_2 rounded p-2">conversations
+| where rated_count &gt; 0 and avg_rating &lt; 3
+| select conversation_id, name, message_count, avg_rating, tools_used
+| order by avg_rating asc</pre>
+                    <p class="font-sans text-text-muted mt-2 text-xs leading-relaxed">
+                        One row per conversation, with derived fields like <span class="text-text-normal">avg_rating</span>,
+                        <span class="text-text-normal">message_count</span>, and <span class="text-text-normal">tools_used</span> aggregated across that
+                        conversation's messages. This finds rated conversations whose overall rating dropped below 3 — useful for
+                        spotting conversations with a poor experience overall, not just isolated bad turns.
+                    </p>
+                </div>
+            </div>
+
+            <div class="space-y-3 text-text-muted">
+
+                <div>
+                    <p class="font-semibold text-text-normal mb-1">Streams &amp; their fields</p>
+                    <p class="text-text-muted mb-2 leading-relaxed">
+                        Every query starts with a <em>stream</em>, which determines what each result row represents
+                        and which fields you can use.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <p class="font-mono text-text-normal mb-1"><span class="text-text-normal">messages</span></p>
+                            <p class="text-text-muted/80 mb-1.5 leading-relaxed">One row per message turn (user message, assistant reply, or tool call).</p>
+                            <div class="font-mono grid grid-cols-2 gap-x-3 gap-y-0.5">
+                                <span>rating</span><span class="text-text-muted/60">— 1–5 stars</span>
+                                <span>feedback_text</span><span class="text-text-muted/60">— written comment</span>
+                                <span>feedback_submitted_at</span><span class="text-text-muted/60">— rating timestamp</span>
+                                <span>model</span><span class="text-text-muted/60">— AI model</span>
+                                <span>role</span><span class="text-text-muted/60">— user / assistant / tool</span>
+                                <span>content</span><span class="text-text-muted/60">— message text</span>
+                                <span>created_at</span><span class="text-text-muted/60">— message timestamp</span>
+                                <span>user_id</span><span class="text-text-muted/60">— user account ID</span>
+                                <span>conversation_id</span><span class="text-text-muted/60">— conversation ID</span>
+                                <span>sequence_number</span><span class="text-text-muted/60">— position in conv.</span>
+                                <span>message_uuid</span><span class="text-text-muted/60">— unique message ID</span>
+                                <span>tool_call_name</span><span class="text-text-muted/60">— tool used (intermediate)</span>
+                                <span>conversation_tool</span><span class="text-text-muted/60">— tools used in conv. (see below)</span>
+                            </div>
+                        </div>
+                        <div>
+                            <p class="font-mono text-text-normal mb-1"><span class="text-text-normal">conversations</span></p>
+                            <p class="text-text-muted/80 mb-1.5 leading-relaxed">One row per conversation, with derived aggregates across its messages.</p>
+                            <div class="font-mono grid grid-cols-2 gap-x-3 gap-y-0.5">
+                                <span>conversation_id</span><span class="text-text-muted/60">— conversation ID</span>
+                                <span>user_id</span><span class="text-text-muted/60">— owner</span>
+                                <span>name</span><span class="text-text-muted/60">— auto title</span>
+                                <span>created_at</span><span class="text-text-muted/60">— start time</span>
+                                <span>updated_at</span><span class="text-text-muted/60">— last activity</span>
+                                <span>message_count</span><span class="text-text-muted/60">— total turns</span>
+                                <span>rated_count</span><span class="text-text-muted/60">— turns with a rating</span>
+                                <span>avg_rating</span><span class="text-text-muted/60">— mean rating</span>
+                                <span>min_rating</span><span class="text-text-muted/60">— lowest rating</span>
+                                <span>max_rating</span><span class="text-text-muted/60">— highest rating</span>
+                                <span>last_rated_at</span><span class="text-text-muted/60">— most recent rating time</span>
+                                <span>tools_used</span><span class="text-text-muted/60">— comma-list of tools used</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <p class="font-semibold text-text-normal mb-1">Clauses (in order)</p>
+                    <div class="space-y-1 font-mono">
+                        <div><span class="text-text-normal">messages</span> / <span class="text-text-normal">conversations</span> — every query must start with one of these</div>
+                        <div><span class="text-text-normal">| where</span> <em>condition</em> — filter rows; chain with <span class="text-text-normal">and</span> / <span class="text-text-normal">or</span></div>
+                        <div><span class="text-text-normal">| select</span> <em>field, field, …</em> — choose which columns to return (omit to get all)</div>
+                        <div><span class="text-text-normal">| summarize</span> <em>alias = func(field), …</em> <span class="text-text-normal">by</span> <em>field</em> — aggregate; omit <span class="text-text-normal">by</span> for a global total</div>
+                        <div><span class="text-text-normal">| order by</span> <em>field</em> <span class="text-text-normal">asc</span>/<span class="text-text-normal">desc</span> — sort results</div>
+                        <div><span class="text-text-normal">| limit</span> <em>n</em> — cap number of rows returned</div>
+                    </div>
+                </div>
+
+                <div>
+                    <p class="font-semibold text-text-normal mb-1">Comparison operators</p>
+                    <div class="font-mono space-y-0.5">
+                        <div><span class="text-text-normal">==  !=  &lt;  &gt;  &lt;=  &gt;=</span> — standard comparisons</div>
+                        <div><span class="text-text-normal">field startswith "text"</span> — prefix match (case-insensitive)</div>
+                        <div><span class="text-text-normal">field contains "text"</span> — substring match (case-insensitive)</div>
+                        <div><span class="text-text-normal">field in [1, 2, 3]</span> — membership test
+                            <span class="text-text-muted/60"> — note: uses [ ] not ( ) unlike standard KQL</span></div>
+                        <div><span class="text-text-normal">field == null</span> — matches rows where the field has no value</div>
+                        <div><span class="text-text-normal">field != null</span> — matches rows where the field has a value</div>
+                    </div>
+                </div>
+
+                <div>
+                    <p class="font-semibold text-text-normal mb-1">Aggregation functions</p>
+                    <div class="font-mono space-y-0.5">
+                        <div><span class="text-text-normal">avg(field)</span> — average of non-null values</div>
+                        <div><span class="text-text-normal">count()</span> — total number of rows in group</div>
+                        <div><span class="text-text-normal">min(field)</span> / <span class="text-text-normal">max(field)</span> — lowest / highest value</div>
+                        <div><span class="text-text-normal">sum(field)</span> — total of all values</div>
+                        <div><span class="text-text-normal">median(field)</span> — middle value
+                            <span class="text-text-muted/60"> — not in standard KQL (use percentile() there instead)</span></div>
+                    </div>
+                </div>
+
+                <div>
+                    <p class="font-semibold text-text-normal mb-1">Working with tool use (<code>conversation_tool</code>)</p>
+                    <p class="text-text-muted mb-1.5 leading-relaxed">
+                        When the AI uses a tool (e.g. document search), the tool call is stored on a separate message from the
+                        rated response. <code class="text-text-normal">conversation_tool</code> describes the tools used anywhere
+                        in this message's conversation, so you can ask questions across the conversation, not just the rated turn.
+                    </p>
+                    <div class="font-mono space-y-0.5">
+                        <div><span class="text-text-normal">where conversation_tool == "vector_search"</span> <span class="text-text-muted/60">— conversation used vector search</span></div>
+                        <div><span class="text-text-normal">where conversation_tool != null</span> <span class="text-text-muted/60">— conversation used any tool</span></div>
+                        <div><span class="text-text-normal">where conversation_tool == null</span> <span class="text-text-muted/60">— conversation used no tools</span></div>
+                        <div><span class="text-text-normal">select rating, conversation_tool</span> <span class="text-text-muted/60">— show tools per row (comma-separated, null when none)</span></div>
+                        <div><span class="text-text-normal">summarize n = count() by conversation_tool</span> <span class="text-text-muted/60">— group by tool (each message counts once per tool used)</span></div>
+                    </div>
+                    <p class="text-text-muted mt-1.5 leading-relaxed">
+                        Available tool names: <code class="text-text-normal">vector_search</code>, <code class="text-text-normal">more_context</code>,
+                        <code class="text-text-normal">document_ids</code>, <code class="text-text-normal">whole_document</code>,
+                        <code class="text-text-normal">search_single_document</code>, <code class="text-text-normal">sky_subtraction</code>,
+                        <code class="text-text-normal">flat_fielding</code>, <code class="text-text-normal">detect_point_sources</code>
+                    </p>
+                    <p class="text-text-muted mt-2 leading-relaxed">
+                        On the <code class="text-text-normal">conversations</code> stream the equivalent field is
+                        <code class="text-text-normal">tools_used</code> — a comma-separated string of every distinct tool the
+                        conversation used. Filter it with <code class="text-text-normal">contains</code> rather than
+                        <code class="text-text-normal">==</code>, e.g. <code class="text-text-normal">where tools_used contains "vector_search"</code>.
+                        <code class="text-text-normal">==</code> only matches conversations that used <em>exactly</em> that one tool, so
+                        any multi-tool conversation gets silently dropped.
+                    </p>
+                </div>
+
+                <div class="font-mono p-2 rounded bg-scheme-shade_2 text-text-muted/70 leading-relaxed">
+                    <span class="font-sans font-semibold text-text-normal">Differences from KQL: </span>
+                    Use <span class="text-text-normal">select</span> instead of <span class="text-text-normal">project</span> ·
+                    Use <span class="text-text-normal">in [  ]</span> with square brackets ·
+                    <span class="text-text-normal">median()</span> is built-in ·
+                    No joins, let statements, time functions, or cross-table queries ·
+                    Only the fields listed above are accessible
+                </div>
+
+            </div>
+        </div>
+    </details>
+
+    <!-- ── Error ────────────────────────────────────────────────────── -->
+    {% if error %}
+    <div class="mb-5 p-4 rounded-lg bg-red-900/40 border border-red-500 text-red-300 text-sm">
+        <strong>Error:</strong> {{ error }}
+    </div>
+    {% endif %}
+
+    <!-- ── Tip / non-blocking advisory ───────────────────────────────── -->
+    {% if notice %}
+    <div class="mb-5 p-4 rounded-lg bg-amber-900/30 border border-amber-500/60 text-amber-200 text-sm">
+        {{ notice }}
+    </div>
+    {% endif %}
+
+    {% if query_text and not error %}
+
+    <!-- ── Row count ────────────────────────────────────────────────── -->
+    {% if rows %}
+    <p class="mb-3 text-sm text-text-muted">{{ row_count }} row{{ row_count|pluralize }}</p>
+    {% else %}
+    <p class="mb-3 text-sm text-text-muted">No results.</p>
+    {% endif %}
+
+    <!-- ── Chart (summarize + by queries only) ──────────────────────── -->
+    {% if chart_json %}
+    <div class="mb-6 p-4 rounded-lg bg-scheme-shade_3 element-border">
+        <canvas id="results-chart" style="max-height: 340px;"></canvas>
+    </div>
+    {% endif %}
+
+    <!-- ── Results table ────────────────────────────────────────────── -->
+    {% if rows %}
+    <div class="overflow-x-auto rounded-lg element-border">
+        <table class="w-full text-sm">
+            <thead class="bg-scheme-shade_3">
+                <tr>
+                    {% if is_row_level %}<th class="px-2 py-2 w-8"></th>{% endif %}
+                    {% for col in columns %}
+                    <th class="px-3 py-2 text-left font-semibold whitespace-nowrap">{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr class="border-t border-scheme-contrast/20 hover:bg-scheme-shade_3/50"
+                    {% if is_row_level %}
+                    data-conv-id="{{ row.conversation_id }}"
+                    data-msg-uuid="{{ row.message_uuid }}"
+                    {% endif %}>
+                    {% if is_row_level %}
+                    <td class="px-2 py-2 text-center">
+                        <button
+                            class="text-text-low_contrast hover:text-blue-500 transition-colors"
+                            title="View full conversation"
+                            onclick="openThread(this.closest('tr').dataset.convId, this.closest('tr').dataset.msgUuid)">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none"
+                                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                            </svg>
+                        </button>
+                    </td>
+                    {% endif %}
+                    {% for cell in row.cells %}
+                    <td class="px-3 py-2 max-w-xs truncate cursor-pointer hover:text-blue-500"
+                        onclick="showCell(this)"
+                        data-value="{{ cell|default_if_none:'' }}">{{ cell|default_if_none:"—" }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {% endif %}{# end query_text and not error #}
+
+    {% endif %}{# end access_denied #}
+
+</div>
+
+<!-- ── Cell expand modal ────────────────────────────────────────────── -->
+<div id="cell-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60"
+     onclick="closeCell()">
+    <div class="bg-scheme-shade_2 element-border rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto"
+         onclick="event.stopPropagation()">
+        <pre id="cell-modal-content" class="whitespace-pre-wrap text-sm text-text-normal font-mono break-words"></pre>
+        <button onclick="closeCell()"
+                class="mt-4 px-4 py-1.5 rounded-lg bg-scheme-shade_5 hover:bg-scheme-shade_6 text-sm transition-all">
+            Close
+        </button>
+    </div>
+</div>
+
+<!-- ── Conversation thread modal ─────────────────────────────────────── -->
+<div id="thread-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60"
+     onclick="closeThread()">
+    <div class="bg-scheme-shade_2 element-border rounded-lg flex flex-col max-w-3xl w-full mx-4"
+         style="max-height: 88vh;"
+         onclick="event.stopPropagation()">
+
+        <!-- Header -->
+        <div class="flex items-center justify-between px-5 py-3 border-b border-scheme-contrast/20 flex-shrink-0">
+            <div>
+                <span class="font-semibold text-text-normal text-sm">Conversation thread</span>
+                <span id="thread-meta" class="ml-2 text-xs text-text-muted"></span>
+            </div>
+            <button onclick="closeThread()"
+                    class="text-text-low_contrast hover:text-text-normal transition-colors text-xl leading-none"
+                    title="Close">&times;</button>
+        </div>
+
+        <!-- Loading / error state -->
+        <div id="thread-loading" class="flex items-center justify-center py-16 hidden">
+            <div class="animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
+        </div>
+        <div id="thread-error" class="px-5 py-4 text-red-400 text-sm hidden"></div>
+
+        <!-- Messages scroll area -->
+        <div id="thread-messages"
+             class="flex-1 overflow-y-auto px-5 py-4 space-y-3 min-h-0">
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if not access_denied %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// ── UTF-8-safe base64 encode (matches Python's base64.b64encode on UTF-8 bytes) ──
+function b64encode(str) {
+    return btoa(
+        encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, h) =>
+            String.fromCharCode(parseInt(h, 16))
+        )
+    );
+}
+
+function buildUrl(queryText) {
+    const encoded = b64encode(queryText.trim());
+    return window.location.origin + window.location.pathname + '?q=' + encodeURIComponent(encoded);
+}
+
+// ── Run button ─────────────────────────────────────────────────────────
+const editor = document.getElementById('query-editor');
+
+document.getElementById('run-btn').addEventListener('click', function () {
+    const q = editor.value.trim();
+    if (!q) return;
+    window.location.href = buildUrl(q);
+});
+
+// ── Copy shareable link ────────────────────────────────────────────────
+document.getElementById('copy-link-btn').addEventListener('click', function () {
+    const q = editor.value.trim();
+    if (!q) { alert('Type a query first.'); return; }
+    const url = buildUrl(q);
+    navigator.clipboard.writeText(url).then(() => {
+        this.textContent = 'Copied!';
+        setTimeout(() => { this.textContent = 'Copy link'; }, 2000);
+    });
+});
+
+// ── Chart ──────────────────────────────────────────────────────────────
+{% if chart_json %}
+(function () {
+    const chartData = {{ chart_json|safe }};
+    const PALETTE = [
+        'rgba(99,179,237,0.75)',
+        'rgba(154,230,180,0.75)',
+        'rgba(252,196,100,0.75)',
+        'rgba(252,129,129,0.75)',
+        'rgba(183,148,246,0.75)',
+        'rgba(251,182,206,0.75)',
+    ];
+
+    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const tickColor = isDark ? '#bbb' : '#555';
+    const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+
+    const datasets = chartData.datasets.map((ds, i) => ({
+        label: ds.label,
+        data: ds.data,
+        backgroundColor: PALETTE[i % PALETTE.length],
+        borderRadius: 4,
+    }));
+
+    new Chart(document.getElementById('results-chart'), {
+        type: 'bar',
+        data: { labels: chartData.labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: { labels: { color: tickColor, font: { size: 12 } } },
+            },
+            scales: {
+                x: { ticks: { color: tickColor }, grid: { color: gridColor } },
+                y: { ticks: { color: tickColor }, grid: { color: gridColor }, beginAtZero: true },
+            },
+        },
+    });
+}());
+{% endif %}
+
+// ── Cell expand modal ──────────────────────────────────────────────────
+function showCell(td) {
+    const val = td.dataset.value;
+    if (!val) return;
+    document.getElementById('cell-modal-content').textContent = val;
+    const modal = document.getElementById('cell-modal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeCell() {
+    const modal = document.getElementById('cell-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { closeCell(); closeThread(); }
+});
+
+// ── Conversation thread modal ──────────────────────────────────────────
+
+function openThread(convId, msgUuid) {
+    if (!convId) return;
+
+    const modal    = document.getElementById('thread-modal');
+    const loading  = document.getElementById('thread-loading');
+    const errEl    = document.getElementById('thread-error');
+    const msgArea  = document.getElementById('thread-messages');
+    const metaEl   = document.getElementById('thread-meta');
+
+    // Reset state
+    msgArea.innerHTML = '';
+    errEl.classList.add('hidden');
+    errEl.textContent = '';
+    metaEl.textContent = '';
+    loading.classList.remove('hidden');
+
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+
+    fetch('/aquillm/feedback-dashboard/conversation/?id=' + encodeURIComponent(convId))
+        .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.error || 'Server error')))
+        .then(data => {
+            loading.classList.add('hidden');
+            const msgs = data.messages || [];
+            metaEl.textContent = msgs.length + ' message' + (msgs.length !== 1 ? 's' : '');
+            if (!msgs.length) {
+                msgArea.innerHTML = '<p class="text-text-muted text-sm">No messages found.</p>';
+                return;
+            }
+            msgs.forEach(m => {
+                msgArea.appendChild(buildBubble(m, m.message_uuid === msgUuid));
+            });
+            // Scroll highlighted message into view
+            const highlighted = msgArea.querySelector('.thread-focal-msg');
+            if (highlighted) {
+                highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            }
+        })
+        .catch(err => {
+            loading.classList.add('hidden');
+            errEl.textContent = typeof err === 'string' ? err : 'Failed to load conversation.';
+            errEl.classList.remove('hidden');
+        });
+}
+
+function closeThread() {
+    const modal = document.getElementById('thread-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+function buildBubble(msg, isFocal) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex justify-start' + (isFocal ? ' thread-focal-msg' : '');
+
+    const inner = document.createElement('div');
+    inner.className = 'w-[88%] flex flex-col items-start';
+
+    // ── Label row ──
+    const labelRow = document.createElement('div');
+    labelRow.className = 'flex items-center gap-1.5 mb-1';
+
+    const dot = document.createElement('span');
+    if (msg.role === 'user') {
+        dot.className = 'w-3 h-3 rounded-full bg-scheme-shade_7 flex-shrink-0';
+    } else if (msg.role === 'assistant') {
+        dot.className = 'w-3 h-3 rounded-full bg-blue-500 flex-shrink-0';
+    } else {
+        dot.className = 'w-3 h-3 rounded-full flex-shrink-0';
+        dot.style.backgroundColor = 'var(--color-secondary_accent-DEFAULT)';
+    }
+
+    const label = document.createElement('span');
+    label.className = 'text-[11px] text-text-low_contrast';
+    label.textContent = msg.role === 'user' ? 'You'
+                      : msg.role === 'tool' ? 'Tool'
+                      : (msg.model ? 'AquiLLM (' + msg.model + ')' : 'AquiLLM');
+
+    labelRow.append(dot, label);
+
+    if (msg.rating != null) {
+        const stars = document.createElement('span');
+        stars.className = 'ml-1 text-[11px]';
+        stars.textContent = '★'.repeat(msg.rating) + '☆'.repeat(5 - msg.rating);
+        stars.style.color = msg.rating <= 2 ? 'var(--color-secondary_accent-DEFAULT)'
+                          : msg.rating === 3 ? 'var(--color-text-low-contrast)'
+                          : 'var(--color-green-DEFAULT)';
+        labelRow.appendChild(stars);
+    }
+
+    if (isFocal) {
+        const tag = document.createElement('span');
+        tag.className = 'ml-1 text-[10px] px-1.5 py-0.5 rounded bg-blue-600/20 text-blue-400 font-semibold';
+        tag.textContent = 'result row';
+        labelRow.appendChild(tag);
+    }
+
+    // ── Bubble ──
+    const bubble = document.createElement('div');
+    let bubbleClass = 'w-full p-2 rounded-[10px] shadow-sm whitespace-pre-wrap break-words element-border leading-[1.35] text-[14px] text-text-normal ';
+    if (msg.role === 'tool') {
+        bubbleClass += 'chat-bubble-left-border-tool text-text-non_user_text_bubble';
+    } else {
+        bubbleClass += 'chat-bubble-left-border-assistant';
+    }
+    if (isFocal) {
+        bubbleClass += ' ring-2 ring-blue-500/60';
+    }
+    bubble.className = bubbleClass;
+
+    // Content
+    if (msg.role === 'tool') {
+        const toolHeader = document.createElement('div');
+        toolHeader.className = 'mb-1 font-bold text-sm';
+        toolHeader.textContent = 'Tool output: ' + (msg.tool_name || '');
+        bubble.appendChild(toolHeader);
+
+        if (msg.result_dict) {
+            const details = document.createElement('details');
+            details.className = 'text-xs';
+            if (msg.for_whom === 'user') details.open = true;
+            const summary = document.createElement('summary');
+            summary.className = 'cursor-pointer text-text-low_contrast hover:text-text-normal';
+            summary.textContent = 'exception' in (msg.result_dict || {}) ? 'View exception' : 'View result';
+            const pre = document.createElement('pre');
+            pre.className = 'mt-1 whitespace-pre-wrap break-words rounded p-2 text-xs overflow-x-auto';
+            pre.style.background = 'var(--color-tool-details-section-tool)';
+            pre.textContent = JSON.stringify(
+                msg.result_dict.exception ?? msg.result_dict.result ?? msg.result_dict, null, 2
+            );
+            details.append(summary, pre);
+            bubble.appendChild(details);
+        }
+    } else if (msg.role === 'assistant' && msg.tool_call_input) {
+        const toolHeader = document.createElement('div');
+        toolHeader.className = 'font-bold text-sm';
+        toolHeader.textContent = 'Called tool: ' + (msg.tool_call_name || '');
+        bubble.appendChild(toolHeader);
+
+        const details = document.createElement('details');
+        details.className = 'text-xs mt-1';
+        const summary = document.createElement('summary');
+        summary.className = 'cursor-pointer text-text-low_contrast hover:text-text-normal';
+        summary.textContent = 'View arguments';
+        const pre = document.createElement('pre');
+        pre.className = 'mt-1 whitespace-pre-wrap break-words rounded p-2 text-xs overflow-x-auto';
+        pre.style.background = 'var(--color-tool-details-section-assistant)';
+        pre.textContent = JSON.stringify(msg.tool_call_input, null, 2);
+        details.append(summary, pre);
+        bubble.appendChild(details);
+    } else {
+        bubble.textContent = msg.content || '';
+    }
+
+    // Feedback text (shown below bubble when present)
+    if (msg.feedback_text) {
+        const fb = document.createElement('div');
+        fb.className = 'mt-1 text-xs text-text-low_contrast italic';
+        fb.textContent = 'Feedback: \u201c' + msg.feedback_text + '\u201d';
+        inner.append(labelRow, bubble, fb);
+    } else {
+        inner.append(labelRow, bubble);
+    }
+
+    wrapper.appendChild(inner);
+    return wrapper;
+}
+</script>
+{% endif %}
+{% endblock %}

@@ -59,6 +59,8 @@ from apps.ingestion.views.pages import (
 from apps.platform_admin.views.pages import (
     gemini_cost_monitor,
     email_whitelist,
+    feedback_dashboard,
+    conversation_thread,
 )
 
 # Re-export bug report views
@@ -87,6 +89,8 @@ urlpatterns = [
     path("ingest_handwritten_notes/", ingest_handwritten_notes, name="ingest_handwritten_notes"),
     path('gemini-costs/', gemini_cost_monitor, name='gemini_cost_monitor'),
     path('bug-reports/', bug_reports_admin, name='bug_reports_admin'),
+    path('feedback-dashboard/', feedback_dashboard, name='feedback_dashboard'),
+    path('feedback-dashboard/conversation/', conversation_thread, name='conversation_thread'),
 ]
 
 if DEBUG:
