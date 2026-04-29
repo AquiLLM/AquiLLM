@@ -1,0 +1,26 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Feedback Dashboard{% endblock %}
+
+{% block content %}
+{% if access_denied %}
+<div class="container mx-auto p-6 text-text-normal max-w-7xl">
+    <h1 class="text-3xl font-bold mb-6">Feedback Dashboard</h1>
+    <div class="p-6 rounded-lg bg-scheme-shade_3 element-border text-center">
+        <p class="text-lg font-semibold mb-1">Admin access only</p>
+        <p class="text-sm text-text-muted">Only site administrators can view this page.</p>
+    </div>
+</div>
+{% else %}
+<div id="feedback-dashboard-root"></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if not access_denied %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+    mountReactComponent('feedback-dashboard-root', 'FeedbackDashboard', {});
+</script>
+{% endif %}
+{% endblock %}

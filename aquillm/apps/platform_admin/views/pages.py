@@ -26,7 +26,17 @@ def email_whitelist(request):
     return render(request, 'aquillm/email_whitelist.html')
 
 
+@login_required
+@require_http_methods(['GET'])
+def feedback_dashboard(request):
+    """Feedback dashboard — renders the shell; React takes over client-side."""
+    return render(request, 'aquillm/feedback_dashboard.html', {
+        'access_denied': not request.user.is_superuser,
+    })
+
+
 __all__ = [
     'gemini_cost_monitor',
     'email_whitelist',
+    'feedback_dashboard',
 ]
