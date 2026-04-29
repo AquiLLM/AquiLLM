@@ -12,6 +12,7 @@ api_urlpatterns = [
     path("whitelisted_email/<str:email>/", api_views.whitelisted_email, name="api_whitelist_email"),
     path("whitelisted_emails/", api_views.whitelisted_emails, name="api_whitelist_emails"),
     path("feedback/ratings.csv", api_views.feedback_ratings_csv, name="api_feedback_ratings_csv"),
+    path("feedback/dashboard/rows/", api_views.feedback_dashboard_rows, name="api_feedback_dashboard_rows"),
 ]
 
 # Page URL patterns (to be included under /aquillm/)
