@@ -109,6 +109,11 @@ LOGGING = {
             "level": "DEBUG",
             "propagate": True,
         },
+        "apps": {
+            "handlers": _default_handlers,
+            "level": "DEBUG",
+            "propagate": True,
+        },
         "celery": {
             "handlers": _default_handlers,
             "level": "DEBUG",
