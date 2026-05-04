@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import FilterBar from './FilterBar';
+import FilterKQLPreview from './FilterKQLPreview';
 import QueryBuilder from './QueryBuilder';
 import QueryBuilderHelp from './QueryBuilderHelp';
 import QueryEditor from './QueryEditor';
@@ -7,6 +9,8 @@ import ResultsChart from './ResultsChart';
 import ResultsTable from './ResultsTable';
 import ThreadModal from './ThreadModal';
 import { b64decode, b64encode, runQuery } from './api';
+import { useFilterBar } from './useFilterBar';
+import { useFilterOptions } from './useFilterOptions';
 import type { QueryResponse } from './types';
 
 function isPageReload(): boolean {
@@ -15,9 +19,6 @@ function isPageReload(): boolean {
 }
 
 function readQueryFromUrl(): string {
-  // A browser refresh should always give a blank slate, even if the URL still
-  // has the ?q= from the last query run. Clean the URL so the shareable-link
-  // behaviour still works for fresh visits.
   if (isPageReload()) {
     if (window.location.search) {
       window.history.replaceState({}, '', window.location.pathname);
@@ -34,10 +35,6 @@ function buildShareableUrl(queryText: string): string {
   return `${window.location.origin}${window.location.pathname}?q=${encodeURIComponent(encoded)}`;
 }
 
-// Pull the offending token from a parser error message.
-// Error messages tend to quote the bad identifier in single or double quotes,
-// e.g. "Unknown field 'foo'" or 'Unexpected character: "@"'. Returns null if
-// there's no clear token to highlight.
 function extractBadToken(errorMessage: string): string | null {
   const match = errorMessage.match(/'([^']+)'|"([^"]+)"/);
   if (!match) return null;
@@ -61,10 +58,25 @@ function renderQueryWithHighlight(queryText: string, badToken: string | null): R
 
 const FeedbackDashboard: React.FC = () => {
   const [queryText, setQueryText] = useState<string>(() => readQueryFromUrl());
-  const [response, setResponse] = useState<QueryResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [thread, setThread] = useState<{ conversationId: string; messageUuid: string } | null>(null);
-  const [showHelp, setShowHelp] = useState<boolean>(false);
+  const [response, setResponse]   = useState<QueryResponse | null>(null);
+  const [loading, setLoading]     = useState(false);
+  const [thread, setThread]       = useState<{ conversationId: string; messageUuid: string } | null>(null);
+  const [showHelp, setShowHelp]   = useState(false);
+
+  const {
+    filters,
+    kqlPreview,
+    kqlForExecution,
+    hasActiveFilters,
+    setFilter,
+    resetFilters,
+  } = useFilterBar();
+
+  const { options, loading: optionsLoading } = useFilterOptions();
+
+  // track whether the last query came from the filter bar or the editor
+  // so we know whether to show the filter KQL preview or the editor KQL
+  const [filterBarActive, setFilterBarActive] = useState(false);
 
   const executeQuery = async (text: string) => {
     const trimmed = text.trim();
@@ -91,29 +103,37 @@ const FeedbackDashboard: React.FC = () => {
     }
   };
 
-  // Run initial query if URL has ?q=
+  // -------------------------------------------------------------------------
+  // filter bar auto-execution
+  // when kqlForExecution changes (debounced), run the filter-generated query
+  // also load the generated KQL into the query editor so the user can see
+  // and further edit it
+  // -------------------------------------------------------------------------
+  const isFirstRender = useRef(true);
+
   useEffect(() => {
-    if (queryText.trim()) {
-      void executeQuery(queryText);
+    // skip on first render — only run when filters actually change
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const trimmed = kqlForExecution.trim();
+    setFilterBarActive(true);
+    setQueryText(kqlForExecution);
+    window.history.replaceState({}, '', window.location.pathname);
+    void executeQuery(trimmed);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kqlForExecution]);
 
-  // React to browser back/forward — reparse the URL and rerun
-  useEffect(() => {
-    const onPopState = () => {
-      const next = readQueryFromUrl();
-      setQueryText(next);
-      if (next.trim()) void executeQuery(next);
-      else setResponse(null);
-    };
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, []);
-
+  // -------------------------------------------------------------------------
+  // manual editor run (Run button or Ctrl+Enter)
+  // when the user manually runs a query, mark filter bar as inactive so the
+  // preview shows the editor content, not the filter-generated KQL
+  // -------------------------------------------------------------------------
   const handleRun = () => {
     const trimmed = queryText.trim();
     if (!trimmed) return;
+    setFilterBarActive(false);
     const url = buildShareableUrl(trimmed);
     window.history.pushState({}, '', url);
     void executeQuery(trimmed);
@@ -122,19 +142,40 @@ const FeedbackDashboard: React.FC = () => {
   const handleClear = () => {
     setQueryText('');
     setResponse(null);
+    setFilterBarActive(false);
     window.history.pushState({}, '', window.location.pathname);
   };
 
   const handleCopyLink = () => {
     const trimmed = queryText.trim();
-    if (!trimmed) {
-      alert('Type a query first.');
-      return;
-    }
+    if (!trimmed) { alert('Type a query first.'); return; }
     void navigator.clipboard.writeText(buildShareableUrl(trimmed));
   };
 
+  useEffect(() => {
+    if (queryText.trim()) {
+      void executeQuery(queryText);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const next = readQueryFromUrl();
+      setQueryText(next);
+      setFilterBarActive(false);
+      if (next.trim()) void executeQuery(next);
+      else setResponse(null);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   const hasQueryRun = response !== null;
+
+  // the KQL shown in the live preview — either the filter-generated KQL
+  // (when filter bar is the active source) or the raw editor text
+  const previewKQL = filterBarActive ? kqlPreview : queryText;
 
   return (
     <div className="container mx-auto p-6 text-text-normal max-w-7xl">
@@ -150,11 +191,38 @@ const FeedbackDashboard: React.FC = () => {
         </button>
       </div>
 
-      <QueryBuilder value={queryText} onChange={setQueryText} />
+      <FilterBar
+        filters={filters}
+        options={options}
+        optionsLoading={optionsLoading}
+        hasActiveFilters={hasActiveFilters}
+        onFilterChange={(key, value) => {
+          setFilter(key, value as string);
+        }}
+        onReset={() => {
+          resetFilters();
+          setFilterBarActive(false);
+          setQueryText('');
+          setResponse(null);
+        }}
+      />
+
+      <FilterKQLPreview kql={previewKQL} loading={loading && filterBarActive} />
+
+      <QueryBuilder
+        value={queryText}
+        onChange={(v) => {
+          setQueryText(v);
+          setFilterBarActive(false);
+        }}
+      />
 
       <QueryEditor
         value={queryText}
-        onChange={setQueryText}
+        onChange={(v) => {
+          setQueryText(v);
+          setFilterBarActive(false);
+        }}
         onRun={handleRun}
         onCopyLink={handleCopyLink}
         onClear={handleClear}

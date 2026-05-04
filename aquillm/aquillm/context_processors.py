@@ -67,6 +67,7 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_bug_reports_list", "api_bug_reports_list", None),
     ("api_bug_report_detail", "api_bug_report_detail", {"report_id": 0}),
     ("api_bug_report_delete", "api_bug_report_delete", {"report_id": 0}),
+    ("api_feedback_filter_options", "api_feedback_filter_options", None),
 ]
 
 # Named page routes for window.pageUrls (non-API aquillm pages).

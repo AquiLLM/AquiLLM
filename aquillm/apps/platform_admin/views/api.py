@@ -383,6 +383,69 @@ def feedback_dashboard_conversation(request):
         logger.exception('feedback_dashboard_conversation: unexpected error', exc_info=exc)
         return JsonResponse({'error': 'An unexpected error occurred.'}, status=500)
 
+@login_required
+@require_http_methods(['GET'])
+def feedback_filter_options(request):
+    """
+    Return available filter option values for the filter bar dropdowns.
+    Uses the feedbackql executor to query the messages stream for models and tools.
+    Uses Django ORM directly for users (needs username not just ID).
+    Superuser only.
+    """
+    if not request.user.is_superuser:
+        return JsonResponse({'error': 'forbidden'}, status=403)
+
+    from ..feedbackql import run
+    from ..feedbackql.exceptions import FeedbackQLError
+
+    try:
+        # distinct models present in the messages table
+        model_rows = run(
+            'messages | where model != null | summarize n = count() by model | order by n desc'
+        )
+        models = [r['model'] for r in model_rows if r.get('model')]
+
+        # distinct tool call names
+        tool_rows = run(
+            'messages | where tool_call_name != null | summarize n = count() by tool_call_name | order by n desc'
+        )
+        tool_names = [r['tool_call_name'] for r in tool_rows if r.get('tool_call_name')]
+
+        # distinct roles
+        role_rows = run(
+            'messages | summarize n = count() by role | order by n desc'
+        )
+        roles = [r['role'] for r in role_rows if r.get('role')]
+
+        # users who own at least one conversation with a rated message
+        from apps.chat.models import Message
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user_ids_qs = (
+            Message.objects
+            .filter(rating__isnull=False)
+            .values_list('conversation__owner_id', flat=True)
+            .distinct()
+        )
+        users = list(
+            User.objects
+            .filter(id__in=user_ids_qs)
+            .order_by('username')
+            .values('id', 'username')
+        )
+
+        return JsonResponse({
+            'users':      users,
+            'models':     models,
+            'tool_names': tool_names,
+            'ratings':    [1, 2, 3, 4, 5],
+            'roles':      roles,
+        })
+    except FeedbackQLError as exc:
+        return JsonResponse({'error': str(exc)}, status=500)
+    except Exception as exc:
+        logger.exception('feedback_filter_options: unexpected error', exc_info=exc)
+        return JsonResponse({'error': 'unexpected error'}, status=500)
 
 __all__ = [
     'feedback_ratings_csv',
@@ -391,4 +454,5 @@ __all__ = [
     'whitelisted_email',
     'feedback_dashboard_query',
     'feedback_dashboard_conversation',
+    'feedback_filter_options',
 ]
