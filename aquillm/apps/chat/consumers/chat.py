@@ -16,7 +16,7 @@ from django.contrib.auth.models import User
 from aquillm.llm import LLMInterface, LLMTool, message_to_user
 from aquillm.memory import augment_conversation_with_memory_async
 from aquillm.message_adapters import load_conversation_from_db, pydantic_message_to_frontend_dict
-from aquillm.settings import DEBUG
+from aquillm.settings import DEBUG, SKILLS_ENABLED
 from aquillm.tasks import enqueue_conversation_memories_task
 from apps.chat.consumers.chat_delta import send_conversation_delta
 from apps.chat.consumers.chat_receive import handle_chat_receive
@@ -24,6 +24,7 @@ from apps.chat.consumers.chat_ws_errors import send_connect_error
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
+from apps.chat.services.skills_runtime import build_skill_tools, effective_base_system_for_memory
 from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
 from lib.tools.debug.weather import get_debug_weather_tool
 
@@ -108,6 +109,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.dead = True
             await self.send('{"exception": "Invalid chat_id"}')
             return
+        if SKILLS_ENABLED:
+            self.tools = self.tools + build_skill_tools(self)
         try:
             self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
             self.last_sent_sequence = len(self.convo) - 1
@@ -125,7 +128,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
             augment_start = perf_counter()
             await augment_conversation_with_memory_async(
-                self.convo, self.user, self.db_convo.system_prompt, self.db_convo.id
+                self.convo, self.user, effective_base_system_for_memory(self), self.db_convo.id
             )
             logger.info(
                 "Memory augmentation took %.1fms in connect()",

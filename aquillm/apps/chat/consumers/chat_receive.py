@@ -21,6 +21,7 @@ from apps.chat.consumers.chat_ws_errors import (
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import ConversationFile
 from apps.chat.services.feedback import apply_message_feedback_text, apply_message_rating
+from apps.chat.services.skills_runtime import effective_base_system_for_memory
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -108,7 +109,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 await augment_conversation_with_memory_async(
                     consumer.convo,
                     consumer.user,
-                    consumer.db_convo.system_prompt,
+                    effective_base_system_for_memory(consumer),
                     consumer.db_convo.id,
                 )
                 logger.info(
