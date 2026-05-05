@@ -33,6 +33,14 @@ def _doc_has_renderable_image(doc: Any) -> bool:
     return True
 
 
+def _retrieval_message(*, search_string: str | None, search_scope: str) -> str:
+    scope = " ".join((search_scope or "documents").split())
+    query = " ".join((search_string or "").split())
+    if query:
+        return f'I searched {scope} for "{query}", but retrieval returned no relevant passages.'
+    return f"I searched {scope}, but retrieval returned no relevant passages."
+
+
 def pack_chunk_search_results(
     results: Sequence[Any],
     *,
@@ -42,6 +50,8 @@ def pack_chunk_search_results(
     image_modality: Any,
     image_url_prefix: str = "/aquillm/document_image/",
     compact_items: bool | None = None,
+    search_string: str | None = None,
+    search_scope: str = "documents",
 ) -> dict[str, Any]:
     """Build the tool `result` dict for multi-chunk search (collections or single doc)."""
     use_compact = _compact_items_default() if compact_items is None else compact_items
@@ -132,7 +142,30 @@ def pack_chunk_search_results(
                 else:
                     items.append({**base, "text": truncate(chunk.content)})
 
-    ret: dict[str, Any] = {"result": items}
+    if not items:
+        return {
+            "result": [],
+            "retrieval_status": "no_results",
+            "retrieval_message": _retrieval_message(
+                search_string=search_string,
+                search_scope=search_scope,
+            ),
+        }
+
+    retrieved_documents = sorted(
+        {
+            str(item.get("title") or item.get("n"))
+            for item in items
+            if item.get("title") or item.get("n")
+        }
+    )
+    ret: dict[str, Any] = {
+        "result": items,
+        "retrieval_status": "results_found",
+        "retrieved_count": len(items),
+    }
+    if retrieved_documents:
+        ret["retrieved_documents"] = retrieved_documents
     if has_image_results:
         ret["_image_instruction"] = IMAGE_MARKDOWN_INSTRUCTION
 

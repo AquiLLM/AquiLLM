@@ -107,6 +107,8 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             docs_by_doc_id=docs_by_doc_id,
             truncate=truncate_tool_text,
             image_modality=TextChunk.Modality.IMAGE,
+            search_string=search_string,
+            search_scope="selected documents",
         )
 
     return vector_search
@@ -236,6 +238,8 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             docs_by_doc_id=docs_by_doc_id,
             truncate=truncate_tool_text,
             image_modality=TextChunk.Modality.IMAGE,
+            search_string=search_string,
+            search_scope=f'document "{doc.title}"',
         )
 
     return search_single_document
