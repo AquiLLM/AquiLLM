@@ -10,6 +10,7 @@ import { linkifyRagCitations } from '../../../utils/linkifyRagCitations';
 import { resolveSiteAbsoluteUrl } from '../../../utils/resolveSiteAbsoluteUrl';
 import { Collapsible, ToolResult, AquillmLogo, UserLogo } from '../../../shared/components';
 import { RatingButtons } from './RatingButtons';
+import { splitOnUnclosedMarkdown } from '../utils';
 import type { Message } from '../types';
 
 interface MessageBubbleProps {
@@ -106,7 +107,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
             </ReactMarkdown>
           </div>
         )}
-        {message.role === 'assistant' && !message.tool_call_input && (
+        {message.role === 'assistant' && !message.tool_call_input && (() => {
+          const safe = message.done === false
+            ? splitOnUnclosedMarkdown(message.content).safe
+            : message.content;
+          return (
           <div className="markdown-cell prose prose-sm md:prose-base max-w-none whitespace-normal leading-relaxed">
             <ReactMarkdown
               remarkPlugins={[remarkGfm, remarkMath]}
@@ -160,11 +165,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
                 },
               }}
             >
-              {linkifyRagCitations(message.content)}
+              {linkifyRagCitations(safe)}
             </ReactMarkdown>
           </div>
-        )}
-        
+          );
+        })()}
+
         {message.role === 'assistant' && message.tool_call_input && (
           <div className="mt-2.5 text-sm">
             <strong>Called Tool: {message.tool_call_name}</strong>

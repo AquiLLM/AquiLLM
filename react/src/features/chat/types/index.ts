@@ -11,6 +11,7 @@ export interface Message {
   for_whom?: 'user' | 'assistant';
   usage?: number;
   files?: [string, number][];
+  done?: boolean;
 }
 
 export interface Collection {

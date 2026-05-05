@@ -234,6 +234,7 @@ def pydantic_message_to_frontend_dict(msg: LLM_Message) -> dict:
     }
 
     if isinstance(msg, AssistantMessage):
+        msg_dict['done'] = True
         if msg.tool_call_name:
             msg_dict['tool_call_name'] = msg.tool_call_name
             msg_dict['tool_call_input'] = msg.tool_call_input

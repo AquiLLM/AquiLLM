@@ -222,6 +222,21 @@ async def complete_conversation_turn(
             await stream_func(out)
 
         effective_stream_func = _live_citation_stream
+
+    # Defer "done=True" to the post-turn delta so the frontend never briefly
+    # observes a partial-but-marked-done state during cutoff continuation,
+    # citation retry, or final synthesis retry. The canonical content is sent
+    # exactly once, in the delta produced by send_conversation_delta.
+    if callable(effective_stream_func):
+        _inner_stream_func = effective_stream_func
+
+        async def _defer_done_stream(payload: dict) -> Any:
+            out = dict(payload)
+            if out.get("done"):
+                out["done"] = False
+            await _inner_stream_func(out)
+
+        effective_stream_func = _defer_done_stream
     tool_step_max_tokens = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 512, minimum=128)
     post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 1536, minimum=256)
     continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 768, minimum=128)

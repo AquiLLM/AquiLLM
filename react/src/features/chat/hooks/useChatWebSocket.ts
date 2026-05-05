@@ -121,6 +121,7 @@ export function useChatWebSocket({
               content: data.stream.content || '',
               message_uuid: data.stream.message_uuid,
               usage: data.stream.usage,
+              done: data.stream.done ?? false,
             };
 
             setConversation((prev) => {

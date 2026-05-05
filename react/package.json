@@ -8,12 +8,15 @@
     "build": "vite build --emptyOutDir",
     "watch": "vite build --watch --emptyOutDir",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:e2e": "npx playwright test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "htmlparser2": "^12.0.0",
     "katex": "^0.16.45",
     "lucide-react": "^0.475.0",
     "react": "^19.0.0",
