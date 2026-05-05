@@ -26,7 +26,7 @@ async def test_search_async_uses_graph_client_when_enabled(monkeypatch):
             self.memory = memory
 
         async def search(self, *_args, **_kwargs):
-            return {"results": [{"memory": self.memory}]}
+            return {"results": [{"memory": self.memory, "metadata": {"user_id": "1"}}]}
 
     async def fake_get_mem0_oss_async():
         return FakeMem0("graph answer")
@@ -70,7 +70,7 @@ async def test_search_async_graph_failure_retries_vector_client(monkeypatch):
     class FakeVectorMem0:
         async def search(self, *_args, **_kwargs):
             seen_clients.append("vector")
-            return {"results": [{"memory": "vector fallback"}]}
+            return {"results": [{"memory": "vector fallback", "metadata": {"user_id": "1"}}]}
 
     async def fake_get_mem0_oss_async_vector():
         return FakeVectorMem0()
@@ -106,12 +106,12 @@ async def test_search_async_graph_attempt_uses_shorter_timeout_budget(monkeypatc
     class FakeGraphMem0:
         async def search(self, *_args, **_kwargs):
             seen_clients.append("graph")
-            return {"results": [{"memory": "vector fallback"}]}
+            return {"results": [{"memory": "vector fallback", "metadata": {"user_id": "1"}}]}
 
     class FakeVectorMem0:
         async def search(self, *_args, **_kwargs):
             seen_clients.append("vector")
-            return {"results": [{"memory": "vector fallback"}]}
+            return {"results": [{"memory": "vector fallback", "metadata": {"user_id": "1"}}]}
 
     async def fake_get_mem0_oss_async():
         return FakeGraphMem0()
@@ -157,7 +157,7 @@ async def test_search_async_timeout_log_reports_actual_graph_budget(monkeypatch)
 
     class FakeMem0:
         async def search(self, *_args, **kwargs):
-            return {"results": [{"memory": "vector fallback"}]}
+            return {"results": [{"memory": "vector fallback", "metadata": {"user_id": "1"}}]}
 
     async def fake_get_mem0_oss_async():
         return FakeMem0()
@@ -211,7 +211,7 @@ async def test_search_async_vector_only_retry_timeout_logs_explicitly(monkeypatc
 
     class FakeMem0:
         async def search(self, *_args, **kwargs):
-            return {"results": [{"memory": "unused"}]}
+            return {"results": [{"memory": "unused", "metadata": {"user_id": "1"}}]}
 
     async def fake_get_mem0_oss_async():
         return FakeMem0()
@@ -268,7 +268,7 @@ async def test_call_mem0_search_async_logs_timed_out_mode(monkeypatch):
 
     class FakeMem0:
         async def search(self, *_args, **kwargs):
-            return {"results": [{"memory": "unused"}]}
+            return {"results": [{"memory": "unused", "metadata": {"user_id": "1"}}]}
 
     async def fake_wait_for(awaitable, timeout):
         awaitable.close()
@@ -341,7 +341,7 @@ async def test_search_async_offloads_mem0_call_to_thread(monkeypatch):
     class FakeMem0:
         def search(self, *_args, **kwargs):
             seen["kwargs"] = kwargs
-            return {"results": [{"memory": "graph answer"}]}
+            return {"results": [{"memory": "graph answer", "metadata": {"user_id": "1"}}]}
 
     async def fake_get_mem0_oss_async():
         return FakeMem0()

@@ -45,6 +45,7 @@ def test_add_mem0_messages_uses_infer_with_graph_enabled(monkeypatch):
             ],
             "user_id": "1",
             "metadata": {
+                "user_id": "1",
                 "conversation_id": 9,
                 "assistant_message_uuid": "abc-123",
                 "source": "aquillm",
