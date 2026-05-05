@@ -1,6 +1,7 @@
 """Hybrid vector + trigram chunk retrieval with reranking."""
 from __future__ import annotations
 
+import re
 import structlog
 from time import perf_counter
 from typing import TYPE_CHECKING, List, Type
@@ -10,6 +11,7 @@ from django.conf import settings as django_settings
 from django.contrib.postgres.search import TrigramSimilarity
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError
+from django.db.models import Q
 from pgvector.django import L2Distance
 
 from apps.documents.services.chunk_rerank import _fallback_rerank, rerank_chunks
@@ -18,6 +20,65 @@ if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+_EXACT_STOPWORDS = {
+    "about",
+    "after",
+    "answer",
+    "before",
+    "could",
+    "document",
+    "documents",
+    "explain",
+    "information",
+    "selected",
+    "should",
+    "through",
+    "where",
+    "which",
+    "would",
+}
+
+
+def _salient_exact_terms(query: str, *, max_terms: int = 8) -> list[str]:
+    """Extract exact fallback terms that are likely to matter for document recall."""
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def add(term: str) -> None:
+        cleaned = term.strip(" \t\r\n\"'`.,;:!?()[]{}")
+        if len(cleaned) < 3:
+            return
+        key = cleaned.lower()
+        if key in seen or key in _EXACT_STOPWORDS:
+            return
+        seen.add(key)
+        terms.append(cleaned)
+
+    for quoted in re.findall(r'"([^"]{3,96})"|\'([^\']{3,96})\'', query or ""):
+        add(quoted[0] or quoted[1])
+
+    for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_./:+-]{2,}", query or ""):
+        lowered = token.lower()
+        has_symbol = any(ch in token for ch in "-_./:+")
+        has_digit = any(ch.isdigit() for ch in token)
+        uppercase_count = sum(1 for ch in token if ch.isupper())
+        is_acronym = uppercase_count >= 2
+        is_long_domain_word = len(token) >= 10 and lowered not in _EXACT_STOPWORDS
+        if has_symbol or has_digit or is_acronym or is_long_domain_word:
+            add(token)
+        if len(terms) >= max_terms:
+            break
+
+    return terms[:max_terms]
+
+
+def _exact_term_query(terms: list[str]) -> Q:
+    query = Q()
+    for term in terms:
+        query |= Q(content__icontains=term)
+    return query
 
 
 def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: List):
@@ -46,6 +107,7 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
     trigram_min = int(getattr(django_settings, "RAG_TRIGRAM_MIN_LIMIT", 0))
     vector_limit = max(top_k + 2, vector_min, min(vector_top_k, raw_cap))
     trigram_limit = max(top_k + 2, trigram_min, min(trigram_top_k, raw_cap))
+    exact_limit = max(top_k + 2, min(trigram_top_k, raw_cap))
     tri_sim_min = float(getattr(django_settings, "RAG_TRIGRAM_SIMILARITY_MIN", 0.000001))
     total_start = perf_counter()
 
@@ -82,7 +144,19 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             .order_by("-similarity")[:trigram_limit]
         )
         trigram_ms = (perf_counter() - trigram_start) * 1000
-        combined_candidates = list(vector_results) + list(trigram_results)
+        exact_start = perf_counter()
+        exact_terms = _salient_exact_terms(query)
+        if exact_terms:
+            exact_results = (
+                model_cls.objects.filter_by_documents(docs)
+                .filter(modality=model_cls.Modality.TEXT)
+                .filter(_exact_term_query(exact_terms))
+                .order_by("doc_id", "chunk_number")[:exact_limit]
+            )
+        else:
+            exact_results = model_cls.objects.none()
+        exact_ms = (perf_counter() - exact_start) * 1000
+        combined_candidates = list(vector_results) + list(trigram_results) + list(exact_results)
         pre_dedupe_count = len(combined_candidates)
         deduped_candidates = []
         seen_pks = set()
@@ -101,14 +175,16 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             rerank_ms = (perf_counter() - rerank_start) * 1000
         total_ms = (perf_counter() - total_start) * 1000
         logger.info(
-            "text_chunk_search latency %.1fms (vector=%.1fms trigram=%.1fms rerank=%.1fms "
-            "docs=%d top_k=%d pre_dedupe=%d candidates=%d)",
+            "text_chunk_search latency %.1fms (vector=%.1fms trigram=%.1fms exact=%.1fms rerank=%.1fms "
+            "docs=%d top_k=%d exact_terms=%d pre_dedupe=%d candidates=%d)",
             total_ms,
             vector_ms,
             trigram_ms,
+            exact_ms,
             rerank_ms,
             len(docs),
             top_k,
+            len(exact_terms),
             pre_dedupe_count,
             len(combined_candidates),
         )
