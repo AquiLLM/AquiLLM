@@ -83,6 +83,8 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
         Prefer this tool when the question may span many documents; it does not require document UUIDs.
         Returns text chunks and image chunks. For image chunks, both the image and its OCR-extracted
         text are provided.
+        After using this tool, tell the user that you searched the selected documents for
+        `search_string`, and cite or name the documents used in the final answer.
         When returning results to the user that include images, use markdown image syntax:
         ![description](image_url)
         """
@@ -202,6 +204,8 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
         documents, prefer vector_search instead (no doc_id required).
         Returns text chunks and image chunks. For image chunks, both the image and its
         OCR-extracted text are provided.
+        After using this tool, tell the user which document was searched for `search_string`,
+        and cite or name the document in the final answer.
         When returning results to the user that include images, use markdown image syntax:
         ![description](image_url)
         """

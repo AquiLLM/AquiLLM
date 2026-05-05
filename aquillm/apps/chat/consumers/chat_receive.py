@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import structlog
+import re
 from base64 import b64decode
 from json import loads
 from time import perf_counter
@@ -24,6 +25,35 @@ from apps.chat.services.feedback import apply_message_feedback_text, apply_messa
 from apps.chat.services.skills_runtime import effective_base_system_for_memory
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+_DOCUMENT_TARGET_RE = re.compile(
+    r"\b(documents?|docs?|papers?|files?|selected collections?|sources?)\b",
+    flags=re.IGNORECASE,
+)
+_DOCUMENT_SEARCH_ACTION_RE = re.compile(
+    r"\b(search|check|find|scan|read|retrieve|query|consult)\b|"
+    r"\blook\s+(?:at|in|through|up)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _looks_like_explicit_document_search_request(message_content: str) -> bool:
+    """True when the user explicitly asks the assistant to retrieve from documents."""
+    text = message_content or ""
+    return bool(_DOCUMENT_TARGET_RE.search(text) and _DOCUMENT_SEARCH_ACTION_RE.search(text))
+
+
+def _configure_append_tools(
+    *,
+    message_content: str,
+    all_tools: list,
+    document_tools: list,
+) -> tuple[list, ToolChoice]:
+    """Choose tool availability and choice strength for an appended user message."""
+    if document_tools and _looks_like_explicit_document_search_request(message_content):
+        return document_tools, ToolChoice(type="any")
+    return all_tools, ToolChoice(type="auto")
 
 
 async def handle_chat_receive(consumer: Any, text_data: str) -> None:
@@ -57,10 +87,14 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             await _save_files(files)
         # Keep the default tool set even when no collections are selected.
         # Restricting to non-document tools here caused an astronomy-only default.
-        active_tools = consumer.tools
+        active_tools, tool_choice = _configure_append_tools(
+            message_content=consumer.convo[-1].content,
+            all_tools=consumer.tools,
+            document_tools=getattr(consumer, "doc_tools", []),
+        )
         consumer.convo[-1].tools = active_tools
         consumer.convo[-1].files = [(file.name, file.id) for file in files]
-        consumer.convo[-1].tool_choice = ToolChoice(type="auto")
+        consumer.convo[-1].tool_choice = tool_choice
         await consumer._save_conversation(create_memories=False)
         consumer.last_sent_sequence = len(consumer.convo) - 1
         logger.debug("append() completed, message added")
