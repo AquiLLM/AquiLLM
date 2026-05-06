@@ -36,6 +36,48 @@ The unified upload endpoint supports:
 * Audio/video transcription: `mp3`, `wav`, `m4a`, `aac`, `flac`, `ogg`, `opus`, `mp4`, `mov`, `m4v`, `webm`, `mkv`, `avi`, `mpeg`, `mpg`
 * Archives: `zip` (supported files inside are expanded and ingested)
 
+## Using AquiLLM
+
+### Uploading Documents
+
+1. **Add a Collection First**
+   - Click on "Collections" in the navigation menu
+   - Click the "New Collection" button
+   - Enter a name for your collection
+
+2. **Upload Documents**
+   - Go to the collection you created
+   - Choose the document type you want to upload using the buttons, the buttons are as follows, in order from left to right:
+     - PDF: Upload PDF files
+     - ArXiv Paper: Enter an arXiv ID to import 
+     - VTT File: Upload VTT transcript files
+     - Webpage: Enter the URL of a site 
+     - Handwritten Notes: Upload images of handwritten notes, select the Convert to LaTeX box if they contain formulas
+     - All documents will appear in your collection, if they don't show up automatically, refresh the page
+   - The documents will be ingested in the background. The ingestion monitor will show its progress. Images that are part of the document will be ingested into a subcollection. Support for image search is very experimental.
+     
+3. **View Your Documents**
+   - If you leave your collection page, do the following
+   - Select Collections button from the sidebar and choose which collection you want to view
+   - Click on any document to view its contents
+
+### Chatting With Your Documents
+
+1. **Start a New Conversation**
+   - From the sidebar, click "New Conversation"
+   - Select which collections to include in your search context
+
+2. **Using the Chat**
+   - Type your questions about the documents in natural language
+   - The AI will search your documents and provide answers with references
+   - You can follow up with additional questions
+   - The AI may quote specific parts of your documents as references
+
+3. **Managing Conversations**
+   - All conversations are saved automatically
+   - Access past conversations from the "Your Conversations" menu in the sidebar
+   - Each conversation maintains its collection context
+
 ## Tech Stack
 
 *   **Backend**: Python, Django
@@ -307,46 +349,6 @@ bash deploy/scripts/start_dev.sh
 | `MEM0_QDRANT_HOST=qdrant` | Qdrant service name (same stack). |
 | `MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1` | Required for some embedding models (e.g. Qwen3-Embedding-4B). |
 
-## Using AquiLLM
-
-### Uploading Documents
-
-1. **Add a Collection First**
-   - Click on "Collections" in the navigation menu
-   - Click the "New Collection" button
-   - Enter a name for your collection
-
-2. **Upload Documents**
-   - Go to the collection you created
-   - Choose the document type you want to upload using the buttons, the buttons are as follows, in order from left to right:
-     - PDF: Upload PDF files
-     - ArXiv Paper: Enter an arXiv ID to import 
-     - VTT File: Upload VTT transcript files
-     - Webpage: Enter the URL of a site 
-     - Handwritten Notes: Upload images of handwritten notes, select the Convert to LaTeX box if they contain formulas
-     - All documents will appear in your collection, if they don't show up automatically, refresh the page
-     
-3. **View Your Documents**
-   - If you leave your collection page, do the following
-   - Select Collections button from the sidebar and choose which collection you want to view
-   - Click on any document to view its contents
-
-### Chatting With Your Documents
-
-1. **Start a New Conversation**
-   - From the sidebar, click "New Conversation"
-   - Select which collections to include in your search context
-
-2. **Using the Chat**
-   - Type your questions about the documents in natural language
-   - The AI will search your documents and provide answers with references
-   - You can follow up with additional questions
-   - The AI may quote specific parts of your documents as references
-
-3. **Managing Conversations**
-   - All conversations are saved automatically
-   - Access past conversations from the "Your Conversations" menu in the sidebar
-   - Each conversation maintains its collection context
 
 ### Exporting chat feedback (superusers)
 
@@ -381,18 +383,25 @@ To ensure generated paths such as `node_modules/` are not committed, run `pwsh -
 * Bernie Boscoe (Southern Oregon University)
 * Tuan Do (UCLA)
 
-### Other Contributors
+### Current Contributors
 
-* Chandler Campbell (Lead Developer, Southern Oregon University)
-* Jack Stark
+* Chandler Campbell (Southern Oregon University)
+* Jack Stark (UCLA)
+* Jackson Godsey (Southern Oregon University)
+* Tee Grant (Southern Oregon University)
+* Morgan Himes (UCLA)
+* Andrew Lizarraga (UCLA)
 * Jacob Nowack (Southern Oregon University)
+* Srinath Saikrishnan (UCLA)
+* Jonathan Soriano (UCLA)
+
+
+### Other Contributors
 * Skyler Acosta (Southern Oregon University)
 * Zhuo Chen (University of Washington)
 * Kevin Donlon (Southern Oregon University)
-* Jackson Godsey (Southern Oregon University)
-* Tee Grant (Southern Oregon University)
 * Elyjah Kiehne (Southern Oregon University)
-* Jonathan Soriano (UCLA)
+
 
 ## Contributing
 
