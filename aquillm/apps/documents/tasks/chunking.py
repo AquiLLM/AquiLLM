@@ -164,6 +164,10 @@ def create_chunks(self, doc_id: str):
         doc.ingestion_complete = True
         doc.full_text += f"\n\nERROR DURING PROCESSING: {exc}"
         doc.save(dont_rechunk=True)
+        try:
+            notify_ingest_monitor_complete(doc.id)
+        except Exception:
+            pass
         raise
 
 
