@@ -54,18 +54,14 @@ query text. You **never write FeedbackQL syntax yourself** — pipes, the
 
 ### Handling tool responses
 
-The tool returns one of three shapes:
+The tool returns one of two shapes:
 
-1. **Success without hint** — `result: {url, query}` — done. Use the URL in
-   your reply.
-2. **Soft failure (`result` includes a `hint`)** — the query is structurally
-   valid but you got an interpretation rule wrong (missing role filter,
-   missing null filter, etc.). **Rebuild the JSON addressing the hint and
-   call the tool again before replying to the user.** Never copy hint text
-   into your final reply — it's an internal signal, not user-facing
-   commentary.
-3. **Hard failure (`exception` field)** — the JSON or query is malformed.
-   Read the error, fix the JSON, call again.
+1. **Success** — `result: {url, query}`. Use the URL in your reply.
+2. **Failure** (`exception` field) — the JSON has a syntax problem, an
+   unknown field, or violates an interpretation rule (missing role filter,
+   missing null filter, etc.). Read the message — it tells you exactly
+   what to fix. Rebuild the JSON addressing it and call the tool again.
+   Never paste exception text into your final reply.
 
 ## Streams
 
@@ -130,28 +126,58 @@ below 4 stars", "users with fewer than 5 ratings"). For sample-size guards
 (e.g. requiring at least N ratings), `having` is appropriate — that's a
 quality filter, not a comparative cutoff.
 
-## Null-rating rule (whenever a query touches rating)
+## Null-filter rule (any optional field used in sort/aggregate/group)
 
-Whenever a query **sorts on**, **aggregates over**, or **groups by** the
-`rating` field, include `{"field": "rating", "op": "!=", "value": null}`
-in the `where` list. This rule covers three failure modes:
+Many fields in AquiLLM are populated only on a subset of rows:
+
+- **`rating`** — only set if a user rated that message
+- **`feedback_text`** — only set if a user left a comment
+- **`feedback_submitted_at`** — only set when feedback exists
+- **`tool_call_name`** — only set on tool-call messages (most messages
+  aren't tool calls)
+- **`model`** — only set on assistant messages
+- **`avg_rating`, `min_rating`, `max_rating`, `last_rated_at`** (conversations
+  stream) — null when the conversation has no ratings
+
+Whenever you **sort on**, **aggregate over**, or **group by** one of these
+optional fields, include `{"field": <field>, "op": "!=", "value": null}`
+in the `where` list (unless the user explicitly wants to see the null
+group, e.g. "show me untagged conversations").
+
+Three failure modes this prevents:
 
 1. **Sorting**: PostgreSQL puts `NULL` first in DESC order and last in
    ASC. `order_by rating desc | limit 10` without the filter returns 10
-   unrated messages with empty rating columns.
-2. **Counting**: `count(rating)` and `count()` both count *every row in
-   the group*, including unrated rows. Without the null filter, an `n`
-   alongside `avg(rating)` or `median(rating)` overstates the sample
-   size — it counts assistant messages, not ratings.
-3. **Grouping**: `summarize ... by rating` produces a `(none)` group for
-   unrated rows that's rarely what the user wants.
+   unrated rows with empty columns.
+2. **Counting**: `count(field)` and `count()` count *every row in the
+   group*, including rows where the field is null. Without the filter,
+   an `n` alongside `avg(rating)` or `median(rating)` overstates sample
+   size.
+3. **Grouping**: `summarize ... by tool_call_name` (or by any other
+   optional field) produces a `(none)` group for null rows that
+   typically dominates and isn't what the user wants. *"What tool is
+   used the most?"* → if you don't filter nulls, the answer comes back
+   as `(none) = 85` because most messages aren't tool calls.
 
-A where filter that already constrains `rating` (e.g. `rating >= 4`,
-`rating in [1, 2]`) implicitly excludes nulls — no separate `!= null`
-needed in that case. The rule applies when `rating` appears anywhere in
-`order_by`, `summarize`, or `summarize.by` and isn't already filtered.
+A where filter that already constrains the field (e.g. `rating >= 4`,
+`tool_call_name == "vector_search"`) implicitly excludes nulls — no
+separate `!= null` needed.
 
-✅ Right (sorting):
+✅ Right (most-used tool):
+
+```json
+{
+  "stream": "messages",
+  "where": [{"field": "tool_call_name", "op": "!=", "value": null}],
+  "summarize": {
+    "aggregations": [{"alias": "n", "func": "count"}],
+    "by": ["tool_call_name"]
+  },
+  "order_by": {"field": "n", "direction": "desc"}
+}
+```
+
+✅ Right (highest-rated answers):
 
 ```json
 {
@@ -162,24 +188,6 @@ needed in that case. The rule applies when `rating` appears anywhere in
   ],
   "order_by": {"field": "rating", "direction": "desc"},
   "limit": 10
-}
-```
-
-✅ Right (global aggregate — count and median both reflect rated rows):
-
-```json
-{
-  "stream": "messages",
-  "where": [
-    {"field": "role", "op": "==", "value": "assistant"},
-    {"field": "rating", "op": "!=", "value": null}
-  ],
-  "summarize": {
-    "aggregations": [
-      {"alias": "median_r", "func": "median", "field": "rating"},
-      {"alias": "n", "func": "count"}
-    ]
-  }
 }
 ```
 
@@ -215,6 +223,52 @@ the alias doesn't exist before aggregation.
 special field needed.
 
 Cannot combine `select` with `summarize`.
+
+## Choosing the right stream for tool questions
+
+Tool data lives in two places, and they answer different questions:
+
+- **`messages.tool_call_name`** — one row per tool invocation across all
+  conversations. Each row with a non-null `tool_call_name` is one call
+  to that tool. Use this for **frequency / count questions**: *"what
+  tool is used the most?"*, *"how many times has vector_search been
+  called?"*. Group by `tool_call_name` and count rows.
+- **`conversations.tools_used`** — comma-separated string of distinct
+  tools used in each conversation (e.g. `"vector_search, document_search"`).
+  Use this for **filter questions**: *"conversations that used X"*,
+  *"conversations that used multiple tools"*. Do NOT group by
+  `tools_used` to count tool frequency — you'd be counting unique tool
+  *combinations* per conversation, not tool calls.
+
+✅ "What tool is used the most?" (counts every invocation across all
+conversations):
+
+```json
+{
+  "stream": "messages",
+  "where": [{"field": "tool_call_name", "op": "!=", "value": null}],
+  "summarize": {
+    "aggregations": [{"alias": "n", "func": "count"}],
+    "by": ["tool_call_name"]
+  },
+  "order_by": {"field": "n", "direction": "desc"}
+}
+```
+
+✅ "Conversations that used vector_search" (filter, not count):
+
+```json
+{
+  "stream": "conversations",
+  "where": [{"field": "tools_used", "op": "contains", "value": "vector_search"}],
+  "order_by": {"field": "updated_at", "direction": "desc"}
+}
+```
+
+To scope tool counts to a single conversation, add a
+`{"field": "conversation_id", "op": "==", "value": <id>}` filter. To get
+per-conversation tool breakdowns, group by both `conversation_id` and
+`tool_call_name`.
 
 ## `conversation_tool` virtual field (messages stream)
 

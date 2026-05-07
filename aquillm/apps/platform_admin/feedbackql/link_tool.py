@@ -43,6 +43,27 @@ _VALID_AGG_FUNCS = frozenset({"avg", "count", "min", "max", "sum", "median"})
 
 _VALID_DIRECTIONS = frozenset({"asc", "desc"})
 
+# Fields that are null on a meaningful fraction of rows. When the LLM
+# sorts/aggregates/groups by one of these without a where filter on it,
+# the null group typically dominates and the answer is wrong (e.g. the
+# top group is `(none)` because most messages aren't tool calls).
+# Per stream because the field set differs.
+_NULL_PRONE_FIELDS = {
+    "messages": frozenset({
+        "rating",
+        "feedback_text",
+        "feedback_submitted_at",
+        "tool_call_name",
+    }),
+    "conversations": frozenset({
+        "avg_rating",
+        "min_rating",
+        "max_rating",
+        "last_rated_at",
+        "tools_used",
+    }),
+}
+
 
 def _query_filters_on(query: Query, field: str) -> bool:
     """True if any where clause in the query has a Condition on `field`."""
@@ -79,6 +100,90 @@ def _query_groups_by(query: Query, field: str) -> bool:
         if isinstance(clause, SummarizeClause) and field in clause.by:
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Server-side auto-fixes
+# ---------------------------------------------------------------------------
+# Some interpretation rules have only one correct completion (add the null
+# filter, add role==assistant for rating queries). These were originally
+# implemented as advisory hints, then as exceptions that asked the LLM to
+# retry. Both depended on the LLM doing follow-up work, which weaker models
+# can't reliably do. So for these unambiguous cases we just apply the
+# correction server-side and ship a working URL. The fix is visible to the
+# user via the query string the dashboard renders.
+#
+# Cases where this is NOT safe (and should stay as advisory or LLM choice):
+# stream selection, comparative-words sort-vs-threshold, sample-size count
+# alongside aggregations. Those involve genuine judgment calls.
+
+def _spec_filtered_fields(spec: dict) -> set[str]:
+    """Fields that appear in any where condition in the JSON spec."""
+    fields: set[str] = set()
+    for cond in spec.get("where") or []:
+        if isinstance(cond, dict) and "field" in cond:
+            fields.add(cond["field"])
+    return fields
+
+
+def _spec_aggregated_or_sorted_fields(spec: dict) -> set[str]:
+    """Fields referenced by order_by, summarize.aggregations, or summarize.by."""
+    referenced: set[str] = set()
+    ob = spec.get("order_by")
+    if isinstance(ob, dict) and "field" in ob:
+        referenced.add(ob["field"])
+    s = spec.get("summarize")
+    if isinstance(s, dict):
+        for agg in s.get("aggregations") or []:
+            if isinstance(agg, dict) and agg.get("field"):
+                referenced.add(agg["field"])
+        for f in s.get("by") or []:
+            referenced.add(f)
+    return referenced
+
+
+_RATING_FEEDBACK_FIELDS = frozenset({
+    "rating", "feedback_text", "feedback_submitted_at",
+})
+
+
+def _apply_safe_fixes(spec: dict) -> None:
+    """Mutate spec in place to add unambiguous safety filters.
+
+    Two fixes:
+      1. Null filter on null-prone fields referenced in summarize/order_by.
+         The user clearly doesn't want the (none) group dominating the
+         result; if they did, they'd have filtered explicitly.
+      2. Role filter on the messages stream when rating/feedback fields
+         are referenced. In AquiLLM, ratings and feedback only attach to
+         assistant messages; without the filter the result includes
+         user/tool messages that aren't part of what the user asked.
+
+    Both fixes are no-ops if the user already filtered the field in any
+    way (any operator). Only adds the filter when no constraint exists.
+    """
+    stream = spec.get("stream")
+    if stream not in _NULL_PRONE_FIELDS:
+        return
+
+    where = spec.setdefault("where", [])
+    if not isinstance(where, list):
+        return  # Malformed spec — let downstream validation catch it.
+
+    filtered = _spec_filtered_fields(spec)
+    sorted_or_aggregated = _spec_aggregated_or_sorted_fields(spec)
+
+    # Fix 1: null filter on null-prone fields used in summarize/order_by
+    for field in sorted(_NULL_PRONE_FIELDS[stream] & sorted_or_aggregated):
+        if field not in filtered:
+            where.append({"field": field, "op": "!=", "value": None})
+            filtered.add(field)
+
+    # Fix 2: role filter on messages stream when rating/feedback referenced
+    if stream == "messages":
+        all_field_refs = filtered | sorted_or_aggregated
+        if all_field_refs & _RATING_FEEDBACK_FIELDS and "role" not in filtered:
+            where.append({"field": "role", "op": "==", "value": "assistant"})
 
 
 def _format_value(v: Any) -> str:
@@ -230,11 +335,10 @@ def build_feedback_link_tool(base_url: str = "") -> LLMTool:
             "construct URLs or query strings by hand. You only describe "
             "intent in JSON; the tool assembles the FeedbackQL syntax "
             "internally so you cannot make pipe/keyword/operator mistakes. "
-            "If the result contains a `hint` field, your JSON has a soft "
-            "interpretation issue (missing role filter, missing null filter, "
-            "etc.). You MUST rebuild the JSON to address the hint and call "
-            "this tool again before replying to the user. Never paste hint "
-            "text into your final response — it is an internal signal."
+            "If the tool returns an `exception`, the message tells you "
+            "exactly what to fix — rebuild the JSON to address it and "
+            "call the tool again before replying to the user. Never "
+            "paste exception text into your final response."
         ),
         required=["query_spec"],
         param_descs={
@@ -301,6 +405,10 @@ def build_feedback_link_tool(base_url: str = "") -> LLMTool:
         if not isinstance(spec, dict):
             return {"exception": "query_spec must be a JSON object"}
 
+        # Apply unambiguous safety corrections before building the query.
+        # See _apply_safe_fixes for details.
+        _apply_safe_fixes(spec)
+
         try:
             query_text = _build_query(
                 stream=spec.get("stream"),
@@ -335,57 +443,22 @@ def build_feedback_link_tool(base_url: str = "") -> LLMTool:
         url = f"{base}{_DASHBOARD_PATH}?t={token}"
         result: dict = {"url": url, "query": query_text}
 
-        # Soft validation: warn the LLM if the query references rating /
-        # feedback fields on the messages stream but has no role filter.
-        # In AquiLLM ratings and free-text feedback only attach to
-        # assistant messages, so missing the role filter means the
-        # results will include user/tool messages too.
-        feedback_in_query = (
-            _query_filters_on(parsed, "rating")
-            or _query_aggregates_on(parsed, "rating")
-            or _query_filters_on(parsed, "feedback_text")
-            or _query_filters_on(parsed, "feedback_submitted_at")
-        )
+        # The role filter and null filter — the most common LLM omissions —
+        # are auto-corrected up-front by _apply_safe_fixes. The hints list
+        # below is for future ambiguous interpretation rules that warrant
+        # advisory feedback (where auto-fix would be presumptuous).
         hints: list[str] = []
-        if (
-            parsed.stream == "messages"
-            and feedback_in_query
-            and not _query_filters_on(parsed, "role")
-        ):
-            hints.append(
-                "Query references rating/feedback fields but does not "
-                "filter by role. Ratings and feedback only attach to "
-                "assistant messages in AquiLLM. Add "
-                "{\"field\": \"role\", \"op\": \"==\", \"value\": \"assistant\"} "
-                "to the where list and call this tool again."
-            )
 
-        # Rating-touched-without-null-filter trap. Three failure modes:
-        #  - order_by rating: NULLs sort first on DESC, last on ASC
-        #  - aggregate(rating): count() will include unrated rows, making
-        #    the n alongside avg/median overstate sample size
-        #  - summarize ... by rating: produces a (none) group for unrated
-        #    rows that's rarely what the user wants
-        rating_touched = (
-            _query_orders_on(parsed, "rating")
-            or _query_aggregates_on(parsed, "rating")
-            or _query_groups_by(parsed, "rating")
-        )
-        if (
-            parsed.stream == "messages"
-            and rating_touched
-            and not _query_filters_on(parsed, "rating")
-        ):
-            hints.append(
-                "Query references rating in order_by/summarize but does "
-                "not filter out null ratings. This makes counts and "
-                "groupings include unrated assistant messages. Add "
-                "{\"field\": \"rating\", \"op\": \"!=\", \"value\": null} "
-                "to the where list and call this tool again."
-            )
-
+        # If we detected an interpretation problem, return an error rather
+        # than the URL. Returning a URL + hint lets the LLM optionally
+        # forward the buggy URL to the user (we've observed this with
+        # gpt-4o); returning an error forces a real retry. Wording is
+        # imperative and matches parser-error style — gpt-4o reliably
+        # retries on parser errors; softer "needs adjustment" wording
+        # was sometimes met with a "let me adjust" stub that didn't
+        # actually retry.
         if hints:
-            result["hint"] = " ".join(hints)
+            return {"exception": " ".join(hints)}
         return {"result": result}
 
     return build_feedback_link
