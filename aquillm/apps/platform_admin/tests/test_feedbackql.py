@@ -167,6 +167,33 @@ class TestParser:
         with pytest.raises(FeedbackQLSyntaxError):
             parse('messages | limit -1')
 
+    def test_missing_pipe_between_stages_raises(self):
+        # Regression: a missing '|' used to silently drop trailing clauses
+        # (e.g. select/order/limit after a where), producing wrong results.
+        # Now any trailing tokens at the end of a clause raise an error.
+        with pytest.raises(FeedbackQLSyntaxError, match="forget a '|'"):
+            parse('messages | where rating < 3 select rating, model')
+
+    def test_missing_pipe_after_select_raises(self):
+        with pytest.raises(FeedbackQLSyntaxError, match="forget a '|'"):
+            parse('messages | select rating order by rating')
+
+    def test_missing_pipe_after_limit_raises(self):
+        with pytest.raises(FeedbackQLSyntaxError, match="forget a '|'"):
+            parse('messages | limit 10 order by rating')
+
+    def test_sql_is_null_raises_helpful_error(self):
+        with pytest.raises(FeedbackQLSyntaxError, match="'== null' / '!= null'"):
+            parse('conversations | where avg_rating is not null')
+
+    def test_sql_like_raises_helpful_error(self):
+        with pytest.raises(FeedbackQLSyntaxError, match="contains.*startswith"):
+            parse('messages | where feedback_text like "%bad%"')
+
+    def test_missing_where_keyword_raises_helpful_error(self):
+        with pytest.raises(FeedbackQLSyntaxError, match="forget the 'where' keyword"):
+            parse('conversations | rated_count > 0 | order by avg_rating')
+
 
 # ---------------------------------------------------------------------------
 # Executor tests (require DB)

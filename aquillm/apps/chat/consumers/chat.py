@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import structlog
 from json import dumps
@@ -27,6 +28,7 @@ from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
+from apps.platform_admin.feedbackql.link_tool import build_feedback_link_tool
 from lib.mcp.config import get_mcp_config
 from lib.mcp.client import MCPClient
 from lib.mcp.adapter import mcp_tools_to_llm_tools
@@ -35,6 +37,35 @@ from lib.skills.tool import build_load_skill_tool, build_read_skill_file_tool
 from lib.tools.debug.weather import get_debug_weather_tool
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+def _resolve_request_origin(scope: dict) -> str:
+    """Build a public-facing 'scheme://host' string from a Channels scope.
+
+    Prefers X-Forwarded-Host / X-Forwarded-Proto when present (set by a
+    trusted reverse proxy) so generated links point at the public origin
+    rather than the internal hostname seen by the app server. Falls back to
+    the Host header and the WebSocket scheme. Returns an empty string when
+    no host header is present.
+    """
+    def _header(name: bytes) -> str:
+        for k, v in scope.get("headers", []):
+            if k.lower() == name:
+                return v.decode("ascii", errors="ignore").strip()
+        return ""
+
+    host = _header(b"x-forwarded-host") or _header(b"host")
+    if not host:
+        return ""
+    # X-Forwarded-Host can carry a comma-separated chain; the originating
+    # client is the leftmost entry.
+    host = host.split(",", 1)[0].strip()
+    proto = _header(b"x-forwarded-proto").lower()
+    if proto:
+        scheme = "https" if "https" in proto else "http"
+    else:
+        scheme = "https" if scope.get("scheme") == "wss" else "http"
+    return f"{scheme}://{host}"
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -54,11 +85,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=dumps({"stream": payload}))
 
     def _effective_system_prompt(self) -> str:
-        """db system prompt + skill index + any slash-activated skill bodies."""
+        """db system prompt + current date + skill index + any slash-activated skill bodies."""
         parts: list[str] = []
         base = self.db_convo.system_prompt if self.db_convo else ""
         if base:
             parts.append(base.rstrip())
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        parts.append(f"Today's date is {today} (UTC).")
         extra = getattr(self, "_skill_prompt_extra", "") or ""
         if extra:
             parts.append(extra)
@@ -143,6 +176,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if self._skills:
             self.tools.append(build_load_skill_tool(self._skills))
             self.tools.append(build_read_skill_file_tool(self._skills))
+        # Feedback dashboard link builder — always available; parses the query
+        # server-side so the LLM can't ship a malformed link. Pass the request
+        # host so the tool returns an absolute URL — relative URLs tempt the
+        # LLM to "complete" them with a hallucinated domain. Honor
+        # X-Forwarded-Host / X-Forwarded-Proto when set so the link points at
+        # the public origin rather than an internal docker/proxy hostname.
+        feedback_base_url = _resolve_request_origin(self.scope)
+        self.tools.append(build_feedback_link_tool(base_url=feedback_base_url))
         logger.info("skills_loaded", count=len(self._skills))
         convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
         logger.debug("Convo ID: %s", convo_id)
