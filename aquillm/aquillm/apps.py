@@ -64,7 +64,10 @@ class AquillmConfig(AppConfig):
     async_anthropic_client = None
     get_embedding = None
     llm_interface: LLMInterface = None
-    system_prompt = "You are a helpful assistant embedded in a retrieval augmented generation system."
+    system_prompt = (
+        "You are a helpful assistant embedded in a retrieval augmented generation system.\n"
+        "For math, use KaTeX: $..$ for inline, $$..$$ for display. Never use \\(...\\) or \\[...\\] delimiters. Never duplicate math as plaintext."
+    )
 
     google_genai_client = None
     default_llm = "CLAUDE"
