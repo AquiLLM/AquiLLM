@@ -87,6 +87,8 @@ def collections(request):
                 'path': collection.get_path(),
                 'document_count': collection.document_count(),
                 'children_count': collection.children.count(),
+                'created_at': collection.created_at.isoformat(),
+                'updated_at': collection.updated_at.isoformat(),
                 'permission': 'MANAGE'
             })
 
@@ -101,6 +103,8 @@ def collections(request):
             'path': colperm.collection.get_path(),
             'document_count': colperm.collection.document_count(),
             'children_count': colperm.collection.children.count(),
+            'created_at': colperm.collection.created_at.isoformat(),
+            'updated_at': colperm.collection.updated_at.isoformat(),
             'permission': colperm.permission
         })
     return JsonResponse({"collections": collections_list})
