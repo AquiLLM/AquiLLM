@@ -7,6 +7,7 @@ import ChatInputDock from './ChatInputDock';
 import { groupMessages, shouldShowSpinner } from '../utils';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
 import ChatCollectionsModal from './ChatCollectionsModal';
+import { AquillmLogo } from '../../../shared/components';
 
 const normalizeCollectionId = (collectionId: string | number): string => String(collectionId);
 
@@ -307,9 +308,25 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
           })}
 
           {shouldShowSpinner(conversation.messages) && (
-            <div className="group flex justify-start my-2" role="status" aria-label="Thinking">
-              <div className="w-[88%] flex justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-4 border-accent border-t-transparent" />
+            <div className="group flex justify-start" role="status" aria-label="AquiLLM is thinking">
+              <div className="w-[88%] flex flex-col items-start">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <AquillmLogo role="assistant" />
+                  <span className="text-[11px] text-text-low_contrast">AquiLLM</span>
+                </div>
+                <div className="assistant-message chat-bubble-left-border-assistant element-border rounded-[10px] px-3 py-2 shadow-sm">
+                  <div className="flex h-[18px] items-center gap-1.5" aria-hidden="true">
+                    <span className="h-2 w-2 rounded-full bg-accent opacity-50 animate-pulse" />
+                    <span
+                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-pulse"
+                      style={{ animationDelay: '150ms' }}
+                    />
+                    <span
+                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-pulse"
+                      style={{ animationDelay: '300ms' }}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           )}
