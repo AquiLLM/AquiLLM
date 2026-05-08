@@ -254,10 +254,11 @@ async def complete_conversation_turn(
     }
 
     response = await llm.get_message(**sdk_args)
+    tool_choice_type = str(getattr(last_message.tool_choice, "type", "") or "").strip().lower()
     should_force_tool_retry = (
         bool(last_message.tools)
         and bool(last_message.tool_choice)
-        and last_message.tool_choice.type == "auto"
+        and tool_choice_type in {"auto", "any"}
         and not response.tool_call
         and fb.looks_like_deferred_tool_intent(response.text)
     )

@@ -55,6 +55,48 @@ class ToolUseRetryTests(SimpleTestCase):
         self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
         self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
 
+    def test_retries_required_tool_choice_when_model_only_promises_to_retrieve(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll retrieve the paper to give you a proper summary.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Tell me about this paper.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'any')
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertEqual(llm.calls[1]['stream_message_uuid'], llm.calls[0]['stream_message_uuid'])
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+        self.assertNotIn("I'll retrieve", updated[-1].content)
+
     def test_does_not_retry_for_normal_non_tool_text_reply(self):
         llm = _FakeLLMInterface([
             LLMResponse(
