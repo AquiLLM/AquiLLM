@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 
 import type { Message, Collection, Conversation, ChatProps } from '../types';
 import { MessageBubble } from './MessageBubble';
@@ -43,6 +43,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     setException,
     setDebugHtml,
     setInputDisabled,
+    setSelectedCollections,
   });
 
   useEffect(() => {
@@ -210,23 +211,33 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     });
   };
 
+  const persistSelectedCollections = useCallback((collectionIds: Set<string>) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      action: 'select_collections',
+      collections: Array.from(collectionIds).map(toPayloadCollectionId),
+    }));
+  }, [wsRef]);
+
   const handleCollectionToggle = (collectionId: string) => {
     const normalizedCollectionId = normalizeCollectionId(collectionId);
-    setSelectedCollections((prev) => {
-      const newSelected = new Set(prev);
-      if (newSelected.has(normalizedCollectionId)) {
-        newSelected.delete(normalizedCollectionId);
-        getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
-          newSelected.delete(descendantId);
-        });
-      } else {
-        newSelected.add(normalizedCollectionId);
-        getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
-          newSelected.add(descendantId);
-        });
-      }
-      return newSelected;
-    });
+    const nextSelected = new Set(selectedCollections);
+
+    if (nextSelected.has(normalizedCollectionId)) {
+      nextSelected.delete(normalizedCollectionId);
+      getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
+        nextSelected.delete(descendantId);
+      });
+    } else {
+      nextSelected.add(normalizedCollectionId);
+      getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
+        nextSelected.add(descendantId);
+      });
+    }
+
+    setSelectedCollections(nextSelected);
+    persistSelectedCollections(nextSelected);
   };
 
   const filteredCollections = collections.filter((collection) =>

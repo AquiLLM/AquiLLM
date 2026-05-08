@@ -1,0 +1,20 @@
+---
+description: Use RTK (Rust Token Killer) for shell commands to shrink noisy CLI output and keep tool transcripts smaller.
+alwaysApply: true
+---
+
+# RTK for terminal / Shell tool
+
+This repo expects **[RTK](https://github.com/rtk-ai/rtk)** when running shell commands from the agent (especially `git`, `cargo`, `pnpm`/`npm`, `docker`, `kubectl`, tests, and linters).
+
+## Golden rule
+
+- Prefix the runnable command with `rtk`: e.g. `rtk git status`, `rtk cargo test`, `rtk pnpm install`.
+- In command chains, prefix **each** segment: e.g. `rtk git add .; rtk git commit -m "msg"; rtk git push` (PowerShell) instead of bare `git`.
+- If `rtk` is missing from PATH, say so; otherwise still prefer `rtk` whenever it is available.
+
+## Why
+
+On Windows, Cursor’s RTK **preToolUse** hook is bash-based and may not rewrite commands; emitting `rtk ...` directly keeps compact output and avoids relying on the hook.
+
+Extended command list and examples: `%USERPROFILE%\.claude\CLAUDE.md` (RTK section) after `rtk init -g`.

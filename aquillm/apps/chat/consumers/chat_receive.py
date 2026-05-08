@@ -56,6 +56,18 @@ def _configure_append_tools(
     return all_tools, ToolChoice(type="auto")
 
 
+def _validated_collection_ids(raw_collections: Any) -> list[Any]:
+    if not isinstance(raw_collections, list):
+        raise ValidationError("collections must be a list")
+
+    collection_ids = []
+    for collection_id in raw_collections:
+        if isinstance(collection_id, bool) or not isinstance(collection_id, (int, str)):
+            raise ValidationError("collection ids must be strings or integers")
+        collection_ids.append(collection_id)
+    return collection_ids
+
+
 async def handle_chat_receive(consumer: Any, text_data: str) -> None:
     logger.debug("ChatConsumer.receive() called with data: %s...", text_data[:100])
 
@@ -65,13 +77,24 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             file.save()
         return files
 
+    @database_sync_to_async
+    def _save_selected_collections(selected_collections: list[Any]) -> None:
+        consumer.db_convo.selected_collection_ids = selected_collections
+        consumer.db_convo.save(update_fields=["selected_collection_ids", "updated_at"])
+
+    async def update_selected_collections(data: dict) -> None:
+        selected_collections = _validated_collection_ids(data.get("collections", []))
+        consumer.col_ref.collections = selected_collections
+        await _save_selected_collections(selected_collections)
+
     async def append(data: dict):
         logger.debug("append() called with collections: %s", data.get("collections", []))
 
         assert consumer.convo is not None
 
-        selected_collections = data["collections"]
+        selected_collections = _validated_collection_ids(data.get("collections", []))
         consumer.col_ref.collections = selected_collections
+        await _save_selected_collections(selected_collections)
         consumer.convo += UserMessage.model_validate(data["message"])
         files: list[ConversationFile] = []
         if "files" in data:
@@ -163,6 +186,8 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 )
                 logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
                 await consumer._save_conversation(create_memories=True)
+            elif action == "select_collections":
+                await update_selected_collections(data)
             elif action == "rate":
                 await rate(data)
             elif action == "feedback":

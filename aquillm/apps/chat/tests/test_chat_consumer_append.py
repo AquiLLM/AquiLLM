@@ -93,6 +93,73 @@ async def test_append_without_selected_collections_keeps_doc_tools(_augment, _me
 @pytest.mark.django_db
 @patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")
 @patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async")
+async def test_append_persists_selected_collections(_augment, _mem_task):
+    user = User.objects.create_user(username="appendcollections", password="pass")
+    db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
+
+    consumer = ChatConsumer()
+    consumer.base_send = AsyncMock()
+    consumer.scope = {"user": user, "url_route": {"kwargs": {"convo_id": db_convo.id}}}
+    consumer.user = user
+    consumer.db_convo = db_convo
+    consumer.convo = Conversation(system="sys", messages=[])
+    consumer.dead = False
+    consumer.col_ref = CollectionsRef([])
+    consumer.doc_tools = [_test_document_ids]
+    consumer.tools = [_test_document_ids]
+    consumer.last_sent_sequence = -1
+    consumer.llm_if = AsyncMock()
+    consumer.llm_if.spin = AsyncMock()
+
+    payload = json.dumps(
+        {
+            "action": "append",
+            "message": {"role": "user", "content": "Search these papers"},
+            "collections": [3, "7"],
+        }
+    )
+
+    await consumer.receive(payload)
+    db_convo.refresh_from_db()
+
+    assert consumer.col_ref.collections == [3, "7"]
+    assert db_convo.selected_collection_ids == [3, "7"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db
+async def test_selection_update_persists_without_appending_message():
+    user = User.objects.create_user(username="selectcollections", password="pass")
+    db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
+
+    consumer = ChatConsumer()
+    consumer.base_send = AsyncMock()
+    consumer.scope = {"user": user, "url_route": {"kwargs": {"convo_id": db_convo.id}}}
+    consumer.user = user
+    consumer.db_convo = db_convo
+    consumer.convo = Conversation(system="sys", messages=[])
+    consumer.dead = False
+    consumer.col_ref = CollectionsRef([])
+
+    payload = json.dumps(
+        {
+            "action": "select_collections",
+            "collections": [11, "13"],
+        }
+    )
+
+    await consumer.receive(payload)
+    db_convo.refresh_from_db()
+
+    assert consumer.col_ref.collections == [11, "13"]
+    assert db_convo.selected_collection_ids == [11, "13"]
+    assert consumer.convo.messages == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db
+@patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")
+@patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async")
 async def test_append_explicit_document_search_requires_doc_tool(_augment, _mem_task):
     user = User.objects.create_user(username="appenddocsearch", password="pass")
     db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
