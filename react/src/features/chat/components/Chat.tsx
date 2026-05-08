@@ -307,8 +307,10 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
           })}
 
           {shouldShowSpinner(conversation.messages) && (
-            <div className="flex justify-center my-2">
-              <div className="animate-spin rounded-full h-8 w-8 border-4 border-accent border-t-transparent" />
+            <div className="group flex justify-start my-2" role="status" aria-label="Thinking">
+              <div className="w-[88%] flex justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-4 border-accent border-t-transparent" />
+              </div>
             </div>
           )}
           <div ref={conversationEndRef} />
