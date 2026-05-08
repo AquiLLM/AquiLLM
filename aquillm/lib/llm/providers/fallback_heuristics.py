@@ -40,6 +40,39 @@ def looks_like_deferred_tool_intent(text: Optional[str]) -> bool:
     return any(cue in normalized for cue in cues)
 
 
+def looks_like_post_tool_non_answer(text: Optional[str]) -> bool:
+    """
+    Detect short post-tool placeholders that promise to answer but do not answer.
+
+    This intentionally stays narrow: longer multi-sentence replies can begin with
+    "I'll explain..." and still contain useful synthesis.
+    """
+    if not text:
+        return False
+    if looks_like_deferred_tool_intent(text):
+        return True
+
+    candidate = " ".join(str(text).strip().split())
+    if not candidate:
+        return False
+    lowered = re.sub(r"[\u2018\u2019]", chr(39), candidate.lower())
+    words = re.findall(r"[A-Za-z0-9]+", lowered)
+    if len(words) > 18:
+        return False
+    if lowered.count(".") + lowered.count("!") + lowered.count("?") > 1:
+        return False
+
+    promise_patterns = (
+        r"^i(?:'ll| will)\s+help\b",
+        r"^i(?:'ll| will)\s+explain\b",
+        r"^i(?:'ll| will)\s+walk\s+you\s+through\b",
+        r"^i(?:'ll| will)\s+summarize\b",
+        r"^i(?:'ll| will)\s+answer\b",
+        r"^let\s+me\s+(?:help|explain|walk\s+you\s+through|summarize)\b",
+    )
+    return any(re.search(pattern, lowered) for pattern in promise_patterns)
+
+
 def extractive_fallback_enabled() -> bool:
     return getenv("LLM_ALLOW_EXTRACTIVE_FALLBACK", "0").strip().lower() in ("1", "true", "yes", "on")
 
@@ -195,6 +228,7 @@ __all__ = [
     "is_useful_fallback_sentence",
     "looks_cut_off",
     "looks_like_deferred_tool_intent",
+    "looks_like_post_tool_non_answer",
     "should_preserve_cutoff_partial",
     "synthesize_from_recent_tool_results",
 ]

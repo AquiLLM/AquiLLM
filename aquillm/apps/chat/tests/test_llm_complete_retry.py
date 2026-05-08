@@ -6,6 +6,7 @@ from asgiref.sync import async_to_sync
 
 from aquillm.llm import (
     Conversation,
+    ToolMessage,
     UserMessage,
     LLMResponse,
     ToolChoice,
@@ -122,6 +123,48 @@ class ToolUseRetryTests(SimpleTestCase):
 
         self.assertEqual(len(llm.calls), 1)
         self.assertIsNone(updated[-1].tool_call_id)
+
+    def test_retries_post_tool_placeholder_that_only_promises_to_help(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll help you understand the math from this paper.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=(
+                    "The paper's math centers on calibration and discrimination: "
+                    "it compares confidence scores against correctness, then studies "
+                    "regions where utility and factuality trade off."
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(content='Can you show me some of the math from the paper?'),
+                ToolMessage(
+                    content='The paper discusses calibration, confidence, utility, and factuality.',
+                    tool_name='whole_document',
+                    arguments={'doc_id': 'doc-1'},
+                    for_whom='assistant',
+                    result_dict={'result': 'The paper discusses calibration, confidence, utility, and factuality.'},
+                ),
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertIn('calibration and discrimination', updated[-1].content)
+        self.assertNotIn("I'll help", updated[-1].content)
 
 
 class CutoffContinuationTests(SimpleTestCase):

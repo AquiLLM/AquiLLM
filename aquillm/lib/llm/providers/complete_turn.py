@@ -270,7 +270,7 @@ async def complete_conversation_turn(
         response_text_for_retry = (response.text or "").strip()
         response_has_tool_call = bool(response.tool_call)
         needs_final_synthesis_retry = (not response_has_tool_call and not response_text_for_retry) or (
-            not response_has_tool_call and fb.looks_like_deferred_tool_intent(response.text)
+            not response_has_tool_call and fb.looks_like_post_tool_non_answer(response.text)
         )
         if needs_final_synthesis_retry:
             finalize_prompt = (
@@ -291,7 +291,7 @@ async def complete_conversation_turn(
         post_finalize_text = (response.text or "").strip()
         if (not response.tool_call) and (
             (not post_finalize_text)
-            or fb.looks_like_deferred_tool_intent(post_finalize_text)
+            or fb.looks_like_post_tool_non_answer(post_finalize_text)
         ):
             compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
             if compact_summary:
