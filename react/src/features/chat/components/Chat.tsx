@@ -316,14 +316,17 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
                 </div>
                 <div className="assistant-message chat-bubble-left-border-assistant element-border rounded-[10px] px-3 py-2 shadow-sm">
                   <div className="flex h-[18px] items-center gap-1.5" aria-hidden="true">
-                    <span className="h-2 w-2 rounded-full bg-accent opacity-50 animate-pulse" />
                     <span
-                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-pulse"
-                      style={{ animationDelay: '150ms' }}
+                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-bounce"
+                      style={{ animationDuration: '900ms' }}
                     />
                     <span
-                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-pulse"
-                      style={{ animationDelay: '300ms' }}
+                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-bounce"
+                      style={{ animationDelay: '120ms', animationDuration: '900ms' }}
+                    />
+                    <span
+                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-bounce"
+                      style={{ animationDelay: '240ms', animationDuration: '900ms' }}
                     />
                   </div>
                 </div>
