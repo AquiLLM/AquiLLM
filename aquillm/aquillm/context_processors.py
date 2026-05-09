@@ -126,7 +126,7 @@ def page_urls(request):
 
 def user_conversations(request):
     if request.user.is_authenticated:
-        convos = WSConversation.objects.filter(owner=request.user).order_by("-updated_at")
+        convos = WSConversation.objects.filter(owner=request.user).order_by("-created_at")
         return {"conversations": convos}
     return {}
 
