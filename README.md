@@ -11,7 +11,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 
-**AquiLLM is an open-source RAG (Retrieval-Augmented Generation) application designed specifically for researchers.** It helps you manage, search, and interact with your research documents using AI, streamlining your literature review and knowledge discovery process. Upload various document formats, organize them into collections, and chat with an AI that understands your library's content.
+**AquiLLM is an open-source open-weight RAG (Retrieval-Augmented Generation) application designed specifically for researchers and research groups.**  It helps users manage, search, and interact with research documents through a natural-language interface to their data, supporting literature review, onboarding, collaboration, and knowledge discovery workflows. Users can upload and organize documents into collections across a variety of file formats. AquiLLM is designed for local or pseudo-local deployment, giving research groups greater control over their data, models, and infrastructure.
 
 More info can be found at [https://aquillm.org](https://aquillm.org). For a brief video tutorial using MRI data, visit [youtube](https://www.youtube.com/watch?v=7B3V2a0Xzaw). 
 See also our paper ["AquiLLM: a RAG Tool for Capturing Tacit Knowledge in Research Groups"](https://arxiv.org/abs/2508.05648) by Chandler Campbell, Bernie Boscoe, and Tuan Do
