@@ -219,7 +219,11 @@ def build_frontend_conversation_json(db_convo: WSConversation) -> dict:
 
         messages.append(msg_dict)
 
-    return {'system': db_convo.system_prompt, 'messages': messages}
+    return {
+        'system': db_convo.system_prompt,
+        'selected_collections': db_convo.selected_collection_ids or [],
+        'messages': messages,
+    }
 
 
 def pydantic_message_to_frontend_dict(msg: LLM_Message) -> dict:

@@ -85,6 +85,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             for col_perm in CollectionPermission.objects.filter(user=self.user)
         ]
 
+    def _apply_saved_collection_selection(self) -> None:
+        if self.db_convo is None:
+            return
+        self.col_ref.collections = list(self.db_convo.selected_collection_ids or [])
+
     async def connect(self):
         logger.debug("ChatConsumer.connect() called")
 
@@ -109,6 +114,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.dead = True
             await self.send('{"exception": "Invalid chat_id"}')
             return
+        self._apply_saved_collection_selection()
         if SKILLS_ENABLED:
             self.tools = self.tools + build_skill_tools(self)
         try:
@@ -119,6 +125,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     {
                         "conversation": {
                             "system": self.db_convo.system_prompt,
+                            "selected_collections": self.db_convo.selected_collection_ids or [],
                             "messages": [
                                 pydantic_message_to_frontend_dict(msg) for msg in self.convo
                             ],

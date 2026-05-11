@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import structlog
+import re
 from base64 import b64decode
 from json import loads
 from time import perf_counter
@@ -26,6 +27,47 @@ from apps.chat.services.skills_runtime import effective_base_system_for_memory
 logger = structlog.stdlib.get_logger(__name__)
 
 
+_DOCUMENT_TARGET_RE = re.compile(
+    r"\b(documents?|docs?|papers?|files?|selected collections?|sources?)\b",
+    flags=re.IGNORECASE,
+)
+_DOCUMENT_SEARCH_ACTION_RE = re.compile(
+    r"\b(search|check|find|scan|read|retrieve|query|consult)\b|"
+    r"\blook\s+(?:at|in|through|up)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _looks_like_explicit_document_search_request(message_content: str) -> bool:
+    """True when the user explicitly asks the assistant to retrieve from documents."""
+    text = message_content or ""
+    return bool(_DOCUMENT_TARGET_RE.search(text) and _DOCUMENT_SEARCH_ACTION_RE.search(text))
+
+
+def _configure_append_tools(
+    *,
+    message_content: str,
+    all_tools: list,
+    document_tools: list,
+) -> tuple[list, ToolChoice]:
+    """Choose tool availability and choice strength for an appended user message."""
+    if document_tools and _looks_like_explicit_document_search_request(message_content):
+        return document_tools, ToolChoice(type="any")
+    return all_tools, ToolChoice(type="auto")
+
+
+def _validated_collection_ids(raw_collections: Any) -> list[Any]:
+    if not isinstance(raw_collections, list):
+        raise ValidationError("collections must be a list")
+
+    collection_ids = []
+    for collection_id in raw_collections:
+        if isinstance(collection_id, bool) or not isinstance(collection_id, (int, str)):
+            raise ValidationError("collection ids must be strings or integers")
+        collection_ids.append(collection_id)
+    return collection_ids
+
+
 async def handle_chat_receive(consumer: Any, text_data: str) -> None:
     logger.debug("ChatConsumer.receive() called with data: %s...", text_data[:100])
 
@@ -35,13 +77,24 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             file.save()
         return files
 
+    @database_sync_to_async
+    def _save_selected_collections(selected_collections: list[Any]) -> None:
+        consumer.db_convo.selected_collection_ids = selected_collections
+        consumer.db_convo.save(update_fields=["selected_collection_ids", "updated_at"])
+
+    async def update_selected_collections(data: dict) -> None:
+        selected_collections = _validated_collection_ids(data.get("collections", []))
+        consumer.col_ref.collections = selected_collections
+        await _save_selected_collections(selected_collections)
+
     async def append(data: dict):
         logger.debug("append() called with collections: %s", data.get("collections", []))
 
         assert consumer.convo is not None
 
-        selected_collections = data["collections"]
+        selected_collections = _validated_collection_ids(data.get("collections", []))
         consumer.col_ref.collections = selected_collections
+        await _save_selected_collections(selected_collections)
         consumer.convo += UserMessage.model_validate(data["message"])
         files: list[ConversationFile] = []
         if "files" in data:
@@ -57,10 +110,14 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             await _save_files(files)
         # Keep the default tool set even when no collections are selected.
         # Restricting to non-document tools here caused an astronomy-only default.
-        active_tools = consumer.tools
+        active_tools, tool_choice = _configure_append_tools(
+            message_content=consumer.convo[-1].content,
+            all_tools=consumer.tools,
+            document_tools=getattr(consumer, "doc_tools", []),
+        )
         consumer.convo[-1].tools = active_tools
         consumer.convo[-1].files = [(file.name, file.id) for file in files]
-        consumer.convo[-1].tool_choice = ToolChoice(type="auto")
+        consumer.convo[-1].tool_choice = tool_choice
         await consumer._save_conversation(create_memories=False)
         consumer.last_sent_sequence = len(consumer.convo) - 1
         logger.debug("append() completed, message added")
@@ -129,6 +186,8 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 )
                 logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
                 await consumer._save_conversation(create_memories=True)
+            elif action == "select_collections":
+                await update_selected_collections(data)
             elif action == "rate":
                 await rate(data)
             elif action == "feedback":

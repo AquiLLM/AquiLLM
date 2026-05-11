@@ -53,8 +53,10 @@ def _reload_mem0_client(monkeypatch, **env: Any):
 
 def _reload_mem0_operations(monkeypatch, **env: Any):
     _apply_env(monkeypatch, **env)
+    from lib.memory import config as config_module
     from lib.memory.mem0 import operations as ops_module
 
+    importlib.reload(config_module)
     importlib.reload(ops_module)
     return ops_module
 
@@ -206,7 +208,7 @@ def test_search_uses_graph_client_when_enabled(monkeypatch):
             self.memory = memory
 
         def search(self, *_args, **_kwargs):
-            return {"results": [{"memory": self.memory}]}
+            return {"results": [{"memory": self.memory, "metadata": {"user_id": "1"}}]}
 
     monkeypatch.setattr(ops_module, "get_mem0_oss", lambda: FakeMem0("graph answer"))
     monkeypatch.setattr(ops_module, "get_mem0_oss_vector", lambda: FakeMem0("vector answer"))
@@ -240,7 +242,7 @@ def test_search_graph_failure_retries_vector_client(monkeypatch):
     class FakeVectorMem0:
         def search(self, *_args, **_kwargs):
             seen_clients.append("vector")
-            return {"results": [{"memory": "graph answer"}]}
+            return {"results": [{"memory": "graph answer", "metadata": {"user_id": "1"}}]}
 
     monkeypatch.setattr(ops_module, "get_mem0_oss", lambda: FakeGraphMem0())
     monkeypatch.setattr(ops_module, "get_mem0_oss_vector", lambda: FakeVectorMem0())

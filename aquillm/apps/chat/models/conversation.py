@@ -20,6 +20,7 @@ class WSConversation(models.Model):
     owner = models.ForeignKey(User, related_name='ws_conversations', on_delete=models.CASCADE)
     system_prompt = models.TextField(default=get_default_system_prompt, blank=True)
     name = models.TextField(blank=True, null=True)
+    selected_collection_ids = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(editable=False)
     updated_at = models.DateTimeField()
 

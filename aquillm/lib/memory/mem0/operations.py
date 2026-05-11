@@ -236,6 +236,7 @@ def search_mem0_via_oss(
         raw_items=response_to_raw_items(response),
         top_k=top_k,
         exclude_conversation_id=exclude_conversation_id,
+        user_id=user_id,
     )
 async def search_mem0_via_oss_async(
     user_id: str, query: str, top_k: int, exclude_conversation_id: Optional[int]
@@ -334,6 +335,7 @@ async def search_mem0_via_oss_async(
         raw_items=response_to_raw_items(response),
         top_k=top_k,
         exclude_conversation_id=exclude_conversation_id,
+        user_id=user_id,
     )
 def search_mem0_episodic_memories(
     user_id: str, query: str, top_k: int, exclude_conversation_id: Optional[int]
@@ -476,6 +478,7 @@ def add_mem0_raw_facts(
         return False
 
     metadata = {
+        "user_id": user_id,
         "conversation_id": conversation_id,
         "assistant_message_uuid": assistant_message_uuid,
         "source": "aquillm",
@@ -533,6 +536,7 @@ def add_mem0_messages(
         return False
 
     metadata = {
+        "user_id": user_id,
         "conversation_id": conversation_id,
         "assistant_message_uuid": assistant_message_uuid,
         "source": "aquillm",
@@ -567,6 +571,7 @@ async def add_mem0_raw_facts_async(
     if mem0 is None:
         return False
     metadata = {
+        "user_id": user_id,
         "conversation_id": conversation_id,
         "assistant_message_uuid": assistant_message_uuid,
         "source": "aquillm",

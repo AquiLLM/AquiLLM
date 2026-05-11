@@ -23,6 +23,7 @@ export interface Collection {
 export interface Conversation {
   messages: Message[];
   usage?: number;
+  selected_collections?: (string | number)[];
 }
 
 export interface ConversationDelta {

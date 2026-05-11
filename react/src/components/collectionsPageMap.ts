@@ -21,8 +21,8 @@ export function mapCollectionFromApi(col: {
     children: Array.isArray(col.children) ? (col.children as Collection[]) : [],
     document_count: col.document_count ?? 0,
     children_count: col.children_count ?? 0,
-    created_at: new Date(col.created_at || new Date()).toLocaleString(),
-    updated_at: new Date(col.updated_at || new Date()).toISOString(),
+    created_at: col.created_at ?? '',
+    updated_at: col.updated_at ?? '',
   };
 }
 

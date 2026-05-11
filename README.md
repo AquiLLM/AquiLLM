@@ -353,6 +353,7 @@ Healthy runs should also avoid repeated `falling back` or `retrying vector-only`
 | Variable | Purpose |
 |----------|--------|
 | `MEMORY_BACKEND=mem0` | Use Mem0 for episodic memory. |
+| `MEMORY_RETRIEVAL_TIMEOUT_SECONDS` | Chat-turn episodic memory lookup budget before generation starts; defaults to 2 seconds and falls back to profile memory only on timeout. |
 | `MEM0_LLM_BASE_URL` | OpenAI-compatible URL for chat (e.g. `http://vllm:8000/v1` or `http://host.docker.internal:8000/v1`). |
 | `MEM0_EMBED_BASE_URL` | OpenAI-compatible URL for embeddings (e.g. `http://vllm_embed:8000/v1` or `http://host.docker.internal:8002/v1`). |
 | `MEM0_LLM_MODEL` / `MEM0_EMBED_MODEL` | Model names as served by vLLM. |
