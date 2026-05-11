@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useDeferredValue } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -23,6 +23,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
   const displayTime = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const contentRef = useRef<HTMLDivElement>(null);
   const activeBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const rawAssistantSafe = message.role === 'assistant' && !message.tool_call_input
+    ? (message.done === false
+        ? splitOnUnclosedMarkdown(message.content).safe
+        : message.content)
+    : '';
+  const deferredAssistantSafe = useDeferredValue(rawAssistantSafe);
 
   useEffect(() => {
     const el = contentRef.current;
@@ -108,9 +115,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
           </div>
         )}
         {message.role === 'assistant' && !message.tool_call_input && (() => {
-          const safe = message.done === false
-            ? splitOnUnclosedMarkdown(message.content).safe
-            : message.content;
+          const safe = deferredAssistantSafe;
           return (
           <div className="markdown-cell prose prose-sm md:prose-base max-w-none whitespace-normal leading-relaxed">
             <ReactMarkdown
