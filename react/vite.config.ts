@@ -15,9 +15,20 @@ export default defineConfig({
       },
       output: {
         entryFileNames: '[name].js',
-        chunkFileNames: '[name].js',
+        // Hashed chunk names so Monaco's many internal modules don't collide
+        // on basename. Entry stays as main.js (referenced by Django templates).
+        chunkFileNames: 'chunks/[name]-[hash].js',
         assetFileNames: '[name].[ext]'
       }
     }
+  },
+  worker: {
+    format: 'es',
+    rollupOptions: {
+      output: {
+        entryFileNames: 'workers/[name]-[hash].js',
+        chunkFileNames: 'workers/chunks/[name]-[hash].js',
+      },
+    },
   },
 })

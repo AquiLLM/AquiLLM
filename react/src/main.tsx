@@ -15,6 +15,7 @@ import UserSettings from './components/UserSettings';
 import ChatFileUpload from './components/ChatFileUpload';
 import BugReportButton from './components/BugReportButton';
 import BugReportsAdmin from './components/BugReportsAdmin';
+const SkillsPage = React.lazy(() => import('./features/skills/components/SkillsPage'));
 // Type for the components mapping
 type ComponentsMap = {
   [key: string]: React.ComponentType<any>;
@@ -49,12 +50,17 @@ window.mountReactComponent = (
     ChatFileUpload: ChatFileUpload,
     BugReportButton: BugReportButton,
     BugReportsAdmin: BugReportsAdmin,
+    SkillsPage: SkillsPage,
     // Add other components here
   };
-  
+
   const Component = components[componentName];
   if (Component) {
-    root.render(<Component {...props} />);
+    root.render(
+      <React.Suspense fallback={null}>
+        <Component {...props} />
+      </React.Suspense>
+    );
   } else {
     console.error(`Component '${componentName}' not found`);
   }

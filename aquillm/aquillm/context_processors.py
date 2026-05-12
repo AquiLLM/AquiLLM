@@ -101,14 +101,17 @@ _PAGE_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
 
 
 def nav_links(request):
-    return {
-        "nav_links": [
-            {"url": "new_ws_convo", "text": "New Conversation"},
-            {"url": "user_ws_convos", "text": "Old Conversations"},
-            {"url": "search", "text": "Search"},
-            {"url": "user_collections", "text": "Collections"},
-        ]
-    }
+    from django.conf import settings
+
+    links = [
+        {"url": "new_ws_convo", "text": "New Conversation"},
+        {"url": "user_ws_convos", "text": "Old Conversations"},
+        {"url": "search", "text": "Search"},
+        {"url": "user_collections", "text": "Collections"},
+    ]
+    if getattr(settings, "SKILLS_ENABLED", False):
+        links.append({"url": "skills:skills_page", "text": "Skills"})
+    return {"nav_links": links}
 
 
 def api_urls(request):

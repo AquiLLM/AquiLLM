@@ -14,8 +14,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "katex": "^0.16.45",
     "lucide-react": "^0.475.0",
+    "monaco-editor": "^0.55.1",
     "react": "^19.0.0",
     "react-circular-progressbar": "^2.2.0",
     "react-dom": "^19.0.0",
