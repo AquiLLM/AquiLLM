@@ -110,7 +110,7 @@ def nav_links(request):
         {"url": "user_collections", "text": "Collections"},
     ]
     if getattr(settings, "SKILLS_ENABLED", False):
-        links.append({"url": "skills:skills_page", "text": "Skills"})
+        links.append({"url": "skills_page", "text": "Skills"})
     return {"nav_links": links}
 
 

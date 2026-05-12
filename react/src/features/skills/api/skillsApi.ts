@@ -1,5 +1,9 @@
-import { getCsrfCookie } from '../../../main';
+import { getCookie } from '../../../utils/csrf';
 import type { Skill, SkillsListResponse } from '../types';
+
+function csrfToken(): string {
+  return getCookie('csrftoken');
+}
 
 const BASE = '/api/skills/';
 
@@ -32,7 +36,7 @@ export async function createSkill(payload: {
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'X-CSRFToken': getCsrfCookie(),
+      'X-CSRFToken': csrfToken(),
     },
     body: JSON.stringify(payload),
   });
@@ -48,7 +52,7 @@ export async function updateSkill(
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'X-CSRFToken': getCsrfCookie(),
+      'X-CSRFToken': csrfToken(),
     },
     body: JSON.stringify(payload),
   });
@@ -59,7 +63,7 @@ export async function deleteSkill(id: number): Promise<void> {
   const r = await fetch(`${BASE}${id}/`, {
     method: 'DELETE',
     credentials: 'include',
-    headers: { 'X-CSRFToken': getCsrfCookie() },
+    headers: { 'X-CSRFToken': csrfToken() },
   });
   if (!r.ok) {
     throw new Error(`Delete failed (${r.status})`);

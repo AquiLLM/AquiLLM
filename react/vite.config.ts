@@ -2,6 +2,10 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from "tailwindcss"
 
+// Main app build: single entry, fully static, output as one self-contained
+// classic-script-compatible bundle (no top-level import/export keywords).
+// The skills page is built separately by vite.config.skills.ts so it can use
+// `React.lazy` + Monaco without forcing this bundle into ES-module format.
 export default defineConfig({
   plugins: [react()],
   base: '/static/js/dist/',
@@ -9,25 +13,16 @@ export default defineConfig({
     outDir: '../aquillm/aquillm/static/js/dist/',
     assetsDir: '',
     manifest: true,
+    // Don't wipe outputs of the sibling skills build.
+    emptyOutDir: false,
     rollupOptions: {
       input: {
         main: './src/main.tsx',
       },
       output: {
         entryFileNames: '[name].js',
-        // Hashed chunk names so Monaco's many internal modules don't collide
-        // on basename. Entry stays as main.js (referenced by Django templates).
-        chunkFileNames: 'chunks/[name]-[hash].js',
-        assetFileNames: '[name].[ext]'
-      }
-    }
-  },
-  worker: {
-    format: 'es',
-    rollupOptions: {
-      output: {
-        entryFileNames: 'workers/[name]-[hash].js',
-        chunkFileNames: 'workers/chunks/[name]-[hash].js',
+        chunkFileNames: '[name].js',
+        assetFileNames: '[name].[ext]',
       },
     },
   },

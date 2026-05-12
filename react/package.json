@@ -5,8 +5,10 @@
   "main": "index.js",
   "scripts": {
     "dev": "vite",
-    "build": "vite build --emptyOutDir",
-    "watch": "vite build --watch --emptyOutDir",
+    "build:main": "vite build --emptyOutDir",
+    "build:skills": "vite build --config vite.config.skills.ts",
+    "build": "npm run build:main && npm run build:skills",
+    "watch": "vite build --emptyOutDir --watch & vite build --config vite.config.skills.ts --watch & wait",
     "typecheck": "tsc --noEmit",
     "test:e2e": "npx playwright test"
   },
