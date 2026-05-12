@@ -20,3 +20,7 @@ def _load() -> str:
 
 
 APP_VERSION = _load()
+
+
+def current_app_version() -> str:
+    return APP_VERSION

@@ -3,7 +3,7 @@ import uuid
 
 from django.db import models
 
-from aquillm.app_version import APP_VERSION
+from aquillm.app_version import current_app_version
 
 from .conversation import WSConversation
 
@@ -21,7 +21,7 @@ class Message(models.Model):
     feedback_submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     sequence_number = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
-    app_version = models.CharField(max_length=20, default="pre-0.1.0")
+    app_version = models.CharField(max_length=20, default=current_app_version)
 
     # AssistantMessage-specific fields
     model = models.CharField(max_length=100, null=True, blank=True)
@@ -42,8 +42,3 @@ class Message(models.Model):
         db_table = 'aquillm_message'
         ordering = ['conversation', 'sequence_number']
         indexes = [models.Index(fields=['rating'])]
-
-    def save(self, *args, **kwargs):
-        if self._state.adding and self.app_version == "pre-0.1.0" and APP_VERSION:
-            self.app_version = APP_VERSION
-        super().save(*args, **kwargs)
