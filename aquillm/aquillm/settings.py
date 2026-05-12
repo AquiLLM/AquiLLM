@@ -206,6 +206,7 @@ TEMPLATES = [
                 "aquillm.context_processors.page_urls",
                 "aquillm.context_processors.react_bundle_version",
                 "aquillm.context_processors.theme_settings",
+                "aquillm.context_processors.app_version",
             ],
         },
     },

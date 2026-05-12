@@ -257,6 +257,11 @@
                         {% endif %}
                     </div>
                 </div>
+                {% if app_version %}
+                <div class="text-xs pl-[8px] pr-[8px] py-[8px] text-text-normal opacity-50 select-none">
+                    v{{ app_version }}
+                </div>
+                {% endif %}
             </div>
 
             <!-- Page Content -->
