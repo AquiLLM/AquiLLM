@@ -33,10 +33,44 @@ from lib.mcp.config import get_mcp_config
 from lib.mcp.client import MCPClient
 from lib.mcp.adapter import mcp_tools_to_llm_tools
 from lib.skills.loader import build_skills_prompt_extra, load_skills
+from aquillm.llm import LLMTool
 from lib.skills.tool import build_load_skill_tool, build_read_skill_file_tool
 from lib.tools.debug.weather import get_debug_weather_tool
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+# Skills whose body is already baked into a per-skill tool's description.
+# Calling load_skill on them is redundant work — round-trip the full body
+# returns content already in the LLM's context. We short-circuit instead,
+# returning a tiny message so the LLM can proceed without wasted latency.
+_SKILLS_WITH_INLINE_BODY = frozenset({"feedback"})
+
+
+def _wrap_load_skill_short_circuit(original: LLMTool) -> LLMTool:
+    """Wrap the boss's load_skill tool so that loads of skills whose body
+    is already inline in their tool description return immediately with a
+    pointer instead of the full body. Other skills load normally.
+    """
+    original_fn = original._function
+
+    def short_circuiting_load_skill(name: str):
+        if name in _SKILLS_WITH_INLINE_BODY:
+            return {
+                "result": (
+                    f"The '{name}' skill body is already inline in its "
+                    f"tool's description (system prompt). Skip this "
+                    f"load_skill call — you already have everything you "
+                    f"need. Proceed directly to the skill's tool."
+                )
+            }
+        return original_fn(name)
+
+    return LLMTool(
+        llm_definition=original.llm_definition,
+        for_whom=original.for_whom,
+        _function=short_circuiting_load_skill,
+    )
 
 
 def _resolve_request_origin(scope: dict) -> str:
@@ -174,16 +208,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self._activated_skill_blocks: list[str] = []
         self._activated_skill_names: set[str] = set()
         if self._skills:
-            self.tools.append(build_load_skill_tool(self._skills))
+            self.tools.append(
+                _wrap_load_skill_short_circuit(build_load_skill_tool(self._skills))
+            )
             self.tools.append(build_read_skill_file_tool(self._skills))
-        # Feedback dashboard link builder — always available; parses the query
-        # server-side so the LLM can't ship a malformed link. Pass the request
-        # host so the tool returns an absolute URL — relative URLs tempt the
-        # LLM to "complete" them with a hallucinated domain. Honor
-        # X-Forwarded-Host / X-Forwarded-Proto when set so the link points at
-        # the public origin rather than an internal docker/proxy hostname.
+        # Feedback dashboard link builder. The feedback SKILL.md body is
+        # injected as the tool description so the LLM always has the full
+        # rules/examples in its system prompt — single source of truth in
+        # SKILL.md, no duplication between description and skill body.
+        # X-Forwarded-Host / X-Forwarded-Proto support means URLs work
+        # correctly behind a reverse proxy.
         feedback_base_url = _resolve_request_origin(self.scope)
-        self.tools.append(build_feedback_link_tool(base_url=feedback_base_url))
+        feedback_skill = next(
+            (s for s in self._skills if s.name == "feedback"), None
+        )
+        self.tools.append(build_feedback_link_tool(
+            base_url=feedback_base_url,
+            skill_body=feedback_skill.body if feedback_skill else "",
+        ))
         logger.info("skills_loaded", count=len(self._skills))
         convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
         logger.debug("Convo ID: %s", convo_id)

@@ -102,6 +102,52 @@ def _query_groups_by(query: Query, field: str) -> bool:
     return False
 
 
+def _validate_post_summarize_field_refs(query: Query) -> str | None:
+    """Replicate the executor's post-summarize field check.
+
+    After a `summarize`, valid field names are restricted to the
+    aggregation aliases plus the `by` fields. Any later `where` or
+    `order_by` referencing a stream field instead would fail at executor
+    time. The parser passes such queries because it doesn't track
+    post-summarize state. We do that here so the LLM gets a clear error
+    up front instead of a broken URL.
+
+    Returns an error message if the query has an invalid post-summarize
+    field reference, else None.
+    """
+    post_summarize_keys: set[str] | None = None  # None = pre-summarize phase
+    for clause in query.clauses:
+        if isinstance(clause, SummarizeClause):
+            post_summarize_keys = (
+                set(clause.by) | {agg.alias for agg in clause.aggregations}
+            )
+            continue
+        if post_summarize_keys is None:
+            continue
+        if isinstance(clause, WhereClause):
+            for part in clause.parts:
+                if isinstance(part, Condition) and part.field not in post_summarize_keys:
+                    return (
+                        f"Field {part.field!r} cannot be used after "
+                        f"summarize. Post-summarize where (`having` in "
+                        f"JSON terms) and order_by can only reference "
+                        f"aggregation aliases or `by` fields: "
+                        f"{sorted(post_summarize_keys)}. If you wanted to "
+                        f"filter on the original stream field, move it "
+                        f"into the top-level `where` (before summarize)."
+                    )
+        elif isinstance(clause, OrderByClause):
+            if clause.field not in post_summarize_keys:
+                return (
+                    f"Field {clause.field!r} cannot be used in order_by "
+                    f"after summarize. Available: "
+                    f"{sorted(post_summarize_keys)}. To order by a "
+                    f"stream field, drop the summarize (just `where` + "
+                    f"`order_by`) or use an aggregation alias."
+                )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Server-side auto-fixes
 # ---------------------------------------------------------------------------
@@ -215,12 +261,43 @@ def _format_condition(cond: dict) -> str:
     field = cond["field"]
     op = cond["op"]
     if op not in _VALID_OPS:
+        # Common LLM mistake: negation operators that don't exist in
+        # FeedbackQL. Give a directive error pointing at the right
+        # behaviour instead of a generic "valid ops" list — gpt-4o
+        # otherwise tends to give up after the generic error.
+        if isinstance(op, str) and any(
+            op.lower().startswith(prefix)
+            for prefix in ("not ", "!", "doesn't", "doesnt", "does not")
+        ):
+            raise ValueError(
+                f"FeedbackQL has no negation operator for substring / "
+                f"prefix / list matches — there is no 'not contains', "
+                f"'not startswith', 'not in', etc. For questions like "
+                f"'X that doesn't contain Y' or 'X that is not in list Z', "
+                f"do NOT include this condition. Produce a query WITHOUT "
+                f"the negation filter, and in your reply to the user tell "
+                f"them the dashboard can't filter for 'does not match' "
+                f"patterns — they will need to scan the results manually."
+            )
         raise ValueError(
             f"Invalid op {op!r}. Valid: {', '.join(sorted(_VALID_OPS))}"
         )
     value = cond.get("value")
     if op == "in" and not isinstance(value, list):
         raise ValueError("'in' requires a list value")
+    # Virtual-field operator restriction (mirrors the executor's check).
+    # conversation_tool is computed per-conversation via a Python lookup
+    # rather than a DB column; it only supports equality semantics. The
+    # executor catches non-eq operators at run time, but we replicate
+    # the check here so the LLM gets a clear error up front instead of
+    # the user clicking a broken URL.
+    if field == "conversation_tool" and op not in ("==", "!="):
+        raise ValueError(
+            f"'conversation_tool' only supports == and != operators (got "
+            f"{op!r}). For substring matches on tools, use the "
+            f"conversations stream's `tools_used` field, which is a "
+            f"comma-separated string supporting `contains`."
+        )
     return f"{field} {op} {_format_value(value)}"
 
 
@@ -322,78 +399,61 @@ def _build_query(
     return "\n| ".join(parts)
 
 
-def build_feedback_link_tool(base_url: str = "") -> LLMTool:
-    """Build the build_feedback_link tool. See module docstring."""
+_TOOL_DESCRIPTION_PREAMBLE = (
+    "Build a shareable feedback-dashboard URL from a structured JSON spec. "
+    "USE THIS TOOL for any admin question about AquiLLM's chat data: user "
+    "feedback (ratings, comments), assistant messages, conversation "
+    "history/stats, model performance, tool usage, per-user activity. "
+    "Do NOT use vector_search for these — vector_search is for document "
+    "RAG; this tool is for the feedback/chat-data dashboard. "
+    "ALWAYS use this tool to produce dashboard links — never construct "
+    "URLs or query strings by hand. You only describe intent in JSON; the "
+    "tool assembles the FeedbackQL syntax internally so you cannot make "
+    "pipe/keyword/operator mistakes. If the tool returns an `exception`, "
+    "the message tells you what to fix — rebuild the JSON and call again. "
+    "Never paste exception text into your final response.\n\n"
+    "The full feedback skill body is included below — you already have "
+    "everything the load_skill tool would return for this skill, so "
+    "do NOT call load_skill(name=\"feedback\"). Doing so wastes a "
+    "round-trip and returns content you can already see. Just call "
+    "build_feedback_link directly when ready.\n\n"
+    "---\n\n"
+)
+
+
+def build_feedback_link_tool(
+    base_url: str = "",
+    skill_body: str = "",
+) -> LLMTool:
+    """Build the build_feedback_link tool.
+
+    `base_url`: origin like "http://localhost:8080" — empty falls back to
+    a relative path.
+
+    `skill_body`: the loaded feedback SKILL.md body. Used as the tool
+    description so the LLM sees the full skill content in its system
+    prompt without needing to call `load_skill`. SKILL.md remains the
+    single source of truth — the description is generated from it at
+    chat-connect time.
+    """
 
     base = base_url.rstrip("/") if base_url else ""
+    full_description = _TOOL_DESCRIPTION_PREAMBLE + (
+        skill_body
+        if skill_body
+        else "(skill body not loaded — see skills/feedback/SKILL.md for the full schema and rules)"
+    )
 
     @llm_tool(
         for_whom="assistant",
-        description=(
-            "Build a shareable feedback-dashboard URL from a structured JSON "
-            "spec. ALWAYS use this tool to produce dashboard links — never "
-            "construct URLs or query strings by hand. You only describe "
-            "intent in JSON; the tool assembles the FeedbackQL syntax "
-            "internally so you cannot make pipe/keyword/operator mistakes. "
-            "If the tool returns an `exception`, the message tells you "
-            "exactly what to fix — rebuild the JSON to address it and "
-            "call the tool again before replying to the user. Never "
-            "paste exception text into your final response."
-        ),
+        description=full_description,
         required=["query_spec"],
         param_descs={
             "query_spec": (
-                'JSON object as a string. Schema:\n'
-                '{\n'
-                '  "stream": "messages" | "conversations",  // REQUIRED\n'
-                '  "where": [                               // optional, AND-joined\n'
-                '    {"field": <name>, "op": <op>, "value": <v>},\n'
-                '    ...\n'
-                '  ],\n'
-                '  "summarize": {                           // optional\n'
-                '    "aggregations": [\n'
-                '      {"alias": <out-name>, "func": <func>, "field": <field>},\n'
-                '      ...\n'
-                '    ],\n'
-                '    "by": [<field>, ...]                   // optional\n'
-                '  },\n'
-                '  "having": [                              // optional, requires summarize; filter on aggregate aliases + by fields\n'
-                '    {"field": <alias-or-by-field>, "op": <op>, "value": <v>},\n'
-                '    ...\n'
-                '  ],\n'
-                '  "select": [<field>, ...],                // optional, mutually exclusive with summarize\n'
-                '  "order_by": {"field": <name>, "direction": "asc"|"desc"},\n'
-                '  "limit": <positive int>\n'
-                '}\n\n'
-                'Valid ops: ==, !=, <, >, <=, >=, startswith, contains, in.\n'
-                'Use value: null with op == or != for null checks.\n'
-                'Valid funcs: avg, count, min, max, sum, median (count needs no field).\n'
-                'Date values are ISO strings, e.g. "2026-04-01".\n\n'
-                'ROLE FILTER RULE: when the user mentions answers, responses, '
-                'outputs, the assistant, the model, the AI, ratings, feedback, '
-                'comments, or stars, include '
-                '{"field": "role", "op": "==", "value": "assistant"} in `where` '
-                '— these always attach to assistant messages in AquiLLM.\n\n'
-                'COUNT RULE: when using `summarize` with avg/min/max/sum/median, '
-                'always include a count aggregation alongside so the user can '
-                'see sample sizes.\n\n'
-                'HAVING RULE: questions like "for X who did Y at least N times" '
-                'or "groups whose aggregate is above/below threshold" need the '
-                '`having` field, NOT `where`. `having` filters the aggregate '
-                'output and can reference aggregation aliases. Example: '
-                '"users who left at least 3 ratings, what is their average" → '
-                'summarize by user_id with count alias `n` and avg alias `avg_r`, '
-                'then having: [{"field":"n","op":">=","value":3}].\n\n'
-                'EXAMPLE — "lowest-rated assistant answers from last month":\n'
-                '{"stream": "messages", '
-                '"where": ['
-                '{"field":"role","op":"==","value":"assistant"},'
-                '{"field":"rating","op":"<=","value":2},'
-                '{"field":"feedback_submitted_at","op":">=","value":"2026-04-01"},'
-                '{"field":"feedback_submitted_at","op":"<","value":"2026-05-01"}'
-                '], '
-                '"order_by": {"field":"rating","direction":"asc"}, '
-                '"limit": 50}'
+                "JSON object as a string describing the user's intent. "
+                "Schema, allowed fields per stream, operators, interpretation "
+                "rules, and worked examples are all in the tool description "
+                "above."
             ),
         },
     )
@@ -434,6 +494,13 @@ def build_feedback_link_tool(base_url: str = "") -> LLMTool:
                     f"Query was: {query_text}"
                 )
             }
+
+        # Replicate the executor's post-summarize field check so the LLM
+        # gets a clear error here instead of the user clicking a broken
+        # link and seeing the failure on the dashboard.
+        post_summarize_error = _validate_post_summarize_field_refs(parsed)
+        if post_summarize_error is not None:
+            return {"exception": post_summarize_error}
 
         # Use a short token instead of base64-in-URL: gpt-4o (and other LLMs)
         # occasionally drop characters when transcribing long opaque strings,
