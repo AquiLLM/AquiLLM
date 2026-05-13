@@ -1,8 +1,6 @@
 """Template context processors: navigation, URLs exposed to the client, theme."""
 from __future__ import annotations
 
-import tomllib
-
 import structlog
 from pathlib import Path
 from typing import Any
@@ -10,22 +8,10 @@ from uuid import UUID
 
 from django.urls import NoReverseMatch, reverse
 
+from .app_version import APP_VERSION
 from .models import UserSettings, WSConversation
 
 logger = structlog.stdlib.get_logger(__name__)
-
-
-def _load_app_version() -> str:
-    pyproject = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
-    try:
-        with pyproject.open("rb") as f:
-            return tomllib.load(f)["project"]["version"]
-    except (OSError, KeyError, tomllib.TOMLDecodeError) as exc:
-        logger.warning("Could not read app version from %s: %s", pyproject, exc)
-        return ""
-
-
-_APP_VERSION = _load_app_version()
 
 _PLACEHOLDER_DOC_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -153,7 +139,7 @@ def theme_settings(request):
 
 
 def app_version(request):
-    return {"app_version": _APP_VERSION}
+    return {"app_version": APP_VERSION}
 
 
 def react_bundle_version(request):

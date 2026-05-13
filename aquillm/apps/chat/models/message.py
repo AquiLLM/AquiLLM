@@ -3,6 +3,8 @@ import uuid
 
 from django.db import models
 
+from aquillm.app_version import current_app_version
+
 from .conversation import WSConversation
 
 
@@ -19,6 +21,7 @@ class Message(models.Model):
     feedback_submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     sequence_number = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
+    app_version = models.CharField(max_length=20, default=current_app_version)
 
     # AssistantMessage-specific fields
     model = models.CharField(max_length=100, null=True, blank=True)
