@@ -77,9 +77,13 @@ class IngestionDashboardConsumer(AsyncWebsocketConsumer):
                         "textExtracted": bool((doc.full_text or "").strip()),
                         "provider": document_provider_name(doc),
                         "providerModel": document_provider_model(doc),
+                        "isReplay": True,
                     }
                 )
             )
+        # Signal that the initial replay is complete; any subsequent
+        # document.ingestion.start messages are live (new uploads).
+        await self.send(dumps({"type": "dashboard.loaded"}))
 
     async def document_ingestion_start(self, event):
         await self.send(text_data=dumps(event))

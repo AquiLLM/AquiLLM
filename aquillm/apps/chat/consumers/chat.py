@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import structlog
 from json import dumps
@@ -27,14 +28,78 @@ from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
+from apps.platform_admin.feedbackql.link_tool import build_feedback_link_tool
 from lib.mcp.config import get_mcp_config
 from lib.mcp.client import MCPClient
 from lib.mcp.adapter import mcp_tools_to_llm_tools
 from lib.skills.loader import build_skills_prompt_extra, load_skills
+from aquillm.llm import LLMTool
 from lib.skills.tool import build_load_skill_tool, build_read_skill_file_tool
 from lib.tools.debug.weather import get_debug_weather_tool
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+# Skills whose body is already baked into a per-skill tool's description.
+# Calling load_skill on them is redundant work — round-trip the full body
+# returns content already in the LLM's context. We short-circuit instead,
+# returning a tiny message so the LLM can proceed without wasted latency.
+_SKILLS_WITH_INLINE_BODY = frozenset({"feedback"})
+
+
+def _wrap_load_skill_short_circuit(original: LLMTool) -> LLMTool:
+    """Wrap the boss's load_skill tool so that loads of skills whose body
+    is already inline in their tool description return immediately with a
+    pointer instead of the full body. Other skills load normally.
+    """
+    original_fn = original._function
+
+    def short_circuiting_load_skill(name: str):
+        if name in _SKILLS_WITH_INLINE_BODY:
+            return {
+                "result": (
+                    f"The '{name}' skill body is already inline in its "
+                    f"tool's description (system prompt). Skip this "
+                    f"load_skill call — you already have everything you "
+                    f"need. Proceed directly to the skill's tool."
+                )
+            }
+        return original_fn(name)
+
+    return LLMTool(
+        llm_definition=original.llm_definition,
+        for_whom=original.for_whom,
+        _function=short_circuiting_load_skill,
+    )
+
+
+def _resolve_request_origin(scope: dict) -> str:
+    """Build a public-facing 'scheme://host' string from a Channels scope.
+
+    Prefers X-Forwarded-Host / X-Forwarded-Proto when present (set by a
+    trusted reverse proxy) so generated links point at the public origin
+    rather than the internal hostname seen by the app server. Falls back to
+    the Host header and the WebSocket scheme. Returns an empty string when
+    no host header is present.
+    """
+    def _header(name: bytes) -> str:
+        for k, v in scope.get("headers", []):
+            if k.lower() == name:
+                return v.decode("ascii", errors="ignore").strip()
+        return ""
+
+    host = _header(b"x-forwarded-host") or _header(b"host")
+    if not host:
+        return ""
+    # X-Forwarded-Host can carry a comma-separated chain; the originating
+    # client is the leftmost entry.
+    host = host.split(",", 1)[0].strip()
+    proto = _header(b"x-forwarded-proto").lower()
+    if proto:
+        scheme = "https" if "https" in proto else "http"
+    else:
+        scheme = "https" if scope.get("scheme") == "wss" else "http"
+    return f"{scheme}://{host}"
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -54,11 +119,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=dumps({"stream": payload}))
 
     def _effective_system_prompt(self) -> str:
-        """db system prompt + skill index + any slash-activated skill bodies."""
+        """db system prompt + current date + skill index + any slash-activated skill bodies."""
         parts: list[str] = []
         base = self.db_convo.system_prompt if self.db_convo else ""
         if base:
             parts.append(base.rstrip())
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        parts.append(f"Today's date is {today} (UTC).")
         extra = getattr(self, "_skill_prompt_extra", "") or ""
         if extra:
             parts.append(extra)
@@ -135,14 +202,39 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 logger.info("mcp_server_connected", server=cfg.name, tool_count=len(schemas))
             except Exception as exc:
                 logger.warning("mcp_server_failed", server=cfg.name, error=str(exc))
-        # Skill discovery (markdown SKILL.md → progressive disclosure)
-        self._skills = await asyncio.to_thread(load_skills)
+        # Skill discovery (markdown SKILL.md → progressive disclosure).
+        # The feedback skill is admin-only: it generates query links to a
+        # dashboard that itself rejects non-admins. Filtering it out here
+        # means non-admin chats don't see the skill in the index, can't
+        # load it via load_skill, and don't have the build_feedback_link
+        # tool registered. Mirrors the dashboard view's is_superuser gate.
+        all_skills = await asyncio.to_thread(load_skills)
+        if self.user.is_superuser:
+            self._skills = all_skills
+        else:
+            self._skills = [s for s in all_skills if s.name != "feedback"]
         self._skill_prompt_extra = build_skills_prompt_extra(self._skills)
         self._activated_skill_blocks: list[str] = []
         self._activated_skill_names: set[str] = set()
         if self._skills:
-            self.tools.append(build_load_skill_tool(self._skills))
+            self.tools.append(
+                _wrap_load_skill_short_circuit(build_load_skill_tool(self._skills))
+            )
             self.tools.append(build_read_skill_file_tool(self._skills))
+        # Feedback dashboard link builder — only registered for superusers.
+        # The SKILL.md body is injected as the tool description so the LLM
+        # always has the full rules/examples in its system prompt without
+        # depending on load_skill. X-Forwarded-Host / X-Forwarded-Proto
+        # support means URLs work correctly behind a reverse proxy.
+        if self.user.is_superuser:
+            feedback_base_url = _resolve_request_origin(self.scope)
+            feedback_skill = next(
+                (s for s in self._skills if s.name == "feedback"), None
+            )
+            self.tools.append(build_feedback_link_tool(
+                base_url=feedback_base_url,
+                skill_body=feedback_skill.body if feedback_skill else "",
+            ))
         logger.info("skills_loaded", count=len(self._skills))
         convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
         logger.debug("Convo ID: %s", convo_id)
