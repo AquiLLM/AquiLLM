@@ -202,8 +202,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 logger.info("mcp_server_connected", server=cfg.name, tool_count=len(schemas))
             except Exception as exc:
                 logger.warning("mcp_server_failed", server=cfg.name, error=str(exc))
-        # Skill discovery (markdown SKILL.md → progressive disclosure)
-        self._skills = await asyncio.to_thread(load_skills)
+        # Skill discovery (markdown SKILL.md → progressive disclosure).
+        # The feedback skill is admin-only: it generates query links to a
+        # dashboard that itself rejects non-admins. Filtering it out here
+        # means non-admin chats don't see the skill in the index, can't
+        # load it via load_skill, and don't have the build_feedback_link
+        # tool registered. Mirrors the dashboard view's is_superuser gate.
+        all_skills = await asyncio.to_thread(load_skills)
+        if self.user.is_superuser:
+            self._skills = all_skills
+        else:
+            self._skills = [s for s in all_skills if s.name != "feedback"]
         self._skill_prompt_extra = build_skills_prompt_extra(self._skills)
         self._activated_skill_blocks: list[str] = []
         self._activated_skill_names: set[str] = set()
@@ -212,20 +221,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 _wrap_load_skill_short_circuit(build_load_skill_tool(self._skills))
             )
             self.tools.append(build_read_skill_file_tool(self._skills))
-        # Feedback dashboard link builder. The feedback SKILL.md body is
-        # injected as the tool description so the LLM always has the full
-        # rules/examples in its system prompt — single source of truth in
-        # SKILL.md, no duplication between description and skill body.
-        # X-Forwarded-Host / X-Forwarded-Proto support means URLs work
-        # correctly behind a reverse proxy.
-        feedback_base_url = _resolve_request_origin(self.scope)
-        feedback_skill = next(
-            (s for s in self._skills if s.name == "feedback"), None
-        )
-        self.tools.append(build_feedback_link_tool(
-            base_url=feedback_base_url,
-            skill_body=feedback_skill.body if feedback_skill else "",
-        ))
+        # Feedback dashboard link builder — only registered for superusers.
+        # The SKILL.md body is injected as the tool description so the LLM
+        # always has the full rules/examples in its system prompt without
+        # depending on load_skill. X-Forwarded-Host / X-Forwarded-Proto
+        # support means URLs work correctly behind a reverse proxy.
+        if self.user.is_superuser:
+            feedback_base_url = _resolve_request_origin(self.scope)
+            feedback_skill = next(
+                (s for s in self._skills if s.name == "feedback"), None
+            )
+            self.tools.append(build_feedback_link_tool(
+                base_url=feedback_base_url,
+                skill_body=feedback_skill.body if feedback_skill else "",
+            ))
         logger.info("skills_loaded", count=len(self._skills))
         convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
         logger.debug("Convo ID: %s", convo_id)
