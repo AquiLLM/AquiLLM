@@ -8,10 +8,15 @@ import react from '@vitejs/plugin-react'
 // because main.js is loaded with a classic `<script>` tag — see the comment
 // in `vite.config.ts`.
 //
+// The Collection Notes page (per-collection markdown notes for owners) shares
+// this bundle config because it has the same constraint: Monaco editor in a
+// React.lazy chunk, ES-module output. Both pages are loaded with
+// `<script type="module">` in their respective templates.
+//
 // Output:
-//   static/js/dist/skills.js                    (entry, ES module)
-//   static/js/dist/skills.css                   (entry CSS, if any)
-//   static/js/dist/chunks/SkillEditor-*.js      (Monaco lazy chunk)
+//   static/js/dist/skills.js                    (skills entry, ES module)
+//   static/js/dist/collection_notes.js          (collection notes entry, ES module)
+//   static/js/dist/chunks/SkillEditor-*.js      (Monaco lazy chunk, shared)
 //   static/js/dist/workers/editor.worker-*.js   (Monaco's web worker)
 export default defineConfig({
   plugins: [react()],
@@ -25,6 +30,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         skills: './src/skills_entry.tsx',
+        collection_notes: './src/collection_notes_entry.tsx',
       },
       output: {
         entryFileNames: '[name].js',

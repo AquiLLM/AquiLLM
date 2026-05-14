@@ -7,7 +7,12 @@ from typing import Any
 
 from django.conf import settings
 
-from apps.skills.services.runtime import aload_user_skill_bodies, load_user_skill_bodies
+from apps.skills.services.runtime import (
+    aload_collection_skill_bodies,
+    aload_user_skill_bodies,
+    load_collection_skill_bodies,
+    load_user_skill_bodies,
+)
 from aquillm.llm import LLMTool
 from lib.skills import (
     collect_system_prompt_extras,
@@ -65,12 +70,19 @@ def build_skill_tools(consumer: Any) -> list[LLMTool]:
     return collect_tools(_resolved_modules(), ctx)
 
 
-def _compose_base_system(base: str, py_extra: str, md_extra: str, db_extra: str) -> str:
-    extra_parts = [s for s in (py_extra, md_extra, db_extra) if s]
+def _compose_base_system(
+    base: str, py_extra: str, md_extra: str, db_extra: str, coll_extra: str
+) -> str:
+    extra_parts = [s for s in (py_extra, md_extra, db_extra, coll_extra) if s]
     if not extra_parts:
         return base
     extra = "\n\n---\n\n".join(extra_parts)
     return f"{base.rstrip()}\n\n{extra}"
+
+
+def _convo_collection_ids(consumer: Any) -> list[int]:
+    raw = getattr(consumer.db_convo, "selected_collection_ids", None) or []
+    return [int(x) for x in raw if isinstance(x, (int, str)) and str(x).strip().isdigit()]
 
 
 def effective_base_system_for_memory(consumer: Any) -> str:
@@ -89,7 +101,8 @@ def effective_base_system_for_memory(consumer: Any) -> str:
     py_extra = collect_system_prompt_extras(_resolved_modules(), ctx).strip()
     md_extra = load_markdown_prompt_bodies(_markdown_skills_root()).strip()
     db_extra = load_user_skill_bodies(consumer.user.id).strip()
-    return _compose_base_system(base, py_extra, md_extra, db_extra)
+    coll_extra = load_collection_skill_bodies(_convo_collection_ids(consumer)).strip()
+    return _compose_base_system(base, py_extra, md_extra, db_extra, coll_extra)
 
 
 async def aeffective_base_system_for_memory(consumer: Any) -> str:
@@ -105,7 +118,8 @@ async def aeffective_base_system_for_memory(consumer: Any) -> str:
     py_extra = collect_system_prompt_extras(_resolved_modules(), ctx).strip()
     md_extra = load_markdown_prompt_bodies(_markdown_skills_root()).strip()
     db_extra = (await aload_user_skill_bodies(consumer.user.id)).strip()
-    return _compose_base_system(base, py_extra, md_extra, db_extra)
+    coll_extra = (await aload_collection_skill_bodies(_convo_collection_ids(consumer))).strip()
+    return _compose_base_system(base, py_extra, md_extra, db_extra, coll_extra)
 
 
 __all__ = [

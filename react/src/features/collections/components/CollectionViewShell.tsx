@@ -28,6 +28,8 @@ export interface CollectionViewShellProps {
   successMessage: string | null;
   isBatchOperationLoading: boolean;
   isUserManagementModalOpen: boolean;
+  canManage: boolean;
+  onOpenCollectionNotes: () => void;
   onBack: () => void;
   onManageCollaborators: () => void;
   onDelete: () => void;
@@ -61,6 +63,8 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
   successMessage,
   isBatchOperationLoading,
   isUserManagementModalOpen,
+  canManage,
+  onOpenCollectionNotes,
   onBack,
   onManageCollaborators,
   onDelete,
@@ -142,6 +146,8 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
           onDelete={onDelete}
           triggerLabel="Collection Settings"
           onMove={onOpenCollectionSettingsMove}
+          onEditNotes={onOpenCollectionNotes}
+          canManage={canManage}
         />
       </div>
     </div>
