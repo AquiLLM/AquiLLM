@@ -9,7 +9,9 @@ from django.db import IntegrityError
 from django.http import HttpRequest, JsonResponse
 from django.views.decorators.http import require_http_methods
 
-from apps.skills.models import Skill
+from apps.collections.models import Collection
+from apps.skills.models import CollectionSkill, Skill
+from apps.skills.models.collection_skill import MAX_BODY_LENGTH as COLLECTION_SKILL_MAX_BODY
 
 
 MAX_NAME_LENGTH = 120
@@ -137,4 +139,70 @@ def skill_detail(request: HttpRequest, skill_id: int) -> JsonResponse:
     return JsonResponse(_serialize(skill))
 
 
-__all__ = ["skills_list_create", "skill_detail"]
+def _serialize_collection_skill(cs: CollectionSkill | None, collection: Collection) -> dict:
+    if cs is None:
+        return {
+            "collection_id": collection.id,
+            "collection_name": collection.name,
+            "body": "",
+            "updated_at": None,
+            "updated_by": None,
+            "exists": False,
+            "max_body_length": COLLECTION_SKILL_MAX_BODY,
+        }
+    return {
+        "collection_id": collection.id,
+        "collection_name": collection.name,
+        "body": cs.body,
+        "updated_at": cs.updated_at.isoformat() if cs.updated_at else None,
+        "updated_by": cs.updated_by.username if cs.updated_by else None,
+        "exists": True,
+        "max_body_length": COLLECTION_SKILL_MAX_BODY,
+    }
+
+
+@login_required
+@require_http_methods(["GET", "PUT"])
+def collection_skill_detail(request: HttpRequest, collection_id: int) -> JsonResponse:
+    """Read or upsert the Collection Notes for a single collection.
+
+    Permission rules:
+      - GET requires EDIT or higher on the collection.
+      - PUT requires MANAGE on the collection.
+    PUT is upsert: creates the row if it does not exist, updates otherwise.
+    """
+    if not getattr(settings, "SKILLS_ENABLED", False):
+        return JsonResponse({"error": "Skills feature is disabled"}, status=404)
+
+    try:
+        collection = Collection.objects.get(pk=collection_id)
+    except Collection.DoesNotExist:
+        return JsonResponse({"error": "Collection not found"}, status=404)
+
+    if request.method == "GET":
+        if not collection.user_can_edit(request.user):
+            return JsonResponse({"error": "Forbidden"}, status=403)
+        cs = CollectionSkill.objects.filter(collection=collection).first()
+        return JsonResponse(_serialize_collection_skill(cs, collection))
+
+    # PUT
+    if not collection.user_can_manage(request.user):
+        return JsonResponse({"error": "Forbidden"}, status=403)
+    payload = _parse_payload(request)
+    if isinstance(payload, JsonResponse):
+        return payload
+    body = payload.get("body", "")
+    if not isinstance(body, str):
+        return JsonResponse({"error": "body must be a string"}, status=400)
+    if len(body) > COLLECTION_SKILL_MAX_BODY:
+        return JsonResponse(
+            {"error": f"body too long (max {COLLECTION_SKILL_MAX_BODY} chars)"}, status=400
+        )
+    cs, _ = CollectionSkill.objects.update_or_create(
+        collection=collection,
+        defaults={"body": body, "updated_by": request.user},
+    )
+    return JsonResponse(_serialize_collection_skill(cs, collection))
+
+
+__all__ = ["skills_list_create", "skill_detail", "collection_skill_detail"]

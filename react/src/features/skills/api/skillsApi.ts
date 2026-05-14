@@ -69,3 +69,34 @@ export async function deleteSkill(id: number): Promise<void> {
     throw new Error(`Delete failed (${r.status})`);
   }
 }
+
+export interface CollectionSkill {
+  collection_id: number;
+  collection_name: string;
+  body: string;
+  updated_at: string | null;
+  updated_by: string | null;
+  exists: boolean;
+  max_body_length: number;
+}
+
+export async function getCollectionSkill(collectionId: number): Promise<CollectionSkill> {
+  const r = await fetch(`/api/collections/${collectionId}/skill/`, { credentials: 'include' });
+  return jsonOrThrow<CollectionSkill>(r);
+}
+
+export async function saveCollectionSkill(
+  collectionId: number,
+  body: string,
+): Promise<CollectionSkill> {
+  const r = await fetch(`/api/collections/${collectionId}/skill/`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': csrfToken(),
+    },
+    body: JSON.stringify({ body }),
+  });
+  return jsonOrThrow<CollectionSkill>(r);
+}
