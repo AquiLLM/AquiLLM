@@ -9,6 +9,22 @@ from ..types.conversation import Conversation
 from ..types.messages import ToolMessage
 
 
+_RAW_TOOL_TRANSCRIPT_RE = re.compile(
+    r"(?im)(?:^|\n)\s*(?:Tool|Tool call|Called Tool)\s*:\s*[A-Za-z_][\w.-]*\s*(?:\n|$)"
+)
+
+
+def looks_like_raw_tool_transcript(text: Optional[str]) -> bool:
+    """Detect tool-call/tool-result transcripts that should not be user-visible answers."""
+    if not text:
+        return False
+    candidate = str(text)
+    lowered = candidate.lower()
+    if "<tool_call" in lowered or "<function_call" in lowered:
+        return True
+    return bool(_RAW_TOOL_TRANSCRIPT_RE.search(candidate))
+
+
 def looks_like_deferred_tool_intent(text: Optional[str]) -> bool:
     """
     Heuristic: detect when the model says it will search/look something up
@@ -16,6 +32,8 @@ def looks_like_deferred_tool_intent(text: Optional[str]) -> bool:
     """
     if not text:
         return False
+    if looks_like_raw_tool_transcript(text):
+        return True
     normalized = re.sub(r"[\u2018\u2019]", chr(39), text.lower())
     cues = (
         "i'll search",
@@ -37,7 +55,13 @@ def looks_like_deferred_tool_intent(text: Optional[str]) -> bool:
         "i'll read the papers",
         "i will read the papers",
     )
-    return any(cue in normalized for cue in cues)
+    if any(cue in normalized for cue in cues):
+        return True
+    action_pattern = (
+        r"\b(?:i(?:'ll| will| am going to)|i'm going to|let me)\s+"
+        r"(?:first\s+)?(?:search|retrieve|check|scan|read|consult|look up|look through)\b"
+    )
+    return bool(re.search(action_pattern, normalized))
 
 
 def looks_like_post_tool_non_answer(text: Optional[str]) -> bool:
@@ -50,6 +74,8 @@ def looks_like_post_tool_non_answer(text: Optional[str]) -> bool:
     if not text:
         return False
     if looks_like_deferred_tool_intent(text):
+        return True
+    if looks_like_raw_tool_transcript(text):
         return True
 
     candidate = " ".join(str(text).strip().split())
@@ -229,6 +255,7 @@ __all__ = [
     "looks_cut_off",
     "looks_like_deferred_tool_intent",
     "looks_like_post_tool_non_answer",
+    "looks_like_raw_tool_transcript",
     "should_preserve_cutoff_partial",
     "synthesize_from_recent_tool_results",
 ]

@@ -13,6 +13,7 @@ from ..types.tools import dump_tool_choice
 from . import fallback_heuristics as fb
 from . import image_context as imgctx
 from . import rag_citations as citations
+from . import visibility
 from .retrieval_status import append_retrieval_notice_if_missing, document_retrieval_notice
 from .summary import generate_compact_tool_summary
 
@@ -306,7 +307,7 @@ async def complete_conversation_turn(
                 )
 
     allowed_tool_names = {tool.name for tool in (last_message.tools or [])}
-    response_text = response.text if response.text else ""
+    response_text = visibility.strip_thinking_blocks(response.text)
     response_tool_call = response.tool_call or {}
 
     if response_tool_call:
@@ -324,16 +325,16 @@ async def complete_conversation_turn(
                     "Please retry and I will provide a full summary."
                 )
 
+    if (not response_tool_call) and visibility.is_interim_assistant_text(response_text):
+        response_text = ""
+
     if (not response_tool_call) and (not response_text.strip()):
         compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
         response_text = compact_summary or (
             fb.synthesize_from_recent_tool_results(conversation)
             if fb.extractive_fallback_enabled()
             else None
-        ) or (
-            "I retrieved supporting passages but could not generate a final answer. "
-            "Please retry and I will provide a full summary."
-        )
+        ) or visibility.clean_response_failure_text(after_tool_result=is_post_tool_result_turn)
 
     stop_reason_normalized = str(response.stop_reason or "").strip().lower()
     if (
@@ -461,6 +462,16 @@ async def complete_conversation_turn(
                 response_text = response_text.rstrip() + "\n\n" + "\n".join(missing_markdown_images)
     if use_live_citation_stream and (not response_tool_call):
         response_text = _append_citation_sources_if_missing(response_text, source_allowlist)
+    if response_tool_call:
+        response_text = visibility.strip_thinking_blocks(response_text)
+        if visibility.is_interim_assistant_text(response_text):
+            response_text = ""
+    else:
+        response_text = visibility.sanitize_assistant_text(response_text)
+        if not response_text.strip():
+            response_text = visibility.clean_response_failure_text(
+                after_tool_result=is_post_tool_result_turn
+            )
     new_msg = AssistantMessage(
         content=response_text,
         stop_reason=response.stop_reason,

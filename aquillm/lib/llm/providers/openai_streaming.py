@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional
 from ..types.response import LLMResponse
 
 from .openai_tool_text import decode_json_dict, extract_tool_call_from_text
+from .visibility import strip_thinking_blocks, visible_stream_content
 
 
 async def consume_streaming_completion(
@@ -34,14 +35,20 @@ async def consume_streaming_completion(
                 if content_piece:
                     piece = str(content_piece)
                     text_parts.append(piece)
-                    await stream_callback(
-                        {
-                            "message_uuid": stream_message_uuid,
-                            "role": "assistant",
-                            "content": "".join(text_parts),
-                            "done": False,
-                        }
+                    visible_content = visible_stream_content(
+                        "".join(text_parts),
+                        raw_tools=raw_tools,
+                        done=False,
                     )
+                    if visible_content:
+                        await stream_callback(
+                            {
+                                "message_uuid": stream_message_uuid,
+                                "role": "assistant",
+                                "content": visible_content,
+                                "done": False,
+                            }
+                        )
 
                 for tc in getattr(delta, "tool_calls", None) or []:
                     idx = int(getattr(tc, "index", 0) or 0)
@@ -70,7 +77,7 @@ async def consume_streaming_completion(
             input_usage = int(getattr(usage, "prompt_tokens", input_usage) or input_usage)
             output_usage = int(getattr(usage, "completion_tokens", output_usage) or output_usage)
 
-    text = "".join(text_parts) or None
+    text = strip_thinking_blocks("".join(text_parts)) or None
     tool_call_payload: Optional[dict] = None
     if tool_call_parts:
         first_idx = sorted(tool_call_parts.keys())[0]
@@ -97,16 +104,23 @@ async def consume_streaming_completion(
         text = parsed_args.get("message") or text
         tool_call_payload = None
 
-    await stream_callback(
-        {
-            "message_uuid": stream_message_uuid,
-            "role": "assistant",
-            "content": text or "",
-            "done": True,
-            "stop_reason": finish_reason,
-            "usage": input_usage + output_usage,
-        }
+    visible_done_content = visible_stream_content(
+        text or "",
+        raw_tools=raw_tools,
+        done=True,
+        tool_call_payload=tool_call_payload,
     )
+    if visible_done_content:
+        await stream_callback(
+            {
+                "message_uuid": stream_message_uuid,
+                "role": "assistant",
+                "content": visible_done_content,
+                "done": True,
+                "stop_reason": finish_reason,
+                "usage": input_usage + output_usage,
+            }
+        )
 
     return LLMResponse(
         text=text,
