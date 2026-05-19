@@ -1,5 +1,5 @@
 """Pydantic message adapters and frontend conversation JSON shape."""
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.contrib.auth import get_user_model
 
 from aquillm.models import WSConversation, Message
@@ -8,6 +8,7 @@ from aquillm.message_adapters import (
     pydantic_message_to_django,
     django_message_to_pydantic,
     build_frontend_conversation_json,
+    pydantic_message_to_frontend_dict,
 )
 
 User = get_user_model()
@@ -171,6 +172,34 @@ class MessageAdapterTests(TestCase):
         self.assertIsNone(db_msg.feedback_text)
 
 
+class FrontendMessageDictTests(SimpleTestCase):
+    def test_assistant_interim_text_is_not_stored_in_django_row(self):
+        msg = AssistantMessage(
+            content="I'll retrieve the passage now.",
+            stop_reason='stop',
+        )
+        db_convo = WSConversation(owner=User(username='testuser'), system_prompt='sys')
+
+        result = pydantic_message_to_django(msg, db_convo, seq_num=0)
+
+        self.assertEqual(result.content, '')
+
+    def test_assistant_interim_text_is_not_sent_to_frontend_content(self):
+        msg = AssistantMessage(
+            content=(
+                "<think>I need to inspect the document.</think>"
+                "I'll retrieve the passage now.\n\n"
+                "Tool:retrieve\n\n"
+                '{"document_ids":["doc-1"]}'
+            ),
+            stop_reason='stop',
+        )
+
+        result = pydantic_message_to_frontend_dict(msg)
+
+        self.assertEqual(result['content'], '')
+
+
 class BuildFrontendJsonTests(TestCase):
     """Tests for build_frontend_conversation_json() structure."""
 
@@ -217,6 +246,23 @@ class BuildFrontendJsonTests(TestCase):
         self.assertEqual(msg['tool_call_name'], 'vector_search')
         self.assertEqual(msg['tool_call_input'], {'search_string': 'test'})
         self.assertEqual(msg['usage'], 300)
+
+    def test_assistant_interim_text_is_not_sent_to_frontend_content(self):
+        Message.objects.create(
+            conversation=self.db_convo,
+            role='assistant',
+            content=(
+                "<think>I need to inspect the document.</think>"
+                "I'll retrieve the passage now.\n\n"
+                "Tool:retrieve\n\n"
+                '{"document_ids":["doc-1"]}'
+            ),
+            sequence_number=0,
+        )
+
+        result = build_frontend_conversation_json(self.db_convo)
+
+        self.assertEqual(result['messages'][0]['content'], '')
 
     def test_tool_message(self):
         Message.objects.create(
