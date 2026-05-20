@@ -1,9 +1,8 @@
 // FilterBar.tsx
 // filter controls for the KQL feedback dashboard
 // each control maps to a KQL where clause in buildKQLFromFilters
-// dropdowns are populated from the existing api_feedback_dashboard_filters endpoint
+// dropdowns are populated from the api_feedback_filter_options endpoint
 // text inputs are debounced inside useFilterBar
-
 import React from 'react';
 import type { FilterOptions } from './useFilterOptions';
 import type { FilterState } from './useFilterBar';
@@ -15,6 +14,8 @@ interface FilterBarProps {
   hasActiveFilters: boolean;
   onFilterChange: (key: keyof FilterState, value: string | number) => void;
   onReset: () => void;
+  /** When true, suppresses the built-in "Filters" header row (use inside DashboardSection) */
+  hideHeader?: boolean;
 }
 
 // shared input class
@@ -78,12 +79,12 @@ const FilterBar: React.FC<FilterBarProps> = ({
   hasActiveFilters,
   onFilterChange,
   onReset,
+  hideHeader = false,
 }) => {
   const userOptions = options.users.map(u => ({
     value: String(u.id),
     label: u.username,
   }));
-
   const modelOptions = options.models.map(m => ({ value: m, label: m }));
   const toolOptions  = options.tool_names.map(t => ({ value: t, label: t }));
   const roleOptions  = options.roles.map(r => ({ value: r, label: r }));
@@ -102,28 +103,46 @@ const FilterBar: React.FC<FilterBarProps> = ({
   const showRatingRange = !filters.exact_rating;
 
   return (
-    <div className="mb-5 rounded-lg bg-scheme-shade_3 element-border">
-      {/* header */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-scheme-contrast/20">
-        <span className="text-sm font-semibold text-text-normal">Filters</span>
-        <div className="flex items-center gap-3">
+    <div className={hideHeader ? '' : 'mb-5 rounded-lg bg-scheme-shade_3 element-border'}>
+      {/* header — only shown when not embedded inside a DashboardSection */}
+      {!hideHeader && (
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-scheme-contrast/20">
+          <span className="text-sm font-semibold text-text-normal">Filters</span>
+          <div className="flex items-center gap-3">
+            {optionsLoading && (
+              <span className="text-xs text-text-muted">loading options…</span>
+            )}
+            {hasActiveFilters && (
+              <button
+                onClick={onReset}
+                className="text-xs text-text-muted hover:text-text-normal transition-colors px-2 py-1 rounded hover:bg-scheme-shade_5"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* When embedded, show loading / clear all inline above the grid */}
+      {hideHeader && (optionsLoading || hasActiveFilters) && (
+        <div className="flex items-center gap-3 px-4 pt-3 text-xs">
           {optionsLoading && (
-            <span className="text-xs text-text-muted">loading options…</span>
+            <span className="text-text-muted">loading options…</span>
           )}
           {hasActiveFilters && (
             <button
               onClick={onReset}
-              className="text-xs text-text-muted hover:text-text-normal transition-colors px-2 py-1 rounded hover:bg-scheme-shade_5"
+              className="text-text-muted hover:text-text-normal transition-colors px-2 py-1 rounded hover:bg-scheme-shade_5"
             >
               Clear all
             </button>
           )}
         </div>
-      </div>
+      )}
 
       {/* controls grid */}
       <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-
         {/* date range */}
         <FilterTextInput
           label="From date"
