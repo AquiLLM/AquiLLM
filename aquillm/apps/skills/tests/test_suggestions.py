@@ -120,6 +120,32 @@ def test_pending_feedback_excludes_high_rating(collection, convo_with_collection
 
 @pytest.mark.django_db
 @override_settings(SKILLS_ENABLED=True)
+def test_pending_feedback_includes_unrated_comment(collection, convo_with_collection):
+    """A user who submitted text feedback without picking a star should still
+    appear in the queue — the comment itself is the signal."""
+    _, asst = _make_message_pair(
+        convo_with_collection,
+        user_text="q",
+        assistant_text="a",
+        rating=None,
+        feedback_text="You forgot about X.",
+    )
+    assert [m.id for m in _list_pending_feedback_sync(collection.id)] == [asst.id]
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True)
+def test_pending_feedback_excludes_unrated_without_comment(collection, convo_with_collection):
+    """Unrated AND no comment = nothing to act on."""
+    _make_message_pair(
+        convo_with_collection,
+        user_text="q", assistant_text="a", rating=None, feedback_text="",
+    )
+    assert _list_pending_feedback_sync(collection.id) == []
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True)
 def test_pending_feedback_excludes_empty_comment(collection, convo_with_collection):
     _make_message_pair(
         convo_with_collection,

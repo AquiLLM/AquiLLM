@@ -17,6 +17,8 @@ from django.apps import apps
 from django.contrib.auth.models import User
 from django.utils import timezone
 
+from django.db.models import Q
+
 from apps.chat.models.message import Message
 from apps.collections.models import Collection
 from apps.skills.models import CollectionSkill, FeedbackDismissal, SkillEditSuggestion
@@ -85,18 +87,20 @@ def _user_prompt(*, prior_user_text: str, bad_assistant_text: str, correction: s
 def _list_pending_feedback_sync(collection_id: int) -> list[Message]:
     """Pending corrective-feedback messages for this collection.
 
-    Excludes messages that already have a pending or accepted suggestion for
-    this collection (those are "in flight" or "done") AND messages whose
-    feedback row has been explicitly dismissed by a manager.
+    Includes assistant messages where the user wrote feedback text and either
+    (a) gave it a low rating (≤ 2), or (b) didn't give a star rating at all.
+    Praise (rating ≥ 3) is excluded even when commented. Conversation must
+    have this collection selected. Excludes messages already in flight (a
+    pending or accepted suggestion exists for this collection) or that a
+    manager has dismissed at the feedback level.
     """
     candidates = list(
         Message.objects
         .filter(
             role="assistant",
-            rating__lte=2,
-            rating__isnull=False,
             conversation__selected_collection_ids__contains=[collection_id],
         )
+        .filter(Q(rating__lte=2) | Q(rating__isnull=True))
         .exclude(feedback_text__isnull=True)
         .exclude(feedback_text="")
         .select_related("conversation")
