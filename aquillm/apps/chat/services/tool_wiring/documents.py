@@ -16,9 +16,32 @@ from apps.collections.models import Collection
 from apps.documents.models import Document, DocumentChild, TextChunk
 from lib.tools.documents.ids import clean_and_parse_doc_id, resolve_doc_id_with_candidates
 from lib.tools.documents.list_ids import titles_to_document_ids
+from apps.skills.services.runtime import load_collection_skill_bodies
 from lib.tools.documents.whole_document import image_document_instruction, image_document_tool_payload
 from lib.tools.search.context import format_adjacent_chunks_tool_result
 from lib.tools.search.vector_search import pack_chunk_search_results
+
+
+_NOTES_TOOL_INSTRUCTION = (
+    "Above are the chunks vector_search retrieved. The `collection_notes` "
+    "field below contains short, authoritative notes the collection's owners "
+    "wrote. When writing your final answer, integrate any relevant fact from "
+    "`collection_notes` ALONGSIDE the retrieved evidence — never omit a "
+    "relevant note just because it wasn't in the search results."
+)
+
+
+def _inject_collection_notes(result: dict, col_ref: CollectionsRef) -> dict:
+    """Append the active collections' notes to a search tool result so the LLM
+    sees them in the same tool turn as the retrieved chunks. Notes alone in the
+    system prompt tend to be ignored once the tool result dominates context.
+    """
+    notes = load_collection_skill_bodies(col_ref.collections)
+    if not notes:
+        return result
+    result["collection_notes"] = notes
+    result["_collection_notes_instruction"] = _NOTES_TOOL_INSTRUCTION
+    return result
 
 _NO_DOCS_EXCEPTION = {
     "exception": (
@@ -101,7 +124,7 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
         titles_by_doc_id = {doc.id: doc.title for doc in docs}
         docs_by_doc_id = {doc.id: doc for doc in docs}
 
-        return pack_chunk_search_results(
+        packed = pack_chunk_search_results(
             results,
             titles_by_doc_id=titles_by_doc_id,
             docs_by_doc_id=docs_by_doc_id,
@@ -110,6 +133,7 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             search_string=search_string,
             search_scope="selected documents",
         )
+        return _inject_collection_notes(packed, col_ref)
 
     return vector_search
 
@@ -232,7 +256,7 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
 
         titles_by_doc_id = {doc.id: doc.title}
         docs_by_doc_id = {doc.id: doc}
-        return pack_chunk_search_results(
+        packed = pack_chunk_search_results(
             results,
             titles_by_doc_id=titles_by_doc_id,
             docs_by_doc_id=docs_by_doc_id,
@@ -241,6 +265,7 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             search_string=search_string,
             search_scope=f'document "{doc.title}"',
         )
+        return _inject_collection_notes(packed, col_ref)
 
     return search_single_document
 

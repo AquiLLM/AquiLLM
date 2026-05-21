@@ -97,7 +97,15 @@ class ToolMessage(__LLMMessage):
         
         if self.result_dict and self.result_dict.get("_image_instruction"):
             text_content += f"\n\n{self.result_dict['_image_instruction']}"
-        
+
+        # Surface collection notes injected by document tools so the LLM
+        # actually sees them at synthesis time (same channel as the
+        # retrieved chunks, not buried in the system prompt).
+        if self.result_dict and self.result_dict.get("_collection_notes_instruction"):
+            text_content += f"\n\n{self.result_dict['_collection_notes_instruction']}"
+        if self.result_dict and self.result_dict.get("collection_notes"):
+            text_content += f"\n\n{self.result_dict['collection_notes']}"
+
         content_parts.append({"type": "text", "text": text_content})
         
         for img in self.get_images():
