@@ -16,10 +16,11 @@ from django.test import Client, override_settings
 from apps.chat.models.conversation import WSConversation
 from apps.chat.models.message import Message
 from apps.collections.models import Collection, CollectionPermission
-from apps.skills.models import CollectionSkill, SkillEditSuggestion
+from apps.skills.models import CollectionSkill, FeedbackDismissal, SkillEditSuggestion
 from apps.skills.services.suggestions import (
     _list_pending_feedback_sync,
     accept_suggestion_sync,
+    dismiss_feedback_sync,
     dismiss_suggestion_sync,
 )
 
@@ -444,3 +445,96 @@ def test_suggestions_list_api(collection, convo_with_collection, owner):
     r = _client(owner).get(f"/api/collections/{collection.id}/suggestions/")
     assert r.status_code == 200
     assert len(r.json()["items"]) == 1
+
+
+# ---- feedback-level dismissal ----------------------------------------------
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True)
+def test_dismiss_feedback_hides_from_pending(collection, convo_with_collection, owner):
+    _, asst = _make_message_pair(
+        convo_with_collection, user_text="q", assistant_text="a", rating=1, feedback_text="bad",
+    )
+    assert [m.id for m in _list_pending_feedback_sync(collection.id)] == [asst.id]
+    dismiss_feedback_sync(collection=collection, source_message=asst, user=owner)
+    assert _list_pending_feedback_sync(collection.id) == []
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True)
+def test_dismiss_feedback_is_idempotent(collection, convo_with_collection, owner):
+    _, asst = _make_message_pair(
+        convo_with_collection, user_text="q", assistant_text="a", rating=1, feedback_text="bad",
+    )
+    dismiss_feedback_sync(collection=collection, source_message=asst, user=owner)
+    dismiss_feedback_sync(collection=collection, source_message=asst, user=owner)
+    assert FeedbackDismissal.objects.filter(
+        collection=collection, source_message=asst,
+    ).count() == 1
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True)
+def test_dismiss_feedback_api_requires_manage(collection, convo_with_collection, owner, editor):
+    _, asst = _make_message_pair(
+        convo_with_collection, user_text="q", assistant_text="a", rating=1, feedback_text="bad",
+    )
+    # Editor (no MANAGE) → 403
+    r = _client(editor).post(
+        f"/api/collections/{collection.id}/pending-feedback/{asst.id}/dismiss/",
+    )
+    assert r.status_code == 403
+    assert not FeedbackDismissal.objects.filter(
+        collection=collection, source_message=asst,
+    ).exists()
+
+    # Manager → 200
+    r = _client(owner).post(
+        f"/api/collections/{collection.id}/pending-feedback/{asst.id}/dismiss/",
+    )
+    assert r.status_code == 200
+    assert FeedbackDismissal.objects.filter(
+        collection=collection, source_message=asst,
+    ).exists()
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True)
+def test_dismiss_feedback_api_rejects_cross_collection(
+    collection, convo_with_collection, owner,
+):
+    """Dismissing requires the message's convo to have this collection selected."""
+    other = Collection.objects.create(name="other")
+    CollectionPermission.objects.create(user=owner, collection=other, permission="MANAGE")
+    _, asst = _make_message_pair(
+        convo_with_collection, user_text="q", assistant_text="a", rating=1, feedback_text="bad",
+    )
+    r = _client(owner).post(
+        f"/api/collections/{other.id}/pending-feedback/{asst.id}/dismiss/",
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True)
+def test_dismissed_feedback_excluded_even_after_suggestion_dismissed(
+    collection, convo_with_collection, owner,
+):
+    """Once feedback is dismissed at the row level, dismissing or creating
+    suggestions doesn't bring it back."""
+    _, asst = _make_message_pair(
+        convo_with_collection, user_text="q", assistant_text="a", rating=1, feedback_text="bad",
+    )
+    SkillEditSuggestion.objects.create(
+        collection=collection,
+        source_message=asst,
+        notes_body_at_generation="",
+        proposed_body="## p",
+        generated_by=owner,
+        status=SkillEditSuggestion.STATUS_DISMISSED,
+    )
+    # Without FeedbackDismissal, the row would re-appear (existing test asserts this).
+    # Add the row-level dismissal and confirm it stays hidden.
+    dismiss_feedback_sync(collection=collection, source_message=asst, user=owner)
+    assert _list_pending_feedback_sync(collection.id) == []

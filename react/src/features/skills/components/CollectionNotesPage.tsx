@@ -7,6 +7,7 @@ import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 
 import {
   acceptSuggestion,
+  dismissPendingFeedback,
   dismissSuggestion,
   generateSuggestion,
   getCollectionSkill,
@@ -48,6 +49,9 @@ const CollectionNotesPage: React.FC<CollectionNotesPageProps> = ({
   const [pending, setPending] = useState<PendingFeedback[]>([]);
   const [suggestions, setSuggestions] = useState<SkillEditSuggestion[]>([]);
   const [generatingFor, setGeneratingFor] = useState<number | null>(null);
+  const [dismissingFor, setDismissingFor] = useState<number | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
+  const [showFeedback, setShowFeedback] = useState<boolean>(false);
 
   // ---- review-mode state ---------------------------------------------------
   const [mode, setMode] = useState<Mode>('edit');
@@ -149,6 +153,20 @@ const CollectionNotesPage: React.FC<CollectionNotesPageProps> = ({
       setError(e instanceof Error ? e.message : 'Generation failed');
     } finally {
       setGeneratingFor(null);
+    }
+  };
+
+  const handleDismissFeedback = async (messageId: number) => {
+    if (!window.confirm('Dismiss this feedback without making a notes change?')) return;
+    setDismissingFor(messageId);
+    setError(null);
+    try {
+      await dismissPendingFeedback(collectionId, messageId);
+      await refreshFeedback();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Dismiss failed');
+    } finally {
+      setDismissingFor(null);
     }
   };
 
@@ -279,8 +297,9 @@ const CollectionNotesPage: React.FC<CollectionNotesPageProps> = ({
               onClick={() => void handleDismiss()}
               disabled={resolvingReview}
               className="px-4 py-2 rounded-md border border-border-mid_contrast text-red hover:bg-scheme-shade_5 disabled:opacity-50"
+              title="Throw out this draft. The feedback stays open for re-drafting."
             >
-              Dismiss
+              Discard draft
             </button>
             <button
               onClick={() => void handleAccept()}
@@ -315,79 +334,114 @@ const CollectionNotesPage: React.FC<CollectionNotesPageProps> = ({
         </p>
       </div>
 
-      {/* Pending suggestions panel ------------------------------------------- */}
+      {/* Pending suggestions panel (collapsible) ----------------------------- */}
       {suggestions.length > 0 && (
-        <div className="mb-4 p-4 rounded-md border border-accent border-opacity-40 bg-accent bg-opacity-5">
-          <div className="font-medium text-text-normal mb-2">
-            Pending suggestions ({suggestions.length})
-          </div>
-          <ul className="space-y-2">
-            {suggestions.map((s) => (
-              <li
-                key={s.id}
-                className="flex items-center justify-between gap-3 p-2 rounded bg-scheme-shade_4 border border-border-low_contrast"
-              >
-                <div className="text-sm text-text-normal">
-                  Drafted {s.created_at ? new Date(s.created_at).toLocaleString() : ''}
-                  {s.generated_by && ` by ${s.generated_by}`}
-                </div>
-                <button
-                  onClick={() => openReview(s)}
-                  className="px-3 py-1 rounded-md bg-accent text-white text-sm hover:bg-accent-dark"
+        <div className="mb-3 rounded-md border border-accent border-opacity-40 bg-accent bg-opacity-5">
+          <button
+            type="button"
+            onClick={() => setShowSuggestions((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 p-3 text-left text-text-normal hover:bg-accent hover:bg-opacity-10"
+            aria-expanded={showSuggestions}
+          >
+            <span className="font-medium">
+              {showSuggestions ? '▾' : '▸'} Pending suggestions ({suggestions.length})
+            </span>
+            <span className="text-xs text-text-slightly_less_contrast">
+              {showSuggestions ? 'click to collapse' : 'click to view'}
+            </span>
+          </button>
+          {showSuggestions && (
+            <ul className="space-y-2 p-3 pt-0 max-h-[260px] overflow-y-auto">
+              {suggestions.map((s) => (
+                <li
+                  key={s.id}
+                  className="flex items-center justify-between gap-3 p-2 rounded bg-scheme-shade_4 border border-border-low_contrast"
                 >
-                  Review
-                </button>
-              </li>
-            ))}
-          </ul>
+                  <div className="text-sm text-text-normal">
+                    Drafted {s.created_at ? new Date(s.created_at).toLocaleString() : ''}
+                    {s.generated_by && ` by ${s.generated_by}`}
+                  </div>
+                  <button
+                    onClick={() => openReview(s)}
+                    className="px-3 py-1 rounded-md bg-accent text-white text-sm hover:bg-accent-dark"
+                  >
+                    Review
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
-      {/* Pending feedback panel --------------------------------------------- */}
+      {/* Pending feedback panel (collapsible) -------------------------------- */}
       {pending.length > 0 && (
-        <div className="mb-4 p-4 rounded-md border border-border-low_contrast">
-          <div className="font-medium text-text-normal mb-2">
-            Pending feedback ({pending.length})
-          </div>
-          <p className="text-sm text-text-slightly_less_contrast mb-3">
-            Low-rated chat responses with user corrections. Click "Draft suggestion" to have
-            the assistant propose a notes update from one. Drafts go into the Pending
-            suggestions panel above for your review.
-          </p>
-          <ul className="space-y-2">
-            {pending.map((m) => (
-              <li
-                key={m.message_id}
-                className="p-2 rounded bg-scheme-shade_4 border border-border-low_contrast"
-              >
-                <div className="text-sm text-text-normal">
-                  <span className="text-yellow-400 mr-2">{'★'.repeat(m.rating ?? 0)}</span>
-                  <span className="text-text-slightly_less_contrast">
-                    {m.conversation_name || `convo #${m.conversation_id}`}
-                    {m.feedback_submitted_at &&
-                      ` — ${new Date(m.feedback_submitted_at).toLocaleString()}`}
-                  </span>
-                </div>
-                <div className="text-sm text-text-normal mt-1">
-                  <span className="text-text-slightly_less_contrast">User said: </span>
-                  {m.feedback_text}
-                </div>
-                <div className="text-xs text-text-slightly_less_contrast mt-1 italic">
-                  Assistant said: {m.content_preview.slice(0, 200)}
-                  {m.content_preview.length >= 200 ? '…' : ''}
-                </div>
-                <div className="mt-2 flex justify-end">
-                  <button
-                    onClick={() => void handleDraftSuggestion(m.message_id)}
-                    disabled={generatingFor !== null}
-                    className="px-3 py-1 rounded-md bg-accent text-white text-sm hover:bg-accent-dark disabled:opacity-50 disabled:cursor-not-allowed"
+        <div className="mb-3 rounded-md border border-border-low_contrast">
+          <button
+            type="button"
+            onClick={() => setShowFeedback((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 p-3 text-left text-text-normal hover:bg-scheme-shade_4"
+            aria-expanded={showFeedback}
+          >
+            <span className="font-medium">
+              {showFeedback ? '▾' : '▸'} Pending feedback ({pending.length})
+            </span>
+            <span className="text-xs text-text-slightly_less_contrast">
+              {showFeedback ? 'click to collapse' : 'click to view'}
+            </span>
+          </button>
+          {showFeedback && (
+            <div className="p-3 pt-0">
+              <p className="text-xs text-text-slightly_less_contrast mb-2">
+                Low-rated chat responses with user corrections.{' '}
+                <strong>Draft suggestion</strong> asks the assistant to propose a notes
+                update from this feedback. <strong>Dismiss feedback</strong> hides the row
+                from the queue — the chat message and its rating stay in the database.
+              </p>
+              <ul className="space-y-2 max-h-[360px] overflow-y-auto">
+                {pending.map((m) => (
+                  <li
+                    key={m.message_id}
+                    className="p-2 rounded bg-scheme-shade_4 border border-border-low_contrast"
                   >
-                    {generatingFor === m.message_id ? 'Drafting…' : 'Draft suggestion'}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
+                    <div className="text-sm text-text-normal">
+                      <span className="text-yellow-400 mr-2">{'★'.repeat(m.rating ?? 0)}</span>
+                      <span className="text-text-slightly_less_contrast">
+                        {m.conversation_name || `convo #${m.conversation_id}`}
+                        {m.feedback_submitted_at &&
+                          ` — ${new Date(m.feedback_submitted_at).toLocaleString()}`}
+                      </span>
+                    </div>
+                    <div className="text-sm text-text-normal mt-1">
+                      <span className="text-text-slightly_less_contrast">User said: </span>
+                      {m.feedback_text}
+                    </div>
+                    <div className="text-xs text-text-slightly_less_contrast mt-1 italic">
+                      Assistant said: {m.content_preview.slice(0, 200)}
+                      {m.content_preview.length >= 200 ? '…' : ''}
+                    </div>
+                    <div className="mt-2 flex justify-end gap-2">
+                      <button
+                        onClick={() => void handleDismissFeedback(m.message_id)}
+                        disabled={dismissingFor !== null || generatingFor !== null}
+                        className="px-3 py-1 rounded-md border border-border-mid_contrast text-text-normal text-sm hover:bg-scheme-shade_5 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Hide this feedback from the queue. The chat message and its rating stay in the database."
+                      >
+                        {dismissingFor === m.message_id ? 'Dismissing…' : 'Dismiss feedback'}
+                      </button>
+                      <button
+                        onClick={() => void handleDraftSuggestion(m.message_id)}
+                        disabled={generatingFor !== null || dismissingFor !== null}
+                        className="px-3 py-1 rounded-md bg-accent text-white text-sm hover:bg-accent-dark disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {generatingFor === m.message_id ? 'Drafting…' : 'Draft suggestion'}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 

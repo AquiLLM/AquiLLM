@@ -11,12 +11,14 @@ from django.db import IntegrityError
 from django.http import HttpRequest, JsonResponse
 from django.views.decorators.http import require_http_methods
 
+from apps.chat.models.message import Message
 from apps.collections.models import Collection
 from apps.skills.models import CollectionSkill, Skill, SkillEditSuggestion
 from apps.skills.models.collection_skill import MAX_BODY_LENGTH as COLLECTION_SKILL_MAX_BODY
 from apps.skills.services.suggestions import (
     _list_pending_feedback_sync,
     accept_suggestion_sync,
+    dismiss_feedback_sync,
     dismiss_suggestion_sync,
     generate_suggestion,
 )
@@ -375,6 +377,32 @@ def suggestion_dismiss(request: HttpRequest, suggestion_id: int) -> JsonResponse
     return JsonResponse(_serialize_suggestion(suggestion))
 
 
+@login_required
+@require_http_methods(["POST"])
+def collection_feedback_dismiss(
+    request: HttpRequest, collection_id: int, message_id: int,
+) -> JsonResponse:
+    """Mark a corrective-feedback row dismissed for this collection.
+
+    Different from dismissing a suggestion draft — this hides the underlying
+    feedback row from the manager's queue permanently (for this collection).
+    """
+    collection, err = _require_manager(request, collection_id)
+    if err:
+        return err
+    try:
+        message = Message.objects.get(pk=message_id)
+    except Message.DoesNotExist:
+        return JsonResponse({"error": "Message not found"}, status=404)
+    if collection.id not in (message.conversation.selected_collection_ids or []):
+        return JsonResponse(
+            {"error": "Message's conversation did not have this collection selected."},
+            status=400,
+        )
+    dismiss_feedback_sync(collection=collection, source_message=message, user=request.user)
+    return JsonResponse({"status": "dismissed", "message_id": message.id})
+
+
 __all__ = [
     "skills_list_create",
     "skill_detail",
@@ -382,6 +410,7 @@ __all__ = [
     "collection_pending_feedback",
     "collection_suggestions_list",
     "collection_suggestions_generate",
+    "collection_feedback_dismiss",
     "suggestion_accept",
     "suggestion_dismiss",
 ]

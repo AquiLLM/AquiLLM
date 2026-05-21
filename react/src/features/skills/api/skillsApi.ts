@@ -189,3 +189,29 @@ export async function dismissSuggestion(suggestionId: number): Promise<SkillEdit
   });
   return jsonOrThrow<SkillEditSuggestion>(r);
 }
+
+export async function dismissPendingFeedback(
+  collectionId: number,
+  messageId: number,
+): Promise<void> {
+  const r = await fetch(
+    `/api/collections/${collectionId}/pending-feedback/${messageId}/dismiss/`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrfToken(),
+      },
+    },
+  );
+  if (!r.ok) {
+    let detail = '';
+    try {
+      detail = `: ${(await r.json())?.error || ''}`;
+    } catch {
+      // ignore
+    }
+    throw new Error(`Dismiss feedback failed (${r.status})${detail}`);
+  }
+}

@@ -31,6 +31,11 @@ api_urlpatterns = [
         name="api_collection_suggestions_generate",
     ),
     path(
+        "collections/<int:collection_id>/pending-feedback/<int:message_id>/dismiss/",
+        api_views.collection_feedback_dismiss,
+        name="api_collection_feedback_dismiss",
+    ),
+    path(
         "suggestions/<int:suggestion_id>/accept/",
         api_views.suggestion_accept,
         name="api_suggestion_accept",

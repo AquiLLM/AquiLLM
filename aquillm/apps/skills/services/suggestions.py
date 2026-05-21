@@ -19,7 +19,7 @@ from django.utils import timezone
 
 from apps.chat.models.message import Message
 from apps.collections.models import Collection
-from apps.skills.models import CollectionSkill, SkillEditSuggestion
+from apps.skills.models import CollectionSkill, FeedbackDismissal, SkillEditSuggestion
 from lib.llm.types.messages import UserMessage
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -83,7 +83,12 @@ def _user_prompt(*, prior_user_text: str, bad_assistant_text: str, correction: s
 
 
 def _list_pending_feedback_sync(collection_id: int) -> list[Message]:
-    """Pending corrective-feedback messages for this collection."""
+    """Pending corrective-feedback messages for this collection.
+
+    Excludes messages that already have a pending or accepted suggestion for
+    this collection (those are "in flight" or "done") AND messages whose
+    feedback row has been explicitly dismissed by a manager.
+    """
     candidates = list(
         Message.objects
         .filter(
@@ -105,7 +110,30 @@ def _list_pending_feedback_sync(collection_id: int) -> list[Message]:
         )
         .values_list("source_message_id", flat=True)
     )
-    return [m for m in candidates if m.id not in handled_ids]
+    dismissed_ids = set(
+        FeedbackDismissal.objects
+        .filter(collection_id=collection_id)
+        .values_list("source_message_id", flat=True)
+    )
+    excluded = handled_ids | dismissed_ids
+    return [m for m in candidates if m.id not in excluded]
+
+
+def dismiss_feedback_sync(
+    *, collection: Collection, source_message: Message, user,
+) -> FeedbackDismissal:
+    """Mark a corrective-feedback row dismissed for this collection.
+
+    Idempotent — calling twice returns the existing row. Different from
+    dismissing a particular suggestion (which only throws out that draft and
+    lets the feedback be re-drafted).
+    """
+    obj, _ = FeedbackDismissal.objects.get_or_create(
+        collection=collection,
+        source_message=source_message,
+        defaults={"dismissed_by": user},
+    )
+    return obj
 
 
 list_pending_feedback = database_sync_to_async(_list_pending_feedback_sync)
@@ -230,4 +258,5 @@ __all__ = [
     "generate_suggestion",
     "accept_suggestion_sync",
     "dismiss_suggestion_sync",
+    "dismiss_feedback_sync",
 ]
