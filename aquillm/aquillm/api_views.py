@@ -47,6 +47,7 @@ from apps.platform_admin.views.api import (
     whitelisted_email,
     feedback_dashboard_query,
     feedback_dashboard_conversation,
+    feedback_filter_options,
 )
 
 # Re-export chat views
@@ -85,6 +86,7 @@ urlpatterns = [
     path("feedback/ratings.csv", feedback_ratings_csv, name="api_feedback_ratings_csv"),
     path("feedback/query/", feedback_dashboard_query, name="api_feedback_dashboard_query"),
     path("feedback/conversation/", feedback_dashboard_conversation, name="api_feedback_dashboard_conversation"),
+    path("feedback/filter_options/", feedback_filter_options, name="api_feedback_filter_options"),
     path("ingest_vtt/", ingest_vtt, name="api_ingest_vtt"),
     path("ingest_uploads/", ingest_uploads, name="api_ingest_uploads"),
     path("ingest_uploads/<int:batch_id>/", ingest_uploads_status, name="api_ingest_uploads_status"),
