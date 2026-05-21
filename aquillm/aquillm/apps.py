@@ -10,7 +10,7 @@ from os import getenv
 from typing import TypedDict
 
 
-from .llm import LLMInterface, ClaudeInterface, OpenAIInterface, GeminiInterface  # GeminiInterface added for Gemini backend support
+from .llm import LLMInterface, ClaudeInterface, OpenAIInterface, GeminiInterface, FakeInterface  # GeminiInterface added for Gemini backend support; FakeInterface for LLM_CHOICE=FAKE demo mode
 from .settings import DEBUG
 
 
@@ -134,6 +134,9 @@ class AquillmConfig(AppConfig):
                 openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key),
                 local_served_model_name,
             )
+        elif llm_choice == 'FAKE':
+            from .demo_script import DEMO_RESPONSES
+            self.llm_interface = FakeInterface(responses=DEMO_RESPONSES)
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 

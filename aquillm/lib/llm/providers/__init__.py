@@ -3,16 +3,17 @@ from .base import LLMInterface
 from .claude import ClaudeInterface
 from .openai import OpenAIInterface, gpt_enc
 from .gemini import GeminiInterface
+from .fake import FakeInterface, tool_call_response
 
 
 def get_provider(provider_name: str, **kwargs) -> LLMInterface:
     """
     Factory function to get an LLM provider by name.
-    
+
     Args:
-        provider_name: One of 'claude', 'openai', 'gemini'
+        provider_name: One of 'claude', 'openai', 'gemini', 'fake'
         **kwargs: Provider-specific arguments (client, model, etc.)
-    
+
     Returns:
         An LLMInterface instance
     """
@@ -20,6 +21,7 @@ def get_provider(provider_name: str, **kwargs) -> LLMInterface:
         'claude': ClaudeInterface,
         'openai': OpenAIInterface,
         'gemini': GeminiInterface,
+        'fake': FakeInterface,
     }
     if provider_name not in providers:
         raise ValueError(f"Unknown provider: {provider_name}. Available: {list(providers.keys())}")
@@ -27,10 +29,12 @@ def get_provider(provider_name: str, **kwargs) -> LLMInterface:
 
 
 __all__ = [
-    'LLMInterface', 
-    'ClaudeInterface', 
-    'OpenAIInterface', 
-    'GeminiInterface', 
+    'LLMInterface',
+    'ClaudeInterface',
+    'OpenAIInterface',
+    'GeminiInterface',
+    'FakeInterface',
+    'tool_call_response',
     'get_provider',
     'gpt_enc',
 ]

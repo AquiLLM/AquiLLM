@@ -27,10 +27,12 @@ from lib.llm.decorators import llm_tool
 
 # Re-export providers
 from lib.llm.providers import (
-    LLMInterface, 
-    ClaudeInterface, 
-    OpenAIInterface, 
-    GeminiInterface, 
+    LLMInterface,
+    ClaudeInterface,
+    OpenAIInterface,
+    GeminiInterface,
+    FakeInterface,
+    tool_call_response,
     get_provider,
     gpt_enc,
 )
@@ -76,7 +78,8 @@ __all__ = [
     # Decorator
     'llm_tool',
     # Providers
-    'LLMInterface', 'ClaudeInterface', 'OpenAIInterface', 'GeminiInterface', 
+    'LLMInterface', 'ClaudeInterface', 'OpenAIInterface', 'GeminiInterface',
+    'FakeInterface', 'tool_call_response',
     'get_provider', 'gpt_enc',
     # Helper tools
     'message_to_user', 'test_function',
