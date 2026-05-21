@@ -17,6 +17,7 @@ export interface Collection {
   id: string | number;
   name: string;
   parent?: string | number | null;
+  permission?: 'VIEW' | 'EDIT' | 'MANAGE';
 }
 
 export interface Conversation {

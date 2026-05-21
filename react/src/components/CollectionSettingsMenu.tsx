@@ -11,8 +11,6 @@ interface CollectionSettingsMenuProps {
   onMove: (collection: Collection) => void;      // Callback for move action
   onDelete: (collection: Collection) => void;    // Callback for delete action
   onManageCollaborators: (collection: Collection) => void; // Callback for managing collaborators
-  onEditNotes?: (collection: Collection) => void; // Optional: edit Collection Notes (MANAGE only)
-  canManage?: boolean;                           // Controls visibility of MANAGE-only items
   triggerLabel?: string;
 }
 
@@ -29,8 +27,6 @@ const CollectionSettingsMenu: React.FC<CollectionSettingsMenuProps> = ({
   onMove,
   onDelete,
   onManageCollaborators,
-  onEditNotes,
-  canManage,
   triggerLabel,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -138,36 +134,6 @@ const CollectionSettingsMenu: React.FC<CollectionSettingsMenuProps> = ({
 
             Move Collection
           </button>
-          {canManage && onEditNotes && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onEditNotes(collection);
-                setIsOpen(false);
-              }}
-              className='text-text-normal'
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'flex-start',
-                gap: '0.5rem',
-                width: '100%',
-                textAlign: 'left',
-                padding: '0.5rem 1rem',
-                border: 'none',
-                backgroundColor: 'transparent',
-                cursor: 'pointer',
-                borderRadius: '0.25rem',
-                textWrap: 'nowrap',
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M4 4h12l4 4v12a0 0 0 0 1 0 0H4a0 0 0 0 1 0 0V4z" stroke="var(--color-contrast)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M8 10h8M8 14h8M8 18h5" stroke="var(--color-contrast)" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-              Collection Notes
-            </button>
-          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
