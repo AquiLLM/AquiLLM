@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+import structlog
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db import IntegrityError
@@ -10,8 +12,16 @@ from django.http import HttpRequest, JsonResponse
 from django.views.decorators.http import require_http_methods
 
 from apps.collections.models import Collection
-from apps.skills.models import CollectionSkill, Skill
+from apps.skills.models import CollectionSkill, Skill, SkillEditSuggestion
 from apps.skills.models.collection_skill import MAX_BODY_LENGTH as COLLECTION_SKILL_MAX_BODY
+from apps.skills.services.suggestions import (
+    _list_pending_feedback_sync,
+    accept_suggestion_sync,
+    dismiss_suggestion_sync,
+    generate_suggestion,
+)
+
+logger = structlog.stdlib.get_logger(__name__)
 
 
 MAX_NAME_LENGTH = 120
@@ -205,4 +215,173 @@ def collection_skill_detail(request: HttpRequest, collection_id: int) -> JsonRes
     return JsonResponse(_serialize_collection_skill(cs, collection))
 
 
-__all__ = ["skills_list_create", "skill_detail", "collection_skill_detail"]
+def _require_manager(request: HttpRequest, collection_id: int):
+    """Return (Collection, None) if OK; else (None, JsonResponse error)."""
+    if not getattr(settings, "SKILLS_ENABLED", False):
+        return None, JsonResponse({"error": "Skills feature is disabled"}, status=404)
+    try:
+        collection = Collection.objects.get(pk=collection_id)
+    except Collection.DoesNotExist:
+        return None, JsonResponse({"error": "Collection not found"}, status=404)
+    if not collection.user_can_manage(request.user):
+        return None, JsonResponse({"error": "Forbidden"}, status=403)
+    return collection, None
+
+
+def _serialize_feedback(msg) -> dict:
+    return {
+        "message_id": msg.id,
+        "message_uuid": str(msg.message_uuid),
+        "conversation_id": msg.conversation_id,
+        "conversation_name": msg.conversation.name,
+        "rating": msg.rating,
+        "feedback_text": msg.feedback_text,
+        "feedback_submitted_at": (
+            msg.feedback_submitted_at.isoformat() if msg.feedback_submitted_at else None
+        ),
+        "model": msg.model,
+        "content_preview": (msg.content or "")[:400],
+    }
+
+
+def _serialize_suggestion(s: SkillEditSuggestion) -> dict:
+    return {
+        "id": s.id,
+        "collection_id": s.collection_id,
+        "source_message_id": s.source_message_id,
+        "notes_body_at_generation": s.notes_body_at_generation,
+        "proposed_body": s.proposed_body,
+        "status": s.status,
+        "generated_by": s.generated_by.username if s.generated_by else None,
+        "resolved_by": s.resolved_by.username if s.resolved_by else None,
+        "resolved_at": s.resolved_at.isoformat() if s.resolved_at else None,
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+    }
+
+
+@login_required
+@require_http_methods(["GET"])
+def collection_pending_feedback(request: HttpRequest, collection_id: int) -> JsonResponse:
+    """List corrective-feedback messages awaiting a manager decision."""
+    collection, err = _require_manager(request, collection_id)
+    if err:
+        return err
+    msgs = _list_pending_feedback_sync(collection.id)
+    return JsonResponse({"items": [_serialize_feedback(m) for m in msgs]})
+
+
+@login_required
+@require_http_methods(["GET"])
+def collection_suggestions_list(request: HttpRequest, collection_id: int) -> JsonResponse:
+    """List pending suggestions for this collection."""
+    collection, err = _require_manager(request, collection_id)
+    if err:
+        return err
+    qs = (
+        SkillEditSuggestion.objects
+        .filter(collection=collection, status=SkillEditSuggestion.STATUS_PENDING)
+        .select_related("generated_by")
+        .order_by("-created_at")
+    )
+    return JsonResponse({"items": [_serialize_suggestion(s) for s in qs]})
+
+
+async def collection_suggestions_generate(request: HttpRequest, collection_id: int) -> JsonResponse:
+    """Generate a SkillEditSuggestion from a specific feedback message via LLM."""
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    user = await sync_to_async(lambda: request.user)()
+    if not user.is_authenticated:
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+    collection, err = await sync_to_async(_require_manager)(request, collection_id)
+    if err:
+        return err
+    try:
+        payload = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    message_id = payload.get("message_id")
+    if not isinstance(message_id, int):
+        return JsonResponse({"error": "message_id (int) is required"}, status=400)
+    try:
+        suggestion = await generate_suggestion(
+            collection_id=collection.id, message_id=message_id, user=user,
+        )
+    except ValueError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+    except Exception as e:
+        logger.exception("suggestion_generation_failed", error=str(e))
+        return JsonResponse({"error": "Generation failed"}, status=500)
+    # Serialize on a sync thread so FK lookups (e.g. generated_by.username)
+    # don't trip Django's SynchronousOnlyOperation guard.
+    payload = await sync_to_async(_serialize_suggestion)(suggestion)
+    return JsonResponse(payload, status=201)
+
+
+@login_required
+@require_http_methods(["POST"])
+def suggestion_accept(request: HttpRequest, suggestion_id: int) -> JsonResponse:
+    """Accept a suggestion, applying its body (or owner-edited override) to the notes."""
+    if not getattr(settings, "SKILLS_ENABLED", False):
+        return JsonResponse({"error": "Skills feature is disabled"}, status=404)
+    try:
+        suggestion = (
+            SkillEditSuggestion.objects.select_related("collection").get(pk=suggestion_id)
+        )
+    except SkillEditSuggestion.DoesNotExist:
+        return JsonResponse({"error": "Suggestion not found"}, status=404)
+    if not suggestion.collection.user_can_manage(request.user):
+        return JsonResponse({"error": "Forbidden"}, status=403)
+    try:
+        payload = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    override_body = payload.get("body")
+    if override_body is not None and not isinstance(override_body, str):
+        return JsonResponse({"error": "body must be a string"}, status=400)
+    if isinstance(override_body, str) and len(override_body) > COLLECTION_SKILL_MAX_BODY:
+        return JsonResponse(
+            {"error": f"body too long (max {COLLECTION_SKILL_MAX_BODY} chars)"}, status=400
+        )
+    try:
+        accept_suggestion_sync(
+            suggestion=suggestion, override_body=override_body, user=request.user,
+        )
+    except ValueError as e:
+        return JsonResponse({"error": str(e)}, status=409)
+    suggestion.refresh_from_db()
+    return JsonResponse(_serialize_suggestion(suggestion))
+
+
+@login_required
+@require_http_methods(["POST"])
+def suggestion_dismiss(request: HttpRequest, suggestion_id: int) -> JsonResponse:
+    """Mark a suggestion dismissed without applying it."""
+    if not getattr(settings, "SKILLS_ENABLED", False):
+        return JsonResponse({"error": "Skills feature is disabled"}, status=404)
+    try:
+        suggestion = (
+            SkillEditSuggestion.objects.select_related("collection").get(pk=suggestion_id)
+        )
+    except SkillEditSuggestion.DoesNotExist:
+        return JsonResponse({"error": "Suggestion not found"}, status=404)
+    if not suggestion.collection.user_can_manage(request.user):
+        return JsonResponse({"error": "Forbidden"}, status=403)
+    try:
+        dismiss_suggestion_sync(suggestion=suggestion, user=request.user)
+    except ValueError as e:
+        return JsonResponse({"error": str(e)}, status=409)
+    suggestion.refresh_from_db()
+    return JsonResponse(_serialize_suggestion(suggestion))
+
+
+__all__ = [
+    "skills_list_create",
+    "skill_detail",
+    "collection_skill_detail",
+    "collection_pending_feedback",
+    "collection_suggestions_list",
+    "collection_suggestions_generate",
+    "suggestion_accept",
+    "suggestion_dismiss",
+]

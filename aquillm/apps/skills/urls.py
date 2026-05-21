@@ -15,6 +15,31 @@ api_urlpatterns = [
         api_views.collection_skill_detail,
         name="api_collection_skill_detail",
     ),
+    path(
+        "collections/<int:collection_id>/pending-feedback/",
+        api_views.collection_pending_feedback,
+        name="api_collection_pending_feedback",
+    ),
+    path(
+        "collections/<int:collection_id>/suggestions/",
+        api_views.collection_suggestions_list,
+        name="api_collection_suggestions_list",
+    ),
+    path(
+        "collections/<int:collection_id>/suggestions/generate/",
+        api_views.collection_suggestions_generate,
+        name="api_collection_suggestions_generate",
+    ),
+    path(
+        "suggestions/<int:suggestion_id>/accept/",
+        api_views.suggestion_accept,
+        name="api_suggestion_accept",
+    ),
+    path(
+        "suggestions/<int:suggestion_id>/dismiss/",
+        api_views.suggestion_dismiss,
+        name="api_suggestion_dismiss",
+    ),
 ]
 
 # Page URL patterns (included under /aquillm/)
