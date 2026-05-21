@@ -48,28 +48,20 @@ async def aload_user_skill_bodies(user_id: int) -> str:
     return _format_skills(await _afetch_user_skills(user_id))
 
 
-_COLLECTION_NOTES_PREAMBLE = (
-    "These notes from the collection's owners SUPPLEMENT — do NOT replace — "
-    "what you retrieve via vector_search. You must still call vector_search "
-    "for any factual or substantive question, per the rules at the top of "
-    "this prompt. AFTER retrieving evidence, weave in any relevant fact from "
-    "the notes below alongside the retrieved evidence. If a note conflicts "
-    "with retrieved evidence, follow the note. Treat the notes as additional "
-    "context — never as a complete answer on their own."
-)
-
-
 def _format_collection_skills(rows) -> str:
+    """Format per-collection notes for tool-result injection.
+
+    Plain body under a collection-name heading — the surrounding
+    `_collection_notes_instruction` (injected alongside in
+    `apps/chat/services/tool_wiring/documents.py`) provides the
+    "integrate alongside retrieved evidence" guidance for the LLM.
+    """
     parts: list[str] = []
     for row in rows:
         body = (row.body or "").strip()
         if not body:
             continue
-        parts.append(
-            f"## Collection notes — {row.collection.name}\n\n"
-            f"{_COLLECTION_NOTES_PREAMBLE}\n\n"
-            f"{body}"
-        )
+        parts.append(f"## Collection notes — {row.collection.name}\n\n{body}")
     if not parts:
         return ""
     return _SECTION_SEP.join(parts)

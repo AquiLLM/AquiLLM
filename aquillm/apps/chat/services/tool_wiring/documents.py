@@ -24,10 +24,19 @@ from lib.tools.search.vector_search import pack_chunk_search_results
 
 _NOTES_TOOL_INSTRUCTION = (
     "Above are the chunks vector_search retrieved. The `collection_notes` "
-    "field below contains short, authoritative notes the collection's owners "
-    "wrote. When writing your final answer, integrate any relevant fact from "
-    "`collection_notes` ALONGSIDE the retrieved evidence — never omit a "
-    "relevant note just because it wasn't in the search results."
+    "field below contains short notes the collection's owners wrote.\n\n"
+    "When writing your final answer:\n"
+    "- If a note states a fact NOT already covered by the chunks, weave "
+    "that fact into your answer naturally (a bullet, parenthetical, or "
+    "extra sentence).\n"
+    "- If a note states a fact ALREADY covered by the chunks, do NOT "
+    "repeat it as a separate sentence. Do not say things like 'the notes "
+    "confirm' or 'additionally the notes mention' — that's redundant and "
+    "makes the answer feel mechanical.\n"
+    "- Never refer to the notes themselves in your output — integrate the "
+    "facts seamlessly as if they came from the same source as the chunks.\n"
+    "- Do not replace chunk content with note content; both are valid.\n\n"
+    "If no note adds anything new, just answer from the chunks."
 )
 
 

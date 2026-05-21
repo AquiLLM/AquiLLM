@@ -132,7 +132,15 @@ class ToolMessage(__LLMMessage):
             ret['content'] = self.render_multimodal_content()
         else:
             prefix = _compact_tool_prefix(self.tool_name, self.arguments)
-            ret['content'] = f"{prefix}\n{sanitized}"
+            text_content = f"{prefix}\n{sanitized}"
+            # Surface collection notes here too — render_multimodal_content
+            # only runs for results containing images, so without this the
+            # text-only vector_search path drops the notes entirely.
+            if self.result_dict and self.result_dict.get("_collection_notes_instruction"):
+                text_content += f"\n\n{self.result_dict['_collection_notes_instruction']}"
+            if self.result_dict and self.result_dict.get("collection_notes"):
+                text_content += f"\n\n{self.result_dict['collection_notes']}"
+            ret['content'] = text_content
 
         logger.info(
             "tool_message_render tool=%s content_chars=%d",
