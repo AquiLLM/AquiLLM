@@ -36,6 +36,37 @@ AquiLLM already has:
 
 The missing piece is a deliberate learning architecture that knows the difference between "the user likes concise updates" and "this project is investigating DeepSeek V4 attention compression."
 
+## Mem0 Upgrade Note
+
+As part of this work, update the Mem0 integration before leaning on it as a core learning backend.
+
+Current local state:
+
+- `uv.lock` currently resolves `mem0ai` to `1.0.7`.
+- `deploy/docker/web/Dockerfile.prod` installs `mem0ai[graph]`.
+- `lib.memory.config` still exposes graph-era settings such as `MEM0_GRAPH_ENABLED`, `MEM0_GRAPH_PROVIDER`, and `MEM0_GRAPH_*`.
+
+Relevant current Mem0 direction:
+
+- Mem0's current memory-type docs describe layered conversation, session, user, and organizational memory, with classic factual, episodic, and semantic memory categories mapped onto those layers: https://mem0.mintlify.app/core-concepts/memory-types
+- Mem0's platform docs now emphasize entity-scoped memory by user, agent, app, and session/run identifiers so memories do not leak across contexts: https://docs.mem0.ai/platform/features/entity-scoped-memory
+- Mem0's memory add pipeline includes extraction, conflict resolution, metadata, and scoped identifiers such as `user_id`, `agent_id`, and `run_id`: https://docs.mem0.ai/core-concepts/memory-operations/add
+- Mem0's OSS migration docs describe a newer memory algorithm, `custom_instructions`, entity linking, hybrid search/BM25 support, and the removal of OSS graph-store configuration: https://docs.mem0.ai/migration/oss-v2-to-v3
+
+Implementation guidance:
+
+- Audit and update the `mem0ai` package version and optional extras deliberately; do not just bump and hope.
+- Replace graph-store assumptions with the current entity-linking or platform entity-scoped model where applicable.
+- Map AquiLLM scopes onto Mem0 scopes:
+  - researcher-global -> `user_id`
+  - project/collection -> `run_id` or metadata such as `collection_id`
+  - AquiLLM app/agent -> `app_id` or `agent_id` where supported
+  - conversation/task -> `run_id`
+- Keep the local `UserMemoryFact`, `EpisodicMemory`, `ResearchMemory`, and `LearningSignal` tables as the source of truth for auditability and fallback.
+- Treat Mem0 as an acceleration/intelligence layer for extraction, conflict resolution, search, and entity linking, not as the only copy of researcher/project memory.
+- Add compatibility tests for both current local fallback and upgraded Mem0-backed behavior.
+- Document any Platform-only features separately from OSS features so local/dev deployments remain usable.
+
 ## Proposed Architecture
 
 Add a new learning layer with three memory types:
@@ -261,6 +292,8 @@ LEARNING_AUTO_PROMOTE_LOW_CONFIDENCE=0
 LEARNING_MAX_CONTEXT_FACTS=6
 LEARNING_MAX_CONTEXT_CHARS=1200
 LEARNING_CAPTURE_IDLE_SECONDS=60
+LEARNING_MEM0_INTEGRATION_MODE=disabled
+LEARNING_MEM0_PROJECT_SCOPE_FIELD=run_id
 ```
 
 Default the whole layer off until tests and manual review pass.
@@ -299,12 +332,13 @@ Add a small learning eval set:
 ## Rollout Plan
 
 1. Add data models and admin visibility.
-2. Add explicit remember/forget commands only.
-3. Add project-scoped retrieval into direct RAG.
-4. Add feedback/correction signals.
-5. Add candidate extraction from completed conversations.
-6. Add review UI or command-based review.
-7. Enable conservative automatic promotion.
+2. Audit and upgrade Mem0 integration behind a feature flag.
+3. Add explicit remember/forget commands only.
+4. Add project-scoped retrieval into direct RAG.
+5. Add feedback/correction signals.
+6. Add candidate extraction from completed conversations.
+7. Add review UI or command-based review.
+8. Enable conservative automatic promotion.
 
 ## Open Questions
 
@@ -313,8 +347,8 @@ Add a small learning eval set:
 - How much confirmation does the user want before storing inferred research memories?
 - Should feedback from low ratings update future behavior automatically, or only create reviewable signals?
 - Should project memories be exported with a collection or remain app-local?
+- Which Mem0 features should be required for self-hosted/local development versus optional Platform enhancements?
 
 ## Recommendation
 
 Start with explicit and correction-driven project memory, not broad automatic learning. The first milestone should make AquiLLM reliably remember what the researcher deliberately tells it, scoped to the right project, and retrieve those learnings during RAG. Once that is trustworthy, add automatic candidate extraction and feedback-driven behavior tuning.
-
