@@ -195,3 +195,55 @@ class ToolImageMarkdownInjectionTests(SimpleTestCase):
         self.assertEqual(changed, 'changed')
         self.assertIn("https://example.com/image/927f673-2776-45fb-a7ec-efc043858fa7", updated[-1].content)
         self.assertIn("/aquillm/document_image/00000000-0000-0000-0000-000000000099/", updated[-1].content)
+
+    def test_final_only_stream_includes_appended_image_markdown(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="Here is the figure summary with the retrieved context.",
+                tool_call={},
+                stop_reason='stop',
+                input_usage=11,
+                output_usage=21,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[
+                UserMessage(content='Show me the figure.'),
+                ToolMessage(
+                    content='{"result": {"type":"image"}}',
+                    tool_name='vector_search',
+                    arguments={"search_string": "figure", "top_k": 1},
+                    for_whom='assistant',
+                    result_dict={
+                        "result": [
+                            {
+                                "rank": 1,
+                                "chunk_id": 42,
+                                "doc_id": "00000000-0000-0000-0000-000000000042",
+                                "chunk": 1,
+                                "title": "Doc",
+                                "type": "image",
+                                "text": "Figure 4",
+                                "image_url": "/aquillm/document_image/00000000-0000-0000-0000-000000000042/",
+                            }
+                        ],
+                        "_image_instruction": "Use markdown image syntax.",
+                    },
+                ),
+            ],
+        )
+        events = []
+
+        async def stream_func(payload):
+            events.append(payload)
+
+        updated, changed = async_to_sync(llm.complete)(convo, 1024, stream_func=stream_func)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0]["done"])
+        self.assertEqual(events[0]["content"], updated[-1].content)
+        self.assertIn("Here is the figure summary", events[0]["content"])
+        self.assertIn("![Figure 4]", events[0]["content"])
+        self.assertIn("/aquillm/document_image/00000000-0000-0000-0000-000000000042/", events[0]["content"])
