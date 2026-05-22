@@ -1019,3 +1019,55 @@ async def test_complete_turn_recovers_from_blank_post_tool_answer_using_list_vec
     assert "historically contingent" in updated[-1].content
     assert "could not generate a final answer" not in updated[-1].content
     assert llm.get_message.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_uses_cited_extract_when_post_tool_summary_fails():
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            return_value=LLMResponse(
+                text="",
+                tool_call={},
+                stop_reason="stop",
+                input_usage=1,
+                output_usage=1,
+                model="fake",
+            )
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Explain DeepSeek attention and show me a figure."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={
+                    "result": [
+                        {
+                            "chunk_id": 11702,
+                            "doc_id": "doc-a",
+                            "title": "DeepSeek Attention",
+                            "text": (
+                                "DeepSeek attention compresses key-value cache usage by separating latent "
+                                "representations from query heads while preserving enough context for generation."
+                            ),
+                            "type": "text_with_image",
+                            "image_url": "/aquillm/document_image/doc-a/",
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=1024)
+
+    assert changed == "changed"
+    content = updated[-1].content
+    assert "I found supporting context" not in content
+    assert "DeepSeek attention compresses key-value cache usage" in content
+    assert "[doc:doc-a chunk:11702]" in content
+    assert "![DeepSeek attention compresses key-value cache usage" in content

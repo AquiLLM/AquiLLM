@@ -13,7 +13,7 @@ from aquillm.llm import LLMTool, ToolResultDict, llm_tool
 from apps.chat.consumers.utils import truncate_tool_text
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.collections.models import Collection
-from apps.documents.models import Document, DocumentChild, TextChunk
+from apps.documents.models import Document, DocumentChild, DocumentFigure, TextChunk
 from lib.tools.documents.ids import clean_and_parse_doc_id, resolve_doc_id_with_candidates
 from lib.tools.documents.list_ids import titles_to_document_ids
 from lib.tools.documents.whole_document import image_document_instruction, image_document_tool_payload
@@ -59,6 +59,55 @@ def _resolve_doc_uuid(doc_id: str, user: User, col_ref: CollectionsRef):
     if not doc.collection.user_can_view(user):
         return None, f"User cannot access document {doc_id}!"
     return parsed, ""
+
+
+def _format_related_figure_payloads(figures, *, user: User, max_figures: int = 3) -> list[dict]:
+    payloads: list[dict] = []
+    for figure in figures:
+        collection = getattr(figure, "collection", None)
+        can_view = getattr(collection, "user_can_view", None) if collection is not None else None
+        if callable(can_view) and not can_view(user):
+            continue
+        image_file = getattr(figure, "image_file", None)
+        if not getattr(image_file, "name", ""):
+            continue
+        caption = (
+            str(getattr(figure, "extracted_caption", "") or "").strip()
+            or str(getattr(figure, "full_text", "") or "").strip()
+            or str(getattr(figure, "title", "") or "Figure").strip()
+        )
+        payloads.append(
+            {
+                "type": "image",
+                "title": str(getattr(figure, "title", "") or "Figure"),
+                "text": caption[:500],
+                "image_url": f"/aquillm/document_image/{figure.id}/",
+                "figure_index": int(getattr(figure, "figure_index", len(payloads)) or 0) + 1,
+            }
+        )
+        if len(payloads) >= max_figures:
+            break
+    return payloads
+
+
+def _related_figure_payloads(doc: DocumentChild, *, user: User, max_figures: int = 3) -> list[dict]:
+    if isinstance(doc, DocumentFigure):
+        return []
+    try:
+        from django.contrib.contenttypes.models import ContentType
+
+        content_type = ContentType.objects.get_for_model(doc, for_concrete_model=False)
+        figures = (
+            DocumentFigure.objects.filter(
+                parent_content_type=content_type,
+                parent_object_id=doc.id,
+            )
+            .order_by("figure_index", "title")
+            [: max_figures * 3]
+        )
+    except Exception:
+        return []
+    return _format_related_figure_payloads(figures, user=user, max_figures=max_figures)
 
 
 def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
@@ -181,6 +230,18 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
                 full_text=doc.full_text, title=doc.title, display_url=display_url
             )
             ret["_image_instruction"] = image_document_instruction(title=doc.title, display_url=display_url)
+        else:
+            figures = _related_figure_payloads(doc, user=user)
+            if figures:
+                ret["result"] = {
+                    "type": "document_with_figures",
+                    "text": doc.full_text,
+                    "figures": figures,
+                }
+                ret["_image_instruction"] = (
+                    "Related figures include image_url fields. When the user asks for figures, "
+                    "include relevant figures in markdown with ![description](image_url)."
+                )
 
         return ret
 

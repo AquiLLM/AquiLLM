@@ -82,3 +82,35 @@ class RecentToolImageMarkdownTests(SimpleTestCase):
             ],
         )
         self.assertEqual(recent_tool_image_markdown(convo), [])
+
+    def test_whole_document_related_figure_rows(self):
+        convo = Conversation(
+            system="s",
+            messages=[
+                ToolMessage(
+                    content="{}",
+                    tool_name="whole_document",
+                    for_whom="assistant",
+                    result_dict={
+                        "result": {
+                            "type": "document_with_figures",
+                            "text": "Main document text",
+                            "figures": [
+                                {
+                                    "type": "image",
+                                    "title": "Figure 1",
+                                    "text": "Calibration diagram",
+                                    "image_url": "/aquillm/document_image/fig-1/",
+                                }
+                            ],
+                        }
+                    },
+                )
+            ],
+        )
+
+        lines = recent_tool_image_markdown(convo, max_images=3)
+
+        self.assertEqual(len(lines), 1)
+        self.assertIn("![Calibration diagram]", lines[0])
+        self.assertIn("/aquillm/document_image/fig-1/", lines[0])

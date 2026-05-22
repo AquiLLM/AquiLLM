@@ -57,11 +57,10 @@ async def generate_compact_tool_summary(
             continue
         best_text = text
         stop_reason_normalized = str(summary_response.stop_reason or "").strip().lower()
-        if (
-            stop_reason_normalized in {"length", "max_tokens"}
-            or fb.looks_cut_off(text)
-            or not fb.is_high_quality_summary(text)
-        ):
+        is_cutoff = stop_reason_normalized in {"length", "max_tokens"} or fb.looks_cut_off(text)
+        if (not is_cutoff) and len(text.strip()) >= 140:
+            return text
+        if is_cutoff or not fb.is_high_quality_summary(text):
             attempt_prompt = (
                 f"{summary_prompt}\n\n"
                 "The previous draft was incomplete or low quality. "

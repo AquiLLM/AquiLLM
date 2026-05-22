@@ -137,7 +137,7 @@ def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
         if not re.search(r"[A-Za-z]", line):
             continue
         words = re.findall(r"[A-Za-z0-9]+", line)
-        if len(words) < 4:
+        if len(words) < 3:
             continue
         if inherited_citation and (raw_line[:1].isspace() or raw_line.startswith("\t")):
             continue

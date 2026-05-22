@@ -77,6 +77,13 @@ def _collect_doc_refs_from_embedded_images(text: str) -> set[str]:
     return refs
 
 
+def _latest_user_requested_image(conversation: Conversation) -> bool:
+    for msg in reversed(conversation.messages):
+        if isinstance(msg, UserMessage):
+            return imgctx.looks_like_image_display_request(msg.content)
+    return False
+
+
 def _collect_source_refs_from_tool_message(tool_message: ToolMessage) -> set[str]:
     refs: set[str] = set()
 
@@ -195,6 +202,7 @@ async def complete_conversation_turn(
     citation_allowlist: set[str] = set()
     source_allowlist: set[str] = set()
     enforce_citations = False
+    response_from_compact_summary = False
     request_system_prompt = system_prompt
     if is_post_tool_result_turn and citations.citation_enforcement_enabled():
         citation_allowlist = citations.collect_allowed_chunk_citations(conversation)
@@ -302,6 +310,7 @@ async def complete_conversation_turn(
         ):
             compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
             if compact_summary:
+                response_from_compact_summary = True
                 response = LLMResponse(
                     text=compact_summary,
                     tool_call={},
@@ -336,6 +345,8 @@ async def complete_conversation_turn(
 
     if (not response_tool_call) and (not response_text.strip()):
         compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
+        if compact_summary:
+            response_from_compact_summary = True
         response_text = compact_summary or (
             fb.synthesize_from_recent_tool_results(conversation)
             if fb.extractive_fallback_enabled()
@@ -378,6 +389,7 @@ async def complete_conversation_turn(
         elif not preserve_partial_response:
             compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
             if compact_summary:
+                response_from_compact_summary = True
                 response_text = compact_summary
             elif fb.extractive_fallback_enabled():
                 synthesized = fb.synthesize_from_recent_tool_results(conversation)
@@ -399,7 +411,23 @@ async def complete_conversation_turn(
             and original_has_any_citation
             and fb.is_high_quality_summary(original_response_text)
         )
-        if should_soft_accept_original:
+        should_soft_accept_image_display = (
+            (not citations_valid)
+            and (not original_invalid)
+            and _latest_user_requested_image(conversation)
+            and bool(imgctx.recent_tool_image_markdown(conversation, max_images=1))
+        )
+        should_soft_accept_compact_summary = (
+            (not citations_valid)
+            and response_from_compact_summary
+            and (not original_invalid)
+            and bool(original_response_text)
+        )
+        if (
+            should_soft_accept_original
+            or should_soft_accept_image_display
+            or should_soft_accept_compact_summary
+        ):
             citations_valid = True
         if (not citations_valid) and (not is_streaming_turn):
             invalid = citations.find_invalid_citations(response_text, citation_allowlist)
@@ -444,6 +472,18 @@ async def complete_conversation_turn(
                 if cited_extract:
                     response_text = cited_extract
                     response_tool_call = {}
+        if (
+            (not response_tool_call)
+            and (
+                not response_text.strip()
+                or response_text.strip()
+                == visibility.clean_response_failure_text(after_tool_result=True)
+            )
+        ):
+            cited_extract = citations.synthesize_cited_extract_from_results(conversation)
+            if cited_extract:
+                response_text = cited_extract
+                response_tool_call = {}
     if (
         (
             is_post_tool_result_turn

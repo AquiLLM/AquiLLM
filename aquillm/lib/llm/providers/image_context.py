@@ -119,6 +119,15 @@ def recent_tool_image_markdown(conversation: Conversation, max_images: int = 3) 
                     url = _result_row_image_url(value)
                     if url:
                         candidates.append((_result_row_image_caption(value, key_fallback=str(key)), url))
+                elif isinstance(value, list):
+                    for nested in value:
+                        if not isinstance(nested, dict):
+                            continue
+                        url = _result_row_image_url(nested)
+                        if url:
+                            candidates.append(
+                                (_result_row_image_caption(nested, key_fallback=str(key)), url)
+                            )
 
         for caption, url in candidates:
             if not url or url.startswith("data:image/"):

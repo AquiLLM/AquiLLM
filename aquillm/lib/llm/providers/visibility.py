@@ -78,12 +78,14 @@ def is_displayable_answer_text(
     if _word_count(visible) >= min_words:
         return True
     sentence_count = len(re.findall(r"[.!?](?:\s|$)", visible))
-    return sentence_count >= 2 and _word_count(visible) >= 12
+    if sentence_count >= 2 and _word_count(visible) >= 12:
+        return True
+    return _word_count(visible) >= 2
 
 
 def sanitize_assistant_text(text: Optional[str], *, suppress_interim: bool = True) -> str:
     """Return text safe for a normal assistant response bubble."""
-    visible = strip_thinking_blocks(text).strip()
+    visible = strip_thinking_blocks(text)
     if suppress_interim and not is_displayable_answer_text(visible):
         return ""
     return visible

@@ -18,6 +18,14 @@ def test_substantial_answer_with_citation_is_displayable():
     assert vis.is_displayable_answer_text(text)
 
 
+def test_concise_final_answer_is_displayable():
+    assert vis.is_displayable_answer_text("Here is the figure summary.")
+
+
+def test_short_cited_final_answer_is_displayable():
+    assert vis.is_displayable_answer_text("Cited answer [doc:doc-a chunk:7].")
+
+
 def test_assistant_tool_call_row_has_empty_frontend_content():
     msg = AssistantMessage(
         content="I'll retrieve the passage now.",
