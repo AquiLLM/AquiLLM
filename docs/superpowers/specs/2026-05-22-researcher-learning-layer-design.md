@@ -102,7 +102,7 @@ Add a new learning layer with three memory types:
      - "Current project compares DeepSeek V4 against Qwen-style sparse attention."
      - "Open question: whether MLA-style KV compression harms long-context retrieval."
      - "User accepted the interpretation of Figure 2 as an ablation over memory usage."
-   - Backing store: new model, likely `ResearchMemory`.
+   - Backing store: new model, likely `ResearchMemory` under the memory app domain.
 
 3. **Research Feedback Memory**
    - Scope: message, conversation, project, and optionally user.
@@ -110,7 +110,7 @@ Add a new learning layer with three memory types:
      - "Answer was rated low because it missed figures."
      - "User corrected 'DeepSeek V4' to refer to the selected paper, not public model news."
      - "Citation style should include chunk refs."
-   - Backing store: new model, likely `LearningSignal`, derived from ratings, feedback text, explicit corrections, and assistant self-checks.
+   - Backing store: new model, likely `LearningSignal` under the memory app domain, derived from ratings, feedback text, explicit corrections, and assistant self-checks.
 
 ## Data Model
 
@@ -328,6 +328,27 @@ LEARNING_MEM0_PROJECT_SCOPE_FIELD=run_id
 
 Default the whole layer off until tests and manual review pass.
 
+## Standards Alignment
+
+This design must follow `docs/documents/standards/code-style-guide.md`.
+
+- Keep Django-bound models, services, admin, tasks, and permissions in `aquillm/apps/memory/**`, for example:
+  - `aquillm/apps/memory/models/research.py`
+  - `aquillm/apps/memory/models/signals.py`
+  - `aquillm/apps/memory/services/learning_capture.py`
+  - `aquillm/apps/memory/services/learning_context.py`
+  - `aquillm/apps/memory/tasks.py`
+- Put only Django-free extraction, normalization, scoring, or entity-linking helpers in `aquillm/lib/memory/**`; `aquillm/lib/**` must not import `apps.*`.
+- Do not add new runtime imports from the compatibility barrel `aquillm.models`.
+- Keep chat and RAG consumers thin: they should call memory services, not perform learning writes or retrieval inline.
+- Keep every new Python file under the 300-line limit by splitting capture, retrieval, promotion, Mem0 adapter logic, and prompt formatting into separate modules.
+- Add module docstrings and type hints on public service boundaries.
+- Enforce user, conversation, collection, and document authorization before reading or writing memories.
+- Keep Celery task arguments and memory evidence payloads JSON-safe; pass IDs and compact metadata, not ORM objects or large source text.
+- Avoid threaded ORM writes. Background promotion should use Celery tasks or explicit service calls.
+- Log memory IDs, counts, scopes, statuses, and timings; do not log secrets, credentials, raw private conversations, full source documents, or unredacted feedback bodies.
+- Keep the learning layer feature-flagged and default-off until tests and manual review pass.
+
 ## Testing Strategy
 
 ### Unit Tests
@@ -363,6 +384,18 @@ Add a small learning eval set:
 - improves answer quality without increasing prompt size beyond budget
 - answers temporal questions about how a project decision changed over time
 - recalls assistant-generated project decisions only after user acceptance or continuation
+
+### Standards Gates
+
+Run the repo standards gates before enabling the feature:
+
+```bash
+python scripts/check_file_lengths.py
+python scripts/check_import_boundaries.py
+pwsh -ExecutionPolicy Bypass -File scripts/check_hygiene.ps1
+pytest aquillm/apps/memory/tests aquillm/apps/chat/tests/test_feedback_capture.py aquillm/lib/memory/tests
+git diff --check
+```
 
 ## Rollout Plan
 

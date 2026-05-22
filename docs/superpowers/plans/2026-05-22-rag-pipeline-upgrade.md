@@ -393,7 +393,7 @@ git commit -m "perf(rag): cache embeddings reranks and stable generation prefixe
 Commit:
 
 ```bash
-git add aquillm/apps/documents/services aquillm/apps/documents/tests aquillm/apps/chat/services/rag_pipeline.py
+git add aquillm/apps/documents/services/contextual_headers.py aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/apps/chat/services/rag_pipeline.py aquillm/apps/documents/tests/test_contextual_headers.py aquillm/apps/documents/tests/test_chunk_search_candidate_tuning.py aquillm/apps/chat/tests/test_direct_rag_pipeline.py
 git commit -m "feat(rag): improve contextual retrieval quality"
 ```
 
@@ -432,6 +432,22 @@ git add aquillm/apps/chat/evals aquillm/apps/chat/tests
 git commit -m "test(rag): add retrieval and answer quality eval harness"
 ```
 
+## Standards Alignment
+
+This implementation must follow `docs/documents/standards/code-style-guide.md`.
+
+- Keep runtime orchestration in `aquillm/apps/chat/services/**` and document retrieval behavior in `aquillm/apps/documents/services/**`.
+- Put only Django-free reusable helpers in `aquillm/lib/**`; `aquillm/lib/**` must not import `apps.*`.
+- Do not add new runtime imports from the compatibility barrel `aquillm.models`.
+- Keep `chat_receive.py` thin: classify, persist, delegate to services, and broadcast results.
+- Keep every new Python file under the 300-line limit; split intent, query rewrite, evidence packing, validation, caching, and metrics by responsibility.
+- Add module docstrings and type hints on public service boundaries, especially orchestrator and evidence-packing entry points.
+- Perform authorization before retrieval or mutation by reusing existing user-accessible collection/document checks.
+- Keep Celery/async payloads JSON-safe and avoid threaded ORM writes.
+- Log stage timings, IDs, counts, cache hits, and policy decisions; do not log raw prompt bodies, source document text, image data URLs, credentials, or secrets.
+- Preserve existing stable public interfaces unless a plan step explicitly calls out the migration.
+- Keep the local token-efficiency audit findings embedded in this plan so implementation does not depend on an untracked audit file being present.
+
 ## Verification Commands
 
 Run focused tests after each phase:
@@ -445,9 +461,12 @@ pytest aquillm/apps/documents/tests/test_chunk_search_candidate_tuning.py
 pytest aquillm/apps/documents/tests/test_rerank_http_cache.py
 ```
 
-Run the broader relevant suite before final merge:
+Run standards gates and the broader relevant suite before final merge:
 
 ```bash
+python scripts/check_file_lengths.py
+python scripts/check_import_boundaries.py
+pwsh -ExecutionPolicy Bypass -File scripts/check_hygiene.ps1
 pytest aquillm/apps/chat/tests aquillm/apps/documents/tests aquillm/lib/llm/tests
 pytest aquillm/tests/integration/test_cache_settings_flags.py
 git diff --check
