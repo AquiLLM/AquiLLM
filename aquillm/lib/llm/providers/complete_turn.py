@@ -320,8 +320,8 @@ def _extract_doc_ref_from_image_url(value: Any) -> str | None:
 
 def _collect_doc_refs_from_embedded_images(text: str) -> set[str]:
     refs: set[str] = set()
-    for match in _DOC_IMAGE_URL_RE.finditer(text or ""):
-        ref = _doc_ref(match.group(1))
+    for match in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", text or ""):
+        ref = _extract_doc_ref_from_image_url(match.group(1))
         if ref:
             refs.add(ref)
     return refs
@@ -373,12 +373,17 @@ def _append_citation_sources_if_missing(
     base = (text or "").rstrip()
     if not allowed_citations:
         return base
-    if "Sources:" in base:
-        return base
     source_refs = _select_source_refs_for_response(base, allowed_citations)
     sources_block = _build_sources_block(source_refs)
     if not sources_block:
         return base
+    sources_index = base.rfind("Sources:")
+    if sources_index >= 0:
+        existing_sources = base[sources_index:]
+        if any(ref in existing_sources for ref in source_refs):
+            return base
+        source_lines = "\n".join(f"- {ref}" for ref in sorted(source_refs))
+        return f"{base}\n{source_lines}"
     return f"{base}\n\n{sources_block}"
 
 

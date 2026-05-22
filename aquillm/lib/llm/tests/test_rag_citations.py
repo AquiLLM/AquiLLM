@@ -663,6 +663,56 @@ async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answ
 
 
 @pytest.mark.asyncio
+async def test_complete_turn_final_stream_adds_refs_when_model_emits_empty_sources_heading(monkeypatch):
+    monkeypatch.setenv("RAG_ENFORCE_CHUNK_CITATIONS", "1")
+    stream_payloads: list[dict] = []
+
+    async def _capture_stream(payload: dict):
+        stream_payloads.append(payload)
+
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            return_value=LLMResponse(
+                text=(
+                    "The retrieved passage supports the central claim [doc:doc-a chunk:7].\n\n"
+                    "Sources:"
+                ),
+                tool_call={},
+                stop_reason="stop",
+                input_usage=2,
+                output_usage=3,
+                model="fake",
+            )
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="Summarize with citations."),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(
+        llm,
+        convo,
+        max_tokens=1024,
+        stream_func=_capture_stream,
+    )
+
+    assert changed == "changed"
+    assert "- [doc:doc-a chunk:7]" in updated[-1].content
+    assert stream_payloads
+    assert "- [doc:doc-a chunk:7]" in stream_payloads[-1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_complete_turn_streaming_appends_used_sources_when_present(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     stream_payloads: list[dict] = []

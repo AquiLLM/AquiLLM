@@ -196,6 +196,57 @@ class ToolImageMarkdownInjectionTests(SimpleTestCase):
         self.assertIn("https://example.com/image/927f673-2776-45fb-a7ec-efc043858fa7", updated[-1].content)
         self.assertIn("/aquillm/document_image/00000000-0000-0000-0000-000000000099/", updated[-1].content)
 
+    def test_complete_appends_image_markdown_when_model_only_mentions_tool_url(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text=(
+                    "Here is the retrieved figure URL: "
+                    "/aquillm/document_image/00000000-0000-0000-0000-000000000077/"
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=9,
+                output_usage=18,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[
+                UserMessage(content='Show me Figure 7'),
+                ToolMessage(
+                    content='{"result": {"type":"image"}}',
+                    tool_name='vector_search',
+                    arguments={"search_string": "Figure 7", "top_k": 5},
+                    for_whom='assistant',
+                    result_dict={
+                        "result": [
+                            {
+                                "rank": 1,
+                                "chunk_id": 77,
+                                "doc_id": "00000000-0000-0000-0000-000000000077",
+                                "chunk": 77,
+                                "title": "Paper",
+                                "type": "image",
+                                "text": "Figure 7",
+                                "image_url": "/aquillm/document_image/00000000-0000-0000-0000-000000000077/",
+                            }
+                        ],
+                        "_image_instruction": "Use markdown image syntax.",
+                    },
+                ),
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 1024)
+
+        self.assertEqual(changed, 'changed')
+        self.assertIn("Here is the retrieved figure URL", updated[-1].content)
+        self.assertIn("![Figure 7]", updated[-1].content)
+        self.assertIn(
+            "](/aquillm/document_image/00000000-0000-0000-0000-000000000077/)",
+            updated[-1].content,
+        )
+
     def test_final_only_stream_includes_appended_image_markdown(self):
         llm = _FakeLLMInterface([
             LLMResponse(
