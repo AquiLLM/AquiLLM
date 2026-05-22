@@ -12,6 +12,7 @@ from lib.llm.providers.rag_citations import (
     find_invalid_citations,
     response_has_required_citations,
     synthesize_cited_extract_from_results,
+    synthesize_doc_level_extract_from_results,
 )
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import ToolMessage, UserMessage
@@ -38,6 +39,34 @@ def test_collect_allowed_chunk_citations_from_verbose_and_compact_rows():
     allowed = collect_allowed_chunk_citations(convo)
     assert "[doc:doc-a chunk:7]" in allowed
     assert "[doc:doc-b chunk:9]" in allowed
+
+
+def test_synthesize_doc_level_extract_from_whole_document_payload():
+    convo = Conversation(
+        system="sys",
+        messages=[
+            ToolMessage(
+                content="{}",
+                tool_name="whole_document",
+                for_whom="assistant",
+                arguments={"doc_id": "doc-paper"},
+                result_dict={
+                    "result": {
+                        "type": "document_with_figures",
+                        "text": (
+                            "The model minimizes a calibration loss L(theta). "
+                            "Figure 2 plots the reliability curve across bins."
+                        ),
+                        "figures": [],
+                    }
+                },
+            )
+        ],
+    )
+    extract = synthesize_doc_level_extract_from_results(convo)
+    assert extract is not None
+    assert "calibration loss" in extract
+    assert "[doc:doc-paper]" in extract
 
 
 def test_collect_allowed_chunk_citations_accepts_explicit_ref_fields():
@@ -1071,3 +1100,73 @@ async def test_complete_turn_uses_cited_extract_when_post_tool_summary_fails():
     assert "DeepSeek attention compresses key-value cache usage" in content
     assert "[doc:doc-a chunk:11702]" in content
     assert "![DeepSeek attention compresses key-value cache usage" in content
+
+
+@pytest.mark.asyncio
+async def test_complete_turn_recovers_blank_post_tool_whole_document_via_synthesis_retry():
+    llm = SimpleNamespace(
+        base_args={},
+        get_message=AsyncMock(
+            side_effect=[
+                LLMResponse(
+                    text="",
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=1,
+                    output_usage=1,
+                    model="fake",
+                ),
+                LLMResponse(
+                    text=(
+                        "This paper defines a calibration loss and reliability diagram. "
+                        "Equation (3) scores bin-wise accuracy; Figure 2 shows the curve."
+                    ),
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=1,
+                    output_usage=1,
+                    model="fake",
+                ),
+            ]
+        ),
+    )
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(
+                content="Tell me about this paper and show figures with math explained."
+            ),
+            ToolMessage(
+                content="{}",
+                tool_name="whole_document",
+                for_whom="assistant",
+                arguments={"doc_id": "doc-paper"},
+                result_dict={
+                    "result": {
+                        "type": "document_with_figures",
+                        "text": (
+                            "The objective combines a cross-entropy term with a calibration penalty. "
+                            "Equation (3) defines the reliability score used in Figure 2."
+                        ),
+                        "figures": [
+                            {
+                                "type": "image",
+                                "title": "Figure 2",
+                                "text": "Reliability diagram across ten bins.",
+                                "image_url": "/aquillm/document_image/fig-2/",
+                            }
+                        ],
+                    }
+                },
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
+
+    assert changed == "changed"
+    assert llm.get_message.await_count == 2
+    content = updated[-1].content
+    assert "I found supporting context" not in content
+    assert "calibration loss" in content
+    assert "Equation (3)" in content

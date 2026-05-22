@@ -81,7 +81,31 @@ def extract_recent_tool_evidence(
                     continue
                 entries.append((_row_source(row, tool_msg.tool_name), _row_text(row)))
         elif isinstance(payload, dict):
-            entries = [(str(k), str(v)) for k, v in list(payload.items())[:12]]
+            doc_text = payload.get("text")
+            if doc_text is None:
+                doc_text = payload.get("full_text")
+            if isinstance(doc_text, str) and doc_text.strip():
+                title = str(payload.get("title") or payload.get("type") or tool_msg.tool_name)
+                entries.append((title, doc_text))
+            figures = payload.get("figures")
+            if isinstance(figures, list):
+                for figure in figures[:6]:
+                    if not isinstance(figure, dict):
+                        continue
+                    caption = str(
+                        figure.get("text")
+                        or figure.get("title")
+                        or figure.get("n")
+                        or "Figure"
+                    ).strip()
+                    if caption:
+                        entries.append((str(figure.get("title") or "Figure"), caption))
+            if not entries:
+                entries = [
+                    (str(k), str(v))
+                    for k, v in list(payload.items())[:12]
+                    if k not in {"figures", "type"}
+                ]
         elif isinstance(payload, str):
             entries = [(tool_msg.tool_name, payload)]
         for key_text, raw_text in entries:

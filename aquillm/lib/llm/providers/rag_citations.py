@@ -244,6 +244,81 @@ def synthesize_cited_extract_from_results(
     return "I can only provide claims directly supported by retrieved chunks:\n" + "\n".join(points)
 
 
+def _doc_ref_from_tool_message(tool_msg: ToolMessage) -> str | None:
+    if isinstance(tool_msg.arguments, dict):
+        doc_id = tool_msg.arguments.get("doc_id")
+        if doc_id is not None:
+            doc_text = str(doc_id).strip()
+            if doc_text:
+                return f"[doc:{doc_text}]"
+    payload = tool_msg.result_dict.get("result") if isinstance(tool_msg.result_dict, dict) else None
+    if isinstance(payload, dict):
+        doc_id = payload.get("doc_id") or payload.get("d")
+        if doc_id is not None:
+            doc_text = str(doc_id).strip()
+            if doc_text:
+                return f"[doc:{doc_text}]"
+    return None
+
+
+def _snippet_from_whole_document_payload(payload: Any, *, max_chars: int = 220) -> str:
+    text = ""
+    if isinstance(payload, str):
+        text = payload
+    elif isinstance(payload, dict):
+        raw = payload.get("text")
+        if raw is None:
+            raw = payload.get("full_text")
+        if raw is None and payload.get("type") == "image_document":
+            raw = payload.get("title")
+        text = str(raw or "")
+    return _truncate_sentence(text, max_chars=max_chars)
+
+
+def synthesize_doc_level_extract_from_results(
+    conversation: Conversation,
+    *,
+    max_points: int = 5,
+) -> str | None:
+    """Bullets from whole-document / document_with_figures tool payloads (doc-level cites)."""
+    points: list[str] = []
+    seen: set[str] = set()
+    tool_messages = [
+        msg
+        for msg in reversed(conversation.messages)
+        if isinstance(msg, ToolMessage) and msg.for_whom == "assistant"
+    ]
+    for tool_msg in tool_messages[:4]:
+        if tool_msg.tool_name not in {"whole_document", "search_single_document"}:
+            continue
+        result_dict = tool_msg.result_dict if isinstance(tool_msg.result_dict, dict) else {}
+        if result_dict.get("exception"):
+            continue
+        payload = result_dict.get("result")
+        doc_ref = _doc_ref_from_tool_message(tool_msg)
+        if isinstance(payload, list):
+            continue
+        snippet = _snippet_from_whole_document_payload(payload)
+        if not snippet:
+            continue
+        dedupe_key = f"{snippet}|{doc_ref or tool_msg.tool_name}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        suffix = f" {doc_ref}" if doc_ref else ""
+        points.append(f"- {snippet}{suffix}")
+        if len(points) >= max_points:
+            break
+    if not points:
+        return None
+    return (
+        "Here is a concise summary from the retrieved document"
+        + ("s" if len(points) > 1 else "")
+        + ":\n"
+        + "\n".join(points)
+    )
+
+
 __all__ = [
     "build_citation_retry_prompt",
     "build_citation_system_suffix",
@@ -255,4 +330,5 @@ __all__ = [
     "find_invalid_citations",
     "response_has_required_citations",
     "synthesize_cited_extract_from_results",
+    "synthesize_doc_level_extract_from_results",
 ]

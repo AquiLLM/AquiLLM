@@ -1,7 +1,7 @@
 """Compact evidence summarization for post-tool LLM turns."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from ..types.messages import UserMessage
 from . import fallback_heuristics as fb
@@ -16,6 +16,9 @@ async def generate_compact_tool_summary(
     llm: LLMInterface,
     conversation: Conversation,
     max_tokens: int,
+    *,
+    stream_callback: Callable[[dict], Awaitable[Any]] | None = None,
+    stream_message_uuid: str | None = None,
 ) -> Optional[str]:
     latest_user_query, evidence = extract_recent_tool_evidence(conversation)
     if not evidence:
@@ -43,12 +46,17 @@ async def generate_compact_tool_summary(
     best_text: Optional[str] = None
     for _ in range(3):
         try:
-            summary_response = await llm.get_message(
-                system="You summarize technical evidence into a clear final answer.",
-                messages=[{"role": "user", "content": attempt_prompt}],
-                messages_pydantic=[UserMessage(content=attempt_prompt)],
-                max_tokens=summary_max_tokens,
-            )
+            summary_args: dict[str, Any] = {
+                "system": "You summarize technical evidence into a clear final answer.",
+                "messages": [{"role": "user", "content": attempt_prompt}],
+                "messages_pydantic": [UserMessage(content=attempt_prompt)],
+                "max_tokens": summary_max_tokens,
+            }
+            if stream_callback is not None:
+                summary_args["stream_callback"] = stream_callback
+            if stream_message_uuid:
+                summary_args["stream_message_uuid"] = stream_message_uuid
+            summary_response = await llm.get_message(**summary_args)
         except Exception:
             continue
 

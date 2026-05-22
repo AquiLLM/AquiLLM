@@ -15,6 +15,10 @@ _STATUS_OPENING_RE = re.compile(
     r"^(?:retrieving|searching|looking|reading|fetching|loading|processing|analyzing|gathering)\b",
     flags=re.IGNORECASE,
 )
+_STREAM_PROMISE_PREFIX_RE = re.compile(
+    r"^\s*(?:i(?:'ll| will)|let me)\b",
+    flags=re.IGNORECASE,
+)
 
 _DEFAULT_MIN_DISPLAY_WORDS = 20
 
@@ -45,6 +49,16 @@ def looks_like_status_only(text: Optional[str]) -> bool:
     if visible.endswith(("...", "…")) and words < 15:
         return True
     return False
+
+
+def _looks_like_streaming_promise_prefix(text: Optional[str]) -> bool:
+    """Block early 'I'll …' / 'Let me …' tokens until the answer is clearly underway."""
+    visible = strip_thinking_blocks(text).strip()
+    if not visible:
+        return False
+    if not _STREAM_PROMISE_PREFIX_RE.match(visible):
+        return False
+    return _word_count(visible) < 40
 
 
 def is_interim_assistant_text(text: Optional[str]) -> bool:
@@ -126,18 +140,23 @@ def visible_stream_content(
     """
     Return content safe to send through the live stream channel.
 
-    Streaming stays enabled; only display-ready text is forwarded (stubs and tool
-    transcripts never reach the UI). ``raw_tools`` does not block token delivery.
+    While streaming, forward any non-interim prose so the UI grows smoothly.
+    On the final chunk, apply the same display rules used for persisted answers.
     """
     _ = raw_tools  # call-site compatibility
     visible = strip_thinking_blocks(text)
     if tool_call_payload:
         return ""
+    if is_interim_assistant_text(visible):
+        return ""
+    if not done and _looks_like_streaming_promise_prefix(visible):
+        return ""
     if is_displayable_answer_text(visible):
         return visible
-    if done and visible.strip() and not is_interim_assistant_text(visible):
-        if _word_count(visible) >= 2:
-            return visible
+    if not done and visible.strip():
+        return visible
+    if done and visible.strip() and _word_count(visible) >= 2:
+        return visible
     return ""
 
 

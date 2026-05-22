@@ -49,3 +49,25 @@ def test_visible_stream_done_suppresses_status_stub():
         tool_call_payload=None,
     )
     assert visible == ""
+
+
+def test_visible_stream_forwards_partial_non_interim_answer_before_display_threshold():
+    partial = "The paper introduces a calibration objective for confidence scores."
+    visible = vis.visible_stream_content(
+        partial,
+        raw_tools=[{"name": "whole_document"}],
+        done=False,
+        tool_call_payload=None,
+    )
+    assert visible == partial
+
+
+def test_visible_stream_done_does_not_drop_short_substantive_answer():
+    answer = "Figure 2 shows the main result."
+    visible = vis.visible_stream_content(
+        answer,
+        raw_tools=None,
+        done=True,
+        tool_call_payload=None,
+    )
+    assert visible == answer

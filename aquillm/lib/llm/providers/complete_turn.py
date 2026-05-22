@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable, Literal, Optional
 from ..types.conversation import Conversation
 from ..types.messages import AssistantMessage, LLM_Message, ToolMessage, UserMessage
 from ..types.response import LLMResponse
-from ..types.tools import dump_tool_choice
+from ..types.tools import ToolChoice, dump_tool_choice
 from . import fallback_heuristics as fb
 from . import image_context as imgctx
 from . import rag_citations as citations
@@ -33,6 +33,219 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
     except Exception:
         value = default
     return max(minimum, value)
+
+
+def _conversation_used_whole_document(conversation: Conversation) -> bool:
+    for msg in reversed(conversation.messages):
+        if isinstance(msg, ToolMessage) and msg.for_whom == "assistant":
+            if msg.tool_name in {"whole_document", "search_single_document"}:
+                return True
+    return False
+
+
+def _resolve_post_tool_max_tokens(
+    conversation: Conversation,
+    *,
+    default_cap: int,
+    global_max: int,
+) -> int:
+    cap = default_cap
+    if _conversation_used_whole_document(conversation):
+        cap = max(
+            cap,
+            _env_int("LLM_POST_TOOL_WHOLE_DOC_MAX_TOKENS", 4096, minimum=256),
+        )
+    return min(global_max, cap)
+
+
+def _compact_summary_fallback_enabled() -> bool:
+    return getenv("LLM_ALLOW_COMPACT_SUMMARY_FALLBACK", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _post_tool_evidence_retry_enabled() -> bool:
+    return getenv("LLM_POST_TOOL_ALLOW_EVIDENCE_RETRY", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _post_tool_synthesis_retry_count() -> int:
+    return min(4, _env_int("LLM_POST_TOOL_SYNTHESIS_RETRIES", 2, minimum=0))
+
+
+def _latest_user_turn(conversation: Conversation) -> UserMessage | None:
+    for msg in reversed(conversation.messages):
+        if isinstance(msg, UserMessage):
+            return msg
+    return None
+
+
+def _post_tool_synthesis_unsatisfied(text: Optional[str]) -> bool:
+    visible = visibility.strip_thinking_blocks(text).strip()
+    if not visible:
+        return True
+    if visibility.is_interim_assistant_text(visible):
+        return True
+    if fb.looks_like_post_tool_non_answer(visible):
+        return True
+    if len(visible) >= 80:
+        return False
+    return not visibility.is_displayable_answer_text(visible)
+
+
+def _build_synthesis_retry_prompt(conversation: Conversation, attempt: int) -> str:
+    user_turn = _latest_user_turn(conversation)
+    query = (user_turn.content or "").strip() if user_turn else ""
+    wants_figures = _latest_user_requested_image(conversation)
+    lines = [
+        f"User request: {query or 'Answer using the retrieved documents above.'}",
+        "",
+        "Write a complete final answer using evidence already in this conversation.",
+        "Answer directly in plain text; do not describe future retrieval steps.",
+    ]
+    if wants_figures:
+        lines.append(
+            "Include relevant figures using markdown image syntax from tool results "
+            "(![caption](url))."
+        )
+    lines.append("Explain equations and technical terms in readable language.")
+    if attempt >= 1:
+        lines.append(
+            "Your previous reply was empty or incomplete. Synthesize a thorough answer "
+            "from the document text and tool results above."
+        )
+    if attempt >= 2:
+        lines.append(
+            "Cover the main thesis, methods or math (with intuition), and key figures or findings."
+        )
+    if attempt >= 3 and _post_tool_evidence_retry_enabled():
+        lines.append(
+            "If existing excerpts are too thin for a specific claim, you may call "
+            "vector_search or search_single_document once with a focused query, then stop."
+        )
+    return "\n".join(lines)
+
+
+async def _run_post_tool_synthesis_attempt(
+    llm: Any,
+    *,
+    system_prompt: str,
+    message_dicts: list[dict],
+    messages_for_bot: list[LLM_Message],
+    conversation: Conversation,
+    post_tool_max_tokens: int,
+    global_max_tokens: int,
+    stream_callback: Optional[Callable[[dict], Awaitable[Any]]],
+    stream_message_uuid: str,
+    attempt: int,
+    allow_tools: bool,
+) -> LLMResponse:
+    prompt = _build_synthesis_retry_prompt(conversation, attempt)
+    retry_messages = message_dicts + [{"role": "user", "content": prompt}]
+    retry_pydantic_messages = messages_for_bot + [UserMessage(content=prompt)]
+    retry_args: dict[str, Any] = llm.base_args | {
+        "system": system_prompt,
+        "messages": retry_messages,
+        "messages_pydantic": retry_pydantic_messages,
+        "max_tokens": _resolve_post_tool_max_tokens(
+            conversation,
+            default_cap=post_tool_max_tokens,
+            global_max=global_max_tokens,
+        ),
+        "stream_callback": stream_callback,
+        "stream_message_uuid": stream_message_uuid,
+    }
+    if allow_tools:
+        user_turn = _latest_user_turn(conversation)
+        if user_turn and user_turn.tools:
+            retry_args["tools"] = [tool.llm_definition for tool in user_turn.tools]
+            retry_args["tool_choice"] = dump_tool_choice(
+                user_turn.tool_choice or ToolChoice(type="auto")
+            )
+    return await llm.get_message(**retry_args)
+
+
+async def _retry_post_tool_synthesis(
+    llm: Any,
+    conversation: Conversation,
+    *,
+    system_prompt: str,
+    message_dicts: list[dict],
+    messages_for_bot: list[LLM_Message],
+    post_tool_max_tokens: int,
+    global_max_tokens: int,
+    stream_callback: Optional[Callable[[dict], Awaitable[Any]]],
+    stream_message_uuid: str,
+    initial_response: LLMResponse,
+) -> LLMResponse:
+    """
+    Re-run full-context synthesis until satisfied or retries exhausted.
+    May return a tool_call so spin() can gather more evidence.
+    """
+    response = initial_response
+    retry_count = _post_tool_synthesis_retry_count()
+    chunk_evidence = citations.collect_allowed_chunk_citations(conversation)
+    for attempt in range(retry_count):
+        if not _post_tool_synthesis_unsatisfied(response.text):
+            break
+        allow_tools = (
+            _post_tool_evidence_retry_enabled()
+            and attempt == retry_count - 1
+            and not chunk_evidence
+        )
+        response = await _run_post_tool_synthesis_attempt(
+            llm,
+            system_prompt=system_prompt,
+            message_dicts=message_dicts,
+            messages_for_bot=messages_for_bot,
+            conversation=conversation,
+            post_tool_max_tokens=post_tool_max_tokens,
+            global_max_tokens=global_max_tokens,
+            stream_callback=stream_callback,
+            stream_message_uuid=stream_message_uuid,
+            attempt=attempt,
+            allow_tools=allow_tools,
+        )
+        if response.tool_call:
+            return response
+    return response
+
+
+async def _last_resort_evidence_answer(
+    llm: Any,
+    conversation: Conversation,
+    max_tokens: int,
+    *,
+    stream_callback: Optional[Callable[[dict], Awaitable[Any]]] = None,
+    stream_message_uuid: Optional[str] = None,
+) -> Optional[str]:
+    """Evidence-backed fallbacks only; compact summary is opt-in and last."""
+    if fb.extractive_fallback_enabled():
+        synthesized = fb.synthesize_from_recent_tool_results(conversation)
+        if synthesized:
+            return synthesized
+    doc_extract = citations.synthesize_doc_level_extract_from_results(conversation)
+    if doc_extract:
+        return doc_extract
+    cited_extract = citations.synthesize_cited_extract_from_results(conversation)
+    if cited_extract:
+        return cited_extract
+    if _compact_summary_fallback_enabled():
+        return await generate_compact_tool_summary(
+            llm,
+            conversation,
+            max_tokens,
+            stream_callback=stream_callback,
+            stream_message_uuid=stream_message_uuid,
+        )
+    return None
 
 
 def _build_sources_block(allowed_citations: set[str]) -> str:
@@ -212,6 +425,13 @@ async def complete_conversation_turn(
                 f"{system_prompt}\n\n"
                 f"{citations.build_citation_system_suffix(citation_allowlist)}"
             )
+    if is_post_tool_result_turn:
+        request_system_prompt = (
+            f"{request_system_prompt}\n\n"
+            "Final synthesis step: answer the user using retrieved document content already in "
+            "this thread. Write a complete user-facing answer; do not emit status lines or "
+            "promises to retrieve later."
+        )
     source_allowlist = set(citation_allowlist)
     if is_post_tool_result_turn and not source_allowlist:
         source_allowlist = _collect_source_refs_from_tool_message(last_message)
@@ -231,8 +451,6 @@ async def complete_conversation_turn(
                 and visibility.should_append_citation_sources(content)
             ):
                 out["content"] = _append_citation_sources_if_missing(content, source_allowlist)
-            elif out.get("done") and not visibility.is_displayable_answer_text(content):
-                out["content"] = ""
             await stream_func(out)
 
         effective_stream_func = _live_citation_stream
@@ -244,7 +462,11 @@ async def complete_conversation_turn(
     if isinstance(last_message, UserMessage) and last_message.tools:
         request_max_tokens = min(max_tokens, tool_step_max_tokens)
     elif is_post_tool_result_turn:
-        request_max_tokens = min(max_tokens, post_tool_max_tokens)
+        request_max_tokens = _resolve_post_tool_max_tokens(
+            conversation,
+            default_cap=post_tool_max_tokens,
+            global_max=max_tokens,
+        )
     if last_message.tools:
         tools = {
             "tools": [tool.llm_definition for tool in last_message.tools],
@@ -281,45 +503,19 @@ async def complete_conversation_turn(
         retry_args = sdk_args | {"tool_choice": {"type": "any"}}
         response = await llm.get_message(**retry_args)
 
-    if is_post_tool_result_turn:
-        response_text_for_retry = (response.text or "").strip()
-        response_has_tool_call = bool(response.tool_call)
-        needs_final_synthesis_retry = (not response_has_tool_call and not response_text_for_retry) or (
-            not response_has_tool_call and fb.looks_like_post_tool_non_answer(response.text)
+    if is_post_tool_result_turn and not response.tool_call:
+        response = await _retry_post_tool_synthesis(
+            llm,
+            conversation,
+            system_prompt=request_system_prompt,
+            message_dicts=message_dicts,
+            messages_for_bot=messages_for_bot,
+            post_tool_max_tokens=post_tool_max_tokens,
+            global_max_tokens=max_tokens,
+            stream_callback=effective_stream_func,
+            stream_message_uuid=stream_message_uuid,
+            initial_response=response,
         )
-        if needs_final_synthesis_retry:
-            finalize_prompt = (
-                "Use the tool results above to answer the user's last request directly. "
-                "Do not call tools. Return a complete final answer in plain text."
-            )
-            finalize_messages = message_dicts + [{"role": "user", "content": finalize_prompt}]
-            finalize_pydantic_messages = messages_for_bot + [UserMessage(content=finalize_prompt)]
-            finalize_args = llm.base_args | {
-                "system": request_system_prompt,
-                "messages": finalize_messages,
-                "messages_pydantic": finalize_pydantic_messages,
-                "max_tokens": min(max_tokens, post_tool_max_tokens),
-                "stream_callback": effective_stream_func,
-                "stream_message_uuid": stream_message_uuid,
-            }
-            response = await llm.get_message(**finalize_args)
-        post_finalize_text = (response.text or "").strip()
-        if (not response.tool_call) and (
-            (not post_finalize_text)
-            or fb.looks_like_post_tool_non_answer(post_finalize_text)
-        ):
-            compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
-            if compact_summary:
-                response_from_compact_summary = True
-                response = LLMResponse(
-                    text=compact_summary,
-                    tool_call={},
-                    stop_reason="stop",
-                    input_usage=response.input_usage,
-                    output_usage=response.output_usage,
-                    model=response.model,
-                    message_uuid=response.message_uuid,
-                )
 
     allowed_tool_names = {tool.name for tool in (last_message.tools or [])}
     response_text = visibility.strip_thinking_blocks(response.text)
@@ -330,28 +526,34 @@ async def complete_conversation_turn(
         if (not allowed_tool_names) or (called_tool_name not in allowed_tool_names):
             response_tool_call = {}
             if not response_text.strip():
-                compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
-                response_text = compact_summary or (
-                    fb.synthesize_from_recent_tool_results(conversation)
-                    if fb.extractive_fallback_enabled()
-                    else None
-                ) or (
+                recovered = await _last_resort_evidence_answer(
+                    llm,
+                    conversation,
+                    max_tokens,
+                    stream_callback=effective_stream_func,
+                    stream_message_uuid=stream_message_uuid,
+                )
+                response_text = recovered or (
                     "I completed retrieval but received an unusable tool-call payload. "
                     "Please retry and I will provide a full summary."
                 )
 
-    if (not response_tool_call) and not visibility.is_displayable_answer_text(response_text):
+    if (not response_tool_call) and visibility.is_interim_assistant_text(response_text):
         response_text = ""
 
     if (not response_tool_call) and (not response_text.strip()):
-        compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
-        if compact_summary:
+        recovered = await _last_resort_evidence_answer(
+            llm,
+            conversation,
+            max_tokens,
+            stream_callback=effective_stream_func,
+            stream_message_uuid=stream_message_uuid,
+        )
+        if recovered and _compact_summary_fallback_enabled():
             response_from_compact_summary = True
-        response_text = compact_summary or (
-            fb.synthesize_from_recent_tool_results(conversation)
-            if fb.extractive_fallback_enabled()
-            else None
-        ) or visibility.clean_response_failure_text(after_tool_result=is_post_tool_result_turn)
+        response_text = recovered or visibility.clean_response_failure_text(
+            after_tool_result=is_post_tool_result_turn
+        )
 
     stop_reason_normalized = str(response.stop_reason or "").strip().lower()
     if (
@@ -364,7 +566,12 @@ async def complete_conversation_turn(
         continuation_response: Optional[LLMResponse] = None
         continuation_text = ""
         if fb.continue_on_cutoff_enabled():
-            continuation_budget = min(max_tokens, post_tool_max_tokens, continuation_max_tokens)
+            post_tool_budget = _resolve_post_tool_max_tokens(
+                conversation,
+                default_cap=post_tool_max_tokens,
+                global_max=max_tokens,
+            )
+            continuation_budget = min(max_tokens, post_tool_budget, continuation_max_tokens)
             continuation_response = await llm._continue_cutoff_response(
                 system_prompt=request_system_prompt,
                 message_dicts=message_dicts,
@@ -387,14 +594,34 @@ async def complete_conversation_turn(
             response_text = f"{response_text.rstrip()}{separator}{continuation_text}"
             response = continuation_response
         elif not preserve_partial_response:
-            compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
-            if compact_summary:
-                response_from_compact_summary = True
-                response_text = compact_summary
-            elif fb.extractive_fallback_enabled():
-                synthesized = fb.synthesize_from_recent_tool_results(conversation)
-                if synthesized:
-                    response_text = synthesized
+            retry_response = await _retry_post_tool_synthesis(
+                llm,
+                conversation,
+                system_prompt=request_system_prompt,
+                message_dicts=message_dicts,
+                messages_for_bot=messages_for_bot,
+                post_tool_max_tokens=post_tool_max_tokens,
+                global_max_tokens=max_tokens,
+                stream_callback=effective_stream_func,
+                stream_message_uuid=stream_message_uuid,
+                initial_response=response,
+            )
+            if retry_response.tool_call:
+                response_tool_call = retry_response.tool_call or {}
+                response = retry_response
+                response_text = visibility.strip_thinking_blocks(retry_response.text)
+            else:
+                recovered = await _last_resort_evidence_answer(
+                    llm,
+                    conversation,
+                    max_tokens,
+                    stream_callback=effective_stream_func,
+                    stream_message_uuid=stream_message_uuid,
+                )
+                if recovered:
+                    if _compact_summary_fallback_enabled():
+                        response_from_compact_summary = True
+                    response_text = recovered
     if is_post_tool_result_turn and (not response_tool_call):
         retrieval_notice = document_retrieval_notice(last_message)
         if retrieval_notice:
@@ -451,7 +678,11 @@ async def complete_conversation_turn(
                 "system": request_system_prompt,
                 "messages": retry_messages,
                 "messages_pydantic": retry_pydantic_messages,
-                "max_tokens": min(max_tokens, post_tool_max_tokens),
+                "max_tokens": _resolve_post_tool_max_tokens(
+                    conversation,
+                    default_cap=post_tool_max_tokens,
+                    global_max=max_tokens,
+                ),
                 "stream_callback": effective_stream_func,
                 "stream_message_uuid": stream_message_uuid,
             }
@@ -468,7 +699,10 @@ async def complete_conversation_turn(
                     + "\n\n[Note: Some citation tokens could not be verified against retrieved chunks.]"
                 )
             else:
-                cited_extract = citations.synthesize_cited_extract_from_results(conversation)
+                cited_extract = (
+                    citations.synthesize_cited_extract_from_results(conversation)
+                    or citations.synthesize_doc_level_extract_from_results(conversation)
+                )
                 if cited_extract:
                     response_text = cited_extract
                     response_tool_call = {}
@@ -480,7 +714,10 @@ async def complete_conversation_turn(
                 == visibility.clean_response_failure_text(after_tool_result=True)
             )
         ):
-            cited_extract = citations.synthesize_cited_extract_from_results(conversation)
+            cited_extract = (
+                citations.synthesize_cited_extract_from_results(conversation)
+                or citations.synthesize_doc_level_extract_from_results(conversation)
+            )
             if cited_extract:
                 response_text = cited_extract
                 response_tool_call = {}
