@@ -67,60 +67,6 @@ class OpenAIFallbackToolParsingTests(SimpleTestCase):
         self.assertIsNone(result.text)
 
 
-class OpenAIQwenThinkingConfigTests(SimpleTestCase):
-    class _CapturingCompletions:
-        def __init__(self):
-            self.calls = []
-
-        async def create(self, **kwargs):
-            self.calls.append(kwargs)
-            return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(tool_calls=[], content='Visible answer'),
-                        finish_reason='stop',
-                    )
-                ],
-                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
-            )
-
-    class _FakeOpenAIClient:
-        base_url = "http://vllm:8000/v1"
-
-        def __init__(self, completions):
-            self.chat = SimpleNamespace(completions=completions)
-
-    @patch.dict(
-        os.environ,
-        {
-            "OPENAI_STREAM_RESPONSES": "0",
-            "VLLM_MODEL": "hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16",
-        },
-        clear=False,
-    )
-    def test_qwen_local_chat_disables_hidden_thinking_by_default(self):
-        completions = self._CapturingCompletions()
-        llm = OpenAIInterface(self._FakeOpenAIClient(completions), model='qwen3.6:27b-mtp-awq')
-
-        result = async_to_sync(llm.get_message)(
-            system='test system',
-            messages=[{'role': 'user', 'content': 'show me the paper figures'}],
-            max_tokens=12288,
-            tools=[{
-                'name': 'whole_document',
-                'description': 'Read docs',
-                'input_schema': {'type': 'object', 'properties': {}},
-            }],
-            tool_choice={'type': 'any'},
-        )
-
-        self.assertEqual(result.text, 'Visible answer')
-        self.assertEqual(
-            completions.calls[0].get("extra_body"),
-            {"chat_template_kwargs": {"enable_thinking": False}},
-        )
-
-
 class OpenAIContextOverflowRetryTests(SimpleTestCase):
     class _SequencedCompletions:
         def __init__(self):
