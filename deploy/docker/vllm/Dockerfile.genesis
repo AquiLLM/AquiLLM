@@ -16,10 +16,13 @@ RUN pip install --no-cache-dir soundfile
 RUN git clone --depth 1 --branch "${GENESIS_REF}" \
         https://github.com/Sandermage/genesis-vllm-patches.git /tmp/genesis \
     && cd /tmp/genesis \
-    && pip install --no-deps --no-cache-dir ./genesis_vllm_plugin \
+    && pip install --no-deps --no-cache-dir ./tools/genesis_vllm_plugin \
     && VLLM_DIR="$(python3 -c 'import os, vllm; print(os.path.dirname(vllm.__file__))')" \
+    && rm -rf "${VLLM_DIR}/_genesis" \
     && cp -r vllm/_genesis "${VLLM_DIR}/_genesis" \
     && rm -rf /tmp/genesis
+
+RUN python3 -c 'import vllm._genesis; from importlib.metadata import entry_points; assert any(ep.name == "genesis_v7" for ep in entry_points(group="vllm.general_plugins")), "Genesis vLLM plugin entry point missing"; print("Genesis plugin installed and vllm._genesis importable")'
 
 COPY --chmod=755 ./deploy/scripts/vllm_start.sh /vllm_start.sh
 COPY --chmod=755 ./deploy/scripts/genesis_vllm_entrypoint.sh /genesis_entrypoint.sh
