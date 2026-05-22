@@ -45,20 +45,12 @@ _DOCUMENT_FIGURE_ACTION_RE = re.compile(
     r"\b(show|display|render|include|explain|find|get|pull|open)\b",
     flags=re.IGNORECASE,
 )
-_DOCUMENT_FIGURE_SOURCE_RE = re.compile(
-    r"\b(it|this|that|paper|document|doc|source|article|file)\b",
-    flags=re.IGNORECASE,
-)
 
 
 def _looks_like_explicit_document_search_request(message_content: str) -> bool:
     """True when the user explicitly asks the assistant to retrieve from documents."""
     text = message_content or ""
-    figure_request = (
-        _DOCUMENT_FIGURE_TARGET_RE.search(text)
-        and _DOCUMENT_FIGURE_ACTION_RE.search(text)
-        and _DOCUMENT_FIGURE_SOURCE_RE.search(text)
-    )
+    figure_request = _DOCUMENT_FIGURE_TARGET_RE.search(text) and _DOCUMENT_FIGURE_ACTION_RE.search(text)
     if figure_request:
         return True
     return bool(_DOCUMENT_TARGET_RE.search(text) and _DOCUMENT_SEARCH_ACTION_RE.search(text))
