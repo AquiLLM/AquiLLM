@@ -1,6 +1,7 @@
 """LLM message types for conversation handling."""
 from typing import Literal, Optional, Any
 from os import getenv
+from datetime import datetime
 import re
 from pydantic import BaseModel, Field, model_validator
 from abc import ABC
@@ -20,6 +21,7 @@ class __LLMMessage(BaseModel, ABC):
     feedback_text: Optional[str] = None
     files: Optional[list[tuple[str, int]]] = None
     message_uuid: uuid.UUID = Field(default_factory=uuid.uuid4)
+    created_at: Optional[datetime] = None
     
     @classmethod
     @model_validator(mode='after')
