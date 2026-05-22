@@ -248,7 +248,10 @@ services:
   vllm:
     build:
       context: ../..
-      dockerfile: deploy/docker/vllm/Dockerfile
+      dockerfile: deploy/docker/vllm/Dockerfile.genesis
+      args:
+        VLLM_GENESIS_BASE_IMAGE: ${VLLM_GENESIS_BASE_IMAGE:-vllm/vllm-openai:v0.21.0}
+        GENESIS_REF: ${GENESIS_REF:-main}
     deploy:
       resources:
         reservations:
@@ -267,6 +270,7 @@ services:
       - VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-40960}
       - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
       - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
+      - VLLM_USE_FLASHINFER_SAMPLER=${VLLM_USE_FLASHINFER_SAMPLER:-0}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
