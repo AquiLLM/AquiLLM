@@ -210,6 +210,7 @@ async def test_complete_turn_retries_when_post_tool_answer_lacks_required_citati
 @pytest.mark.asyncio
 async def test_complete_turn_uses_higher_default_post_tool_token_budget(monkeypatch):
     monkeypatch.delenv("LLM_POST_TOOL_MAX_TOKENS", raising=False)
+    monkeypatch.setenv("LLM_POST_TOOL_OUTPUT_MAX_TOKENS", "6144")
     seen_max_tokens: list[int] = []
 
     async def _fake_get_message(**kwargs):
@@ -248,7 +249,7 @@ async def test_complete_turn_uses_higher_default_post_tool_token_budget(monkeypa
     _updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
     assert changed == "changed"
     assert seen_max_tokens
-    assert seen_max_tokens[0] == 1536
+    assert seen_max_tokens[0] == 6144
 
 
 @pytest.mark.asyncio
@@ -390,7 +391,8 @@ async def test_complete_turn_does_not_force_extractive_fallback_for_incomplete_b
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_skips_citation_rewrite_retry():
+async def test_complete_turn_streaming_skips_citation_rewrite_retry(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     llm = SimpleNamespace(
         base_args={},
         get_message=AsyncMock(
@@ -432,7 +434,8 @@ async def test_complete_turn_streaming_skips_citation_rewrite_retry():
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_invalid_citations_get_note_not_full_fallback():
+async def test_complete_turn_streaming_invalid_citations_get_note_not_full_fallback(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     llm = SimpleNamespace(
         base_args={},
         get_message=AsyncMock(
@@ -475,7 +478,8 @@ async def test_complete_turn_streaming_invalid_citations_get_note_not_full_fallb
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_live_stream_appends_sources_on_done_only():
+async def test_complete_turn_live_stream_appends_sources_on_done_only(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict):
@@ -544,6 +548,7 @@ async def test_complete_turn_live_stream_appends_sources_on_done_only():
 
 @pytest.mark.asyncio
 async def test_complete_turn_streaming_skips_appending_sources_when_flag_disabled(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     monkeypatch.setenv("RAG_APPEND_CITATION_SOURCES", "0")
     stream_payloads: list[dict] = []
 
@@ -598,7 +603,8 @@ async def test_complete_turn_streaming_skips_appending_sources_when_flag_disable
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answer():
+async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answer(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict):
@@ -657,7 +663,8 @@ async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answ
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_appends_used_sources_when_present():
+async def test_complete_turn_streaming_appends_used_sources_when_present(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict):
@@ -725,7 +732,8 @@ async def test_complete_turn_streaming_appends_used_sources_when_present():
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_does_not_append_sources_on_cutoff_done_chunk():
+async def test_complete_turn_streaming_does_not_append_sources_on_cutoff_done_chunk(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict):
@@ -795,7 +803,8 @@ async def test_complete_turn_streaming_does_not_append_sources_on_cutoff_done_ch
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_cutoff_continuation_restart_still_appends_sources():
+async def test_complete_turn_streaming_cutoff_continuation_restart_still_appends_sources(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     llm = SimpleNamespace(
         base_args={},
         get_message=AsyncMock(
@@ -858,7 +867,8 @@ async def test_complete_turn_streaming_cutoff_continuation_restart_still_appends
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_whole_document_continuation_appends_doc_source():
+async def test_complete_turn_streaming_whole_document_continuation_appends_doc_source(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     async def _noop_stream(_payload: dict):
         return None
 
@@ -982,7 +992,11 @@ async def test_complete_turn_preserves_substantial_cutoff_draft_when_continuatio
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_recovers_from_blank_post_tool_answer_using_list_vector_search_evidence():
+async def test_complete_turn_recovers_from_blank_post_tool_answer_using_list_vector_search_evidence(
+    monkeypatch,
+):
+    monkeypatch.setenv("LLM_POST_TOOL_SYNTHESIS_RETRIES", "2")
+    monkeypatch.setenv("RAG_ENFORCE_CHUNK_CITATIONS", "0")
     llm = SimpleNamespace(
         base_args={},
         get_message=AsyncMock(

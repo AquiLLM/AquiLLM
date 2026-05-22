@@ -11,6 +11,7 @@ from ..types.messages import AssistantMessage, LLM_Message, ToolMessage, UserMes
 from ..types.response import LLMResponse
 from ..types.tools import ToolChoice, dump_tool_choice
 from . import fallback_heuristics as fb
+from . import final_stream
 from . import image_context as imgctx
 from . import rag_citations as citations
 from . import visibility
@@ -515,8 +516,14 @@ async def complete_conversation_turn(
     source_allowlist = set(citation_allowlist)
     if is_post_tool_result_turn and not source_allowlist:
         source_allowlist = _collect_source_refs_from_tool_message(last_message)
+    defer_stream_until_final = (
+        callable(stream_func) and final_stream.final_answer_streaming_enabled()
+    )
     use_live_citation_stream = bool(
-        source_allowlist and callable(stream_func) and citations.citation_sources_append_enabled()
+        source_allowlist
+        and callable(stream_func)
+        and (not defer_stream_until_final)
+        and citations.citation_sources_append_enabled()
     )
     effective_stream_func = stream_func
     if use_live_citation_stream and callable(stream_func):
@@ -534,6 +541,7 @@ async def complete_conversation_turn(
             await stream_func(out)
 
         effective_stream_func = _live_citation_stream
+    provider_stream_func = None if defer_stream_until_final else effective_stream_func
     tool_step_max_tokens = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 512, minimum=128)
     post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 8192, minimum=256)
     continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 4096, minimum=128)
@@ -564,7 +572,7 @@ async def complete_conversation_turn(
                 "messages": message_dicts,
                 "messages_pydantic": messages_for_bot,
                 "max_tokens": request_max_tokens,
-                "stream_callback": effective_stream_func,
+                "stream_callback": provider_stream_func,
                 "stream_message_uuid": stream_message_uuid,
             }
         )
@@ -592,7 +600,7 @@ async def complete_conversation_turn(
             messages_for_bot=messages_for_bot,
             post_tool_max_tokens=post_tool_max_tokens,
             global_max_tokens=_post_tool_global_max(max_tokens),
-            stream_callback=effective_stream_func,
+            stream_callback=provider_stream_func,
             stream_message_uuid=stream_message_uuid,
             initial_response=response,
         )
@@ -610,7 +618,7 @@ async def complete_conversation_turn(
                     llm,
                     conversation,
                     max_tokens,
-                    stream_callback=effective_stream_func,
+                    stream_callback=provider_stream_func,
                     stream_message_uuid=stream_message_uuid,
                 )
                 response_text = recovered or (
@@ -626,7 +634,7 @@ async def complete_conversation_turn(
             llm,
             conversation,
             max_tokens,
-            stream_callback=effective_stream_func,
+            stream_callback=provider_stream_func,
             stream_message_uuid=stream_message_uuid,
         )
         if recovered and _compact_summary_fallback_enabled():
@@ -663,7 +671,7 @@ async def complete_conversation_turn(
                 messages_for_bot=messages_for_bot,
                 partial_text=response_text,
                 max_tokens=continuation_budget,
-                stream_callback=effective_stream_func,
+                stream_callback=provider_stream_func,
                 stream_message_uuid=stream_message_uuid,
             )
             if continuation_response is not None and not continuation_response.message_uuid:
@@ -688,7 +696,7 @@ async def complete_conversation_turn(
                 messages_for_bot=messages_for_bot,
                 post_tool_max_tokens=post_tool_max_tokens,
                 global_max_tokens=_post_tool_global_max(max_tokens),
-                stream_callback=effective_stream_func,
+                stream_callback=provider_stream_func,
                 stream_message_uuid=stream_message_uuid,
                 initial_response=response,
             )
@@ -703,7 +711,7 @@ async def complete_conversation_turn(
                     llm,
                     conversation,
                     max_tokens,
-                    stream_callback=effective_stream_func,
+                    stream_callback=provider_stream_func,
                     stream_message_uuid=stream_message_uuid,
                 )
                 if recovered:
@@ -715,7 +723,7 @@ async def complete_conversation_turn(
         if retrieval_notice:
             response_text = append_retrieval_notice_if_missing(response_text, retrieval_notice)
     if enforce_citations and (not response_tool_call):
-        is_streaming_turn = callable(stream_func)
+        is_streaming_turn = callable(provider_stream_func)
         original_response_text = (response_text or "").strip()
         citations_valid = citations.response_has_required_citations(response_text, citation_allowlist)
         original_invalid = citations.find_invalid_citations(original_response_text, citation_allowlist)
@@ -771,7 +779,7 @@ async def complete_conversation_turn(
                     default_cap=post_tool_max_tokens,
                     global_max=_post_tool_global_max(max_tokens),
                 ),
-                "stream_callback": effective_stream_func,
+                "stream_callback": provider_stream_func,
                 "stream_message_uuid": stream_message_uuid,
             }
             retry_response = await llm.get_message(**retry_args)
@@ -833,8 +841,13 @@ async def complete_conversation_turn(
                 missing_markdown_images.append(line)
             if missing_markdown_images:
                 response_text = response_text.rstrip() + "\n\n" + "\n".join(missing_markdown_images)
+    should_append_final_sources = bool(
+        (use_live_citation_stream or defer_stream_until_final)
+        and source_allowlist
+        and citations.citation_sources_append_enabled()
+    )
     if (
-        use_live_citation_stream
+        should_append_final_sources
         and (not response_tool_call)
         and visibility.should_append_citation_sources(response_text)
     ):
@@ -862,6 +875,19 @@ async def complete_conversation_turn(
     if DEBUG:
         print("Response from LLM:")
         pp(new_msg.model_dump())
+    if (
+        defer_stream_until_final
+        and callable(stream_func)
+        and not new_msg.tool_call_id
+        and new_msg.content.strip()
+    ):
+        await final_stream.send_final_answer_stream(
+            stream_func,
+            message_uuid=str(new_msg.message_uuid),
+            content=new_msg.content,
+            stop_reason=new_msg.stop_reason,
+            usage=new_msg.usage,
+        )
 
     return conversation + [new_msg], "changed"
 

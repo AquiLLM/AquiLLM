@@ -22,6 +22,19 @@ def test_explicit_document_search_request_requires_document_tool_call():
     assert tool_choice == ToolChoice(type="any")
 
 
+def test_figure_request_from_prior_document_requires_document_tool_call():
+    message = "Can you show me some of the figures from it with context please"
+
+    tools, tool_choice = _configure_append_tools(
+        message_content=message,
+        all_tools=[_test_document_ids, _test_image_result_tool],
+        document_tools=[_test_document_ids],
+    )
+
+    assert tools == [_test_document_ids]
+    assert tool_choice == ToolChoice(type="any")
+
+
 def test_regular_chat_keeps_all_tools_on_auto():
     message = "Can you explain why the sky subtraction step matters?"
 
