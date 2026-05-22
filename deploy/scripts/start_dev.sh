@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Standard development startup for AquiLLM.
 # Starts vLLM services in series
-# (chat -> ocr -> transcribe -> embed -> rerank), waiting for each
+# (chat -> transcribe -> embed -> rerank), waiting for each
 # to become healthy before moving on, then starts web/worker.
 #
 # Optional env vars:
@@ -104,9 +104,6 @@ wait_for_service_healthy() {
 if [ "$USE_VLLM" = "1" ]; then
   compose_up vllm
   wait_for_service_healthy vllm
-
-  compose_up vllm_ocr
-  wait_for_service_healthy vllm_ocr
 
   compose_up vllm_transcribe
   wait_for_service_healthy vllm_transcribe

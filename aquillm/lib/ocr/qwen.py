@@ -23,7 +23,12 @@ def _qwen_ocr_extra_body(model_name: str) -> Dict[str, Any] | None:
         or ""
     ).strip().lower()
     requested_model = (model_name or "").strip().lower()
-    if "qwen3.5" in requested_model or "qwen3.5" in configured_model:
+    if (
+        "qwen3.5" in requested_model
+        or "qwen3.5" in configured_model
+        or "qwen3.6" in requested_model
+        or "qwen3.6" in configured_model
+    ):
         return {"chat_template_kwargs": {"enable_thinking": False}}
     return None
 

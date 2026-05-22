@@ -81,8 +81,8 @@ This assumes you have Docker and Docker Compose installed.
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
     - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose up` â€” a simple restart may not pick up the change.
-    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_ocr` (OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker).
-    - For image OCR through local vLLM, set `APP_OCR_PROVIDER=qwen` and point `APP_OCR_QWEN_BASE_URL` to `http://vllm_ocr:8000/v1`.
+    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat/native OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker). The legacy `vllm_ocr` sidecar is available only with `--profile ocr-sidecar`.
+    - For image OCR through local vLLM, set `APP_OCR_PROVIDER=qwen` and point `APP_OCR_QWEN_BASE_URL` to `http://vllm:8000/v1`.
     - For audio/video transcription through local vLLM, set `INGEST_TRANSCRIBE_PROVIDER=openai` and `INGEST_TRANSCRIBE_OPENAI_BASE_URL=http://vllm_transcribe:8000/v1`.
     - GGUF note: set model as `repo:filename.gguf` or `repo:selector` (for example `repo:i1-Q4_K_M`). Startup resolves the best matching GGUF file in the repo, downloads it, and launches vLLM with the local file path.
     - For embedding/reranker models like `Qwen/Qwen3-Embedding-4B` and `Qwen/Qwen3-Reranker-4B`, set `MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1` and `APP_RERANK_VLLM_TRUST_REMOTE_CODE=1`.
@@ -101,7 +101,7 @@ This assumes you have Docker and Docker Compose installed.
     docker compose up -d
 
     # Local vLLM-backed startup (serial health-gated launch:
-    # vllm -> vllm_ocr -> vllm_transcribe -> vllm_embed -> vllm_rerank -> web/worker)
+    # vllm -> vllm_transcribe -> vllm_embed -> vllm_rerank -> web/worker)
     bash deploy/scripts/start_dev.sh
 
     # Optional edge/TLS dev startup with nginx:
@@ -160,10 +160,10 @@ docker compose -f deploy/compose/production.yml --profile vllm up --build -d
 If vLLM is running but individual services need to be force-recreated (for example, after changing model configuration):
 
 ```bash
-docker compose -f deploy/compose/production.yml --profile vllm up -d --force-recreate vllm vllm_ocr vllm_transcribe vllm_embed vllm_rerank
+docker compose -f deploy/compose/production.yml --profile vllm up -d --force-recreate vllm vllm_transcribe vllm_embed vllm_rerank
 
-# Recreate only OCR + transcription model services:
-docker compose -f deploy/compose/production.yml --profile vllm up -d --force-recreate vllm_ocr vllm_transcribe
+# Recreate only the main chat/native-OCR service:
+docker compose -f deploy/compose/production.yml --profile vllm up -d --force-recreate vllm
 ```
 
 ## Small-scale deployment:
@@ -181,7 +181,7 @@ docker compose -f deploy/compose/production.yml --profile vllm up -d --force-rec
     - Database settings: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_NAME, POSTGRES_HOST
     - At least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)
     - Set LLM_CHOICE to your preferred provider (`CLAUDE`, `OPENAI`, `GEMINI`, `GEMMA3`, `LLAMA3.2`, `GPT-OSS`, or `QWEN3_30B`). To switch models after initial setup, update LLM_CHOICE in `.env` and do a full restart: `docker compose down && docker compose -f deploy/compose/production.yml up` â€” a simple restart may not pick up the change.
-    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat), `vllm_ocr` (OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker).
+    - If using local vLLM-backed choices (`GEMMA3`, `LLAMA3.2`, `GPT-OSS`, `QWEN3_30B`), use `--profile vllm` when starting compose. This profile launches `vllm` (chat/native OCR), `vllm_transcribe` (audio/video transcription), `vllm_embed` (embeddings), and `vllm_rerank` (reranker). The legacy `vllm_ocr` sidecar is available only with `--profile ocr-sidecar`.
     - GGUF note: set model as `repo:filename.gguf` or `repo:selector` (for example `repo:i1-Q4_K_M`). Startup resolves the best matching GGUF file in the repo, downloads it, and launches vLLM with the local file path.
     - For embedding/reranker models like `Qwen/Qwen3-Embedding-4B` and `Qwen/Qwen3-Reranker-4B`, set `MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1` and `APP_RERANK_VLLM_TRUST_REMOTE_CODE=1`.
     - Optional memory backend:
@@ -281,7 +281,7 @@ Production:
 docker compose -f deploy/compose/production.yml --profile vllm up -d
 ```
 
-The `vllm` profile starts dedicated model services: chat (`vllm` on 8000), OCR (`vllm_ocr` on 8004), transcription (`vllm_transcribe` on 8005), embeddings (`vllm_embed` on 8002), and reranker (`vllm_rerank` on 8003). Mem0 uses chat + embed services; Qdrant is already part of the stack.
+The `vllm` profile starts dedicated model services: chat/native OCR (`vllm` on 8000), transcription (`vllm_transcribe` on 8005), embeddings (`vllm_embed` on 8002), and reranker (`vllm_rerank` on 8003). Mem0 uses chat + embed services; Qdrant is already part of the stack.
 
 **4. Optional: dual-write to local DB**
 
@@ -313,7 +313,7 @@ In OSS mode, relaunching Mem0 means recreating AquiLLM services that host/use it
 Optional env vars:
 
 - `AQUILLM_COMPOSE_FILE` - e.g. `deploy/compose/development.yml` or `deploy/compose/production.yml`
-- `RELAUNCH_MEM0_MODELS=1` - also recreate `vllm`, `vllm_ocr`, `vllm_transcribe`, `vllm_embed`, and `vllm_rerank`
+- `RELAUNCH_MEM0_MODELS=1` - also recreate `vllm`, `vllm_transcribe`, `vllm_embed`, and `vllm_rerank`
 
 `./deploy/scripts/start_mem0_local.sh` now forwards to this OSS relaunch flow for backward compatibility.
 

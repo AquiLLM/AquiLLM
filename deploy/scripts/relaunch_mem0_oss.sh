@@ -60,7 +60,7 @@ for required_service in qdrant web worker; do
 done
 
 if [ "${RELAUNCH_MEM0_MODELS}" = "1" ]; then
-  for model_service in vllm vllm_ocr vllm_transcribe vllm_embed vllm_rerank; do
+  for model_service in vllm vllm_transcribe vllm_embed vllm_rerank; do
     if service_exists "$model_service"; then
       services_to_relaunch+=("$model_service")
     fi

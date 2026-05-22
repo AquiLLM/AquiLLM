@@ -31,9 +31,6 @@ services:
       vllm:
         condition: service_healthy
         required: false
-      vllm_ocr:
-        condition: service_healthy
-        required: false
       vllm_transcribe:
         condition: service_healthy
         required: false
@@ -83,9 +80,6 @@ services:
       vllm:
         condition: service_healthy
         required: false
-      vllm_ocr:
-        condition: service_healthy
-        required: false
       vllm_transcribe:
         condition: service_healthy
         required: false
@@ -128,9 +122,6 @@ services:
         condition: service_started
         required: false
       vllm:
-        condition: service_healthy
-        required: false
-      vllm_ocr:
         condition: service_healthy
         required: false
       vllm_transcribe:
@@ -299,7 +290,7 @@ services:
               driver: nvidia
     restart: unless-stopped
     profiles:
-      - vllm
+      - ocr-sidecar
     depends_on:
       vllm:
         condition: service_healthy
@@ -341,7 +332,7 @@ services:
     profiles:
       - vllm
     depends_on:
-      vllm_ocr:
+      vllm:
         condition: service_healthy
     env_file:
       - ../../.env
