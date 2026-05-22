@@ -52,9 +52,13 @@ def collections(request):
         name = data.get('name')
         if not name:
             return JsonResponse({'error': 'Name is required'}, status=400)
+        parent_id = data.get('parent_id')
+        parent = get_object_or_404(Collection, id=parent_id) if parent_id not in (None, "") else None
+        if parent and not parent.user_can_edit(request.user):
+            return JsonResponse({'error': 'You do not have permission to create a subcollection here'}, status=403)
 
         with transaction.atomic():
-            collection = Collection.objects.create(name=name)
+            collection = Collection.objects.create(name=name, parent=parent)
             CollectionPermission.objects.create(
                 collection=collection,
                 user=request.user,

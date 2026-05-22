@@ -3,6 +3,7 @@ import type { Collection } from '../../../components/CollectionsTree';
 import CollectionSettingsMenu from '../../../components/CollectionSettingsMenu';
 import FileSystemViewer from '../../documents/components/FileSystemViewer';
 import MoveCollectionModal from '../../../components/MoveCollectionModal';
+import CreateCollectionModal from '../../../components/CreateCollectionModal';
 import UserManagementModal from '../../platform_admin/components/UserManagementModal';
 import type { FileSystemItem } from '../../../types/FileSystemItem';
 import IngestRowContainer from '../../../components/IngestRow';
@@ -25,6 +26,7 @@ export interface CollectionViewShellProps {
   isMoveModalOpen: boolean;
   batchMovingItems: FileSystemItem[];
   isBatchMoveModalOpen: boolean;
+  isCreateSubcollectionOpen: boolean;
   successMessage: string | null;
   isBatchOperationLoading: boolean;
   isUserManagementModalOpen: boolean;
@@ -32,6 +34,9 @@ export interface CollectionViewShellProps {
   onManageCollaborators: () => void;
   onDelete: () => void;
   onOpenCollectionSettingsMove: () => void;
+  onOpenCreateSubcollection: () => void;
+  onCloseCreateSubcollection: () => void;
+  onSubmitCreateSubcollection: (collection: Collection) => void;
   onCloseMoveModal: () => void;
   onMoveSubmit: (itemId: number, newParentId: number | null) => void;
   onCloseBatchMoveModal: () => void;
@@ -58,6 +63,7 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
   isMoveModalOpen,
   batchMovingItems,
   isBatchMoveModalOpen,
+  isCreateSubcollectionOpen,
   successMessage,
   isBatchOperationLoading,
   isUserManagementModalOpen,
@@ -65,6 +71,9 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
   onManageCollaborators,
   onDelete,
   onOpenCollectionSettingsMove,
+  onOpenCreateSubcollection,
+  onCloseCreateSubcollection,
+  onSubmitCreateSubcollection,
   onCloseMoveModal,
   onMoveSubmit,
   onCloseBatchMoveModal,
@@ -142,6 +151,7 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
           onDelete={onDelete}
           triggerLabel="Collection Settings"
           onMove={onOpenCollectionSettingsMove}
+          onCreateSubcollection={onOpenCreateSubcollection}
         />
       </div>
     </div>
@@ -207,6 +217,13 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
       isOpen={isMoveModalOpen}
       onClose={onCloseMoveModal}
       onSubmit={onMoveSubmit}
+    />
+
+    <CreateCollectionModal
+      isOpen={isCreateSubcollectionOpen}
+      onClose={onCloseCreateSubcollection}
+      onSubmit={onSubmitCreateSubcollection}
+      parentCollection={collection}
     />
 
     {batchMovingItems.length > 0 && (

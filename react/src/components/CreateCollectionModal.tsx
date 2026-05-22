@@ -10,6 +10,7 @@ interface CreateCollectionModalProps {
   isOpen: boolean;                          // Controls modal visibility
   onClose: () => void;                      // Callback when modal is closed
   onSubmit: (newCollection: Collection) => void; // Callback when new collection is created
+  parentCollection?: Collection | null;
 }
 
 /**
@@ -19,7 +20,12 @@ interface CreateCollectionModalProps {
  * @param props.onClose - Function to call when modal should close
  * @param props.onSubmit - Function to call with new collection data
  */
-const CreateCollectionModal: React.FC<CreateCollectionModalProps> = ({ isOpen, onClose, onSubmit }) => {
+const CreateCollectionModal: React.FC<CreateCollectionModalProps> = ({
+  isOpen,
+  onClose,
+  onSubmit,
+  parentCollection = null,
+}) => {
   const [name, setName] = useState('');
 
   if (!isOpen) return null;
@@ -32,9 +38,9 @@ const CreateCollectionModal: React.FC<CreateCollectionModalProps> = ({ isOpen, o
     const newCollection: Collection = {
       id: Date.now(), // Temporary ID, will be replaced by server
       name: name.trim(),
-      parent: null,
+      parent: parentCollection?.id ?? null,
       collection: 0,
-      path: name.trim(),
+      path: parentCollection ? `${parentCollection.path}/${name.trim()}` : name.trim(),
       children: [],
       document_count: 0,
       children_count: 0,
@@ -50,7 +56,15 @@ const CreateCollectionModal: React.FC<CreateCollectionModalProps> = ({ isOpen, o
   return (
     <div className="fixed inset-0 bg-black bg-opacity-75 backdrop-blur-[10px] flex justify-center items-center z-[1000]">
       <div className="bg-scheme-shade_3 p-6 rounded-[32px] border border-border-mid_contrast w-full max-w-[400px] relative shadow-lg">
-        <h3 className="text-2xl font-bold mb-6 text-text-normal">Create New Collection</h3>
+        <h3 className="text-2xl font-bold mb-2 text-text-normal">
+          {parentCollection ? 'Create Subcollection' : 'Create New Collection'}
+        </h3>
+        {parentCollection && (
+          <p className="mb-6 text-sm text-text-low_contrast">
+            Parent: {parentCollection.path || parentCollection.name}
+          </p>
+        )}
+        {!parentCollection && <div className="mb-6" />}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
             <label htmlFor="collectionName" className="block mb-2 text-text-low_contrast">
@@ -87,4 +101,4 @@ const CreateCollectionModal: React.FC<CreateCollectionModalProps> = ({ isOpen, o
   );
 };
 
-export default CreateCollectionModal; 
+export default CreateCollectionModal;

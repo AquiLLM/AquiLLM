@@ -11,6 +11,7 @@ interface CollectionSettingsMenuProps {
   onMove: (collection: Collection) => void;      // Callback for move action
   onDelete: (collection: Collection) => void;    // Callback for delete action
   onManageCollaborators: (collection: Collection) => void; // Callback for managing collaborators
+  onCreateSubcollection?: (collection: Collection) => void;
   triggerLabel?: string;
 }
 
@@ -27,6 +28,7 @@ const CollectionSettingsMenu: React.FC<CollectionSettingsMenuProps> = ({
   onMove,
   onDelete,
   onManageCollaborators,
+  onCreateSubcollection,
   triggerLabel,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -105,6 +107,36 @@ const CollectionSettingsMenu: React.FC<CollectionSettingsMenuProps> = ({
 
             Manage Collaborators
           </button>
+          {onCreateSubcollection && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateSubcollection(collection);
+                setIsOpen(false);
+              }}
+              className='text-text-normal'
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                gap: '0.5rem',
+                width: '100%',
+                textAlign: 'left',
+                padding: '0.5rem 1rem',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                borderRadius: '0.25rem',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 10V18M8 14H16" stroke="var(--color-contrast)" strokeWidth="1.5" strokeLinecap="round" />
+                <path d="M3 18V6.5C3 5.12 4.12 4 5.5 4H9L11 6H18.5C19.88 6 21 7.12 21 8.5V18C21 19.1 20.1 20 19 20H5C3.9 20 3 19.1 3 18Z" stroke="var(--color-contrast)" strokeWidth="1.5" strokeLinejoin="round" />
+              </svg>
+
+              New Subcollection
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();

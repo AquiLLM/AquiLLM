@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { Collection } from '../../../components/CollectionsTree';
+import { mapCollectionFromApi } from '../../../components/collectionsPageMap';
 import type { FileSystemItem } from '../../../types/FileSystemItem';
 import { getCookie } from '../../../utils/csrf';
 import formatUrl from '../../../utils/formatUrl';
@@ -22,6 +23,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
   const [isBatchMoveModalOpen, setIsBatchMoveModalOpen] = useState(false);
   const [isBatchOperationLoading, setIsBatchOperationLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isCreateSubcollectionOpen, setIsCreateSubcollectionOpen] = useState(false);
   const [permissionSource, setPermissionSource] = useState<{
     direct: boolean;
     source_collection_id: number | null;
@@ -80,38 +82,25 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
     fetchCollectionData();
   }, [fetchCollectionData]);
 
-  useEffect(() => {
+  const refreshAllCollections = useCallback(() => {
     fetch(window.apiUrls.api_collections, {
-      headers: {
-        Accept: 'application/json',
-      },
+      headers: { Accept: 'application/json' },
       credentials: 'include',
     })
       .then((res) => {
-        if (!res.ok) {
-          throw new Error('Failed to fetch available collections');
-        }
+        if (!res.ok) throw new Error('Failed to fetch available collections');
         return res.json();
       })
       .then((data) => {
         const collectionsData = data.collections || [];
-        const parsed = collectionsData.map((col: any) => ({
-          id: col.id,
-          name: col.name,
-          parent: col.parent,
-          document_count: col.document_count,
-          path: col.path,
-          children: [],
-          children_count: 0,
-          created_at: '',
-          updated_at: '',
-        }));
-        setAllCollections(parsed);
+        setAllCollections(collectionsData.map((col: any) => mapCollectionFromApi(col)));
       })
-      .catch((err) => {
-        console.error('Error fetching all collections:', err);
-      });
+      .catch((err) => console.error('Error fetching all collections:', err));
   }, []);
+
+  useEffect(() => {
+    refreshAllCollections();
+  }, [refreshAllCollections]);
 
   const {
     handleMoveSubmit,
@@ -205,6 +194,34 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
     setIsMoveModalOpen(true);
   };
 
+  const handleCreateSubcollection = (newCollection: Collection) => {
+    if (!collection) return;
+    fetch(window.apiUrls.api_collections, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken'),
+      },
+      body: JSON.stringify({ name: newCollection.name, parent_id: collection.id }),
+      credentials: 'include',
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to create subcollection');
+        return res.json();
+      })
+      .then(() => {
+        setIsCreateSubcollectionOpen(false);
+        setSuccessMessage(`Created subcollection "${newCollection.name}"`);
+        setTimeout(() => setSuccessMessage(null), 3000);
+        fetchCollectionData();
+        refreshAllCollections();
+      })
+      .catch((err) => {
+        console.error('Error creating subcollection:', err);
+        alert('Failed to create subcollection. Please try again.');
+      });
+  };
+
   if (loading) return <div>Loading...</div>;
   if (error) return <div>Error: {error}</div>;
   if (!collection) return <div>Collection not found</div>;
@@ -223,6 +240,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
       isMoveModalOpen={isMoveModalOpen}
       batchMovingItems={batchMovingItems}
       isBatchMoveModalOpen={isBatchMoveModalOpen}
+      isCreateSubcollectionOpen={isCreateSubcollectionOpen}
       successMessage={successMessage}
       isBatchOperationLoading={isBatchOperationLoading}
       isUserManagementModalOpen={isUserManagementModalOpen}
@@ -233,6 +251,9 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
         setMovingItem({ id: collection.id, type: 'collection', name: collection.name });
         setIsMoveModalOpen(true);
       }}
+      onOpenCreateSubcollection={() => setIsCreateSubcollectionOpen(true)}
+      onCloseCreateSubcollection={() => setIsCreateSubcollectionOpen(false)}
+      onSubmitCreateSubcollection={handleCreateSubcollection}
       onCloseMoveModal={() => {
         setIsMoveModalOpen(false);
         setMovingItem(null);
