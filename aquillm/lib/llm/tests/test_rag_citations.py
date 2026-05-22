@@ -1051,7 +1051,8 @@ async def test_complete_turn_recovers_from_blank_post_tool_answer_using_list_vec
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_uses_cited_extract_when_post_tool_summary_fails():
+async def test_complete_turn_does_not_use_chunk_dump_when_synthesis_fails(monkeypatch):
+    monkeypatch.setenv("LLM_ALLOW_EXTRACTIVE_EVIDENCE_UI", "0")
     llm = SimpleNamespace(
         base_args={},
         get_message=AsyncMock(
@@ -1068,7 +1069,36 @@ async def test_complete_turn_uses_cited_extract_when_post_tool_summary_fails():
     convo = Conversation(
         system="sys",
         messages=[
-            UserMessage(content="Explain DeepSeek attention and show me a figure."),
+            UserMessage(content="Explain the paper."),
+            ToolMessage(
+                content="{}",
+                tool_name="whole_document",
+                for_whom="assistant",
+                arguments={"doc_id": "doc-paper"},
+                result_dict={
+                    "result": {
+                        "text": (
+                            "Hallucinations undermine trust when models speak without "
+                            "calibrated confidence estimates across domains."
+                        ),
+                    }
+                },
+            ),
+        ],
+    )
+
+    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=1024)
+
+    assert changed == "changed"
+    content = updated[-1].content
+    assert "Here is a concise summary from the retrieved document" not in content
+    assert "I found supporting context" in content
+
+
+def test_synthesize_cited_extract_still_available_when_extractive_ui_enabled():
+    convo = Conversation(
+        system="sys",
+        messages=[
             ToolMessage(
                 content="{}",
                 tool_name="vector_search",
@@ -1083,23 +1113,15 @@ async def test_complete_turn_uses_cited_extract_when_post_tool_summary_fails():
                                 "DeepSeek attention compresses key-value cache usage by separating latent "
                                 "representations from query heads while preserving enough context for generation."
                             ),
-                            "type": "text_with_image",
-                            "image_url": "/aquillm/document_image/doc-a/",
                         }
                     ]
                 },
             ),
         ],
     )
-
-    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=1024)
-
-    assert changed == "changed"
-    content = updated[-1].content
-    assert "I found supporting context" not in content
-    assert "DeepSeek attention compresses key-value cache usage" in content
-    assert "[doc:doc-a chunk:11702]" in content
-    assert "![DeepSeek attention compresses key-value cache usage" in content
+    extract = synthesize_cited_extract_from_results(convo)
+    assert extract is not None
+    assert "DeepSeek attention compresses" in extract
 
 
 @pytest.mark.asyncio

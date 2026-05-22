@@ -19,8 +19,69 @@ _STREAM_PROMISE_PREFIX_RE = re.compile(
     r"^\s*(?:i(?:'ll| will)|let me)\b",
     flags=re.IGNORECASE,
 )
+_TOOL_MARKUP_BLOCK_RE = re.compile(
+    r"<(?:tool_code|tool_call|function_call)\b[^>]*>[\s\S]*?</(?:tool_code|tool_call|function_call)>",
+    flags=re.IGNORECASE,
+)
+_TOOL_MARKUP_OPEN_RE = re.compile(
+    r"<(?:tool_code|tool_call|function_call)\b[^>]*>",
+    flags=re.IGNORECASE,
+)
 
 _DEFAULT_MIN_DISPLAY_WORDS = 20
+
+
+def strip_tool_markup(text: Optional[str]) -> str:
+    """Remove provider-specific tool-call XML/tags from user-visible text."""
+    cleaned = _TOOL_MARKUP_BLOCK_RE.sub("", text or "")
+    cleaned = _TOOL_MARKUP_OPEN_RE.sub("", cleaned)
+    return cleaned
+
+
+def looks_like_incomplete_tool_call_stream(text: Optional[str]) -> bool:
+    """Suppress partial tool-call JSON/XML while it is still streaming in."""
+    visible = strip_thinking_blocks(text).strip()
+    if not visible:
+        return False
+    lowered = visible.lower()
+    if "<tool" in lowered:
+        return True
+    if re.search(r'\{\s*"(?:name|tool_name)"\s*:', visible):
+        return True
+    if '"arguments"' in lowered and _word_count(visible) < 80:
+        return True
+    return False
+
+
+def looks_like_extractive_chunk_dump(text: Optional[str]) -> bool:
+    """True when the text is a mechanical evidence list, not a synthesized answer."""
+    visible = strip_thinking_blocks(strip_tool_markup(text)).strip()
+    if not visible:
+        return False
+    lowered = visible.lower()
+    if lowered.startswith("here is a concise summary from the retrieved document"):
+        return True
+    if lowered.startswith("i can only provide claims directly supported by retrieved chunks"):
+        return True
+    if lowered.startswith("here are the key points from the retrieved passages"):
+        return True
+    return False
+
+
+def looks_like_tool_markup_fragment(text: Optional[str]) -> bool:
+    visible = strip_thinking_blocks(strip_tool_markup(text)).strip()
+    if not visible:
+        return False
+    lowered = visible.lower()
+    if (
+        "<tool_code" in lowered
+        or "<tool_call" in lowered
+        or "<function_call" in lowered
+    ):
+        return True
+    if re.fullmatch(r"(?:tool|tools|calling\s+tool)\s*[.:]?", visible, flags=re.IGNORECASE):
+        return True
+    return False
 
 
 def strip_thinking_blocks(text: Optional[str]) -> str:
@@ -68,6 +129,10 @@ def is_interim_assistant_text(text: Optional[str]) -> bool:
         return False
     if looks_like_status_only(visible):
         return True
+    if looks_like_tool_markup_fragment(visible):
+        return True
+    if looks_like_extractive_chunk_dump(visible):
+        return True
     return fb.looks_like_deferred_tool_intent(visible) or fb.looks_like_raw_tool_transcript(visible)
 
 
@@ -99,7 +164,7 @@ def is_displayable_answer_text(
 
 def sanitize_assistant_text(text: Optional[str], *, suppress_interim: bool = True) -> str:
     """Return text safe for a normal assistant response bubble."""
-    visible = strip_thinking_blocks(text)
+    visible = strip_tool_markup(strip_thinking_blocks(text))
     if suppress_interim and not is_displayable_answer_text(visible):
         return ""
     return visible
@@ -144,12 +209,17 @@ def visible_stream_content(
     On the final chunk, apply the same display rules used for persisted answers.
     """
     _ = raw_tools  # call-site compatibility
-    visible = strip_thinking_blocks(text)
+    visible = strip_tool_markup(strip_thinking_blocks(text))
     if tool_call_payload:
+        return ""
+    if looks_like_tool_markup_fragment(visible):
         return ""
     if is_interim_assistant_text(visible):
         return ""
-    if not done and _looks_like_streaming_promise_prefix(visible):
+    if not done and (
+        _looks_like_streaming_promise_prefix(visible)
+        or looks_like_incomplete_tool_call_stream(visible)
+    ):
         return ""
     if is_displayable_answer_text(visible):
         return visible
@@ -168,6 +238,9 @@ __all__ = [
     "looks_like_status_only",
     "sanitize_assistant_text",
     "should_append_citation_sources",
+    "looks_like_extractive_chunk_dump",
+    "looks_like_tool_markup_fragment",
     "strip_thinking_blocks",
+    "strip_tool_markup",
     "visible_stream_content",
 ]

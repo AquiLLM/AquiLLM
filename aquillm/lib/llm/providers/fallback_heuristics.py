@@ -20,7 +20,11 @@ def looks_like_raw_tool_transcript(text: Optional[str]) -> bool:
         return False
     candidate = str(text)
     lowered = candidate.lower()
-    if "<tool_call" in lowered or "<function_call" in lowered:
+    if (
+        "<tool_call" in lowered
+        or "<function_call" in lowered
+        or "<tool_code" in lowered
+    ):
         return True
     return bool(_RAW_TOOL_TRANSCRIPT_RE.search(candidate))
 

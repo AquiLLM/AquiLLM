@@ -78,6 +78,26 @@ def _result_row_image_url(value: dict) -> str | None:
     return None
 
 
+def _figure_caption_is_displayable(caption: str) -> bool:
+    from .fallback_heuristics import is_useful_fallback_sentence
+
+    candidate = (caption or "").strip().replace("\n", " ")
+    if not candidate or candidate.lower() in {"figure", "image", "untitled"}:
+        return False
+    if re.fullmatch(r"(?:figure|fig\.?)\s*\d+[A-Za-z0-9.-]*", candidate, re.I):
+        return True
+    if is_useful_fallback_sentence(candidate):
+        return True
+    symbol_noise = len(re.findall(r"[^\w\s]", candidate))
+    if symbol_noise > max(3, len(candidate) // 6):
+        return False
+    words = re.findall(r"[A-Za-z0-9]+", candidate)
+    alpha = len(re.findall(r"[A-Za-z]", candidate))
+    if len(words) >= 1 and alpha >= 3 and len(candidate) <= 120:
+        return True
+    return False
+
+
 def _result_row_image_caption(value: dict, key_fallback: str | None = None) -> str:
     for k in ("text", "x", "title", "n"):
         raw = value.get(k)
@@ -132,10 +152,13 @@ def recent_tool_image_markdown(conversation: Conversation, max_images: int = 3) 
         for caption, url in candidates:
             if not url or url.startswith("data:image/"):
                 continue
+            if not _figure_caption_is_displayable(caption):
+                continue
             if url in seen_urls:
                 continue
             seen_urls.add(url)
-            lines.append(f"![{caption}]({url})")
+            alt = caption[:80].replace("\n", " ").strip() or "Figure"
+            lines.append(f"![{alt}]({url})")
             if len(lines) >= max_images:
                 return lines
 

@@ -93,7 +93,7 @@ async def consume_streaming_completion(
     elif text and raw_tools:
         tool_call_payload = extract_tool_call_from_text(text, raw_tools)
         if tool_call_payload and re.fullmatch(
-            r"\s*(```[\s\S]*```|<function_call>[\s\S]*</function_call>|<tool_call>[\s\S]*</tool_call>|<\w+>\s*\{[\s\S]*\}\s*</\w+>)\s*",
+            r"\s*(```[\s\S]*```|<function_call>[\s\S]*</function_call>|<tool_call>[\s\S]*</tool_call>|<tool_code>[\s\S]*</tool_code>|<\w+>\s*\{[\s\S]*\}\s*</\w+>)\s*",
             text,
             flags=re.IGNORECASE,
         ):

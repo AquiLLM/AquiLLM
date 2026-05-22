@@ -43,23 +43,58 @@ def _conversation_used_whole_document(conversation: Conversation) -> bool:
     return False
 
 
+def _post_tool_output_ceiling() -> int:
+    return _env_int("LLM_POST_TOOL_OUTPUT_MAX_TOKENS", 6144, minimum=256)
+
+
+def _post_tool_global_max(global_max: int) -> int:
+    return max(global_max, _post_tool_output_ceiling())
+
+
 def _resolve_post_tool_max_tokens(
     conversation: Conversation,
     *,
     default_cap: int,
     global_max: int,
 ) -> int:
+    cap = max(default_cap, _post_tool_output_ceiling())
+    if _conversation_used_whole_document(conversation):
+        cap = max(
+            cap,
+            _env_int("LLM_POST_TOOL_WHOLE_DOC_MAX_TOKENS", 6144, minimum=256),
+        )
+    return min(cap, max(global_max, _post_tool_output_ceiling()))
+
+
+def _resolve_continuation_max_tokens(
+    conversation: Conversation,
+    *,
+    default_cap: int,
+    post_tool_budget: int,
+    global_max: int,
+) -> int:
     cap = default_cap
     if _conversation_used_whole_document(conversation):
         cap = max(
             cap,
-            _env_int("LLM_POST_TOOL_WHOLE_DOC_MAX_TOKENS", 4096, minimum=256),
+            _env_int("LLM_CONTINUATION_WHOLE_DOC_MAX_TOKENS", 2048, minimum=128),
         )
-    return min(global_max, cap)
+    cap = max(cap, post_tool_budget // 2)
+    return min(global_max, post_tool_budget, cap)
 
 
 def _compact_summary_fallback_enabled() -> bool:
     return getenv("LLM_ALLOW_COMPACT_SUMMARY_FALLBACK", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _extractive_evidence_ui_enabled() -> bool:
+    """When false, never replace a failed synthesis with raw chunk/doc bullet dumps."""
+    return getenv("LLM_ALLOW_EXTRACTIVE_EVIDENCE_UI", "0").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -88,7 +123,7 @@ def _latest_user_turn(conversation: Conversation) -> UserMessage | None:
 
 
 def _post_tool_synthesis_unsatisfied(text: Optional[str]) -> bool:
-    visible = visibility.strip_thinking_blocks(text).strip()
+    visible = visibility.strip_tool_markup(visibility.strip_thinking_blocks(text)).strip()
     if not visible:
         return True
     if visibility.is_interim_assistant_text(visible):
@@ -107,8 +142,9 @@ def _build_synthesis_retry_prompt(conversation: Conversation, attempt: int) -> s
     lines = [
         f"User request: {query or 'Answer using the retrieved documents above.'}",
         "",
-        "Write a complete final answer using evidence already in this conversation.",
-        "Answer directly in plain text; do not describe future retrieval steps.",
+        "Write a complete, thorough final answer using evidence already in this conversation.",
+        "Use multiple sections when helpful; aim for depth (typically 400-900 words when sources support it).",
+        "Answer directly in plain text; do not describe future retrieval steps or emit tool markup.",
     ]
     if wants_figures:
         lines.append(
@@ -226,17 +262,18 @@ async def _last_resort_evidence_answer(
     stream_callback: Optional[Callable[[dict], Awaitable[Any]]] = None,
     stream_message_uuid: Optional[str] = None,
 ) -> Optional[str]:
-    """Evidence-backed fallbacks only; compact summary is opt-in and last."""
-    if fb.extractive_fallback_enabled():
-        synthesized = fb.synthesize_from_recent_tool_results(conversation)
-        if synthesized:
-            return synthesized
-    doc_extract = citations.synthesize_doc_level_extract_from_results(conversation)
-    if doc_extract:
-        return doc_extract
-    cited_extract = citations.synthesize_cited_extract_from_results(conversation)
-    if cited_extract:
-        return cited_extract
+    """Optional fallbacks; default is synthesis-only (no chunk dumps in the UI)."""
+    if _extractive_evidence_ui_enabled():
+        if fb.extractive_fallback_enabled():
+            synthesized = fb.synthesize_from_recent_tool_results(conversation)
+            if synthesized:
+                return synthesized
+        doc_extract = citations.synthesize_doc_level_extract_from_results(conversation)
+        if doc_extract:
+            return doc_extract
+        cited_extract = citations.synthesize_cited_extract_from_results(conversation)
+        if cited_extract:
+            return cited_extract
     if _compact_summary_fallback_enabled():
         return await generate_compact_tool_summary(
             llm,
@@ -429,8 +466,9 @@ async def complete_conversation_turn(
         request_system_prompt = (
             f"{request_system_prompt}\n\n"
             "Final synthesis step: answer the user using retrieved document content already in "
-            "this thread. Write a complete user-facing answer; do not emit status lines or "
-            "promises to retrieve later."
+            "this thread. Write a thorough, well-structured user-facing answer with enough detail "
+            "to stand alone; finish every section and do not stop mid-sentence. Do not emit status "
+            "lines, tool markup, or promises to retrieve later."
         )
     source_allowlist = set(citation_allowlist)
     if is_post_tool_result_turn and not source_allowlist:
@@ -455,8 +493,8 @@ async def complete_conversation_turn(
 
         effective_stream_func = _live_citation_stream
     tool_step_max_tokens = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 512, minimum=128)
-    post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 1536, minimum=256)
-    continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 768, minimum=128)
+    post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 3072, minimum=256)
+    continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 1536, minimum=128)
     citation_retry_prior_max_chars = _env_int("LLM_CITATION_RETRY_PRIOR_MAX_CHARS", 2400, minimum=512)
     request_max_tokens = max_tokens
     if isinstance(last_message, UserMessage) and last_message.tools:
@@ -465,7 +503,7 @@ async def complete_conversation_turn(
         request_max_tokens = _resolve_post_tool_max_tokens(
             conversation,
             default_cap=post_tool_max_tokens,
-            global_max=max_tokens,
+            global_max=_post_tool_global_max(max_tokens),
         )
     if last_message.tools:
         tools = {
@@ -511,14 +549,14 @@ async def complete_conversation_turn(
             message_dicts=message_dicts,
             messages_for_bot=messages_for_bot,
             post_tool_max_tokens=post_tool_max_tokens,
-            global_max_tokens=max_tokens,
+            global_max_tokens=_post_tool_global_max(max_tokens),
             stream_callback=effective_stream_func,
             stream_message_uuid=stream_message_uuid,
             initial_response=response,
         )
 
     allowed_tool_names = {tool.name for tool in (last_message.tools or [])}
-    response_text = visibility.strip_thinking_blocks(response.text)
+    response_text = visibility.strip_tool_markup(visibility.strip_thinking_blocks(response.text))
     response_tool_call = response.tool_call or {}
 
     if response_tool_call:
@@ -569,9 +607,14 @@ async def complete_conversation_turn(
             post_tool_budget = _resolve_post_tool_max_tokens(
                 conversation,
                 default_cap=post_tool_max_tokens,
-                global_max=max_tokens,
+                global_max=_post_tool_global_max(max_tokens),
             )
-            continuation_budget = min(max_tokens, post_tool_budget, continuation_max_tokens)
+            continuation_budget = _resolve_continuation_max_tokens(
+                conversation,
+                default_cap=continuation_max_tokens,
+                post_tool_budget=post_tool_budget,
+                global_max=_post_tool_global_max(max_tokens),
+            )
             continuation_response = await llm._continue_cutoff_response(
                 system_prompt=request_system_prompt,
                 message_dicts=message_dicts,
@@ -601,7 +644,7 @@ async def complete_conversation_turn(
                 message_dicts=message_dicts,
                 messages_for_bot=messages_for_bot,
                 post_tool_max_tokens=post_tool_max_tokens,
-                global_max_tokens=max_tokens,
+                global_max_tokens=_post_tool_global_max(max_tokens),
                 stream_callback=effective_stream_func,
                 stream_message_uuid=stream_message_uuid,
                 initial_response=response,
@@ -609,7 +652,9 @@ async def complete_conversation_turn(
             if retry_response.tool_call:
                 response_tool_call = retry_response.tool_call or {}
                 response = retry_response
-                response_text = visibility.strip_thinking_blocks(retry_response.text)
+                response_text = visibility.strip_tool_markup(
+                    visibility.strip_thinking_blocks(retry_response.text)
+                )
             else:
                 recovered = await _last_resort_evidence_answer(
                     llm,
@@ -681,7 +726,7 @@ async def complete_conversation_turn(
                 "max_tokens": _resolve_post_tool_max_tokens(
                     conversation,
                     default_cap=post_tool_max_tokens,
-                    global_max=max_tokens,
+                    global_max=_post_tool_global_max(max_tokens),
                 ),
                 "stream_callback": effective_stream_func,
                 "stream_message_uuid": stream_message_uuid,
@@ -699,15 +744,17 @@ async def complete_conversation_turn(
                     + "\n\n[Note: Some citation tokens could not be verified against retrieved chunks.]"
                 )
             else:
-                cited_extract = (
-                    citations.synthesize_cited_extract_from_results(conversation)
-                    or citations.synthesize_doc_level_extract_from_results(conversation)
-                )
-                if cited_extract:
-                    response_text = cited_extract
-                    response_tool_call = {}
+                if _extractive_evidence_ui_enabled():
+                    cited_extract = (
+                        citations.synthesize_cited_extract_from_results(conversation)
+                        or citations.synthesize_doc_level_extract_from_results(conversation)
+                    )
+                    if cited_extract:
+                        response_text = cited_extract
+                        response_tool_call = {}
         if (
-            (not response_tool_call)
+            _extractive_evidence_ui_enabled()
+            and (not response_tool_call)
             and (
                 not response_text.strip()
                 or response_text.strip()
@@ -750,7 +797,7 @@ async def complete_conversation_turn(
     ):
         response_text = _append_citation_sources_if_missing(response_text, source_allowlist)
     if response_tool_call:
-        response_text = visibility.strip_thinking_blocks(response_text)
+        response_text = visibility.strip_tool_markup(visibility.strip_thinking_blocks(response_text))
         if visibility.is_interim_assistant_text(response_text):
             response_text = ""
     else:

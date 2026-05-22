@@ -62,6 +62,33 @@ def test_visible_stream_forwards_partial_non_interim_answer_before_display_thres
     assert visible == partial
 
 
+def test_extractive_chunk_dump_is_not_displayable():
+    dump = (
+        "Here is a concise summary from the retrieved documents:\n"
+        "- o at o ( ); o p edic [doc:abc]"
+    )
+    assert vis.looks_like_extractive_chunk_dump(dump)
+    assert not vis.is_displayable_answer_text(dump)
+
+
+def test_visible_stream_suppresses_tool_code_markup_fragment():
+    visible = vis.visible_stream_content(
+        "<tool_code> Tool",
+        raw_tools=[{"name": "whole_document"}],
+        done=False,
+        tool_call_payload=None,
+    )
+    assert visible == ""
+
+
+def test_sanitize_strips_tool_code_from_persisted_answer():
+    text = "Overview text.\n\n<tool_code>{\"name\":\"vector_search\"}</tool_code>\n\nMore detail."
+    cleaned = vis.sanitize_assistant_text(text, suppress_interim=False)
+    assert "<tool_code>" not in cleaned
+    assert "Overview text" in cleaned
+    assert "More detail" in cleaned
+
+
 def test_visible_stream_done_does_not_drop_short_substantive_answer():
     answer = "Figure 2 shows the main result."
     visible = vis.visible_stream_content(

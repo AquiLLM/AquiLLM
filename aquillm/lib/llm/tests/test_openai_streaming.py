@@ -109,6 +109,24 @@ async def test_streaming_think_blocks_are_removed_from_visible_stream():
     assert all("inspect this first" not in payload.get("content", "") for payload in payloads)
 
 
+async def test_streaming_tool_code_fragment_is_suppressed():
+    payloads: list[dict] = []
+
+    async def _capture(payload: dict) -> None:
+        payloads.append(payload)
+
+    await consume_streaming_completion(
+        stream=_FakeStream([_chunk("<tool_code> Tool"), _chunk("Real answer paragraph.", "stop")]),
+        stream_callback=_capture,
+        stream_message_uuid="msg-tool-code",
+        raw_tools=[{"name": "whole_document"}],
+        model_name="test-model",
+    )
+
+    assert all("<tool_code>" not in payload.get("content", "") for payload in payloads)
+    assert all(payload.get("content", "") != " Tool" for payload in payloads)
+
+
 async def test_streaming_deferred_retrieval_phrase_is_suppressed_without_tools():
     payloads: list[dict] = []
 

@@ -99,6 +99,7 @@ def extract_tool_call_from_text(text: str, raw_tools: Optional[list[dict]]) -> O
     candidates.extend(re.findall(r"```(?:json|xml)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE))
     candidates.extend(re.findall(r"<function_call>\s*([\s\S]*?)\s*</function_call>", text, flags=re.IGNORECASE))
     candidates.extend(re.findall(r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", text, flags=re.IGNORECASE))
+    candidates.extend(re.findall(r"<tool_code>\s*([\s\S]*?)\s*</tool_code>", text, flags=re.IGNORECASE))
 
     for candidate in candidates:
         payload = decode_json_dict(candidate)

@@ -262,6 +262,8 @@ def _doc_ref_from_tool_message(tool_msg: ToolMessage) -> str | None:
 
 
 def _snippet_from_whole_document_payload(payload: Any, *, max_chars: int = 220) -> str:
+    from .tool_evidence import select_evidence_snippet
+
     text = ""
     if isinstance(payload, str):
         text = payload
@@ -272,6 +274,9 @@ def _snippet_from_whole_document_payload(payload: Any, *, max_chars: int = 220) 
         if raw is None and payload.get("type") == "image_document":
             raw = payload.get("title")
         text = str(raw or "")
+    snippet = select_evidence_snippet(text, max_chars=max_chars)
+    if snippet:
+        return snippet
     return _truncate_sentence(text, max_chars=max_chars)
 
 
