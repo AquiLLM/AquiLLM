@@ -32,6 +32,23 @@ Implication for AquiLLM: selected-document questions like "tell me about the pap
 - `aquillm/apps/documents/services/chunk_search.py` already does hybrid vector + trigram + exact-term retrieval, dedupes candidates, reranks, and logs per-stage latency.
 - `aquillm/apps/chat/services/tool_wiring/documents.py` already returns image-aware `vector_search`, `whole_document`, `search_single_document`, and `more_context` results. The missing layer is orchestration and evidence packaging.
 
+## Local Token-Efficiency Audit Inputs
+
+Use the relevant findings from `docs/documents/2026-05-20-token-efficiency-context-window-audit.md` as local constraints for this work:
+
+- F1: Gemini prompt trimming can leave dropped messages in `messages_pydantic`; fix provider-history alignment before relying on packer-driven drops in long RAG chats.
+- F2: `CONTEXT_BUDGET_RETRIEVAL_TOKENS` and `CONTEXT_MAX_SNIPPETS_PER_DOC` exist but are not fully enforced; direct RAG evidence packing should make those knobs real.
+- F3: fallback overflow trimming deletes by position; direct RAG should avoid unpaired user/assistant/tool drops and preserve active tool evidence.
+- F4/F5: `whole_document` currently uses a coarse 150k-token gate and weak projected prompt estimate; whole-document mode must be budget-aware.
+- F6: broad tool-schema attachment is recurring prompt overhead; the direct RAG router should send no tools for normal chat and skip tool schemas entirely for backend-orchestrated document turns.
+- F7: compact vector-search payloads exist but are off in example config; use compact payloads where validation shows citations/images still work.
+- F8: `more_context` can truncate away central evidence; adjacent-context expansion must preserve the central chunk first.
+- F9/F10: profile memory and prompt-only skills can grow the system prompt; RAG synthesis should reserve context for evidence before optional memories/skills.
+- F12/F14: inline image and multimodal rerank payloads need separate byte/count controls; figure retrieval should prefer URLs/captions unless image pixels are truly required.
+- F13: search-result row truncation is character-based; evidence rows should use query-aware sentence snippets.
+- F15: citation enforcement is quality-positive but retries can bloat prompts; allowlists and retry prompts should stay compact.
+- F16/F17: raw tool results and frontend token gauges are useful but not equivalent to projected next-turn prompt pressure; add projected prompt/evidence metrics.
+
 ## Desired Behavior
 
 - A selected-collection paper question starts retrieval immediately, without waiting for an LLM tool-call attempt.
@@ -42,6 +59,33 @@ Implication for AquiLLM: selected-document questions like "tell me about the pap
 - Final answers cite only retrieved chunks/documents and include a source block when citations are enabled.
 - The UI never receives the generic clean-response fallback when tool evidence exists; it gets either a synthesized answer or a transparent evidence-based fallback.
 - Latency is measurable by stage: intent, rewrite, retrieval, rerank, evidence packing, synthesis, validation.
+
+## Phase 0: Token-Budget Correctness Prerequisites
+
+- [ ] Fix provider history alignment before enabling aggressive packing.
+  - Update `aquillm/lib/llm/utils/prompt_budget.py` so trimmed dict messages can be synced back to pydantic messages by kept indices or stable message identity.
+  - Update `aquillm/lib/llm/providers/gemini.py` so dropped dict messages are also dropped from `messages_pydantic`.
+  - Preserve tool-call/function-response pairs when trimming.
+
+- [ ] Replace positional overflow deletion in the RAG path.
+  - Ensure direct RAG prompt packing preserves system prompt, latest user turn, active tool evidence, retained citation allowlist, and final-answer reserve.
+  - Add trim reports with reason codes instead of silent oldest-message deletion.
+
+- [ ] Add projected prompt estimation.
+  - Add or reuse a provider-agnostic helper for `system + history + proposed evidence + optional tool schemas + completion reserve`.
+  - Use it for direct RAG whole-document decisions and observability.
+
+- [ ] Tests.
+  - Gemini long-history trimming sends exactly the kept pydantic messages.
+  - Tool-call/tool-result pairs remain paired under trimming.
+  - Projected prompt usage differs from, and does not overwrite, last-turn token usage.
+
+Commit:
+
+```bash
+git add aquillm/lib/llm/utils/prompt_budget.py aquillm/lib/llm/providers/gemini.py aquillm/lib/llm/tests/test_prompt_budget.py aquillm/lib/llm/tests/test_gemini_prompt_budget.py
+git commit -m "fix(context): align provider history after prompt packing"
+```
 
 ## Phase 1: Route Obvious RAG Outside The Tool Loop
 
@@ -58,6 +102,8 @@ Implication for AquiLLM: selected-document questions like "tell me about the pap
 - [ ] Update `aquillm/apps/chat/consumers/chat_receive.py`.
   - Replace local `_looks_like_*` helpers with `rag_intent.classify_chat_message()`.
   - Keep existing `_configure_append_tools()` behavior as the fallback path.
+  - Do not attach any tool schemas for ordinary chat.
+  - For direct RAG turns, avoid attaching document tool schemas because retrieval will be backend-orchestrated.
   - Set a private runtime marker on the latest `UserMessage`, for example `metadata["rag_intent"]` if message metadata exists, or a sidecar on the consumer if not.
 
 - [ ] Add tests in `aquillm/apps/chat/tests/test_document_search_intent.py`.
@@ -65,6 +111,7 @@ Implication for AquiLLM: selected-document questions like "tell me about the pap
   - Follow-up "try again" inherits prior RAG intent.
   - Plain physics/general chat has no tools.
   - Astronomy/FITS local tool requests still use normal tool routing.
+  - Direct document RAG does not serialize document tool schemas into the first provider call.
 
 Commit:
 
@@ -83,7 +130,8 @@ git commit -m "feat(rag): classify direct document retrieval turns"
 
 - [ ] Start with a conservative retrieval policy.
   - If no collections are selected, do not call retrieval; let normal chat answer or ask for collection selection.
-  - If exactly one accessible document is selected and full text is under a configurable token threshold, call the same logic as `whole_document`.
+  - If exactly one accessible document is selected and full text fits the projected prompt budget, call the same logic as `whole_document`.
+  - If the projected prompt budget is tight, use section/search retrieval instead of opening the whole document.
   - Otherwise call the same logic as `vector_search` immediately with `top_k=10`.
   - If the user requests figures, preserve figure/image rows and set figure-aware synthesis instructions.
 
@@ -101,6 +149,7 @@ git commit -m "feat(rag): classify direct document retrieval turns"
   - Assert direct RAG calls retrieval without first calling `llm_if.get_message()` for tool selection.
   - Assert no generic fallback is emitted when retrieval returns evidence.
   - Assert normal chat still bypasses document retrieval.
+  - Assert whole-document mode declines full text when projected prompt budget is insufficient.
 
 Commit:
 
@@ -149,16 +198,24 @@ git commit -m "feat(rag): rewrite follow-up retrieval queries"
   - Group candidate chunks by document.
   - Keep the top chunks, but prevent one document from consuming the entire context when multiple documents are selected.
   - For single-paper requests, prioritize coherence over diversity.
+  - Enforce `CONTEXT_BUDGET_RETRIEVAL_TOKENS` and `CONTEXT_MAX_SNIPPETS_PER_DOC` against retained evidence rows, not serialized JSON after the fact.
 
 - [ ] Add figure retrieval policy.
   - If `wants_figures`, include up to `RAG_MAX_FIGURES_PER_TURN` relevant figures.
   - Prefer figures whose captions or OCR text match the query.
   - If text chunks come from a parent paper that has related figures, include the most relevant related figures even if the vector search did not rank image chunks high enough.
+  - Prefer figure URLs and captions for synthesis; reserve inline image payloads for visual reasoning requests.
+
+- [ ] Add query-aware snippets.
+  - Extract sentence windows around query terms, entities, figure labels, equation labels, and model names.
+  - Preserve citation tokens and source titles even under tight row budgets.
+  - Avoid cutting snippets mid-sentence where possible.
 
 - [ ] Tests.
   - Figure/image requests produce an evidence packet with markdown-safe `/aquillm/document_image/<uuid>/` URLs.
   - Chunk citations survive compaction.
   - Evidence packet never includes raw base64 image payloads in model text.
+  - Per-document snippet caps and retrieval-token budgets drop duplicate rows while retaining citation-bearing evidence.
 
 Commit:
 
@@ -189,11 +246,13 @@ git commit -m "feat(rag): package cited text and figures for synthesis"
   - If the answer lacks citations while citations are required, retry synthesis with the allow-list.
   - If the user requested figures and no image URL appears but evidence contains images, append or retry with figure instructions.
   - If synthesis still fails, return an extractive evidence answer instead of the generic clean-response fallback.
+  - Keep citation retry prompts compact by grouping refs by document and only listing retained evidence rows.
 
 - [ ] Tests.
   - Blank synthesis over evidence returns an evidence fallback, not generic failure.
   - Invalid citations are rejected and retried.
   - Figure requests include at least one markdown image when evidence contains figures.
+  - Citation retry does not re-add dropped retrieval rows or obsolete allowlist entries.
 
 Commit:
 
@@ -212,6 +271,9 @@ git commit -m "feat(rag): validate cited figure-aware synthesis"
   - `rag_evidence_pack_ms`
   - `rag_synthesis_ttft_ms` when stream timing is available
   - `rag_total_ms`
+  - `estimated_next_prompt_tokens`
+  - `retrieval_evidence_tokens`
+  - `tool_schema_tokens`
 
 - [ ] Make slow knobs explicit in `.env.example`.
   - `RAG_DIRECT_ENABLED=1`
@@ -219,6 +281,8 @@ git commit -m "feat(rag): validate cited figure-aware synthesis"
   - `RAG_DIRECT_TOP_K=10`
   - `RAG_MAX_FIGURES_PER_TURN=3`
   - `RAG_DIRECT_WHOLE_DOC_TOKEN_LIMIT=80000`
+  - `TOOL_SEARCH_COMPACT_PAYLOAD=1` for staging once citation/image tests pass.
+  - `LM_LINGUA2_ENABLED=0` unless explicitly validating compression quality.
   - Keep `APP_EMBED_DIMS=1024` because the Mem0/vector compatibility truncation is intentional.
 
 - [ ] Add timeout behavior.
@@ -271,6 +335,7 @@ git commit -m "chore(rag): add direct rag controls and telemetry"
   - For whole-document mode, place static document text before the latest user question where the provider/runtime can reuse prefix cache.
   - Add config documentation for `LMCACHE_ENABLED` and `LMCACHE_EXTRA_ARGS` in the RAG rollout notes.
   - Measure LMCache benefit separately from retrieval cache benefit with TTFT and total generation timing.
+  - Keep profile memory and prompt-only skill bodies after direct evidence in the budget priority order.
 
 - [ ] Add cache observability.
   - Emit per-stage hit/miss metrics:
@@ -292,6 +357,7 @@ git commit -m "chore(rag): add direct rag controls and telemetry"
   - `aquillm/apps/documents/tests/test_rerank_http_cache.py` verifies normalized query variants and repeated candidate sets skip HTTP.
   - `aquillm/apps/chat/tests/test_direct_rag_pipeline.py` verifies "try again" reuses prior query/evidence instead of reranking again.
   - `aquillm/tests/integration/test_vllm_lmcache_plumbing.py` verifies LMCache env wiring remains intact.
+  - Rerank image payload tests verify caption-only rerank is used unless the query is figure/plot-specific.
 
 Commit:
 
@@ -316,11 +382,13 @@ git commit -m "perf(rag): cache embeddings reranks and stable generation prefixe
   - `specific`: narrower top-K, exact-term boost.
   - `figure`: image/caption/OCR emphasis.
   - `math`: more adjacent chunks around equations and definitions.
+  - `context`: central chunk first, then alternating adjacent chunks outward.
 
 - [ ] Tests.
   - Acronym/model-name queries keep exact matches in candidate set.
   - Figure queries rank image chunks or related figures into evidence.
   - Math queries include adjacent chunks.
+  - `more_context`-style expansion always retains the central chunk under small `TOOL_CHUNK_CHAR_LIMIT`.
 
 Commit:
 
@@ -381,6 +449,7 @@ Run the broader relevant suite before final merge:
 
 ```bash
 pytest aquillm/apps/chat/tests aquillm/apps/documents/tests aquillm/lib/llm/tests
+pytest aquillm/tests/integration/test_cache_settings_flags.py
 git diff --check
 ```
 
