@@ -237,7 +237,70 @@ git add .env.example aquillm/apps/chat/services/rag_pipeline.py aquillm/apps/cha
 git commit -m "chore(rag): add direct rag controls and telemetry"
 ```
 
-## Phase 7: Retrieval Quality Improvements
+## Phase 7: Cache Acceleration For Embeddings, Reranking, And Generation
+
+- [ ] Make cache layers explicit.
+  - Use LMCache for repeated LLM generation prefixes: system prompts, stable RAG synthesis instructions, tool/evidence schemas, and static document context in whole-document mode.
+  - Use Django cache/Redis via `aquillm/apps/documents/services/rag_cache.py` for retrieval work: query embeddings, rerank endpoint capability, rerank results, document access refs, document lookup refs, and image data URLs.
+  - Do not treat LMCache as an embedding/reranker cache; those are separate model calls and should stay in `rag_cache`.
+
+- [ ] Improve embedding cache hit rate.
+  - Normalize retrieval queries before `get_cached_query_embedding()`:
+    - trim/collapse whitespace
+    - lowercase only where retrieval semantics allow it
+    - preserve exact technical terms separately for exact-term search
+  - Include embedding model, embedding endpoint, input type, and fitted `APP_EMBED_DIMS` in the query embedding model signature.
+  - Increase `RAG_QUERY_EMBED_TTL_SECONDS` for stable local collections once invalidation is reliable.
+  - Add an optional direct-RAG prewarm step: when a collection is selected, warm document-access refs; when a query is rewritten, warm the rewritten query embedding before vector search.
+
+- [ ] Improve reranker cache hit rate and latency.
+  - Keep the existing rerank-result key shape of `(query_signature, candidate_ids, top_k, model)` because candidate order matters.
+  - Add query normalization before `query_signature_for_rerank()` so follow-up retries and whitespace-only variants hit cache.
+  - Cache failed reranker capability probes longer, so vLLM endpoint discovery does not retry unsupported `/rerank`, `/v2/rerank`, `/score` shapes on every request.
+  - Add `RAG_RERANK_BYPASS_CANDIDATE_COUNT`: skip reranker when candidate count is already `<= top_k`.
+  - Add `RAG_RERANK_MIN_CANDIDATES`: use fallback order for tiny candidate sets where reranking costs more than it helps.
+  - Add optional async/background rerank prefetch for likely follow-up modes, such as figure/method/math queries after an academic summary.
+
+- [ ] Use direct RAG to increase cache locality.
+  - Deterministic query rewriting should produce stable queries for common follow-ups.
+  - Evidence packet generation should preserve candidate IDs in stable order so rerank-result caching is useful.
+  - Retry requests must reuse the previous direct-RAG query and evidence packet when possible instead of recomputing retrieval.
+
+- [ ] Use LMCache where it fits.
+  - Keep synthesis prompt scaffolding stable and early in the prompt, with variable evidence appended after stable instructions.
+  - For whole-document mode, place static document text before the latest user question where the provider/runtime can reuse prefix cache.
+  - Add config documentation for `LMCACHE_ENABLED` and `LMCACHE_EXTRA_ARGS` in the RAG rollout notes.
+  - Measure LMCache benefit separately from retrieval cache benefit with TTFT and total generation timing.
+
+- [ ] Add cache observability.
+  - Emit per-stage hit/miss metrics:
+    - `rag_cache.query_embed`
+    - `rag_cache.rerank_result`
+    - `rag_cache.rerank_capability`
+    - `rag_cache.doc_access`
+    - `rag_cache.document_lookup`
+    - `rag_cache.image_data_url`
+  - Add request-level summary fields:
+    - `query_embedding_cache_hit`
+    - `rerank_cache_hit`
+    - `rerank_capability_cache_hit`
+    - `lmcache_enabled`
+    - `direct_rag_reused_evidence`
+
+- [ ] Tests.
+  - `aquillm/apps/documents/tests/test_chunk_search_query_cache.py` verifies normalized query variants reuse the same embedding.
+  - `aquillm/apps/documents/tests/test_rerank_http_cache.py` verifies normalized query variants and repeated candidate sets skip HTTP.
+  - `aquillm/apps/chat/tests/test_direct_rag_pipeline.py` verifies "try again" reuses prior query/evidence instead of reranking again.
+  - `aquillm/tests/integration/test_vllm_lmcache_plumbing.py` verifies LMCache env wiring remains intact.
+
+Commit:
+
+```bash
+git add .env.example aquillm/apps/documents/services/rag_cache.py aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/apps/chat/services/rag_pipeline.py aquillm/apps/documents/tests/test_chunk_search_query_cache.py aquillm/apps/documents/tests/test_rerank_http_cache.py aquillm/apps/chat/tests/test_direct_rag_pipeline.py aquillm/tests/integration/test_vllm_lmcache_plumbing.py
+git commit -m "perf(rag): cache embeddings reranks and stable generation prefixes"
+```
+
+## Phase 8: Retrieval Quality Improvements
 
 - [ ] Add contextual chunk metadata during ingestion.
   - Add optional `TextChunk.metadata["contextual_header"]`.
@@ -266,7 +329,7 @@ git add aquillm/apps/documents/services aquillm/apps/documents/tests aquillm/app
 git commit -m "feat(rag): improve contextual retrieval quality"
 ```
 
-## Phase 8: RAG Evaluation Harness
+## Phase 9: RAG Evaluation Harness
 
 - [ ] Add `aquillm/apps/chat/evals/rag_cases.yaml`.
   - Include representative local cases:
