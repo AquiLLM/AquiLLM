@@ -52,6 +52,7 @@ Relevant current Mem0 direction:
 - Mem0's platform docs now emphasize entity-scoped memory by user, agent, app, and session/run identifiers so memories do not leak across contexts: https://docs.mem0.ai/platform/features/entity-scoped-memory
 - Mem0's memory add pipeline includes extraction, conflict resolution, metadata, and scoped identifiers such as `user_id`, `agent_id`, and `run_id`: https://docs.mem0.ai/core-concepts/memory-operations/add
 - Mem0's OSS migration docs describe a newer memory algorithm, `custom_instructions`, entity linking, hybrid search/BM25 support, and the removal of OSS graph-store configuration: https://docs.mem0.ai/migration/oss-v2-to-v3
+- Mem0's April 2026 token-efficient memory algorithm emphasizes production retrieval under practical token budgets, single-pass ADD-only extraction, agent-generated facts as first-class memories, entity linking, multi-signal retrieval, keyword normalization, and retrieval fusion: https://mem0.ai/blog/mem0-the-token-efficient-memory-algorithm
 
 Implementation guidance:
 
@@ -66,6 +67,22 @@ Implementation guidance:
 - Treat Mem0 as an acceleration/intelligence layer for extraction, conflict resolution, search, and entity linking, not as the only copy of researcher/project memory.
 - Add compatibility tests for both current local fallback and upgraded Mem0-backed behavior.
 - Document any Platform-only features separately from OSS features so local/dev deployments remain usable.
+
+Algorithm ideas to carry into AquiLLM even when Mem0 is disabled:
+
+- Prefer token-efficient memory retrieval over large-context replay. Target compact memory context blocks, not "stuff more chat history into the prompt."
+- Use **ADD-only project memory** for research evolution. If the researcher changes their mind, store the new state alongside the old state with temporal/evidence metadata rather than overwriting the past.
+- Treat assistant-generated facts as first-class when they represent accepted project decisions, completed actions, recommendations, or summaries the user continues from.
+- Add entity linking for paper titles, methods, datasets, authors, figures, equations, model names, and user-defined project terms.
+- Retrieve with multiple signals in parallel:
+  - semantic similarity
+  - keyword/BM25 or exact-term matching
+  - entity matching
+  - recency/temporal relevance
+  - feedback/correction weight
+- Normalize keywords so variants such as "attend", "attended", and "attending" can match. For research use, also normalize figure labels, equation labels, model aliases, and dataset acronyms.
+- Evaluate memory quality under token budgets, not just accuracy with a huge context window.
+- Track temporal transitions explicitly, for example "the project originally assumed X, later rejected X after paper Y."
 
 ## Proposed Architecture
 
@@ -110,6 +127,9 @@ Proposed fields:
 - `memory_type`: `hypothesis`, `open_question`, `method_preference`, `paper_note`, `decision`, `correction`, `terminology`, `citation_preference`
 - `content`: concise learned statement
 - `evidence`: JSON with source message UUIDs, document IDs, chunk citations, or feedback IDs
+- `entities`: JSON/list of linked project entities such as papers, figures, equations, models, datasets, authors, and methods
+- `temporal_event_at`: nullable timestamp or logical event marker when the memory describes a transition
+- `supersedes`: nullable FK/self-reference for temporal transitions without destructive overwrites
 - `confidence`: float or small enum
 - `status`: `active`, `superseded`, `rejected`, `archived`
 - `embedding`: vector for retrieval
@@ -193,6 +213,7 @@ Promotion rules:
 - rating with feedback: promote as a `LearningSignal`; only turn into durable memory after summarization
 - repeated pattern: promote when seen more than once
 - project facts: promote only with collection/conversation/document scope
+- state changes: add the new memory with temporal metadata; do not erase the previous memory unless the user explicitly asks to forget it
 
 ### 5. Retrieve
 
@@ -204,6 +225,15 @@ Before each answer, retrieve learning context in layers:
 4. relevant feedback/corrections that apply to the current intent
 
 The learning context should feed the RAG prompt as a compact "Researcher/project context" block, not as unbounded memory.
+
+Rank memory candidates with fused signals:
+
+- semantic similarity against the latest request or rewritten RAG query
+- exact keyword and normalized term overlap
+- entity overlap with the request, selected documents, and retrieved chunks
+- recency and temporal fit
+- confidence and explicit-user-confirmation boost
+- feedback/correction weight
 
 ### 6. Apply
 
@@ -309,6 +339,9 @@ Default the whole layer off until tests and manual review pass.
 - low-confidence candidate requires confirmation
 - retrieval returns only memories in allowed scope
 - prompt context cap prevents memory bloat
+- ADD-only state changes preserve previous and current project facts
+- entity-linked memories are boosted when a query mentions the same paper, figure, equation, model, dataset, or method
+- keyword normalization matches common research variants and aliases
 
 ### Integration Tests
 
@@ -328,6 +361,8 @@ Add a small learning eval set:
 - avoids cross-project leakage
 - avoids storing sensitive text
 - improves answer quality without increasing prompt size beyond budget
+- answers temporal questions about how a project decision changed over time
+- recalls assistant-generated project decisions only after user acceptance or continuation
 
 ## Rollout Plan
 
