@@ -8,6 +8,7 @@ from typing import Any
 from django.conf import settings
 
 from aquillm.llm import LLMTool
+from apps.chat.services.collection_prompt_skills import load_collection_prompt_skills
 from lib.skills import (
     collect_system_prompt_extras,
     collect_tools,
@@ -76,7 +77,9 @@ def effective_base_system_for_memory(consumer: Any) -> str:
     ctx = build_skill_runtime_context(consumer)
     py_extra = collect_system_prompt_extras(_resolved_modules(), ctx).strip()
     md_extra = load_markdown_prompt_bodies(_markdown_skills_root()).strip()
-    extra_parts = [s for s in (py_extra, md_extra) if s]
+    selected_collections = getattr(getattr(consumer, "col_ref", None), "collections", [])
+    collection_extra = load_collection_prompt_skills(consumer.user, selected_collections).strip()
+    extra_parts = [s for s in (py_extra, md_extra, collection_extra) if s]
     if not extra_parts:
         return base
     extra = "\n\n---\n\n".join(extra_parts)

@@ -11,6 +11,13 @@ def test_parse_front_matter_basic() -> None:
     assert body.strip() == "Line one."
 
 
+def test_parse_front_matter_folded_scalar() -> None:
+    raw = "---\nname: My block\ndescription: >\n  Line one.\n  Line two.\n---\n\nBody."
+    meta, body = _parse_simple_front_matter_block(raw)
+    assert meta.get("description") == "Line one. Line two."
+    assert body.strip() == "Body."
+
+
 def test_parse_no_front_matter_returns_all_as_body() -> None:
     raw = "No delimiter here"
     meta, rest = _parse_simple_front_matter_block(raw)

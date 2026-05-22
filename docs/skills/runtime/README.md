@@ -16,6 +16,24 @@ These are **plain Markdown files** merged into the chat system prompt (before me
 
 They are **not** the same as Claude/Cursor/IDE `SKILL.md` files: the **web app** reads them at runtime, not the editor.
 
+## Collection Session Skills
+
+AquiLLM can also load prompt-only Markdown skills from selected collections when:
+
+```env
+AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=1
+AQUILLM_COLLECTION_MARKDOWN_SKILLS_MAX_CHARS=12000
+```
+
+Collection skills are session-scoped; they are appended only for conversations with matching selected collections. They do not install global skills and they do not register Python tools.
+
+Supported collection patterns:
+
+- A Markdown document in a selected collection named `skills`, `skill`, or ending in `_skill`.
+- A direct child subcollection named `skills` or `skill_pack`; Markdown/raw-text documents inside it are loaded as a skill pack.
+
+The model-facing skill title comes from front matter such as `name: astro-python-scripts`, not from the filename. `description:` is preserved and shown to the model as activation guidance.
+
 ## What to add
 
 - One concern per file, or one file with a `name` in front matter (see `_template.md`).

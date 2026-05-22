@@ -38,6 +38,7 @@ Drop plain Markdown (optional `---` / `---` front matter with `name:`) into a di
 | `lib/skills/markdown.py` | Load and merge `.md` prompt skills from a directory |
 | `lib/skills/builtin/example_runtime_skill.py` | Default built-in skill when skills are on (quality-gate reminder tool + small prompt blurb) |
 | `lib/skills/builtin/dummy_skill.py` | **Template only** — commented echo tool; not loaded by default; add path to `AQUILLM_SKILLS_EXTRA_MODULES` (or copy the file) when authoring new skills |
+| `apps/chat/services/collection_prompt_skills.py` | Load selected-collection Markdown prompt skills for the current session only |
 | `apps/chat/services/skills_runtime.py` | Reads Django settings, builds context from `ChatConsumer`, returns tools and effective base system string |
 
 ### Configuration
@@ -47,13 +48,17 @@ Drop plain Markdown (optional `---` / `---` front matter with `name:`) into a di
 | `AQUILLM_SKILLS_ENABLED` | off (`0` / false) | When on, built-in + extra skill modules are loaded; markdown directory is also honored when set |
 | `AQUILLM_SKILLS_EXTRA_MODULES` | empty | Comma-separated dotted paths **in addition** to the built-in example skill |
 | `AQUILLM_SKILLS_MARKDOWN_DIR` | empty | Directory of `.md` files (path relative to **repository root** or absolute); empty = do not load markdown skills |
+| `AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED` | off (`0` / false) | When on, selected collections may contribute session-scoped Markdown prompt skills |
+| `AQUILLM_COLLECTION_MARKDOWN_SKILLS_MAX_CHARS` | `12000` | Character cap for all collection-backed prompt skills in one session |
 
 Built-in module list is `lib.skills.loader.DEFAULT_BUILTIN_MODULES` (includes `lib.skills.builtin.example_runtime_skill`).
 
 ### Runtime flow (chat)
 
 1. On WebSocket connect, after a valid `WSConversation` is loaded, `ChatConsumer` appends `build_skill_tools(consumer)` when skills are enabled.
-2. For memory augmentation (`augment_conversation_with_memory_async`), the base system string is `effective_base_system_for_memory(consumer)` = DB `system_prompt` + **Python** `get_system_prompt_extra` text (if any) + **markdown** file content (if any), then episodic/profile memory blocks are appended as today.
+2. For memory augmentation (`augment_conversation_with_memory_async`), the base system string is `effective_base_system_for_memory(consumer)` = DB `system_prompt` + **Python** `get_system_prompt_extra` text (if any) + **markdown** file content (if any) + selected-collection prompt skills (if enabled), then episodic/profile memory blocks are appended as today.
+
+Collection-backed prompt skills load only from selected collections. A document named `skills`, `skill`, or `*_skill` is treated as a one-off prompt skill. A direct child subcollection named `skills` or `skill_pack` is treated as a skill pack, and its Markdown/raw-text documents are appended as prompt skills for that session.
 
 MCP and separate agent loops are not wired here yet; they will use the same `LLMTool` shape when implemented per `docs/roadmap/plans/pending/2026-03-20-mcp-skills-agents-structure.md`.
 

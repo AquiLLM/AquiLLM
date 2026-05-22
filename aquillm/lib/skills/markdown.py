@@ -47,14 +47,34 @@ def _parse_simple_front_matter_block(raw: str) -> tuple[dict[str, str], str]:
         return {}, raw
     body = "\n".join(lines[i + 1 :]).lstrip("\n")
     meta: dict[str, str] = {}
-    for line in meta_lines:
+    i = 0
+    while i < len(meta_lines):
+        line = meta_lines[i]
         if ":" not in line:
+            i += 1
             continue
         key, _, val = line.partition(":")
         k = key.strip().lower().replace(" ", "_")
         v = val.strip()
-        if k and v:
+        if not k:
+            i += 1
+            continue
+        if v in {">", "|"}:
+            block_lines: list[str] = []
+            i += 1
+            while i < len(meta_lines):
+                continuation = meta_lines[i]
+                if continuation and not continuation[:1].isspace():
+                    break
+                block_lines.append(continuation.strip())
+                i += 1
+            nonempty = [part for part in block_lines if part]
+            if nonempty:
+                meta[k] = " ".join(nonempty) if v == ">" else "\n".join(nonempty)
+            continue
+        if v:
             meta[k] = v
+        i += 1
     return meta, body
 
 
