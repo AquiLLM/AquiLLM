@@ -44,7 +44,7 @@ def _conversation_used_whole_document(conversation: Conversation) -> bool:
 
 
 def _post_tool_output_ceiling() -> int:
-    return _env_int("LLM_POST_TOOL_OUTPUT_MAX_TOKENS", 6144, minimum=256)
+    return _env_int("LLM_POST_TOOL_OUTPUT_MAX_TOKENS", 12288, minimum=256)
 
 
 def _post_tool_global_max(global_max: int) -> int:
@@ -61,7 +61,7 @@ def _resolve_post_tool_max_tokens(
     if _conversation_used_whole_document(conversation):
         cap = max(
             cap,
-            _env_int("LLM_POST_TOOL_WHOLE_DOC_MAX_TOKENS", 6144, minimum=256),
+            _env_int("LLM_POST_TOOL_WHOLE_DOC_MAX_TOKENS", 12288, minimum=256),
         )
     return min(cap, max(global_max, _post_tool_output_ceiling()))
 
@@ -77,9 +77,8 @@ def _resolve_continuation_max_tokens(
     if _conversation_used_whole_document(conversation):
         cap = max(
             cap,
-            _env_int("LLM_CONTINUATION_WHOLE_DOC_MAX_TOKENS", 2048, minimum=128),
+            _env_int("LLM_CONTINUATION_WHOLE_DOC_MAX_TOKENS", 6144, minimum=128),
         )
-    cap = max(cap, post_tool_budget // 2)
     return min(global_max, post_tool_budget, cap)
 
 
@@ -391,6 +390,11 @@ def _continuation_separator(partial_text: str, continuation_text: str) -> str:
         return ""
     if continuation_text.startswith((")", "]", "/", ".", ",", ":", ";", "!", "?")):
         return ""
+    tail = partial_text.rstrip()
+    if tail.endswith(("&", "*", "(", "[", "{", "-", "—")):
+        return ""
+    if tail.endswith("**") or tail.count("**") % 2 == 1:
+        return ""
     return "\n"
 
 
@@ -402,22 +406,60 @@ def _largest_suffix_prefix_overlap(left: str, right: str, min_chars: int = 1) ->
     return 0
 
 
+def _largest_common_prefix(left: str, right: str, min_chars: int = 1) -> int:
+    max_size = min(len(left), len(right))
+    for size in range(max_size, max(min_chars, 1) - 1, -1):
+        if left[:size] == right[:size]:
+            return size
+    return 0
+
+
+def _suffix_prefix_overlap_threshold(partial: str, continuation: str, overlap: int) -> int:
+    if overlap <= 0:
+        return 0
+    if overlap <= 12:
+        return 3
+    return max(3, min(96, min(len(partial), len(continuation)) // 8))
+
+
+def _repair_continuation_seam(partial_text: str, merged_text: str) -> str:
+    """Fix glued tokens and doubled percent signs at the partial/continuation boundary."""
+    if not partial_text or not merged_text or len(partial_text) >= len(merged_text):
+        return merged_text
+    window_start = max(0, len(partial_text) - 48)
+    window_end = min(len(merged_text), len(partial_text) + 48)
+    window = merged_text[window_start:window_end]
+    repaired = re.sub(r"(\d+(?:\.\d+)?%)(?:\1)+", r"\1", window)
+    if repaired == window:
+        return merged_text
+    return merged_text[:window_start] + repaired + merged_text[window_end:]
+
+
 def _trim_duplicate_continuation_prefix(partial_text: str, continuation_text: str) -> str:
     partial = partial_text or ""
     continuation = continuation_text or ""
     if (not partial) or (not continuation):
         return continuation
 
-    trimmed = False
-    overlap_floor = max(16, min(96, min(len(partial), len(continuation)) // 3))
-    suffix_overlap = _largest_suffix_prefix_overlap(partial, continuation, min_chars=overlap_floor)
-    if suffix_overlap:
-        continuation = continuation[suffix_overlap:]
-        trimmed = True
+    cont = continuation.lstrip("\r\n")
+    partial_stripped = partial.lstrip("\r\n")
 
-    if trimmed:
-        continuation = continuation.lstrip("\r\n")
-    return continuation
+    if partial_stripped.startswith(cont):
+        return ""
+
+    if cont.startswith(partial):
+        cont = cont[len(partial) :]
+    else:
+        prefix_overlap = _largest_common_prefix(partial_stripped, cont, min_chars=1)
+        if prefix_overlap >= 24:
+            cont = cont[prefix_overlap:]
+
+    suffix_overlap = _largest_suffix_prefix_overlap(partial, cont, min_chars=1)
+    threshold = _suffix_prefix_overlap_threshold(partial, cont, suffix_overlap)
+    if suffix_overlap >= threshold:
+        cont = cont[suffix_overlap:]
+
+    return cont.lstrip("\r\n")
 
 
 async def complete_conversation_turn(
@@ -493,8 +535,8 @@ async def complete_conversation_turn(
 
         effective_stream_func = _live_citation_stream
     tool_step_max_tokens = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 512, minimum=128)
-    post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 3072, minimum=256)
-    continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 1536, minimum=128)
+    post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 8192, minimum=256)
+    continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 4096, minimum=128)
     citation_retry_prior_max_chars = _env_int("LLM_CITATION_RETRY_PRIOR_MAX_CHARS", 2400, minimum=512)
     request_max_tokens = max_tokens
     if isinstance(last_message, UserMessage) and last_message.tools:
@@ -634,7 +676,8 @@ async def complete_conversation_turn(
                 preserve_partial_response = True
         if continuation_text and not fb.looks_like_deferred_tool_intent(continuation_text):
             separator = _continuation_separator(response_text, continuation_text)
-            response_text = f"{response_text.rstrip()}{separator}{continuation_text}"
+            merged = f"{response_text.rstrip()}{separator}{continuation_text}"
+            response_text = _repair_continuation_seam(response_text, merged)
             response = continuation_response
         elif not preserve_partial_response:
             retry_response = await _retry_post_tool_synthesis(

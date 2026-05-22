@@ -61,7 +61,10 @@ class LLMInterface(ABC):
             return None
         continuation_prompt = (
             "Continue the previous assistant response exactly where it stopped. "
-            "Do not restart, do not repeat prior points, and keep the same structure/tone."
+            "Do not restart from the beginning, do not repeat prior points or section headings, "
+            "and keep the same structure/tone. "
+            "If the previous text ended mid-sentence, mid-heading, or mid-list item, "
+            "complete that fragment first before starting any new section."
         )
         continuation_messages = message_dicts + [
             {"role": "assistant", "content": partial_text},
