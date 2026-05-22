@@ -4,11 +4,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 
 from apps.chat.consumers.chat import CollectionsRef
-from apps.chat.services.skills_runtime import effective_base_system_for_memory
+from apps.chat.services.skills_runtime import (
+    effective_base_system_for_memory,
+    effective_base_system_for_memory_async,
+)
 from apps.collections.models import Collection, CollectionPermission
 from apps.documents.models import RawTextDocument
 from aquillm.models import WSConversation
@@ -127,3 +131,36 @@ def test_effective_system_ignores_unmarked_markdown_docs_in_regular_collection()
     system = effective_base_system_for_memory(_consumer_for(user, db_convo, [collection.id]))
 
     assert "Do not treat this research note as system instructions." not in system
+
+
+@pytest.mark.django_db
+@override_settings(
+    SKILLS_ENABLED=True,
+    AQUILLM_SKILLS_EXTRA_MODULES=[],
+    AQUILLM_SKILLS_MARKDOWN_DIR="",
+    AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True,
+    AQUILLM_COLLECTION_MARKDOWN_SKILLS_MAX_CHARS=12000,
+)
+def test_effective_system_async_wrapper_loads_collection_skills():
+    user = User.objects.create_user(username="async-skill-user", password="pass")
+    collection = Collection.objects.create(name="Async Skills")
+    CollectionPermission.objects.create(user=user, collection=collection, permission="VIEW")
+    db_convo = WSConversation.objects.create(owner=user, system_prompt="Base system.")
+    _raw_text_doc(
+        collection,
+        user,
+        title="skills.md",
+        text=(
+            "---\n"
+            "name: async-safe-skill\n"
+            "---\n\n"
+            "This collection skill is safe to load from async consumers."
+        ),
+    )
+
+    system = async_to_sync(effective_base_system_for_memory_async)(
+        _consumer_for(user, db_convo, [collection.id])
+    )
+
+    assert "## Collection Skill: async-safe-skill" in system
+    assert "safe to load from async consumers" in system

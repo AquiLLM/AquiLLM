@@ -25,7 +25,7 @@ from apps.chat.consumers.chat_ws_errors import send_connect_error
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
-from apps.chat.services.skills_runtime import build_skill_tools, effective_base_system_for_memory
+from apps.chat.services.skills_runtime import build_skill_tools, effective_base_system_for_memory_async
 from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
 from lib.tools.debug.weather import get_debug_weather_tool
 
@@ -136,7 +136,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
             augment_start = perf_counter()
             await augment_conversation_with_memory_async(
-                self.convo, self.user, effective_base_system_for_memory(self), self.db_convo.id
+                self.convo,
+                self.user,
+                await effective_base_system_for_memory_async(self),
+                self.db_convo.id,
             )
             logger.info(
                 "Memory augmentation took %.1fms in connect()",

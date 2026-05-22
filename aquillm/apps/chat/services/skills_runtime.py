@@ -5,6 +5,7 @@ import structlog
 from pathlib import Path
 from typing import Any
 
+from channels.db import database_sync_to_async
 from django.conf import settings
 
 from aquillm.llm import LLMTool
@@ -86,8 +87,12 @@ def effective_base_system_for_memory(consumer: Any) -> str:
     return f"{base.rstrip()}\n\n{extra}"
 
 
+effective_base_system_for_memory_async = database_sync_to_async(effective_base_system_for_memory)
+
+
 __all__ = [
     "build_skill_runtime_context",
     "build_skill_tools",
     "effective_base_system_for_memory",
+    "effective_base_system_for_memory_async",
 ]
