@@ -13,7 +13,10 @@ from .llm import (
     Conversation, UserMessage, AssistantMessage, ToolMessage,
     LLM_Message,
 )
-from lib.llm.providers.visibility import assistant_content_for_frontend
+from lib.llm.providers.visibility import (
+    assistant_content_for_frontend,
+    sanitize_assistant_text,
+)
 
 
 def _frontend_message_content(msg: LLM_Message) -> str:
