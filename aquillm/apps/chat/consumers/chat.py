@@ -19,6 +19,7 @@ from aquillm.message_adapters import load_conversation_from_db, pydantic_message
 from aquillm.settings import DEBUG, SKILLS_ENABLED
 from aquillm.tasks import enqueue_conversation_memories_task
 from apps.chat.consumers.chat_delta import send_conversation_delta
+from apps.chat.consumers.chat_publish import run_llm_spin
 from apps.chat.consumers.chat_receive import handle_chat_receive
 from apps.chat.consumers.chat_ws_errors import send_connect_error
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
@@ -145,7 +146,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.debug("About to call llm_if.spin() in connect()")
             before_spin_len = len(self.convo)
             llm_start = perf_counter()
-            await self.llm_if.spin(
+            await run_llm_spin(
+                self,
+                self.llm_if,
                 self.convo,
                 max_func_calls=CHAT_MAX_FUNC_CALLS,
                 max_tokens=CHAT_MAX_TOKENS,

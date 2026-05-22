@@ -41,8 +41,13 @@ export const groupMessages = (messages: Message[]): (Message | MessageGroup)[] =
 export const shouldShowSpinner = (messages: Message[]): boolean => {
   if (messages.length === 0) return false;
   const lastMessage = messages[messages.length - 1];
+  const assistantAwaitingAnswer =
+    lastMessage.role === 'assistant' &&
+    !lastMessage.tool_call_input &&
+    !(lastMessage.content || '').trim();
   return (
     lastMessage.role === 'user' ||
+    assistantAwaitingAnswer ||
     (lastMessage.role === 'assistant' && !!lastMessage.tool_call_input) ||
     (lastMessage.role === 'tool' && lastMessage.for_whom === 'assistant')
   );

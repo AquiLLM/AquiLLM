@@ -13,15 +13,15 @@ from .llm import (
     Conversation, UserMessage, AssistantMessage, ToolMessage,
     LLM_Message,
 )
-from lib.llm.providers.visibility import sanitize_assistant_text
+from lib.llm.providers.visibility import assistant_content_for_frontend
 
 
-def _frontend_message_content(role: str, content: str) -> str:
-    if content == "** Empty Message, tool call **":
-        content = ""
-    if role == "assistant":
-        return sanitize_assistant_text(content)
-    return content
+def _frontend_message_content(msg: LLM_Message) -> str:
+    if msg.content == "** Empty Message, tool call **":
+        return ""
+    if isinstance(msg, AssistantMessage):
+        return assistant_content_for_frontend(msg)
+    return msg.content
 
 
 def pydantic_message_to_django(
@@ -210,10 +210,11 @@ def build_frontend_conversation_json(db_convo: WSConversation) -> dict:
     """
     messages = []
     for msg in db_convo.db_messages.order_by('sequence_number'):
+        pydantic_msg = django_message_to_pydantic(msg)
         # Fields included for every message type
         msg_dict = {
             'role': msg.role,
-            'content': _frontend_message_content(msg.role, msg.content),
+            'content': _frontend_message_content(pydantic_msg),
             'message_uuid': str(msg.message_uuid),  # convert UUID to string for JSON
             'rating': msg.rating,
         }
@@ -241,7 +242,7 @@ def build_frontend_conversation_json(db_convo: WSConversation) -> dict:
 
 
 def pydantic_message_to_frontend_dict(msg: LLM_Message) -> dict:
-    content = _frontend_message_content(msg.role, msg.content)
+    content = _frontend_message_content(msg)
     msg_dict = {
         'role': msg.role,
         'content': content,

@@ -15,6 +15,7 @@ from django.core.files.base import ContentFile
 from aquillm.llm import ToolChoice, UserMessage
 from aquillm.memory import augment_conversation_with_memory_async
 from apps.chat.consumers.chat_delta import send_conversation_delta
+from apps.chat.consumers.chat_publish import run_llm_spin
 from apps.chat.consumers.chat_ws_errors import (
     send_receive_error,
     send_receive_validation_error,
@@ -175,7 +176,9 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 )
                 logger.debug("About to call llm_if.spin() in receive()")
                 llm_start = perf_counter()
-                await consumer.llm_if.spin(
+                await run_llm_spin(
+                    consumer,
+                    consumer.llm_if,
                     consumer.convo,
                     max_func_calls=CHAT_MAX_FUNC_CALLS,
                     max_tokens=CHAT_MAX_TOKENS,

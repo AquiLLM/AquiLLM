@@ -217,8 +217,14 @@ async def complete_conversation_turn(
             content = str(out.get("content", ""))
             stop_reason = str(out.get("stop_reason", "")).strip().lower()
             is_cutoff_done = stop_reason in {"length", "max_tokens"}
-            if out.get("done") and (not is_cutoff_done):
+            if (
+                out.get("done")
+                and (not is_cutoff_done)
+                and visibility.should_append_citation_sources(content)
+            ):
                 out["content"] = _append_citation_sources_if_missing(content, source_allowlist)
+            elif out.get("done") and not visibility.is_displayable_answer_text(content):
+                out["content"] = ""
             await stream_func(out)
 
         effective_stream_func = _live_citation_stream
@@ -325,7 +331,7 @@ async def complete_conversation_turn(
                     "Please retry and I will provide a full summary."
                 )
 
-    if (not response_tool_call) and visibility.is_interim_assistant_text(response_text):
+    if (not response_tool_call) and not visibility.is_displayable_answer_text(response_text):
         response_text = ""
 
     if (not response_tool_call) and (not response_text.strip()):
@@ -460,7 +466,11 @@ async def complete_conversation_turn(
                 missing_markdown_images.append(line)
             if missing_markdown_images:
                 response_text = response_text.rstrip() + "\n\n" + "\n".join(missing_markdown_images)
-    if use_live_citation_stream and (not response_tool_call):
+    if (
+        use_live_citation_stream
+        and (not response_tool_call)
+        and visibility.should_append_citation_sources(response_text)
+    ):
         response_text = _append_citation_sources_if_missing(response_text, source_allowlist)
     if response_tool_call:
         response_text = visibility.strip_thinking_blocks(response_text)

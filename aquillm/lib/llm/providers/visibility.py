@@ -1,13 +1,22 @@
-"""User-visible assistant text policy for streamed and persisted responses."""
+"""Presentation policy: what assistant text may leave the server toward the chat UI."""
 from __future__ import annotations
 
 import re
 from typing import Optional
 
+from ..types.messages import AssistantMessage
 from . import fallback_heuristics as fb
 
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>[\s\S]*?</think>", flags=re.IGNORECASE)
 _OPEN_THINK_RE = re.compile(r"<think\b[^>]*>[\s\S]*$", flags=re.IGNORECASE)
+_CHUNK_CITATION_RE = re.compile(r"\[doc:[^\]\s]+\s+chunk:\d+\]", flags=re.IGNORECASE)
+_DOC_CITATION_RE = re.compile(r"\[doc:[^\]\s]+\]", flags=re.IGNORECASE)
+_STATUS_OPENING_RE = re.compile(
+    r"^(?:retrieving|searching|looking|reading|fetching|loading|processing|analyzing|gathering)\b",
+    flags=re.IGNORECASE,
+)
+
+_DEFAULT_MIN_DISPLAY_WORDS = 20
 
 
 def strip_thinking_blocks(text: Optional[str]) -> str:
@@ -17,20 +26,79 @@ def strip_thinking_blocks(text: Optional[str]) -> str:
     return cleaned
 
 
+def _word_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9]+", text))
+
+
+def looks_like_status_only(text: Optional[str]) -> bool:
+    """
+    Short, in-progress status lines (e.g. "Retrieving the paper...") — structural, not phrase lists.
+    """
+    visible = strip_thinking_blocks(text).strip()
+    if not visible:
+        return False
+    words = _word_count(visible)
+    if words > 18:
+        return False
+    if _STATUS_OPENING_RE.match(visible):
+        return True
+    if visible.endswith(("...", "…")) and words < 15:
+        return True
+    return False
+
+
 def is_interim_assistant_text(text: Optional[str]) -> bool:
     """True for model work-in-progress prose or raw tool transcripts."""
     visible = strip_thinking_blocks(text).strip()
     if not visible:
         return False
+    if looks_like_status_only(visible):
+        return True
     return fb.looks_like_deferred_tool_intent(visible) or fb.looks_like_raw_tool_transcript(visible)
+
+
+def is_displayable_answer_text(
+    text: Optional[str],
+    *,
+    min_words: int = _DEFAULT_MIN_DISPLAY_WORDS,
+) -> bool:
+    """
+    True when assistant prose is substantial enough to show as a finished answer bubble.
+
+    Tool-call rows, streaming placeholders, and post-tool stubs stay hidden until this passes.
+    """
+    visible = strip_thinking_blocks(text).strip()
+    if not visible:
+        return False
+    if is_interim_assistant_text(visible):
+        return False
+    if _CHUNK_CITATION_RE.search(visible) or _DOC_CITATION_RE.search(visible):
+        if _word_count(visible) >= 8:
+            return True
+    if _word_count(visible) >= min_words:
+        return True
+    sentence_count = len(re.findall(r"[.!?](?:\s|$)", visible))
+    return sentence_count >= 2 and _word_count(visible) >= 12
 
 
 def sanitize_assistant_text(text: Optional[str], *, suppress_interim: bool = True) -> str:
     """Return text safe for a normal assistant response bubble."""
     visible = strip_thinking_blocks(text).strip()
-    if suppress_interim and is_interim_assistant_text(visible):
+    if suppress_interim and not is_displayable_answer_text(visible):
         return ""
     return visible
+
+
+def assistant_content_for_frontend(message: AssistantMessage) -> str:
+    """Map a persisted assistant row to user-visible bubble content."""
+    if message.tool_call_name:
+        return ""
+    return sanitize_assistant_text(message.content, suppress_interim=True)
+
+
+def should_append_citation_sources(text: Optional[str]) -> bool:
+    """Sources footer is only for display-ready answers, not status stubs."""
+    return is_displayable_answer_text(text)
 
 
 def clean_response_failure_text(*, after_tool_result: bool) -> str:
@@ -53,21 +121,32 @@ def visible_stream_content(
     done: bool,
     tool_call_payload: Optional[dict] = None,
 ) -> str:
-    """Return content safe to send through the live stream channel."""
+    """
+    Return content safe to send through the live stream channel.
+
+    Streaming stays enabled; only display-ready text is forwarded (stubs and tool
+    transcripts never reach the UI). ``raw_tools`` does not block token delivery.
+    """
+    _ = raw_tools  # call-site compatibility
     visible = strip_thinking_blocks(text)
     if tool_call_payload:
         return ""
-    if is_interim_assistant_text(visible):
-        return ""
-    if raw_tools:
-        return visible if done else ""
-    return visible
+    if is_displayable_answer_text(visible):
+        return visible
+    if done and visible.strip() and not is_interim_assistant_text(visible):
+        if _word_count(visible) >= 2:
+            return visible
+    return ""
 
 
 __all__ = [
+    "assistant_content_for_frontend",
     "clean_response_failure_text",
+    "is_displayable_answer_text",
     "is_interim_assistant_text",
+    "looks_like_status_only",
     "sanitize_assistant_text",
+    "should_append_citation_sources",
     "strip_thinking_blocks",
     "visible_stream_content",
 ]
