@@ -72,7 +72,16 @@ def prompt_budget_slack_tokens() -> int:
 
 
 def prompt_budget_max_tokens_cap() -> int:
-    return _settings_int("PROMPT_BUDGET_MAX_TOKENS_CAP", 8192)
+    return _settings_int("PROMPT_BUDGET_MAX_TOKENS_CAP", 0)
+
+
+def cap_completion_tokens(max_tokens: int) -> int:
+    """Apply the optional prompt-budget completion cap; 0 or less means uncapped."""
+    requested = max(int(max_tokens), 1)
+    cap = prompt_budget_max_tokens_cap()
+    if cap <= 0:
+        return requested
+    return min(requested, cap)
 
 
 def maybe_pack_message_dicts_for_context(
@@ -92,7 +101,7 @@ def maybe_pack_message_dicts_for_context(
         from lib.llm.utils.context_packer import load_context_packer_config, pack_messages_for_budget
 
         cfg = load_context_packer_config()
-        mt = min(max(int(max_tokens), 1), prompt_budget_max_tokens_cap())
+        mt = cap_completion_tokens(max_tokens)
         before_messages = list(message_dicts)
         out = pack_messages_for_budget(
             system_text,
@@ -132,7 +141,7 @@ def apply_preflight_trim_to_message_dicts(
         return (False, max_tokens)
 
     orig_max = max(int(max_tokens), 1)
-    mt = min(orig_max, prompt_budget_max_tokens_cap())
+    mt = cap_completion_tokens(orig_max)
     changed_pack, mt = maybe_pack_message_dicts_for_context(
         system_text, message_dicts, context_limit=limit, max_tokens=mt
     )
@@ -209,6 +218,7 @@ def sync_trimmed_dicts_into_pydantic_messages(
 
 __all__ = [
     "apply_preflight_trim_to_message_dicts",
+    "cap_completion_tokens",
     "context_packer_enabled",
     "maybe_pack_message_dicts_for_context",
     "prompt_budget_context_limit",

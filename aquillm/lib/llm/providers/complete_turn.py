@@ -36,6 +36,17 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
     return max(minimum, value)
 
 
+def _env_optional_cap(name: str, default: int, minimum: int) -> int:
+    """Return a token cap where 0 disables the cap and uses the caller budget."""
+    try:
+        value = int(getenv(name, str(default)))
+    except Exception:
+        value = default
+    if value <= 0:
+        return 0
+    return max(minimum, value)
+
+
 def _conversation_used_whole_document(conversation: Conversation) -> bool:
     for msg in reversed(conversation.messages):
         if isinstance(msg, ToolMessage) and msg.for_whom == "assistant":
@@ -125,17 +136,21 @@ def _auto_tool_followup_direct_retry_enabled() -> bool:
 
 
 def _direct_answer_retry_max_tokens() -> int:
-    return _env_int("LLM_DIRECT_ANSWER_RETRY_MAX_TOKENS", 2048, minimum=256)
+    return _env_optional_cap("LLM_DIRECT_ANSWER_RETRY_MAX_TOKENS", 2048, minimum=256)
 
 
 def _tool_call_retry_max_tokens() -> int:
-    return _env_int("LLM_TOOL_CALL_RETRY_MAX_TOKENS", 2048, minimum=256)
+    return _env_optional_cap("LLM_TOOL_CALL_RETRY_MAX_TOKENS", 2048, minimum=256)
 
 
 def _resolve_tool_step_max_tokens(max_tokens: int, tool_choice_type: str) -> int:
-    requested = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 2048, minimum=128)
+    requested = _env_optional_cap("LLM_TOOL_STEP_MAX_TOKENS", 2048, minimum=128)
+    if requested <= 0:
+        requested = max_tokens
     if tool_choice_type == "any":
-        requested = max(requested, _tool_call_retry_max_tokens())
+        retry_cap = _tool_call_retry_max_tokens()
+        if retry_cap > 0:
+            requested = max(requested, retry_cap)
     return min(max_tokens, requested)
 
 

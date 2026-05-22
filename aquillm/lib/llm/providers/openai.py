@@ -41,6 +41,57 @@ if DEBUG:
 gpt_enc = encoding_for_model('gpt-4o')
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = (getenv(name, "") or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def _looks_like_qwen_thinking_model(model_name: str) -> bool:
+    model = (model_name or "").strip().lower()
+    return any(token in model for token in ("qwen3.5", "qwen3.6"))
+
+
+def _qwen_chat_thinking_extra_body(model_name: str, *, is_local_compatible_endpoint: bool) -> dict | None:
+    """Disable Qwen hidden thinking on local vLLM chat unless explicitly opted out."""
+    if not is_local_compatible_endpoint:
+        return None
+    if not _env_bool("OPENAI_COMPAT_DISABLE_QWEN_THINKING", True):
+        return None
+    configured = " ".join(
+        (
+            getenv("VLLM_MODEL", ""),
+            getenv("VLLM_SERVED_MODEL_NAME", ""),
+            getenv("APP_CHAT_MODEL", ""),
+        )
+    )
+    if not (
+        _looks_like_qwen_thinking_model(model_name)
+        or _looks_like_qwen_thinking_model(configured)
+    ):
+        return None
+    return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def _merge_extra_body(arguments: dict, extra_body: dict | None) -> None:
+    if not extra_body:
+        return
+    existing = arguments.get("extra_body")
+    if isinstance(existing, dict):
+        merged = dict(existing)
+        for key, value in extra_body.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                nested = dict(merged[key])
+                nested.update(value)
+                merged[key] = nested
+            else:
+                merged[key] = value
+        arguments["extra_body"] = merged
+    else:
+        arguments["extra_body"] = dict(extra_body)
+
+
 class OpenAIInterface(LLMInterface):
     """LLM interface for OpenAI models."""
 
@@ -156,16 +207,16 @@ class OpenAIInterface(LLMInterface):
         try:
             from lib.llm.utils.prompt_budget import (
                 context_packer_enabled,
+                cap_completion_tokens,
                 maybe_pack_message_dicts_for_context,
                 prompt_budget_context_limit,
-                prompt_budget_max_tokens_cap,
             )
 
             pack_limit = context_limit if context_limit > 0 else prompt_budget_context_limit()
             if pack_limit > 0 and context_packer_enabled():
                 sys_row = arguments["messages"][0]
                 tail = arguments["messages"][1:]
-                mt0 = min(max(int(arguments["max_tokens"]), 1), prompt_budget_max_tokens_cap())
+                mt0 = cap_completion_tokens(arguments["max_tokens"])
                 _, mt1 = maybe_pack_message_dicts_for_context(
                     str(sys_row.get("content", "")),
                     tail,
@@ -202,6 +253,13 @@ class OpenAIInterface(LLMInterface):
             transformed_tool_choice = transform_openai_tool_choice(tool_choice_raw)
             if transformed_tool_choice is not None:
                 arguments["tool_choice"] = transformed_tool_choice
+        _merge_extra_body(
+            arguments,
+            _qwen_chat_thinking_extra_body(
+                self.base_args["model"],
+                is_local_compatible_endpoint=is_local_compatible_endpoint,
+            ),
+        )
 
         request_timeout_s = float(getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "120"))
         try:

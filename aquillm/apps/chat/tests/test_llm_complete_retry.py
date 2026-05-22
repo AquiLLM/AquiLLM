@@ -145,6 +145,41 @@ class ToolUseRetryTests(SimpleTestCase):
         self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
         self.assertNotIn('could not complete', updated[-1].content)
 
+    @patch.dict(
+        "os.environ",
+        {"LLM_TOOL_STEP_MAX_TOKENS": "0", "LLM_TOOL_CALL_RETRY_MAX_TOKENS": "0"},
+    )
+    def test_zero_tool_step_token_caps_use_full_turn_budget(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Review this paper and include figures.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(llm.calls[0]['max_tokens'], 12288)
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+
     def test_required_tool_request_retries_when_forced_retry_still_promises_to_search(self):
         llm = _FakeLLMInterface([
             LLMResponse(

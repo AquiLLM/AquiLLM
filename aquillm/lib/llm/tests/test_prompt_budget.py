@@ -79,6 +79,21 @@ def test_sync_trimmed_dicts_into_pydantic():
 
 
 @override_settings(
+    TOKEN_EFFICIENCY_ENABLED=False,
+    CONTEXT_PACKER_ENABLED=True,
+    PROMPT_BUDGET_CONTEXT_LIMIT=131072,
+    PROMPT_BUDGET_MAX_TOKENS_CAP=0,
+)
+def test_zero_max_tokens_cap_preserves_requested_completion_budget():
+    msgs = [{"role": "user", "content": "summarize this paper"}]
+
+    changed, new_max = pb.apply_preflight_trim_to_message_dicts("short", msgs, 12288)
+
+    assert changed is False
+    assert new_max == 12288
+
+
+@override_settings(
     TOKEN_EFFICIENCY_ENABLED=True,
     PROMPT_BUDGET_CONTEXT_LIMIT=512,
     PROMPT_BUDGET_SLACK_TOKENS=32,
