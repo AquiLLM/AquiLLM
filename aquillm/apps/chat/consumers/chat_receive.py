@@ -53,6 +53,10 @@ _LOCAL_TOOL_ACTION_RE = re.compile(
     r")\b",
     flags=re.IGNORECASE,
 )
+_RETRY_REQUEST_RE = re.compile(
+    r"^\s*(?:try again|retry|please retry|run it again|do that again)\s*[.!?]*\s*$",
+    flags=re.IGNORECASE,
+)
 
 
 def _looks_like_explicit_document_search_request(message_content: str) -> bool:
@@ -69,13 +73,29 @@ def _looks_like_local_tool_request(message_content: str) -> bool:
     return bool(_LOCAL_TOOL_ACTION_RE.search(message_content or ""))
 
 
+def _looks_like_retry_request(message_content: str) -> bool:
+    """True when the user asks to rerun the previous failed/unsatisfying turn."""
+    return bool(_RETRY_REQUEST_RE.match(message_content or ""))
+
+
+def _latest_prior_user_tool_intent(messages: list) -> tuple[list | None, Optional[ToolChoice]]:
+    for msg in reversed(messages):
+        if isinstance(msg, UserMessage) and msg.tools and msg.tool_choice:
+            return msg.tools, msg.tool_choice
+    return None, None
+
+
 def _configure_append_tools(
     *,
     message_content: str,
     all_tools: list,
     document_tools: list,
+    prior_user_tools: Optional[list] = None,
+    prior_user_tool_choice: Optional[ToolChoice] = None,
 ) -> tuple[list, Optional[ToolChoice]]:
     """Choose tool availability and choice strength for an appended user message."""
+    if prior_user_tools and _looks_like_retry_request(message_content):
+        return prior_user_tools, prior_user_tool_choice or ToolChoice(type="auto")
     if document_tools and _looks_like_explicit_document_search_request(message_content):
         return document_tools, ToolChoice(type="any")
     if all_tools and _looks_like_local_tool_request(message_content):
@@ -135,10 +155,15 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 for file in data["files"]
             ]
             await _save_files(files)
+        prior_user_tools, prior_user_tool_choice = _latest_prior_user_tool_intent(
+            consumer.convo.messages[:-1]
+        )
         active_tools, tool_choice = _configure_append_tools(
             message_content=consumer.convo[-1].content,
             all_tools=consumer.tools,
             document_tools=getattr(consumer, "doc_tools", []),
+            prior_user_tools=prior_user_tools,
+            prior_user_tool_choice=prior_user_tool_choice,
         )
         consumer.convo[-1].tools = active_tools
         consumer.convo[-1].files = [(file.name, file.id) for file in files]

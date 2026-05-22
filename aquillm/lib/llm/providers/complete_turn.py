@@ -128,6 +128,10 @@ def _direct_answer_retry_max_tokens() -> int:
     return _env_int("LLM_DIRECT_ANSWER_RETRY_MAX_TOKENS", 2048, minimum=256)
 
 
+def _tool_call_retry_max_tokens() -> int:
+    return _env_int("LLM_TOOL_CALL_RETRY_MAX_TOKENS", 2048, minimum=256)
+
+
 def _latest_user_turn(conversation: Conversation) -> UserMessage | None:
     for msg in reversed(conversation.messages):
         if isinstance(msg, UserMessage):
@@ -251,6 +255,38 @@ async def _run_plain_followup_answer_retry(
                 "messages": message_dicts + [{"role": "user", "content": prompt}],
                 "messages_pydantic": messages_for_bot + [UserMessage(content=prompt)],
                 "max_tokens": max(max_tokens, _direct_answer_retry_max_tokens()),
+                "stream_callback": stream_callback,
+                "stream_message_uuid": stream_message_uuid,
+            }
+        )
+    )
+
+
+async def _run_hidden_tool_call_retry(
+    llm: Any,
+    *,
+    system_prompt: str,
+    message_dicts: list[dict],
+    messages_for_bot: list[LLM_Message],
+    tools: dict[str, Any],
+    current_max_tokens: int,
+    stream_callback: Optional[Callable[[dict], Awaitable[Any]]],
+    stream_message_uuid: str,
+) -> LLMResponse:
+    prompt = (
+        "The prior attempt did not produce a visible tool call. "
+        "Call exactly one available tool now using valid JSON arguments. "
+        "Do not answer in prose before the tool result is available."
+    )
+    return await llm.get_message(
+        **(
+            llm.base_args
+            | tools
+            | {
+                "system": system_prompt,
+                "messages": message_dicts + [{"role": "user", "content": prompt}],
+                "messages_pydantic": messages_for_bot + [UserMessage(content=prompt)],
+                "max_tokens": max(current_max_tokens, _tool_call_retry_max_tokens()),
                 "stream_callback": stream_callback,
                 "stream_message_uuid": stream_message_uuid,
             }
@@ -645,6 +681,26 @@ async def complete_conversation_turn(
     if should_force_tool_retry:
         retry_args = sdk_args | {"tool_choice": {"type": "any"}}
         response = await llm.get_message(**retry_args)
+
+    if (
+        isinstance(last_message, UserMessage)
+        and bool(last_message.tools)
+        and bool(last_message.tool_choice)
+        and not response.tool_call
+        and not visibility.strip_tool_markup(
+            visibility.strip_thinking_blocks(response.text)
+        ).strip()
+    ):
+        response = await _run_hidden_tool_call_retry(
+            llm,
+            system_prompt=request_system_prompt,
+            message_dicts=message_dicts,
+            messages_for_bot=messages_for_bot,
+            tools=tools,
+            current_max_tokens=request_max_tokens,
+            stream_callback=provider_stream_func,
+            stream_message_uuid=stream_message_uuid,
+        )
 
     if is_post_tool_result_turn and not response.tool_call:
         response = await _retry_post_tool_synthesis(

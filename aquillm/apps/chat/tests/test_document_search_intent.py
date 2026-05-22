@@ -48,6 +48,21 @@ def test_followup_figure_request_without_source_word_requires_document_tool_call
     assert tool_choice == ToolChoice(type="any")
 
 
+def test_retry_request_reuses_prior_tool_intent():
+    message = "try again"
+
+    tools, tool_choice = _configure_append_tools(
+        message_content=message,
+        all_tools=[_test_document_ids, _test_image_result_tool],
+        document_tools=[_test_document_ids],
+        prior_user_tools=[_test_document_ids],
+        prior_user_tool_choice=ToolChoice(type="any"),
+    )
+
+    assert tools == [_test_document_ids]
+    assert tool_choice == ToolChoice(type="any")
+
+
 def test_regular_followup_omits_tools_for_direct_answer():
     message = "Can you show how they predict a rotating black hole?"
 

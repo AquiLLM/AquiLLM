@@ -99,6 +99,52 @@ class ToolUseRetryTests(SimpleTestCase):
         self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
         self.assertNotIn("I'll retrieve", updated[-1].content)
 
+    def test_required_tool_request_retries_with_more_budget_when_first_response_is_hidden_thinking(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="<think>I need to inspect the selected paper before answering.",
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=512,
+            ),
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content=(
+                        'Give me a highly detailed academic summary of this paper, '
+                        'show images from it, and explain the math.'
+                    ),
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'any')
+        self.assertEqual(llm.calls[0]['max_tokens'], 512)
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertGreaterEqual(llm.calls[1]['max_tokens'], 2048)
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+        self.assertNotIn('could not complete', updated[-1].content)
+
     def test_does_not_retry_for_normal_non_tool_text_reply(self):
         llm = _FakeLLMInterface([
             LLMResponse(
