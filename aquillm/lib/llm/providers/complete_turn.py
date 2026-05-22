@@ -154,6 +154,58 @@ def _resolve_tool_step_max_tokens(max_tokens: int, tool_choice_type: str) -> int
     return min(max_tokens, requested)
 
 
+def _visible_text_is_empty_or_interim(text: Optional[str]) -> bool:
+    visible = visibility.strip_tool_markup(visibility.strip_thinking_blocks(text)).strip()
+    return (not visible) or visibility.is_interim_assistant_text(visible)
+
+
+def _deterministic_required_tool_call(
+    *,
+    last_message: UserMessage,
+    stream_message_uuid: str,
+    input_usage: int,
+    output_usage: int,
+    model: str | None,
+) -> LLMResponse | None:
+    """Fail open to a safe first retrieval call when a required tool turn produced only reasoning."""
+    available = {tool.name: tool for tool in (last_message.tools or [])}
+    if "vector_search" in available:
+        query = " ".join((last_message.content or "").split())
+        if not query:
+            return None
+        return LLMResponse(
+            text=None,
+            tool_call={
+                "tool_call_id": str(uuid.uuid4()),
+                "tool_call_name": "vector_search",
+                "tool_call_input": {
+                    "search_string": query,
+                    "top_k": 10,
+                },
+            },
+            stop_reason="tool_use",
+            input_usage=input_usage,
+            output_usage=output_usage,
+            model=model,
+            message_uuid=stream_message_uuid,
+        )
+    if "document_ids" in available:
+        return LLMResponse(
+            text=None,
+            tool_call={
+                "tool_call_id": str(uuid.uuid4()),
+                "tool_call_name": "document_ids",
+                "tool_call_input": {},
+            },
+            stop_reason="tool_use",
+            input_usage=input_usage,
+            output_usage=output_usage,
+            model=model,
+            message_uuid=stream_message_uuid,
+        )
+    return None
+
+
 def _latest_user_turn(conversation: Conversation) -> UserMessage | None:
     for msg in reversed(conversation.messages):
         if isinstance(msg, UserMessage):
@@ -712,12 +764,7 @@ async def complete_conversation_turn(
         and bool(last_message.tool_choice)
         and tool_choice_type == "any"
         and not response.tool_call
-        and (
-            not visibility.strip_tool_markup(
-                visibility.strip_thinking_blocks(response.text)
-            ).strip()
-            or visibility.is_interim_assistant_text(response.text)
-        )
+        and _visible_text_is_empty_or_interim(response.text)
     ):
         response = await _run_hidden_tool_call_retry(
             llm,
@@ -729,6 +776,24 @@ async def complete_conversation_turn(
             stream_callback=provider_stream_func,
             stream_message_uuid=stream_message_uuid,
         )
+
+    if (
+        isinstance(last_message, UserMessage)
+        and bool(last_message.tools)
+        and bool(last_message.tool_choice)
+        and tool_choice_type == "any"
+        and not response.tool_call
+        and _visible_text_is_empty_or_interim(response.text)
+    ):
+        deterministic_response = _deterministic_required_tool_call(
+            last_message=last_message,
+            stream_message_uuid=stream_message_uuid,
+            input_usage=response.input_usage,
+            output_usage=response.output_usage,
+            model=response.model,
+        )
+        if deterministic_response is not None:
+            response = deterministic_response
 
     if is_post_tool_result_turn and not response.tool_call:
         response = await _retry_post_tool_synthesis(

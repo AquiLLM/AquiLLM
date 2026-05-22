@@ -11,9 +11,20 @@ from aquillm.llm import (
     UserMessage,
     LLMResponse,
     ToolChoice,
+    llm_tool,
 )
 
 from apps.chat.tests.chat_message_test_support import _FakeLLMInterface, _test_document_ids
+
+
+@llm_tool(
+    for_whom='assistant',
+    required=['search_string', 'top_k'],
+    param_descs={'search_string': 'query', 'top_k': 'count'},
+)
+def vector_search(search_string: str, top_k: int):
+    """Search selected documents."""
+    return {'result': f'{search_string}:{top_k}'}
 
 
 class ToolUseRetryTests(SimpleTestCase):
@@ -179,6 +190,48 @@ class ToolUseRetryTests(SimpleTestCase):
         self.assertEqual(changed, 'changed')
         self.assertEqual(llm.calls[0]['max_tokens'], 12288)
         self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+
+    def test_required_document_tool_turn_falls_back_to_vector_search_when_model_only_thinks(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="<think>I need to inspect the selected paper first.</think>",
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=50,
+            ),
+            LLMResponse(
+                text="<think>I still need to inspect the selected paper.</think>",
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=50,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Tell me about the paper and show me a figure or two.',
+                    tools=[vector_search, _test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(updated[-1].tool_call_name, 'vector_search')
+        self.assertEqual(
+            updated[-1].tool_call_input,
+            {
+                'search_string': 'Tell me about the paper and show me a figure or two.',
+                'top_k': 10,
+            },
+        )
+        self.assertNotIn('could not complete', updated[-1].content)
 
     def test_required_tool_request_retries_when_forced_retry_still_promises_to_search(self):
         llm = _FakeLLMInterface([
