@@ -6,7 +6,7 @@ import re
 from base64 import b64decode
 from json import loads
 from time import perf_counter
-from typing import Any
+from typing import Any, Optional
 
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError
@@ -45,6 +45,14 @@ _DOCUMENT_FIGURE_ACTION_RE = re.compile(
     r"\b(show|display|render|include|explain|find|get|pull|open)\b",
     flags=re.IGNORECASE,
 )
+_LOCAL_TOOL_ACTION_RE = re.compile(
+    r"\b("
+    r"sky\s+subtraction|subtract\s+the\s+sky|flat[-\s]?field(?:ing)?|"
+    r"point\s+source(?:s)?|detect\s+source(?:s)?|fits|uploaded\s+files?|"
+    r"use\s+(?:the\s+)?tool|run\s+(?:the\s+)?tool"
+    r")\b",
+    flags=re.IGNORECASE,
+)
 
 
 def _looks_like_explicit_document_search_request(message_content: str) -> bool:
@@ -56,16 +64,23 @@ def _looks_like_explicit_document_search_request(message_content: str) -> bool:
     return bool(_DOCUMENT_TARGET_RE.search(text) and _DOCUMENT_SEARCH_ACTION_RE.search(text))
 
 
+def _looks_like_local_tool_request(message_content: str) -> bool:
+    """True for app-local non-document tools such as FITS processing."""
+    return bool(_LOCAL_TOOL_ACTION_RE.search(message_content or ""))
+
+
 def _configure_append_tools(
     *,
     message_content: str,
     all_tools: list,
     document_tools: list,
-) -> tuple[list, ToolChoice]:
+) -> tuple[list, Optional[ToolChoice]]:
     """Choose tool availability and choice strength for an appended user message."""
     if document_tools and _looks_like_explicit_document_search_request(message_content):
         return document_tools, ToolChoice(type="any")
-    return all_tools, ToolChoice(type="auto")
+    if all_tools and _looks_like_local_tool_request(message_content):
+        return all_tools, ToolChoice(type="auto")
+    return [], None
 
 
 def _validated_collection_ids(raw_collections: Any) -> list[Any]:
@@ -120,8 +135,6 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 for file in data["files"]
             ]
             await _save_files(files)
-        # Keep the default tool set even when no collections are selected.
-        # Restricting to non-document tools here caused an astronomy-only default.
         active_tools, tool_choice = _configure_append_tools(
             message_content=consumer.convo[-1].content,
             all_tools=consumer.tools,

@@ -115,11 +115,31 @@ def _post_tool_synthesis_retry_count() -> int:
     return min(4, _env_int("LLM_POST_TOOL_SYNTHESIS_RETRIES", 2, minimum=0))
 
 
+def _auto_tool_followup_direct_retry_enabled() -> bool:
+    return getenv("LLM_AUTO_TOOL_FOLLOWUP_DIRECT_RETRY", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _direct_answer_retry_max_tokens() -> int:
+    return _env_int("LLM_DIRECT_ANSWER_RETRY_MAX_TOKENS", 2048, minimum=256)
+
+
 def _latest_user_turn(conversation: Conversation) -> UserMessage | None:
     for msg in reversed(conversation.messages):
         if isinstance(msg, UserMessage):
             return msg
     return None
+
+
+def _has_prior_assistant_context(conversation: Conversation) -> bool:
+    for msg in conversation.messages[:-1]:
+        if isinstance(msg, AssistantMessage) and visibility.is_displayable_answer_text(msg.content):
+            return True
+    return False
 
 
 def _post_tool_synthesis_unsatisfied(text: Optional[str]) -> bool:
@@ -206,6 +226,36 @@ async def _run_post_tool_synthesis_attempt(
                 user_turn.tool_choice or ToolChoice(type="auto")
             )
     return await llm.get_message(**retry_args)
+
+
+async def _run_plain_followup_answer_retry(
+    llm: Any,
+    *,
+    system_prompt: str,
+    message_dicts: list[dict],
+    messages_for_bot: list[LLM_Message],
+    max_tokens: int,
+    stream_callback: Optional[Callable[[dict], Awaitable[Any]]],
+    stream_message_uuid: str,
+) -> LLMResponse:
+    prompt = (
+        "Your previous attempt did not produce a user-visible answer. "
+        "Answer the latest user message directly using the conversation history. "
+        "Do not call tools, do not promise to search or retrieve, and do not mention internal tooling."
+    )
+    return await llm.get_message(
+        **(
+            llm.base_args
+            | {
+                "system": system_prompt,
+                "messages": message_dicts + [{"role": "user", "content": prompt}],
+                "messages_pydantic": messages_for_bot + [UserMessage(content=prompt)],
+                "max_tokens": max(max_tokens, _direct_answer_retry_max_tokens()),
+                "stream_callback": stream_callback,
+                "stream_message_uuid": stream_message_uuid,
+            }
+        )
+    )
 
 
 async def _retry_post_tool_synthesis(
@@ -630,6 +680,41 @@ async def complete_conversation_turn(
                     "I completed retrieval but received an unusable tool-call payload. "
                     "Please retry and I will provide a full summary."
                 )
+
+    should_plain_retry_auto_tool_followup = (
+        _auto_tool_followup_direct_retry_enabled()
+        and isinstance(last_message, UserMessage)
+        and bool(last_message.tools)
+        and tool_choice_type == "auto"
+        and _has_prior_assistant_context(conversation)
+        and (not response_tool_call)
+        and (
+            not response_text.strip()
+            or visibility.is_interim_assistant_text(response_text)
+        )
+    )
+    if should_plain_retry_auto_tool_followup:
+        retry_response = await _run_plain_followup_answer_retry(
+            llm,
+            system_prompt=request_system_prompt,
+            message_dicts=message_dicts,
+            messages_for_bot=messages_for_bot,
+            max_tokens=max_tokens,
+            stream_callback=provider_stream_func,
+            stream_message_uuid=stream_message_uuid,
+        )
+        retry_text = visibility.strip_tool_markup(
+            visibility.strip_thinking_blocks(retry_response.text)
+        )
+        if (
+            retry_response
+            and (not retry_response.tool_call)
+            and retry_text.strip()
+            and (not visibility.is_interim_assistant_text(retry_text))
+        ):
+            response = retry_response
+            response_text = retry_text
+            response_tool_call = {}
 
     if (not response_tool_call) and visibility.is_interim_assistant_text(response_text):
         response_text = ""

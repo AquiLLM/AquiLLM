@@ -5,6 +5,7 @@ from django.test import SimpleTestCase
 from asgiref.sync import async_to_sync
 
 from aquillm.llm import (
+    AssistantMessage,
     Conversation,
     ToolMessage,
     UserMessage,
@@ -123,6 +124,62 @@ class ToolUseRetryTests(SimpleTestCase):
 
         self.assertEqual(len(llm.calls), 1)
         self.assertIsNone(updated[-1].tool_call_id)
+
+    def test_auto_tool_followup_retries_plain_answer_when_tool_retry_stays_interim(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll retrieve the passage now.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text="I'll retrieve the passage now.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=(
+                    "A rotating black hole is described by the Kerr solution: the field equations "
+                    "admit a stationary, axisymmetric spacetime whose angular momentum drags nearby "
+                    "inertial frames and creates an ergosphere."
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(content='Show me the Einstein field equations.'),
+                AssistantMessage(
+                    content='The Einstein field equations relate curvature to stress-energy.',
+                    stop_reason='stop',
+                ),
+                UserMessage(
+                    content='Can you show how they predict a rotating black hole?',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='auto'),
+                ),
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 3)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'auto')
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertNotIn('tools', llm.calls[2])
+        self.assertNotIn('tool_choice', llm.calls[2])
+        self.assertGreaterEqual(llm.calls[2]['max_tokens'], 2048)
+        self.assertIn('Kerr solution', updated[-1].content)
+        self.assertNotIn("I'll retrieve", updated[-1].content)
 
     def test_retries_post_tool_placeholder_that_only_promises_to_help(self):
         llm = _FakeLLMInterface([

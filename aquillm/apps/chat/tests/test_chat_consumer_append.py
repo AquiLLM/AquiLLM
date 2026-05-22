@@ -55,7 +55,7 @@ async def test_append_without_files_does_not_raise(_augment, _mem_task):
 @pytest.mark.django_db
 @patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")
 @patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async")
-async def test_append_without_selected_collections_keeps_doc_tools(_augment, _mem_task):
+async def test_append_regular_chat_omits_tools(_augment, _mem_task):
     user = User.objects.create_user(username="appendtools", password="pass")
     db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
 
@@ -85,8 +85,8 @@ async def test_append_without_selected_collections_keeps_doc_tools(_augment, _me
 
     assert consumer.convo is not None
     assert len(consumer.convo.messages) >= 1
-    tool_names = [tool.name for tool in (consumer.convo[-1].tools or [])]
-    assert "_test_document_ids" in tool_names
+    assert consumer.convo[-1].tools == []
+    assert consumer.convo[-1].tool_choice is None
 
 
 @pytest.mark.asyncio

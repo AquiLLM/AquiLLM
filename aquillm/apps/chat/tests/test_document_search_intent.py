@@ -48,8 +48,21 @@ def test_followup_figure_request_without_source_word_requires_document_tool_call
     assert tool_choice == ToolChoice(type="any")
 
 
-def test_regular_chat_keeps_all_tools_on_auto():
-    message = "Can you explain why the sky subtraction step matters?"
+def test_regular_followup_omits_tools_for_direct_answer():
+    message = "Can you show how they predict a rotating black hole?"
+
+    tools, tool_choice = _configure_append_tools(
+        message_content=message,
+        all_tools=[_test_document_ids, _test_image_result_tool],
+        document_tools=[_test_document_ids],
+    )
+
+    assert tools == []
+    assert tool_choice is None
+
+
+def test_astronomy_processing_request_keeps_all_tools_on_auto():
+    message = "Please subtract the sky from object file 1 using sky file 2."
 
     tools, tool_choice = _configure_append_tools(
         message_content=message,
