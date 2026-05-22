@@ -89,7 +89,7 @@ class ToolUseRetryTests(SimpleTestCase):
             ],
         )
 
-        updated, changed = async_to_sync(llm.complete)(convo, 512)
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
 
         self.assertEqual(changed, 'changed')
         self.assertEqual(len(llm.calls), 2)
@@ -134,14 +134,68 @@ class ToolUseRetryTests(SimpleTestCase):
             ],
         )
 
-        updated, changed = async_to_sync(llm.complete)(convo, 512)
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
 
         self.assertEqual(changed, 'changed')
         self.assertEqual(len(llm.calls), 2)
         self.assertEqual(llm.calls[0]['tool_choice']['type'], 'any')
-        self.assertEqual(llm.calls[0]['max_tokens'], 512)
+        self.assertGreaterEqual(llm.calls[0]['max_tokens'], 2048)
         self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
         self.assertGreaterEqual(llm.calls[1]['max_tokens'], 2048)
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+        self.assertNotIn('could not complete', updated[-1].content)
+
+    def test_required_tool_request_retries_when_forced_retry_still_promises_to_search(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll search the selected paper and figures now.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=20,
+            ),
+            LLMResponse(
+                text="I'll retrieve the document first.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=20,
+            ),
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content=(
+                        'Give me a comprehensive review of the paper in this collection '
+                        'and show some of the figures.'
+                    ),
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 3)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'any')
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertEqual(llm.calls[2]['tool_choice']['type'], 'any')
+        self.assertGreaterEqual(llm.calls[0]['max_tokens'], 2048)
+        self.assertGreaterEqual(llm.calls[2]['max_tokens'], 2048)
         self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
         self.assertNotIn('could not complete', updated[-1].content)
 

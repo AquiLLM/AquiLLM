@@ -132,6 +132,13 @@ def _tool_call_retry_max_tokens() -> int:
     return _env_int("LLM_TOOL_CALL_RETRY_MAX_TOKENS", 2048, minimum=256)
 
 
+def _resolve_tool_step_max_tokens(max_tokens: int, tool_choice_type: str) -> int:
+    requested = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 2048, minimum=128)
+    if tool_choice_type == "any":
+        requested = max(requested, _tool_call_retry_max_tokens())
+    return min(max_tokens, requested)
+
+
 def _latest_user_turn(conversation: Conversation) -> UserMessage | None:
     for msg in reversed(conversation.messages):
         if isinstance(msg, UserMessage):
@@ -633,13 +640,13 @@ async def complete_conversation_turn(
 
         effective_stream_func = _live_citation_stream
     provider_stream_func = None if defer_stream_until_final else effective_stream_func
-    tool_step_max_tokens = _env_int("LLM_TOOL_STEP_MAX_TOKENS", 512, minimum=128)
     post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 8192, minimum=256)
     continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 4096, minimum=128)
     citation_retry_prior_max_chars = _env_int("LLM_CITATION_RETRY_PRIOR_MAX_CHARS", 2400, minimum=512)
     request_max_tokens = max_tokens
+    tool_choice_type = str(getattr(last_message.tool_choice, "type", "") or "").strip().lower()
     if isinstance(last_message, UserMessage) and last_message.tools:
-        request_max_tokens = min(max_tokens, tool_step_max_tokens)
+        request_max_tokens = _resolve_tool_step_max_tokens(max_tokens, tool_choice_type)
     elif is_post_tool_result_turn:
         request_max_tokens = _resolve_post_tool_max_tokens(
             conversation,
@@ -670,7 +677,6 @@ async def complete_conversation_turn(
     }
 
     response = await llm.get_message(**sdk_args)
-    tool_choice_type = str(getattr(last_message.tool_choice, "type", "") or "").strip().lower()
     should_force_tool_retry = (
         bool(last_message.tools)
         and bool(last_message.tool_choice)
@@ -679,17 +685,24 @@ async def complete_conversation_turn(
         and fb.looks_like_deferred_tool_intent(response.text)
     )
     if should_force_tool_retry:
-        retry_args = sdk_args | {"tool_choice": {"type": "any"}}
+        retry_args = sdk_args | {
+            "tool_choice": {"type": "any"},
+            "max_tokens": max(request_max_tokens, _tool_call_retry_max_tokens()),
+        }
         response = await llm.get_message(**retry_args)
 
     if (
         isinstance(last_message, UserMessage)
         and bool(last_message.tools)
         and bool(last_message.tool_choice)
+        and tool_choice_type == "any"
         and not response.tool_call
-        and not visibility.strip_tool_markup(
-            visibility.strip_thinking_blocks(response.text)
-        ).strip()
+        and (
+            not visibility.strip_tool_markup(
+                visibility.strip_thinking_blocks(response.text)
+            ).strip()
+            or visibility.is_interim_assistant_text(response.text)
+        )
     ):
         response = await _run_hidden_tool_call_retry(
             llm,
