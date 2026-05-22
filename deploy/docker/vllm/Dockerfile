@@ -1,6 +1,6 @@
-# Pinned: Whisper + bitsandbytes 4-bit fails on v0.18.x (V1 engine, bitsandbytes.py bias shape in encoder profile).
-# Bump to :latest (or v0.18+) only after upstream fixes or use fp16 + smaller Whisper without BnB on transcribe.
-FROM vllm/vllm-openai:v0.17.1
+# v0.21.0 brings the Qwen3.6/MTP/TurboQuant serving path needed by the
+# current remote profile. Keep libsndfile/soundfile for the Whisper sidecar.
+FROM vllm/vllm-openai:v0.21.0
 
 USER root
 RUN apt-get update \

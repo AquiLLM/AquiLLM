@@ -15,10 +15,10 @@ select_model_and_alias() {
       echo "${VLLM_MODEL:-openai/gpt-oss-120b}|${VLLM_SERVED_MODEL_NAME:-gpt-oss:120b}"
       ;;
     QWEN3_30B)
-      echo "${VLLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}|${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b}"
+      echo "${VLLM_MODEL:-hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16}|${VLLM_SERVED_MODEL_NAME:-qwen3.6:27b-mtp-awq}"
       ;;
     *)
-      echo "${VLLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}|${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b}"
+      echo "${VLLM_MODEL:-hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16}|${VLLM_SERVED_MODEL_NAME:-qwen3.6:27b-mtp-awq}"
       ;;
   esac
 }
@@ -234,8 +234,8 @@ if [ "${VLLM_TRUST_REMOTE_CODE:-0}" = "1" ] || [ "${VLLM_TRUST_REMOTE_CODE:-}" =
   fi
 fi
 
-# vLLM 0.17.x: bitsandbytes + Qwen3-VL sequence-classification reranker fails loading classifier weights
-# (AssertionError: e.g. torch.Size([1, 2048]) vs [512, 1]). Use fp16 for rerank until upstream fixes.
+# bitsandbytes + Qwen3-VL sequence-classification reranker can fail loading
+# classifier weights. Use fp16 for rerank until that path is proven stable.
 # Match rerank intents broadly: score task, reranker model id, pooling runner, or known reranker hf_overrides marker.
 _vllm_task_trim="${VLLM_TASK:-}"
 _vllm_task_trim="${_vllm_task_trim%%[$'\r']}"
@@ -249,7 +249,7 @@ if [[ "${VLLM_EXTRA_ARGS:-}" == *[Bb]itsandbytes* ]]; then
   fi
 fi
 if [ "${_rerank_bnb_strip}" = "1" ]; then
-  echo "WARN: Removing bitsandbytes flags from rerank VLLM_EXTRA_ARGS; incompatible with Qwen3-VL reranker on vLLM 0.17.x." >&2
+  echo "WARN: Removing bitsandbytes flags from rerank VLLM_EXTRA_ARGS; incompatible with Qwen3-VL reranker." >&2
   VLLM_EXTRA_ARGS="$(
     VLLM_EXTRA_ARGS_IN="${VLLM_EXTRA_ARGS}" "${PYTHON_BIN}" - <<'PY'
 import os
