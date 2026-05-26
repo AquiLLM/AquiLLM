@@ -80,6 +80,19 @@ class FakeInterface(LLMInterface):
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
+        # Out-of-band internal calls (e.g. WSConversation.set_name auto-titling) hit
+        # this same interface. They are not part of the scripted chat flow, so do
+        # not consume an index — serve a canned title-style response and return.
+        if self._is_internal_title_call(kwargs):
+            return LLMResponse(
+                text="Demo Conversation",
+                tool_call={},
+                stop_reason="end_turn",
+                input_usage=0,
+                output_usage=0,
+                model="fake",
+            )
+
         index = min(self._index, len(self.responses) - 1)
         self._index += 1
 
@@ -121,6 +134,11 @@ class FakeInterface(LLMInterface):
             )
 
         return response
+
+    @staticmethod
+    def _is_internal_title_call(kwargs: dict) -> bool:
+        system = str(kwargs.get("system") or "")
+        return "title" in system.lower() and "conversation" in system.lower()
 
     @override
     async def token_count(

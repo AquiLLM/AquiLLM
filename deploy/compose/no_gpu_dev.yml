@@ -22,8 +22,8 @@ x-common-env: &common-env
   DJANGO_DEBUG: 1
   C_FORCE_ROOT: 1
   RUN_CELERY_IN_WEB: 0
-  # LLM — OpenAI
-  LLM_CHOICE: OPENAI
+  # LLM — OpenAI by default; .env can override (e.g. LLM_CHOICE=FAKE for demo mode).
+  LLM_CHOICE: ${LLM_CHOICE:-OPENAI}
   # OCR — OpenAI vision (GPT-4o)
   APP_OCR_PROVIDER: qwen
   APP_OCR_QWEN_BASE_URL: https://api.openai.com/v1
