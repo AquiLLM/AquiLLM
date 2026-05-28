@@ -27,6 +27,7 @@ export interface UseChatWebSocketParams {
   setException: (msg: string) => void;
   setDebugHtml: (html: string | null) => void;
   setInputDisabled: (disabled: boolean) => void;
+  setSelectedCollections?: (collectionIds: Set<string>) => void;
 }
 
 const MAX_RECONNECTION_ATTEMPTS = 5;
@@ -38,6 +39,7 @@ export function useChatWebSocket({
   setException,
   setDebugHtml,
   setInputDisabled,
+  setSelectedCollections,
 }: UseChatWebSocketParams) {
   const wsRef = useRef<WebSocket | null>(null);
   const [_isConnected, setIsConnected] = useState(false);
@@ -103,6 +105,9 @@ export function useChatWebSocket({
 
           if (data.conversation) {
             const updatedConversation = data.conversation;
+            if (Array.isArray(updatedConversation.selected_collections) && setSelectedCollections) {
+              setSelectedCollections(new Set(updatedConversation.selected_collections.map(String)));
+            }
             const lastAssistantMessage = updatedConversation.messages
               .slice()
               .reverse()
@@ -185,7 +190,7 @@ export function useChatWebSocket({
         wsRef.current.close();
       }
     };
-  }, [connectionAttempts, convoId, setConversation, setException, setDebugHtml, setInputDisabled]);
+  }, [connectionAttempts, convoId, setConversation, setException, setDebugHtml, setInputDisabled, setSelectedCollections]);
 
   return { wsRef };
 }

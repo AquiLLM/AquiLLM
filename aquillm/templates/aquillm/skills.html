@@ -1,0 +1,16 @@
+{% extends "aquillm/base.html" %}
+{% load static %}
+
+{% block title %}AquiLLM -- Skills{% endblock %}
+
+{% block content %}
+  <div id="skills-page" class="h-full"></div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    window.apiUrls = window.apiUrls || {};
+    window.apiUrls.skills = "/api/skills/";
+  </script>
+  <script type="module" src="{% static 'js/dist/skills.js' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}"></script>
+{% endblock %}

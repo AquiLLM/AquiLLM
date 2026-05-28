@@ -229,3 +229,37 @@ def test_collection_permissions_post_leaves_non_figure_children_untouched(client
     assert response.status_code == 200
 
     assert CollectionPermission.objects.filter(collection=other_child, user=owner, permission="MANAGE").exists()
+
+
+@pytest.mark.django_db
+def test_collections_list_includes_created_and_updated_at(client):
+    user = User.objects.create_user(username="collections-list-user", password="pw12345")
+    collection = Collection.objects.create(name="Has Timestamps")
+    CollectionPermission.objects.create(user=user, collection=collection, permission="VIEW")
+
+    assert client.login(username="collections-list-user", password="pw12345")
+    response = client.get(reverse("api_collections"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    listed = next(item for item in payload["collections"] if item["id"] == collection.id)
+    assert listed["created_at"] == collection.created_at.isoformat()
+    assert listed["updated_at"] == collection.updated_at.isoformat()
+
+
+@pytest.mark.django_db
+def test_collections_create_response_includes_created_and_updated_at(client):
+    user = User.objects.create_user(username="collections-create-user", password="pw12345")
+    assert client.login(username="collections-create-user", password="pw12345")
+
+    response = client.post(
+        reverse("api_collections"),
+        data=json.dumps({"name": "Brand New"}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    created = Collection.objects.get(id=payload["id"])
+    assert payload["created_at"] == created.created_at.isoformat()
+    assert payload["updated_at"] == created.updated_at.isoformat()

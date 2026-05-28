@@ -151,6 +151,7 @@ INSTALLED_APPS = [
     "apps.core",
     "apps.integrations.zotero",
     "apps.bug_reports",
+    "apps.skills",
     'allauth',
     'allauth.account',
     'allauth.socialaccount',

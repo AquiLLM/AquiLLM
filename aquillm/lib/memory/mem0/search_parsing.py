@@ -43,14 +43,38 @@ def _extract_mem0_conversation_id(item: Any) -> Optional[int]:
         return None
 
 
+def _extract_mem0_user_id(item: Any) -> Optional[str]:
+    """Extract the owning user ID from Mem0 result metadata."""
+    if not isinstance(item, dict):
+        return None
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    for raw_value in (metadata.get("user_id"), item.get("user_id")):
+        if raw_value is None:
+            continue
+        normalized = str(raw_value).strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _belongs_to_user(item: Any, user_id: str) -> bool:
+    """Require explicit owner metadata before a Mem0 memory can enter prompt context."""
+    expected = str(user_id).strip()
+    if not expected:
+        return False
+    return _extract_mem0_user_id(item) == expected
+
+
 def parse_mem0_search_items(
-    raw_items: Any, top_k: int, exclude_conversation_id: Optional[int]
+    raw_items: Any, top_k: int, exclude_conversation_id: Optional[int], user_id: str
 ) -> list[RetrievedEpisodicMemory]:
     """Parse Mem0 search results into RetrievedEpisodicMemory objects."""
     parsed: list[RetrievedEpisodicMemory] = []
     if not isinstance(raw_items, list):
         return parsed
     for item in raw_items:
+        if not _belongs_to_user(item, user_id):
+            continue
         content = _extract_mem0_content(item)
         if not content:
             continue

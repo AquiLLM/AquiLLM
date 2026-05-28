@@ -28,6 +28,7 @@ from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
+from apps.skills.services.runtime import aload_user_skill_bodies
 from apps.platform_admin.feedbackql.link_tool import build_feedback_link_tool
 from lib.mcp.config import get_mcp_config
 from lib.mcp.client import MCPClient
@@ -119,13 +120,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=dumps({"stream": payload}))
 
     def _effective_system_prompt(self) -> str:
-        """db system prompt + current date + skill index + any slash-activated skill bodies."""
+        """db system prompt + current date + DB user-skill bodies + file-skill index + slash-activated skill bodies."""
         parts: list[str] = []
         base = self.db_convo.system_prompt if self.db_convo else ""
         if base:
             parts.append(base.rstrip())
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         parts.append(f"Today's date is {today} (UTC).")
+        user_skill_bodies = getattr(self, "_user_skill_bodies", "") or ""
+        if user_skill_bodies:
+            parts.append(user_skill_bodies)
         extra = getattr(self, "_skill_prompt_extra", "") or ""
         if extra:
             parts.append(extra)
@@ -171,6 +175,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             col_perm.collection.id
             for col_perm in CollectionPermission.objects.filter(user=self.user)
         ]
+
+    def _apply_saved_collection_selection(self) -> None:
+        if self.db_convo is None:
+            return
+        self.col_ref.collections = list(self.db_convo.selected_collection_ids or [])
 
     async def connect(self):
         logger.debug("ChatConsumer.connect() called")
@@ -244,6 +253,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.dead = True
             await self.send('{"exception": "Invalid chat_id"}')
             return
+        self._apply_saved_collection_selection()
+        self._user_skill_bodies = (await aload_user_skill_bodies(self.user.id)).strip()
         try:
             self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
             self.last_sent_sequence = len(self.convo) - 1
@@ -252,6 +263,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     {
                         "conversation": {
                             "system": self.db_convo.system_prompt,
+                            "selected_collections": self.db_convo.selected_collection_ids or [],
                             "messages": [
                                 pydantic_message_to_frontend_dict(msg) for msg in self.convo
                             ],

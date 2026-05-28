@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 
 import type { Message, Collection, Conversation, ChatProps } from '../types';
 import { MessageBubble } from './MessageBubble';
@@ -7,6 +7,7 @@ import ChatInputDock from './ChatInputDock';
 import { groupMessages, shouldShowSpinner } from '../utils';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
 import ChatCollectionsModal from './ChatCollectionsModal';
+import { AquillmLogo } from '../../../shared/components';
 
 const normalizeCollectionId = (collectionId: string | number): string => String(collectionId);
 
@@ -43,6 +44,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     setException,
     setDebugHtml,
     setInputDisabled,
+    setSelectedCollections,
   });
 
   useEffect(() => {
@@ -210,23 +212,33 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     });
   };
 
+  const persistSelectedCollections = useCallback((collectionIds: Set<string>) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      action: 'select_collections',
+      collections: Array.from(collectionIds).map(toPayloadCollectionId),
+    }));
+  }, [wsRef]);
+
   const handleCollectionToggle = (collectionId: string) => {
     const normalizedCollectionId = normalizeCollectionId(collectionId);
-    setSelectedCollections((prev) => {
-      const newSelected = new Set(prev);
-      if (newSelected.has(normalizedCollectionId)) {
-        newSelected.delete(normalizedCollectionId);
-        getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
-          newSelected.delete(descendantId);
-        });
-      } else {
-        newSelected.add(normalizedCollectionId);
-        getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
-          newSelected.add(descendantId);
-        });
-      }
-      return newSelected;
-    });
+    const nextSelected = new Set(selectedCollections);
+
+    if (nextSelected.has(normalizedCollectionId)) {
+      nextSelected.delete(normalizedCollectionId);
+      getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
+        nextSelected.delete(descendantId);
+      });
+    } else {
+      nextSelected.add(normalizedCollectionId);
+      getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
+        nextSelected.add(descendantId);
+      });
+    }
+
+    setSelectedCollections(nextSelected);
+    persistSelectedCollections(nextSelected);
   };
 
   const filteredCollections = collections.filter((collection) =>
@@ -296,8 +308,29 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
           })}
 
           {shouldShowSpinner(conversation.messages) && (
-            <div className="flex justify-center my-2">
-              <div className="animate-spin rounded-full h-8 w-8 border-4 border-accent border-t-transparent" />
+            <div className="group flex justify-start" role="status" aria-label="AquiLLM is thinking">
+              <div className="w-[88%] flex flex-col items-start">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <AquillmLogo role="assistant" />
+                  <span className="text-[11px] text-text-low_contrast">AquiLLM</span>
+                </div>
+                <div className="assistant-message chat-bubble-left-border-assistant element-border rounded-[10px] px-3 py-2 shadow-sm">
+                  <div className="flex h-[18px] items-center gap-1.5" aria-hidden="true">
+                    <span
+                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-bounce"
+                      style={{ animationDuration: '900ms' }}
+                    />
+                    <span
+                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-bounce"
+                      style={{ animationDelay: '120ms', animationDuration: '900ms' }}
+                    />
+                    <span
+                      className="h-2 w-2 rounded-full bg-accent opacity-50 animate-bounce"
+                      style={{ animationDelay: '240ms', animationDuration: '900ms' }}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
           )}
           <div ref={conversationEndRef} />

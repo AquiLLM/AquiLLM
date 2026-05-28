@@ -37,36 +37,68 @@ class _VecChain:
 
 
 class _TriChain:
-    def __init__(self, rows, limits: dict[str, int | None], tri_filters: list[dict]):
+    def __init__(
+        self,
+        rows,
+        limits: dict[str, int | None],
+        tri_filters: list[dict],
+        exact_rows=None,
+        exact_filters=None,
+    ):
         self._rows = rows
         self._limits = limits
         self._tri_filters = tri_filters
+        self._exact_rows = [] if exact_rows is None else exact_rows
+        self._exact_filters = [] if exact_filters is None else exact_filters
+        self._limit_key = "trigram"
 
     def annotate(self, **k):
         return self
 
-    def filter(self, **k):
+    def filter(self, *args, **k):
+        if args:
+            self._rows = self._exact_rows
+            self._limit_key = "exact"
+            self._exact_filters.append({"args": args, "kwargs": dict(k)})
+            return self
         self._tri_filters.append(dict(k))
         return self
 
     def order_by(self, *a):
-        return _SliceList(self._rows, self._limits, "trigram")
+        return _SliceList(self._rows, self._limits, self._limit_key)
 
 
 class _QRoot:
-    def __init__(self, vec_rows, tri_rows, limits: dict[str, int | None], tri_filters: list[dict]):
+    def __init__(
+        self,
+        vec_rows,
+        tri_rows,
+        limits: dict[str, int | None],
+        tri_filters: list[dict],
+        exact_rows=None,
+        exact_filters=None,
+    ):
         self._vec = vec_rows
         self._tri = tri_rows
+        self._exact = [] if exact_rows is None else exact_rows
         self._limits = limits
         self._tri_filters = tri_filters
+        self._exact_filters = [] if exact_filters is None else exact_filters
         self.last_vec_chain: _VecChain | None = None
 
     def exclude(self, **k):
         self.last_vec_chain = _VecChain(self._vec, self._limits)
         return self.last_vec_chain
 
-    def filter(self, **k):
-        return _TriChain(self._tri, self._limits, self._tri_filters)
+    def filter(self, *args, **k):
+        chain = _TriChain(
+            self._tri,
+            self._limits,
+            self._tri_filters,
+            exact_rows=self._exact,
+            exact_filters=self._exact_filters,
+        )
+        return chain.filter(*args, **k)
 
 
 class _ModelCls:
@@ -88,7 +120,7 @@ def test_candidate_limits_follow_env_min_max_and_multiplier(mock_embed, mock_rer
     cfg.trigram_top_k = 100
     mock_app_cfg.return_value = cfg
 
-    limits: dict[str, int | None] = {"vector": None, "trigram": None}
+    limits: dict[str, int | None] = {"vector": None, "trigram": None, "exact": None}
     tri_filters: list[dict] = []
     mc = _ModelCls
     mc.objects.filter_by_documents.return_value = _QRoot(
@@ -129,7 +161,7 @@ def test_vector_min_limit_raises_floor(mock_embed, mock_rerank, mock_app_cfg):
     cfg.trigram_top_k = 100
     mock_app_cfg.return_value = cfg
 
-    limits: dict[str, int | None] = {"vector": None, "trigram": None}
+    limits: dict[str, int | None] = {"vector": None, "trigram": None, "exact": None}
     tri_filters: list[dict] = []
     mc = _ModelCls
     mc.objects.filter_by_documents.return_value = _QRoot(
@@ -164,7 +196,7 @@ def test_trigram_similarity_threshold_from_settings(mock_embed, mock_rerank, moc
     cfg.trigram_top_k = 30
     mock_app_cfg.return_value = cfg
 
-    limits: dict[str, int | None] = {"vector": None, "trigram": None}
+    limits: dict[str, int | None] = {"vector": None, "trigram": None, "exact": None}
     tri_filters: list[dict] = []
     mc = _ModelCls
     mc.objects.filter_by_documents.return_value = _QRoot(
@@ -177,3 +209,47 @@ def test_trigram_similarity_threshold_from_settings(mock_embed, mock_rerank, moc
     sim_filters = [f for f in tri_filters if "similarity__gt" in f]
     assert sim_filters
     assert sim_filters[-1]["similarity__gt"] == 0.02
+
+
+@override_settings(RAG_CACHE_ENABLED=True)
+@patch("apps.documents.services.chunk_search.apps.get_app_config")
+@patch("apps.documents.services.chunk_search.rerank_chunks")
+@patch("aquillm.utils.get_embedding")
+def test_exact_domain_terms_are_added_as_candidates(mock_embed, mock_rerank, mock_app_cfg):
+    mock_embed.return_value = [0.5] * 16
+    vector_chunk = MagicMock(pk=1, content="generic vector hit")
+    trigram_chunk = MagicMock(pk=2, content="generic trigram hit")
+    exact_chunk = MagicMock(pk=3, content="HSC-PDR2 Wide Survey is described here")
+    mock_rerank.return_value = [exact_chunk, vector_chunk, trigram_chunk]
+
+    cfg = MagicMock()
+    cfg.vector_top_k = 30
+    cfg.trigram_top_k = 30
+    mock_app_cfg.return_value = cfg
+
+    limits: dict[str, int | None] = {"vector": None, "trigram": None, "exact": None}
+    tri_filters: list[dict] = []
+    exact_filters: list[dict] = []
+    mc = _ModelCls
+    mc.objects.filter_by_documents.return_value = _QRoot(
+        [vector_chunk],
+        [trigram_chunk],
+        limits,
+        tri_filters,
+        exact_rows=[exact_chunk],
+        exact_filters=exact_filters,
+    )
+
+    _vector, _trigram, results = text_chunk_search(
+        mc,
+        "What does the document say about HSC-PDR2 calibration?",
+        2,
+        [MagicMock()],
+    )
+
+    assert exact_filters
+    assert limits["exact"] is not None
+    mock_rerank.assert_called_once()
+    rerank_candidates = list(mock_rerank.call_args.args[2])
+    assert exact_chunk in rerank_candidates
+    assert results[0] == exact_chunk

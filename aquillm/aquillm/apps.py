@@ -72,7 +72,8 @@ class AquillmConfig(AppConfig):
         "uploaded documents before answering. Do not rely on your training data for such "
         "questions; answer from retrieved sources and cite them. Only skip the tool for "
         "casual chat, greetings, or clearly meta questions about yourself. If a search "
-        "returns no relevant results, say so plainly — do not invent facts."
+        "returns no relevant results, say so plainly — do not invent facts.\n"
+        "For math, use KaTeX: $..$ for inline, $$..$$ for display. Never use \\(...\\) or \\[...\\] delimiters. Never duplicate math as plaintext."
     )
 
     google_genai_client = None

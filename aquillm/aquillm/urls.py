@@ -21,6 +21,10 @@ from django.contrib.auth import views as auth_views
 
 from apps.chat.urls import urlpatterns as chat_urlpatterns
 from apps.chat.views.pages import new_ws_convo
+from apps.skills.urls import (
+    api_urlpatterns as skills_api_urlpatterns,
+    page_urlpatterns as skills_page_urlpatterns,
+)
 from . import views, api_views
 from .views import urlpatterns as page_urlpatterns
 from .settings import DEBUG
@@ -31,7 +35,9 @@ from . import zotero_views
 urlpatterns = [
     path("", views.index, name="index"),
     path("api/", include(api_urlpatterns)),
+    path("api/", include(skills_api_urlpatterns)),
     path("aquillm/", include(page_urlpatterns)),
+    path("aquillm/", include(skills_page_urlpatterns)),
     path("chat/", include(chat_urlpatterns)),
     path('accounts/', include('allauth.urls')),
 

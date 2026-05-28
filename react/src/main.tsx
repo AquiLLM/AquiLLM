@@ -53,7 +53,7 @@ window.mountReactComponent = (
     FeedbackDashboard: FeedbackDashboard,
     // Add other components here
   };
-  
+
   const Component = components[componentName];
   if (Component) {
     root.render(<Component {...props} />);

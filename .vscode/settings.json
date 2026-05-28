@@ -1,4 +1,7 @@
 {
+    "terminal.integrated.env.windows": {
+        "PATH": "${env:PATH};${env:USERPROFILE}\\.cargo\\bin"
+    },
     "python.testing.pytestArgs": [
         "."
     ],

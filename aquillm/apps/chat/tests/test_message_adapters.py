@@ -182,6 +182,8 @@ class BuildFrontendJsonTests(TestCase):
         )
 
     def test_basic_structure(self):
+        self.db_convo.selected_collection_ids = [3, '7']
+        self.db_convo.save(update_fields=['selected_collection_ids', 'updated_at'])
         Message.objects.create(
             conversation=self.db_convo,
             role='user',
@@ -192,6 +194,7 @@ class BuildFrontendJsonTests(TestCase):
         result = build_frontend_conversation_json(self.db_convo)
 
         self.assertEqual(result['system'], 'You are a helpful assistant.')
+        self.assertEqual(result['selected_collections'], [3, '7'])
         self.assertEqual(len(result['messages']), 1)
         self.assertEqual(result['messages'][0]['role'], 'user')
         self.assertEqual(result['messages'][0]['content'], 'Hello')

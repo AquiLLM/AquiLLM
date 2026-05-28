@@ -50,3 +50,22 @@ class VectorSearchPackTests(SimpleTestCase):
         )
         assert "image_url" not in out["result"][0]
         assert "_image_instruction" not in out
+
+    def test_pack_empty_results_explains_no_relevant_passages(self):
+        out = pack_chunk_search_results(
+            [],
+            titles_by_doc_id={},
+            docs_by_doc_id={},
+            truncate=lambda s: s,
+            image_modality="image",
+            compact_items=False,
+            search_string="HSC-PDR2 calibration",
+            search_scope="selected documents",
+        )
+
+        assert out["result"] == []
+        assert out["retrieval_status"] == "no_results"
+        assert out["retrieval_message"] == (
+            'I searched selected documents for "HSC-PDR2 calibration", but retrieval returned '
+            "no relevant passages."
+        )

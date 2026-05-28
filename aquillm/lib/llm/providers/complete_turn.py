@@ -13,6 +13,7 @@ from ..types.tools import dump_tool_choice
 from . import fallback_heuristics as fb
 from . import image_context as imgctx
 from . import rag_citations as citations
+from .retrieval_status import append_retrieval_notice_if_missing, document_retrieval_notice
 from .summary import generate_compact_tool_summary
 
 try:
@@ -25,8 +26,6 @@ if DEBUG:
 
 
 _DOC_IMAGE_URL_RE = re.compile(r"/aquillm/document_image/([^/]+)/")
-
-
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
     try:
         value = int(getenv(name, str(default)))
@@ -255,10 +254,11 @@ async def complete_conversation_turn(
     }
 
     response = await llm.get_message(**sdk_args)
+    tool_choice_type = str(getattr(last_message.tool_choice, "type", "") or "").strip().lower()
     should_force_tool_retry = (
         bool(last_message.tools)
         and bool(last_message.tool_choice)
-        and last_message.tool_choice.type == "auto"
+        and tool_choice_type in {"auto", "any"}
         and not response.tool_call
         and fb.looks_like_deferred_tool_intent(response.text)
     )
@@ -270,7 +270,7 @@ async def complete_conversation_turn(
         response_text_for_retry = (response.text or "").strip()
         response_has_tool_call = bool(response.tool_call)
         needs_final_synthesis_retry = (not response_has_tool_call and not response_text_for_retry) or (
-            not response_has_tool_call and fb.looks_like_deferred_tool_intent(response.text)
+            not response_has_tool_call and fb.looks_like_post_tool_non_answer(response.text)
         )
         if needs_final_synthesis_retry:
             finalize_prompt = (
@@ -291,7 +291,7 @@ async def complete_conversation_turn(
         post_finalize_text = (response.text or "").strip()
         if (not response.tool_call) and (
             (not post_finalize_text)
-            or fb.looks_like_deferred_tool_intent(post_finalize_text)
+            or fb.looks_like_post_tool_non_answer(post_finalize_text)
         ):
             compact_summary = await generate_compact_tool_summary(llm, conversation, max_tokens)
             if compact_summary:
@@ -376,6 +376,10 @@ async def complete_conversation_turn(
                 synthesized = fb.synthesize_from_recent_tool_results(conversation)
                 if synthesized:
                     response_text = synthesized
+    if is_post_tool_result_turn and (not response_tool_call):
+        retrieval_notice = document_retrieval_notice(last_message)
+        if retrieval_notice:
+            response_text = append_retrieval_notice_if_missing(response_text, retrieval_notice)
     if enforce_citations and (not response_tool_call):
         is_streaming_turn = callable(stream_func)
         original_response_text = (response_text or "").strip()

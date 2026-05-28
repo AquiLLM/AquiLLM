@@ -13,6 +13,7 @@ This module integrates lib/memory (pure Python) with Django models.
 from __future__ import annotations
 
 import asyncio
+import os
 import structlog
 from typing import TYPE_CHECKING, Optional
 
@@ -46,6 +47,8 @@ if TYPE_CHECKING:
     from .llm import Conversation
 
 logger = structlog.stdlib.get_logger(__name__)
+
+DEFAULT_MEMORY_RETRIEVAL_TIMEOUT_SECONDS = 2.0
 
 # Re-export for backward compatibility
 __all__ = [
@@ -265,6 +268,56 @@ def get_last_user_message_text(convo: 'Conversation') -> str:
     return ""
 
 
+def _memory_retrieval_timeout_seconds() -> float:
+    raw_value = os.getenv(
+        "MEMORY_RETRIEVAL_TIMEOUT_SECONDS",
+        str(DEFAULT_MEMORY_RETRIEVAL_TIMEOUT_SECONDS),
+    )
+    try:
+        return max(0.0, float(raw_value))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid MEMORY_RETRIEVAL_TIMEOUT_SECONDS=%r; using %.1fs.",
+            raw_value,
+            DEFAULT_MEMORY_RETRIEVAL_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_MEMORY_RETRIEVAL_TIMEOUT_SECONDS
+
+
+async def _get_episodic_memories_with_latency_budget(
+    user: User,
+    query: str,
+    top_k: int,
+    exclude_conversation_id: Optional[int],
+):
+    timeout_seconds = _memory_retrieval_timeout_seconds()
+    lookup = get_episodic_memories_async(
+        user,
+        query,
+        top_k=top_k,
+        exclude_conversation_id=exclude_conversation_id,
+    )
+    if timeout_seconds <= 0:
+        return await lookup
+    try:
+        return await asyncio.wait_for(lookup, timeout=timeout_seconds)
+    except TimeoutError:
+        logger.warning(
+            "Skipping episodic memory injection after %.2fs timeout; user_id=%s query=%r",
+            timeout_seconds,
+            getattr(user, "id", None),
+            query[:180] if isinstance(query, str) else "",
+        )
+        return []
+    except Exception as exc:
+        logger.warning(
+            "Skipping episodic memory injection after retrieval failure; user_id=%s error=%s",
+            getattr(user, "id", None),
+            exc,
+        )
+        return []
+
+
 def augment_conversation_with_memory(
     convo: 'Conversation',
     user: User,
@@ -302,8 +355,11 @@ async def augment_conversation_with_memory_async(
     """
     query = get_last_user_message_text(convo)
     profile_task = database_sync_to_async(get_user_profile_facts)(user)
-    episodic_task = get_episodic_memories_async(
-        user, query, top_k=EPISODIC_TOP_K, exclude_conversation_id=exclude_conversation_id
+    episodic_task = _get_episodic_memories_with_latency_budget(
+        user,
+        query,
+        top_k=EPISODIC_TOP_K,
+        exclude_conversation_id=exclude_conversation_id,
     )
     profile_facts, episodic = await asyncio.gather(profile_task, episodic_task)
     logger.info(
