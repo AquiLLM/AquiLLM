@@ -16,9 +16,41 @@ from apps.collections.models import Collection
 from apps.documents.models import Document, DocumentChild, TextChunk
 from lib.tools.documents.ids import clean_and_parse_doc_id, resolve_doc_id_with_candidates
 from lib.tools.documents.list_ids import titles_to_document_ids
+from apps.skills.services.runtime import load_collection_skill_bodies
 from lib.tools.documents.whole_document import image_document_instruction, image_document_tool_payload
 from lib.tools.search.context import format_adjacent_chunks_tool_result
 from lib.tools.search.vector_search import pack_chunk_search_results
+
+
+_NOTES_TOOL_INSTRUCTION = (
+    "Above are the chunks vector_search retrieved. The `collection_notes` "
+    "field below contains short notes the collection's owners wrote.\n\n"
+    "When writing your final answer:\n"
+    "- If a note states a fact NOT already covered by the chunks, weave "
+    "that fact into your answer naturally (a bullet, parenthetical, or "
+    "extra sentence).\n"
+    "- If a note states a fact ALREADY covered by the chunks, do NOT "
+    "repeat it as a separate sentence. Do not say things like 'the notes "
+    "confirm' or 'additionally the notes mention' — that's redundant and "
+    "makes the answer feel mechanical.\n"
+    "- Never refer to the notes themselves in your output — integrate the "
+    "facts seamlessly as if they came from the same source as the chunks.\n"
+    "- Do not replace chunk content with note content; both are valid.\n\n"
+    "If no note adds anything new, just answer from the chunks."
+)
+
+
+def _inject_collection_notes(result: dict, col_ref: CollectionsRef) -> dict:
+    """Append the active collections' notes to a search tool result so the LLM
+    sees them in the same tool turn as the retrieved chunks. Notes alone in the
+    system prompt tend to be ignored once the tool result dominates context.
+    """
+    notes = load_collection_skill_bodies(col_ref.collections)
+    if not notes:
+        return result
+    result["collection_notes"] = notes
+    result["_collection_notes_instruction"] = _NOTES_TOOL_INSTRUCTION
+    return result
 
 _NO_DOCS_EXCEPTION = {
     "exception": (
@@ -101,7 +133,7 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
         titles_by_doc_id = {doc.id: doc.title for doc in docs}
         docs_by_doc_id = {doc.id: doc for doc in docs}
 
-        return pack_chunk_search_results(
+        packed = pack_chunk_search_results(
             results,
             titles_by_doc_id=titles_by_doc_id,
             docs_by_doc_id=docs_by_doc_id,
@@ -110,6 +142,7 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             search_string=search_string,
             search_scope="selected documents",
         )
+        return _inject_collection_notes(packed, col_ref)
 
     return vector_search
 
@@ -232,7 +265,7 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
 
         titles_by_doc_id = {doc.id: doc.title}
         docs_by_doc_id = {doc.id: doc}
-        return pack_chunk_search_results(
+        packed = pack_chunk_search_results(
             results,
             titles_by_doc_id=titles_by_doc_id,
             docs_by_doc_id=docs_by_doc_id,
@@ -241,6 +274,7 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             search_string=search_string,
             search_scope=f'document "{doc.title}"',
         )
+        return _inject_collection_notes(packed, col_ref)
 
     return search_single_document
 
