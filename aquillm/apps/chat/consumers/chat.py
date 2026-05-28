@@ -1,6 +1,9 @@
 """WebSocket consumer for chat functionality."""
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
+
 import structlog
 from json import dumps
 from os import getenv
@@ -16,7 +19,7 @@ from django.contrib.auth.models import User
 from aquillm.llm import LLMInterface, LLMTool, message_to_user
 from aquillm.memory import augment_conversation_with_memory_async
 from aquillm.message_adapters import load_conversation_from_db, pydantic_message_to_frontend_dict
-from aquillm.settings import DEBUG, SKILLS_ENABLED
+from aquillm.settings import DEBUG
 from aquillm.tasks import enqueue_conversation_memories_task
 from apps.chat.consumers.chat_delta import send_conversation_delta
 from apps.chat.consumers.chat_receive import handle_chat_receive
@@ -24,11 +27,79 @@ from apps.chat.consumers.chat_ws_errors import send_connect_error
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
-from apps.chat.services.skills_runtime import build_skill_tools, effective_base_system_for_memory
 from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
+from apps.platform_admin.feedbackql.link_tool import build_feedback_link_tool
+from lib.mcp.config import get_mcp_config
+from lib.mcp.client import MCPClient
+from lib.mcp.adapter import mcp_tools_to_llm_tools
+from lib.skills.loader import build_skills_prompt_extra, load_skills
+from aquillm.llm import LLMTool
+from lib.skills.tool import build_load_skill_tool, build_read_skill_file_tool
 from lib.tools.debug.weather import get_debug_weather_tool
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+# Skills whose body is already baked into a per-skill tool's description.
+# Calling load_skill on them is redundant work — round-trip the full body
+# returns content already in the LLM's context. We short-circuit instead,
+# returning a tiny message so the LLM can proceed without wasted latency.
+_SKILLS_WITH_INLINE_BODY = frozenset({"feedback"})
+
+
+def _wrap_load_skill_short_circuit(original: LLMTool) -> LLMTool:
+    """Wrap the boss's load_skill tool so that loads of skills whose body
+    is already inline in their tool description return immediately with a
+    pointer instead of the full body. Other skills load normally.
+    """
+    original_fn = original._function
+
+    def short_circuiting_load_skill(name: str):
+        if name in _SKILLS_WITH_INLINE_BODY:
+            return {
+                "result": (
+                    f"The '{name}' skill body is already inline in its "
+                    f"tool's description (system prompt). Skip this "
+                    f"load_skill call — you already have everything you "
+                    f"need. Proceed directly to the skill's tool."
+                )
+            }
+        return original_fn(name)
+
+    return LLMTool(
+        llm_definition=original.llm_definition,
+        for_whom=original.for_whom,
+        _function=short_circuiting_load_skill,
+    )
+
+
+def _resolve_request_origin(scope: dict) -> str:
+    """Build a public-facing 'scheme://host' string from a Channels scope.
+
+    Prefers X-Forwarded-Host / X-Forwarded-Proto when present (set by a
+    trusted reverse proxy) so generated links point at the public origin
+    rather than the internal hostname seen by the app server. Falls back to
+    the Host header and the WebSocket scheme. Returns an empty string when
+    no host header is present.
+    """
+    def _header(name: bytes) -> str:
+        for k, v in scope.get("headers", []):
+            if k.lower() == name:
+                return v.decode("ascii", errors="ignore").strip()
+        return ""
+
+    host = _header(b"x-forwarded-host") or _header(b"host")
+    if not host:
+        return ""
+    # X-Forwarded-Host can carry a comma-separated chain; the originating
+    # client is the leftmost entry.
+    host = host.split(",", 1)[0].strip()
+    proto = _header(b"x-forwarded-proto").lower()
+    if proto:
+        scheme = "https" if "https" in proto else "http"
+    else:
+        scheme = "https" if scope.get("scheme") == "wss" else "http"
+    return f"{scheme}://{host}"
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -39,12 +110,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
     user: Optional[User] = None
 
     dead: bool = False
+    _mcp_clients: list[MCPClient]
 
     col_ref = CollectionsRef([])
     last_sent_sequence: int = -1
 
     async def _send_stream_payload(self, payload: dict) -> None:
         await self.send(text_data=dumps({"stream": payload}))
+
+    def _effective_system_prompt(self) -> str:
+        """db system prompt + current date + skill index + any slash-activated skill bodies."""
+        parts: list[str] = []
+        base = self.db_convo.system_prompt if self.db_convo else ""
+        if base:
+            parts.append(base.rstrip())
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        parts.append(f"Today's date is {today} (UTC).")
+        extra = getattr(self, "_skill_prompt_extra", "") or ""
+        if extra:
+            parts.append(extra)
+        for block in getattr(self, "_activated_skill_blocks", []):
+            parts.append(block)
+        return "\n\n".join(parts)
 
     @database_sync_to_async
     def _save_conversation(self, create_memories: bool = False):
@@ -101,6 +188,54 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.tools.append(message_to_user)
         if DEBUG:
             self.tools.append(get_debug_weather_tool())
+        # MCP tool discovery (stdio transport)
+        self._mcp_clients = []
+        mcp_configs = get_mcp_config()
+        logger.info("mcp_discovery_start", enabled=bool(mcp_configs), server_count=len(mcp_configs))
+        for cfg in mcp_configs:
+            try:
+                client = MCPClient(config=cfg)
+                await asyncio.to_thread(client.start)
+                schemas = await asyncio.to_thread(client.list_tools)
+                self.tools.extend(mcp_tools_to_llm_tools(schemas, client))
+                self._mcp_clients.append(client)
+                logger.info("mcp_server_connected", server=cfg.name, tool_count=len(schemas))
+            except Exception as exc:
+                logger.warning("mcp_server_failed", server=cfg.name, error=str(exc))
+        # Skill discovery (markdown SKILL.md → progressive disclosure).
+        # The feedback skill is admin-only: it generates query links to a
+        # dashboard that itself rejects non-admins. Filtering it out here
+        # means non-admin chats don't see the skill in the index, can't
+        # load it via load_skill, and don't have the build_feedback_link
+        # tool registered. Mirrors the dashboard view's is_superuser gate.
+        all_skills = await asyncio.to_thread(load_skills)
+        if self.user.is_superuser:
+            self._skills = all_skills
+        else:
+            self._skills = [s for s in all_skills if s.name != "feedback"]
+        self._skill_prompt_extra = build_skills_prompt_extra(self._skills)
+        self._activated_skill_blocks: list[str] = []
+        self._activated_skill_names: set[str] = set()
+        if self._skills:
+            self.tools.append(
+                _wrap_load_skill_short_circuit(build_load_skill_tool(self._skills))
+            )
+            self.tools.append(build_read_skill_file_tool(self._skills))
+        # Feedback dashboard link builder — only registered for superusers.
+        # The SKILL.md body is injected as the tool description so the LLM
+        # always has the full rules/examples in its system prompt without
+        # depending on load_skill. X-Forwarded-Host / X-Forwarded-Proto
+        # support means URLs work correctly behind a reverse proxy.
+        if self.user.is_superuser:
+            feedback_base_url = _resolve_request_origin(self.scope)
+            feedback_skill = next(
+                (s for s in self._skills if s.name == "feedback"), None
+            )
+            self.tools.append(build_feedback_link_tool(
+                base_url=feedback_base_url,
+                skill_body=feedback_skill.body if feedback_skill else "",
+            ))
+        logger.info("skills_loaded", count=len(self._skills))
         convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
         logger.debug("Convo ID: %s", convo_id)
         self.db_convo = await self.__get_convo(convo_id, self.user)
@@ -109,8 +244,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.dead = True
             await self.send('{"exception": "Invalid chat_id"}')
             return
-        if SKILLS_ENABLED:
-            self.tools = self.tools + build_skill_tools(self)
         try:
             self.convo = await database_sync_to_async(load_conversation_from_db)(self.db_convo)
             self.last_sent_sequence = len(self.convo) - 1
@@ -128,7 +261,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
             augment_start = perf_counter()
             await augment_conversation_with_memory_async(
-                self.convo, self.user, effective_base_system_for_memory(self), self.db_convo.id
+                self.convo, self.user, self._effective_system_prompt(), self.db_convo.id
             )
             logger.info(
                 "Memory augmentation took %.1fms in connect()",
@@ -160,6 +293,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.error("Exception in connect(): %s", e, exc_info=True)
             await send_connect_error(self, e)
             return
+
+    async def disconnect(self, code):
+        for client in getattr(self, "_mcp_clients", []):
+            try:
+                await asyncio.to_thread(client.stop)
+            except Exception as exc:
+                logger.debug("mcp_client_cleanup_error", error=str(exc))
 
     async def receive(self, text_data):
         await handle_chat_receive(self, text_data)

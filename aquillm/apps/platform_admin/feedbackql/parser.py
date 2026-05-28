@@ -506,6 +506,28 @@ def _parse_condition(ts: _TokenStream) -> Condition:
             ts.advance()
             ts.expect('LBRACKET')
             return Condition(field=field_name, op='in', value=_parse_value_list(ts))
+        # Common SQL-style mistakes — return targeted hints so the caller
+        # (often an LLM) can fix the query on the first retry instead of
+        # thrashing on a generic "expected a comparison operator" error.
+        if kw == 'is':
+            raise FeedbackQLSyntaxError(
+                f"Got 'is' after field {field_name!r}. FeedbackQL uses "
+                f"'== null' / '!= null' for null checks, not "
+                f"SQL-style 'is null' / 'is not null'."
+            )
+        if kw == 'like':
+            raise FeedbackQLSyntaxError(
+                f"Got 'like' after field {field_name!r}. FeedbackQL has no "
+                f"'like' operator. Use 'contains' for substring match or "
+                f"'startswith' for prefix match."
+            )
+        if kw in ('between', 'not'):
+            raise FeedbackQLSyntaxError(
+                f"Got {kw!r} after field {field_name!r}. FeedbackQL has no "
+                f"{kw!r} operator. Use a chain of comparisons "
+                f"(e.g. 'rating >= 1 and rating <= 3') or '!= null' for "
+                f"non-null checks."
+            )
 
     raise FeedbackQLSyntaxError(
         f"Expected a comparison operator (==, !=, <, >, <=, >=, startswith, contains, in), "
@@ -623,6 +645,12 @@ def _parse_clause(text: str, allowed: frozenset[str]):
     """
     Parse a single pipeline stage (everything between two pipes).
     Looks at the first keyword to determine which kind of clause it is.
+
+    After the clause is parsed, the token stream must be exhausted. Trailing
+    tokens almost always mean the author forgot a '|' between stages — e.g.
+    `where rating < 3 select foo` should have been `where rating < 3 | select foo`.
+    Without this check, the inner clause parsers stop at the first unexpected
+    token and silently drop the rest, producing wrong results without an error.
     """
     tokens = _tokenize(text)
     if not tokens:
@@ -632,24 +660,44 @@ def _parse_clause(text: str, allowed: frozenset[str]):
     kw = ts.peek_value()
     if kw == 'where':
         ts.advance()
-        return _parse_where(ts)
-    if kw == 'select':
+        clause = _parse_where(ts)
+    elif kw == 'select':
         ts.advance()
-        return _parse_select(ts, allowed)
-    if kw == 'summarize':
+        clause = _parse_select(ts, allowed)
+    elif kw == 'summarize':
         ts.advance()
-        return _parse_summarize(ts, allowed)
-    if kw == 'order':
+        clause = _parse_summarize(ts, allowed)
+    elif kw == 'order':
         ts.advance()
-        return _parse_order_by(ts)
-    if kw == 'limit':
+        clause = _parse_order_by(ts)
+    elif kw == 'limit':
         ts.advance()
-        return _parse_limit(ts)
+        clause = _parse_limit(ts)
+    else:
+        first_token = text.split()[0]
+        # Common LLM mistake: writing a condition directly after '|' without
+        # the 'where' keyword (e.g. `... | rated_count > 0 | ...`).
+        # Recognise it by the first token being a known field name and
+        # nudge them toward the fix instead of the generic clause error.
+        if kw and kw in allowed:
+            raise FeedbackQLSyntaxError(
+                f"Got field {first_token!r} where a clause keyword was "
+                f"expected. Did you forget the 'where' keyword? Conditions "
+                f"like '{first_token} <op> <value>' must be inside a "
+                f"'where ...' clause."
+            )
+        raise FeedbackQLSyntaxError(
+            f"Unknown clause {first_token!r}. "
+            f"Expected: where, select, summarize, order by, limit"
+        )
 
-    raise FeedbackQLSyntaxError(
-        f"Unknown clause {text.split()[0]!r}. "
-        f"Expected: where, select, summarize, order by, limit"
-    )
+    if not ts.at_end():
+        leftover = ts.peek()
+        raise FeedbackQLSyntaxError(
+            f"Unexpected token {leftover[1]!r} after {kw!r} clause. "
+            f"Did you forget a '|' between stages?"
+        )
+    return clause
 
 # ---------------------------------------------------------------------------
 # Public entry point

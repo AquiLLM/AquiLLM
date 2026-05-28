@@ -19,7 +19,8 @@ async def transform_openai_tools(tools: list[dict], *, include_strict: bool = Tr
                 "additionalProperties": False,
             },
         }
-        if strict_tools:
+        is_mcp_tool = tool["name"].startswith("mcp_")
+        if strict_tools and not is_mcp_tool:
             function_payload["strict"] = True
         transformed.append(
             {
