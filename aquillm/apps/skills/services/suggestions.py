@@ -1,7 +1,7 @@
 """LLM-drafted proposed edits to a collection's notes.
 
 A manager clicks "Draft a suggestion" on a piece of corrective feedback
-(rating ≤ 2 + non-empty comment) in their queue. We call the project LLM
+(rating ≤ 3 + non-empty comment) in their queue. We call the project LLM
 with the current notes + the offending assistant turn + the user's
 correction, and store the result as a pending `SkillEditSuggestion`. The
 manager later reviews it side-by-side and accepts (with optional tweaks)
@@ -88,9 +88,10 @@ def _list_pending_feedback_sync(collection_id: int) -> list[Message]:
     """Pending corrective-feedback messages for this collection.
 
     Includes assistant messages where the user wrote feedback text and either
-    (a) gave it a low rating (≤ 2), or (b) didn't give a star rating at all.
-    Praise (rating ≥ 3) is excluded even when commented. Conversation must
-    have this collection selected. Excludes messages already in flight (a
+    (a) gave it a low-or-middling rating (≤ 3), or (b) didn't give a star
+    rating at all. Praise (rating ≥ 4) is excluded even when commented.
+    Conversation must have this collection selected. Excludes messages
+    already in flight (a
     pending or accepted suggestion exists for this collection) or that a
     manager has dismissed at the feedback level.
     """
@@ -100,7 +101,7 @@ def _list_pending_feedback_sync(collection_id: int) -> list[Message]:
             role="assistant",
             conversation__selected_collection_ids__contains=[collection_id],
         )
-        .filter(Q(rating__lte=2) | Q(rating__isnull=True))
+        .filter(Q(rating__lte=3) | Q(rating__isnull=True))
         .exclude(feedback_text__isnull=True)
         .exclude(feedback_text="")
         .select_related("conversation")
