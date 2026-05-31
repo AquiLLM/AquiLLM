@@ -599,76 +599,217 @@ const FeedbackDashboard: React.FC = () => {
       {/* Syntax quick reference */}
       <details className="mt-6 rounded-lg bg-scheme-shade_3 element-border text-sm">
         <summary className="px-4 py-2.5 cursor-pointer font-semibold select-none hover:text-blue-500 transition-colors">
-          Syntax quick reference
+          Syntax quick reference &amp; examples
         </summary>
-        <div className="px-5 py-4 text-xs space-y-4 text-text-muted">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <p className="font-mono font-bold text-text-normal mb-2">messages stream</p>
-              {[
-                ['rating','NUMBER','1–5 star rating'],
-                ['feedback_text','TEXT','Written comment'],
-                ['feedback_submitted_at','TIME','When rating was submitted'],
-                ['model','TEXT','AI model used'],
-                ['role','TEXT','user / assistant / tool'],
-                ['content','TEXT','Message text'],
-                ['user_id','NUMBER','User account ID'],
-                ['conversation_id','NUMBER','Conversation ID'],
-                ['tool_call_name','TEXT','Tool used (intermediate only)'],
-                ['conversation_tool','ARRAY','Tools used in this conversation'],
-              ].map(([f,t,d]) => (
-                <div key={f} className="flex items-baseline gap-2 py-0.5 border-b border-scheme-contrast/10 last:border-0">
-                  <span className="font-mono text-text-normal w-44 shrink-0">{f}</span>
-                  <span className={`text-[10px] px-1 rounded shrink-0 ${
-                    t==='NUMBER'?'bg-blue-600/30 text-blue-300':
-                    t==='TIME'?'bg-yellow-600/30 text-yellow-300':
-                    t==='ARRAY'?'bg-purple-600/30 text-purple-300':
-                    'bg-green-600/30 text-green-300'}`}>{t}</span>
-                  <span>{d}</span>
-                </div>
-              ))}
+        <div className="px-5 py-5 text-xs space-y-6 text-text-muted">
+
+          {/* ── How it works ── */}
+          <div>
+            <p className="font-semibold text-text-normal text-sm mb-2">How queries work</p>
+            <p className="leading-relaxed mb-2">
+              Every query is a <strong className="text-text-normal">pipeline</strong>. You start
+              with a <span className="font-mono text-text-normal">stream</span> (the data source)
+              and pass it through clauses separated by{' '}
+              <span className="font-mono text-text-normal">|</span>. Each clause filters, shapes,
+              or sorts the data from the previous step.
+            </p>
+            <div className="rounded bg-scheme-shade_2 element-border px-4 py-3 font-mono text-text-normal leading-relaxed">
+              <span className="text-blue-400">messages</span>
+              <span className="text-text-muted">{'  '}← start here (pick a stream)</span>
+              <br />
+              <span className="text-text-muted">| </span>
+              <span className="text-green-400">where rating &gt;= 4</span>
+              <span className="text-text-muted">{'  '}← filter rows</span>
+              <br />
+              <span className="text-text-muted">| </span>
+              <span className="text-yellow-400">order by feedback_submitted_at desc</span>
+              <span className="text-text-muted">{'  '}← sort</span>
+              <br />
+              <span className="text-text-muted">| </span>
+              <span className="text-purple-400">limit 50</span>
+              <span className="text-text-muted">{'  '}← cap results</span>
             </div>
-            <div>
-              <p className="font-mono font-bold text-text-normal mb-2">conversations stream</p>
+            <p className="mt-2 leading-relaxed">
+              You don't need to type queries manually — use the{' '}
+              <strong className="text-text-normal">Basic Query Builder</strong> dropdowns for common
+              filters, or the{' '}
+              <strong className="text-text-normal">Advanced Query Builder</strong> to add any clause.
+              The <strong className="text-text-normal">Textual Query</strong> box always shows the
+              exact query being run and can be edited directly.
+            </p>
+          </div>
+
+          {/* ── Example queries ── */}
+          <div>
+            <p className="font-semibold text-text-normal text-sm mb-3">Example queries</p>
+            <div className="space-y-3">
               {[
-                ['conversation_id','NUMBER','Conversation ID'],
-                ['user_id','NUMBER','Owner user ID'],
-                ['name','TEXT','Auto-generated title'],
-                ['created_at','TIME','When conversation started'],
-                ['message_count','NUMBER','Total message turns'],
-                ['rated_count','NUMBER','Number of rated messages'],
-                ['avg_rating','NUMBER','Mean rating across messages'],
-                ['min_rating','NUMBER','Lowest rating in conv.'],
-                ['max_rating','NUMBER','Highest rating in conv.'],
-                ['last_rated_at','TIME','Most recent rating time'],
-                ['tools_used','ARRAY','Comma-list of distinct tools'],
-              ].map(([f,t,d]) => (
-                <div key={f} className="flex items-baseline gap-2 py-0.5 border-b border-scheme-contrast/10 last:border-0">
-                  <span className="font-mono text-text-normal w-36 shrink-0">{f}</span>
-                  <span className={`text-[10px] px-1 rounded shrink-0 ${
-                    t==='NUMBER'?'bg-blue-600/30 text-blue-300':
-                    t==='TIME'?'bg-yellow-600/30 text-yellow-300':
-                    t==='ARRAY'?'bg-purple-600/30 text-purple-300':
-                    'bg-green-600/30 text-green-300'}`}>{t}</span>
-                  <span>{d}</span>
+                {
+                  label: 'All rated messages, newest first',
+                  query: 'messages\n| where rating != null\n| order by feedback_submitted_at desc\n| limit 100',
+                  note: 'A good starting point. Shows only messages that have been rated.',
+                },
+                {
+                  label: 'Low-rated messages with written feedback',
+                  query: 'messages\n| where rating <= 2\n| where feedback_text != null\n| order by feedback_submitted_at desc\n| limit 50',
+                  note: 'Use this to review the most critical feedback. Both conditions must be true.',
+                },
+                {
+                  label: 'Count of ratings per model',
+                  query: 'messages\n| where rating != null\n| summarize n = count() by model\n| order by n desc',
+                  note: 'Produces a bar chart. Shows which models receive the most feedback.',
+                },
+                {
+                  label: 'Average rating per model',
+                  query: 'messages\n| where rating != null\n| summarize avg_rating = avg(rating) by model\n| order by avg_rating desc',
+                  note: 'Ranks models from highest to lowest average user rating.',
+                },
+                {
+                  label: 'Search feedback text for a keyword',
+                  query: 'messages\n| where feedback_text contains "slow"\n| order by feedback_submitted_at desc\n| limit 50',
+                  note: 'Case-insensitive substring match. Change "slow" to any word or phrase.',
+                },
+                {
+                  label: 'Conversations overview — most-rated first',
+                  query: 'conversations\n| order by rated_count desc\n| limit 50',
+                  note: 'Switch to the conversations stream for one row per conversation rather than per message.',
+                },
+              ].map(({ label, query, note }) => (
+                <div key={label} className="rounded bg-scheme-shade_2 element-border overflow-hidden">
+                  <div className="px-3 py-1.5 border-b border-scheme-contrast/10 font-semibold text-text-normal">
+                    {label}
+                  </div>
+                  <pre className="px-3 py-2 font-mono text-[11px] text-blue-300 leading-relaxed whitespace-pre overflow-x-auto">
+                    {query}
+                  </pre>
+                  <div className="px-3 py-1.5 text-text-muted border-t border-scheme-contrast/10">
+                    {note}
+                  </div>
                 </div>
               ))}
             </div>
           </div>
+
+          {/* ── Tips ── */}
+          <div>
+            <p className="font-semibold text-text-normal text-sm mb-2">Tips for new users</p>
+            <ul className="space-y-1.5 leading-relaxed">
+              <li><span className="text-text-normal font-semibold">Start with Basic Query Builder.</span>{' '}
+                The dropdowns build a valid query automatically — no typing required.</li>
+              <li><span className="text-text-normal font-semibold">Add where clauses one at a time.</span>{' '}
+                Each additional <span className="font-mono">where</span> narrows the results further (AND logic).</li>
+              <li><span className="text-text-normal font-semibold">summarize produces charts.</span>{' '}
+                When a query uses <span className="font-mono">summarize</span>, results automatically
+                render as a bar chart in addition to the table.</li>
+              <li><span className="text-text-normal font-semibold">Always end with limit.</span>{' '}
+                Large queries without a limit can be slow. The Advanced builder adds{' '}
+                <span className="font-mono">limit 200</span> by default.</li>
+              <li><span className="text-text-normal font-semibold">Copy link saves your query.</span>{' '}
+                The Copy link button in Textual Query encodes the current query in the URL so you
+                can bookmark or share it.</li>
+              <li><span className="text-text-normal font-semibold">null means no value.</span>{' '}
+                Most messages don't have a rating — use{' '}
+                <span className="font-mono">where rating != null</span> to exclude them before
+                computing averages.</li>
+            </ul>
+          </div>
+
+          {/* ── Streams & fields ── */}
+          <div>
+            <p className="font-semibold text-text-normal text-sm mb-3">Streams &amp; their fields</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <p className="font-mono font-bold text-text-normal mb-2">messages</p>
+                <p className="mb-2 leading-relaxed">One row per message turn (user, assistant, or tool call).</p>
+                {[
+                  ['rating','NUMBER','1–5 star rating (null if unrated)'],
+                  ['feedback_text','TEXT','Written comment left by user'],
+                  ['feedback_submitted_at','TIME','When rating was submitted'],
+                  ['model','TEXT','AI model used'],
+                  ['role','TEXT','user / assistant / tool'],
+                  ['content','TEXT','Message text'],
+                  ['user_id','NUMBER','User account ID'],
+                  ['conversation_id','NUMBER','Conversation ID'],
+                  ['tool_call_name','TEXT','Tool used (assistant messages only)'],
+                  ['conversation_tool','ARRAY','All tools used in this conversation'],
+                ].map(([f,t,d]) => (
+                  <div key={f} className="flex items-baseline gap-2 py-0.5 border-b border-scheme-contrast/10 last:border-0">
+                    <span className="font-mono text-text-normal w-44 shrink-0">{f}</span>
+                    <span className={`text-[10px] px-1 rounded shrink-0 ${
+                      t==='NUMBER'?'bg-blue-600/30 text-blue-300':
+                      t==='TIME'?'bg-yellow-600/30 text-yellow-300':
+                      t==='ARRAY'?'bg-purple-600/30 text-purple-300':
+                      'bg-green-600/30 text-green-300'}`}>{t}</span>
+                    <span>{d}</span>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <p className="font-mono font-bold text-text-normal mb-2">conversations</p>
+                <p className="mb-2 leading-relaxed">One row per conversation with pre-computed aggregates.</p>
+                {[
+                  ['conversation_id','NUMBER','Conversation ID'],
+                  ['user_id','NUMBER','Owner user ID'],
+                  ['name','TEXT','Auto-generated title'],
+                  ['created_at','TIME','When conversation started'],
+                  ['message_count','NUMBER','Total message turns'],
+                  ['rated_count','NUMBER','Number of rated messages'],
+                  ['avg_rating','NUMBER','Mean rating across messages'],
+                  ['min_rating','NUMBER','Lowest rating in conv.'],
+                  ['max_rating','NUMBER','Highest rating in conv.'],
+                  ['last_rated_at','TIME','Most recent rating time'],
+                  ['tools_used','ARRAY','Comma-list of distinct tools used'],
+                ].map(([f,t,d]) => (
+                  <div key={f} className="flex items-baseline gap-2 py-0.5 border-b border-scheme-contrast/10 last:border-0">
+                    <span className="font-mono text-text-normal w-36 shrink-0">{f}</span>
+                    <span className={`text-[10px] px-1 rounded shrink-0 ${
+                      t==='NUMBER'?'bg-blue-600/30 text-blue-300':
+                      t==='TIME'?'bg-yellow-600/30 text-yellow-300':
+                      t==='ARRAY'?'bg-purple-600/30 text-purple-300':
+                      'bg-green-600/30 text-green-300'}`}>{t}</span>
+                    <span>{d}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* ── Operators & aggregation ── */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <p className="font-semibold text-text-normal mb-1">Operators</p>
-              {['== / !=  equal / not equal','< > <= >=  numeric','contains "x"  substring','startswith "x"  prefix','in [1,2,3]  membership','== null / != null  missing/present'].map(o => (
-                <div key={o} className="font-mono text-text-normal/80 py-0.5 text-[11px]">{o}</div>
+              <p className="font-semibold text-text-normal mb-2">Comparison operators</p>
+              {[
+                ['== / !=', 'Equal / not equal'],
+                ['< > <= >=', 'Numeric comparisons'],
+                ['contains "x"', 'Case-insensitive substring match'],
+                ['startswith "x"', 'Prefix match'],
+                ['in [1, 2, 3]', 'Matches any value in the list'],
+                ['== null / != null', 'Field is empty / field has a value'],
+              ].map(([op, desc]) => (
+                <div key={op} className="flex gap-3 py-0.5 border-b border-scheme-contrast/10 last:border-0">
+                  <span className="font-mono text-text-normal w-36 shrink-0">{op}</span>
+                  <span>{desc}</span>
+                </div>
               ))}
             </div>
             <div>
-              <p className="font-semibold text-text-normal mb-1">Aggregation functions</p>
-              {['avg(field)','count()','min(field)','max(field)','sum(field)','median(field)'].map(f => (
-                <div key={f} className="font-mono text-text-normal/80 py-0.5 text-[11px]">{f}</div>
+              <p className="font-semibold text-text-normal mb-2">Aggregation functions (for summarize)</p>
+              {[
+                ['count()', 'Number of rows in each group'],
+                ['avg(field)', 'Average value'],
+                ['min(field)', 'Lowest value'],
+                ['max(field)', 'Highest value'],
+                ['sum(field)', 'Total of all values'],
+                ['median(field)', 'Middle value'],
+              ].map(([fn, desc]) => (
+                <div key={fn} className="flex gap-3 py-0.5 border-b border-scheme-contrast/10 last:border-0">
+                  <span className="font-mono text-text-normal w-36 shrink-0">{fn}</span>
+                  <span>{desc}</span>
+                </div>
               ))}
             </div>
           </div>
+
         </div>
       </details>
 
