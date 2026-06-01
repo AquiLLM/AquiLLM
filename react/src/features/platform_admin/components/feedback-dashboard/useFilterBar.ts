@@ -1,8 +1,7 @@
 // useFilterBar.ts
-// owns filter state for the filter bar
-// builds a KQL query string from active filters
-// debounces text inputs so we do not fire a query on every keystroke
-// the generated KQL is used both for live display and for actual execution
+// owns filter state for the basic query builder dropdowns
+// builds the basic KQL clauses (where only — order by and limit live in useAdvancedBuilder)
+// debounces feedback_text_search so queries don't fire on every keystroke
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 const DEBOUNCE_MS = 400;
@@ -19,7 +18,6 @@ export interface FilterState {
   model: string;
   tool_call_name: string;
   has_feedback_text: string;
-  limit: number;
 }
 
 export const EMPTY_FILTER_STATE: FilterState = {
@@ -34,11 +32,12 @@ export const EMPTY_FILTER_STATE: FilterState = {
   model: '',
   tool_call_name: '',
   has_feedback_text: '',
-  limit: 200,
 };
 
-export function buildKQLFromFilters(filters: FilterState): string {
-  const clauses: string[] = ['messages'];
+// Builds only the Basic where clauses — no order by, no limit.
+// order by and limit are owned by useAdvancedBuilder.
+export function buildBasicClauses(filters: FilterState, feedbackTextSearch: string): string[] {
+  const clauses: string[] = [];
 
   if (filters.date_from)
     clauses.push(`where feedback_submitted_at >= "${filters.date_from}"`);
@@ -75,25 +74,19 @@ export function buildKQLFromFilters(filters: FilterState): string {
   else if (filters.has_feedback_text === 'false')
     clauses.push('where feedback_text == null');
 
-  if (filters.feedback_text_search.trim()) {
-    const escaped = filters.feedback_text_search.trim().replace(/"/g, '\\"');
+  if (feedbackTextSearch.trim()) {
+    const escaped = feedbackTextSearch.trim().replace(/"/g, '\\"');
     clauses.push(`where feedback_text contains "${escaped}"`);
   }
 
-  clauses.push('order by feedback_submitted_at desc');
-  clauses.push(`limit ${filters.limit}`);
-
-  const [first, ...rest] = clauses;
-  if (rest.length === 0) return first;
-  return `${first}\n${rest.map(c => `| ${c}`).join('\n')}`;
+  return clauses;
 }
 
 export function useFilterBar(): {
   filters: FilterState;
-  kqlPreview: string;
-  kqlForExecution: string;
+  basicKQL: string;          // debounced basic where clauses only ("messages\n| where …")
   hasActiveFilters: boolean;
-  setFilter: (key: keyof FilterState, value: string | number) => void;
+  setFilter: (key: keyof FilterState, value: string) => void;
   setAllFilters: (partial: Partial<FilterState>) => void;
   resetFilters: () => void;
 } {
@@ -109,15 +102,14 @@ export function useFilterBar(): {
     return () => { if (textTimer.current) clearTimeout(textTimer.current); };
   }, [filters.feedback_text_search]);
 
-  const kqlPreview = buildKQLFromFilters(filters);
+  // Debounced basic clauses — safe to use as auto-run trigger
+  const basicClauses = buildBasicClauses(filters, debouncedTextSearch);
+  const basicKQL =
+    basicClauses.length === 0
+      ? 'messages'
+      : `messages\n${basicClauses.map(c => `| ${c}`).join('\n')}`;
 
-  const effectiveFilters: FilterState = {
-    ...filters,
-    feedback_text_search: debouncedTextSearch,
-  };
-  const kqlForExecution = buildKQLFromFilters(effectiveFilters);
-
-  const setFilter = useCallback((key: keyof FilterState, value: string | number) => {
+  const setFilter = useCallback((key: keyof FilterState, value: string) => {
     setFilters(prev => {
       const next = { ...prev, [key]: value };
       if (key === 'exact_rating' && value !== '') {
@@ -131,11 +123,9 @@ export function useFilterBar(): {
     });
   }, []);
 
-  // Set all filters at once (used when parsing KQL back into filter state)
   const setAllFilters = useCallback((partial: Partial<FilterState>) => {
     const next = { ...EMPTY_FILTER_STATE, ...partial };
     setFilters(next);
-    // Immediately sync debounced text search to avoid a 400ms lag
     setDebouncedTextSearch(partial.feedback_text_search ?? '');
   }, []);
 
@@ -157,13 +147,5 @@ export function useFilterBar(): {
     filters.tool_call_name !== '' ||
     filters.has_feedback_text !== '';
 
-  return {
-    filters,
-    kqlPreview,
-    kqlForExecution,
-    hasActiveFilters,
-    setFilter,
-    setAllFilters,
-    resetFilters,
-  };
+  return { filters, basicKQL, hasActiveFilters, setFilter, setAllFilters, resetFilters };
 }

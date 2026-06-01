@@ -12,7 +12,7 @@ interface FilterBarProps {
   options: FilterOptions;
   optionsLoading: boolean;
   hasActiveFilters: boolean;
-  onFilterChange: (key: keyof FilterState, value: string | number) => void;
+  onFilterChange: (key: keyof FilterState, value: string) => void;
   onReset: () => void;
   /** When true, suppresses the built-in "Filters" header row (use inside DashboardSection) */
   hideHeader?: boolean;
@@ -237,20 +237,6 @@ const FilterBar: React.FC<FilterBarProps> = ({
           placeholder="Either"
         />
 
-        {/* result limit */}
-        <FilterSelect
-          label="Result limit"
-          value={String(filters.limit)}
-          onChange={v => onFilterChange('limit', Number(v))}
-          options={[
-            { value: '50',   label: '50 rows'   },
-            { value: '100',  label: '100 rows'  },
-            { value: '200',  label: '200 rows'  },
-            { value: '500',  label: '500 rows'  },
-            { value: '1000', label: '1000 rows' },
-          ]}
-          placeholder=""
-        />
       </div>
     </div>
   );
