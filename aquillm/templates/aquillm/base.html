@@ -726,9 +726,11 @@
 {% if user.is_authenticated%}
     {{ api_urls|json_script:"api_urls" }}
     {{ page_urls|json_script:"page_urls" }}
+    {{ app_flags|json_script:"app_flags" }}
     <script type="text/javascript">
         window.apiUrls = JSON.parse(document.getElementById('api_urls').textContent);
         window.pageUrls = JSON.parse(document.getElementById('page_urls').textContent);
+        window.appFlags = JSON.parse(document.getElementById('app_flags').textContent);
     </script>
 {% endif %}
 

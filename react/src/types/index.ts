@@ -45,5 +45,11 @@ declare global {
     pageUrls: {
       [key: string]: string;
     }
+    appFlags?: {
+      /** When true, the chat eagerly LLM-narrows every citation in newly
+       * arrived assistant messages so subsequent clicks open instantly. */
+      eagerCitationNarrow?: boolean;
+      [key: string]: unknown;
+    }
   }
 }

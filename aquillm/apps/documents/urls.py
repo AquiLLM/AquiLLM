@@ -10,6 +10,7 @@ app_name = 'documents'
 api_urlpatterns = [
     path("move/<uuid:doc_id>/", api_views.move_document, name="api_move_document"),
     path("delete/<uuid:doc_id>/", api_views.delete_document, name="api_delete_document"),
+    path("chunks/<int:chunk_id>/", api_views.chunk_detail, name="api_chunk_detail"),
 ]
 
 # Page URL patterns (to be included under /aquillm/)
