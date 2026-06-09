@@ -76,13 +76,18 @@ def move_document(request, doc_id):
     })
 
 
+FULL_TEXT_WINDOW_THRESHOLD = 500_000
+FULL_TEXT_WINDOW_PADDING = 5_000
+
+
 @require_http_methods(["GET"])
 @login_required
 def chunk_detail(request, chunk_id):
-    """Return a chunk's text content plus its document's title and PDF availability.
+    """Return a chunk plus enough document context for the citation modal.
 
-    Consumed by the React PDF citation modal to fuzzy-match the cited
-    passage against the PDF text layer.
+    The modal branches on `document.has_pdf`: when true the React side fuzzy-
+    matches the chunk into the PDF text layer; when false it renders
+    `document.full_text` with the chunk highlighted via offsets.
     """
     chunk = TextChunk.objects.filter(pk=chunk_id).first()
     if not chunk:
@@ -99,15 +104,33 @@ def chunk_detail(request, chunk_id):
             status=403,
         )
 
-    has_pdf = bool(getattr(doc, "pdf_file", None))
+    has_pdf = bool(
+        getattr(doc, "pdf_file", None) or getattr(doc, "rendered_pdf", None)
+    )
+
+    full_text = doc.full_text or ""
+    text_offset = 0
+    # Window very long docs around the chunk so the response stays bounded.
+    if len(full_text) > FULL_TEXT_WINDOW_THRESHOLD:
+        window_start = max(0, chunk.start_position - FULL_TEXT_WINDOW_PADDING)
+        window_end = min(len(full_text), chunk.end_position + FULL_TEXT_WINDOW_PADDING)
+        full_text = full_text[window_start:window_end]
+        text_offset = window_start
 
     return JsonResponse({
         "content": chunk.content,
         "chunk_number": chunk.chunk_number,
+        "start_position": chunk.start_position,
+        "end_position": chunk.end_position,
+        "start_time": chunk.start_time,
         "document": {
             "id": str(doc.id),
             "title": doc.title,
+            "type": doc.__class__.__name__,
             "has_pdf": has_pdf,
+            "source_url": getattr(doc, "source_url", None),
+            "full_text": full_text,
+            "text_offset": text_offset,
         },
     })
 

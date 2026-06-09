@@ -11,24 +11,19 @@ import {
   type PageHighlightRange,
 } from '../../../utils/pdfTextMatch';
 import { getCsrfCookie } from '../../../main';
+import type { CitationChunkDetail } from './citationTypes';
 
 configurePdfWorker();
 
-interface ChunkDetail {
-  content: string;
-  chunk_number: number;
-  document: {
-    id: string;
-    title: string;
-    has_pdf: boolean;
-  };
-}
+type ChunkDetail = CitationChunkDetail;
 
 interface PDFCitationModalProps {
   docId: string;
   chunkId: string;
   /** Assistant message UUID — enables LLM-narrowed highlight. */
   messageUuid?: string;
+  /** Optional chunk prefetched by the provider, skipping the initial fetch. */
+  preloadedChunk?: CitationChunkDetail | null;
   onClose: () => void;
 }
 
@@ -61,9 +56,10 @@ export const PDFCitationModal: React.FC<PDFCitationModalProps> = ({
   docId,
   chunkId,
   messageUuid,
+  preloadedChunk,
   onClose,
 }) => {
-  const [chunk, setChunk] = useState<ChunkDetail | null>(null);
+  const [chunk, setChunk] = useState<ChunkDetail | null>(preloadedChunk ?? null);
   const [chunkError, setChunkError] = useState<string | null>(null);
 
   // LLM-narrowed quote. When set, replaces chunk.content as the locator input.
@@ -96,7 +92,9 @@ export const PDFCitationModal: React.FC<PDFCitationModalProps> = ({
   }, [onClose]);
 
   // Fetch chunk metadata (content + document title + PDF availability).
+  // Skipped when the provider has already fetched it.
   useEffect(() => {
+    if (preloadedChunk) return;
     let cancelled = false;
     const apiPattern = window.apiUrls?.api_chunk_detail;
     if (!apiPattern) {
@@ -118,7 +116,7 @@ export const PDFCitationModal: React.FC<PDFCitationModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [chunkId]);
+  }, [chunkId, preloadedChunk]);
 
   // In parallel with the chunk fetch, ask the backend to LLM-narrow the
   // citation to the most relevant verbatim quote.
