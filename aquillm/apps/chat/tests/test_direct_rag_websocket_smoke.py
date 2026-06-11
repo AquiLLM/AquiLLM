@@ -24,20 +24,20 @@ Run this file locally (PowerShell, repo root)::
             [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), 'Process')
         }
     }
-    $env:POSTGRES_HOST = 'localhost'   # or 'db' inside compose network
     cd aquillm
     python -m pytest apps/chat/tests/test_direct_rag_websocket_smoke.py -q --tb=short
+
+No Postgres required: tests mock the consumer DB layer and exercise the same
+``handle_chat_receive`` path as the live WebSocket.
 """
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from django.contrib.auth import get_user_model
 
 from aquillm.llm import Conversation
-from aquillm.models import WSConversation
 from apps.chat.consumers.chat import ChatConsumer, CollectionsRef
 from apps.chat.consumers.chat_receive import handle_chat_receive
 from apps.chat.services import rag_pipeline
@@ -47,8 +47,6 @@ from apps.chat.tests.chat_message_test_support import (
 )
 from lib.llm.types.messages import AssistantMessage, ToolMessage
 from lib.llm.types.response import LLMResponse
-
-User = get_user_model()
 
 
 def _results_payload() -> dict:
@@ -93,11 +91,27 @@ def _consumer(user, db_convo, llm_if) -> ChatConsumer:
     consumer.last_sent_sequence = -1
     consumer.llm_if = llm_if
     consumer._send_stream_payload = AsyncMock()
+    consumer._save_conversation = AsyncMock()
     return consumer
 
 
+def _mock_user_and_convo():
+    user = MagicMock()
+    user.id = 1
+    db_convo = MagicMock()
+    db_convo.id = 42
+    db_convo.selected_collection_ids = []
+    db_convo.save = MagicMock()
+    return user, db_convo
+
+
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@patch("apps.chat.consumers.chat_delta.aclose_old_connections", new_callable=AsyncMock)
+@patch(
+    "apps.chat.consumers.chat_receive.effective_base_system_for_memory_async",
+    new_callable=AsyncMock,
+    return_value="sys",
+)
 @patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")
 @patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async", new_callable=AsyncMock)
 @patch("apps.chat.consumers.chat_receive.run_llm_spin", new_callable=AsyncMock)
@@ -105,6 +119,8 @@ async def test_append_direct_rag_skips_tool_selection_spin(
     mock_spin,
     _augment,
     _mem_task,
+    _memory_system,
+    _aclose,
     monkeypatch,
 ):
     """Append with RAG_DIRECT_ENABLED=1 retrieves before LLM tool selection."""
@@ -141,8 +157,7 @@ async def test_append_direct_rag_skips_tool_selection_spin(
 
     llm_if.get_message = tracked_get_message
 
-    user = User.objects.create_user(username="directragws", password="pass")
-    db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
+    user, db_convo = _mock_user_and_convo()
     consumer = _consumer(user, db_convo, llm_if)
 
     await handle_chat_receive(
@@ -167,7 +182,11 @@ async def test_append_direct_rag_skips_tool_selection_spin(
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@patch(
+    "apps.chat.consumers.chat_receive.effective_base_system_for_memory_async",
+    new_callable=AsyncMock,
+    return_value="sys",
+)
 @patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")
 @patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async", new_callable=AsyncMock)
 @patch("apps.chat.consumers.chat_receive.run_llm_spin", new_callable=AsyncMock)
@@ -175,13 +194,13 @@ async def test_append_direct_rag_disabled_falls_back_to_spin(
     mock_spin,
     _augment,
     _mem_task,
+    _memory_system,
     monkeypatch,
 ):
     """When RAG_DIRECT_ENABLED=0, append still uses the normal LLM spin path."""
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "0")
 
-    user = User.objects.create_user(username="directragoff", password="pass")
-    db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
+    user, db_convo = _mock_user_and_convo()
     llm_if = _FakeLLMInterface([])
     consumer = _consumer(user, db_convo, llm_if)
 
