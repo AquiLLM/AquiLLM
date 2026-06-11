@@ -23,6 +23,7 @@ from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import ConversationFile
 from apps.chat.services.feedback import apply_message_feedback_text, apply_message_rating
 from apps.chat.services.rag_intent import classify_chat_message
+from apps.chat.services.rag_pipeline import run_direct_rag_turn
 from apps.chat.services.skills_runtime import effective_base_system_for_memory_async
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -189,20 +190,34 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                     "Memory augmentation took %.1fms in receive()",
                     (perf_counter() - augment_start) * 1000,
                 )
-                logger.debug("About to call llm_if.spin() in receive()")
-                llm_start = perf_counter()
-                await run_llm_spin(
+                direct_outcome = await run_direct_rag_turn(
                     consumer,
                     consumer.llm_if,
                     consumer.convo,
-                    max_func_calls=CHAT_MAX_FUNC_CALLS,
-                    max_tokens=CHAT_MAX_TOKENS,
-                    send_func=lambda c: send_conversation_delta(
-                        consumer, c, create_memories=False, close_db=True
-                    ),
                     stream_func=consumer._send_stream_payload,
                 )
-                logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
+                if direct_outcome == "handled":
+                    await send_conversation_delta(
+                        consumer, consumer.convo, create_memories=False, close_db=True
+                    )
+                else:
+                    logger.debug("About to call llm_if.spin() in receive()")
+                    llm_start = perf_counter()
+                    await run_llm_spin(
+                        consumer,
+                        consumer.llm_if,
+                        consumer.convo,
+                        max_func_calls=CHAT_MAX_FUNC_CALLS,
+                        max_tokens=CHAT_MAX_TOKENS,
+                        send_func=lambda c: send_conversation_delta(
+                            consumer, c, create_memories=False, close_db=True
+                        ),
+                        stream_func=consumer._send_stream_payload,
+                    )
+                    logger.info(
+                        "LLM spin took %.1fms in receive()",
+                        (perf_counter() - llm_start) * 1000,
+                    )
                 await consumer._save_conversation(create_memories=True)
             elif action == "select_collections":
                 await update_selected_collections(data)

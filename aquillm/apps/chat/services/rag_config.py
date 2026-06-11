@@ -35,6 +35,10 @@ def evidence_token_budget() -> int:
     return _env_int("RAG_EVIDENCE_TOKEN_BUDGET", 3500, minimum=256)
 
 
+def synthesis_max_tokens() -> int:
+    return _env_int("RAG_SYNTHESIS_MAX_TOKENS", 8192, minimum=256)
+
+
 def max_snippets_per_doc() -> int:
     return _env_int("RAG_MAX_SNIPPETS_PER_DOC", 3, minimum=1)
 
@@ -64,5 +68,6 @@ __all__ = [
     "max_figures_per_turn",
     "max_snippets_per_doc",
     "query_rewrite_enabled",
+    "synthesis_max_tokens",
     "tool_default_top_k",
 ]
