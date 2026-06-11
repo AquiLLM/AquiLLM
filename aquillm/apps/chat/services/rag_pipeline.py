@@ -10,6 +10,7 @@ Failures fail open: any retrieval/synthesis exception returns ``"skipped"`` with
 """
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any, Literal
 
@@ -23,6 +24,7 @@ from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 from apps.chat.services.rag_config import direct_rag_top_k, is_direct_rag_enabled
 from apps.chat.services.rag_evidence import build_evidence_packet
 from apps.chat.services.rag_intent import classify_chat_message
+from apps.chat.services.rag_metrics import log_direct_rag_turn
 from apps.chat.services.rag_query import build_retrieval_query
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.chat.services.tool_wiring.documents import vector_search_tool
@@ -96,10 +98,16 @@ async def run_direct_rag_turn(
     if user_message is None:
         return "skipped"
 
+    t_start = time.perf_counter()
+
     collection_ids = list(getattr(consumer.col_ref, "collections", []) or [])
+
+    t_intent_start = time.perf_counter()
     intent = classify_chat_message(
         user_message.content or "", selected_collection_ids=collection_ids
     )
+    t_intent_end = time.perf_counter()
+
     if not intent.requires_rag or intent.requires_local_tools or intent.is_retry:
         return "skipped"
 
@@ -110,19 +118,45 @@ async def run_direct_rag_turn(
         return "handled"
 
     try:
+        t_query_start = time.perf_counter()
         query = build_retrieval_query(convo, user_message.content or "")
+        t_query_end = time.perf_counter()
+
         top_k = direct_rag_top_k()
+
+        t_retrieval_start = time.perf_counter()
         raw_result = await sync_to_async(_run_vector_search, thread_sensitive=True)(
             consumer, query, top_k
         )
+        t_retrieval_end = time.perf_counter()
+
+        t_evidence_start = time.perf_counter()
         packet = build_evidence_packet(
             raw_result, query=query, search_scope=_SEARCH_SCOPE
         )
+        t_evidence_end = time.perf_counter()
+
         working_convo = _append_retrieval_messages(convo, query, raw_result, top_k)
+
+        t_synthesis_start = time.perf_counter()
         result_convo = await synthesize_from_evidence(
             llm_if, working_convo, packet, stream_func=stream_func
         )
+        t_synthesis_end = time.perf_counter()
+
         consumer.convo = result_convo
+
+        _ms = lambda a, b: (b - a) * 1000.0  # noqa: E731
+        log_direct_rag_turn(
+            intent_ms=_ms(t_intent_start, t_intent_end),
+            query_ms=_ms(t_query_start, t_query_end),
+            retrieval_ms=_ms(t_retrieval_start, t_retrieval_end),
+            evidence_ms=_ms(t_evidence_start, t_evidence_end),
+            synthesis_ms=_ms(t_synthesis_start, t_synthesis_end),
+            total_ms=_ms(t_start, t_synthesis_end),
+            retrieved_count=int(raw_result.get("retrieved_count", 0) or 0),
+            retrieval_status=packet.retrieval_status,
+        )
         logger.info(
             "direct_rag_turn_handled retrieved=%d retained=%d status=%s",
             int(raw_result.get("retrieved_count", 0) or 0),

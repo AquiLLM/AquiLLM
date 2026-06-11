@@ -1,0 +1,79 @@
+# Offline eval cases for the direct RAG pipeline.
+# Each case is exercised by run_rag_eval.py with mocked retrieval and LLM.
+#
+# Fields:
+#   id          – unique case identifier (used in test output)
+#   description – human-readable description
+#   message     – user chat message content
+#   collection_ids – non-empty list means collections are selected
+#   mock_retrieval_status – "results_found" | "no_results"
+#   mock_retrieved_count  – number of chunks in mock payload
+#   expect_outcome        – "handled" | "skipped"
+#   expect_retrieval_called – whether _run_vector_search should be invoked
+#   expect_content_contains – substring(s) that must appear in the final answer
+
+cases:
+  - id: explicit_search
+    description: "Explicit document search request with collections selected"
+    message: "Please search the selected documents for calibration notes."
+    collection_ids: [1]
+    mock_retrieval_status: results_found
+    mock_retrieved_count: 1
+    expect_outcome: handled
+    expect_retrieval_called: true
+    expect_content_contains:
+      - "calibration"
+
+  - id: collection_backed_question
+    description: "Implicit collection-backed question (no search verb)"
+    message: "What does this paper say about spectral analysis?"
+    collection_ids: [42]
+    mock_retrieval_status: results_found
+    mock_retrieved_count: 2
+    expect_outcome: handled
+    expect_retrieval_called: true
+    expect_content_contains:
+      - "spectral"
+
+  - id: figure_request
+    description: "Figure retrieval request from selected documents"
+    message: "Show me the figures from the calibration paper."
+    collection_ids: [1]
+    mock_retrieval_status: results_found
+    mock_retrieved_count: 1
+    expect_outcome: handled
+    expect_retrieval_called: true
+    expect_content_contains:
+      - "calibration"
+
+  - id: no_results
+    description: "Search that returns empty results → transparent notice, no LLM call"
+    message: "Search the documents for dark matter candidates."
+    collection_ids: [5]
+    mock_retrieval_status: no_results
+    mock_retrieved_count: 0
+    expect_outcome: handled
+    expect_retrieval_called: true
+    expect_content_contains:
+      - "no relevant passages"
+
+  - id: no_collections
+    description: "RAG intent but no collections → prompt to select"
+    message: "Search the documents for gravitational lensing."
+    collection_ids: []
+    mock_retrieval_status: results_found
+    mock_retrieved_count: 0
+    expect_outcome: handled
+    expect_retrieval_called: false
+    expect_content_contains:
+      - "collection"
+
+  - id: non_rag_message
+    description: "General conversation → skipped, not a RAG turn"
+    message: "What is the capital of France?"
+    collection_ids: []
+    mock_retrieval_status: results_found
+    mock_retrieved_count: 0
+    expect_outcome: skipped
+    expect_retrieval_called: false
+    expect_content_contains: []

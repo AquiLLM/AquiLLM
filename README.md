@@ -47,6 +47,22 @@ The unified upload endpoint supports:
 
 *   **Optional RAG / cost controls**: Django cacheâ€“backed retrieval TTL caches (`RAG_CACHE_*`), cross-provider prompt preflight trimming (`TOKEN_EFFICIENCY_*`), optional LM-Lingua2 compression (`LM_LINGUA2_*`), and optional vLLM LMCache wiring (`LMCACHE_*`). See `.env.example` and `docs/roadmap/plans/active/2026-03-23-caching-rag-token-efficiency-rollout-notes.md` for rollout and rollback.
 
+### Direct RAG (backend-driven retrieval)
+
+When `RAG_DIRECT_ENABLED=1`, AquiLLM bypasses the LLM tool-selection round trip for obvious document questions. The pipeline runs retrieval deterministically before the model sees the turn, packages evidence with per-doc caps and token budgets, and hands a post-tool conversation to the synthesis step. Failures fail open: any exception falls back to the normal agentic tool loop.
+
+Key env vars:
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAG_DIRECT_ENABLED` | `0` | Enable backend-driven retrieval (off by default) |
+| `RAG_DIRECT_TOP_K` | `10` | Chunks retrieved per turn |
+| `RAG_EVIDENCE_TOKEN_BUDGET` | `3500` | Max tokens of evidence passed to synthesis |
+| `RAG_ATTACH_TOOLS_WHEN_COLLECTIONS_SELECTED` | `1` | Auto-attach document tools when collections are selected and intent requires RAG |
+| `RAG_TOOL_DEFAULT_TOP_K` | `10` | Default `top_k` injected into `vector_search` calls when the LLM omits it |
+
+Offline eval cases live in `aquillm/apps/chat/evals/rag_cases.yaml`; run `python -m apps.chat.evals.run_rag_eval` from the `aquillm/` directory to execute them without a live LLM or database.
+
 ### RAG retrieval defaults and benchmarking
 
 Default `VECTOR_TOP_K`, `TRIGRAM_TOP_K`, `CHUNK_SIZE`, and `CHUNK_OVERLAP` target a balance of latency and recall for typical research corpora. Tune `RAG_CANDIDATE_MULTIPLIER`, `RAG_*_MIN_LIMIT`, and `RAG_TRIGRAM_SIMILARITY_MIN` when you need more aggressive candidate fan-out or stricter trigram filtering. To compare old versus new defaults without code changes, snapshot your current `.env`, restore prior values (for example higher `VECTOR_TOP_K` / `TRIGRAM_TOP_K`), run the same fixed set of chat queries, and compare p95 end-to-end chat latency plus qualitative answer quality. Enable `RAG_CACHE_ENABLED=1` only after you have a shared cache backend so measurements are not dominated by cold embed calls.
