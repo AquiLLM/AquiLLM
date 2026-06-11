@@ -186,6 +186,123 @@ async def test_spin_breaks_when_weighted_budget_units_are_exhausted(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_spin_no_results_does_not_increment_no_progress_streak(monkeypatch):
+    """retrieval_status=no_results should NOT count as no_progress (unlike exceptions)."""
+    monkeypatch.setenv("LLM_MAX_CALLS_PER_TOOL_NAME", "10")
+    monkeypatch.setenv("LLM_REPEAT_TOOL_BREAK_THRESHOLD", "99")
+    monkeypatch.setenv("LLM_TOOL_NO_PROGRESS_BREAK_THRESHOLD", "2")
+    monkeypatch.delenv("LLM_TOOL_CALL_LIMITS", raising=False)
+    monkeypatch.delenv("LLM_TOOL_BUDGET_UNITS_PER_TURN", raising=False)
+    monkeypatch.delenv("LLM_TOOL_COST_WEIGHTS", raising=False)
+
+    def _no_results_tool_result(call_number: int) -> ToolMessage:
+        result_dict = {
+            "retrieval_status": "no_results",
+            "result": [],
+            "retrieval_message": "No relevant passages found.",
+        }
+        return ToolMessage(
+            content=str(result_dict),
+            tool_name="vector_search",
+            for_whom="assistant",
+            result_dict=result_dict,
+        )
+
+    def _convo_with_no_results(n_calls: int) -> Conversation:
+        messages: list = [UserMessage(content="Find sources.")]
+        for i in range(1, n_calls + 1):
+            if i > 1:
+                messages.append(_no_results_tool_result(i - 1))
+            messages.append(_assistant_tool_call(i, query=f"query-{i}"))
+        return Conversation(system="sys", messages=messages)
+
+    llm = _DummyLLMInterface()
+    llm.complete = AsyncMock(
+        side_effect=[
+            (_convo_with_no_results(1), "changed"),
+            (_convo_with_no_results(2), "changed"),
+            (_convo_with_no_results(3), "changed"),
+            (
+                Conversation(
+                    system="sys",
+                    messages=[UserMessage(content="q"), _assistant_final_answer()],
+                ),
+                "changed",
+            ),
+            (
+                Conversation(
+                    system="sys",
+                    messages=[UserMessage(content="q"), _assistant_final_answer()],
+                ),
+                "unchanged",
+            ),
+        ]
+    )
+    send_func = AsyncMock()
+
+    await llm.spin(
+        convo=Conversation(system="sys", messages=[UserMessage(content="start")]),
+        max_func_calls=10,
+        send_func=send_func,
+        max_tokens=256,
+    )
+
+    # 3 tool calls + 2 synthesis calls = 5 total; no early break from no_results
+    assert llm.complete.await_count == 5
+
+
+@pytest.mark.asyncio
+async def test_spin_no_results_still_breaks_on_per_tool_limit(monkeypatch):
+    """Even without no_progress penalty, per_tool_limit still terminates the loop."""
+    monkeypatch.setenv("LLM_MAX_CALLS_PER_TOOL_NAME", "2")
+    monkeypatch.setenv("LLM_REPEAT_TOOL_BREAK_THRESHOLD", "99")
+    monkeypatch.setenv("LLM_TOOL_NO_PROGRESS_BREAK_THRESHOLD", "99")
+    monkeypatch.delenv("LLM_TOOL_CALL_LIMITS", raising=False)
+    monkeypatch.delenv("LLM_TOOL_BUDGET_UNITS_PER_TURN", raising=False)
+    monkeypatch.delenv("LLM_TOOL_COST_WEIGHTS", raising=False)
+
+    def _no_results_result(i: int) -> ToolMessage:
+        result_dict = {"retrieval_status": "no_results", "result": []}
+        return ToolMessage(
+            content=str(result_dict),
+            tool_name="vector_search",
+            for_whom="assistant",
+            result_dict=result_dict,
+        )
+
+    def _convo_no_results(n: int) -> Conversation:
+        msgs: list = [UserMessage(content="q")]
+        for i in range(1, n + 1):
+            if i > 1:
+                msgs.append(_no_results_result(i - 1))
+            msgs.append(_assistant_tool_call(i, query=f"q{i}"))
+        return Conversation(system="sys", messages=msgs)
+
+    llm = _DummyLLMInterface()
+    final = Conversation(
+        system="sys", messages=[UserMessage(content="q"), _assistant_final_answer()]
+    )
+    llm.complete = AsyncMock(
+        side_effect=[
+            (_convo_no_results(1), "changed"),
+            (_convo_no_results(2), "changed"),
+            (final, "changed"),
+            (final, "unchanged"),
+        ]
+    )
+    send_func = AsyncMock()
+
+    await llm.spin(
+        convo=Conversation(system="sys", messages=[UserMessage(content="start")]),
+        max_func_calls=10,
+        send_func=send_func,
+        max_tokens=256,
+    )
+
+    assert llm.complete.await_count == 4
+
+
+@pytest.mark.asyncio
 async def test_spin_preserves_final_synthesis_step_after_break(monkeypatch):
     monkeypatch.setenv("LLM_MAX_CALLS_PER_TOOL_NAME", "2")
     monkeypatch.setenv("LLM_REPEAT_TOOL_BREAK_THRESHOLD", "99")

@@ -2,10 +2,19 @@
 from __future__ import annotations
 
 import re
+from os import getenv
 from typing import Any
 
 
 _DOC_CITATION_RE = re.compile(r"\[doc:(?P<doc>[^\]\s]+)\s+chunk:(?P<chunk>\d+)\]")
+
+
+def _rag_tool_default_top_k() -> int:
+    try:
+        value = int(getenv("RAG_TOOL_DEFAULT_TOP_K", "10"))
+    except (TypeError, ValueError):
+        value = 10
+    return max(1, value)
 
 
 def _coerce_int(value: Any) -> Any:
@@ -141,6 +150,8 @@ def normalize_tool_call_kwargs(tool_name: str, raw: dict[str, Any]) -> dict[str,
     out = dict(raw)
     if tool_name == "vector_search":
         _normalize_search_string_and_top_k(out)
+        if out.get("top_k") is None:
+            out["top_k"] = _rag_tool_default_top_k()
     elif tool_name == "search_single_document":
         _normalize_search_string_and_top_k(out)
         _fill_doc_id(out)

@@ -95,3 +95,36 @@ def test_more_context_extracts_chunk_id_from_citation_ref():
     )
     assert out["chunk_id"] == 6715
     assert out["adjacent_chunks"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 6: default top_k from RAG_TOOL_DEFAULT_TOP_K (Task 6)
+# ---------------------------------------------------------------------------
+
+def test_vector_search_defaults_top_k_when_missing(monkeypatch):
+    """vector_search with no top_k alias gets RAG_TOOL_DEFAULT_TOP_K default."""
+    monkeypatch.setenv("RAG_TOOL_DEFAULT_TOP_K", "10")
+    out = normalize_tool_call_kwargs("vector_search", {"search_string": "black holes"})
+    assert out["top_k"] == 10
+
+
+def test_vector_search_default_top_k_respects_env(monkeypatch):
+    """RAG_TOOL_DEFAULT_TOP_K env override is honored."""
+    monkeypatch.setenv("RAG_TOOL_DEFAULT_TOP_K", "15")
+    out = normalize_tool_call_kwargs("vector_search", {"q": "dark matter"})
+    assert out["top_k"] == 15
+
+
+def test_vector_search_explicit_top_k_not_overridden(monkeypatch):
+    """Explicit top_k=5 is NOT replaced by the default."""
+    monkeypatch.setenv("RAG_TOOL_DEFAULT_TOP_K", "10")
+    out = normalize_tool_call_kwargs("vector_search", {"search_string": "pulsars", "top_k": 5})
+    assert out["top_k"] == 5
+
+
+def test_other_tool_does_not_get_default_top_k(monkeypatch):
+    """Default top_k injection only applies to vector_search."""
+    monkeypatch.setenv("RAG_TOOL_DEFAULT_TOP_K", "10")
+    raw = {"doc_id": "abc", "search_string": "test"}
+    out = normalize_tool_call_kwargs("search_single_document", raw)
+    assert out.get("top_k") is None

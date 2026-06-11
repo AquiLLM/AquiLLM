@@ -795,6 +795,25 @@ async def complete_conversation_turn(
         if deterministic_response is not None:
             response = deterministic_response
 
+    _available_tool_names = {tool.name for tool in (last_message.tools or [])}
+    if (
+        isinstance(last_message, UserMessage)
+        and bool(last_message.tools)
+        and tool_choice_type == "auto"
+        and "vector_search" in _available_tool_names
+        and not response.tool_call
+        and _visible_text_is_empty_or_interim(response.text)
+    ):
+        deterministic_response = _deterministic_required_tool_call(
+            last_message=last_message,
+            stream_message_uuid=stream_message_uuid,
+            input_usage=response.input_usage,
+            output_usage=response.output_usage,
+            model=response.model,
+        )
+        if deterministic_response is not None:
+            response = deterministic_response
+
     if is_post_tool_result_turn and not response.tool_call:
         response = await _retry_post_tool_synthesis(
             llm,

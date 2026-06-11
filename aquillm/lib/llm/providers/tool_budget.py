@@ -211,7 +211,14 @@ class ToolBudgetPolicy:
         is_repeat_signature: bool,
     ) -> bool:
         result_dict = observation.latest_result_dict if isinstance(observation.latest_result_dict, dict) else None
-        has_exception = bool(result_dict and str(result_dict.get("exception", "")).strip())
+        is_explicit_no_results = (
+            isinstance(result_dict, dict)
+            and result_dict.get("retrieval_status") == "no_results"
+        )
+        has_exception = (
+            not is_explicit_no_results
+            and bool(result_dict and str(result_dict.get("exception", "")).strip())
+        )
         if has_exception:
             return True
 

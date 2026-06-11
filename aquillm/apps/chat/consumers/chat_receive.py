@@ -22,6 +22,7 @@ from apps.chat.consumers.chat_ws_errors import (
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import ConversationFile
 from apps.chat.services.feedback import apply_message_feedback_text, apply_message_rating
+from apps.chat.services.rag_config import attach_tools_when_collections_selected
 from apps.chat.services.rag_intent import classify_chat_message
 from apps.chat.services.rag_pipeline import run_direct_rag_turn
 from apps.chat.services.skills_runtime import effective_base_system_for_memory_async
@@ -57,6 +58,7 @@ def _configure_append_tools(
     message_content: str,
     all_tools: list,
     document_tools: list,
+    selected_collection_ids: Optional[list] = None,
     prior_user_tools: Optional[list] = None,
     prior_user_tool_choice: Optional[ToolChoice] = None,
 ) -> tuple[list, Optional[ToolChoice]]:
@@ -65,6 +67,17 @@ def _configure_append_tools(
         return prior_user_tools, prior_user_tool_choice or ToolChoice(type="auto")
     if document_tools and _looks_like_explicit_document_search_request(message_content):
         return document_tools, ToolChoice(type="any")
+    collection_ids = list(selected_collection_ids or [])
+    if (
+        document_tools
+        and collection_ids
+        and attach_tools_when_collections_selected()
+    ):
+        intent = classify_chat_message(
+            message_content or "", selected_collection_ids=collection_ids
+        )
+        if intent.requires_rag and not intent.requires_local_tools:
+            return document_tools, ToolChoice(type="any")
     if all_tools and _looks_like_local_tool_request(message_content):
         return all_tools, ToolChoice(type="auto")
     return [], None
@@ -129,6 +142,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             message_content=consumer.convo[-1].content,
             all_tools=consumer.tools,
             document_tools=getattr(consumer, "doc_tools", []),
+            selected_collection_ids=selected_collections,
             prior_user_tools=prior_user_tools,
             prior_user_tool_choice=prior_user_tool_choice,
         )
