@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import structlog
-import re
 from base64 import b64decode
 from json import loads
 from time import perf_counter
@@ -23,59 +22,26 @@ from apps.chat.consumers.chat_ws_errors import (
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import ConversationFile
 from apps.chat.services.feedback import apply_message_feedback_text, apply_message_rating
+from apps.chat.services.rag_intent import classify_chat_message
 from apps.chat.services.skills_runtime import effective_base_system_for_memory_async
 
 logger = structlog.stdlib.get_logger(__name__)
 
 
-_DOCUMENT_TARGET_RE = re.compile(
-    r"\b(documents?|docs?|papers?|files?|selected collections?|sources?)\b",
-    flags=re.IGNORECASE,
-)
-_DOCUMENT_SEARCH_ACTION_RE = re.compile(
-    r"\b(search|check|find|scan|read|retrieve|query|consult)\b|"
-    r"\blook\s+(?:at|in|through|up)\b",
-    flags=re.IGNORECASE,
-)
-_DOCUMENT_FIGURE_TARGET_RE = re.compile(
-    r"\b(figures?|figs?\.?|images?|visuals?|plots?|graphs?|charts?|diagrams?)\b",
-    flags=re.IGNORECASE,
-)
-_DOCUMENT_FIGURE_ACTION_RE = re.compile(
-    r"\b(show|display|render|include|explain|find|get|pull|open)\b",
-    flags=re.IGNORECASE,
-)
-_LOCAL_TOOL_ACTION_RE = re.compile(
-    r"\b("
-    r"sky\s+subtraction|subtract\s+the\s+sky|flat[-\s]?field(?:ing)?|"
-    r"point\s+source(?:s)?|detect\s+source(?:s)?|fits|uploaded\s+files?|"
-    r"use\s+(?:the\s+)?tool|run\s+(?:the\s+)?tool"
-    r")\b",
-    flags=re.IGNORECASE,
-)
-_RETRY_REQUEST_RE = re.compile(
-    r"^\s*(?:try again|retry|please retry|run it again|do that again)\s*[.!?]*\s*$",
-    flags=re.IGNORECASE,
-)
-
-
 def _looks_like_explicit_document_search_request(message_content: str) -> bool:
     """True when the user explicitly asks the assistant to retrieve from documents."""
-    text = message_content or ""
-    figure_request = _DOCUMENT_FIGURE_TARGET_RE.search(text) and _DOCUMENT_FIGURE_ACTION_RE.search(text)
-    if figure_request:
-        return True
-    return bool(_DOCUMENT_TARGET_RE.search(text) and _DOCUMENT_SEARCH_ACTION_RE.search(text))
+    intent = classify_chat_message(message_content or "", selected_collection_ids=[])
+    return intent.requires_rag and not intent.requires_local_tools and not intent.is_retry
 
 
 def _looks_like_local_tool_request(message_content: str) -> bool:
     """True for app-local non-document tools such as FITS processing."""
-    return bool(_LOCAL_TOOL_ACTION_RE.search(message_content or ""))
+    return classify_chat_message(message_content or "", selected_collection_ids=[]).requires_local_tools
 
 
 def _looks_like_retry_request(message_content: str) -> bool:
     """True when the user asks to rerun the previous failed/unsatisfying turn."""
-    return bool(_RETRY_REQUEST_RE.match(message_content or ""))
+    return classify_chat_message(message_content or "", selected_collection_ids=[]).is_retry
 
 
 def _latest_prior_user_tool_intent(messages: list) -> tuple[list | None, Optional[ToolChoice]]:
