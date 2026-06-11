@@ -4,8 +4,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
-
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
@@ -15,10 +13,6 @@ from apps.chat.services.rag_pipeline import run_direct_rag_turn
 from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
 from lib.llm.types.response import LLMResponse
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _user_convo(text: str) -> Conversation:
     return Conversation(system="sys", messages=[UserMessage(content=text)])
@@ -50,10 +44,6 @@ def _results_payload() -> dict:
         "retrieved_documents": ["Paper A"],
     }
 
-
-# ---------------------------------------------------------------------------
-# Flag gating
-# ---------------------------------------------------------------------------
 
 async def test_skipped_when_flag_off(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "0")
@@ -95,10 +85,6 @@ async def test_skipped_when_last_message_not_user(monkeypatch):
 
     assert outcome == "skipped"
 
-
-# ---------------------------------------------------------------------------
-# Retrieval happens before any LLM call
-# ---------------------------------------------------------------------------
 
 async def test_handled_retrieves_before_llm(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
@@ -163,10 +149,6 @@ async def test_handled_appends_synthetic_tool_messages(monkeypatch):
     assert captured["packet"].chunks
 
 
-# ---------------------------------------------------------------------------
-# No collections -> user-visible prompt to select
-# ---------------------------------------------------------------------------
-
 async def test_no_collections_prompts_selection(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     called: list = []
@@ -187,10 +169,6 @@ async def test_no_collections_prompts_selection(monkeypatch):
     assert "collection" in last.content.lower()
 
 
-# ---------------------------------------------------------------------------
-# Fail-open: retrieval errors fall back to normal spin (skipped, convo intact)
-# ---------------------------------------------------------------------------
-
 async def test_retrieval_failure_falls_back_to_skipped(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
 
@@ -210,10 +188,6 @@ async def test_retrieval_failure_falls_back_to_skipped(monkeypatch):
     assert consumer.convo is convo
     assert isinstance(consumer.convo[-1], UserMessage)
 
-
-# ---------------------------------------------------------------------------
-# End-to-end through the real synthesis machinery (single LLM call)
-# ---------------------------------------------------------------------------
 
 async def test_end_to_end_real_synthesis_single_llm_call(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
@@ -262,3 +236,58 @@ async def test_end_to_end_real_synthesis_single_llm_call(monkeypatch):
     assert order.count("get_message") == 1
     assert "calibration" in consumer.convo[-1].content.lower()
     assert "[doc:doc-a chunk:1]" in consumer.convo[-1].content
+
+
+async def test_direct_rag_no_results_returns_notice_without_llm(monkeypatch):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    raw = {
+        "result": [],
+        "retrieval_status": "no_results",
+        "retrieval_message": (
+            'I searched the selected documents for "dark matter", '
+            "but retrieval returned no relevant passages."
+        ),
+    }
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", lambda c, q, k: raw)
+
+    convo = _user_convo("search the documents for dark matter")
+    consumer = _consumer(convo, [1])
+    # Empty response list: any LLM call would raise IndexError.
+    llm_if = _FakeLLMInterface([])
+
+    outcome = await run_direct_rag_turn(consumer, llm_if, convo, stream_func=None)
+
+    assert outcome == "handled"
+    assert llm_if.calls == []
+    assert "no relevant passages" in consumer.convo[-1].content.lower()
+
+
+async def test_direct_rag_figure_request_embeds_image(monkeypatch):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    raw = _results_payload()
+    raw["result"][0]["image_url"] = "/aquillm/document_image/doc-a/"
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", lambda c, q, k: raw)
+
+    answer = (
+        "The figure shows calibration drift across magnitude bins for the survey "
+        "sample [doc:doc-a chunk:1]."
+    )
+    llm_if = _FakeLLMInterface(
+        [
+            LLMResponse(
+                text=answer,
+                tool_call=None,
+                stop_reason="end_turn",
+                input_usage=1,
+                output_usage=1,
+            )
+        ]
+    )
+
+    convo = _user_convo("show me the figure for the calibration method")
+    consumer = _consumer(convo, [1])
+
+    outcome = await run_direct_rag_turn(consumer, llm_if, convo, stream_func=None)
+
+    assert outcome == "handled"
+    assert "/aquillm/document_image/doc-a/" in consumer.convo[-1].content
