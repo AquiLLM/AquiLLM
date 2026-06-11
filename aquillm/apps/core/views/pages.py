@@ -42,7 +42,7 @@ def search(request):
             top_k = form.cleaned_data['top_k']
             collections = form.cleaned_data['collections']
             searchable_docs = Collection.get_user_accessible_documents(request.user, collections=collections)
-            vector_results, trigram_results, reranked_results = TextChunk.text_chunk_search(query, top_k, searchable_docs)
+            vector_results, trigram_results, reranked_results, _diagnostics = TextChunk.text_chunk_search(query, top_k, searchable_docs)
         else:
             error_message = "Invalid form submission"
     else:

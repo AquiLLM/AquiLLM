@@ -69,3 +69,69 @@ class VectorSearchPackTests(SimpleTestCase):
             'I searched selected documents for "HSC-PDR2 calibration", but retrieval returned '
             "no relevant passages."
         )
+
+    def test_pack_no_results_includes_retrieval_diagnostics_when_provided(self):
+        diag = {
+            "doc_count": 2,
+            "chunks_with_embeddings": 0,
+            "vector_error": "connection refused",
+            "trigram_candidates": 0,
+            "exact_terms": ["HSC-PDR2"],
+        }
+        out = pack_chunk_search_results(
+            [],
+            titles_by_doc_id={},
+            docs_by_doc_id={},
+            truncate=lambda s: s,
+            image_modality="image",
+            compact_items=False,
+            search_string="HSC-PDR2",
+            search_scope="selected documents",
+            retrieval_diagnostics=diag,
+        )
+
+        assert out["retrieval_status"] == "no_results"
+        assert out["retrieval_diagnostics"] == diag
+        assert out["retrieval_diagnostics"]["vector_error"] == "connection refused"
+        assert out["retrieval_diagnostics"]["chunks_with_embeddings"] == 0
+
+    def test_pack_no_results_omits_retrieval_diagnostics_when_not_provided(self):
+        out = pack_chunk_search_results(
+            [],
+            titles_by_doc_id={},
+            docs_by_doc_id={},
+            truncate=lambda s: s,
+            image_modality="image",
+            compact_items=False,
+        )
+
+        assert out["retrieval_status"] == "no_results"
+        assert "retrieval_diagnostics" not in out
+
+    def test_pack_results_found_never_includes_retrieval_diagnostics(self):
+        chunk = SimpleNamespace(
+            id=9,
+            doc_id="doc-c",
+            chunk_number=1,
+            modality="text",
+            content="some text",
+        )
+        diag = {
+            "doc_count": 1,
+            "chunks_with_embeddings": 5,
+            "vector_error": None,
+            "trigram_candidates": 3,
+            "exact_terms": [],
+        }
+        out = pack_chunk_search_results(
+            [chunk],
+            titles_by_doc_id={"doc-c": "Doc C"},
+            docs_by_doc_id={"doc-c": SimpleNamespace(image_file=None)},
+            truncate=lambda s: s,
+            image_modality="image",
+            compact_items=False,
+            retrieval_diagnostics=diag,
+        )
+
+        assert out["retrieval_status"] == "results_found"
+        assert "retrieval_diagnostics" not in out

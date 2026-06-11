@@ -146,7 +146,7 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
         )
         if not docs:
             return _NO_DOCS_EXCEPTION
-        _, _, results = TextChunk.text_chunk_search(search_string, top_k, docs)
+        _, _, results, diagnostics = TextChunk.text_chunk_search(search_string, top_k, docs)
         titles_by_doc_id = {doc.id: doc.title for doc in docs}
         docs_by_doc_id = {doc.id: doc for doc in docs}
 
@@ -158,6 +158,7 @@ def vector_search_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             image_modality=TextChunk.Modality.IMAGE,
             search_string=search_string,
             search_scope="selected documents",
+            retrieval_diagnostics=diagnostics,
         )
 
     return vector_search
@@ -289,7 +290,7 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             }
         if not doc.collection.user_can_view(user):
             return {"exception": f"User cannot access document {doc_id}!"}
-        _, _, results = TextChunk.text_chunk_search(search_string, top_k, [doc])
+        _, _, results, diagnostics = TextChunk.text_chunk_search(search_string, top_k, [doc])
 
         titles_by_doc_id = {doc.id: doc.title}
         docs_by_doc_id = {doc.id: doc}
@@ -301,6 +302,7 @@ def search_single_document_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
             image_modality=TextChunk.Modality.IMAGE,
             search_string=search_string,
             search_scope=f'document "{doc.title}"',
+            retrieval_diagnostics=diagnostics,
         )
 
     return search_single_document

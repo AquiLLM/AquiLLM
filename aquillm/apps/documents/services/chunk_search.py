@@ -112,6 +112,7 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
     total_start = perf_counter()
 
     try:
+        vector_error: str | None = None
         try:
             vector_start = perf_counter()
             _embed_base, _embed_key, embed_model = get_local_embed_config()
@@ -129,6 +130,7 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             )  # type: ignore
             vector_ms = (perf_counter() - vector_start) * 1000
         except Exception as exc:
+            vector_error = str(exc)
             logger.warning(
                 "Vector embed/search failed; continuing with trigram-only retrieval. Error: %s",
                 exc,
@@ -156,7 +158,10 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
         else:
             exact_results = model_cls.objects.none()
         exact_ms = (perf_counter() - exact_start) * 1000
-        combined_candidates = list(vector_results) + list(trigram_results) + list(exact_results)
+        vec_list = list(vector_results)
+        tri_list = list(trigram_results)
+        exact_list = list(exact_results)
+        combined_candidates = vec_list + tri_list + exact_list
         pre_dedupe_count = len(combined_candidates)
         deduped_candidates = []
         seen_pks = set()
@@ -188,7 +193,35 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             pre_dedupe_count,
             len(combined_candidates),
         )
-        return vector_results, trigram_results, reranked_results
+        chunks_with_embeddings: int | None = None
+        if not reranked_results:
+            try:
+                chunks_with_embeddings = (
+                    model_cls.objects.filter_by_documents(docs)
+                    .exclude(embedding__isnull=True)
+                    .count()
+                )
+            except Exception as count_exc:
+                logger.warning("Could not count chunks_with_embeddings: %s", count_exc)
+        diagnostics: dict = {
+            "doc_count": len(docs),
+            "chunks_with_embeddings": chunks_with_embeddings,
+            "vector_error": vector_error,
+            "trigram_candidates": len(tri_list),
+            "exact_terms": exact_terms,
+        }
+        if not reranked_results:
+            logger.info(
+                "text_chunk_search returned no results",
+                extra={
+                    "doc_count": diagnostics["doc_count"],
+                    "chunks_with_embeddings": chunks_with_embeddings,
+                    "vector_error": vector_error,
+                    "trigram_candidates": diagnostics["trigram_candidates"],
+                    "exact_terms": exact_terms,
+                },
+            )
+        return vector_results, trigram_results, reranked_results, diagnostics
     except DatabaseError as e:
         logger.error(f"Database error during search: {str(e)}")
         raise e

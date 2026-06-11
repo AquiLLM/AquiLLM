@@ -52,6 +52,7 @@ def pack_chunk_search_results(
     compact_items: bool | None = None,
     search_string: str | None = None,
     search_scope: str = "documents",
+    retrieval_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the tool `result` dict for multi-chunk search (collections or single doc)."""
     use_compact = _compact_items_default() if compact_items is None else compact_items
@@ -143,7 +144,7 @@ def pack_chunk_search_results(
                     items.append({**base, "text": truncate(chunk.content)})
 
     if not items:
-        return {
+        no_results: dict[str, Any] = {
             "result": [],
             "retrieval_status": "no_results",
             "retrieval_message": _retrieval_message(
@@ -151,6 +152,9 @@ def pack_chunk_search_results(
                 search_scope=search_scope,
             ),
         }
+        if retrieval_diagnostics is not None:
+            no_results["retrieval_diagnostics"] = retrieval_diagnostics
+        return no_results
 
     retrieved_documents = sorted(
         {

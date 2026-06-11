@@ -240,7 +240,7 @@ def test_exact_domain_terms_are_added_as_candidates(mock_embed, mock_rerank, moc
         exact_filters=exact_filters,
     )
 
-    _vector, _trigram, results = text_chunk_search(
+    _vector, _trigram, results, _diag = text_chunk_search(
         mc,
         "What does the document say about HSC-PDR2 calibration?",
         2,
