@@ -477,9 +477,16 @@ class CutoffContinuationTests(SimpleTestCase):
         first_uuid = llm.calls[0].get("stream_message_uuid")
         self.assertTrue(first_uuid)
         self.assertEqual(llm.calls[1].get("stream_message_uuid"), first_uuid)
-        self.assertEqual(updated[-1].message_uuid, first_uuid)
+        self.assertEqual(str(updated[-1].message_uuid), first_uuid)
 
-    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    @patch.dict(
+        "os.environ",
+        {
+            "LLM_CONTINUATION_MAX_TOKENS": "640",
+            "LLM_POST_TOOL_MAX_TOKENS": "1536",
+            "LLM_STREAM_FINAL_ANSWER_ONLY": "0",
+        },
+    )
     def test_streaming_cutoff_continuation_keeps_streaming_same_bubble(self):
         class _StreamingFakeLLM(_FakeLLMInterface):
             async def get_message(self, *args, **kwargs):
