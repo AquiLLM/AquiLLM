@@ -23,6 +23,12 @@ class WSConversation(models.Model):
     selected_collection_ids = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(editable=False)
     updated_at = models.DateTimeField()
+    # Re-index guard for ConversationChunk: SHA256 of the ordered transcript that was
+    # last indexed, plus whether that indexing finished. Mirrors Document.full_text_hash.
+    indexed_transcript_hash = models.CharField(max_length=64, null=True, blank=True)
+    # db_default so inserts that omit this column (e.g. a stale process mid-deploy)
+    # don't violate the NOT NULL constraint on this table.
+    index_complete = models.BooleanField(default=False, db_default=False)
 
     class Meta:
         app_label = 'apps_chat'

@@ -18,6 +18,7 @@ from aquillm.memory import augment_conversation_with_memory_async
 from aquillm.message_adapters import load_conversation_from_db, pydantic_message_to_frontend_dict
 from aquillm.settings import DEBUG, SKILLS_ENABLED
 from aquillm.tasks import enqueue_conversation_memories_task
+from apps.chat.tasks import enqueue_index_conversation_task
 from apps.chat.consumers.chat_delta import send_conversation_delta
 from apps.chat.consumers.chat_publish import run_llm_spin
 from apps.chat.consumers.chat_receive import handle_chat_receive
@@ -26,7 +27,11 @@ from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services.skills_runtime import build_skill_tools, effective_base_system_for_memory_async
-from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
+from apps.chat.services.tool_wiring import (
+    build_astronomy_tools,
+    build_document_tools,
+    build_memory_tools,
+)
 from lib.tools.debug.weather import get_debug_weather_tool
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -37,6 +42,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     db_convo: Optional[WSConversation] = None
     convo: Optional[Any] = None
     tools: list[LLMTool] = []
+    memory_tools: list[LLMTool] = []
     user: Optional[User] = None
 
     dead: bool = False
@@ -62,6 +68,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
             except Exception as exc:
                 logger.warning(
                     "Failed to queue memory extraction task for convo %s: %s",
+                    self.db_convo.id,
+                    exc,
+                )
+            try:
+                enqueue_index_conversation_task(
+                    conversation_id=self.db_convo.id,
+                    queued_updated_at=self.db_convo.updated_at.isoformat(),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to queue conversation indexing task for convo %s: %s",
                     self.db_convo.id,
                     exc,
                 )
@@ -102,7 +119,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.__get_all_user_collections()
         logger.debug("Collections loaded: %s", self.col_ref.collections)
         self.doc_tools = build_document_tools(self.user, self.col_ref, ChatRef(self))
-        self.tools = self.doc_tools + build_astronomy_tools(self)
+        self.memory_tools = build_memory_tools(self.user, ChatRef(self))
+        self.tools = self.doc_tools + build_astronomy_tools(self) + self.memory_tools
         if getenv("LLM_CHOICE") == "GEMMA3":
             self.tools.append(message_to_user)
         if DEBUG:
