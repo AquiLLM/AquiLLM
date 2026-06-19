@@ -81,6 +81,11 @@ CONTEXT_BUDGET_RETRIEVAL_TOKENS = env_int("CONTEXT_BUDGET_RETRIEVAL_TOKENS", 350
 CONTEXT_PIN_LAST_TURNS = env_int("CONTEXT_PIN_LAST_TURNS", 2)
 CONTEXT_MAX_SNIPPETS_PER_DOC = env_int("CONTEXT_MAX_SNIPPETS_PER_DOC", 3)
 
+# Crawl-time PDF capture: render each crawled page to PDF and attach a merged
+# PDF to the document so the citation modal can highlight on the page layout.
+# Off by default — capture is expensive (Selenium + CDP printToPDF per URL).
+CRAWL_CAPTURE_PDF = env_bool("CRAWL_CAPTURE_PDF", False)
+
 # Pluggable LLM skills (`lib.skills`); off by default. See `mcp-skills-agents-runtime.md`.
 SKILLS_ENABLED = env_bool("AQUILLM_SKILLS_ENABLED", False)
 AQUILLM_SKILLS_EXTRA_MODULES = env_csv("AQUILLM_SKILLS_EXTRA_MODULES")

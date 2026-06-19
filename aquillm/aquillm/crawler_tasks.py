@@ -6,6 +6,7 @@ from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from celery import shared_task
 from celery.states import state, STARTED, SUCCESS, FAILURE
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.files.base import ContentFile
 from django.db import DatabaseError
@@ -291,15 +292,18 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
 
                 # Capture a PDF rendering of the page so the citation modal can
                 # highlight the cited passage on the original page layout.
-                try:
-                    if selenium_driver is None:
-                        selenium_driver = _init_selenium_driver()
-                        logger.info(f"[Task {task_id}] Selenium WebDriver initialized for PDF capture.")
-                    pdf_bytes = _capture_page_pdf(selenium_driver, current_url, selenium_loaded_this_url)
-                    if pdf_bytes:
-                        per_url_pdfs.append(pdf_bytes)
-                except Exception as e:
-                    logger.warning(f"[Task {task_id}] PDF capture failed for {current_url}: {e}", exc_info=False)
+                # Gated behind CRAWL_CAPTURE_PDF — capture is expensive (Selenium
+                # + CDP printToPDF per URL) and off by default.
+                if settings.CRAWL_CAPTURE_PDF:
+                    try:
+                        if selenium_driver is None:
+                            selenium_driver = _init_selenium_driver()
+                            logger.info(f"[Task {task_id}] Selenium WebDriver initialized for PDF capture.")
+                        pdf_bytes = _capture_page_pdf(selenium_driver, current_url, selenium_loaded_this_url)
+                        if pdf_bytes:
+                            per_url_pdfs.append(pdf_bytes)
+                    except Exception as e:
+                        logger.warning(f"[Task {task_id}] PDF capture failed for {current_url}: {e}", exc_info=False)
 
                 if current_depth < max_depth and html_content_for_links:
                     try:
