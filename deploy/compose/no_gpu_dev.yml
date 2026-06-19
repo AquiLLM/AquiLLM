@@ -57,6 +57,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/web/Dockerfile.prod
+      args:
+        CRAWL_CAPTURE_PDF: ${CRAWL_CAPTURE_PDF:-false}
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
     restart: unless-stopped
@@ -86,6 +88,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/web/Dockerfile.prod
+      args:
+        CRAWL_CAPTURE_PDF: ${CRAWL_CAPTURE_PDF:-false}
     restart: unless-stopped
     env_file:
       - ../../.env

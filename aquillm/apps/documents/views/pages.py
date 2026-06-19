@@ -30,13 +30,16 @@ def get_doc(request, doc_id):
 @require_http_methods(['GET'])
 @login_required
 def pdf(request, doc_id):
-    """Serve the PDF file for a document."""
+    """Serve the PDF file for a document.
+
+    PDFDocument uses `pdf_file`; TeXDocument uses `pdf_file` when compiled;
+    RawTextDocument uses `rendered_pdf` populated by the web crawler.
+    """
     doc = get_doc(request, doc_id)
-    if doc.pdf_file:
-        response = HttpResponse(doc.pdf_file, content_type='application/pdf')
-        return response
-    else:
-        raise Http404("Requested document does not have an associated PDF")
+    pdf_field = getattr(doc, 'pdf_file', None) or getattr(doc, 'rendered_pdf', None)
+    if pdf_field:
+        return HttpResponse(pdf_field, content_type='application/pdf')
+    raise Http404("Requested document does not have an associated PDF")
 
 
 @require_http_methods(['GET'])

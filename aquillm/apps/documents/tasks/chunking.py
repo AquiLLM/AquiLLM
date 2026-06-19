@@ -77,7 +77,7 @@ def create_chunks(self, doc_id: str):
             ]
             TextChunk.objects.bulk_create(new_chunks)
             doc.ingestion_complete = True
-            doc.save(dont_rechunk=True)
+            doc.save(dont_rechunk=True, update_fields=['ingestion_complete'])
             notify_ingest_monitor_complete(doc.id)
             return
 
@@ -156,14 +156,14 @@ def create_chunks(self, doc_id: str):
         send_progress(force=True)
         TextChunk.objects.bulk_create(chunks)
         doc.ingestion_complete = True
-        doc.save(dont_rechunk=True)
+        doc.save(dont_rechunk=True, update_fields=['ingestion_complete'])
         notify_ingest_monitor_complete(doc.id)
     except Exception as exc:
         logger.error("Error creating chunks for document %s: %s", doc.id, exc)
         self.update_state(state=FAILURE)
         doc.ingestion_complete = True
         doc.full_text += f"\n\nERROR DURING PROCESSING: {exc}"
-        doc.save(dont_rechunk=True)
+        doc.save(dont_rechunk=True, update_fields=['ingestion_complete', 'full_text'])
         raise
 
 

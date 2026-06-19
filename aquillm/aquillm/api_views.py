@@ -23,6 +23,8 @@ from apps.collections.views.api import (
 
 # Re-export document views
 from apps.documents.views.api import (
+    chunk_detail,
+    citation_narrow,
     delete_document,
     move_document,
 )
@@ -77,6 +79,8 @@ urlpatterns = [
     path("ingestion/monitor/", ingestion_monitor, name="api_ingestion_monitor"),
     path("documents/move/<uuid:doc_id>/", move_document, name="api_move_document"),
     path("documents/delete/<uuid:doc_id>/", delete_document, name="api_delete_document"),
+    path("chunks/<int:chunk_id>/", chunk_detail, name="api_chunk_detail"),
+    path("citations/narrow/", citation_narrow, name="api_citation_narrow"),
     path("users/search/", search_users, name="api_search_users"),
     path("whitelisted_email/<str:email>/", whitelisted_email, name="api_whitelist_email"),
     path("whitelisted_emails/", whitelisted_emails, name="api_whitelist_emails"),
