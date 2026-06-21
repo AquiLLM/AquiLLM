@@ -2,6 +2,7 @@
 import structlog
 
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.http import HttpResponseForbidden
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
@@ -26,7 +27,18 @@ def email_whitelist(request):
     return render(request, 'aquillm/email_whitelist.html')
 
 
+@login_required
+@require_http_methods(['GET'])
+def feedback_dashboard(request):
+    """Display the superuser-only feedback dashboard page."""
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("Superuser access required")
+
+    return render(request, 'aquillm/feedback_dashboard.html')
+
+
 __all__ = [
+    'feedback_dashboard',
     'gemini_cost_monitor',
     'email_whitelist',
 ]
