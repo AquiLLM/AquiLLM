@@ -11,6 +11,7 @@ api_urlpatterns = [
     path("users/search/", api_views.search_users, name="api_search_users"),
     path("whitelisted_email/<str:email>/", api_views.whitelisted_email, name="api_whitelist_email"),
     path("whitelisted_emails/", api_views.whitelisted_emails, name="api_whitelist_emails"),
+    path("feedback/filter-schema/", api_views.feedback_filter_schema, name="api_feedback_filter_schema"),
     path("feedback/ratings.csv", api_views.feedback_ratings_csv, name="api_feedback_ratings_csv"),
 ]
 
