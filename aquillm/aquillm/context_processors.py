@@ -26,7 +26,7 @@ def _safe_reverse(name: str, kwargs: dict[str, Any] | None = None) -> str | None
             return url
         return reverse(name)
     except NoReverseMatch as exc:
-        logger.warning("Could not reverse URL name=%s kwargs=%s: %s", name, kwargs, exc)
+        logger.warning("obs.core.url_reverse_failed", url_name=name, kwargs=kwargs, error=str(exc), error_type=type(exc).__name__)
         return None
 
 

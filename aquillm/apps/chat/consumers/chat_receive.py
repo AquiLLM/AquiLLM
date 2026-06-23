@@ -116,7 +116,7 @@ def _validated_collection_ids(raw_collections: Any) -> list[Any]:
 
 
 async def handle_chat_receive(consumer: Any, text_data: str) -> None:
-    logger.debug("ChatConsumer.receive() called with data: %s...", text_data[:100])
+    logger.debug("obs.chat.receive", data_preview=text_data[:100])
 
     @database_sync_to_async
     def _save_files(files: list[ConversationFile]) -> list[ConversationFile]:
@@ -135,7 +135,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         await _save_selected_collections(selected_collections)
 
     async def append(data: dict):
-        logger.debug("append() called with collections: %s", data.get("collections", []))
+        logger.debug("obs.chat.append", collections=data.get("collections", []))
 
         assert consumer.convo is not None
 
@@ -170,7 +170,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         consumer.convo[-1].tool_choice = tool_choice
         await consumer._save_conversation(create_memories=False)
         consumer.last_sent_sequence = len(consumer.convo) - 1
-        logger.debug("append() completed, message added")
+        logger.debug("obs.chat.append_completed")
 
     async def rate(data: dict):
         assert consumer.convo is not None
@@ -209,7 +209,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         try:
             data = loads(text_data)
             action = data.pop("action", None)
-            logger.debug("Action: %s", action)
+            logger.debug("obs.chat.action", action=action)
             if action == "append":
                 await append(data)
                 augment_start = perf_counter()
@@ -220,10 +220,11 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                     consumer.db_convo.id,
                 )
                 logger.info(
-                    "Memory augmentation took %.1fms in receive()",
-                    (perf_counter() - augment_start) * 1000,
+                    "obs.chat.memory_augmented",
+                    phase="receive",
+                    duration_ms=(perf_counter() - augment_start) * 1000,
                 )
-                logger.debug("About to call llm_if.spin() in receive()")
+                logger.debug("obs.chat.spin_starting", phase="receive")
                 llm_start = perf_counter()
                 await run_llm_spin(
                     consumer,
@@ -236,7 +237,11 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                     ),
                     stream_func=consumer._send_stream_payload,
                 )
-                logger.info("LLM spin took %.1fms in receive()", (perf_counter() - llm_start) * 1000)
+                logger.info(
+                    "obs.chat.spin_completed",
+                    phase="receive",
+                    duration_ms=(perf_counter() - llm_start) * 1000,
+                )
                 await consumer._save_conversation(create_memories=True)
             elif action == "select_collections":
                 await update_selected_collections(data)
@@ -246,13 +251,18 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 await feedback(data)
             else:
                 raise ValueError(f'Invalid action "{action}"')
-            logger.debug("receive() action completed")
+            logger.debug("obs.chat.action_completed", action=action)
         except ValidationError as e:
             msg = e.messages[0] if getattr(e, "messages", None) else str(e)
-            logger.warning("Validation error in receive(): %s", msg)
+            logger.warning("obs.chat.validation_error", error=msg)
             await send_receive_validation_error(consumer, msg)
         except Exception as e:
-            logger.error("Exception in receive(): %s", e, exc_info=True)
+            logger.error(
+                "obs.chat.receive_error",
+                error=str(e),
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
             await send_receive_error(consumer, e)
 
 

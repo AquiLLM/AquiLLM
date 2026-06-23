@@ -38,7 +38,7 @@ def _create_report(exception, user=None, context=''):
             source='exception',
         )
     except Exception:
-        logger.debug("Failed to create bug report from handled exception", exc_info=True)
+        logger.debug("obs.bug_report.capture_failed", exc_info=True)
 
 
 @contextmanager

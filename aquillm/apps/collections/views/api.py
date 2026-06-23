@@ -40,7 +40,12 @@ def delete_collection(request, collection_id):
             'message': f'Collection deleted successfully along with {children_count} subcollections and {documents_count} documents'
         })
     except Exception as e:
-        logger.error(f"Error deleting collection {collection_id}: {e}")
+        logger.error(
+            "obs.collections.delete_error",
+            collection_id=collection_id,
+            error=str(e),
+            error_type=type(e).__name__,
+        )
         return JsonResponse({'error': f'Failed to delete collection: {str(e)}'}, status=500)
 
 
@@ -286,7 +291,11 @@ def collection_detail(request, col_id):
         }
         return JsonResponse(response_data)
     except Exception as e:
-        logger.error(f"Error processing collection data: {str(e)}")
+        logger.error(
+            "obs.collections.detail_error",
+            error=str(e),
+            error_type=type(e).__name__,
+        )
         return JsonResponse({'error': str(e)}, status=500)
 
 

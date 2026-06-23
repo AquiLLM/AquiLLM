@@ -80,7 +80,7 @@ def _capture_page_pdf(driver, url, already_loaded):
             return None
         return base64.b64decode(data)
     except Exception as e:
-        logger.warning(f"Page.printToPDF failed for {url}: {e}", exc_info=False)
+        logger.warning("obs.crawl.pdf_capture_error", url=url, error=str(e), error_type=type(e).__name__, exc_info=False)
         return None
 
 
@@ -96,7 +96,7 @@ def _merge_pdfs(pdf_bytes_list):
                 merged.insert_pdf(src)
                 src.close()
             except Exception as e:
-                logger.warning(f"Skipping bad per-URL PDF during merge: {e}", exc_info=False)
+                logger.warning("obs.crawl.pdf_merge_skip", error=str(e), error_type=type(e).__name__, exc_info=False)
         if merged.page_count == 0:
             merged.close()
             return None
@@ -104,14 +104,15 @@ def _merge_pdfs(pdf_bytes_list):
         merged.close()
         if len(out) > MERGED_PDF_SIZE_CAP and len(pdf_bytes_list) > 1:
             logger.warning(
-                f"Merged crawl PDF size {len(out)} exceeds cap {MERGED_PDF_SIZE_CAP}; "
-                f"falling back to first-URL PDF only."
+                "obs.crawl.pdf_size_exceeded",
+                merged_size=len(out),
+                size_cap=MERGED_PDF_SIZE_CAP,
             )
             # Fall back to just the first URL's PDF.
             return pdf_bytes_list[0] if len(pdf_bytes_list[0]) <= MERGED_PDF_SIZE_CAP else None
         return out
     except Exception as e:
-        logger.warning(f"Failed to merge crawl PDFs: {e}", exc_info=False)
+        logger.warning("obs.crawl.pdf_merge_error", error=str(e), error_type=type(e).__name__, exc_info=False)
         return None
 
 def is_same_domain(base_url, link_url):
@@ -140,7 +141,7 @@ def send_crawl_status(user_id: int, task_id: str, message_type: str, payload: di
     try:
         channel_layer = get_channel_layer()
         group_name = f'crawl-status-{user_id}'
-        logger.debug(f"Sending WS message type '{message_type}' to group {group_name} for task {task_id}")
+        logger.debug("obs.crawl.ws_send", message_type=message_type, group_name=group_name, task_id=task_id)
         async_to_sync(channel_layer.group_send)(
             group_name,
             {
@@ -154,7 +155,7 @@ def send_crawl_status(user_id: int, task_id: str, message_type: str, payload: di
         )
     except Exception as e:
         # Log if sending the WebSocket message fails, but don't let it crash the task
-        logger.error(f"Failed to send WebSocket status update for task {task_id} to user {user_id}: {e}", exc_info=False)
+        logger.error("obs.crawl.ws_send_error", task_id=task_id, user_id=user_id, error=str(e), error_type=type(e).__name__, exc_info=False)
 
 
 @app.task(bind=True, track_started=True, serializer='json')
@@ -164,7 +165,7 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
     extract text using Trafilatura (with Selenium fallback), and save as a RawTextDocument.
     """
     task_id = str(self.request.id) # Ensure task_id is a string for consistency
-    logger.info(f"[Task {task_id}] Starting crawl for URL: {initial_url}, Collection: {collection_id}, User: {user_id}, Depth: {max_depth}")
+    logger.info("obs.crawl.start", task_id=task_id, url=initial_url, collection_id=collection_id, user_id=user_id, max_depth=max_depth)
     self.update_state(state=STARTED, meta={'current_url': initial_url, 'progress': 0, 'task_id': task_id})
     # Send initial start message via WebSocket
     send_crawl_status(user_id, task_id, 'crawl.start', {'initial_url': initial_url, 'message': 'Crawl initiated...'})
@@ -174,7 +175,7 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
         user = get_user_model().objects.get(pk=user_id)
     except ObjectDoesNotExist as e:
         error_msg = 'Collection or User not found.'
-        logger.error(f"[Task {task_id}] Failed: {error_msg} {e}")
+        logger.error("obs.crawl.setup_error", task_id=task_id, message=error_msg, error=str(e), error_type=type(e).__name__)
         self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
         send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
         return {'error': error_msg}
@@ -197,10 +198,10 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
             status_message = f"Processing URL {processed_count}/{total_urls_found}: {current_url}"
             self.update_state(state=STARTED, meta={'current_url': current_url, 'progress': progress, 'message': status_message, 'task_id': task_id})
             send_crawl_status(user_id, task_id, 'crawl.progress', {'progress': progress, 'message': status_message})
-            logger.info(f"[Task {task_id}] {status_message}")
+            logger.info("obs.crawl.progress", task_id=task_id, message=status_message, processed_count=processed_count, total_count=total_urls_found, url=current_url)
 
             if current_url in visited_urls or current_depth > max_depth:
-                logger.debug(f"[Task {task_id}] Skipping: {'Visited' if current_url in visited_urls else 'Max depth exceeded'} - {current_url}")
+                logger.debug("obs.crawl.skip", task_id=task_id, reason='visited' if current_url in visited_urls else 'max_depth_exceeded', url=current_url)
                 continue
 
             visited_urls.add(current_url)
@@ -211,35 +212,35 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
 
             # --- Attempt 1: Trafilatura ---
             try:
-                logger.debug(f"[Task {task_id}] Attempting Trafilatura fetch for: {current_url}")
+                logger.debug("obs.crawl.trafilatura_fetch", task_id=task_id, url=current_url)
                 downloaded = fetch_url(current_url)
                 if downloaded:
-                    logger.debug(f"[Task {task_id}] Trafilatura fetch successful. Extracting text...")
+                    logger.debug("obs.crawl.trafilatura_fetch_ok", task_id=task_id, url=current_url)
                     text = extract(downloaded, include_comments=False, include_tables=True)
                     if text and len(text.strip()) >= MIN_TEXT_LENGTH:
                         extracted_text = text.strip()
                         html_content_for_links = downloaded # Use downloaded content to find links
-                        logger.info(f"[Task {task_id}] Trafilatura extracted {len(extracted_text)} chars.")
+                        logger.info("obs.crawl.trafilatura_extract", task_id=task_id, url=current_url, char_count=len(extracted_text))
                         if current_depth == 0:
                             metadata = extract_metadata(downloaded)
                             if metadata and metadata.title:
                                 page_title = metadata.title.strip().replace('\n', ' ').replace('\r', '')
-                                logger.info(f"[Task {task_id}] Extracted title: '{page_title}'")
+                                logger.info("obs.crawl.title_extract", task_id=task_id, title=page_title)
                     else:
-                        logger.warning(f"[Task {task_id}] Trafilatura extracted insufficient text ({len(text.strip()) if text else 0} chars) for: {current_url}")
+                        logger.warning("obs.crawl.trafilatura_insufficient", task_id=task_id, url=current_url, char_count=len(text.strip()) if text else 0)
                 else:
-                    logger.warning(f"[Task {task_id}] Trafilatura fetch_url returned None for: {current_url}")
+                    logger.warning("obs.crawl.trafilatura_fetch_empty", task_id=task_id, url=current_url)
 
             except Exception as e:
-                logger.warning(f"[Task {task_id}] Trafilatura failed for {current_url}: {e}", exc_info=False) # Keep log concise
+                logger.warning("obs.crawl.trafilatura_error", task_id=task_id, url=current_url, error=str(e), error_type=type(e).__name__, exc_info=False) # Keep log concise
 
             # --- Attempt 2: Selenium (if Trafilatura failed or insufficient) ---
             if not extracted_text:
-                logger.info(f"[Task {task_id}] Trafilatura failed or insufficient. Attempting Selenium fallback for: {current_url}")
+                logger.info("obs.crawl.selenium_fallback", task_id=task_id, url=current_url)
                 try:
                     if selenium_driver is None: # Initialize driver only if needed
                         selenium_driver = _init_selenium_driver()
-                        logger.info(f"[Task {task_id}] Selenium WebDriver initialized.")
+                        logger.info("obs.crawl.selenium_init", task_id=task_id)
 
                     selenium_driver.get(current_url)
                     selenium_loaded_this_url = True
@@ -253,12 +254,12 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
                         if text and len(text.strip()) >= MIN_TEXT_LENGTH:
                             extracted_text = text.strip()
                             html_content_for_links = page_source # Use page source to find links
-                            logger.info(f"[Task {task_id}] Selenium+Trafilatura extracted {len(extracted_text)} chars.")
+                            logger.info("obs.crawl.selenium_extract", task_id=task_id, url=current_url, char_count=len(extracted_text))
                             if current_depth == 0:
                                 sel_title = selenium_driver.title
                                 if sel_title:
                                     page_title = sel_title.strip().replace('\n', ' ').replace('\r', '')
-                                    logger.info(f"[Task {task_id}] Extracted title via Selenium: '{page_title}'")
+                                    logger.info("obs.crawl.title_extract_selenium", task_id=task_id, title=page_title)
                         else:
                              # Fallback: Get text directly from body (less reliable)
                              try:
@@ -266,24 +267,24 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
                                  if body_text and len(body_text.strip()) >= MIN_TEXT_LENGTH:
                                       extracted_text = body_text.strip()
                                       html_content_for_links = page_source
-                                      logger.info(f"[Task {task_id}] Selenium extracted {len(extracted_text)} chars from body.")
+                                      logger.info("obs.crawl.selenium_body_extract", task_id=task_id, url=current_url, char_count=len(extracted_text))
                                       if current_depth == 0 and not page_title: # Update title if not already set
                                           sel_title = selenium_driver.title
                                           if sel_title:
                                               page_title = sel_title.strip().replace('\n', ' ').replace('\r', '')
-                                              logger.info(f"[Task {task_id}] Extracted title via Selenium: '{page_title}'")
+                                              logger.info("obs.crawl.title_extract_selenium", task_id=task_id, title=page_title)
                                  else:
-                                     logger.warning(f"[Task {task_id}] Selenium extracted insufficient text from body ({len(body_text.strip()) if body_text else 0} chars) for: {current_url}")
+                                     logger.warning("obs.crawl.selenium_body_insufficient", task_id=task_id, url=current_url, char_count=len(body_text.strip()) if body_text else 0)
                              except Exception as body_e:
-                                 logger.warning(f"[Task {task_id}] Selenium failed to get body text for {current_url}: {body_e}", exc_info=False)
+                                 logger.warning("obs.crawl.selenium_body_error", task_id=task_id, url=current_url, error=str(body_e), error_type=type(body_e).__name__, exc_info=False)
 
                     else:
-                        logger.warning(f"[Task {task_id}] Selenium got empty page source for: {current_url}")
+                        logger.warning("obs.crawl.selenium_empty_source", task_id=task_id, url=current_url)
 
                 except WebDriverException as e:
-                    logger.error(f"[Task {task_id}] Selenium WebDriver error for {current_url}: {e}", exc_info=False)
+                    logger.error("obs.crawl.selenium_webdriver_error", task_id=task_id, url=current_url, error=str(e), error_type=type(e).__name__, exc_info=False)
                 except Exception as e:
-                    logger.error(f"[Task {task_id}] Selenium processing error for {current_url}: {e}", exc_info=False)
+                    logger.error("obs.crawl.selenium_error", task_id=task_id, url=current_url, error=str(e), error_type=type(e).__name__, exc_info=False)
 
 
             # --- Process extracted text and find links ---
@@ -298,12 +299,12 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
                     try:
                         if selenium_driver is None:
                             selenium_driver = _init_selenium_driver()
-                            logger.info(f"[Task {task_id}] Selenium WebDriver initialized for PDF capture.")
+                            logger.info("obs.crawl.selenium_init_pdf", task_id=task_id)
                         pdf_bytes = _capture_page_pdf(selenium_driver, current_url, selenium_loaded_this_url)
                         if pdf_bytes:
                             per_url_pdfs.append(pdf_bytes)
                     except Exception as e:
-                        logger.warning(f"[Task {task_id}] PDF capture failed for {current_url}: {e}", exc_info=False)
+                        logger.warning("obs.crawl.pdf_capture_error", task_id=task_id, url=current_url, error=str(e), error_type=type(e).__name__, exc_info=False)
 
                 if current_depth < max_depth and html_content_for_links:
                     try:
@@ -311,21 +312,21 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
                         # Add only new, unvisited links that are not already in the queue
                         new_links_found = {link for link in found_links if link not in visited_urls and not any(item[0] == link for item in urls_to_visit)}
                         if new_links_found:
-                            logger.info(f"[Task {task_id}] Found {len(new_links_found)} new links at depth {current_depth} from {current_url}")
+                            logger.info("obs.crawl.links_found", task_id=task_id, link_count=len(new_links_found), depth=current_depth, url=current_url)
                             for link in new_links_found:
                                 urls_to_visit.append((link, current_depth + 1))
                             total_urls_found = processed_count + len(urls_to_visit) # Update total for progress calc
                     except Exception as link_e:
-                        logger.error(f"[Task {task_id}] Error finding links in content from {current_url}: {link_e}", exc_info=False)
+                        logger.error("obs.crawl.links_error", task_id=task_id, url=current_url, error=str(link_e), error_type=type(link_e).__name__, exc_info=False)
             else:
-                 logger.error(f"[Task {task_id}] Failed to extract sufficient text from {current_url} using both methods.")
+                 logger.error("obs.crawl.extract_failed", task_id=task_id, url=current_url)
 
 
         # --- Combine and Save ---
         if all_text_content:
             final_text = "".join(all_text_content).strip()
             status_message = f"Crawling complete. Total text length: {len(final_text)}. Saving document..."
-            logger.info(f"[Task {task_id}] {status_message}")
+            logger.info("obs.crawl.saving", task_id=task_id, message=status_message, text_length=len(final_text))
             self.update_state(state=STARTED, meta={'current_url': 'Saving Document', 'progress': 95, 'message': status_message, 'task_id': task_id})
             send_crawl_status(user_id, task_id, 'crawl.progress', {'progress': 95, 'message': status_message})
             try:
@@ -339,7 +340,7 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
                 doc.save() # This triggers the chunking task via the model's save method
                 doc_id_str = str(doc.id)
                 doc_title = doc.title
-                logger.info(f"[Task {task_id}] Successfully saved RawTextDocument {doc_id_str} for initial URL {initial_url}")
+                logger.info("obs.crawl.document_saved", task_id=task_id, document_id=doc_id_str, url=initial_url)
 
                 # Attach merged PDF rendering. Failure is non-fatal — the citation
                 # modal falls back to a text-highlight view when rendered_pdf is absent.
@@ -357,12 +358,19 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
                         )
                         doc.save(dont_rechunk=True, update_fields=['rendered_pdf'])
                         logger.info(
-                            f"[Task {task_id}] Saved rendered_pdf for {doc_id_str} "
-                            f"({len(merged_pdf_bytes)} bytes, {len(per_url_pdfs)} pages merged)."
+                            "obs.crawl.rendered_pdf_saved",
+                            task_id=task_id,
+                            document_id=doc_id_str,
+                            pdf_bytes=len(merged_pdf_bytes),
+                            page_count=len(per_url_pdfs),
                         )
                 except Exception as e:
                     logger.warning(
-                        f"[Task {task_id}] Failed to attach rendered_pdf for {doc_id_str}: {e}",
+                        "obs.crawl.rendered_pdf_error",
+                        task_id=task_id,
+                        document_id=doc_id_str,
+                        error=str(e),
+                        error_type=type(e).__name__,
                         exc_info=False,
                     )
                 self.update_state(state=SUCCESS, meta={'document_id': doc_id_str, 'title': doc_title, 'progress': 100, 'task_id': task_id})
@@ -371,39 +379,39 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
 
             except DuplicateDocumentError as e:
                 error_msg = e.message
-                logger.warning(f"[Task {task_id}] Duplicate document error on save: {error_msg}")
+                logger.warning("obs.crawl.duplicate_document", task_id=task_id, message=error_msg)
                 self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
                 send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
                 return {'error': error_msg}
             except ValidationError as e:
                  error_msg = "; ".join([f'{k}: {v[0]}' for k, v in e.message_dict.items()]) if hasattr(e, 'message_dict') else ". ".join(e.messages)
                  error_msg = f'Validation Error: {error_msg}'
-                 logger.error(f"[Task {task_id}] Validation error saving document: {error_msg}", exc_info=True)
+                 logger.error("obs.crawl.validation_error", task_id=task_id, message=error_msg, exc_info=True)
                  self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
                  send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
                  return {'error': error_msg}
             except DatabaseError as e:
                 error_msg = 'Database error during save.'
-                logger.error(f"[Task {task_id}] {error_msg} {e}", exc_info=True)
+                logger.error("obs.crawl.database_error", task_id=task_id, message=error_msg, error=str(e), error_type=type(e).__name__, exc_info=True)
                 self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
                 send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
                 return {'error': error_msg}
             except Exception as e:
                 error_msg = 'Unexpected error during save.'
-                logger.error(f"[Task {task_id}] {error_msg} {e}", exc_info=True)
+                logger.error("obs.crawl.save_error", task_id=task_id, message=error_msg, error=str(e), error_type=type(e).__name__, exc_info=True)
                 self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
                 send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
                 return {'error': error_msg}
         else:
             error_msg = 'No text content could be extracted.'
-            logger.error(f"[Task {task_id}] Crawling finished, but {error_msg} from any URL starting with {initial_url}.")
+            logger.error("obs.crawl.no_content", task_id=task_id, message=error_msg, url=initial_url)
             self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
             send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
             return {'error': error_msg}
 
     except Exception as e:
         error_msg = f'Unexpected task error: {e}'
-        logger.error(f"[Task {task_id}] {error_msg}", exc_info=True)
+        logger.error("obs.crawl.task_error", task_id=task_id, error=str(e), error_type=type(e).__name__, exc_info=True)
         self.update_state(state=FAILURE, meta={'error': error_msg, 'task_id': task_id})
         send_crawl_status(user_id, task_id, 'crawl.error', {'error': error_msg})
         return {'error': error_msg}
@@ -412,6 +420,6 @@ def crawl_and_ingest_webpage(self, initial_url: str, collection_id: int, user_id
         if selenium_driver:
             try:
                 selenium_driver.quit()
-                logger.info(f"[Task {task_id}] Selenium WebDriver closed.")
+                logger.info("obs.crawl.selenium_closed", task_id=task_id)
             except Exception as e:
-                logger.error(f"[Task {task_id}] Error closing Selenium WebDriver: {e}", exc_info=False)
+                logger.error("obs.crawl.selenium_close_error", task_id=task_id, error=str(e), error_type=type(e).__name__, exc_info=False)

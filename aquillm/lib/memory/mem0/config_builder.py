@@ -29,7 +29,7 @@ def _env_optional_float(name: str) -> float | None:
     try:
         return float(value)
     except Exception:
-        logger.warning("Invalid %s=%r; ignoring.", name, value)
+        logger.warning("obs.memory.invalid_env_float", env_name=name, value=value)
         return None
 
 
@@ -94,19 +94,19 @@ def _build_mem0_graph_store(graph_enabled_override: bool | None = None) -> dict[
     threshold = _env_optional_float("MEM0_GRAPH_THRESHOLD")
 
     if not graph_enabled:
-        logger.info("Mem0 graph mode disabled; using vector-only memory.")
+        logger.info("obs.memory.graph_disabled")
         return None
 
     if not provider:
         message = "MEM0_GRAPH_ENABLED=1 requires MEM0_GRAPH_PROVIDER."
         if fail_open:
-            logger.warning("%s Fail-open enabled; continuing vector-only.", message)
+            logger.warning("obs.memory.graph_config_invalid", reason=message)
             return None
         raise ValueError(message)
     if provider != "memgraph":
         message = f"Unsupported MEM0 graph provider: {provider!r}."
         if fail_open:
-            logger.warning("%s Fail-open enabled; continuing vector-only.", message)
+            logger.warning("obs.memory.graph_config_invalid", reason=message, provider=provider)
             return None
         raise ValueError(message)
 
@@ -120,7 +120,7 @@ def _build_mem0_graph_store(graph_enabled_override: bool | None = None) -> dict[
     if missing:
         message = f"Incomplete MEM0 graph config; missing {', '.join(missing)}."
         if fail_open:
-            logger.warning("%s Fail-open enabled; continuing vector-only.", message)
+            logger.warning("obs.memory.graph_config_invalid", reason=message, missing=missing)
             return None
         raise ValueError(message)
 
@@ -139,10 +139,10 @@ def _build_mem0_graph_store(graph_enabled_override: bool | None = None) -> dict[
         graph_config["threshold"] = threshold
 
     logger.info(
-        "Mem0 graph mode enabled: provider=%s add_enabled=%s search_enabled=%s",
-        provider,
-        add_enabled,
-        search_enabled,
+        "obs.memory.graph_enabled",
+        provider=provider,
+        add_enabled=add_enabled,
+        search_enabled=search_enabled,
     )
     graph_store = {"provider": provider, "config": graph_config}
     if custom_prompt:
@@ -210,17 +210,13 @@ def build_mem0_oss_config_dict(graph_enabled_override: bool | None = None) -> tu
                 if embed_provider == "openai" and not allow_embed_dims_override:
                     vector_store_config["embedding_model_dims"] = embed_dims
                     embed_config["embedding_dims"] = None
-                    logger.info(
-                        "Ignoring embedder-level MEM0_EMBED_DIMS for OpenAI-compatible embedder; "
-                        "keeping vector-store dims override and set "
-                        "MEM0_EMBED_ALLOW_DIMENSIONS_OVERRIDE=1 to also force the embed request."
-                    )
+                    logger.info("obs.memory.embed_dims_ignored", embed_dims=embed_dims)
                 else:
                     if embed_provider == "openai":
                         embed_config["embedding_dims"] = embed_dims
                     vector_store_config["embedding_model_dims"] = embed_dims
         except Exception:
-            logger.warning("Invalid MEM0_EMBED_DIMS=%r; ignoring.", embed_dims_raw)
+            logger.warning("obs.memory.invalid_embed_dims", value=embed_dims_raw)
 
     if embed_provider == "openai" and not allow_embed_dims_override and "embedding_dims" not in embed_config:
         embed_config["embedding_dims"] = None

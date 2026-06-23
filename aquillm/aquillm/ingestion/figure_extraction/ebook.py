@@ -61,13 +61,13 @@ def extract_figures_epub(data: bytes, filename: str = "") -> Iterator[ExtractedF
     try:
         from ebooklib import epub, ITEM_IMAGE
     except ImportError:
-        logger.warning("ebooklib not installed; skipping EPUB figure extraction")
+        logger.warning("obs.figures.dependency_missing", dependency="ebooklib", source_format="epub")
         return
-    
+
     try:
         book = epub.read_epub(io.BytesIO(data))
     except Exception as exc:
-        logger.warning("Failed to open EPUB for figure extraction: %s", exc)
+        logger.warning("obs.figures.open_failed", source_format="epub", error=str(exc), error_type=type(exc).__name__)
         return
     
     total_extracted = 0
@@ -108,11 +108,11 @@ def extract_figures_epub(data: bytes, filename: str = "") -> Iterator[ExtractedF
                 total_extracted += 1
                 
             except Exception as exc:
-                logger.debug("Failed to extract EPUB image: %s", exc)
+                logger.debug("obs.figures.image_extract_failed", source_format="epub", error=str(exc), error_type=type(exc).__name__)
                 continue
-                
+
     except Exception as exc:
-        logger.warning("EPUB figure extraction failed: %s", exc)
-    
+        logger.warning("obs.figures.extract_failed", source_format="epub", error=str(exc), error_type=type(exc).__name__)
+
     if total_extracted > 0:
-        logger.info("Extracted %d figures from EPUB %s", total_extracted, filename)
+        logger.info("obs.figures.extract_done", source_format="epub", figure_count=total_extracted, filename=filename)

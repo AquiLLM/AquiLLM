@@ -26,7 +26,7 @@ def extract_text_with_tesseract(file_content: bytes, convert_to_latex: bool = Fa
         ) from exc
 
     if convert_to_latex:
-        logger.info("Local OCR provider does not support LaTeX conversion; returning plain extracted text.")
+        logger.info("obs.ocr.latex_unsupported")
 
     return {
         "extracted_text": extracted_text or "NO READABLE TEXT",

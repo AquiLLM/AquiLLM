@@ -40,7 +40,12 @@ def cache_get(key: str) -> Any | None:
     try:
         return cache.get(key)
     except Exception as exc:
-        logger.warning("cache_get failed (fail-open) key=%s err=%s", key[:120], exc)
+        logger.warning(
+            "obs.rag.cache_get_failed",
+            key=key[:120],
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return None
 
 
@@ -50,16 +55,21 @@ def cache_set(key: str, value: Any, timeout: int) -> None:
     try:
         cache.set(key, value, timeout=timeout)
     except Exception as exc:
-        logger.warning("cache_set failed (fail-open) key=%s err=%s", key[:120], exc)
+        logger.warning(
+            "obs.rag.cache_set_failed",
+            key=key[:120],
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
 
 def _log_hit_miss(metric: str, hit: bool) -> None:
     if not _rag_enabled():
         return
     if hit:
-        logger.info("%s hit", metric)
+        logger.info("obs.rag.cache_hit", metric=metric)
     else:
-        logger.debug("%s miss", metric)
+        logger.debug("obs.rag.cache_miss", metric=metric)
 
 
 def query_embedding_cache_key(query: str, input_type: str, model_signature: str) -> str:

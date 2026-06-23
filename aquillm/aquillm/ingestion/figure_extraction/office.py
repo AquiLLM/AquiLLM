@@ -65,15 +65,15 @@ def _extract_via_pdf(data: bytes, source_format: str, filename: str) -> Iterator
         return None
     
     if not is_libreoffice_available():
-        logger.debug("LibreOffice not available for %s conversion", source_format)
+        logger.debug("obs.figures.libreoffice_unavailable", source_format=source_format)
         return None
-    
+
     pdf_bytes = convert_to_pdf(data, source_format, filename)
     if not pdf_bytes:
-        logger.debug("PDF conversion failed for %s", filename or source_format)
+        logger.debug("obs.figures.convert_failed", source_format=source_format, filename=filename or source_format)
         return None
-    
-    logger.info("Using PDF conversion for %s figure extraction: %s", source_format.upper(), filename)
+
+    logger.info("obs.figures.convert_used", source_format=source_format.upper(), filename=filename)
     
     # Update location metadata to indicate conversion was used
     for figure in extract_pdf_figures(pdf_bytes, filename):
@@ -86,13 +86,13 @@ def _extract_docx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedF
     try:
         from docx import Document
     except ImportError:
-        logger.warning("python-docx not installed; skipping DOCX figure extraction")
+        logger.warning("obs.figures.dependency_missing", dependency="python-docx", source_format="docx")
         return
-    
+
     try:
         doc = Document(io.BytesIO(data))
     except Exception as exc:
-        logger.warning("Failed to open DOCX for figure extraction: %s", exc)
+        logger.warning("obs.figures.open_failed", source_format="docx", error=str(exc), error_type=type(exc).__name__)
         return
     
     total_extracted = 0
@@ -132,14 +132,14 @@ def _extract_docx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedF
                 total_extracted += 1
                 
             except Exception as exc:
-                logger.debug("Failed to extract DOCX image: %s", exc)
+                logger.debug("obs.figures.image_extract_failed", source_format="docx", error=str(exc), error_type=type(exc).__name__)
                 continue
-                
+
     except Exception as exc:
-        logger.warning("DOCX figure extraction failed: %s", exc)
-    
+        logger.warning("obs.figures.extract_failed", source_format="docx", error=str(exc), error_type=type(exc).__name__)
+
     if total_extracted > 0:
-        logger.info("Extracted %d embedded figures from DOCX %s", total_extracted, filename)
+        logger.info("obs.figures.extract_done", source_format="docx", figure_count=total_extracted, filename=filename)
 
 
 def _extract_pptx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
@@ -148,13 +148,13 @@ def _extract_pptx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedF
         from pptx import Presentation
         from pptx.enum.shapes import MSO_SHAPE_TYPE
     except ImportError:
-        logger.warning("python-pptx not installed; skipping PPTX figure extraction")
+        logger.warning("obs.figures.dependency_missing", dependency="python-pptx", source_format="pptx")
         return
-    
+
     try:
         prs = Presentation(io.BytesIO(data))
     except Exception as exc:
-        logger.warning("Failed to open PPTX for figure extraction: %s", exc)
+        logger.warning("obs.figures.open_failed", source_format="pptx", error=str(exc), error_type=type(exc).__name__)
         return
     
     total_extracted = 0
@@ -220,14 +220,14 @@ def _extract_pptx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedF
                     total_extracted += 1
                     
                 except Exception as exc:
-                    logger.debug("Failed to extract PPTX image from slide %d: %s", slide_num, exc)
+                    logger.debug("obs.figures.image_extract_failed", source_format="pptx", slide_number=slide_num, error=str(exc), error_type=type(exc).__name__)
                     continue
-                    
+
     except Exception as exc:
-        logger.warning("PPTX figure extraction failed: %s", exc)
-    
+        logger.warning("obs.figures.extract_failed", source_format="pptx", error=str(exc), error_type=type(exc).__name__)
+
     if total_extracted > 0:
-        logger.info("Extracted %d embedded figures from PPTX %s", total_extracted, filename)
+        logger.info("obs.figures.extract_done", source_format="pptx", figure_count=total_extracted, filename=filename)
 
 
 def extract_figures_docx(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
@@ -251,7 +251,7 @@ def extract_figures_docx(data: bytes, filename: str = "") -> Iterator[ExtractedF
         return
     
     # Fall back to direct extraction
-    logger.debug("Falling back to direct DOCX extraction for %s", filename)
+    logger.debug("obs.figures.direct_fallback", source_format="docx", filename=filename)
     yield from _extract_docx_direct(data, filename)
 
 
@@ -276,5 +276,5 @@ def extract_figures_pptx(data: bytes, filename: str = "") -> Iterator[ExtractedF
         return
     
     # Fall back to direct extraction
-    logger.debug("Falling back to direct PPTX extraction for %s", filename)
+    logger.debug("obs.figures.direct_fallback", source_format="pptx", filename=filename)
     yield from _extract_pptx_direct(data, filename)

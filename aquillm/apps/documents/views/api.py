@@ -36,7 +36,12 @@ def delete_document(request, doc_id):
             'message': f'{title} deleted successfully'
         })
     except Exception as e:
-        logger.error(f"Error deleting document {doc_id}: {e}")
+        logger.error(
+            "obs.documents.delete_failed",
+            doc_id=doc_id,
+            error=str(e),
+            error_type=type(e).__name__,
+        )
         return JsonResponse({'error': f'Failed to delete document: {str(e)}'}, status=500)
 
 
