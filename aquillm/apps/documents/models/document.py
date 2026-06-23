@@ -47,6 +47,9 @@ class Document(models.Model):
     id = models.UUIDField(default=uuid.uuid4, editable=False, db_index=True)
     title = models.CharField(max_length=200)
     full_text = models.TextField()
+    # Canonical origin of the document (e.g. the arXiv abstract page or the
+    # crawled web URL), surfaced as a "View source" link in the citation modal.
+    source_url = models.URLField(max_length=2000, null=True, blank=True)
     collection = models.ForeignKey(
         'apps_collections.Collection',
         on_delete=models.CASCADE,

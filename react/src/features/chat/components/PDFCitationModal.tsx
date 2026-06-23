@@ -6,6 +6,7 @@ import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import formatUrl from '../../../utils/formatUrl';
 import { configurePdfWorker } from '../../../utils/pdfWorker';
+import CitationPinButton from './CitationPinButton';
 import {
   locateAcrossDocument,
   type PageHighlightRange,
@@ -25,6 +26,9 @@ interface PDFCitationModalProps {
   /** Optional chunk prefetched by the provider, skipping the initial fetch. */
   preloadedChunk?: CitationChunkDetail | null;
   onClose: () => void;
+  /** Pin state for the slide-out panel (keeps it open, ignores Escape). */
+  pinned?: boolean;
+  onTogglePin?: () => void;
 }
 
 /** Each PDF text-layer item we need to compute a highlight rect. */
@@ -58,6 +62,8 @@ export const PDFCitationModal: React.FC<PDFCitationModalProps> = ({
   messageUuid,
   preloadedChunk,
   onClose,
+  pinned = false,
+  onTogglePin,
 }) => {
   const [chunk, setChunk] = useState<ChunkDetail | null>(preloadedChunk ?? null);
   const [chunkError, setChunkError] = useState<string | null>(null);
@@ -82,14 +88,14 @@ export const PDFCitationModal: React.FC<PDFCitationModalProps> = ({
   const hasScrolledRef = useRef(false);
   const scannedPagesRef = useRef<PageScan[] | null>(null);
 
-  // Escape key closes the modal.
+  // Escape key closes the modal, unless the panel is pinned.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !pinned) onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [onClose, pinned]);
 
   // Fetch chunk metadata (content + document title + PDF availability).
   // Skipped when the provider has already fetched it.
@@ -475,6 +481,17 @@ export const PDFCitationModal: React.FC<PDFCitationModalProps> = ({
               {headerStatus}
             </div>
           )}
+          {chunk?.document.source_url && (
+            <a
+              href={chunk.document.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-accent hover:underline truncate inline-block max-w-full"
+              title={chunk.document.source_url}
+            >
+              View source
+            </a>
+          )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           {fallbackDocUrl && (
@@ -488,6 +505,7 @@ export const PDFCitationModal: React.FC<PDFCitationModalProps> = ({
               <ExternalLink className="w-4 h-4" />
             </a>
           )}
+          {onTogglePin && <CitationPinButton pinned={pinned} onToggle={onTogglePin} />}
           <button
             type="button"
             onClick={onClose}
