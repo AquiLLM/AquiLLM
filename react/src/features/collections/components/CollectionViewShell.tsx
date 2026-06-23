@@ -30,6 +30,8 @@ export interface CollectionViewShellProps {
   successMessage: string | null;
   isBatchOperationLoading: boolean;
   isUserManagementModalOpen: boolean;
+  canManage: boolean;
+  onOpenCollectionNotes: () => void;
   onBack: () => void;
   onManageCollaborators: () => void;
   onDelete: () => void;
@@ -67,6 +69,8 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
   successMessage,
   isBatchOperationLoading,
   isUserManagementModalOpen,
+  canManage,
+  onOpenCollectionNotes,
   onBack,
   onManageCollaborators,
   onDelete,
@@ -145,14 +149,29 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
 
       <div className="flex items-center justify-between gap-4 border-b border-border-low_contrast pb-[10px]">
         <h1 className="text-[2.05rem] font-semibold leading-none text-text-normal">{collection.name}</h1>
-        <CollectionSettingsMenu
-          collection={collection}
-          onManageCollaborators={onManageCollaborators}
-          onDelete={onDelete}
-          triggerLabel="Collection Settings"
-          onMove={onOpenCollectionSettingsMove}
-          onCreateSubcollection={onOpenCreateSubcollection}
-        />
+        <div className="flex items-center gap-2">
+          {canManage && (
+            <button
+              onClick={onOpenCollectionNotes}
+              className="h-[36px] px-3 border border-border-mid_contrast rounded-[18px] bg-scheme-shade_4 hover:bg-scheme-shade_5 text-sm text-text-normal inline-flex items-center gap-2"
+              title="Markdown notes AquiLLM keeps in mind when this collection is in a chat"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M4 4h12l4 4v12a0 0 0 0 1 0 0H4a0 0 0 0 1 0 0V4z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M8 10h8M8 14h8M8 18h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+              Collection Notes
+            </button>
+          )}
+          <CollectionSettingsMenu
+            collection={collection}
+            onManageCollaborators={onManageCollaborators}
+            onDelete={onDelete}
+            triggerLabel="Collection Settings"
+            onMove={onOpenCollectionSettingsMove}
+            onCreateSubcollection={onOpenCreateSubcollection}
+          />
+        </div>
       </div>
     </div>
     {permissionSource && !permissionSource.direct && permissionSource.source_collection_name && (

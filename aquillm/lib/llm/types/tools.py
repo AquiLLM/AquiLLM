@@ -24,6 +24,11 @@ type ToolResultDict = dict[
         'retrieval_message',
         'retrieved_count',
         'retrieved_documents',
+        # Per-collection authoritative notes injected by document tools so the
+        # LLM sees them in the same tool turn as retrieved chunks (notes alone
+        # in the system prompt get buried once chunks dominate context).
+        'collection_notes',
+        '_collection_notes_instruction',
     ],
     ToolResultValue,
 ]

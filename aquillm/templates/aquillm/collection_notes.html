@@ -1,0 +1,18 @@
+{% extends "aquillm/base.html" %}
+{% load static %}
+
+{% block title %}AquiLLM -- Collection Notes -- {{ collection_name }}{% endblock %}
+
+{% block content %}
+  <div
+    id="collection-notes-page"
+    class="h-full"
+    data-collection-id="{{ collection_id }}"
+    data-collection-name="{{ collection_name }}"
+    data-collection-url="{{ collection_url }}"
+  ></div>
+{% endblock %}
+
+{% block scripts %}
+  <script type="module" src="{% static 'js/dist/collection_notes.js' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}"></script>
+{% endblock %}

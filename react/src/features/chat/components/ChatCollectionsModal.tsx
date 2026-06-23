@@ -77,9 +77,24 @@ const ChatCollectionsModal: React.FC<ChatCollectionsModalProps> = ({
                     MozAppearance: 'none',
                   }}
                 />
-                <label htmlFor={`collection-${collectionId}`} className="text-sm leading-6 text-text-normal cursor-pointer">
+                <label htmlFor={`collection-${collectionId}`} className="flex-1 text-sm leading-6 text-text-normal cursor-pointer">
                   {collection.name}
                 </label>
+                {collection.permission === 'MANAGE' && (
+                  <a
+                    href={`/aquillm/collections/${collectionId}/notes/`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    title="Open Collection Notes in a new tab"
+                    className="text-text-slightly_less_contrast hover:text-accent shrink-0 px-1"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                      <path d="M4 4h12l4 4v12a0 0 0 0 1 0 0H4a0 0 0 0 1 0 0V4z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M8 10h8M8 14h8M8 18h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    </svg>
+                  </a>
+                )}
               </div>
             );
           })}

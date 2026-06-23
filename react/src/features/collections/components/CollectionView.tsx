@@ -31,6 +31,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
     permission_level: string | null;
   } | null>(null);
   const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState(false);
+  const [canManage, setCanManage] = useState<boolean>(false);
 
   const fetchCollectionData = useCallback(() => {
     setLoading(true);
@@ -48,6 +49,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
       .then((data) => {
         if (!data.collection) throw new Error('Invalid response format');
         if (data.permission_source) setPermissionSource(data.permission_source);
+        setCanManage(Boolean(data.can_manage));
         setCollection({
           id: data.collection.id,
           name: data.collection.name,
@@ -244,6 +246,10 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
       successMessage={successMessage}
       isBatchOperationLoading={isBatchOperationLoading}
       isUserManagementModalOpen={isUserManagementModalOpen}
+      canManage={canManage}
+      onOpenCollectionNotes={() => {
+        window.location.href = `/aquillm/collections/${collection.id}/notes/`;
+      }}
       onBack={handleBack}
       onManageCollaborators={handleManageCollaborators}
       onDelete={handleDelete}

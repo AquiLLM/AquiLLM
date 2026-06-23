@@ -5,8 +5,10 @@
   "main": "index.js",
   "scripts": {
     "dev": "vite",
-    "build": "vite build --emptyOutDir",
-    "watch": "vite build --watch --emptyOutDir",
+    "build:main": "vite build --emptyOutDir",
+    "build:notes": "vite build --config vite.config.notes.ts",
+    "build": "npm run build:main && npm run build:notes",
+    "watch": "vite build --emptyOutDir --watch & vite build --config vite.config.notes.ts --watch & wait",
     "typecheck": "tsc --noEmit",
     "test:e2e": "npx playwright test"
   },
@@ -14,8 +16,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "katex": "^0.16.45",
     "lucide-react": "^0.475.0",
+    "monaco-editor": "^0.55.1",
     "react": "^19.0.0",
     "react-circular-progressbar": "^2.2.0",
     "react-dom": "^19.0.0",
