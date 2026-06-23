@@ -1,6 +1,7 @@
 """Template context processors: navigation, URLs exposed to the client, theme."""
 from __future__ import annotations
 
+import os
 import structlog
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,8 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_ingest_uploads_status", "api_ingest_uploads_status", {"batch_id": 0}),
     ("api-user-settings", "api-user-settings", None),
     ("api_conversation_file", "api_conversation_file", {"convo_file_id": 0}),
+    ("api_chunk_detail", "api_chunk_detail", {"chunk_id": 0}),
+    ("api_citation_narrow", "api_citation_narrow", None),
     ("api_ingest_webpage", "api_ingest_webpage", None),
     # Page-backed ingest (not under /api/ but consumed like an API URL by the React app)
     ("api_ingest_handwritten_notes", "ingest_handwritten_notes", None),
@@ -140,6 +143,25 @@ def theme_settings(request):
 
 def app_version(request):
     return {"app_version": APP_VERSION}
+
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _env_bool(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUTHY
+
+
+def app_flags(request):
+    """Boolean feature flags exposed to the React app as window.appFlags."""
+    return {
+        "app_flags": {
+            # When truthy, the chat eagerly LLM-narrows every citation in
+            # newly arrived assistant messages so the cache is warm by the
+            # time the user clicks. See apps/documents/services/citation_narrow.py.
+            "eagerCitationNarrow": _env_bool("CITATION_NARROW_EAGER"),
+        },
+    }
 
 
 def react_bundle_version(request):

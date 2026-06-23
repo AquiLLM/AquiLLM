@@ -6,10 +6,12 @@ import rehypeRaw from 'rehype-raw';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import formatUrl from '../../../utils/formatUrl';
-import { linkifyRagCitations } from '../../../utils/linkifyRagCitations';
+import { DOC_CHUNK_CITATION_RE, linkifyRagCitations } from '../../../utils/linkifyRagCitations';
 import { resolveSiteAbsoluteUrl } from '../../../utils/resolveSiteAbsoluteUrl';
 import { Collapsible, ToolResult, AquillmLogo, UserLogo } from '../../../shared/components';
 import { RatingButtons } from './RatingButtons';
+import { useCitationModal } from './CitationModalProvider';
+import { getCsrfCookie } from '../../../main';
 import type { Message } from '../types';
 
 interface MessageBubbleProps {
@@ -22,6 +24,64 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
   const displayTime = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const contentRef = useRef<HTMLDivElement>(null);
   const activeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const { openCitation } = useCitationModal();
+  const messageUuid = message.message_uuid;
+  const eagerNarrowSeenRef = useRef<Set<string>>(new Set());
+
+  // Eager LLM-narrow every citation in newly arrived assistant messages
+  // when window.appFlags.eagerCitationNarrow is on. Fire-and-forget — the
+  // backend caches by (message_uuid, chunk_pk) so subsequent clicks open
+  // instantly. Per-bubble dedupe ref guards against re-firing on re-render
+  // (e.g. when streaming content updates).
+  useEffect(() => {
+    if (!messageUuid || message.role !== 'assistant') return;
+    if (!window.appFlags?.eagerCitationNarrow) return;
+    const apiUrl = window.apiUrls?.api_citation_narrow;
+    if (!apiUrl) return;
+    const content = message.content || '';
+    if (!content) return;
+    DOC_CHUNK_CITATION_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = DOC_CHUNK_CITATION_RE.exec(content))) {
+      const chunkId = match[2];
+      const key = `${messageUuid}:${chunkId}`;
+      if (eagerNarrowSeenRef.current.has(key)) continue;
+      eagerNarrowSeenRef.current.add(key);
+      fetch(apiUrl, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCsrfCookie(),
+        },
+        body: JSON.stringify({ message_uuid: messageUuid, chunk_id: Number(chunkId) }),
+      }).catch(() => {
+        // Swallow — best-effort prefetch. Click-time fetch will retry.
+      });
+    }
+  }, [messageUuid, message.role, message.content]);
+
+  // Intercept plain clicks on .rag-citation-link anchors and route them to
+  // the PDF citation modal. Modifier-clicks (ctrl/cmd/shift) and middle
+  // clicks fall through to the anchor's native "open in new tab".
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.button !== 0) return; // middle/right click: native behaviour
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const target = (e.target as Element | null)?.closest?.('.rag-citation-link');
+      if (!target) return;
+      const docId = target.getAttribute('data-doc-id');
+      const chunkId = target.getAttribute('data-chunk-id');
+      if (!docId || !chunkId) return;
+      e.preventDefault();
+      openCitation({ docId, chunkId, messageUuid });
+    };
+    el.addEventListener('click', onClick);
+    return () => el.removeEventListener('click', onClick);
+  }, [openCitation, messageUuid]);
 
   useEffect(() => {
     const el = contentRef.current;

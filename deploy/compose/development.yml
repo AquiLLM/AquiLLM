@@ -4,6 +4,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/web/Dockerfile.prod
+      args:
+        CRAWL_CAPTURE_PDF: ${CRAWL_CAPTURE_PDF:-false}
 
     restart: unless-stopped
     env_file:
@@ -61,6 +63,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/web/Dockerfile.prod
+      args:
+        CRAWL_CAPTURE_PDF: ${CRAWL_CAPTURE_PDF:-false}
     restart: unless-stopped
     env_file:
       - ../../.env
@@ -105,6 +109,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/web/Dockerfile.prod
+      args:
+        CRAWL_CAPTURE_PDF: ${CRAWL_CAPTURE_PDF:-false}
     restart: unless-stopped
     env_file:
       - ../../.env
