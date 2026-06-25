@@ -2,11 +2,11 @@
 Embedding utility functions.
 """
 
-import logging
+import structlog
 
 from .config import get_target_dims
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def fit_embedding_dims(embedding: list[float]) -> list[float]:

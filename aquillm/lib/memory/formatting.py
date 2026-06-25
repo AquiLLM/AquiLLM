@@ -31,7 +31,9 @@ def format_memories_for_system(profile_facts: list[Any], episodic_memories: list
             "Do not say you lack memory when relevant items are present below.",
         ]
         for f in profile_facts:
-            fact_text = getattr(f, 'fact', str(f))
+            fact_text = getattr(f, "fact", None)
+            if not isinstance(fact_text, str) or not fact_text.strip():
+                fact_text = str(f)
             lines.append(f"  - {fact_text}")
         parts.append("\n".join(lines))
     if episodic_memories:

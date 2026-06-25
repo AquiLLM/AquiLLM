@@ -23,6 +23,8 @@ from apps.collections.views.api import (
 
 # Re-export document views
 from apps.documents.views.api import (
+    chunk_detail,
+    citation_narrow,
     delete_document,
     move_document,
 )
@@ -57,6 +59,14 @@ from apps.core.views.api import (
     user_settings_api,
 )
 
+# Re-export bug report views
+from apps.bug_reports.views.api import (
+    submit_bug_report,
+    list_bug_reports,
+    bug_report_detail,
+    delete_bug_report,
+)
+
 # Backward compatibility URL patterns
 urlpatterns = [
     path("collections/", collections, name="api_collections"),
@@ -69,6 +79,8 @@ urlpatterns = [
     path("ingestion/monitor/", ingestion_monitor, name="api_ingestion_monitor"),
     path("documents/move/<uuid:doc_id>/", move_document, name="api_move_document"),
     path("documents/delete/<uuid:doc_id>/", delete_document, name="api_delete_document"),
+    path("chunks/<int:chunk_id>/", chunk_detail, name="api_chunk_detail"),
+    path("citations/narrow/", citation_narrow, name="api_citation_narrow"),
     path("users/search/", search_users, name="api_search_users"),
     path("whitelisted_email/<str:email>/", whitelisted_email, name="api_whitelist_email"),
     path("whitelisted_emails/", whitelisted_emails, name="api_whitelist_emails"),
@@ -79,4 +91,8 @@ urlpatterns = [
     path('user-settings/', user_settings_api, name='api-user-settings'),
     path('conversation_file/<int:convo_file_id>/', conversation_file, name='api_conversation_file'),
     path("ingest_webpage/", ingest_webpage, name="api_ingest_webpage"),
+    path("bug-reports/", submit_bug_report, name="api_bug_reports"),
+    path("bug-reports/list/", list_bug_reports, name="api_bug_reports_list"),
+    path("bug-reports/<int:report_id>/", bug_report_detail, name="api_bug_report_detail"),
+    path("bug-reports/<int:report_id>/delete/", delete_bug_report, name="api_bug_report_delete"),
 ]

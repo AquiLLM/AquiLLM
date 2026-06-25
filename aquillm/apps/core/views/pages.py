@@ -1,5 +1,5 @@
 """Page views for core app functionality."""
-import logging
+import structlog
 
 from django.apps import apps
 from django.contrib.auth.decorators import login_required
@@ -13,7 +13,7 @@ from apps.documents.models import TextChunk
 from aquillm.forms import SearchForm
 from aquillm.settings import DEBUG
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @require_http_methods(['GET'])
@@ -42,7 +42,7 @@ def search(request):
             top_k = form.cleaned_data['top_k']
             collections = form.cleaned_data['collections']
             searchable_docs = Collection.get_user_accessible_documents(request.user, collections=collections)
-            vector_results, trigram_results, reranked_results = TextChunk.text_chunk_search(query, top_k, searchable_docs)
+            vector_results, trigram_results, reranked_results, _diagnostics = TextChunk.text_chunk_search(query, top_k, searchable_docs)
         else:
             error_message = "Invalid form submission"
     else:

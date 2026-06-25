@@ -4,9 +4,9 @@ Zotero API client for syncing library data
 import requests
 from requests import Response
 from typing import Tuple, List, Dict, Optional, BinaryIO
-import logging
+import structlog
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class ZoteroAPIClient:

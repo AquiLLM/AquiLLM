@@ -1,0 +1,784 @@
+.
+|-- .converagerc
+|-- .dockerignore
+|-- .DS_Store
+|-- .env.example
+|-- .github
+|   `-- workflows
+|       |-- hygiene-check.yml
+|       `-- test-backend-frontend.yml
+|-- .gitignore
+|-- .vscode
+|   |-- launch.json
+|   `-- settings.json
+|-- aquillm
+|   |-- apps
+|   |   |-- __init__.py
+|   |   |-- chat
+|   |   |   |-- __init__.py
+|   |   |   |-- apps.py
+|   |   |   |-- consumers
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- chat.py
+|   |   |   |   |-- chat_delta.py
+|   |   |   |   |-- chat_receive.py
+|   |   |   |   |-- chat_ws_errors.py
+|   |   |   |   `-- utils.py
+|   |   |   |-- migrations
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- 0001_initial_from_aquillm.py
+|   |   |   |   `-- 0002_message_feedback_submitted_at.py
+|   |   |   |-- models
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- conversation.py
+|   |   |   |   |-- file.py
+|   |   |   |   `-- message.py
+|   |   |   |-- refs.py
+|   |   |   |-- routing.py
+|   |   |   |-- services
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- feedback.py
+|   |   |   |   `-- tool_wiring
+|   |   |   |       |-- __init__.py
+|   |   |   |       |-- astronomy.py
+|   |   |   |       `-- documents.py
+|   |   |   |-- tests
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- chat_message_test_support.py
+|   |   |   |   |-- test_chat_consumer_append.py
+|   |   |   |   |-- test_conversation_persistence.py
+|   |   |   |   |-- test_feedback_capture.py
+|   |   |   |   |-- test_llm_complete_retry.py
+|   |   |   |   |-- test_message_adapters.py
+|   |   |   |   |-- test_multimodal_messages.py
+|   |   |   |   `-- test_tool_result_images.py
+|   |   |   |-- urls.py
+|   |   |   `-- views
+|   |   |       |-- __init__.py
+|   |   |       |-- api.py
+|   |   |       `-- pages.py
+|   |   |-- collections
+|   |   |   |-- __init__.py
+|   |   |   |-- apps.py
+|   |   |   |-- migrations
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- 0001_initial_from_aquillm.py
+|   |   |   |-- models
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- collection.py
+|   |   |   |   `-- permission.py
+|   |   |   |-- services
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- collection_api_payloads.py
+|   |   |   |-- tests
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- test_collection_api.py
+|   |   |   |   `-- test_collection_model.py
+|   |   |   |-- urls.py
+|   |   |   `-- views
+|   |   |       |-- __init__.py
+|   |   |       |-- api.py
+|   |   |       `-- pages.py
+|   |   |-- core
+|   |   |   |-- __init__.py
+|   |   |   |-- apps.py
+|   |   |   |-- migrations
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- 0001_initial_from_aquillm.py
+|   |   |   |-- models
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- user_settings.py
+|   |   |   |-- tests
+|   |   |   |   `-- __init__.py
+|   |   |   |-- urls.py
+|   |   |   `-- views
+|   |   |       |-- __init__.py
+|   |   |       |-- api.py
+|   |   |       `-- pages.py
+|   |   |-- documents
+|   |   |   |-- __init__.py
+|   |   |   |-- apps.py
+|   |   |   |-- migrations
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- 0001_initial_from_aquillm.py
+|   |   |   |-- models
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- chunks.py
+|   |   |   |   |-- document.py
+|   |   |   |   |-- document_types
+|   |   |   |   |   |-- __init__.py
+|   |   |   |   |   |-- figure.py
+|   |   |   |   |   |-- handwritten.py
+|   |   |   |   |   |-- image.py
+|   |   |   |   |   |-- media.py
+|   |   |   |   |   |-- pdf.py
+|   |   |   |   |   |-- raw_text.py
+|   |   |   |   |   |-- tex.py
+|   |   |   |   |   `-- vtt.py
+|   |   |   |   `-- exceptions.py
+|   |   |   |-- services
+|   |   |   |   |-- chunk_embeddings.py
+|   |   |   |   |-- chunk_progress.py
+|   |   |   |   |-- chunk_rerank.py
+|   |   |   |   |-- chunk_rerank_config.py
+|   |   |   |   |-- chunk_rerank_local_vllm.py
+|   |   |   |   |-- chunk_rerank_parse.py
+|   |   |   |   |-- chunk_rerank_payload.py
+|   |   |   |   |-- chunk_search.py
+|   |   |   |   |-- document_meta.py
+|   |   |   |   `-- image_payloads.py
+|   |   |   |-- tasks
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- chunking.py
+|   |   |   |-- tests
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- test_multimodal_chunk_position_uniqueness.py
+|   |   |   |-- urls.py
+|   |   |   `-- views
+|   |   |       |-- __init__.py
+|   |   |       |-- api.py
+|   |   |       `-- pages.py
+|   |   |-- ingestion
+|   |   |   |-- __init__.py
+|   |   |   |-- apps.py
+|   |   |   |-- consumers.py
+|   |   |   |-- migrations
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- 0001_initial_from_aquillm.py
+|   |   |   |   `-- 0002_expand_source_file_max_length.py
+|   |   |   |-- models
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- batch.py
+|   |   |   |-- routing.py
+|   |   |   |-- services
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- arxiv_ingest.py
+|   |   |   |   |-- upload_batches.py
+|   |   |   |   `-- web_ingest.py
+|   |   |   |-- tests
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- test_figure_extraction.py
+|   |   |   |   |-- test_handwritten_ingest.py
+|   |   |   |   |-- test_ingest_consumers_auth.py
+|   |   |   |   |-- test_ingestion_monitor_includes_non_pdf.py
+|   |   |   |   |-- test_multimodal_ingestion_media_storage.py
+|   |   |   |   |-- test_transcribe_provider_selection.py
+|   |   |   |   |-- test_unified_ingestion_api.py
+|   |   |   |   `-- test_unified_ingestion_parsers.py
+|   |   |   |-- urls.py
+|   |   |   `-- views
+|   |   |       |-- __init__.py
+|   |   |       |-- api
+|   |   |       |   |-- __init__.py
+|   |   |       |   |-- arxiv.py
+|   |   |       |   |-- uploads.py
+|   |   |       |   `-- web.py
+|   |   |       `-- pages.py
+|   |   |-- integrations
+|   |   |   |-- __init__.py
+|   |   |   `-- zotero
+|   |   |       |-- __init__.py
+|   |   |       |-- apps.py
+|   |   |       |-- migrations
+|   |   |       |   |-- __init__.py
+|   |   |       |   `-- 0001_initial_from_aquillm.py
+|   |   |       |-- models.py
+|   |   |       |-- services
+|   |   |       |   |-- __init__.py
+|   |   |       |   |-- library_sync.py
+|   |   |       |   |-- sync_collections.py
+|   |   |       |   `-- sync_items.py
+|   |   |       `-- tasks.py
+|   |   |-- memory
+|   |   |   |-- __init__.py
+|   |   |   |-- apps.py
+|   |   |   |-- migrations
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- 0001_initial_from_aquillm.py
+|   |   |   |-- models
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- episodic.py
+|   |   |   |   `-- facts.py
+|   |   |   `-- tests
+|   |   |       `-- __init__.py
+|   |   `-- platform_admin
+|   |       |-- __init__.py
+|   |       |-- apps.py
+|   |       |-- migrations
+|   |       |   |-- __init__.py
+|   |       |   `-- 0001_initial_from_aquillm.py
+|   |       |-- models
+|   |       |   |-- __init__.py
+|   |       |   |-- usage.py
+|   |       |   `-- whitelist.py
+|   |       |-- services
+|   |       |   |-- __init__.py
+|   |       |   `-- feedback_export.py
+|   |       |-- tests
+|   |       |   |-- __init__.py
+|   |       |   |-- test_feedback_csv_export_api.py
+|   |       |   `-- test_feedback_export_service.py
+|   |       |-- urls.py
+|   |       `-- views
+|   |           |-- __init__.py
+|   |           |-- api.py
+|   |           `-- pages.py
+|   |-- aquillm
+|   |   |-- .DS_Store
+|   |   |-- __init__.py
+|   |   |-- adapters.py
+|   |   |-- admin.py
+|   |   |-- api_views.py
+|   |   |-- apps.py
+|   |   |-- asgi.py
+|   |   |-- celery.py
+|   |   |-- chunking.py
+|   |   |-- context_processors.py
+|   |   |-- crawl_status_consumers.py
+|   |   |-- crawler_tasks.py
+|   |   |-- forms.py
+|   |   |-- ingestion
+|   |   |   |-- __init__.py
+|   |   |   |-- figure_extraction
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- ebook.py
+|   |   |   |   |-- office.py
+|   |   |   |   |-- office_convert.py
+|   |   |   |   |-- pdf.py
+|   |   |   |   |-- pdf_geometry.py
+|   |   |   |   |-- pdf_page_extractors.py
+|   |   |   |   |-- spreadsheet.py
+|   |   |   |   `-- types.py
+|   |   |   |-- media.py
+|   |   |   |-- parser_archive.py
+|   |   |   |-- parser_figures.py
+|   |   |   |-- parsers.py
+|   |   |   `-- types.py
+|   |   |-- llm.py
+|   |   |-- llm_adaptors
+|   |   |   `-- claude.py
+|   |   |-- memory.py
+|   |   |-- message_adapters.py
+|   |   |-- migrations
+|   |   |   |-- __init__.py
+|   |   |   |-- 0001_initial.py
+|   |   |   |-- 0002_setup.py
+|   |   |   |-- 0003_alter_usersettings_color_scheme.py
+|   |   |   |-- 0004_conversationfile.py
+|   |   |   |-- 0005_alter_conversationfile_message_uuid.py
+|   |   |   |-- 0006_pdfdocument_zotero_item_key_zoteroconnection.py
+|   |   |   |-- 0007_remove_zoteroconnection_last_sync_version.py
+|   |   |   |-- 0008_wsconversation_system_prompt_message.py
+|   |   |   |-- 0009_migrate_json_to_messages.py
+|   |   |   |-- 0010_remove_wsconversation_convo.py
+|   |   |   |-- 0011_message_feedback_text.py
+|   |   |   |-- 0012_user_memory.py
+|   |   |   |-- 0013_textchunk_content_trgm_idx.py
+|   |   |   |-- 0014_textchunk_multimodal_fields.py
+|   |   |   |-- 0015_unified_ingestion_status.py
+|   |   |   |-- 0016_multimodal_ingestion_media_docs.py
+|   |   |   |-- 0017_document_figure_model.py
+|   |   |   |-- 0018_remove_collection_models_state.py
+|   |   |   `-- 0019_remove_moved_models_state.py
+|   |   |-- models.py
+|   |   |-- ocr_utils.py
+|   |   |-- routing.py
+|   |   |-- settings.py
+|   |   |-- settings_logging.py
+|   |   |-- settings_test.py
+|   |   |-- static
+|   |   |   |-- circular_progress_bar.css
+|   |   |   |-- fonts
+|   |   |   |   |-- Comic Sans MS.ttf
+|   |   |   |   |-- Lexend-VariableFont_wght.ttf
+|   |   |   |   |-- OpenDyslexic3-Regular.ttf
+|   |   |   |   `-- OpenDyslexic-Regular.woff
+|   |   |   |-- fonts.css
+|   |   |   |-- images
+|   |   |   |   |-- alpha-black.svg
+|   |   |   |   |-- alpha-blue.svg
+|   |   |   |   |-- alpha-dark.ico
+|   |   |   |   |-- alpha-light.ico
+|   |   |   |   |-- alpha-orange.svg
+|   |   |   |   |-- aquila.svg
+|   |   |   |   |-- aquila-medium.svg
+|   |   |   |   |-- aquila-small.svg
+|   |   |   |   |-- aquila-small-dark.ico
+|   |   |   |   |-- aquila-small-dark.svg
+|   |   |   |   |-- aquila-small-light.ico
+|   |   |   |   |-- aquila-small-light.svg
+|   |   |   |   |-- aquila-small-lightest.svg
+|   |   |   |   |-- arxiv-logomark-small-square.svg
+|   |   |   |   |-- audio-svgrepo-com.svg
+|   |   |   |   |-- latex-implies.svg
+|   |   |   |   |-- list.svg
+|   |   |   |   |-- upsilon.svg
+|   |   |   |   `-- user.svg
+|   |   |   |-- scrollbar.css
+|   |   |   |-- search_styling.css
+|   |   |   `-- theme.css
+|   |   |-- task_ingest_helpers.py
+|   |   |-- task_ingest_uploaded.py
+|   |   |-- tasks.py
+|   |   |-- urls.py
+|   |   |-- utils.py
+|   |   |-- views.py
+|   |   |-- vtt.py
+|   |   |-- wsgi.py
+|   |   |-- zotero_client.py
+|   |   |-- zotero_oauth.py
+|   |   |-- zotero_sync_helpers.py
+|   |   |-- zotero_tasks.py
+|   |   `-- zotero_views.py
+|   |-- chat
+|   |   |-- __init__.py
+|   |   |-- admin.py
+|   |   |-- apps.py
+|   |   |-- consumers.py
+|   |   |-- migrations
+|   |   |   `-- __init__.py
+|   |   |-- models.py
+|   |   |-- routing.py
+|   |   |-- urls.py
+|   |   `-- views.py
+|   |-- ingest
+|   |   |-- __init__.py
+|   |   |-- admin.py
+|   |   |-- apps.py
+|   |   |-- consumers.py
+|   |   |-- migrations
+|   |   |   `-- __init__.py
+|   |   |-- models.py
+|   |   |-- routing.py
+|   |   `-- views.py
+|   |-- lib
+|   |   |-- __init__.py
+|   |   |-- embeddings
+|   |   |   |-- __init__.py
+|   |   |   |-- cohere.py
+|   |   |   |-- config.py
+|   |   |   |-- local.py
+|   |   |   |-- multimodal.py
+|   |   |   |-- tests
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- test_context_limit_handling.py
+|   |   |   `-- utils.py
+|   |   |-- integrations
+|   |   |   |-- __init__.py
+|   |   |   `-- zotero
+|   |   |       `-- __init__.py
+|   |   |-- llm
+|   |   |   |-- __init__.py
+|   |   |   |-- decorators
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- tool.py
+|   |   |   |-- providers
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- base.py
+|   |   |   |   |-- claude.py
+|   |   |   |   |-- complete_turn.py
+|   |   |   |   |-- fallback_heuristics.py
+|   |   |   |   |-- gemini.py
+|   |   |   |   |-- image_context.py
+|   |   |   |   |-- openai.py
+|   |   |   |   |-- openai_overflow.py
+|   |   |   |   |-- openai_streaming.py
+|   |   |   |   |-- openai_tokens.py
+|   |   |   |   |-- openai_tool_text.py
+|   |   |   |   |-- openai_tools_format.py
+|   |   |   |   |-- summary.py
+|   |   |   |   `-- tool_evidence.py
+|   |   |   |-- tests
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- test_tool_choice_serialization.py
+|   |   |   |-- types
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- conversation.py
+|   |   |   |   |-- messages.py
+|   |   |   |   |-- response.py
+|   |   |   |   `-- tools.py
+|   |   |   `-- utils
+|   |   |       |-- __init__.py
+|   |   |       `-- images.py
+|   |   |-- memory
+|   |   |   |-- __init__.py
+|   |   |   |-- config.py
+|   |   |   |-- extraction
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- stable_facts.py
+|   |   |   |-- formatting.py
+|   |   |   |-- mem0
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- client.py
+|   |   |   |   `-- operations.py
+|   |   |   |-- tests
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- test_mem0_oss_mode.py
+|   |   |   `-- types.py
+|   |   |-- ocr
+|   |   |   |-- __init__.py
+|   |   |   |-- config.py
+|   |   |   |-- gemini.py
+|   |   |   |-- image_utils.py
+|   |   |   |-- qwen.py
+|   |   |   |-- tesseract.py
+|   |   |   `-- tests
+|   |   |       |-- __init__.py
+|   |   |       `-- test_provider_selection.py
+|   |   |-- parsers
+|   |   |   |-- __init__.py
+|   |   |   |-- config.py
+|   |   |   |-- documents
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- docx.py
+|   |   |   |   |-- epub.py
+|   |   |   |   |-- html.py
+|   |   |   |   `-- pdf.py
+|   |   |   |-- media
+|   |   |   |   |-- __init__.py
+|   |   |   |   `-- vtt.py
+|   |   |   |-- presentations
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- odp.py
+|   |   |   |   `-- pptx.py
+|   |   |   |-- spreadsheets
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- csv_parser.py
+|   |   |   |   |-- ods.py
+|   |   |   |   |-- xls.py
+|   |   |   |   `-- xlsx.py
+|   |   |   |-- structured
+|   |   |   |   |-- __init__.py
+|   |   |   |   |-- json_parser.py
+|   |   |   |   |-- xml_parser.py
+|   |   |   |   `-- yaml_parser.py
+|   |   |   |-- tests
+|   |   |   |   `-- __init__.py
+|   |   |   `-- text_utils.py
+|   |   `-- tools
+|   |       |-- __init__.py
+|   |       |-- astronomy
+|   |       |   |-- __init__.py
+|   |       |   |-- flat_fielding.py
+|   |       |   |-- point_source.py
+|   |       |   `-- sky_subtraction.py
+|   |       |-- debug
+|   |       |   |-- __init__.py
+|   |       |   `-- weather.py
+|   |       |-- documents
+|   |       |   |-- __init__.py
+|   |       |   |-- ids.py
+|   |       |   |-- list_ids.py
+|   |       |   |-- single_document.py
+|   |       |   `-- whole_document.py
+|   |       `-- search
+|   |           |-- __init__.py
+|   |           |-- context.py
+|   |           `-- vector_search.py
+|   |-- manage.py
+|   |-- templates
+|   |   |-- allauth
+|   |   |   |-- account
+|   |   |   |   `-- login.html
+|   |   |   |-- elements
+|   |   |   |   |-- alert.html
+|   |   |   |   |-- badge.html
+|   |   |   |   |-- button.html
+|   |   |   |   |-- button__entrance.html
+|   |   |   |   |-- button_group.html
+|   |   |   |   |-- field.html
+|   |   |   |   |-- fields.html
+|   |   |   |   |-- form.html
+|   |   |   |   |-- form__entrance.html
+|   |   |   |   |-- h1.html
+|   |   |   |   |-- h1__entrance.html
+|   |   |   |   |-- h2__entrance.html
+|   |   |   |   |-- img.html
+|   |   |   |   |-- panel.html
+|   |   |   |   |-- provider.html
+|   |   |   |   |-- provider_list.html
+|   |   |   |   `-- table.html
+|   |   |   |-- layouts
+|   |   |   |   |-- base.html
+|   |   |   |   |-- entrance.html
+|   |   |   |   `-- manage.html
+|   |   |   `-- socialaccount
+|   |   |       `-- snippets
+|   |   |           `-- login.html
+|   |   |-- aquillm
+|   |   |   |-- base.html
+|   |   |   |-- collection.html
+|   |   |   |-- convo.html
+|   |   |   |-- document.html
+|   |   |   |-- email_whitelist.html
+|   |   |   |-- gemini_cost_monitor.html
+|   |   |   |-- index.html
+|   |   |   |-- ingest_handwritten_notes.html
+|   |   |   |-- ingest_handwritten_notes_modal.html
+|   |   |   |-- ingest_pdf.html
+|   |   |   |-- ingest_pdf_modal.html
+|   |   |   |-- ingest_vtt.html
+|   |   |   |-- ingest_vtt_modal.html
+|   |   |   |-- ingestion_dashboard.html
+|   |   |   |-- insert_arxiv.html
+|   |   |   |-- insert_arxiv_modal.html
+|   |   |   |-- pdf_ingestion_monitor.html
+|   |   |   |-- raw_convo.html
+|   |   |   |-- react_test.html
+|   |   |   |-- search.html
+|   |   |   |-- text_chunk.html
+|   |   |   |-- user_collections.html
+|   |   |   |-- user_conversations.html
+|   |   |   |-- user_settings.html
+|   |   |   |-- user_ws_convos.html
+|   |   |   `-- ws_convo.html
+|   |   |-- partials
+|   |   |   `-- conversation_list.html
+|   |   `-- zotero
+|   |       |-- settings.html
+|   |       |-- sync.html
+|   |       `-- verify.html
+|   |-- test-results.txt
+|   `-- tests
+|       |-- __init__.py
+|       `-- integration
+|           |-- __init__.py
+|           |-- test_architecture_import_boundaries.py
+|           |-- test_compose_multimodal_services.py
+|           |-- test_context_processors_urls.py
+|           |-- test_deployment_run_script.py
+|           |-- test_dev_launch_script.py
+|           |-- test_documents_models_exports.py
+|           |-- test_ingest_row_ajax_header.py
+|           |-- test_legacy_models_compat_module.py
+|           |-- test_llm_tool_types_import.py
+|           |-- test_no_runtime_debug_artifacts.py
+|           |-- test_settings_security_flags.py
+|           `-- test_vllm_extra_args_parser.py
+|-- deploy
+|   |-- compose
+|   |   |-- base.yml
+|   |   |-- development.yml
+|   |   |-- production.yml
+|   |   `-- test.yml
+|   |-- docker
+|   |   |-- certbot
+|   |   |   `-- Dockerfile
+|   |   |-- test
+|   |   |   `-- Dockerfile
+|   |   |-- vllm
+|   |   |   |-- chat_templates
+|   |   |   |   `-- qwen3_vl_reranker.jinja
+|   |   |   `-- Dockerfile
+|   |   `-- web
+|   |       |-- Dockerfile
+|   |       `-- Dockerfile.prod
+|   |-- nginx
+|   |   |-- aquillm.conf.template
+|   |   `-- nginx.conf
+|   `-- scripts
+|       |-- aquillm.service
+|       |-- dev
+|       |   |-- create_buckets.sh
+|       |   |-- reload_tailwind.sh
+|       |   `-- run.sh
+|       |-- get_certs.cron
+|       |-- get_certs.sh
+|       |-- healthcheck.sh
+|       |-- install.sh
+|       |-- nginx_start.sh
+|       |-- parse_vllm_extra_args.py
+|       |-- relaunch_mem0_oss.sh
+|       |-- run.sh
+|       |-- start_dev.sh
+|       |-- start_mem0_local.sh
+|       `-- vllm_start.sh
+|-- docs
+|   |-- architecture
+|   |   `-- aquillm-current-architecture-mermaid.md
+|   |-- plans
+|   |   |-- 2025-03-16-sandboxed-math-integration.md
+|   |   |-- 2026-03-16-auto-ingest-design.md
+|   |   |-- 2026-03-16-auto-ingest-implementation-plan.md
+|   |   |-- 2026-03-16-observability-design.md
+|   |   `-- 2026-03-16-observability-implementation-plan.md
+|   `-- superpowers
+|       |-- plans
+|       |   |-- 2026-03-16-bigger-vllm-models.md
+|       |   |-- 2026-03-17-full-multimodal-storage-and-ingestion.md
+|       |   |-- 2026-03-17-unified-multiformat-ingestion.md
+|       |   |-- 2026-03-18-codebase-refactor.md
+|       |   |-- 2026-03-18-codebase-refactor-handoff.md
+|       |   |-- 2026-03-18-pdf-figure-extraction.md
+|       |   |-- 2026-03-18-unified-document-figure-extraction.md
+|       |   |-- 2026-03-19-structure-and-code-quality-remediation-execution-notes.md
+|       |   |-- 2026-03-21-architecture-boundary-and-structural-remediation-execution-notes.md
+|       |   |-- 2026-03-21-feedback-rating-csv-export-execution-notes.md
+|       |   |-- 2026-03-23-large-file-remediation-handoff.md
+|       |   `-- 2026-03-24-large-file-remediation-handoff.md
+|       `-- specs
+|           |-- 2026-03-16-bigger-vllm-models-design.md
+|           |-- 2026-03-17-unified-multiformat-ingestion-design.md
+|           |-- 2026-03-18-codebase-refactor-design.md
+|           `-- 2026-03-18-unified-document-figure-extraction-design.md
+|-- LICENSE
+|-- package.json
+|-- package-lock.json
+|-- pytest.ini
+|-- react
+|   |-- .gitignore
+|   |-- auth.json
+|   |-- package.json
+|   |-- package-lock.json
+|   |-- playwright.config.js
+|   |-- postcss.config.js
+|   |-- scripts
+|   |   `-- login.ts
+|   |-- src
+|   |   |-- components
+|   |   |   |-- ChatComponent.tsx
+|   |   |   |-- ChatFileUpload.tsx
+|   |   |   |-- CollectionSettingsMenu.tsx
+|   |   |   |-- CollectionsPage.tsx
+|   |   |   |-- CollectionsPageContent.tsx
+|   |   |   |-- collectionsPageMap.ts
+|   |   |   |-- CollectionsTree.tsx
+|   |   |   |-- CollectionView.tsx
+|   |   |   |-- CreateCollectionModal.tsx
+|   |   |   |-- CustomContextMenu.tsx
+|   |   |   |-- FileSystemViewer.tsx
+|   |   |   |-- IngestionDashboard.tsx
+|   |   |   |-- IngestionDashboardLauncher.tsx
+|   |   |   |-- IngestPDF.tsx
+|   |   |   |-- IngestRow.tsx
+|   |   |   |-- MoveCollectionModal.tsx
+|   |   |   |-- PDFIngestionMonitor.tsx
+|   |   |   |-- SearchPage.tsx
+|   |   |   |-- TestComponent.tsx
+|   |   |   |-- UserManagementModal.tsx
+|   |   |   |-- UserSettings.tsx
+|   |   |   `-- WhitelistEmails.tsx
+|   |   |-- features
+|   |   |   |-- chat
+|   |   |   |   |-- components
+|   |   |   |   |   |-- Chat.tsx
+|   |   |   |   |   |-- ChatCollectionsModal.tsx
+|   |   |   |   |   |-- ChatInputDock.tsx
+|   |   |   |   |   |-- ChatShell.tsx
+|   |   |   |   |   |-- index.ts
+|   |   |   |   |   |-- MessageBubble.tsx
+|   |   |   |   |   |-- RatingButtons.tsx
+|   |   |   |   |   `-- ToolCallGroup.tsx
+|   |   |   |   |-- hooks
+|   |   |   |   |   |-- index.ts
+|   |   |   |   |   `-- useChatWebSocket.ts
+|   |   |   |   |-- types
+|   |   |   |   |   `-- index.ts
+|   |   |   |   `-- utils
+|   |   |   |       |-- index.ts
+|   |   |   |       `-- messageGrouping.ts
+|   |   |   |-- collections
+|   |   |   |   `-- components
+|   |   |   |       |-- CollectionView.tsx
+|   |   |   |       |-- collectionViewBreadcrumbs.ts
+|   |   |   |       |-- collectionViewContents.ts
+|   |   |   |       |-- CollectionViewShell.tsx
+|   |   |   |       |-- collectionViewTypes.ts
+|   |   |   |       `-- useCollectionViewMoveBatch.ts
+|   |   |   |-- documents
+|   |   |   |   `-- components
+|   |   |   |       |-- fileSystemTypeColors.ts
+|   |   |   |       |-- FileSystemViewer.tsx
+|   |   |   |       |-- FileSystemViewerBatchBar.tsx
+|   |   |   |       |-- FileSystemViewerBodyTop.tsx
+|   |   |   |       |-- FileSystemViewerDataTable.tsx
+|   |   |   |       `-- FileSystemViewerPaginationBar.tsx
+|   |   |   |-- ingestion
+|   |   |   |   |-- components
+|   |   |   |   |   |-- DocTypeToggle.tsx
+|   |   |   |   |   |-- forms
+|   |   |   |   |   |   |-- ArxivForm.tsx
+|   |   |   |   |   |   |-- HandwrittenForm.tsx
+|   |   |   |   |   |   |-- index.ts
+|   |   |   |   |   |   |-- PDFForm.tsx
+|   |   |   |   |   |   |-- UploadsForm.tsx
+|   |   |   |   |   |   |-- VTTForm.tsx
+|   |   |   |   |   |   `-- WebpageForm.tsx
+|   |   |   |   |   |-- index.ts
+|   |   |   |   |   |-- IngestRow.tsx
+|   |   |   |   |   |-- IngestRowsContainer.tsx
+|   |   |   |   |   `-- IngestRowStatusBlocks.tsx
+|   |   |   |   |-- hooks
+|   |   |   |   |   `-- useIngestUploadBatchPolling.ts
+|   |   |   |   |-- types
+|   |   |   |   |   `-- index.ts
+|   |   |   |   `-- utils
+|   |   |   |       `-- runIngestRowSubmissions.ts
+|   |   |   `-- platform_admin
+|   |   |       `-- components
+|   |   |           |-- UserManagementModal.tsx
+|   |   |           |-- UserManagementModalFooter.tsx
+|   |   |           |-- UserManagementModalHeaderHelp.tsx
+|   |   |           |-- UserManagementModalScrollBody.tsx
+|   |   |           |-- UserManagementSearchSection.tsx
+|   |   |           |-- userManagementTypes.ts
+|   |   |           `-- UserManagementUsersPanel.tsx
+|   |   |-- icons
+|   |   |   |-- document.tsx
+|   |   |   `-- folder.tsx
+|   |   |-- main.tsx
+|   |   |-- shared
+|   |   |   `-- components
+|   |   |       |-- Collapsible.tsx
+|   |   |       |-- index.ts
+|   |   |       |-- logos
+|   |   |       |   |-- AquillmLogo.tsx
+|   |   |       |   |-- ArxivLogo.tsx
+|   |   |       |   |-- index.ts
+|   |   |       |   `-- UserLogo.tsx
+|   |   |       `-- ToolResult.tsx
+|   |   |-- types
+|   |   |   |-- FileSystemItem.tsx
+|   |   |   `-- index.ts
+|   |   `-- utils
+|   |       |-- collectionUtils.ts
+|   |       |-- csrf.tsx
+|   |       |-- formatUrl.ts
+|   |       `-- uiUtils.ts
+|   |-- tailwind.config.js
+|   |-- test.css
+|   |-- test-data
+|   |   |-- cpu-intro-2.pdf
+|   |   `-- test-link.txt
+|   |-- test-results
+|   |   `-- .last-run.json
+|   |-- tests
+|   |   |-- chat.spec.ts
+|   |   |-- collections.spec.ts
+|   |   |-- feedback-export.spec.ts
+|   |   |-- homepage.spec.ts
+|   |   |-- login.spec.ts
+|   |   |-- managing-collab.spec.ts
+|   |   |-- search.spec.ts
+|   |   |-- sidebar-navigation.spec.ts
+|   |   `-- usersettings.spec.ts
+|   |-- tsconfig.json
+|   |-- tsconfig.node.json
+|   `-- vite.config.ts
+|-- README.md
+|-- requirements.txt
+|-- scripts
+|   |-- check_file_lengths.py
+|   |-- check_hygiene.ps1
+|   `-- check_import_boundaries.py
+|-- test-results.txt
+`-- tests
+    |-- conftest.py
+    `-- unit
+        |-- test_llm_claude_mapping.py
+        |-- test_llm_config_apps.py
+        |-- test_llm_gpt_oss_mapping.py
+        |-- test_message_adapters_django_to_pydantic.py
+        |-- test_message_adapters_frontend_json.py
+        |-- test_message_adapters_pydantic_to_django.py
+        `-- test_message_adapters_roundtrip.py

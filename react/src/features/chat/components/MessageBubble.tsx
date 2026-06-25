@@ -1,10 +1,17 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import rehypeRaw from 'rehype-raw';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import formatUrl from '../../../utils/formatUrl';
+import { DOC_CHUNK_CITATION_RE, linkifyRagCitations } from '../../../utils/linkifyRagCitations';
+import { resolveSiteAbsoluteUrl } from '../../../utils/resolveSiteAbsoluteUrl';
 import { Collapsible, ToolResult, AquillmLogo, UserLogo } from '../../../shared/components';
 import { RatingButtons } from './RatingButtons';
+import { useCitationModal } from './CitationModalProvider';
+import { getCsrfCookie } from '../../../main';
 import type { Message } from '../types';
 
 interface MessageBubbleProps {
@@ -15,6 +22,113 @@ interface MessageBubbleProps {
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, onFeedback }) => {
   const displayTime = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const contentRef = useRef<HTMLDivElement>(null);
+  const activeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const { openCitation } = useCitationModal();
+  const messageUuid = message.message_uuid;
+  const eagerNarrowSeenRef = useRef<Set<string>>(new Set());
+
+  // Eager LLM-narrow every citation in newly arrived assistant messages
+  // when window.appFlags.eagerCitationNarrow is on. Fire-and-forget — the
+  // backend caches by (message_uuid, chunk_pk) so subsequent clicks open
+  // instantly. Per-bubble dedupe ref guards against re-firing on re-render
+  // (e.g. when streaming content updates).
+  useEffect(() => {
+    if (!messageUuid || message.role !== 'assistant') return;
+    if (!window.appFlags?.eagerCitationNarrow) return;
+    const apiUrl = window.apiUrls?.api_citation_narrow;
+    if (!apiUrl) return;
+    const content = message.content || '';
+    if (!content) return;
+    DOC_CHUNK_CITATION_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = DOC_CHUNK_CITATION_RE.exec(content))) {
+      const chunkId = match[2];
+      const key = `${messageUuid}:${chunkId}`;
+      if (eagerNarrowSeenRef.current.has(key)) continue;
+      eagerNarrowSeenRef.current.add(key);
+      fetch(apiUrl, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCsrfCookie(),
+        },
+        body: JSON.stringify({ message_uuid: messageUuid, chunk_id: Number(chunkId) }),
+      }).catch(() => {
+        // Swallow — best-effort prefetch. Click-time fetch will retry.
+      });
+    }
+  }, [messageUuid, message.role, message.content]);
+
+  // Intercept plain clicks on .rag-citation-link anchors and route them to
+  // the PDF citation modal. Modifier-clicks (ctrl/cmd/shift) and middle
+  // clicks fall through to the anchor's native "open in new tab".
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.button !== 0) return; // middle/right click: native behaviour
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const target = (e.target as Element | null)?.closest?.('.rag-citation-link');
+      if (!target) return;
+      const docId = target.getAttribute('data-doc-id');
+      const chunkId = target.getAttribute('data-chunk-id');
+      if (!docId || !chunkId) return;
+      e.preventDefault();
+      openCitation({ docId, chunkId, messageUuid });
+    };
+    el.addEventListener('click', onClick);
+    return () => el.removeEventListener('click', onClick);
+  }, [openCitation, messageUuid]);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+
+    const handleOver = (e: MouseEvent) => {
+      const katex = (e.target as Element).closest?.('.katex');
+      if (!katex || activeBtnRef.current?.parentElement === katex) return;
+      handleOut();
+      const annotation = katex.querySelector('annotation[encoding="application/x-tex"]');
+      if (!annotation) return;
+      const btn = document.createElement('button');
+      btn.className = 'katex-copy-btn katex-copy-btn--visible';
+      btn.textContent = '⧉';
+      btn.title = 'Copy LaTeX';
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        navigator.clipboard.writeText(annotation.textContent ?? '');
+        btn.textContent = '✓';
+        setTimeout(() => { if (btn.parentElement) btn.textContent = '⧉'; }, 1500);
+      });
+      (katex as HTMLElement).style.position = 'relative';
+      katex.appendChild(btn);
+      activeBtnRef.current = btn;
+    };
+
+    const handleOut = (e?: MouseEvent) => {
+      if (e && (e.target as Element).closest?.('.katex-copy-btn')) return;
+      if (activeBtnRef.current) {
+        const parent = activeBtnRef.current.parentElement;
+        if (parent) (parent as HTMLElement).style.position = '';
+        activeBtnRef.current.remove();
+        activeBtnRef.current = null;
+      }
+    };
+
+    el.addEventListener('mouseover', handleOver);
+    el.addEventListener('mouseout', (e: Event) => {
+      const related = (e as MouseEvent).relatedTarget as Element | null;
+      if (related?.closest?.('.katex')) return;
+      handleOut();
+    });
+    return () => {
+      el.removeEventListener('mouseover', handleOver);
+    };
+  }, []);
 
   const getMessageClasses = () => {
     let classes = "w-full p-2 rounded-[10px] shadow-sm whitespace-pre-wrap break-words element-border leading-[1.35] text-[14px]";
@@ -31,7 +145,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
   };
 
   return (
-    <div className="group flex justify-start">
+    <div className="group flex justify-start" ref={contentRef}>
       <div className="w-[88%] flex flex-col items-start">
         <div className="flex items-center gap-1.5 mb-1">
           {message.role === 'user' ? (
@@ -47,16 +161,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
         <div className={getMessageClasses()}>
         {message.role === 'user' && (
           <div className="markdown-cell prose max-w-none whitespace-normal">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
               {message.content}
             </ReactMarkdown>
           </div>
         )}
         {message.role === 'assistant' && !message.tool_call_input && (
           <div className="markdown-cell prose prose-sm md:prose-base max-w-none whitespace-normal leading-relaxed">
-            <ReactMarkdown 
-              remarkPlugins={[remarkGfm]} 
-              rehypePlugins={[rehypeRaw]}
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[[rehypeRaw, { passThrough: ['math', 'inlineMath'] }], rehypeKatex]}
               components={{
                 h1: ({ children, ...props }) => (
                   <h1 {...props} className="mt-0 mb-3 text-[1.75rem] leading-tight font-semibold">
@@ -81,14 +195,19 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
                 img: ({ node, ...props }) => {
                   const altText = (props.alt ?? '').trim();
                   const showCaption = altText.length > 0 && !/^image$/i.test(altText);
+                  const resolvedSrc = resolveSiteAbsoluteUrl(props.src);
+                  // Avoid duplicating the caption as both alt text (shown on load failure) and figcaption.
+                  const imgAlt = showCaption ? '' : altText;
 
                   return (
                     <figure className="my-3 w-fit max-w-full rounded-[10px] border border-border-mid_contrast bg-scheme-shade_3 p-2.5">
                       <img
                         {...props}
+                        src={resolvedSrc}
+                        alt={imgAlt}
                         className="block max-w-full h-auto rounded-lg border border-border-mid_contrast cursor-pointer hover:opacity-90 transition-opacity"
                         style={{ maxHeight: '360px', objectFit: 'contain' }}
-                        onClick={() => props.src && window.open(props.src, '_blank')}
+                        onClick={() => resolvedSrc && window.open(resolvedSrc, '_blank')}
                         title="Click to view full size"
                       />
                       {showCaption && (
@@ -101,7 +220,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
                 },
               }}
             >
-              {message.content}
+              {linkifyRagCitations(message.content)}
             </ReactMarkdown>
           </div>
         )}

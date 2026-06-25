@@ -14,13 +14,15 @@ export interface Message {
 }
 
 export interface Collection {
-  id: string;
+  id: string | number;
   name: string;
+  parent?: string | number | null;
 }
 
 export interface Conversation {
   messages: Message[];
   usage?: number;
+  selected_collections?: (string | number)[];
 }
 
 export interface ConversationDelta {

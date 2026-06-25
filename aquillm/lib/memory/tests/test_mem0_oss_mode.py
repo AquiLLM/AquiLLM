@@ -22,6 +22,31 @@ def _reload_memory_client_module(monkeypatch, **env):
     return client_module
 
 
+@pytest.mark.asyncio
+async def test_search_mem0_episodic_memories_async_uses_oss_when_available(monkeypatch):
+    """Async search delegates to OSS async helper first."""
+    monkeypatch.setenv("MEMORY_BACKEND", "mem0")
+
+    from lib.memory import search_mem0_episodic_memories_async, RetrievedEpisodicMemory
+    from lib.memory.mem0 import operations as ops_module
+
+    expected = [RetrievedEpisodicMemory(content="remembered", conversation_id=7)]
+
+    async def fake_via_oss_async(*_args, **_kwargs):
+        return expected
+
+    monkeypatch.setattr(ops_module, "search_mem0_via_oss_async", fake_via_oss_async)
+
+    actual = await search_mem0_episodic_memories_async(
+        user_id="42",
+        query="status update",
+        top_k=3,
+        exclude_conversation_id=None,
+    )
+
+    assert actual == expected
+
+
 def test_search_mem0_uses_oss_when_available(monkeypatch):
     """Test that search uses OSS SDK when available."""
     monkeypatch.setenv("MEMORY_BACKEND", "mem0")
@@ -64,7 +89,7 @@ def test_add_mem0_raw_facts_uses_oss_sdk(monkeypatch):
     
     result = add_mem0_raw_facts(
         user_id="42",
-        facts=["remember this"],
+        facts=["Please remember that AquiLLM uses Qdrant and Memgraph for memory."],
         conversation_id=9,
         assistant_message_uuid="abc-123",
     )

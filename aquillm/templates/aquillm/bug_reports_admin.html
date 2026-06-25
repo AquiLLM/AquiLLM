@@ -1,0 +1,13 @@
+{% extends "aquillm/base.html" %}
+
+{% block title %}Bug Reports{% endblock %}
+
+{% block content %}
+    <div id="bug-reports-admin"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    mountReactComponent('bug-reports-admin', 'BugReportsAdmin', {});
+</script>
+{% endblock %}

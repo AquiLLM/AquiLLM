@@ -61,6 +61,11 @@ from apps.platform_admin.views.pages import (
     email_whitelist,
 )
 
+# Re-export bug report views
+from apps.bug_reports.views.pages import (
+    bug_reports_admin,
+)
+
 from .settings import DEBUG
 
 # Backward compatibility URL patterns
@@ -80,7 +85,8 @@ urlpatterns = [
     path("ingestion_dashboard/", ingestion_dashboard, name="ingestion_dashboard"),
     path("email_whitelist/", email_whitelist, name="email_whitelist"),
     path("ingest_handwritten_notes/", ingest_handwritten_notes, name="ingest_handwritten_notes"),
-    path('gemini-costs/', gemini_cost_monitor, name='gemini_cost_monitor')
+    path('gemini-costs/', gemini_cost_monitor, name='gemini_cost_monitor'),
+    path('bug-reports/', bug_reports_admin, name='bug_reports_admin'),
 ]
 
 if DEBUG:

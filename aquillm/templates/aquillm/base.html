@@ -7,7 +7,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}AquiLLM{% endblock %}</title>
 
-    <script src="{% static 'js/dist/main.js' %}"></script>
+    <script src="{% static 'js/dist/main.js' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}"></script>
+    <link rel="stylesheet" href="{% static 'js/dist/main.css' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}" type="text/css" />
     <link rel="icon" type="image/png" href="{% static 'images/aquila-small-light.ico' %}" media="(prefers-color-scheme: dark)"/>
     <link rel="icon" type="image/png" href="{% static 'images/aquila-small-dark.ico' %}" media="(prefers-color-scheme: light)"/>
 
@@ -146,6 +147,8 @@
                 <div class="flex items-center gap-2 sm:gap-3 my-2 text-slight_muted_white pr-[16px]">
                     {% block nav_extra %}{% endblock %}
                     {% if user.is_authenticated %}
+                        <div id="bug-report-root"></div>
+                        <script>mountReactComponent('bug-report-root', 'BugReportButton', {});</script>
                         <button id="account-management-toggle-button" class="h-[40px] px-[10px] rounded-[14px] hover:bg-scheme-shade_6 transition-all flex items-center gap-[10px] border border-scheme-contrast">
                             <div class="h-[28px] w-[28px] rounded-full bg-scheme-shade_5 text-text-normal flex items-center justify-center text-xs font-semibold">
                                 {{ user.username|slice:":1"|upper }}
@@ -247,10 +250,18 @@
                             <a href="{% url 'email_whitelist' %}" class="my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
                                 Email Whitelist
                             </a>
+                            <a href="{% url 'bug_reports_admin' %}" class="my-[2px] pl-[8px] py-[3px] text-base text-text-normal w-full hover:bg-scheme-shade_5 rounded-[10px] transition-all">
+                                Bug Reports
+                            </a>
                             {% endif %}
                         {% endif %}
                     </div>
                 </div>
+                {% if app_version %}
+                <div class="text-xs pl-[8px] pr-[8px] py-[8px] text-text-normal opacity-50 select-none">
+                    v{{ app_version }}
+                </div>
+                {% endif %}
             </div>
 
             <!-- Page Content -->
@@ -715,9 +726,11 @@
 {% if user.is_authenticated%}
     {{ api_urls|json_script:"api_urls" }}
     {{ page_urls|json_script:"page_urls" }}
+    {{ app_flags|json_script:"app_flags" }}
     <script type="text/javascript">
         window.apiUrls = JSON.parse(document.getElementById('api_urls').textContent);
         window.pageUrls = JSON.parse(document.getElementById('page_urls').textContent);
+        window.appFlags = JSON.parse(document.getElementById('app_flags').textContent);
     </script>
 {% endif %}
 

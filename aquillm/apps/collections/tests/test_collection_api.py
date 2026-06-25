@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -160,3 +162,104 @@ def test_collection_detail_infers_parent_document_id_from_figure_title_when_link
     payload = response.json()
     listed_child = next(item for item in payload["children"] if item["id"] == figures_collection.id)
     assert listed_child["parent_document_id"] == str(source_doc.id)
+
+
+@pytest.mark.django_db
+def test_collection_permissions_post_syncs_figure_subcollections(client):
+    owner = User.objects.create_user(username="perm-owner", password="pw12345")
+    collaborator = User.objects.create_user(username="perm-collab", password="pw12345")
+    collection = Collection.objects.create(name="Shared Root")
+    CollectionPermission.objects.create(user=owner, collection=collection, permission="MANAGE")
+    figures_collection = Collection.objects.create(name="Lecture1 - Figures", parent=collection)
+    CollectionPermission.objects.create(user=owner, collection=figures_collection, permission="MANAGE")
+
+    assert client.login(username="perm-owner", password="pw12345")
+    url = reverse("api_collection_permissions", kwargs={"col_id": collection.id})
+    response = client.post(
+        url,
+        data=json.dumps({"viewers": [collaborator.id], "editors": [], "admins": []}),
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+
+    fig_view = CollectionPermission.objects.filter(
+        collection=figures_collection, user=collaborator, permission="VIEW"
+    ).exists()
+    assert fig_view is True
+
+
+@pytest.mark.django_db
+def test_collection_permissions_post_removes_collaborator_from_figure_subcollections(client):
+    owner = User.objects.create_user(username="perm-owner2", password="pw12345")
+    collaborator = User.objects.create_user(username="perm-collab2", password="pw12345")
+    collection = Collection.objects.create(name="Shared Root 2")
+    CollectionPermission.objects.create(user=owner, collection=collection, permission="MANAGE")
+    figures_collection = Collection.objects.create(name="Doc - Figures", parent=collection)
+    CollectionPermission.objects.create(user=owner, collection=figures_collection, permission="MANAGE")
+    CollectionPermission.objects.create(user=collaborator, collection=collection, permission="VIEW")
+    CollectionPermission.objects.create(user=collaborator, collection=figures_collection, permission="VIEW")
+
+    assert client.login(username="perm-owner2", password="pw12345")
+    url = reverse("api_collection_permissions", kwargs={"col_id": collection.id})
+    response = client.post(
+        url,
+        data=json.dumps({"viewers": [], "editors": [], "admins": []}),
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+
+    assert not CollectionPermission.objects.filter(collection=figures_collection, user=collaborator).exists()
+
+
+@pytest.mark.django_db
+def test_collection_permissions_post_leaves_non_figure_children_untouched(client):
+    owner = User.objects.create_user(username="perm-owner3", password="pw12345")
+    collection = Collection.objects.create(name="Shared Root 3")
+    CollectionPermission.objects.create(user=owner, collection=collection, permission="MANAGE")
+    other_child = Collection.objects.create(name="My Notes", parent=collection)
+    CollectionPermission.objects.create(user=owner, collection=other_child, permission="MANAGE")
+
+    assert client.login(username="perm-owner3", password="pw12345")
+    url = reverse("api_collection_permissions", kwargs={"col_id": collection.id})
+    response = client.post(
+        url,
+        data=json.dumps({"viewers": [], "editors": [], "admins": []}),
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+
+    assert CollectionPermission.objects.filter(collection=other_child, user=owner, permission="MANAGE").exists()
+
+
+@pytest.mark.django_db
+def test_collections_list_includes_created_and_updated_at(client):
+    user = User.objects.create_user(username="collections-list-user", password="pw12345")
+    collection = Collection.objects.create(name="Has Timestamps")
+    CollectionPermission.objects.create(user=user, collection=collection, permission="VIEW")
+
+    assert client.login(username="collections-list-user", password="pw12345")
+    response = client.get(reverse("api_collections"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    listed = next(item for item in payload["collections"] if item["id"] == collection.id)
+    assert listed["created_at"] == collection.created_at.isoformat()
+    assert listed["updated_at"] == collection.updated_at.isoformat()
+
+
+@pytest.mark.django_db
+def test_collections_create_response_includes_created_and_updated_at(client):
+    user = User.objects.create_user(username="collections-create-user", password="pw12345")
+    assert client.login(username="collections-create-user", password="pw12345")
+
+    response = client.post(
+        reverse("api_collections"),
+        data=json.dumps({"name": "Brand New"}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    created = Collection.objects.get(id=payload["id"])
+    assert payload["created_at"] == created.created_at.isoformat()
+    assert payload["updated_at"] == created.updated_at.isoformat()

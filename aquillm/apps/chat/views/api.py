@@ -1,5 +1,5 @@
 """API views for chat functionality."""
-import logging
+import structlog
 
 from django.contrib.auth.decorators import login_required
 from django.http import FileResponse, JsonResponse
@@ -8,7 +8,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.chat.models import ConversationFile
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @login_required

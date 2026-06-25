@@ -1,4 +1,6 @@
-FROM vllm/vllm-openai:latest
+# v0.21.0 brings the Qwen3.6/MTP/TurboQuant serving path needed by the
+# current remote profile. Keep libsndfile/soundfile for the Whisper sidecar.
+FROM vllm/vllm-openai:v0.21.0
 
 USER root
 RUN apt-get update \

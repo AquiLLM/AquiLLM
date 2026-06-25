@@ -1,0 +1,663 @@
+"""LLMInterface.complete() retry behavior and max-token cutoff continuation."""
+from unittest.mock import patch
+
+from django.test import SimpleTestCase
+from asgiref.sync import async_to_sync
+
+from aquillm.llm import (
+    AssistantMessage,
+    Conversation,
+    ToolMessage,
+    UserMessage,
+    LLMResponse,
+    ToolChoice,
+    llm_tool,
+)
+
+from apps.chat.tests.chat_message_test_support import _FakeLLMInterface, _test_document_ids
+
+
+@llm_tool(
+    for_whom='assistant',
+    required=['search_string', 'top_k'],
+    param_descs={'search_string': 'query', 'top_k': 'count'},
+)
+def vector_search(search_string: str, top_k: int):
+    """Search selected documents."""
+    return {'result': f'{search_string}:{top_k}'}
+
+
+class ToolUseRetryTests(SimpleTestCase):
+    def test_retries_with_required_tool_when_model_only_promises_to_search(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll search each of these three papers for detailed information.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Search these papers and summarize memory systems.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='auto'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'auto')
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+
+    def test_retries_required_tool_choice_when_model_only_promises_to_retrieve(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll retrieve the paper to give you a proper summary.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Tell me about this paper.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'any')
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertEqual(llm.calls[1]['stream_message_uuid'], llm.calls[0]['stream_message_uuid'])
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+        self.assertNotIn("I'll retrieve", updated[-1].content)
+
+    def test_required_tool_request_retries_with_more_budget_when_first_response_is_hidden_thinking(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="<think>I need to inspect the selected paper before answering.",
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=512,
+            ),
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content=(
+                        'Give me a highly detailed academic summary of this paper, '
+                        'show images from it, and explain the math.'
+                    ),
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'any')
+        self.assertGreaterEqual(llm.calls[0]['max_tokens'], 2048)
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertGreaterEqual(llm.calls[1]['max_tokens'], 2048)
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+        self.assertNotIn('could not complete', updated[-1].content)
+
+    @patch.dict(
+        "os.environ",
+        {"LLM_TOOL_STEP_MAX_TOKENS": "0", "LLM_TOOL_CALL_RETRY_MAX_TOKENS": "0"},
+    )
+    def test_zero_tool_step_token_caps_use_full_turn_budget(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Review this paper and include figures.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(llm.calls[0]['max_tokens'], 12288)
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+
+    def test_required_document_tool_turn_falls_back_to_vector_search_when_model_only_thinks(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="<think>I need to inspect the selected paper first.</think>",
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=50,
+            ),
+            LLMResponse(
+                text="<think>I still need to inspect the selected paper.</think>",
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=50,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Tell me about the paper and show me a figure or two.',
+                    tools=[vector_search, _test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(updated[-1].tool_call_name, 'vector_search')
+        self.assertEqual(
+            updated[-1].tool_call_input,
+            {
+                'search_string': 'Tell me about the paper and show me a figure or two.',
+                'top_k': 10,
+            },
+        )
+        self.assertNotIn('could not complete', updated[-1].content)
+
+    def test_required_tool_request_retries_when_forced_retry_still_promises_to_search(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll search the selected paper and figures now.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=20,
+            ),
+            LLMResponse(
+                text="I'll retrieve the document first.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=20,
+            ),
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content=(
+                        'Give me a comprehensive review of the paper in this collection '
+                        'and show some of the figures.'
+                    ),
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 3)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'any')
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertEqual(llm.calls[2]['tool_choice']['type'], 'any')
+        self.assertGreaterEqual(llm.calls[0]['max_tokens'], 2048)
+        self.assertGreaterEqual(llm.calls[2]['max_tokens'], 2048)
+        self.assertEqual(updated[-1].tool_call_name, '_test_document_ids')
+        self.assertNotIn('could not complete', updated[-1].content)
+
+    def test_does_not_retry_for_normal_non_tool_text_reply(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text='Here is a concise answer from prior context.',
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Give me a quick answer.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='auto'),
+                )
+            ],
+        )
+
+        updated, _ = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(len(llm.calls), 1)
+        self.assertIsNone(updated[-1].tool_call_id)
+
+    def test_auto_tool_followup_retries_plain_answer_when_tool_retry_stays_interim(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll retrieve the passage now.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text="I'll retrieve the passage now.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=(
+                    "A rotating black hole is described by the Kerr solution: the field equations "
+                    "admit a stationary, axisymmetric spacetime whose angular momentum drags nearby "
+                    "inertial frames and creates an ergosphere."
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(content='Show me the Einstein field equations.'),
+                AssistantMessage(
+                    content='The Einstein field equations relate curvature to stress-energy.',
+                    stop_reason='stop',
+                ),
+                UserMessage(
+                    content='Can you show how they predict a rotating black hole?',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='auto'),
+                ),
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 3)
+        self.assertEqual(llm.calls[0]['tool_choice']['type'], 'auto')
+        self.assertEqual(llm.calls[1]['tool_choice']['type'], 'any')
+        self.assertNotIn('tools', llm.calls[2])
+        self.assertNotIn('tool_choice', llm.calls[2])
+        self.assertGreaterEqual(llm.calls[2]['max_tokens'], 2048)
+        self.assertIn('Kerr solution', updated[-1].content)
+        self.assertNotIn("I'll retrieve", updated[-1].content)
+
+    def test_retries_post_tool_placeholder_that_only_promises_to_help(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text="I'll help you understand the math from this paper.",
+                tool_call={},
+                stop_reason='end_turn',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=(
+                    "The paper's math centers on calibration and discrimination: "
+                    "it compares confidence scores against correctness, then studies "
+                    "regions where utility and factuality trade off."
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(content='Can you show me some of the math from the paper?'),
+                ToolMessage(
+                    content='The paper discusses calibration, confidence, utility, and factuality.',
+                    tool_name='whole_document',
+                    arguments={'doc_id': 'doc-1'},
+                    for_whom='assistant',
+                    result_dict={'result': 'The paper discusses calibration, confidence, utility, and factuality.'},
+                ),
+            ],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertIn('calibration and discrimination', updated[-1].content)
+        self.assertNotIn("I'll help", updated[-1].content)
+
+
+class CutoffContinuationTests(SimpleTestCase):
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_continues_cutoff_response_before_compact_fallback(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text='Scalable patent analysis outline:\n1. Ingestion and preprocessing',
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text='2. Claim parsing and structured extraction.\n3. Prior-art ranking.\n4. Validation and reporting.',
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Give me a detailed patent-analysis implementation outline.')],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[1]["max_tokens"], 640)
+        self.assertIn('1. Ingestion and preprocessing', updated[-1].content)
+        self.assertIn('2. Claim parsing and structured extraction.', updated[-1].content)
+
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_continuation_reuses_stream_message_uuid_for_single_bubble(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text='Intro section that gets cut',
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=' and then continues cleanly.',
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Give me a long answer that may be cut off.')],
+        )
+
+        async def _noop_stream(_payload: dict):
+            return None
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048, stream_func=_noop_stream)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        first_uuid = llm.calls[0].get("stream_message_uuid")
+        self.assertTrue(first_uuid)
+        self.assertEqual(llm.calls[1].get("stream_message_uuid"), first_uuid)
+        self.assertEqual(str(updated[-1].message_uuid), first_uuid)
+
+    @patch.dict(
+        "os.environ",
+        {
+            "LLM_CONTINUATION_MAX_TOKENS": "640",
+            "LLM_POST_TOOL_MAX_TOKENS": "1536",
+            "LLM_STREAM_FINAL_ANSWER_ONLY": "0",
+        },
+    )
+    def test_streaming_cutoff_continuation_keeps_streaming_same_bubble(self):
+        class _StreamingFakeLLM(_FakeLLMInterface):
+            async def get_message(self, *args, **kwargs):
+                self.calls.append(kwargs)
+                response = self.responses[len(self.calls) - 1]
+                callback = kwargs.get("stream_callback")
+                if callable(callback):
+                    await callback(
+                        {
+                            "message_uuid": kwargs.get("stream_message_uuid"),
+                            "role": "assistant",
+                            "content": response.text or "",
+                            "done": True,
+                            "stop_reason": response.stop_reason,
+                            "usage": response.input_usage + response.output_usage,
+                        }
+                    )
+                return response
+
+        llm = _StreamingFakeLLM([
+            LLMResponse(
+                text='Intro section that gets cut',
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=' and then continues cleanly.',
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Give me a long answer that may be cut off.')],
+        )
+        stream_payloads = []
+
+        async def _capture_stream(payload: dict):
+            stream_payloads.append(payload)
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048, stream_func=_capture_stream)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertTrue(callable(llm.calls[1].get("stream_callback")))
+        self.assertEqual(len(stream_payloads), 2)
+        self.assertEqual(stream_payloads[0]["message_uuid"], stream_payloads[1]["message_uuid"])
+        self.assertIn('Intro section that gets cut', stream_payloads[-1]["content"])
+        self.assertIn('and then continues cleanly.', stream_payloads[-1]["content"])
+        self.assertIn('and then continues cleanly.', updated[-1].content)
+
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_continuation_does_not_break_truncated_markdown_image_url(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text='![Figure 7](https://aquillm/document_image/b4a',
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text='65cf7-c884-49cf-af76-e477e5a21b25/)',
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Show me Figure 7 in chat.')],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertIn(
+            '![Figure 7](https://aquillm/document_image/b4a65cf7-c884-49cf-af76-e477e5a21b25/)',
+            updated[-1].content,
+        )
+        self.assertNotIn('/document_image/b4a\n65cf7', updated[-1].content)
+
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_continuation_restart_prefix_is_deduplicated_before_merge(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text=(
+                    "# The GalaxiesML Dataset: Comprehensive Technical Analysis\n\n"
+                    "Dataset Construction and Provenance\n"
+                    "Source Survey: HSC-PDR2 Wide Survey\n\n"
+                    "Performance Requirements Context\n"
+                    "The paper establishes **LS"
+                ),
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=(
+                    "# The GalaxiesML Dataset: Comprehensive Technical Analysis\n\n"
+                    "Dataset Construction and Provenance\n"
+                    "Source Survey: HSC-PDR2 Wide Survey\n\n"
+                    "Performance Requirements Context\n"
+                    "The paper establishes **LSST deployment thresholds and acceptance criteria."
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Provide a detailed technical analysis of GalaxiesML.')],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(
+            updated[-1].content.count('# The GalaxiesML Dataset: Comprehensive Technical Analysis'),
+            1,
+        )
+        self.assertIn('The paper establishes **LSST deployment thresholds', updated[-1].content)
+
+    @patch.dict("os.environ", {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"})
+    def test_duplicate_only_continuation_keeps_partial_without_repeating(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text=(
+                    "Comprehensive rollout plan:\n"
+                    "- Validate ingestion pipeline behavior across three cohorts.\n"
+                    "- Measure retrieval recall and precision against reference judgments.\n"
+                    "- Stress-test latency under sustained concurrent traffic.\n"
+                    "- Document risk mitigations and fallback controls for production.\n"
+                    "Next, we should ev"
+                ),
+                tool_call={},
+                stop_reason='max_tokens',
+                input_usage=5,
+                output_usage=5,
+            ),
+            LLMResponse(
+                text=(
+                    "Comprehensive rollout plan:\n"
+                    "- Validate ingestion pipeline behavior across three cohorts.\n"
+                    "- Measure retrieval recall and precision against reference judgments.\n"
+                    "- Stress-test latency under sustained concurrent traffic.\n"
+                ),
+                tool_call={},
+                stop_reason='stop',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a helpful assistant.',
+            messages=[UserMessage(content='Give me a detailed rollout plan.')],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 2048)
+
+        self.assertEqual(changed, 'changed')
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(updated[-1].content.count('Comprehensive rollout plan:'), 1)
+        self.assertIn('Next, we should ev', updated[-1].content)

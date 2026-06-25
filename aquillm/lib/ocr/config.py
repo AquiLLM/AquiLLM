@@ -19,7 +19,7 @@ def get_qwen_config() -> tuple[str, str, str, int]:
     base_url = (
         os.getenv("APP_OCR_QWEN_BASE_URL")
         or os.getenv("VLLM_BASE_URL")
-        or "http://vllm_ocr:8000/v1"
+        or "http://vllm:8000/v1"
     ).rstrip("/")
     if not base_url.endswith("/v1"):
         base_url = f"{base_url}/v1"
@@ -28,7 +28,7 @@ def get_qwen_config() -> tuple[str, str, str, int]:
         os.getenv("APP_OCR_QWEN_MODEL")
         or os.getenv("VLLM_SERVED_MODEL_NAME")
         or os.getenv("VLLM_MODEL")
-        or "qwen3.5:27b-q8_0"
+        or "qwen3.6:27b-mtp-awq"
     )
     timeout_raw = (os.getenv("APP_OCR_QWEN_TIMEOUT_SECONDS") or "120").strip()
     try:

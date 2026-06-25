@@ -13,3 +13,15 @@ jobs:
       - name: Check tracked banned paths
         shell: pwsh
         run: pwsh -ExecutionPolicy Bypass -File scripts/check_hygiene.ps1
+
+  structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: File length and import boundaries
+        run: |
+          python scripts/check_file_lengths.py
+          python scripts/check_import_boundaries.py

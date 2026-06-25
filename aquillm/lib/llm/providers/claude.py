@@ -33,6 +33,14 @@ class ClaudeInterface(LLMInterface):
         kwargs.pop('thinking_budget', None)
         kwargs.pop('stream_callback', None)
         kwargs.pop('stream_message_uuid', None)
+        msgs = kwargs.get("messages")
+        sys_t = kwargs.get("system")
+        mt = kwargs.get("max_tokens")
+        if isinstance(msgs, list) and sys_t is not None and mt is not None:
+            from lib.llm.utils.prompt_budget import apply_preflight_trim_to_message_dicts
+
+            _, new_max = apply_preflight_trim_to_message_dicts(str(sys_t), msgs, int(mt))
+            kwargs["max_tokens"] = new_max
         response = await self.client.messages.create(**kwargs)
         if DEBUG:
             print("Claude SDK Response:")

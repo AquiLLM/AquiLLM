@@ -1,12 +1,12 @@
 """Episodic memory model."""
-import logging
+import structlog
 
 from django.contrib.auth.models import User
 from django.db import models
 from django.db.models import Q
 from pgvector.django import VectorField, HnswIndex
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class EpisodicMemory(models.Model):

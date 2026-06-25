@@ -1,0 +1,265 @@
+"""Heuristics for extractive fallback and deferred-tool detection."""
+from __future__ import annotations
+
+import re
+from os import getenv
+from typing import Optional
+
+from ..types.conversation import Conversation
+from ..types.messages import ToolMessage
+
+
+_RAW_TOOL_TRANSCRIPT_RE = re.compile(
+    r"(?im)(?:^|\n)\s*(?:Tool|Tool call|Called Tool)\s*:\s*[A-Za-z_][\w.-]*\s*(?:\n|$)"
+)
+
+
+def looks_like_raw_tool_transcript(text: Optional[str]) -> bool:
+    """Detect tool-call/tool-result transcripts that should not be user-visible answers."""
+    if not text:
+        return False
+    candidate = str(text)
+    lowered = candidate.lower()
+    if (
+        "<tool_call" in lowered
+        or "<function_call" in lowered
+        or "<tool_code" in lowered
+    ):
+        return True
+    return bool(_RAW_TOOL_TRANSCRIPT_RE.search(candidate))
+
+
+def looks_like_deferred_tool_intent(text: Optional[str]) -> bool:
+    """
+    Heuristic: detect when the model says it will search/look something up
+    instead of actually issuing a tool call in this turn.
+    """
+    if not text:
+        return False
+    if looks_like_raw_tool_transcript(text):
+        return True
+    normalized = re.sub(r"[\u2018\u2019]", chr(39), text.lower())
+    cues = (
+        "i'll search",
+        "i will search",
+        "i'll search for",
+        "let me search",
+        "i can search",
+        "i'm going to search",
+        "i'll look through",
+        "i will look through",
+        "i'll look up",
+        "i will look up",
+        "let me look up",
+        "i'll retrieve",
+        "i will retrieve",
+        "let me retrieve",
+        "i'll check",
+        "i will check",
+        "i'll read the papers",
+        "i will read the papers",
+    )
+    if any(cue in normalized for cue in cues):
+        return True
+    action_pattern = (
+        r"\b(?:i(?:'ll| will| am going to)|i'm going to|let me)\s+"
+        r"(?:first\s+)?(?:search|retrieve|check|scan|read|consult|look up|look through)\b"
+    )
+    return bool(re.search(action_pattern, normalized))
+
+
+def looks_like_post_tool_non_answer(text: Optional[str]) -> bool:
+    """
+    Detect short post-tool placeholders that promise to answer but do not answer.
+
+    This intentionally stays narrow: longer multi-sentence replies can begin with
+    "I'll explain..." and still contain useful synthesis.
+    """
+    if not text:
+        return False
+    if looks_like_deferred_tool_intent(text):
+        return True
+    if looks_like_raw_tool_transcript(text):
+        return True
+
+    candidate = " ".join(str(text).strip().split())
+    if not candidate:
+        return False
+    lowered = re.sub(r"[\u2018\u2019]", chr(39), candidate.lower())
+    words = re.findall(r"[A-Za-z0-9]+", lowered)
+    if len(words) > 18:
+        return False
+    if lowered.count(".") + lowered.count("!") + lowered.count("?") > 1:
+        return False
+
+    promise_patterns = (
+        r"^i(?:'ll| will)\s+help\b",
+        r"^i(?:'ll| will)\s+explain\b",
+        r"^i(?:'ll| will)\s+walk\s+you\s+through\b",
+        r"^i(?:'ll| will)\s+summarize\b",
+        r"^i(?:'ll| will)\s+answer\b",
+        r"^let\s+me\s+(?:help|explain|walk\s+you\s+through|summarize)\b",
+    )
+    return any(re.search(pattern, lowered) for pattern in promise_patterns)
+
+
+def extractive_fallback_enabled() -> bool:
+    return getenv("LLM_ALLOW_EXTRACTIVE_FALLBACK", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def first_sentence(text: str, max_chars: int = 260) -> str:
+    cleaned = re.sub(r"([A-Za-z])-\s+([A-Za-z])", r"\1\2", text or "")
+    cleaned = " ".join(cleaned.split())
+    if not cleaned:
+        return ""
+    match = re.search(r"(.+?[.!?])(\s|$)", cleaned)
+    candidate = match.group(1) if match else cleaned
+    if len(candidate) > max_chars:
+        return candidate[:max_chars].rstrip() + "..."
+    return candidate
+
+
+def is_useful_fallback_sentence(text: str) -> bool:
+    candidate = (text or "").strip()
+    if not candidate:
+        return False
+    if not re.match(r'^[A-Z"(]', candidate):
+        return False
+    words = re.findall(r"[A-Za-z0-9]+", candidate)
+    if len(words) < 10:
+        return False
+    alpha_chars = len(re.findall(r"[A-Za-z]", candidate))
+    if alpha_chars < 40:
+        return False
+    digit_chars = len(re.findall(r"\d", candidate))
+    if digit_chars / max(1, len(candidate)) > 0.08:
+        return False
+    upper_chars = len(re.findall(r"[A-Z]", candidate))
+    if alpha_chars and (upper_chars / alpha_chars) > 0.45:
+        return False
+    bad_tokens = ("mmlu", "bbh", "gsm8k", "triviaqa", "humaneval", "mbpp", "cmath")
+    lowered = candidate.lower()
+    if sum(1 for token in bad_tokens if token in lowered) >= 2:
+        return False
+    return True
+
+
+def is_high_quality_summary(text: str) -> bool:
+    candidate = (text or "").strip()
+    if len(candidate) < 220:
+        return False
+    lowered = candidate.lower()
+    if lowered.startswith("here are the key points from the retrieved passages"):
+        return False
+    if "i retrieved supporting passages but could not generate a final answer" in lowered:
+        return False
+    if "please retry and i will provide a direct summary" in lowered:
+        return False
+    bad_tokens = ("mmlu", "bbh", "gsm8k", "triviaqa", "humaneval", "mbpp", "cmath")
+    if sum(1 for token in bad_tokens if token in lowered) >= 5:
+        return False
+    bullet_count = candidate.count("\n- ") + candidate.count("\n* ")
+    sentence_count = len(re.findall(r"[.!?](?:\s|$)", candidate))
+    return bullet_count >= 3 or sentence_count >= 5
+
+
+def looks_cut_off(text: str) -> bool:
+    cleaned = (text or "").rstrip()
+    if not cleaned:
+        return False
+    if cleaned.endswith(("...", "…")):
+        return True
+    if cleaned[-1] in ".!?)]}\"'":
+        return False
+    return True
+
+
+def continue_on_cutoff_enabled() -> bool:
+    return getenv("LLM_CONTINUE_ON_CUTOFF", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def should_preserve_cutoff_partial(text: Optional[str]) -> bool:
+    candidate = (text or "").strip()
+    if len(candidate) < 180:
+        return False
+    if looks_like_deferred_tool_intent(candidate):
+        return False
+    lowered = candidate.lower()
+    if lowered.startswith("here are the key points from the retrieved passages"):
+        return False
+    if "i retrieved supporting passages but could not generate a final answer" in lowered:
+        return False
+    if "please retry and i will provide a full summary" in lowered:
+        return False
+    if is_high_quality_summary(candidate):
+        return True
+    bullet_count = candidate.count("\n- ") + candidate.count("\n* ")
+    citation_count = candidate.count("[doc:")
+    nonempty_lines = len([line for line in candidate.splitlines() if line.strip()])
+    return bullet_count >= 3 or citation_count >= 3 or (len(candidate) >= 260 and nonempty_lines >= 4)
+
+
+def synthesize_from_recent_tool_results(conversation: Conversation) -> Optional[str]:
+    tool_messages = [
+        msg
+        for msg in reversed(conversation.messages)
+        if isinstance(msg, ToolMessage) and msg.for_whom == "assistant"
+    ]
+    if not tool_messages:
+        return None
+
+    bullets: list[str] = []
+    seen: set[str] = set()
+    source_titles: list[str] = []
+    title_re = re.compile(r"--\s*(.*?)\s*chunk\s*#:", flags=re.IGNORECASE)
+
+    for tool_msg in tool_messages[:3]:
+        result_dict = tool_msg.result_dict if isinstance(tool_msg.result_dict, dict) else {}
+        payload = result_dict.get("result")
+        if isinstance(payload, dict):
+            for k, v in list(payload.items())[:8]:
+                key_text = str(k)
+                val_text = str(v)
+                title_match = title_re.search(key_text)
+                if title_match:
+                    title = title_match.group(1).strip()
+                    if title and title not in source_titles:
+                        source_titles.append(title)
+                sentence = first_sentence(val_text)
+                if sentence and is_useful_fallback_sentence(sentence) and sentence not in seen:
+                    seen.add(sentence)
+                    bullets.append(sentence)
+                if len(bullets) >= 6:
+                    break
+        elif isinstance(payload, str):
+            sentence = first_sentence(payload)
+            if sentence and is_useful_fallback_sentence(sentence) and sentence not in seen:
+                seen.add(sentence)
+                bullets.append(sentence)
+        if len(bullets) >= 6:
+            break
+
+    if not bullets:
+        return None
+
+    header = "Here are the key points from the retrieved passages:"
+    bullet_lines = [f"- {point}" for point in bullets[:5]]
+    if source_titles:
+        sources = ", ".join(source_titles[:4])
+        return f"{header}\n" + "\n".join(bullet_lines) + f"\n\nSources consulted: {sources}"
+    return f"{header}\n" + "\n".join(bullet_lines)
+
+
+__all__ = [
+    "continue_on_cutoff_enabled",
+    "extractive_fallback_enabled",
+    "first_sentence",
+    "is_high_quality_summary",
+    "is_useful_fallback_sentence",
+    "looks_cut_off",
+    "looks_like_deferred_tool_intent",
+    "looks_like_post_tool_non_answer",
+    "looks_like_raw_tool_transcript",
+    "should_preserve_cutoff_partial",
+    "synthesize_from_recent_tool_results",
+]

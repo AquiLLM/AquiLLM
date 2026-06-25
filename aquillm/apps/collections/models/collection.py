@@ -123,11 +123,32 @@ class Collection(models.Model):
     @classmethod
     def get_user_accessible_documents(cls, user, collections: Optional[CollectionQuerySet] = None, perm='VIEW'):
         """Returns a list of documents, not a queryset."""
+        from django.conf import settings
+
+        from apps.documents.services import rag_cache
+
         if collections is None:
             collections = cls.objects.all()  # type: ignore
         collections = collections.filter_by_user_perm(user, perm)  # type: ignore
+        collection_ids = tuple(sorted(collections.values_list("pk", flat=True)))  # type: ignore[attr-defined]
+
+        if getattr(settings, "RAG_CACHE_ENABLED", False):
+            cached_refs = rag_cache.get_cached_doc_access_refs(user.id, collection_ids, perm)
+            if cached_refs is not None:
+                return rag_cache.rehydrate_documents_from_refs(cached_refs)
+
         doc_types = _get_document_types()
-        documents = functools.reduce(lambda l, r: l + r, [list(x.objects.filter(collection__in=collections)) for x in doc_types])
+        documents = functools.reduce(
+            lambda l, r: l + r,
+            [list(x.objects.filter(collection__in=collections)) for x in doc_types],
+        )
+        if getattr(settings, "RAG_CACHE_ENABLED", False):
+            rag_cache.set_cached_doc_access_refs(
+                user.id,
+                collection_ids,
+                perm,
+                rag_cache.document_refs_from_documents(documents),
+            )
         return documents
 
     def move_to(self, new_parent=None):

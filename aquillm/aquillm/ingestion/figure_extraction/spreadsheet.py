@@ -6,13 +6,13 @@ Supports two extraction methods:
 """
 
 import io
-import logging
+import structlog
 import zipfile
 from typing import Iterator
 
 from .types import ExtractedFigure
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 MIN_IMAGE_WIDTH = 100
 MIN_IMAGE_HEIGHT = 100

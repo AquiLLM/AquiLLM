@@ -1,6 +1,6 @@
 """API views for core app functionality."""
 import json
-import logging
+import structlog
 
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
@@ -8,7 +8,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.core.models import UserSettings, COLOR_SCHEME_CHOICES, FONT_FAMILY_CHOICES
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 @require_http_methods(["GET", "POST"])

@@ -1,12 +1,12 @@
 """Office document to PDF conversion using LibreOffice headless."""
 
-import logging
+import structlog
 import os
 import subprocess
 import tempfile
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 # Supported formats for conversion
 CONVERTIBLE_FORMATS = {

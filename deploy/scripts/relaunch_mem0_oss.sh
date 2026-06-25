@@ -10,6 +10,7 @@ set -euo pipefail
 #   RELAUNCH_MEM0_MODELS=0   # set to 1 to also recreate model services
 
 AQUILLM_COMPOSE_FILE="${AQUILLM_COMPOSE_FILE:-deploy/compose/development.yml}"
+AQUILLM_ENV_FILE="${AQUILLM_ENV_FILE:-.env}"
 RELAUNCH_MEM0_MODELS="${RELAUNCH_MEM0_MODELS:-0}"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -27,7 +28,17 @@ if [ ! -f "$AQUILLM_COMPOSE_FILE" ]; then
   exit 1
 fi
 
-mapfile -t compose_services < <(docker compose -f "$AQUILLM_COMPOSE_FILE" config --services)
+if [ ! -f "$AQUILLM_ENV_FILE" ]; then
+  echo "ERROR: env file '$AQUILLM_ENV_FILE' was not found in $(pwd)." >&2
+  exit 1
+fi
+compose_cmd=(
+  docker compose
+  --env-file "$AQUILLM_ENV_FILE"
+  -f "$AQUILLM_COMPOSE_FILE"
+)
+
+mapfile -t compose_services < <("${compose_cmd[@]}" config --services)
 
 service_exists() {
   local needle="$1"
@@ -49,7 +60,7 @@ for required_service in qdrant web worker; do
 done
 
 if [ "${RELAUNCH_MEM0_MODELS}" = "1" ]; then
-  for model_service in vllm vllm_ocr vllm_transcribe vllm_embed vllm_rerank; do
+  for model_service in vllm vllm_transcribe vllm_embed vllm_rerank; do
     if service_exists "$model_service"; then
       services_to_relaunch+=("$model_service")
     fi
@@ -63,7 +74,7 @@ fi
 
 echo "Relaunching Mem0 OSS dependencies via $AQUILLM_COMPOSE_FILE"
 echo "Services: ${services_to_relaunch[*]}"
-docker compose -f "$AQUILLM_COMPOSE_FILE" up -d --force-recreate "${services_to_relaunch[@]}"
+"${compose_cmd[@]}" up -d --force-recreate "${services_to_relaunch[@]}"
 
 if service_exists qdrant; then
   echo "Checking Qdrant readiness on http://localhost:6333/healthz"

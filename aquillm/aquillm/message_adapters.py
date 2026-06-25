@@ -13,6 +13,18 @@ from .llm import (
     Conversation, UserMessage, AssistantMessage, ToolMessage,
     LLM_Message,
 )
+from lib.llm.providers.visibility import (
+    assistant_content_for_frontend,
+    sanitize_assistant_text,
+)
+
+
+def _frontend_message_content(msg: LLM_Message) -> str:
+    if msg.content == "** Empty Message, tool call **":
+        return ""
+    if isinstance(msg, AssistantMessage):
+        return assistant_content_for_frontend(msg)
+    return msg.content
 
 
 def pydantic_message_to_django(
@@ -26,11 +38,16 @@ def pydantic_message_to_django(
     (typically via bulk_create for performance).
     """
     # Fields shared by all message types
+    content = (
+        sanitize_assistant_text(msg.content)
+        if isinstance(msg, AssistantMessage)
+        else msg.content
+    )
     common = {
         'conversation': conversation,        # FK linking this message to its conversation
         'message_uuid': msg.message_uuid,    # unique ID used by the frontend to identify messages
         'role': msg.role,                    # 'user', 'assistant', or 'tool'
-        'content': msg.content,              # the actual message text
+        'content': content,                  # the actual message text
         'rating': msg.rating,                # user rating (1-5) or None
         'feedback_text': msg.feedback_text,  # optional user feedback text
         'sequence_number': seq_num,          # position in the conversation (0, 1, 2, ...)
@@ -196,10 +213,11 @@ def build_frontend_conversation_json(db_convo: WSConversation) -> dict:
     """
     messages = []
     for msg in db_convo.db_messages.order_by('sequence_number'):
+        pydantic_msg = django_message_to_pydantic(msg)
         # Fields included for every message type
         msg_dict = {
             'role': msg.role,
-            'content': msg.content,
+            'content': _frontend_message_content(pydantic_msg),
             'message_uuid': str(msg.message_uuid),  # convert UUID to string for JSON
             'rating': msg.rating,
         }
@@ -219,13 +237,15 @@ def build_frontend_conversation_json(db_convo: WSConversation) -> dict:
 
         messages.append(msg_dict)
 
-    return {'system': db_convo.system_prompt, 'messages': messages}
+    return {
+        'system': db_convo.system_prompt,
+        'selected_collections': db_convo.selected_collection_ids or [],
+        'messages': messages,
+    }
 
 
 def pydantic_message_to_frontend_dict(msg: LLM_Message) -> dict:
-    content = msg.content
-    if content == "** Empty Message, tool call **":
-        content = ""
+    content = _frontend_message_content(msg)
     msg_dict = {
         'role': msg.role,
         'content': content,

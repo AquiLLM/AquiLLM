@@ -19,8 +19,8 @@ from channels.security.websocket import AllowedHostsOriginValidator
 
 
 
-from chat.routing import websocket_urlpatterns as chat_patterns
-from ingest.routing import websocket_urlpatterns as ingest_patterns
+from apps.chat.routing import websocket_urlpatterns as chat_patterns
+from apps.ingestion.routing import websocket_urlpatterns as ingest_patterns
 # Import the new crawl status patterns
 from .routing import websocket_urlpatterns as crawl_status_patterns
 
@@ -36,3 +36,9 @@ application = ProtocolTypeRouter(
 
     }
 )
+
+# Wrap the full ASGI application with OpenTelemetry tracing if enabled.
+if os.environ.get("OTEL_ENABLED", "").strip().lower() in ("1", "true", "yes"):
+    from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
+
+    application = OpenTelemetryMiddleware(application)

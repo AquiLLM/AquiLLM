@@ -3,12 +3,14 @@ FROM astral/uv:0.8.17-python3.12-bookworm
 # Set environment variables
 
 ENV PORT=${PORT}
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV PATH=/opt/venv/bin:$PATH
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
-RUN uv pip install -r requirements.txt --system
+# Copy dependency files first to leverage Docker cache
+COPY pyproject.toml uv.lock ./
+RUN UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_INSTALLS=1 uv sync --frozen --no-dev --no-cache
 RUN apt update && apt install -y curl npm inotify-tools tesseract-ocr \
     libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui
 # Copy the rest of the application

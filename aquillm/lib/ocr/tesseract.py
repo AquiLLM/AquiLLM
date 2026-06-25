@@ -3,10 +3,10 @@ Local Tesseract OCR provider.
 """
 
 import io
-import logging
+import structlog
 from typing import Any, Dict
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 def extract_text_with_tesseract(file_content: bytes, convert_to_latex: bool = False) -> Dict[str, Any]:
