@@ -10,6 +10,8 @@ import type { CitationChunkDetail } from './citationTypes';
 // is harmless and preserves code-splitting if we ever switch back to ESM.
 const PDFCitationModal = lazy(() => import('./PDFCitationModal'));
 const TextCitationModal = lazy(() => import('./TextCitationModal'));
+const ImageCitationModal = lazy(() => import('./ImageCitationModal'));
+const CitationUnavailable = lazy(() => import('./CitationUnavailable'));
 
 /** Width of the slide-out citation panel. The outer container animates
  * between 0 and this width; the inner content stays fixed-width so it
@@ -30,27 +32,57 @@ interface CitationModalContextValue {
   closeCitation: () => void;
   target: CitationTarget | null;
   isOpen: boolean;
+  /** When pinned, the panel stays open across navigation and ignores Escape. */
+  pinned: boolean;
+  togglePin: () => void;
 }
 
 const CitationModalContext = createContext<CitationModalContextValue | null>(null);
 
+const PIN_STORAGE_KEY = 'aquillm.citationPanel.pinned';
+
 export function useCitationModal(): CitationModalContextValue {
   const ctx = useContext(CitationModalContext);
   if (!ctx) {
-    return { openCitation: () => {}, closeCitation: () => {}, target: null, isOpen: false };
+    return {
+      openCitation: () => {},
+      closeCitation: () => {},
+      target: null,
+      isOpen: false,
+      pinned: false,
+      togglePin: () => {},
+    };
   }
   return ctx;
 }
 
 export const CitationModalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [target, setTarget] = useState<CitationTarget | null>(null);
+  const [pinned, setPinned] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(PIN_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
 
   const openCitation = useCallback((next: CitationTarget) => setTarget(next), []);
   const closeCitation = useCallback(() => setTarget(null), []);
+  const togglePin = useCallback(() => {
+    setPinned((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(PIN_STORAGE_KEY, next ? '1' : '0');
+      } catch {
+        /* ignore storage failures */
+      }
+      return next;
+    });
+  }, []);
 
   return (
     <CitationModalContext.Provider
-      value={{ openCitation, closeCitation, target, isOpen: target !== null }}
+      value={{ openCitation, closeCitation, target, isOpen: target !== null, pinned, togglePin }}
     >
       {children}
     </CitationModalContext.Provider>
@@ -64,12 +96,18 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
   target,
   onClose,
 }) => {
+  const { pinned, togglePin } = useCitationModal();
   const [chunk, setChunk] = useState<CitationChunkDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Distinct from a transient error: the chunk/document no longer exists
+  // (deleted after the message was written) → a dead-end, so we show a
+  // dedicated "unavailable" panel rather than an error with a link that 404s.
+  const [gone, setGone] = useState(false);
 
   useEffect(() => {
     setChunk(null);
     setError(null);
+    setGone(false);
     let cancelled = false;
     const apiPattern = window.apiUrls?.api_chunk_detail;
     if (!apiPattern) {
@@ -79,11 +117,15 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
     const url = formatUrl(apiPattern, { chunk_id: target.chunkId });
     fetch(url, { credentials: 'include' })
       .then((r) => {
+        if (r.status === 404) {
+          if (!cancelled) setGone(true);
+          return null;
+        }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then((data: CitationChunkDetail) => {
-        if (!cancelled) setChunk(data);
+      .then((data: CitationChunkDetail | null) => {
+        if (!cancelled && data) setChunk(data);
       })
       .catch((err) => {
         if (!cancelled) setError(err?.message || 'Failed to load chunk.');
@@ -92,6 +134,14 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
       cancelled = true;
     };
   }, [target.chunkId]);
+
+  if (gone) {
+    return (
+      <Suspense fallback={null}>
+        <CitationUnavailable onClose={onClose} pinned={pinned} onTogglePin={togglePin} />
+      </Suspense>
+    );
+  }
 
   if (error) {
     // Hand off to the text modal which renders a friendly error state.
@@ -103,6 +153,8 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
           messageUuid={target.messageUuid}
           preloadedChunk={null}
           onClose={onClose}
+          pinned={pinned}
+          onTogglePin={togglePin}
         />
       </Suspense>
     );
@@ -116,7 +168,12 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
     );
   }
 
-  const Modal = chunk.document.has_pdf ? PDFCitationModal : TextCitationModal;
+  const Modal =
+    chunk.modality === 'image'
+      ? ImageCitationModal
+      : chunk.document.has_pdf
+        ? PDFCitationModal
+        : TextCitationModal;
   return (
     <Suspense fallback={null}>
       <Modal
@@ -125,6 +182,8 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
         messageUuid={target.messageUuid}
         preloadedChunk={chunk}
         onClose={onClose}
+        pinned={pinned}
+        onTogglePin={togglePin}
       />
     </Suspense>
   );

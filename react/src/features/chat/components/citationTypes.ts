@@ -7,6 +7,10 @@ export interface CitationChunkDetail {
   end_position: number;
   /** VTT transcript chunks carry the timestamp; null for everything else. */
   start_time: number | null;
+  /** Chunk modality: "text" or "image". */
+  modality: string;
+  /** Served image URL for image chunks (figures); null for text chunks. */
+  image_url: string | null;
   document: {
     id: string;
     title: string;

@@ -62,6 +62,7 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_conversation_file", "api_conversation_file", {"convo_file_id": 0}),
     ("api_chunk_detail", "api_chunk_detail", {"chunk_id": 0}),
     ("api_citation_narrow", "api_citation_narrow", None),
+    ("api_citation_sources", "api_citation_sources", None),
     ("api_ingest_webpage", "api_ingest_webpage", None),
     # Page-backed ingest (not under /api/ but consumed like an API URL by the React app)
     ("api_ingest_handwritten_notes", "ingest_handwritten_notes", None),

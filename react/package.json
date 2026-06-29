@@ -8,6 +8,8 @@
     "build": "vite build --emptyOutDir",
     "watch": "vite build --watch --emptyOutDir",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:e2e": "npx playwright test"
   },
   "keywords": [],
@@ -37,6 +39,7 @@
     "postcss": "^8.5.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
-    "vite": "^6.0.11"
+    "vite": "^6.0.11",
+    "vitest": "^3.2.6"
   }
 }

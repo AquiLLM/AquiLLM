@@ -11,6 +11,7 @@ import { resolveSiteAbsoluteUrl } from '../../../utils/resolveSiteAbsoluteUrl';
 import { Collapsible, ToolResult, AquillmLogo, UserLogo } from '../../../shared/components';
 import { RatingButtons } from './RatingButtons';
 import { useCitationModal } from './CitationModalProvider';
+import MessageSources from './MessageSources';
 import { getCsrfCookie } from '../../../main';
 import type { Message } from '../types';
 
@@ -224,7 +225,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
             </ReactMarkdown>
           </div>
         )}
-        
+        {message.role === 'assistant' && !message.tool_call_input && (
+          <MessageSources content={message.content} messageUuid={messageUuid} />
+        )}
+
         {message.role === 'assistant' && message.tool_call_input && (
           <div className="mt-2.5 text-sm">
             <strong>Called Tool: {message.tool_call_name}</strong>
