@@ -1,6 +1,7 @@
 """WebSocket receive handler for chat append / rate / feedback actions."""
 from __future__ import annotations
 
+import re
 import structlog
 from base64 import b64decode
 from json import loads
@@ -30,6 +31,23 @@ from apps.chat.services.skills_runtime import effective_base_system_for_memory_a
 logger = structlog.stdlib.get_logger(__name__)
 
 
+# Recall requests that point at *other* conversation threads (not documents).
+_CHAT_HISTORY_TARGET_RE = re.compile(
+    r"\b(?:past|previous|prior|earlier|old(?:er)?|other|last(?:\s+time)?)\s+"
+    r"(?:chats?|conversations?|threads?|discussions?|sessions?|talks?)\b|"
+    r"\b(?:chat|conversation|thread|discussion)\s+history\b",
+    flags=re.IGNORECASE,
+)
+_CHAT_HISTORY_PHRASE_RE = re.compile(
+    r"\bwhat\s+did\s+we\s+(?:discuss|talk\s+about|say|decide|cover|go\s+over)\b|"
+    r"\b(?:discuss(?:ed)?|talk(?:ed)?\s+about|decide[d]?|said|mention(?:ed)?)\b[^.?!]*"
+    r"\b(?:before|earlier|last\s+time|previously|in\s+(?:a|an|our|the)\s+"
+    r"(?:past|previous|earlier|other)\s+(?:chat|conversation|thread))\b|"
+    r"\bremind\s+me\s+what\s+we\b",
+    flags=re.IGNORECASE,
+)
+
+
 def _looks_like_explicit_document_search_request(message_content: str) -> bool:
     """True when the user explicitly asks the assistant to retrieve from documents."""
     intent = classify_chat_message(message_content or "", selected_collection_ids=[])
@@ -46,6 +64,12 @@ def _looks_like_retry_request(message_content: str) -> bool:
     return classify_chat_message(message_content or "", selected_collection_ids=[]).is_retry
 
 
+def _looks_like_chat_history_search_request(message_content: str) -> bool:
+    """True when the user asks to recall something from an earlier conversation."""
+    text = message_content or ""
+    return bool(_CHAT_HISTORY_TARGET_RE.search(text) or _CHAT_HISTORY_PHRASE_RE.search(text))
+
+
 def _latest_prior_user_tool_intent(messages: list) -> tuple[list | None, Optional[ToolChoice]]:
     for msg in reversed(messages):
         if isinstance(msg, UserMessage) and msg.tools and msg.tool_choice:
@@ -59,12 +83,15 @@ def _configure_append_tools(
     all_tools: list,
     document_tools: list,
     selected_collection_ids: Optional[list] = None,
+    memory_tools: Optional[list] = None,
     prior_user_tools: Optional[list] = None,
     prior_user_tool_choice: Optional[ToolChoice] = None,
 ) -> tuple[list, Optional[ToolChoice]]:
     """Choose tool availability and choice strength for an appended user message."""
     if prior_user_tools and _looks_like_retry_request(message_content):
         return prior_user_tools, prior_user_tool_choice or ToolChoice(type="auto")
+    if memory_tools and _looks_like_chat_history_search_request(message_content):
+        return memory_tools, ToolChoice(type="any")
     if document_tools and _looks_like_explicit_document_search_request(message_content):
         return document_tools, ToolChoice(type="any")
     collection_ids = list(selected_collection_ids or [])
@@ -143,6 +170,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             all_tools=consumer.tools,
             document_tools=getattr(consumer, "doc_tools", []),
             selected_collection_ids=selected_collections,
+            memory_tools=getattr(consumer, "memory_tools", []),
             prior_user_tools=prior_user_tools,
             prior_user_tool_choice=prior_user_tool_choice,
         )
