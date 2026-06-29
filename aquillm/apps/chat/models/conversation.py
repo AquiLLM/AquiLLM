@@ -99,7 +99,12 @@ class WSConversation(models.Model):
         try:
             title_text = get_title()
         except Exception as exc:
-            logger.warning("Failed to auto-title conversation %s: %s", self.pk, exc)
+            logger.warning(
+                "obs.chat.auto_title_failed",
+                conversation_id=self.pk,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
         title_text = self._clean_generated_title(title_text)
         if self._is_generic_title(title_text):

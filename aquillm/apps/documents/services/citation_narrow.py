@@ -71,7 +71,11 @@ def narrow_citation(message_content: str, chunk_content: str) -> Optional[str]:
     try:
         quote = call().strip()
     except Exception as exc:
-        logger.warning("Citation narrow LLM call failed: %s", exc)
+        logger.warning(
+            "obs.rag.narrow_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return None
 
     if not quote:

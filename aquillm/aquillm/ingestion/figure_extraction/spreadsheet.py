@@ -60,15 +60,15 @@ def _extract_via_pdf(data: bytes, source_format: str, filename: str) -> Iterator
         return None
     
     if not is_libreoffice_available():
-        logger.debug("LibreOffice not available for %s conversion", source_format)
+        logger.debug("obs.figures.libreoffice_unavailable", source_format=source_format)
         return None
-    
+
     pdf_bytes = convert_to_pdf(data, source_format, filename)
     if not pdf_bytes:
-        logger.debug("PDF conversion failed for %s", filename or source_format)
+        logger.debug("obs.figures.convert_failed", source_format=source_format, filename=filename or source_format)
         return None
-    
-    logger.info("Using PDF conversion for %s figure extraction: %s", source_format.upper(), filename)
+
+    logger.info("obs.figures.convert_used", source_format=source_format.upper(), filename=filename)
     
     # Update location metadata to indicate conversion was used
     for figure in extract_pdf_figures(pdf_bytes, filename):
@@ -81,13 +81,13 @@ def _extract_xlsx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedF
     try:
         from openpyxl import load_workbook
     except ImportError:
-        logger.warning("openpyxl not installed; skipping XLSX figure extraction")
+        logger.warning("obs.figures.dependency_missing", dependency="openpyxl", source_format="xlsx")
         return
-    
+
     try:
         workbook = load_workbook(io.BytesIO(data), read_only=False)
     except Exception as exc:
-        logger.warning("Failed to open XLSX for figure extraction: %s", exc)
+        logger.warning("obs.figures.open_failed", source_format="xlsx", error=str(exc), error_type=type(exc).__name__)
         return
     
     total_extracted = 0
@@ -134,14 +134,14 @@ def _extract_xlsx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedF
                     total_extracted += 1
                     
                 except Exception as exc:
-                    logger.debug("Failed to extract XLSX image: %s", exc)
+                    logger.debug("obs.figures.image_extract_failed", source_format="xlsx", error=str(exc), error_type=type(exc).__name__)
                     continue
-                    
+
     except Exception as exc:
-        logger.warning("XLSX figure extraction failed: %s", exc)
-    
+        logger.warning("obs.figures.extract_failed", source_format="xlsx", error=str(exc), error_type=type(exc).__name__)
+
     if total_extracted > 0:
-        logger.info("Extracted %d embedded figures from XLSX %s", total_extracted, filename)
+        logger.info("obs.figures.extract_done", source_format="xlsx", figure_count=total_extracted, filename=filename)
 
 
 def _extract_ods_direct(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
@@ -188,14 +188,14 @@ def _extract_ods_direct(data: bytes, filename: str = "") -> Iterator[ExtractedFi
                     total_extracted += 1
                     
                 except Exception as exc:
-                    logger.debug("Failed to extract ODS image %s: %s", zip_info.filename, exc)
+                    logger.debug("obs.figures.image_extract_failed", source_format="ods", path=zip_info.filename, error=str(exc), error_type=type(exc).__name__)
                     continue
-                    
+
     except Exception as exc:
-        logger.warning("ODS figure extraction failed: %s", exc)
-    
+        logger.warning("obs.figures.extract_failed", source_format="ods", error=str(exc), error_type=type(exc).__name__)
+
     if total_extracted > 0:
-        logger.info("Extracted %d embedded figures from ODS %s", total_extracted, filename)
+        logger.info("obs.figures.extract_done", source_format="ods", figure_count=total_extracted, filename=filename)
 
 
 def extract_figures_xlsx(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
@@ -219,7 +219,7 @@ def extract_figures_xlsx(data: bytes, filename: str = "") -> Iterator[ExtractedF
         return
     
     # Fall back to direct extraction
-    logger.debug("Falling back to direct XLSX extraction for %s", filename)
+    logger.debug("obs.figures.direct_fallback", source_format="xlsx", filename=filename)
     yield from _extract_xlsx_direct(data, filename)
 
 
@@ -244,5 +244,5 @@ def extract_figures_ods(data: bytes, filename: str = "") -> Iterator[ExtractedFi
         return
     
     # Fall back to direct extraction
-    logger.debug("Falling back to direct ODS extraction for %s", filename)
+    logger.debug("obs.figures.direct_fallback", source_format="ods", filename=filename)
     yield from _extract_ods_direct(data, filename)

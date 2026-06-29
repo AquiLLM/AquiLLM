@@ -182,10 +182,10 @@ class LLMInterface(ABC):
             await send_func(convo)
             if changed == "unchanged":
                 logger.info(
-                    "tool_loop_ended stop_reason=%s calls=%d policy=%s",
-                    stop_reason or "unchanged",
-                    calls,
-                    budget_policy.summary(),
+                    "obs.llm.tool_loop_ended",
+                    stop_reason=stop_reason or "unchanged",
+                    calls=calls,
+                    policy=budget_policy.summary(),
                 )
                 return
             last_message = convo[-1]
@@ -207,10 +207,10 @@ class LLMInterface(ABC):
         if stop_reason is None and calls >= max_func_calls:
             stop_reason = "max_func_calls_reached"
         logger.info(
-            "tool_loop_ended stop_reason=%s calls=%d policy=%s",
-            stop_reason or "loop_exited",
-            calls,
-            budget_policy.summary(),
+            "obs.llm.tool_loop_ended",
+            stop_reason=stop_reason or "loop_exited",
+            calls=calls,
+            policy=budget_policy.summary(),
         )
         last = convo[-1]
         if isinstance(last, AssistantMessage) and last.tool_call_id:

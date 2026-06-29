@@ -34,20 +34,20 @@ def parse_csv_positive_int_map(raw: str | None, *, setting_name: str) -> dict[st
         if not item:
             continue
         if ":" not in item:
-            logger.warning("Ignoring invalid %s entry without ':'", setting_name)
+            logger.warning("obs.llm.tool_budget_invalid_entry", setting_name=setting_name, reason="missing_colon")
             continue
         key_raw, value_raw = item.split(":", 1)
         key = _normalize_tool_name(key_raw)
         if not key:
-            logger.warning("Ignoring invalid %s entry with empty tool name", setting_name)
+            logger.warning("obs.llm.tool_budget_invalid_entry", setting_name=setting_name, reason="empty_tool_name")
             continue
         try:
             value = int(value_raw.strip())
         except Exception:
-            logger.warning("Ignoring invalid %s entry for tool=%s (value not int)", setting_name, key)
+            logger.warning("obs.llm.tool_budget_invalid_entry", setting_name=setting_name, tool=key, reason="value_not_int")
             continue
         if value <= 0:
-            logger.warning("Ignoring invalid %s entry for tool=%s (value must be >0)", setting_name, key)
+            logger.warning("obs.llm.tool_budget_invalid_entry", setting_name=setting_name, tool=key, reason="value_not_positive")
             continue
         parsed[key] = value
     return parsed
@@ -87,8 +87,8 @@ class ToolBudgetConfig:
                 parsed_budget_units = int(raw_budget_units)
             except Exception:
                 logger.warning(
-                    "Invalid LLM_TOOL_BUDGET_UNITS_PER_TURN=%r; disabling weighted budget",
-                    raw_budget_units,
+                    "obs.llm.tool_budget_units_invalid",
+                    raw_value=raw_budget_units,
                 )
                 budget_units_per_turn = None
             else:

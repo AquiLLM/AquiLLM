@@ -63,7 +63,8 @@ class EpisodicMemory(models.Model):
                 self.embedding = get_embedding(self.content, input_type='search_document')
             except Exception as exc:
                 logger.warning(
-                    "Episodic memory embedding failed; saving without embedding. Error: %s",
-                    exc,
+                    "obs.memory.embedding_error",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
                 )
         super().save(*args, **kwargs)

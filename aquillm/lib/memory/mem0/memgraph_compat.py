@@ -469,22 +469,22 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
 
         if not node_similarity:
             logger.info(
-                "Memgraph graph search stats: strategy=%s candidate_limit=%d seed_names=%d "
-                "seed_tokens=%d fetched_candidates=%d score_mode=%s valid_candidates=%d "
-                "passed_threshold=%d query_nodes=%d fetch_ms=%.2f score_ms=%.2f edge_query_ms=%.2f total_ms=%.2f",
-                fetch_stats.get("strategy", "generic"),
-                int(fetch_stats.get("candidate_limit", 0)),
-                int(fetch_stats.get("seed_name_count", 0)),
-                int(fetch_stats.get("seed_token_count", 0)),
-                int(fetch_stats.get("fetched_candidate_count", 0)),
-                ",".join(sorted(set(score_modes))) if score_modes else "empty",
-                max_valid_candidates,
-                passed_threshold_total,
-                len(list(node_list or [])),
-                float(fetch_stats.get("fetch_ms", 0.0)),
-                score_ms_total,
-                0.0,
-                (time.perf_counter() - total_started_at) * 1000.0,
+                "obs.memory.graph_search_stats",
+                extra={
+                    "strategy": fetch_stats.get("strategy", "generic"),
+                    "candidate_limit": int(fetch_stats.get("candidate_limit", 0)),
+                    "seed_names": int(fetch_stats.get("seed_name_count", 0)),
+                    "seed_tokens": int(fetch_stats.get("seed_token_count", 0)),
+                    "fetched_candidates": int(fetch_stats.get("fetched_candidate_count", 0)),
+                    "score_mode": ",".join(sorted(set(score_modes))) if score_modes else "empty",
+                    "valid_candidates": max_valid_candidates,
+                    "passed_threshold": passed_threshold_total,
+                    "query_nodes": len(list(node_list or [])),
+                    "fetch_ms": float(fetch_stats.get("fetch_ms", 0.0)),
+                    "score_ms": score_ms_total,
+                    "edge_query_ms": 0.0,
+                    "total_ms": (time.perf_counter() - total_started_at) * 1000.0,
+                },
             )
             return []
 
@@ -523,22 +523,22 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
         result_relations.sort(key=lambda item: item.get("similarity", -1.0), reverse=True)
         edge_query_ms = (time.perf_counter() - edge_started_at) * 1000.0
         logger.info(
-            "Memgraph graph search stats: strategy=%s candidate_limit=%d seed_names=%d "
-            "seed_tokens=%d fetched_candidates=%d score_mode=%s valid_candidates=%d "
-            "passed_threshold=%d query_nodes=%d fetch_ms=%.2f score_ms=%.2f edge_query_ms=%.2f total_ms=%.2f",
-            fetch_stats.get("strategy", "generic"),
-            int(fetch_stats.get("candidate_limit", 0)),
-            int(fetch_stats.get("seed_name_count", 0)),
-            int(fetch_stats.get("seed_token_count", 0)),
-            int(fetch_stats.get("fetched_candidate_count", 0)),
-            ",".join(sorted(set(score_modes))) if score_modes else "empty",
-            max_valid_candidates,
-            passed_threshold_total,
-            len(list(node_list or [])),
-            float(fetch_stats.get("fetch_ms", 0.0)),
-            score_ms_total,
-            edge_query_ms,
-            (time.perf_counter() - total_started_at) * 1000.0,
+            "obs.memory.graph_search_stats",
+            extra={
+                "strategy": fetch_stats.get("strategy", "generic"),
+                "candidate_limit": int(fetch_stats.get("candidate_limit", 0)),
+                "seed_names": int(fetch_stats.get("seed_name_count", 0)),
+                "seed_tokens": int(fetch_stats.get("seed_token_count", 0)),
+                "fetched_candidates": int(fetch_stats.get("fetched_candidate_count", 0)),
+                "score_mode": ",".join(sorted(set(score_modes))) if score_modes else "empty",
+                "valid_candidates": max_valid_candidates,
+                "passed_threshold": passed_threshold_total,
+                "query_nodes": len(list(node_list or [])),
+                "fetch_ms": float(fetch_stats.get("fetch_ms", 0.0)),
+                "score_ms": score_ms_total,
+                "edge_query_ms": edge_query_ms,
+                "total_ms": (time.perf_counter() - total_started_at) * 1000.0,
+            },
         )
         return result_relations[:limit]
 
@@ -563,7 +563,7 @@ class CompatibleMemgraphMemoryGraph(UpstreamMemoryGraph):
         for item in to_be_added:
             prepared = prepare_graph_relation(item)
             if prepared is None:
-                logger.info("Dropping low-value graph relation candidate: %r", item)
+                logger.info("obs.memory.graph_relation_dropped", extra={"relation": item})
                 continue
 
             source = prepared["source"]

@@ -142,7 +142,7 @@ def load_collection_prompt_skills(user: Any, selected_collection_ids: Iterable[A
     limit = _max_chars()
     if limit and len(prompt) > limit:
         logger.info(
-            "collection_prompt_skills_truncated",
+            "obs.chat.collection_prompt_skills_truncated",
             user_id=getattr(user, "id", None),
             selected_collection_count=len(selected),
             skill_block_count=len(parts),
@@ -152,7 +152,7 @@ def load_collection_prompt_skills(user: Any, selected_collection_ids: Iterable[A
         prompt = prompt[:limit].rstrip()
     elif prompt:
         logger.info(
-            "collection_prompt_skills_loaded",
+            "obs.chat.collection_prompt_skills_loaded",
             user_id=getattr(user, "id", None),
             selected_collection_count=len(selected),
             skill_block_count=len(parts),

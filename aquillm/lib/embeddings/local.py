@@ -90,15 +90,13 @@ def _embed_local_with_context_retry(client: OpenAI, model: str, query: Any) -> l
                 next_candidate = _shrink_text_for_retry(candidate)
             if next_candidate == candidate:
                 break
-            token_note = f" (model limit={limit_tokens} tokens)" if limit_tokens else ""
             logger.warning(
-                "Local embed input exceeded context; retrying with shorter text %d -> %d chars "
-                "(attempt %d/%d)%s.",
-                len(candidate),
-                len(next_candidate),
-                attempt,
-                max_retries,
-                token_note,
+                "obs.embed.input_retry_truncate",
+                original_chars=len(candidate),
+                new_chars=len(next_candidate),
+                attempt=attempt,
+                max_retries=max_retries,
+                limit_tokens=limit_tokens,
             )
             candidate = next_candidate
     if last_exc is not None:
@@ -136,8 +134,9 @@ def get_embeddings_via_local_openai(queries: list[Any]) -> list[list[float]]:
         if not is_context_limit_error(exc):
             raise
         logger.warning(
-            "Local embed batch exceeded context limits; retrying per item with adaptive truncation. Error: %s",
-            exc,
+            "obs.embed.batch_context_retry",
+            error=str(exc),
+            error_type=type(exc).__name__,
         )
         return [_embed_local_with_context_retry(client, model, query) for query in queries]
 

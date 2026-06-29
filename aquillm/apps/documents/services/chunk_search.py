@@ -132,8 +132,9 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
         except Exception as exc:
             vector_error = str(exc)
             logger.warning(
-                "Vector embed/search failed; continuing with trigram-only retrieval. Error: %s",
-                exc,
+                "obs.rag.vector_search_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
             )
             vector_results = model_cls.objects.none()
             vector_ms = (perf_counter() - total_start) * 1000
@@ -180,18 +181,17 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             rerank_ms = (perf_counter() - rerank_start) * 1000
         total_ms = (perf_counter() - total_start) * 1000
         logger.info(
-            "text_chunk_search latency %.1fms (vector=%.1fms trigram=%.1fms exact=%.1fms rerank=%.1fms "
-            "docs=%d top_k=%d exact_terms=%d pre_dedupe=%d candidates=%d)",
-            total_ms,
-            vector_ms,
-            trigram_ms,
-            exact_ms,
-            rerank_ms,
-            len(docs),
-            top_k,
-            len(exact_terms),
-            pre_dedupe_count,
-            len(combined_candidates),
+            "obs.rag.search",
+            total_ms=total_ms,
+            vector_ms=vector_ms,
+            trigram_ms=trigram_ms,
+            exact_ms=exact_ms,
+            rerank_ms=rerank_ms,
+            doc_count=len(docs),
+            top_k=top_k,
+            exact_term_count=len(exact_terms),
+            pre_dedupe_count=pre_dedupe_count,
+            candidate_count=len(combined_candidates),
         )
         chunks_with_embeddings: int | None = None
         if not reranked_results:
@@ -223,13 +223,13 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             )
         return vector_results, trigram_results, reranked_results, diagnostics
     except DatabaseError as e:
-        logger.error(f"Database error during search: {str(e)}")
+        logger.error("obs.rag.search_db_error", error=str(e), error_type=type(e).__name__)
         raise e
     except ValidationError as e:
-        logger.error(f"Validation error during search: {str(e)}")
+        logger.error("obs.rag.search_validation_error", error=str(e), error_type=type(e).__name__)
         raise e
     except Exception as e:
-        logger.error(f"Unexpected error during search: {str(e)}")
+        logger.error("obs.rag.search_error", error=str(e), error_type=type(e).__name__)
         raise e
 
 

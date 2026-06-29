@@ -76,19 +76,20 @@ def sync_collections_with_hierarchy(
             if created:
                 collections_created += 1
                 logger.info(
-                    "Created collection: %s (parent: %s)",
-                    full_name,
-                    parent_collection.name if parent_collection else "None",
+                    "obs.zotero.collection_created",
+                    collection=full_name,
+                    parent=parent_collection.name if parent_collection else None,
                 )
             else:
                 collections_updated += 1
-                logger.debug("Collection already exists: %s", full_name)
+                logger.debug("obs.zotero.collection_exists", collection=full_name)
 
         except Exception as e:
             logger.error(
-                "Error syncing collection %s: %s",
-                zotero_col.get("key", "unknown"),
-                str(e),
+                "obs.zotero.collection_sync_error",
+                collection=zotero_col.get("key", "unknown"),
+                error=str(e),
+                error_type=type(e).__name__,
             )
             errors += 1
 

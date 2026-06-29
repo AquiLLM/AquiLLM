@@ -57,12 +57,12 @@ def convert_to_pdf(data: bytes, source_format: str, filename: str = "") -> bytes
     source_format = source_format.lower().strip().lstrip(".")
     
     if source_format not in CONVERTIBLE_FORMATS:
-        logger.debug("Format %s not supported for conversion", source_format)
+        logger.debug("obs.figures.unsupported_format", source_format=source_format)
         return None
-    
+
     libreoffice_cmd = _find_libreoffice()
     if not libreoffice_cmd:
-        logger.warning("LibreOffice not found; cannot convert %s to PDF", source_format)
+        logger.warning("obs.figures.libreoffice_not_found", source_format=source_format)
         return None
     
     # Use a temporary directory for conversion
@@ -89,17 +89,17 @@ def convert_to_pdf(data: bytes, source_format: str, filename: str = "") -> bytes
             
             if result.returncode != 0:
                 logger.warning(
-                    "LibreOffice conversion failed for %s: %s",
-                    filename or source_format,
-                    result.stderr.decode("utf-8", errors="replace")[:500],
+                    "obs.figures.convert_failed",
+                    filename=filename or source_format,
+                    stderr=result.stderr.decode("utf-8", errors="replace")[:500],
                 )
                 return None
-            
+
         except subprocess.TimeoutExpired:
-            logger.warning("LibreOffice conversion timed out for %s", filename or source_format)
+            logger.warning("obs.figures.convert_timeout", filename=filename or source_format)
             return None
         except subprocess.SubprocessError as exc:
-            logger.warning("LibreOffice conversion error for %s: %s", filename or source_format, exc)
+            logger.warning("obs.figures.convert_error", filename=filename or source_format, error=str(exc), error_type=type(exc).__name__)
             return None
         
         # Find the output PDF
@@ -110,19 +110,19 @@ def convert_to_pdf(data: bytes, source_format: str, filename: str = "") -> bytes
             if pdf_files:
                 output_path = pdf_files[0]
             else:
-                logger.warning("No PDF output found after conversion of %s", filename or source_format)
+                logger.warning("obs.figures.convert_no_output", filename=filename or source_format)
                 return None
-        
+
         pdf_bytes = output_path.read_bytes()
-        
+
         if len(pdf_bytes) < 100:
-            logger.warning("PDF output too small for %s", filename or source_format)
+            logger.warning("obs.figures.convert_output_too_small", filename=filename or source_format, byte_count=len(pdf_bytes))
             return None
-        
+
         logger.debug(
-            "Successfully converted %s to PDF (%d bytes)",
-            filename or source_format,
-            len(pdf_bytes),
+            "obs.figures.convert_success",
+            filename=filename or source_format,
+            byte_count=len(pdf_bytes),
         )
         return pdf_bytes
 

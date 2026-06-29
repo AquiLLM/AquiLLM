@@ -43,7 +43,7 @@ def extract_text_from_image(image_input: Any, convert_to_latex: bool = False) ->
             errors.append(f"qwen: {exc}")
             if provider == "qwen":
                 raise ValueError(f"OCR processing failed: {exc}") from exc
-            logger.warning("Qwen OCR failed; trying local OCR fallback. Error: %s", exc)
+            logger.warning("obs.ocr.provider_fallback", provider="qwen", fallback="local", error=str(exc), error_type=type(exc).__name__)
 
     if provider in {"auto", "local"}:
         try:
@@ -52,7 +52,7 @@ def extract_text_from_image(image_input: Any, convert_to_latex: bool = False) ->
             errors.append(f"local: {exc}")
             if provider == "local":
                 raise ValueError(f"OCR processing failed: {exc}") from exc
-            logger.warning("Local OCR failed; trying Gemini OCR fallback. Error: %s", exc)
+            logger.warning("obs.ocr.provider_fallback", provider="local", fallback="gemini", error=str(exc), error_type=type(exc).__name__)
 
     if provider in {"auto", "gemini"}:
         try:

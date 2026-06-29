@@ -15,7 +15,7 @@ def _load() -> str:
         with pyproject.open("rb") as f:
             return tomllib.load(f)["project"]["version"]
     except (OSError, KeyError, tomllib.TOMLDecodeError) as exc:
-        logger.warning("Could not read app version from %s: %s", pyproject, exc)
+        logger.warning("obs.core.app_version_read_failed", path=str(pyproject), error=str(exc), error_type=type(exc).__name__)
         return ""
 
 
