@@ -57,6 +57,7 @@ python-pptx
 ebooklib
 PyYAML
 PyMuPDF>=1.24.0
+prql-python
 llmlingua
 structlog>=24.1.0
 python-logging-loki>=0.3.1
