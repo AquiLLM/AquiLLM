@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { X, ExternalLink } from 'lucide-react';
-import type { CitationChunkDetail } from './citationTypes';
+import type { CitationChunkSummary } from './citationTypes';
 import CitationPinButton from './CitationPinButton';
 
 interface ImageCitationModalProps {
@@ -10,7 +10,7 @@ interface ImageCitationModalProps {
    *  modal signature with the PDF/text modals. */
   messageUuid?: string;
   /** Chunk prefetched by the provider; image chunks are always preloaded. */
-  preloadedChunk?: CitationChunkDetail | null;
+  preloadedChunk?: CitationChunkSummary | null;
   onClose: () => void;
   /** Pin state for the slide-out panel. */
   pinned?: boolean;

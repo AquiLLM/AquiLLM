@@ -1,6 +1,6 @@
 import React, { createContext, lazy, Suspense, useCallback, useContext, useEffect, useState } from 'react';
 import formatUrl from '../../../utils/formatUrl';
-import type { CitationChunkDetail } from './citationTypes';
+import type { CitationChunkDetail, CitationChunkSummary } from './citationTypes';
 
 // Lazy-loaded to keep react-pdf / pdfjs-dist (which use `import.meta`) out
 // of the main bundle. main.js is loaded as a classic <script>, so any
@@ -40,6 +40,53 @@ interface CitationModalContextValue {
 const CitationModalContext = createContext<CitationModalContextValue | null>(null);
 
 const PIN_STORAGE_KEY = 'aquillm.citationPanel.pinned';
+const CITATION_OPEN_START_MARK = 'aquillm:citation:open-start';
+const CITATION_COMPACT_READY_MARK = 'aquillm:citation:compact-ready';
+const CITATION_COMPACT_MEASURE = 'aquillm:citation:compact-metadata';
+
+function markCitationOpenStart(): void {
+  if (!import.meta.env.DEV || typeof performance === 'undefined') return;
+  try {
+    if (typeof performance.clearMarks === 'function') {
+      performance.clearMarks(CITATION_OPEN_START_MARK);
+      performance.clearMarks(CITATION_COMPACT_READY_MARK);
+    }
+    if (typeof performance.clearMeasures === 'function') {
+      performance.clearMeasures(CITATION_COMPACT_MEASURE);
+    }
+    if (typeof performance.mark === 'function') {
+      performance.mark(CITATION_OPEN_START_MARK);
+    }
+  } catch {
+    // User Timing is diagnostic-only and must never block opening a citation.
+  }
+}
+
+function markCitationCompactReady(): void {
+  if (!import.meta.env.DEV || typeof performance === 'undefined') return;
+  try {
+    if (typeof performance.mark !== 'function') return;
+    performance.mark(CITATION_COMPACT_READY_MARK);
+    if (typeof performance.measure === 'function') {
+      performance.measure(
+        CITATION_COMPACT_MEASURE,
+        CITATION_OPEN_START_MARK,
+        CITATION_COMPACT_READY_MARK,
+      );
+    }
+  } catch {
+    // Some browsers throw when marks are missing or User Timing is restricted.
+  }
+}
+
+function compactChunkDetailUrl(url: string): string {
+  const parsed = new URL(url, window.location.href);
+  parsed.searchParams.set('include_full_text', '0');
+  if (/^[a-z][a-z\d+.-]*:/i.test(url) || url.startsWith('//')) {
+    return parsed.toString();
+  }
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
 
 export function useCitationModal(): CitationModalContextValue {
   const ctx = useContext(CitationModalContext);
@@ -66,7 +113,10 @@ export const CitationModalProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   });
 
-  const openCitation = useCallback((next: CitationTarget) => setTarget(next), []);
+  const openCitation = useCallback((next: CitationTarget) => {
+    markCitationOpenStart();
+    setTarget(next);
+  }, []);
   const closeCitation = useCallback(() => setTarget(null), []);
   const togglePin = useCallback(() => {
     setPinned((prev) => {
@@ -97,7 +147,8 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
   onClose,
 }) => {
   const { pinned, togglePin } = useCitationModal();
-  const [chunk, setChunk] = useState<CitationChunkDetail | null>(null);
+  const [summary, setSummary] = useState<CitationChunkSummary | null>(null);
+  const [detail, setDetail] = useState<CitationChunkDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Distinct from a transient error: the chunk/document no longer exists
   // (deleted after the message was written) → a dead-end, so we show a
@@ -105,33 +156,58 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
   const [gone, setGone] = useState(false);
 
   useEffect(() => {
-    setChunk(null);
+    setSummary(null);
+    setDetail(null);
     setError(null);
     setGone(false);
-    let cancelled = false;
     const apiPattern = window.apiUrls?.api_chunk_detail;
     if (!apiPattern) {
       setError('Chunk detail API not configured.');
       return;
     }
-    const url = formatUrl(apiPattern, { chunk_id: target.chunkId });
-    fetch(url, { credentials: 'include' })
-      .then((r) => {
-        if (r.status === 404) {
+    const controller = new AbortController();
+    let cancelled = false;
+    const detailUrl = formatUrl(apiPattern, { chunk_id: target.chunkId });
+
+    const loadCitation = async () => {
+      try {
+        const compactResponse = await fetch(compactChunkDetailUrl(detailUrl), {
+          credentials: 'include',
+          signal: controller.signal,
+        });
+        if (compactResponse.status === 404) {
           if (!cancelled) setGone(true);
-          return null;
+          return;
         }
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data: CitationChunkDetail | null) => {
-        if (!cancelled && data) setChunk(data);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err?.message || 'Failed to load chunk.');
-      });
+        if (!compactResponse.ok) throw new Error(`HTTP ${compactResponse.status}`);
+        const compactChunk = (await compactResponse.json()) as CitationChunkSummary;
+        if (cancelled) return;
+        markCitationCompactReady();
+        setSummary(compactChunk);
+
+        if (compactChunk.modality === 'image' || compactChunk.document.has_pdf) return;
+
+        const detailResponse = await fetch(detailUrl, {
+          credentials: 'include',
+          signal: controller.signal,
+        });
+        if (detailResponse.status === 404) {
+          if (!cancelled) setGone(true);
+          return;
+        }
+        if (!detailResponse.ok) throw new Error(`HTTP ${detailResponse.status}`);
+        const fullChunk = (await detailResponse.json()) as CitationChunkDetail;
+        if (!cancelled) setDetail(fullChunk);
+      } catch (err) {
+        if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) return;
+        setError(err instanceof Error && err.message ? err.message : 'Failed to load chunk.');
+      }
+    };
+
+    void loadCitation();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [target.chunkId]);
 
@@ -160,32 +236,58 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
     );
   }
 
-  if (!chunk) {
+  if (summary?.modality === 'image') {
     return (
-      <div className="bg-scheme-shade_3 h-full flex items-center justify-center text-text-low_contrast text-sm">
-        Loading citation…
-      </div>
+      <Suspense fallback={null}>
+        <ImageCitationModal
+          docId={target.docId}
+          chunkId={target.chunkId}
+          messageUuid={target.messageUuid}
+          preloadedChunk={summary}
+          onClose={onClose}
+          pinned={pinned}
+          onTogglePin={togglePin}
+        />
+      </Suspense>
     );
   }
 
-  const Modal =
-    chunk.modality === 'image'
-      ? ImageCitationModal
-      : chunk.document.has_pdf
-        ? PDFCitationModal
-        : TextCitationModal;
+  if (summary?.document.has_pdf) {
+    return (
+      <Suspense fallback={null}>
+        <PDFCitationModal
+          docId={target.docId}
+          chunkId={target.chunkId}
+          messageUuid={target.messageUuid}
+          preloadedChunk={summary}
+          onClose={onClose}
+          pinned={pinned}
+          onTogglePin={togglePin}
+        />
+      </Suspense>
+    );
+  }
+
+  if (detail) {
+    return (
+      <Suspense fallback={null}>
+        <TextCitationModal
+          docId={target.docId}
+          chunkId={target.chunkId}
+          messageUuid={target.messageUuid}
+          preloadedChunk={detail}
+          onClose={onClose}
+          pinned={pinned}
+          onTogglePin={togglePin}
+        />
+      </Suspense>
+    );
+  }
+
   return (
-    <Suspense fallback={null}>
-      <Modal
-        docId={target.docId}
-        chunkId={target.chunkId}
-        messageUuid={target.messageUuid}
-        preloadedChunk={chunk}
-        onClose={onClose}
-        pinned={pinned}
-        onTogglePin={togglePin}
-      />
-    </Suspense>
+    <div className="bg-scheme-shade_3 h-full flex items-center justify-center text-text-low_contrast text-sm">
+      Loading citation…
+    </div>
   );
 };
 
@@ -205,7 +307,13 @@ export const CitationPanelSlot: React.FC = () => {
       style={{ width: isOpen ? CITATION_PANEL_WIDTH : 0 }}
     >
       <div className="h-full" style={{ width: CITATION_PANEL_WIDTH }}>
-        {target && <CitationDispatcher target={target} onClose={closeCitation} />}
+        {target && (
+          <CitationDispatcher
+            key={JSON.stringify([target.docId, target.chunkId, target.messageUuid ?? null])}
+            target={target}
+            onClose={closeCitation}
+          />
+        )}
       </div>
     </div>
   );

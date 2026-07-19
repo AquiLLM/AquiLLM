@@ -9,7 +9,7 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 
 from apps.collections.models import Collection
-from apps.documents.models import Document, TextChunk
+from apps.documents.models import DESCENDED_FROM_DOCUMENT, Document, TextChunk
 from apps.documents.services.citation_narrow import narrow_citation
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -85,6 +85,18 @@ FULL_TEXT_WINDOW_THRESHOLD = 500_000
 FULL_TEXT_WINDOW_PADDING = 5_000
 
 
+def _get_chunk_document(chunk, *, include_full_text):
+    if include_full_text:
+        return chunk.document
+
+    for doc_type in DESCENDED_FROM_DOCUMENT:
+        doc = doc_type.objects.defer("full_text").filter(id=chunk.doc_id).first()
+        if doc:
+            return doc
+
+    raise ValidationError(f"TextChunk {chunk.pk} is not associated with a document!")
+
+
 @require_http_methods(["GET"])
 @login_required
 def chunk_detail(request, chunk_id):
@@ -98,8 +110,13 @@ def chunk_detail(request, chunk_id):
     if not chunk:
         return JsonResponse({"error": "Chunk not found"}, status=404)
 
+    include_full_text = request.GET.get("include_full_text", "1").lower() not in {
+        "0",
+        "false",
+        "no",
+    }
     try:
-        doc = chunk.document
+        doc = _get_chunk_document(chunk, include_full_text=include_full_text)
     except ValidationError:
         return JsonResponse({"error": "Chunk's document not found"}, status=404)
 
@@ -113,14 +130,24 @@ def chunk_detail(request, chunk_id):
         getattr(doc, "pdf_file", None) or getattr(doc, "rendered_pdf", None)
     )
 
-    full_text = doc.full_text or ""
-    text_offset = 0
-    # Window very long docs around the chunk so the response stays bounded.
-    if len(full_text) > FULL_TEXT_WINDOW_THRESHOLD:
-        window_start = max(0, chunk.start_position - FULL_TEXT_WINDOW_PADDING)
-        window_end = min(len(full_text), chunk.end_position + FULL_TEXT_WINDOW_PADDING)
-        full_text = full_text[window_start:window_end]
-        text_offset = window_start
+    document_payload = {
+        "id": str(doc.id),
+        "title": doc.title,
+        "type": doc.__class__.__name__,
+        "has_pdf": has_pdf,
+        "source_url": getattr(doc, "source_url", None),
+    }
+    if include_full_text:
+        full_text = doc.full_text or ""
+        text_offset = 0
+        # Window very long docs around the chunk so the response stays bounded.
+        if len(full_text) > FULL_TEXT_WINDOW_THRESHOLD:
+            window_start = max(0, chunk.start_position - FULL_TEXT_WINDOW_PADDING)
+            window_end = min(len(full_text), chunk.end_position + FULL_TEXT_WINDOW_PADDING)
+            full_text = full_text[window_start:window_end]
+            text_offset = window_start
+        document_payload["full_text"] = full_text
+        document_payload["text_offset"] = text_offset
 
     # Image chunks point at a DocumentFigure (a Document subclass) whose binary
     # is served by the document_image view; the modal renders it directly.
@@ -136,15 +163,7 @@ def chunk_detail(request, chunk_id):
         "start_time": chunk.start_time,
         "modality": chunk.modality,
         "image_url": image_url,
-        "document": {
-            "id": str(doc.id),
-            "title": doc.title,
-            "type": doc.__class__.__name__,
-            "has_pdf": has_pdf,
-            "source_url": getattr(doc, "source_url", None),
-            "full_text": full_text,
-            "text_offset": text_offset,
-        },
+        "document": document_payload,
     })
 
 

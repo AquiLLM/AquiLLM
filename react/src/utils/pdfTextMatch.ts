@@ -256,6 +256,154 @@ export interface DocumentMatchResult {
   pageHighlights: Map<number, PageHighlightRange>;
 }
 
+interface DocumentPage {
+  pageNumber: number;
+  items: PDFTextItemLike[];
+}
+
+interface IndexedPage {
+  pageNumber: number;
+  index: PageIndex;
+}
+
+interface DocumentAnchorMatch extends IndexedPage {
+  match: AnchorMatch;
+}
+
+export interface IncrementalDocumentLocator {
+  /** Add the next extracted page, returning as soon as the full range is known. */
+  pushPage(page: DocumentPage): DocumentMatchResult | null;
+  /** Signal EOF and return the missing-end fallback when only the start matched. */
+  finish(): DocumentMatchResult | null;
+}
+
+class StatefulIncrementalDocumentLocator implements IncrementalDocumentLocator {
+  private readonly startAnchor: string;
+  private readonly endAnchor: string | null;
+  private startInfo: DocumentAnchorMatch | null = null;
+  private readonly pagesFromStart: IndexedPage[] = [];
+  private completed = false;
+  private completedResult: DocumentMatchResult | null = null;
+
+  constructor(query: string) {
+    const trimmed = query.trim();
+    this.startAnchor = pickStartAnchor(trimmed);
+    this.endAnchor = trimmed.length > MAX_ANCHOR_LEN ? pickEndAnchor(trimmed) : null;
+
+    if (trimmed.length < MIN_ANCHOR_LEN) {
+      this.completed = true;
+    }
+  }
+
+  pushPage(page: DocumentPage): DocumentMatchResult | null {
+    if (this.completed) return cloneDocumentMatchResult(this.completedResult);
+
+    const indexedPage: IndexedPage = {
+      pageNumber: page.pageNumber,
+      index: buildPageIndex(page.items),
+    };
+
+    if (!this.startInfo) {
+      const startMatch = findAnchor(indexedPage.index, this.startAnchor);
+      if (!startMatch) return null;
+
+      this.startInfo = { ...indexedPage, match: startMatch };
+      this.pagesFromStart.push(indexedPage);
+
+      if (!this.endAnchor) {
+        return this.complete({
+          startPage: page.pageNumber,
+          pageHighlights: new Map([[page.pageNumber, {
+            firstItem: startMatch.firstItem,
+            lastItem: startMatch.lastItem,
+          }]]),
+        });
+      }
+
+      const endMatch = findAnchor(indexedPage.index, this.endAnchor, startMatch.lastItem);
+      if (endMatch) {
+        return this.complete(this.buildCompletedResult({ ...indexedPage, match: endMatch }));
+      }
+      return null;
+    }
+
+    if (page.pageNumber < this.startInfo.pageNumber) return null;
+
+    this.pagesFromStart.push(indexedPage);
+    const endMatch = findAnchor(indexedPage.index, this.endAnchor!, 0);
+    if (!endMatch) return null;
+
+    return this.complete(this.buildCompletedResult({ ...indexedPage, match: endMatch }));
+  }
+
+  finish(): DocumentMatchResult | null {
+    if (this.completed) return cloneDocumentMatchResult(this.completedResult);
+
+    if (!this.startInfo) return this.complete(null);
+
+    return this.complete({
+      startPage: this.startInfo.pageNumber,
+      pageHighlights: new Map([[this.startInfo.pageNumber, {
+        firstItem: this.startInfo.match.firstItem,
+        lastItem: this.startInfo.index.itemCount - 1,
+      }]]),
+    });
+  }
+
+  private buildCompletedResult(endInfo: DocumentAnchorMatch): DocumentMatchResult {
+    const startInfo = this.startInfo!;
+    const pageHighlights = new Map<number, PageHighlightRange>();
+
+    if (endInfo.pageNumber === startInfo.pageNumber) {
+      pageHighlights.set(startInfo.pageNumber, {
+        firstItem: startInfo.match.firstItem,
+        lastItem: Math.max(startInfo.match.lastItem, endInfo.match.lastItem),
+      });
+      return { startPage: startInfo.pageNumber, pageHighlights };
+    }
+
+    pageHighlights.set(startInfo.pageNumber, {
+      firstItem: startInfo.match.firstItem,
+      lastItem: startInfo.index.itemCount - 1,
+    });
+    for (const page of this.pagesFromStart) {
+      if (page.pageNumber > startInfo.pageNumber && page.pageNumber < endInfo.pageNumber) {
+        pageHighlights.set(page.pageNumber, {
+          firstItem: 0,
+          lastItem: page.index.itemCount - 1,
+        });
+      }
+    }
+    pageHighlights.set(endInfo.pageNumber, {
+      firstItem: 0,
+      lastItem: endInfo.match.lastItem,
+    });
+
+    return { startPage: startInfo.pageNumber, pageHighlights };
+  }
+
+  private complete(result: DocumentMatchResult | null): DocumentMatchResult | null {
+    this.completed = true;
+    this.completedResult = result;
+    return cloneDocumentMatchResult(result);
+  }
+}
+
+function cloneDocumentMatchResult(result: DocumentMatchResult | null): DocumentMatchResult | null {
+  if (!result) return null;
+
+  return {
+    startPage: result.startPage,
+    pageHighlights: new Map(
+      Array.from(result.pageHighlights, ([pageNumber, range]) => [pageNumber, { ...range }]),
+    ),
+  };
+}
+
+export function createIncrementalDocumentLocator(query: string): IncrementalDocumentLocator {
+  return new StatefulIncrementalDocumentLocator(query);
+}
+
 /**
  * Locate a chunk across an entire document and return per-page highlight
  * ranges. Handles the case where a chunk spans page boundaries:
@@ -269,102 +417,15 @@ export interface DocumentMatchResult {
  * extend to the end of the start page only.
  */
 export function locateAcrossDocument(
-  pages: Array<{ pageNumber: number; items: PDFTextItemLike[] }>,
+  pages: DocumentPage[],
   query: string,
 ): DocumentMatchResult | null {
-  const trimmed = query.trim();
-  if (trimmed.length < MIN_ANCHOR_LEN) return null;
-
-  const indices = new Map<number, PageIndex>();
-  const getIdx = (pageNumber: number, items: PDFTextItemLike[]): PageIndex => {
-    let idx = indices.get(pageNumber);
-    if (!idx) {
-      idx = buildPageIndex(items);
-      indices.set(pageNumber, idx);
-    }
-    return idx;
-  };
-
-  const startAnchor = pickStartAnchor(trimmed);
-
-  let startInfo:
-    | { pageNumber: number; index: PageIndex; match: AnchorMatch }
-    | null = null;
+  const locator = createIncrementalDocumentLocator(query);
   for (const page of pages) {
-    const idx = getIdx(page.pageNumber, page.items);
-    const m = findAnchor(idx, startAnchor);
-    if (m) {
-      startInfo = { pageNumber: page.pageNumber, index: idx, match: m };
-      break;
-    }
+    const result = locator.pushPage(page);
+    if (result) return result;
   }
-  if (!startInfo) return null;
-
-  const pageHighlights = new Map<number, PageHighlightRange>();
-
-  // Short query: anchor covers the whole chunk on one page.
-  if (trimmed.length <= MAX_ANCHOR_LEN) {
-    pageHighlights.set(startInfo.pageNumber, {
-      firstItem: startInfo.match.firstItem,
-      lastItem: startInfo.match.lastItem,
-    });
-    return { startPage: startInfo.pageNumber, pageHighlights };
-  }
-
-  const endAnchor = pickEndAnchor(trimmed);
-
-  let endInfo:
-    | { pageNumber: number; index: PageIndex; match: AnchorMatch }
-    | null = null;
-  for (const page of pages) {
-    if (page.pageNumber < startInfo.pageNumber) continue;
-    const idx = getIdx(page.pageNumber, page.items);
-    const minItem = page.pageNumber === startInfo.pageNumber ? startInfo.match.lastItem : 0;
-    const m = findAnchor(idx, endAnchor, minItem);
-    if (m) {
-      endInfo = { pageNumber: page.pageNumber, index: idx, match: m };
-      break;
-    }
-  }
-
-  if (!endInfo) {
-    // Couldn't find end anchor; highlight from start anchor through end of
-    // start page (chunk likely continues but we can't confirm where).
-    pageHighlights.set(startInfo.pageNumber, {
-      firstItem: startInfo.match.firstItem,
-      lastItem: startInfo.index.itemCount - 1,
-    });
-    return { startPage: startInfo.pageNumber, pageHighlights };
-  }
-
-  if (endInfo.pageNumber === startInfo.pageNumber) {
-    pageHighlights.set(startInfo.pageNumber, {
-      firstItem: startInfo.match.firstItem,
-      lastItem: Math.max(startInfo.match.lastItem, endInfo.match.lastItem),
-    });
-    return { startPage: startInfo.pageNumber, pageHighlights };
-  }
-
-  // Cross-page: highlight tail of start page, all of middle pages, head of end page.
-  pageHighlights.set(startInfo.pageNumber, {
-    firstItem: startInfo.match.firstItem,
-    lastItem: startInfo.index.itemCount - 1,
-  });
-  for (const page of pages) {
-    if (page.pageNumber > startInfo.pageNumber && page.pageNumber < endInfo.pageNumber) {
-      const idx = getIdx(page.pageNumber, page.items);
-      pageHighlights.set(page.pageNumber, {
-        firstItem: 0,
-        lastItem: idx.itemCount - 1,
-      });
-    }
-  }
-  pageHighlights.set(endInfo.pageNumber, {
-    firstItem: 0,
-    lastItem: endInfo.match.lastItem,
-  });
-
-  return { startPage: startInfo.pageNumber, pageHighlights };
+  return locator.finish();
 }
 
 function collectItemIndices(first: number, last: number): PDFMatchResult {
