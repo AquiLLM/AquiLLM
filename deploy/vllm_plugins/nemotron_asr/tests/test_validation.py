@@ -25,9 +25,9 @@ class FakeTranscriptionRequest:
     response_format: str = "json"
     temperature: float | None = None
     timestamp_granularities: list[str] | None = None
-    stream: bool = False
-    stream_include_usage: bool = False
-    stream_continuous_usage_stats: bool = False
+    stream: bool | None = False
+    stream_include_usage: bool | None = False
+    stream_continuous_usage_stats: bool | None = False
     include_stop_str_in_output: bool = False
     max_completion_tokens: int | None = None
     top_p: float | None = None
@@ -40,7 +40,7 @@ class FakeTranscriptionRequest:
     length_penalty: float | None = None
     n: int = 1
     use_beam_search: bool = False
-    hotwords: str | list[str] | None = None
+    hotwords: str | None = None
     to_language: str | None = None
     vllm_xargs: dict[str, Any] | None = None
 
@@ -50,6 +50,20 @@ class FakeTranscriptionRequest:
     [
         FakeTranscriptionRequest(),
         FakeTranscriptionRequest(response_format="text", language="en"),
+        FakeTranscriptionRequest(
+            prompt="",
+            hotwords="",
+            temperature=0,
+            to_language="",
+            vllm_xargs={},
+            timestamp_granularities=[],
+            stream=False,
+            stream_include_usage=False,
+            stream_continuous_usage_stats=False,
+        ),
+        FakeTranscriptionRequest(stream=None),
+        FakeTranscriptionRequest(stream_include_usage=None),
+        FakeTranscriptionRequest(stream_continuous_usage_stats=None),
         FakeTranscriptionRequest(
             language="de",
             top_p=0.3,
@@ -90,17 +104,11 @@ def test_validate_request_accepts_the_supported_policy(
         ("transcribe", {"n": 2}, 1.0, "n"),
         ("transcribe", {"prompt": "context"}, 1.0, "prompt"),
         ("transcribe", {"hotwords": "AquiLLM"}, 1.0, "hotwords"),
+        ("transcribe", {"hotwords": []}, 1.0, "hotwords"),
+        ("transcribe", {"vllm_xargs": []}, 1.0, "vllm_xargs"),
         ("transcribe", {"stream": True}, 1.0, "stream"),
-        ("transcribe", {"stream": None}, 1.0, "stream"),
         ("transcribe", {"stream_include_usage": True}, 1.0, "stream_include_usage"),
-        ("transcribe", {"stream_include_usage": None}, 1.0, "stream_include_usage"),
         ("transcribe", {"stream_continuous_usage_stats": True}, 1.0, "stream_continuous_usage_stats"),
-        (
-            "transcribe",
-            {"stream_continuous_usage_stats": None},
-            1.0,
-            "stream_continuous_usage_stats",
-        ),
         ("transcribe", {"response_format": "verbose_json"}, 1.0, "response_format"),
         ("transcribe", {"response_format": "srt"}, 1.0, "response_format"),
         ("transcribe", {"response_format": "vtt"}, 1.0, "response_format"),

@@ -89,7 +89,7 @@ _DEFAULT_LOCALES = {
     "pt": "pt-BR",
     "zh": "zh-CN",
 }
-_SUPPORTED_CHOICES = ", ".join(("auto", *PRODUCTION_LOCALES))
+_PRODUCTION_CHOICES = ("auto", *PRODUCTION_LOCALES)
 
 
 def adaptation_languages_enabled(
@@ -102,7 +102,15 @@ def adaptation_languages_enabled(
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _language_error(value: Any, *, adaptation: bool = False) -> RequestValidationError:
+def _language_error(
+    value: Any,
+    *,
+    adaptation: bool = False,
+    allow_adaptation: bool = False,
+) -> RequestValidationError:
+    supported_choices = ", ".join(
+        (*_PRODUCTION_CHOICES, *(ADAPTATION_LOCALES if allow_adaptation else ()))
+    )
     detail = (
         " This locale is adaptation-ready; set "
         "NEMOTRON_ASR_ALLOW_ADAPTATION_LANGUAGES=1 to allow it."
@@ -112,7 +120,7 @@ def _language_error(value: Any, *, adaptation: bool = False) -> RequestValidatio
     return RequestValidationError(
         "language",
         value,
-        f"Unsupported language {value!r}; supported choices: {_SUPPORTED_CHOICES}.{detail}",
+        f"Unsupported language {value!r}; supported choices: {supported_choices}.{detail}",
     )
 
 
@@ -121,7 +129,7 @@ def normalize_language(value: str | None, *, allow_adaptation: bool = False) -> 
     if value is None:
         return "auto"
     if not isinstance(value, str):
-        raise _language_error(value)
+        raise _language_error(value, allow_adaptation=allow_adaptation)
 
     candidate = value.strip()
     if not candidate or candidate.lower() == "auto":
@@ -136,7 +144,7 @@ def normalize_language(value: str | None, *, allow_adaptation: bool = False) -> 
     if adaptation_locale is not None:
         if allow_adaptation:
             return adaptation_locale
-        raise _language_error(value, adaptation=True)
+        raise _language_error(value, adaptation=True, allow_adaptation=allow_adaptation)
 
     if "-" not in key:
         default_locale = _DEFAULT_LOCALES.get(key)
@@ -151,6 +159,6 @@ def normalize_language(value: str | None, *, allow_adaptation: bool = False) -> 
         if len(adaptation_locales) == 1:
             if allow_adaptation:
                 return adaptation_locales[0]
-            raise _language_error(value, adaptation=True)
+            raise _language_error(value, adaptation=True, allow_adaptation=allow_adaptation)
 
-    raise _language_error(value)
+    raise _language_error(value, allow_adaptation=allow_adaptation)

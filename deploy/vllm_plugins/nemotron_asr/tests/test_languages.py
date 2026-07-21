@@ -175,6 +175,15 @@ def test_normalize_language_rejects_unknown_values_with_actionable_error(
     assert repr(value) in error.value.message
     assert "supported choices" in error.value.message
     assert "en-US" in error.value.message
+    assert all(locale not in error.value.message for locale in EXPECTED_ADAPTATION_LOCALES)
+
+
+def test_unknown_language_with_adaptation_enabled_lists_adaptation_choices() -> None:
+    with pytest.raises(RequestValidationError) as error:
+        normalize_language("klingon", allow_adaptation=True)
+
+    assert error.value.parameter == "language"
+    assert all(locale in error.value.message for locale in EXPECTED_ADAPTATION_LOCALES)
 
 
 @pytest.mark.parametrize(

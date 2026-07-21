@@ -35,7 +35,7 @@ def validate_request(
         raise _unsupported("to_language", to_language, "translation is not supported")
 
     vllm_xargs = _request_value(request, "vllm_xargs", None)
-    if vllm_xargs not in (None, {}, []):
+    if vllm_xargs is not None and (not isinstance(vllm_xargs, dict) or vllm_xargs):
         raise _unsupported("vllm_xargs", vllm_xargs, "custom vLLM arguments are not supported")
 
     max_completion_tokens = _request_value(request, "max_completion_tokens", None)
@@ -73,15 +73,15 @@ def validate_request(
         raise _unsupported("prompt", prompt, "prompts are not supported")
 
     hotwords = _request_value(request, "hotwords", None)
-    if hotwords not in (None, "", []):
+    if hotwords not in (None, ""):
         raise _unsupported("hotwords", hotwords, "hotwords are not supported")
 
     stream = _request_value(request, "stream", False)
-    if stream is not False:
+    if stream is not False and stream is not None:
         raise _unsupported("stream", stream, "streaming is not supported")
 
     stream_include_usage = _request_value(request, "stream_include_usage", False)
-    if stream_include_usage is not False:
+    if stream_include_usage is not False and stream_include_usage is not None:
         raise _unsupported(
             "stream_include_usage",
             stream_include_usage,
@@ -91,7 +91,7 @@ def validate_request(
     stream_continuous_usage_stats = _request_value(
         request, "stream_continuous_usage_stats", False
     )
-    if stream_continuous_usage_stats is not False:
+    if stream_continuous_usage_stats is not False and stream_continuous_usage_stats is not None:
         raise _unsupported(
             "stream_continuous_usage_stats",
             stream_continuous_usage_stats,
