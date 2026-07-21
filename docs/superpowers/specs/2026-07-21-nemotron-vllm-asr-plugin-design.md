@@ -173,10 +173,14 @@ not be overwritten wholesale.
 3. The Nemotron processor resamples to 16 kHz and creates the checkpoint's
    128-bin log-mel features and attention mask.
 4. `get_generation_prompt()` returns an `ExplicitEncoderDecoderPrompt` with
-   the audio in the encoder prompt, blank token `13087` as the one-token
-   decoder prompt, and per-request `mm_processor_kwargs={"language": locale}`.
-   The processor maps the locale to `prompt_ids`. Missing language maps to
-   `auto` rather than the Transformers pipeline's English default.
+   an `encoder_prompt=TextPrompt(...)` that contains both
+   `multi_modal_data={"audio": (waveform, 16000)}` and per-request
+   `mm_processor_kwargs={"language": locale}`, plus blank token `13087` as the
+   one-token `decoder_prompt=TokensPrompt(...)`. These fields are nested inside
+   the encoder singleton prompt; `ExplicitEncoderDecoderPrompt` itself contains
+   only `encoder_prompt` and `decoder_prompt`. The processor maps the locale to
+   `prompt_ids`. Missing language maps to `auto` rather than the Transformers
+   pipeline's English default.
 5. The FastConformer encoder processes the complete utterance once.
 6. The Transformers-compatible greedy RNNT algorithm emits the transcript
    sequence. Blank token `13087` advances the encoder frame; nonblank tokens
@@ -184,13 +188,13 @@ not be overwritten wholesale.
 7. `embed_multimodal()` derives each item's valid encoder-frame length from the
    post-encoder attention mask, crops the corresponding encoder tensor to that
    length, and returns only the cropped tensors accepted by vLLM 0.21's
-   `MultiModalEmbeddings` interface. On the required V1 encoder-decoder path,
-   vLLM reruns this encoder for every request; the cache manager does not reuse
-   encoder output. The real request's `forward()` prefill call receives the
-   cropped output, performs RNNT greedy decoding, atomically replaces the
-   previous sequence, and appends a dedicated terminal token. Profiling/dummy
-   calls may create provisional state, but the first real prefill must overwrite
-   it atomically before any user-visible replay.
+   `MultiModalEmbeddings` interface. The real request's `forward()` prefill call
+   receives the cropped encoder output whether vLLM computed it for this call
+   or recovered it from its multimodal content-hash cache. That prefill performs
+   RNNT greedy decoding, atomically replaces the previous sequence, and appends
+   a dedicated terminal token. Profiling/dummy calls may create provisional
+   state, but every real prefill must overwrite it atomically before any
+   user-visible replay.
 8. Decode positions are derived from vLLM's absolute `positions` tensor and
    the one-token decoder prompt, never from a mutable counter. Positions inside
    the transcript force the corresponding token; the next and all later
@@ -209,9 +213,10 @@ not be overwritten wholesale.
 `max-num-seqs=1` and V1 make model-local state safe only when combined with
 these rules. Each real prefill atomically overwrites state, positions rather
 than a call counter select replay tokens, and cancellation/abort is followed by
-a fresh prefill before any subsequent replay. Duplicate audio still reruns the
-encoder on this path. The plugin must fail fast if V2 is enabled. If vLLM 0.21
-does not expose enough lifecycle information to prove these invariants,
+a fresh prefill before any subsequent replay. Duplicate audio must rebuild
+replay state correctly even when the multimodal encoder output comes from
+vLLM's content-hash cache. The plugin must fail fast if V2 is enabled. If vLLM
+0.21 does not expose enough lifecycle information to prove these invariants,
 `compat.py` will add the smallest version-gated state lifecycle hook; this is a
 planned deliverable, not an untracked fallback.
 
@@ -339,9 +344,10 @@ documentation will identify the model license.
    processor kwargs, prompt ID, and FP32 dtype.
 6. Verify omitted-language auto detection, explicit language, invalid language,
    and the complete request-validation matrix through HTTP.
-7. Submit different sequential utterances, duplicate audio, and an aborted
-   request followed by a successful request; verify V1 reruns the encoder and
-   no transcript or language state leaks.
+7. Submit different sequential utterances, duplicate audio through a confirmed
+   multimodal encoder-cache hit, and an aborted request followed by a successful
+   request; verify every real prefill rebuilds replay state and no transcript or
+   language state leaks.
 8. Prove 389/390-second acceptance and 391-second rejection without truncation.
 9. Reconfigure the same image with the complete documented Whisper environment
    block and verify the rollback endpoint.
