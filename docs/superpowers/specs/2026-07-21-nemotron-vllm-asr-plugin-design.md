@@ -30,11 +30,17 @@ later milestone.
 - Run eagerly with one active sequence in the initial implementation. This
   avoids request-state corruption until an upstream-compatible request-scoped
   model-state hook is proven.
+- Require vLLM 0.21's default V1 runner (`VLLM_USE_V2_MODEL_RUNNER=0`). The V2
+  runner's transcription state is Whisper-specific and is not part of this
+  first release.
 - Treat omitted language as automatic detection. An optional ingestion
   language setting may pass an explicit locale.
 - Keep the no-GPU development profile on hosted `whisper-1`.
 - Use operational rollback, not automatic dual-model retry. Automatic fallback
   would require another resident model and is outside this scope.
+- Pin Transformers to `5.13.0` and the Hugging Face checkpoint revision to
+  `f3d333391852ba876df169dcc9ba902d25b6ab0b`. Record the base image's Torch,
+  tokenizers, and CUDA versions during the build so dependency drift is visible.
 
 ## Approaches Considered
 
@@ -79,9 +85,29 @@ The package will contain focused modules:
   feature extraction, and language-prompt propagation.
 - `model.py`: vLLM model wrapper, checkpoint loading, encoder invocation,
   greedy RNNT decoding, and forced-token replay.
-- `state.py` if needed: isolated predecoded-token state helpers. The initial
-  model may keep one request's state locally because `max-num-seqs=1` is a hard
-  runtime constraint.
+- `state.py`: isolated single-request predecoded-token state, deterministic
+  position lookup, terminal-token handling, reset, and profiling guards.
+- `compat.py`: a version-gated vLLM 0.21 compatibility surface for endpoint
+  request validation or lifecycle hooks that cannot be implemented through the
+  public model protocol. It must reject unsupported vLLM versions and may not
+  apply unrelated monkeypatches.
+
+The wrapper will explicitly inherit `SupportsTranscription` and
+`SupportsMultiModal`. It will set `supports_transcription_only=True`, declare
+ISO-639-1 `supported_languages`, and implement the complete vLLM 0.21 contract:
+
+- `get_speech_to_text_config()`;
+- `validate_language()`;
+- `get_generation_prompt()`;
+- `get_num_audio_tokens()`;
+- `post_process_output()`;
+- multimodal processor registration;
+- `embed_multimodal()`, `embed_input_ids()`, `forward()`, `compute_logits()`,
+  and `load_weights()`.
+
+The build/startup probe must verify that vLLM discovers the `transcription`
+generation task and initializes the transcription route, not merely that the
+architecture name appears in `ModelRegistry`.
 
 The package must not monkeypatch broad vLLM internals during import. If a
 vLLM 0.21 compatibility hook is necessary, it will live in an explicit,
@@ -90,13 +116,15 @@ version-checked module and fail fast on unsupported vLLM versions.
 ### Transcription image
 
 `deploy/docker/vllm/Dockerfile.transcribe` will derive from
-`vllm/vllm-openai:v0.21.0`, install media libraries, install a pinned
-Transformers 5.13 release, and install the local plugin package. Build-time
+`vllm/vllm-openai:v0.21.0`, install media libraries, install exactly
+Transformers 5.13.0, and install the local plugin package. Build-time
 checks will verify:
 
 1. the plugin entry point is discoverable;
 2. Transformers exposes `Nemotron3_5AsrForRNNT` and its processor;
-3. loading vLLM plugins registers the architecture.
+3. loading vLLM plugins registers the architecture;
+4. the model class satisfies `SupportsTranscription` and advertises the
+   `transcription` task.
 
 The same image remains able to serve Whisper because registering an unused
 model architecture is inert. Rollback therefore requires only environment
@@ -118,11 +146,17 @@ tokenizer:   nvidia/nemotron-3.5-asr-streaming-0.6b
 dtype:       auto (checkpoint resolves to FP32)
 execution:   eager
 sequences:   1
+runner:      V1 (`VLLM_USE_V2_MODEL_RUNNER=0`)
+GPU budget:  0.20 initially; finalized by RTX 3090 startup measurement
+model len:   4096 initially; finalized by maximum replay tests
 ```
 
 `INGEST_TRANSCRIBE_MODEL` must equal the served name. `.env.example` will
-include a complete commented Whisper rollback configuration. Existing local
-`.env` values remain operator-owned and will not be overwritten wholesale.
+include complete Nemotron and Whisper blocks covering model, revision,
+tokenizer, served name, dtype, GPU utilization, model length, trust settings,
+and extra arguments. Nemotron arguments must not contain Whisper's
+bitsandbytes flags. Existing local `.env` values remain operator-owned and will
+not be overwritten wholesale.
 
 ## Request and Decode Flow
 
@@ -132,32 +166,76 @@ include a complete commented Whisper rollback configuration. Existing local
    multimodal processor.
 3. The Nemotron processor resamples to 16 kHz and creates the checkpoint's
    128-bin log-mel features and attention mask.
-4. The processor maps an explicit language code or locale to `prompt_ids`.
-   Missing language maps to `auto` rather than the Transformers pipeline's
-   English default.
+4. `get_generation_prompt()` returns an `ExplicitEncoderDecoderPrompt` with
+   the audio in the encoder prompt, blank token `13087` as the one-token
+   decoder prompt, and per-request `mm_processor_kwargs={"language": locale}`.
+   The processor maps the locale to `prompt_ids`. Missing language maps to
+   `auto` rather than the Transformers pipeline's English default.
 5. The FastConformer encoder processes the complete utterance once.
 6. The Transformers-compatible greedy RNNT algorithm emits the transcript
    sequence. Blank token `13087` advances the encoder frame; nonblank tokens
    remain on the frame, with the checkpoint's ten-symbol-per-frame cap.
-7. The plugin stores that completed token sequence for the single active
-   request and replays forced logits through vLLM's normal scheduler. This
-   preserves vLLM's transcription response machinery without pretending the
-   RNNT decoder is autoregressive.
-8. Token decoding uses `skip_special_tokens=True` and does not CTC-collapse
-   repeated emissions. The response remains `{ "text": "..." }`.
+7. `embed_multimodal()` returns encoder output and valid frame length. On the
+   required V1 encoder-decoder path, vLLM reruns this encoder for every request;
+   the cache manager does not reuse encoder output. The real request's
+   `forward()` prefill call receives the output, performs RNNT greedy decoding,
+   atomically replaces the previous sequence, and appends a dedicated terminal
+   token. Profiling/dummy calls may create provisional state, but the first real
+   prefill must overwrite it atomically before any user-visible replay.
+8. Decode positions are derived from vLLM's absolute `positions` tensor and
+   the one-token decoder prompt, never from a mutable counter. Positions inside
+   the transcript force the corresponding token; the next and all later
+   positions force the terminal token.
+9. The terminal token is Nemotron blank/decoder-start token `13087`, configured
+   as EOS in an image-local pinned generation configuration and omitted by
+   special-token decoding. Empty transcripts therefore replay token `13087`
+   immediately. Tests must prove
+   the request finishes at the first terminal token rather than running to
+   `max_tokens`.
+10. RNNT blank emissions are control flow and are never inserted into the
+    replay sequence. Token decoding preserves repeated emitted token IDs and
+    removes terminal/language special tokens. The response remains
+    `{ "text": "..." }`.
+
+`max-num-seqs=1` and V1 make model-local state safe only when combined with
+these rules. Each real prefill atomically overwrites state, positions rather
+than a call counter select replay tokens, and cancellation/abort is followed by
+a fresh prefill before any subsequent replay. Duplicate audio still reruns the
+encoder on this path. The plugin must fail fast if V2 is enabled. If vLLM 0.21
+does not expose enough lifecycle information to prove these invariants,
+`compat.py` will add the smallest version-gated state lifecycle hook; this is a
+planned deliverable, not an untracked fallback.
 
 ## API Behavior
 
-- `language`: supported. Bare codes are normalized to a supported locale when
-  necessary; `auto` selects prompt ID 101.
+- `language`: vLLM's public API accepts ISO-639-1 codes. The plugin overrides
+  validation to also accept documented model locales. Deterministic defaults
+  are `en -> en-US`, `es -> es-US`, `fr -> fr-FR`, `pt -> pt-BR`, and
+  `zh -> zh-CN`; other unambiguous codes map to their only production locale.
+  Explicit supported locales pass through. Missing language becomes `auto`,
+  which selects prompt ID 101. Unsupported/adaptation-only choices return an
+  actionable 4xx unless explicitly enabled by configuration.
 - omitted language: automatic detection.
-- `temperature`: only greedy decoding is supported; zero is accepted.
-- `prompt`: unsupported in the first release and must not silently alter
-  output.
-- translations: unsupported.
-- response: normal JSON/text transcription is required. Word-level timestamps
-  are outside the first release because the checkpoint exposes token durations,
-  not native word segmentation.
+- `temperature`, `top_p`, `seed`, and beam controls: output remains greedy and
+  deterministic because the model exposes one forced token per step. Nonzero
+  temperature, beam search, or `n != 1` will be rejected with 4xx to avoid
+  implying unsupported behavior.
+- `prompt` and `hotwords`: nonempty values are rejected with 4xx.
+- translations: `get_speech_to_text_config()` remains startup-safe for the
+  `translate` handler, while `get_generation_prompt()` rejects translation
+  requests with a stable 4xx.
+- response: normal JSON and text transcription are required. HTTP output
+  streaming may be rejected with 4xx in this batch-only release; realtime
+  audio streaming is not registered. `verbose_json` and timestamp granularities
+  are rejected because the checkpoint exposes token durations rather than
+  native word segmentation.
+
+The vLLM model protocol cannot inspect every HTTP sampling/output field.
+`compat.py` will therefore add one version-checked validation call at the start
+of vLLM 0.21's speech-to-text request creation path, active only for the
+Nemotron architecture. It will enforce the option matrix and the 390-second
+limit before generation. Prompt and translation checks are repeated in
+`get_generation_prompt()` as defense in depth.
 
 AquiLLM's current client does not send optional parameters, so these limitations
 do not change the product's existing ingestion path.
@@ -170,8 +248,13 @@ activations, and vLLM overhead.
 
 The encoder has 5,000 post-subsampling positions. Based on 10 ms feature frames
 and 8x subsampling, offline utterances approach a hard ceiling near 400 seconds.
-The first release will document and enforce a conservative maximum near 390
-seconds rather than silently truncating longer files.
+`get_speech_to_text_config()` will return
+`SpeechToTextConfig(sample_rate=16000, max_audio_clip_s=390,
+min_energy_split_window_size=None)`, which disables vLLM chunking. A version-
+gated request check will reject audio longer than 390 seconds rather than
+silently processing an over-limit clip. Boundary tests cover 389, 390, and 391
+seconds. `TRANSCRIBE_VLLM_MAX_MODEL_LEN` is separately sized for replayed text
+tokens and is not treated as an audio-duration control.
 
 The model weights are licensed under OpenMDW 1.1; the Transformers integration
 code is Apache-2.0. AquiLLM will download rather than redistribute weights, and
@@ -182,27 +265,34 @@ documentation will identify the model license.
 - Unsupported plugin/runtime versions fail during image build or service
   startup, not on the first user upload.
 - Unsupported language values return an actionable client error.
+- Unsupported request options and translations return stable 4xx errors while
+  server startup remains healthy.
 - Empty transcripts remain errors in AquiLLM's existing ingestion adapter.
-- Sequential requests must clear forced-token state before processing the next
-  utterance.
+- Sequential requests, cache hits, cancellation, preprocessing errors, and
+  dummy profiling must not leak forced-token state into the next utterance.
 - The service health check gates dependent inference services as it does today.
 - Operators can restore Whisper by changing the documented model, tokenizer,
-  served name, model alias, and Whisper-specific extra arguments, then
-  recreating `vllm_transcribe`.
+  served name, `INGEST_TRANSCRIBE_MODEL`, and Whisper-specific extra arguments,
+  then recreating `vllm_transcribe`.
 
 ## Verification Strategy
 
 ### Package tests
 
 - Entry-point registration is re-entrant and lazily imports vLLM model code.
-- The architecture is visible after plugin loading.
+- The architecture is visible after plugin loading, satisfies the full
+  `SupportsTranscription` protocol, and exposes the `transcription` task.
+- Rendered encoder-decoder prompts retain `input_features`, `attention_mask`,
+  `prompt_ids`, and lookahead metadata as batched audio fields.
 - Language mapping covers `auto`, bare codes, explicit locales, and invalid
   values.
 - Greedy RNNT state handling covers blank emissions, repeated real tokens,
-  maximum symbols per frame, and state reset between requests.
+  maximum symbols per frame, first/last/empty replay, explicit termination,
+  duplicate inputs, cancellation, profiling, and reset between requests.
 - Output cleanup removes blank and language-tag special tokens without
   collapsing valid repetition.
-- Checkpoint weight names load without unexpected or missing tensors.
+- Lightweight mapping tests cover checkpoint tensor names; the full 2.55 GB
+  weight-load assertion runs in container/GPU verification.
 
 ### Repository integration tests
 
@@ -211,19 +301,37 @@ documentation will identify the model license.
 - The no-GPU profile remains on hosted Whisper.
 - The startup script selects transcription arguments by service kind.
 - `INGEST_TRANSCRIBE_MODEL` matches the served alias.
-- Optional ingestion language is passed only when configured, if that small
-  adapter enhancement is included.
+- `INGEST_TRANSCRIBE_LANGUAGE` is in scope. `media.py` passes it only when set;
+  unset behavior exercises Nemotron automatic detection and remains compatible
+  with Whisper/OpenAI.
+- Checked-in validation tests cover prompt, hotwords, temperature, beam, `n`,
+  HTTP streaming, verbose responses, translations, and overlength audio.
 
 ### Container and GPU verification
 
 1. Build the transcription image successfully.
 2. Start the service on the available RTX 3090 and wait for `/health`.
 3. Verify `/v1/models` exposes the Nemotron served alias.
-4. Transcribe a known short 16 kHz WAV through `/v1/audio/transcriptions`.
-5. Compare plugin output with direct Transformers 5.13 output for the same
-   audio and language prompt.
-6. Submit two sequential utterances and verify no transcript state leaks.
-7. Reconfigure the same image for Whisper and verify the rollback endpoint.
+4. Transcribe the checked-in LibriSpeech-derived, attributed fixture
+   `tests/fixtures/audio/librispeech_1272-128104-0000.flac` through
+   `/v1/audio/transcriptions` and assert its recorded exact normalized text plus
+   the OpenAI SDK `.text` property. The fixture's source and redistribution
+   terms must be recorded beside it.
+5. Compare exact normalized decoded text and filtered emitted token IDs with
+   direct Transformers 5.13.0 using the identical model revision, audio,
+   processor kwargs, prompt ID, and FP32 dtype.
+6. Verify omitted-language auto detection, explicit language, invalid language,
+   and the complete request-validation matrix through HTTP.
+7. Submit different sequential utterances, duplicate audio, and an aborted
+   request followed by a successful request; verify V1 reruns the encoder and
+   no transcript or language state leaks.
+8. Prove 389/390-second acceptance and 391-second rejection without truncation.
+9. Reconfigure the same image with the complete documented Whisper environment
+   block and verify the rollback endpoint.
+10. Start the intended inference profile on the RTX 3090 and confirm the final
+    GPU-utilization allocation fits alongside required services. If the full
+    profile cannot fit, document the measured compatible profile instead of
+    publishing an untested default.
 
 If the local Docker daemon is unavailable, static and Python-level tests may
 proceed, but the work is not considered fully runtime-verified until the
@@ -246,4 +354,6 @@ The feature is complete when the plugin is packaged and registered, all
 repository tests pass, the transcription image serves Nemotron through the
 unchanged OpenAI endpoint, a known WAV returns the expected text without state
 leakage, the result matches direct Transformers within the agreed greedy decode
-contract, and the documented Whisper rollback succeeds.
+contract, unsupported requests fail predictably, audio limits are enforced,
+the measured RTX 3090 deployment budget is documented, and the documented
+Whisper rollback succeeds.
