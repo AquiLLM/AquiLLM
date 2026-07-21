@@ -8,8 +8,11 @@ import pytest
 
 pytest.importorskip("torch")
 pytest.importorskip("vllm")
-
 from aquillm_vllm_nemotron_asr.model import Nemotron3_5AsrForRNNT  # noqa: E402
+from tokenizers import Tokenizer  # noqa: E402
+from tokenizers.models import WordLevel  # noqa: E402
+from tokenizers.pre_tokenizers import Whitespace  # noqa: E402
+from transformers import PreTrainedTokenizerFast  # noqa: E402
 from vllm.config import SpeechToTextConfig  # noqa: E402
 from vllm.config.speech_to_text import SpeechToTextParams  # noqa: E402
 from vllm.model_executor.models.interfaces import (  # noqa: E402
@@ -18,6 +21,9 @@ from vllm.model_executor.models.interfaces import (  # noqa: E402
     supports_transcription,
 )
 from vllm.sampling_params import SamplingParams  # noqa: E402
+from vllm.v1.engine import EngineCoreRequest  # noqa: E402
+from vllm.v1.engine.detokenizer import IncrementalDetokenizer  # noqa: E402
+from vllm.v1.worker.gpu.model_states.default import DefaultModelState  # noqa: E402
 
 
 def _params(**overrides: object) -> SpeechToTextParams:
@@ -41,6 +47,13 @@ def test_protocol_advertises_transcription_multimodal_and_attention_free() -> No
     assert supports_multimodal(Nemotron3_5AsrForRNNT)
     assert is_attention_free(Nemotron3_5AsrForRNNT)
     assert Nemotron3_5AsrForRNNT.supports_transcription_only is True
+
+
+def test_vllm_task_discovery_exposes_only_transcription() -> None:
+    model_state = object.__new__(DefaultModelState)
+    model_state.model = Nemotron3_5AsrForRNNT
+
+    assert model_state.get_supported_generation_tasks() == ("transcription",)
 
 
 def test_production_bare_languages_cover_every_model_locale() -> None:
@@ -114,12 +127,38 @@ def test_post_process_output_only_cleans_text_and_preserves_repetition() -> None
     assert Nemotron3_5AsrForRNNT.post_process_output("again again") == "again again"
 
 
-def test_vllm_default_detokenization_skips_special_ids_before_text_cleanup() -> None:
-    # 13087 is the tokenizer pad / model terminal token. The serving path
-    # supplies decoded text to post_process_output, so special-ID removal must
-    # happen in vLLM detokenization rather than this text-only method.
-    assert SamplingParams().skip_special_tokens is True
-    assert Nemotron3_5AsrForRNNT.post_process_output("repeat repeat") == "repeat repeat"
+def test_vllm_detokenization_drops_terminal_pad_and_preserves_repeated_tokens() -> None:
+    # Use a real fast tokenizer with the pinned model terminal/pad ID.  This
+    # runs vLLM's actual IncrementalDetokenizer path, not a local decode shim.
+    vocab = {"<unk>": 0, "repeat": 1, "<pad>": 13087}
+    vocab.update({f"<unused-{token_id}>": token_id for token_id in range(2, 13087)})
+    backend = Tokenizer(WordLevel(vocab=vocab, unk_token="<unk>"))
+    backend.pre_tokenizer = Whitespace()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        pad_token="<pad>",
+        unk_token="<unk>",
+    )
+    request = EngineCoreRequest(
+        request_id="nemotron-terminal-test",
+        prompt_token_ids=[],
+        mm_features=None,
+        sampling_params=SamplingParams(skip_special_tokens=True),
+        pooling_params=None,
+        arrival_time=0.0,
+        lora_request=None,
+        cache_salt=None,
+        data_parallel_rank=None,
+    )
+    detokenizer = IncrementalDetokenizer.from_new_request(tokenizer, request)
+
+    detokenizer.update([1, 1, 13087], stop_terminated=False)
+
+    decoded = detokenizer.get_next_output_text(finished=True, delta=False)
+    assert tokenizer.pad_token_id == 13087
+    assert detokenizer.output_token_ids == [1, 1, 13087]
+    assert decoded == "repeat repeat"
+    assert Nemotron3_5AsrForRNNT.post_process_output(decoded) == "repeat repeat"
 
 
 def test_model_blank_is_decoder_start_not_hf_processor_blank() -> None:
