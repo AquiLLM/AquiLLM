@@ -54,6 +54,22 @@ def test_profiling_state_never_survives_a_real_prefill() -> None:
     assert state.forced_ids([1, 2]) == [9, BLANK_TOKEN_ID]
 
 
+def test_profiling_replacement_cannot_overwrite_real_state() -> None:
+    state = ReplayState()
+    state.replace_real([7, 8])
+    state.replace_profiling([1, 2])
+
+    assert state.forced_ids([1, 2, 3]) == [7, 8, BLANK_TOKEN_ID]
+
+
+def test_profiling_state_can_be_replaced_before_real_prefill() -> None:
+    state = ReplayState()
+    state.replace_profiling([1, 2])
+    state.replace_profiling([3])
+
+    assert state.forced_ids([1, 2]) == [3, BLANK_TOKEN_ID]
+
+
 def test_duplicate_audio_prefill_replaces_state() -> None:
     state = ReplayState()
     state.replace_real([31, 32])
