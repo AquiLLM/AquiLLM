@@ -317,6 +317,48 @@ def test_nemotron_validation_uses_vllms_real_error_response_surface(
     assert response.error.param == "temperature"
 
 
+def test_outer_wrapper_converts_preprocess_duration_error_before_generation(
+    monkeypatch: pytest.MonkeyPatch, installed_hook
+) -> None:
+    """The stock create path dynamically reaches the patched preprocess method."""
+    from vllm.entrypoints.openai.engine.serving import create_error_response
+
+    monkeypatch.setattr(compat, "_is_nemotron_handler", lambda handler: True)
+    generation_reached = False
+
+    async def original_preprocess(*args, **kwargs):
+        return ([{"resampled": True}], 391.0)
+
+    async def stock_like_original_create(
+        handler, audio_data, request, raw_request, response_class, stream_method
+    ):
+        nonlocal generation_reached
+        await handler._preprocess_speech_to_text(request, audio_data, "request-id")
+        generation_reached = True
+        return object()
+
+    installed_hook.original_preprocess = original_preprocess
+    installed_hook.original_create = stock_like_original_create
+    handler = Handler()
+    handler.create_error_response = create_error_response
+
+    async def call_patched_preprocess(*args, **kwargs):
+        return await installed_hook.wrapped_preprocess(handler, *args, **kwargs)
+
+    handler._preprocess_speech_to_text = call_patched_preprocess
+    response = run(
+        installed_hook.wrapped_create(
+            handler, b"audio", Request(), object(), object(), object()
+        )
+    )
+
+    assert response.error.code == 400
+    assert response.error.type == "BadRequestError"
+    assert response.error.param == "duration_s"
+    assert "duration_s" in response.error.message
+    assert generation_reached is False
+
+
 @pytest.mark.parametrize("duration_s", [389.0, 390.0])
 def test_preprocess_keeps_valid_resampled_results_unchanged(
     monkeypatch: pytest.MonkeyPatch, installed_hook, duration_s: float

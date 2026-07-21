@@ -172,8 +172,12 @@ class Nemotron3_5AsrForRNNT(
     def get_speech_to_text_config(
         cls, model_config: ModelConfig, task_type: str
     ) -> SpeechToTextConfig:
-        if task_type != "transcribe":
-            raise ValueError("Nemotron supports only the 'transcribe' task")
+        # vLLM 0.21 instantiates both endpoint handlers for every
+        # transcription-capable model. The compatibility wrapper rejects real
+        # translation requests before generation, but translation handler
+        # construction itself must remain startup-safe.
+        if task_type not in {"transcribe", "translate"}:
+            raise ValueError(f"Nemotron does not recognize task type {task_type!r}")
         return SpeechToTextConfig(
             sample_rate=SAMPLE_RATE,
             max_audio_clip_s=MAX_AUDIO_DURATION_S,

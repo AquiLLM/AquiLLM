@@ -71,7 +71,7 @@ def test_production_bare_languages_cover_every_model_locale() -> None:
     assert Nemotron3_5AsrForRNNT.validate_language(None) == "auto"
 
 
-def test_speech_to_text_config_is_batch_only_and_rejects_translation() -> None:
+def test_speech_to_text_config_is_batch_only_and_startup_safe_for_translation() -> None:
     config = Nemotron3_5AsrForRNNT.get_speech_to_text_config(
         SimpleNamespace(), "transcribe"
     )
@@ -81,8 +81,44 @@ def test_speech_to_text_config_is_batch_only_and_rejects_translation() -> None:
         max_audio_clip_s=390,
         min_energy_split_window_size=None,
     )
-    with pytest.raises(ValueError, match="transcribe"):
+    assert (
         Nemotron3_5AsrForRNNT.get_speech_to_text_config(SimpleNamespace(), "translate")
+        == config
+    )
+    with pytest.raises(ValueError, match="unknown"):
+        Nemotron3_5AsrForRNNT.get_speech_to_text_config(SimpleNamespace(), "unknown")
+
+
+def test_both_stock_speech_handlers_initialize_for_the_transcription_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """vLLM 0.21 creates both handlers for every transcription-capable model."""
+    from vllm.entrypoints.openai.engine.serving import OpenAIServing
+    from vllm.entrypoints.openai.speech_to_text.serving import (
+        OpenAIServingTranscription,
+        OpenAIServingTranslation,
+    )
+
+    def fake_openai_serving_init(self, **_kwargs: object) -> None:
+        self.model_config = SimpleNamespace(get_diff_sampling_param=lambda: None)
+        self.__dict__["model_cls"] = Nemotron3_5AsrForRNNT
+
+    monkeypatch.setattr(OpenAIServing, "__init__", fake_openai_serving_init)
+
+    transcription = OpenAIServingTranscription(object(), object(), request_logger=None)
+    translation = OpenAIServingTranslation(object(), object(), request_logger=None)
+
+    assert (
+        transcription.asr_config
+        == translation.asr_config
+        == SpeechToTextConfig(
+            sample_rate=16_000,
+            max_audio_clip_s=390,
+            min_energy_split_window_size=None,
+        )
+    )
+    assert transcription.task_type == "transcribe"
+    assert translation.task_type == "translate"
 
 
 def test_generation_prompt_has_exact_encoder_decoder_nesting_and_auto_language() -> (
