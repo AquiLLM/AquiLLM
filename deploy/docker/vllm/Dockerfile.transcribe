@@ -7,6 +7,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg libsndfile1 python3-cairo \
     && rm -rf /var/lib/apt/lists/*
 RUN python3 -m pip install --no-cache-dir --upgrade "transformers==5.13.0" soundfile
+RUN python3 -m pip install --no-cache-dir "librosa==0.11.0"
 
 # Build and install the plugin as a wheel.  The source tree is removed so the
 # final image cannot silently run an editable checkout.

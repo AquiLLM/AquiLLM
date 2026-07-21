@@ -6,12 +6,18 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import numpy as np
 
 VLLM_VERSION = "0.21.0"
 TRANSFORMERS_VERSION = "5.13.0"
+LIBROSA_VERSION = "0.11.0"
 ARCHITECTURE = "Nemotron3_5AsrForRNNT"
 PLUGIN_NAME = "aquillm_nemotron_asr"
 PLUGIN_TARGET = "aquillm_vllm_nemotron_asr:register"
+MODEL_ID = "nvidia/nemotron-3.5-asr-streaming-0.6b"
+MODEL_REVISION = "f3d333391852ba876df169dcc9ba902d25b6ab0b"
 DEFAULT_GENERATION_CONFIG = Path("/opt/aquillm/nemotron-generation-config")
 
 
@@ -25,6 +31,7 @@ def _require_version(distribution: str, expected: str) -> None:
 def _print_runtime_versions() -> None:
     _require_version("vllm", VLLM_VERSION)
     _require_version("transformers", TRANSFORMERS_VERSION)
+    _require_version("librosa", LIBROSA_VERSION)
     for distribution in ("torch", "tokenizers", "safetensors"):
         print(f"{distribution}={importlib.metadata.version(distribution)}")
 
@@ -108,6 +115,66 @@ def _assert_model_contract() -> None:
         )
 
 
+def _assert_processor_contract() -> None:
+    from transformers import AutoProcessor, Nemotron3_5AsrProcessor
+    from transformers.models.nemotron_asr_streaming import (
+        NemotronAsrStreamingFeatureExtractor,
+    )
+
+    with TemporaryDirectory(prefix="aquillm-nemotron-processor-") as cache_directory:
+        processor = AutoProcessor.from_pretrained(
+            MODEL_ID,
+            revision=MODEL_REVISION,
+            cache_dir=cache_directory,
+        )
+        if type(processor) is not Nemotron3_5AsrProcessor:
+            raise AssertionError(
+                "AutoProcessor must load the exact Nemotron3_5AsrProcessor class; "
+                f"found {type(processor)!r}"
+            )
+        feature_extractor = processor.feature_extractor
+        if type(feature_extractor) is not NemotronAsrStreamingFeatureExtractor:
+            raise AssertionError(
+                "Nemotron processor must load the exact "
+                "NemotronAsrStreamingFeatureExtractor class; "
+                f"found {type(feature_extractor)!r}"
+            )
+        if feature_extractor.sampling_rate != 16_000:
+            raise AssertionError(
+                "Nemotron feature extractor sampling_rate must be 16000; "
+                f"found {feature_extractor.sampling_rate}"
+            )
+
+        inputs = processor(
+            np.zeros(16_000, dtype=np.float32),
+            sampling_rate=16_000,
+            language="auto",
+            return_tensors="pt",
+        )
+        expected_shapes = {
+            "input_features": (1, 101, 128),
+            "attention_mask": (1, 101),
+        }
+        for name, expected_shape in expected_shapes.items():
+            actual_shape = tuple(inputs[name].shape)
+            if actual_shape != expected_shape:
+                raise AssertionError(
+                    f"processor {name} shape must be {expected_shape}; "
+                    f"found {actual_shape}"
+                )
+
+        forbidden_paths = [
+            path
+            for path in Path(cache_directory).rglob("*")
+            if path.name.lower().endswith((".safetensors", ".bin", ".pt"))
+        ]
+        if forbidden_paths:
+            raise AssertionError(
+                "processor probe downloaded checkpoint weights: "
+                + ", ".join(str(path) for path in forbidden_paths)
+            )
+
+
 def _assert_scheduler_contract() -> None:
     from vllm.config import SchedulerConfig
 
@@ -172,6 +239,7 @@ def main() -> int:
     _print_runtime_versions()
     _assert_plugin_registration()
     _assert_model_contract()
+    _assert_processor_contract()
     _assert_scheduler_contract()
     _assert_generation_config(args.generation_config)
     print("Nemotron ASR vLLM plugin probe passed")

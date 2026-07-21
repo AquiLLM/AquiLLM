@@ -18,6 +18,14 @@ def test_transcription_image_is_pinned_and_self_contained():
 
     assert "FROM vllm/vllm-openai:v0.21.0" in dockerfile
     assert "transformers==5.13.0" in dockerfile
+    transformers_install = (
+        "RUN python3 -m pip install --no-cache-dir --upgrade "
+        '"transformers==5.13.0" soundfile'
+    )
+    assert (
+        f"{transformers_install}\n"
+        'RUN python3 -m pip install --no-cache-dir "librosa==0.11.0"'
+    ) in dockerfile
     assert "libsndfile1" in dockerfile
     assert "ffmpeg" in dockerfile
     assert "soundfile" in dockerfile
@@ -58,6 +66,19 @@ def test_probe_checks_the_pinned_runtime_and_plugin_contract():
     for required in (
         "0.21.0",
         "5.13.0",
+        "0.11.0",
+        "nvidia/nemotron-3.5-asr-streaming-0.6b",
+        "f3d333391852ba876df169dcc9ba902d25b6ab0b",
+        "TemporaryDirectory",
+        "AutoProcessor.from_pretrained",
+        "NemotronAsrStreamingFeatureExtractor",
+        "sampling_rate",
+        "np.zeros(16_000, dtype=np.float32)",
+        'language="auto"',
+        'return_tensors="pt"',
+        "(1, 101, 128)",
+        "(1, 101)",
+        'endswith((".safetensors", ".bin", ".pt"))',
         "VLLM_USE_V2_MODEL_RUNNER",
         "vllm.general_plugins",
         "load_general_plugins",
