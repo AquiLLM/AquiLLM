@@ -1,5 +1,5 @@
-from .constants import ARCHITECTURE, MODEL_CLASS
 from .compat import install_compatibility_hook
+from .constants import ARCHITECTURE, MODEL_CLASS
 
 
 def register() -> None:
@@ -18,8 +18,7 @@ def register() -> None:
         existing_model_class = getattr(existing_model, "model_cls", None)
         if isinstance(existing_model_class, type):
             existing_registration = (
-                f"{existing_model_class.__module__}."
-                f"{existing_model_class.__qualname__}"
+                f"{existing_model_class.__module__}.{existing_model_class.__qualname__}"
             )
         elif isinstance(existing_module_name, str) and isinstance(
             existing_class_name, str
