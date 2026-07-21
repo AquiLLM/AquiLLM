@@ -149,13 +149,18 @@ sequences:   1
 runner:      V1 (`VLLM_USE_V2_MODEL_RUNNER=0`)
 GPU budget:  0.20 initially; finalized by RTX 3090 startup measurement
 model len:   50000, covering the 390-second theoretical RNNT replay ceiling
+batch tokens: 50000, required by vLLM 0.21 for encoder-decoder startup
 ```
 
 Because this explicit length exceeds the checkpoint's encoder-position value,
 the service will opt into vLLM's long-model-length override. The wrapper does
 not use text-model positional embeddings or a decoder KV cache; its decoder
 position is only a replay index. Startup tests must prove the override does not
-allocate an unintended text KV cache.
+allocate an unintended text KV cache. Nemotron's extra arguments will include
+`--max-num-batched-tokens 50000`: vLLM 0.21 disables chunked prefill for
+encoder-decoder models and otherwise rejects a batched-token limit below
+`max_model_len`. The Whisper rollback block restores its smaller, independently
+tested token limits.
 
 `INGEST_TRANSCRIBE_MODEL` must equal the served name. `.env.example` will
 include complete Nemotron and Whisper blocks covering model, revision,
@@ -320,6 +325,9 @@ documentation will identify the model license.
 
 - Only `vllm_transcribe` uses `Dockerfile.transcribe`.
 - All three GPU Compose files agree on the Nemotron defaults and service kind.
+- Nemotron startup arguments set `max-num-batched-tokens >= max-model-len`, and
+  the startup probe constructs `SchedulerConfig` successfully with the exact
+  deployed values.
 - The no-GPU profile remains on hosted Whisper.
 - The startup script selects transcription arguments by service kind.
 - `INGEST_TRANSCRIBE_MODEL` matches the served alias.
