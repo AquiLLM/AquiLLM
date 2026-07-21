@@ -1,0 +1,30 @@
+# Dedicated, deliberately isolated runtime for NVIDIA Nemotron 3.5 ASR.
+FROM vllm/vllm-openai:v0.21.0
+
+USER root
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg libsndfile1 python3-cairo \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -m pip install --no-cache-dir --upgrade "transformers==5.13.0" soundfile
+
+# Build and install the plugin as a wheel.  The source tree is removed so the
+# final image cannot silently run an editable checkout.
+COPY ./deploy/vllm_plugins/nemotron_asr /tmp/aquillm-vllm-nemotron-asr
+RUN python3 -m pip wheel --no-deps --no-build-isolation \
+        --wheel-dir /tmp/aquillm-vllm-nemotron-wheel /tmp/aquillm-vllm-nemotron-asr \
+    && python3 -m pip install --no-cache-dir --no-index \
+        --find-links /tmp/aquillm-vllm-nemotron-wheel aquillm-vllm-nemotron-asr \
+    && rm -rf /tmp/aquillm-vllm-nemotron-asr /tmp/aquillm-vllm-nemotron-wheel
+
+COPY ./deploy/docker/vllm/nemotron_generation_config /opt/aquillm/nemotron-generation-config
+COPY ./deploy/docker/vllm/probe_nemotron_plugin.py /probe_nemotron_plugin.py
+COPY --chmod=755 ./deploy/scripts/vllm_start.sh /vllm_start.sh
+COPY --chmod=755 ./deploy/scripts/parse_vllm_extra_args.py /parse_vllm_extra_args.py
+
+RUN python3 -c "import importlib.metadata as m; print('vLLM', m.version('vllm')); print('Transformers', m.version('transformers')); print('Torch', m.version('torch')); print('CUDA', __import__('torch').version.cuda); print('tokenizers', m.version('tokenizers')); print('safetensors', m.version('safetensors'))" \
+    && python3 -m pip check \
+    && python3 /probe_nemotron_plugin.py --generation-config /opt/aquillm/nemotron-generation-config
+
+EXPOSE 8000
+ENTRYPOINT ["/vllm_start.sh"]
