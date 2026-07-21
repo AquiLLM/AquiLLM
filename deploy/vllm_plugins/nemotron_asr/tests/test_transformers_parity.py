@@ -59,6 +59,8 @@ def test_pinned_nemotron_generate_matches_the_pure_rnnt_core(
     scripted_tokens = (91, BLANK_TOKEN_ID, 91, BLANK_TOKEN_ID)
 
     class TinyEncoder(torch.nn.Module):
+        main_input_name = "input_features"
+
         def forward(self, input_features, attention_mask=None, **kwargs):
             del kwargs
             return SimpleNamespace(
