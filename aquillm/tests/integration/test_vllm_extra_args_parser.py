@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 
 def _parse_args(raw: str) -> list[str]:
@@ -21,7 +21,8 @@ def _parse_args(raw: str) -> list[str]:
 def test_parser_normalizes_escaped_json_values():
     raw = (
         "--speculative-config "
-        '\'{\\"method\\":\\"ngram\\",\\"num_speculative_tokens\\":2,\\"prompt_lookup_max\\":3}\' '
+        '\'{\\"method\\":\\"ngram\\",\\"num_speculative_tokens\\":2,'
+        '\\"prompt_lookup_max\\":3}\' '
         "--model-loader-extra-config "
         '\'{\\"load_in_4bit\\":true,\\"bnb_4bit_quant_type\\":\\"nf4\\"}\''
     )
@@ -33,6 +34,25 @@ def test_parser_normalizes_escaped_json_values():
         '{"method":"ngram","num_speculative_tokens":2,"prompt_lookup_max":3}',
         "--model-loader-extra-config",
         '{"load_in_4bit":true,"bnb_4bit_quant_type":"nf4"}',
+    ]
+
+
+def test_parser_tokenizes_nemotron_scheduler_and_generation_config_args():
+    raw = (
+        "--enforce-eager --max-num-seqs 1 --max-num-batched-tokens 50000 "
+        "--generation-config /opt/aquillm/nemotron-generation-config"
+    )
+
+    parsed = _parse_args(raw)
+
+    assert parsed == [
+        "--enforce-eager",
+        "--max-num-seqs",
+        "1",
+        "--max-num-batched-tokens",
+        "50000",
+        "--generation-config",
+        "/opt/aquillm/nemotron-generation-config",
     ]
 
 

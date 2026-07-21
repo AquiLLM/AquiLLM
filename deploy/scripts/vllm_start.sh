@@ -34,6 +34,9 @@ _DEFAULT_OCR_VLLM_EXTRA_ARGS="--kv-cache-dtype fp8 --compilation-config '{\"cuda
 
 # Compose sometimes injects VLLM_EXTRA_ARGS="" when ${VAR:-} interpolation is empty on the host,
 # which overrides env_file. Recover from the service-specific *VLLM_EXTRA_ARGS in the same .env.
+if [ -z "${VLLM_EXTRA_ARGS// }" ] && [ "${VLLM_SERVICE_KIND:-}" = "transcribe" ]; then
+  export VLLM_EXTRA_ARGS="${TRANSCRIBE_VLLM_EXTRA_ARGS:-}"
+fi
 if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
   case "${VLLM_TASK:-}" in
     score) export VLLM_EXTRA_ARGS="${APP_RERANK_VLLM_EXTRA_ARGS:-}" ;;
@@ -46,7 +49,6 @@ if [ -z "${VLLM_EXTRA_ARGS// }" ] && [ "${VLLM_RUNNER:-}" = "pooling" ] && [ -z 
 fi
 if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
   case "${VLLM_MODEL:-}" in
-    *whisper*|*Whisper*) export VLLM_EXTRA_ARGS="${TRANSCRIBE_VLLM_EXTRA_ARGS:-}" ;;
     *Qwen2.5-VL*|*Qwen/Qwen2.5-VL*|*Qwen3.5-4B*|*Qwen/Qwen3.5-4B*)
       if [ -n "${OCR_VLLM_EXTRA_ARGS// }" ]; then
         export VLLM_EXTRA_ARGS="${OCR_VLLM_EXTRA_ARGS}"
@@ -212,6 +214,10 @@ if [ -n "${VLLM_DTYPE:-}" ]; then
   cmd+=(--dtype "${VLLM_DTYPE}")
 fi
 
+if [ -n "${VLLM_REVISION:-}" ] && supports_arg "--revision"; then
+  cmd+=(--revision "${VLLM_REVISION}")
+fi
+
 if [ -n "${VLLM_RUNNER:-}" ] && supports_arg "--runner"; then
   cmd+=(--runner "${VLLM_RUNNER}")
 fi
@@ -335,6 +341,8 @@ unset \
   VLLM_GPU_MEMORY_UTILIZATION \
   VLLM_MAX_MODEL_LEN \
   VLLM_DTYPE \
+  VLLM_REVISION \
+  VLLM_SERVICE_KIND \
   VLLM_RUNNER \
   VLLM_TASK \
   VLLM_DOWNLOAD_DIR \

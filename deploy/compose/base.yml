@@ -225,7 +225,7 @@ services:
   vllm_transcribe:
     build:
       context: ../..
-      dockerfile: deploy/docker/vllm/Dockerfile
+      dockerfile: deploy/docker/vllm/Dockerfile.transcribe
     deploy:
       resources:
         reservations:
@@ -243,12 +243,17 @@ services:
     environment:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
-      - VLLM_MODEL=${TRANSCRIBE_VLLM_MODEL:-openai/whisper-large-v3}
-      - VLLM_SERVED_MODEL_NAME=${TRANSCRIBE_VLLM_SERVED_MODEL_NAME:-whisper-large-v3}
-      - VLLM_TOKENIZER=${TRANSCRIBE_VLLM_TOKENIZER:-openai/whisper-large-v3}
+      - VLLM_MODEL=${TRANSCRIBE_VLLM_MODEL:-nvidia/nemotron-3.5-asr-streaming-0.6b}
+      - VLLM_REVISION=${TRANSCRIBE_VLLM_REVISION-f3d333391852ba876df169dcc9ba902d25b6ab0b}
+      - VLLM_SERVED_MODEL_NAME=${TRANSCRIBE_VLLM_SERVED_MODEL_NAME:-nemotron-3.5-asr-streaming-0.6b}
+      - VLLM_TOKENIZER=${TRANSCRIBE_VLLM_TOKENIZER:-nvidia/nemotron-3.5-asr-streaming-0.6b}
       - VLLM_TENSOR_PARALLEL_SIZE=${TRANSCRIBE_VLLM_TENSOR_PARALLEL_SIZE:-1}
-      - VLLM_GPU_MEMORY_UTILIZATION=${TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION:-0.2}
-      - VLLM_MAX_MODEL_LEN=${TRANSCRIBE_VLLM_MAX_MODEL_LEN:-4096}
+      - VLLM_GPU_MEMORY_UTILIZATION=${TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION:-0.20}
+      - VLLM_MAX_MODEL_LEN=${TRANSCRIBE_VLLM_MAX_MODEL_LEN:-50000}
+      - VLLM_DTYPE=${TRANSCRIBE_VLLM_DTYPE:-auto}
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN=${TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN:-1}
+      - VLLM_SERVICE_KIND=transcribe
+      - VLLM_USE_V2_MODEL_RUNNER=0
       - "VLLM_EXTRA_ARGS=${TRANSCRIBE_VLLM_EXTRA_ARGS}"
       - VLLM_TRUST_REMOTE_CODE=${TRANSCRIBE_VLLM_TRUST_REMOTE_CODE:-1}
     ports:
