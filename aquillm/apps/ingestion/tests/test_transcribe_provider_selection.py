@@ -1,6 +1,8 @@
 """Tests for media transcription provider selection and configuration."""
 
+import httpx
 import pytest
+from openai import BadRequestError
 
 from aquillm.ingestion import media
 
@@ -71,3 +73,56 @@ def test_transcribe_passes_optional_configured_language(
         key: value for key, value in captured.items() if key != "file"
     } == expected_kwargs
     assert captured["file"].name == "sample.wav"
+
+
+@pytest.mark.parametrize("provider_text", ["", "  \t\n"])
+def test_transcribe_rejects_blank_provider_text(monkeypatch, provider_text):
+    monkeypatch.setenv("INGEST_TRANSCRIBE_PROVIDER", "openai")
+
+    class FakeTranscriptions:
+        def create(self, **_kwargs):
+            return type("Transcription", (), {"text": provider_text})()
+
+    class FakeClient:
+        audio = type("Audio", (), {"transcriptions": FakeTranscriptions()})()
+
+    monkeypatch.setattr(media, "_openai_client", lambda: FakeClient())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        media.transcribe_media_bytes(b"audio-bytes", "sample.wav")
+
+    assert str(exc_info.value) == "Transcription provider returned empty text."
+
+
+def test_transcribe_translates_openai_bad_request_error(monkeypatch):
+    monkeypatch.setenv("INGEST_TRANSCRIBE_PROVIDER", "openai")
+    request = httpx.Request(
+        "POST", "http://vllm_transcribe:8000/v1/audio/transcriptions"
+    )
+    response = httpx.Response(400, request=request)
+    sdk_error = BadRequestError(
+        "Invalid transcription request.",
+        response=response,
+        body={"error": {"message": "Invalid transcription request."}},
+    )
+
+    class FakeTranscriptions:
+        def create(self, **_kwargs):
+            raise sdk_error
+
+    class FakeClient:
+        audio = type("Audio", (), {"transcriptions": FakeTranscriptions()})()
+
+    monkeypatch.setattr(media, "_openai_client", lambda: FakeClient())
+
+    expected_message = (
+        "Transcription request failed. Verify that "
+        "INGEST_TRANSCRIBE_OPENAI_BASE_URL points to a model endpoint that "
+        "supports audio transcription and that INGEST_TRANSCRIBE_MODEL matches "
+        "the served model name."
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        media.transcribe_media_bytes(b"audio-bytes", "sample.wav")
+
+    assert str(exc_info.value) == expected_message
+    assert exc_info.value.__cause__ is sdk_error
