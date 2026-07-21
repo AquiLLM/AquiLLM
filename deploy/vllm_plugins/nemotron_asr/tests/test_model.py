@@ -18,6 +18,7 @@ class _Encoder(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.calls: list[dict[str, object]] = []
+        self.post_attention_mask: torch.Tensor | None = None
 
     def forward(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
@@ -26,7 +27,10 @@ class _Encoder(torch.nn.Module):
         hidden = torch.arange(batch * frames * 2, dtype=torch.float32).reshape(
             batch, frames, 2
         )
-        return SimpleNamespace(last_hidden_state=hidden)
+        return SimpleNamespace(
+            last_hidden_state=hidden,
+            attention_mask=self.post_attention_mask,
+        )
 
 
 class _Identity(torch.nn.Module):
@@ -59,6 +63,7 @@ def _bare_model() -> model_module.Nemotron3_5AsrForRNNT:
 
 def test_embed_multimodal_runs_audio_path_and_crops_post_encoder_mask() -> None:
     model = _bare_model()
+    model.encoder.post_attention_mask = torch.tensor([[1, 0, 0, 0], [1, 1, 0, 0]])
     output = model.embed_multimodal(
         input_features=torch.zeros((2, 4, 3)),
         attention_mask=torch.tensor([[1, 1, 0, 0], [1, 1, 1, 0]]),
@@ -66,8 +71,8 @@ def test_embed_multimodal_runs_audio_path_and_crops_post_encoder_mask() -> None:
         num_lookahead_tokens=torch.tensor([0, 0]),
     )
 
-    assert [item.shape for item in output] == [(2, 2), (3, 2)]
-    assert torch.equal(output[0], torch.tensor([[0.0, 1.0], [2.0, 3.0]]))
+    assert [item.shape for item in output] == [(1, 2), (2, 2)]
+    assert torch.equal(output[0], torch.tensor([[0.0, 1.0]]))
     assert len(model.encoder.calls) == 1
     assert set(model.encoder.calls[0]) == {
         "input_features",
@@ -75,6 +80,19 @@ def test_embed_multimodal_runs_audio_path_and_crops_post_encoder_mask() -> None:
         "num_lookahead_tokens",
     }
     assert model.encoder.calls[0]["num_lookahead_tokens"] == 0
+
+
+def test_embed_multimodal_preserves_a_zero_length_post_encoder_item() -> None:
+    model = _bare_model()
+    model.encoder.post_attention_mask = torch.tensor([[0, 0], [1, 0]])
+
+    output = model.embed_multimodal(
+        input_features=torch.zeros((2, 2, 3)),
+        attention_mask=torch.tensor([[1, 1], [1, 1]]),
+        prompt_ids=torch.tensor([1, 2]),
+    )
+
+    assert [item.shape for item in output] == [(0, 2), (1, 2)]
 
 
 def test_forward_replaces_replay_state_for_fresh_and_future_cached_encoder_outputs(
@@ -166,7 +184,11 @@ def test_init_rehomes_only_checkpoint_identity_modules_without_pretrained_loadin
     monkeypatch.setattr(model_module, "HfNemotron3_5AsrForRNNT", TinyHfModel)
     config = SimpleNamespace(num_prompts=3, default_prompt_id=0, vocab_size=13088)
     runtime = SimpleNamespace(
-        scheduler_config=SimpleNamespace(max_num_seqs=1, max_num_batched_tokens=50_000),
+        scheduler_config=SimpleNamespace(
+            max_num_seqs=1,
+            max_num_batched_tokens=50_000,
+            max_num_encoder_input_tokens=50_000,
+        ),
         model_config=SimpleNamespace(
             enforce_eager=True, max_model_len=50_000, hf_config=config
         ),
@@ -183,6 +205,60 @@ def test_init_rehomes_only_checkpoint_identity_modules_without_pretrained_loadin
         "joint",
     }
     assert not hasattr(model, "model")
+
+
+def test_init_rejects_the_pinned_v2_model_runner_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SimpleNamespace(
+        scheduler_config=SimpleNamespace(
+            max_num_seqs=1,
+            max_num_batched_tokens=50_000,
+            max_num_encoder_input_tokens=50_000,
+        ),
+        model_config=SimpleNamespace(
+            enforce_eager=True,
+            max_model_len=50_000,
+            hf_config=SimpleNamespace(vocab_size=13088),
+        ),
+        parallel_config=SimpleNamespace(tensor_parallel_size=1),
+    )
+    monkeypatch.setattr(model_module.vllm_envs, "VLLM_USE_V2_MODEL_RUNNER", True)
+
+    with pytest.raises(ValueError, match="V2"):
+        model_module.Nemotron3_5AsrForRNNT(vllm_config=runtime)
+
+
+def test_init_rejects_vocab_size_drift_before_constructing_hf_modules() -> None:
+    runtime = SimpleNamespace(
+        scheduler_config=SimpleNamespace(
+            max_num_seqs=1,
+            max_num_batched_tokens=50_000,
+            max_num_encoder_input_tokens=50_000,
+        ),
+        model_config=SimpleNamespace(
+            enforce_eager=True,
+            max_model_len=50_000,
+            hf_config=SimpleNamespace(vocab_size=4),
+        ),
+        parallel_config=SimpleNamespace(tensor_parallel_size=1),
+    )
+
+    with pytest.raises(ValueError, match="vocab_size=13088"):
+        model_module.Nemotron3_5AsrForRNNT(vllm_config=runtime)
+
+
+def test_attention_free_adapter_has_no_vllm_kv_cache_groups() -> None:
+    from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
+    from vllm.v1.core.kv_cache_utils import get_kv_cache_groups
+
+    model = _bare_model()
+    runtime = SimpleNamespace(
+        scheduler_config=SimpleNamespace(disable_hybrid_kv_cache_manager=False)
+    )
+
+    assert not any(isinstance(module, AttentionLayerBase) for module in model.modules())
+    assert get_kv_cache_groups(runtime, {}) == []
 
 
 @pytest.mark.parametrize(
@@ -207,6 +283,15 @@ def test_init_rehomes_only_checkpoint_identity_modules_without_pretrained_loadin
             "max_num_batched_tokens",
         ),
         (
+            "scheduler_config",
+            SimpleNamespace(
+                max_num_seqs=1,
+                max_num_batched_tokens=50_000,
+                max_num_encoder_input_tokens=1,
+            ),
+            "max_num_encoder_input_tokens",
+        ),
+        (
             "model_config",
             SimpleNamespace(
                 enforce_eager=True, max_model_len=4, hf_config=SimpleNamespace()
@@ -220,7 +305,9 @@ def test_init_rejects_invalid_vllm_runtime_config(
 ) -> None:
     values = {
         "scheduler_config": SimpleNamespace(
-            max_num_seqs=1, max_num_batched_tokens=50_000
+            max_num_seqs=1,
+            max_num_batched_tokens=50_000,
+            max_num_encoder_input_tokens=50_000,
         ),
         "model_config": SimpleNamespace(
             enforce_eager=True, max_model_len=50_000, hf_config=SimpleNamespace()

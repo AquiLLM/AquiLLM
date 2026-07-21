@@ -16,6 +16,7 @@ from transformers import Nemotron3_5AsrForRNNT as HfNemotron3_5AsrForRNNT
 from transformers.models.nemotron3_5_asr.generation_nemotron3_5_asr import (
     Nemotron3_5AsrRNNTDecoderCache,
 )
+from vllm import envs as vllm_envs
 from vllm.config import ModelConfig, SpeechToTextConfig, VllmConfig
 from vllm.config.speech_to_text import SpeechToTextParams
 from vllm.inputs import (
@@ -48,6 +49,7 @@ from .processing import (
 from .state import ReplayState
 
 _REQUIRED_MAX_MODEL_LEN = 50_000
+_VOCAB_SIZE = 13_088
 _CHECKPOINT_PREFIXES = (
     "encoder.",
     "decoder.",
@@ -241,6 +243,8 @@ class Nemotron3_5AsrForRNNT(
         scheduler = vllm_config.scheduler_config
         model = vllm_config.model_config
         parallel = vllm_config.parallel_config
+        if vllm_envs.VLLM_USE_V2_MODEL_RUNNER:
+            raise ValueError("Nemotron ASR does not support the V2 model runner")
         if scheduler.max_num_seqs != 1:
             raise ValueError("Nemotron ASR requires scheduler max_num_seqs=1")
         if not model.enforce_eager:
@@ -256,12 +260,13 @@ class Nemotron3_5AsrForRNNT(
                 "Nemotron ASR requires "
                 f"max_num_batched_tokens={_REQUIRED_MAX_MODEL_LEN}"
             )
-        # vLLM 0.21 is V1-only.  Keep an explicit guard for injected/future
-        # config objects that expose the runner mode rather than assuming it.
-        if getattr(vllm_config, "use_v1", True) is False:
-            raise ValueError("Nemotron ASR requires the V1 runner")
-        if getattr(vllm_config, "runner_type", "generate") != "generate":
-            raise ValueError("Nemotron ASR requires the V1 generate runner")
+        if scheduler.max_num_encoder_input_tokens != _REQUIRED_MAX_MODEL_LEN:
+            raise ValueError(
+                "Nemotron ASR requires "
+                f"max_num_encoder_input_tokens={_REQUIRED_MAX_MODEL_LEN}"
+            )
+        if model.hf_config.vocab_size != _VOCAB_SIZE:
+            raise ValueError(f"Nemotron ASR requires vocab_size={_VOCAB_SIZE}")
 
     def embed_multimodal(self, **kwargs: object) -> MultiModalEmbeddings:
         input_features = cast(torch.Tensor, kwargs["input_features"])
@@ -361,7 +366,7 @@ class Nemotron3_5AsrForRNNT(
 
     def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor:
         forced_ids = hidden_states.to(dtype=torch.long).reshape(-1)
-        vocab_size = int(getattr(self.config, "vocab_size", BLANK_TOKEN_ID + 1))
+        vocab_size = _VOCAB_SIZE
         if forced_ids.numel() and (
             forced_ids.min().item() < 0 or forced_ids.max().item() >= vocab_size
         ):
