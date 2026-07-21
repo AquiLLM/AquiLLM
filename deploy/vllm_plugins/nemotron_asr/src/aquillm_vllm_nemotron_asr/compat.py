@@ -21,17 +21,22 @@ _NEMOTRON_MODEL_MODULE = "aquillm_vllm_nemotron_asr.model"
 _NEMOTRON_MODEL_NAME = "Nemotron3_5AsrForRNNT"
 _PATCH_SENTINEL = "__aquillm_nemotron_asr_compat_patch__"
 _PATCH_OWNER = "aquillm_vllm_nemotron_asr.compat"
-_PATCH_VERSION = 1
+_PATCH_VERSION = 2
+_PLAIN_TEXT_ATTRIBUTE = "__aquillm_nemotron_plain_text__"
 
 
 @dataclass
 class _PatchState:
-    """The original descriptors and installed wrappers for one vLLM class."""
+    """The original callables and installed wrappers for pinned vLLM."""
 
     original_create: Callable[..., Awaitable[Any]]
     original_preprocess: Callable[..., Awaitable[Any]]
+    original_json_response: type[Any]
     wrapped_create: Callable[..., Awaitable[Any]]
     wrapped_preprocess: Callable[..., Awaitable[Any]]
+    wrapped_json_response: type[Any]
+    marked_response_type: type[Any]
+    marked_payload_type: type[dict[str, Any]]
     owner: str = _PATCH_OWNER
     version: int = _PATCH_VERSION
 
@@ -40,7 +45,7 @@ _PATCH_STATE: _PatchState | None = None
 
 
 def _validate_existing_patch_state(
-    handler_class: type[object], existing: object
+    handler_class: type[object], api_router: object, existing: object
 ) -> _PatchState:
     """Validate a reload-stable sentinel without depending on class identity."""
     if (
@@ -51,21 +56,30 @@ def _validate_existing_patch_state(
 
     original_create = getattr(existing, "original_create", None)
     original_preprocess = getattr(existing, "original_preprocess", None)
+    original_json_response = getattr(existing, "original_json_response", None)
     wrapped_create = getattr(existing, "wrapped_create", None)
     wrapped_preprocess = getattr(existing, "wrapped_preprocess", None)
+    wrapped_json_response = getattr(existing, "wrapped_json_response", None)
+    marked_response_type = getattr(existing, "marked_response_type", None)
+    marked_payload_type = getattr(existing, "marked_payload_type", None)
     if not all(
         callable(value)
         for value in (
             original_create,
             original_preprocess,
+            original_json_response,
             wrapped_create,
             wrapped_preprocess,
+            wrapped_json_response,
+            marked_response_type,
+            marked_payload_type,
         )
     ):
         raise RuntimeError("Nemotron ASR compatibility hook has a malformed sentinel.")
     if (
         handler_class._create_speech_to_text is not wrapped_create
         or handler_class._preprocess_speech_to_text is not wrapped_preprocess
+        or getattr(api_router, "JSONResponse", None) is not wrapped_json_response
     ):
         raise RuntimeError(
             "Nemotron ASR compatibility hook was partially replaced; "
@@ -141,14 +155,22 @@ def install_compatibility_hook() -> None:
     global _PATCH_STATE
 
     verify_vllm_compatibility()
+    from vllm.entrypoints.openai.speech_to_text import api_router
     from vllm.entrypoints.openai.speech_to_text.speech_to_text import (
         OpenAISpeechToText,
     )
 
     existing = getattr(OpenAISpeechToText, _PATCH_SENTINEL, None)
     if existing is not None:
-        _PATCH_STATE = _validate_existing_patch_state(OpenAISpeechToText, existing)
+        _PATCH_STATE = _validate_existing_patch_state(
+            OpenAISpeechToText, api_router, existing
+        )
         return
+
+    from starlette.responses import Response
+    from vllm.entrypoints.openai.speech_to_text.protocol import (
+        TranscriptionResponse,
+    )
 
     original_create = cast(
         Callable[..., Awaitable[Any]], OpenAISpeechToText._create_speech_to_text
@@ -156,6 +178,51 @@ def install_compatibility_hook() -> None:
     original_preprocess = cast(
         Callable[..., Awaitable[Any]], OpenAISpeechToText._preprocess_speech_to_text
     )
+    original_json_response = api_router.JSONResponse
+
+    class MarkedPlainTextPayload(dict[str, Any]):
+        """JSON-compatible route payload carrying nonserialized text metadata."""
+
+    class MarkedPlainTextTranscriptionResponse(TranscriptionResponse):
+        """A normal vLLM response whose dump carries route-local metadata."""
+
+        def model_dump(self, *args: object, **kwargs: object) -> dict[str, Any]:
+            payload = MarkedPlainTextPayload(super().model_dump(*args, **kwargs))
+            setattr(payload, _PLAIN_TEXT_ATTRIBUTE, self.text)
+            return payload
+
+    class PlainTextAwareJSONResponse(original_json_response):
+        """Render only this plugin's marked dict payload as plain UTF-8 text."""
+
+        def __init__(
+            self,
+            content: Any,
+            status_code: int = 200,
+            headers: Any = None,
+            media_type: str | None = None,
+            background: Any = None,
+        ) -> None:
+            if type(content) is MarkedPlainTextPayload:
+                copied_headers = {
+                    key: value
+                    for key, value in (headers or {}).items()
+                    if key.lower() != "content-type"
+                }
+                copied_headers["content-type"] = "text/plain; charset=utf-8"
+                headers = copied_headers
+                media_type = "text/plain"
+            super().__init__(
+                content=content,
+                status_code=status_code,
+                headers=headers,
+                media_type=media_type,
+                background=background,
+            )
+
+        def render(self, content: Any) -> bytes:
+            if type(content) is MarkedPlainTextPayload:
+                return Response.render(self, getattr(content, _PLAIN_TEXT_ATTRIBUTE))
+            return super().render(content)
 
     @wraps(original_create)
     async def wrapped_create(handler: object, *args: object, **kwargs: object) -> Any:
@@ -172,7 +239,14 @@ def install_compatibility_hook() -> None:
                 duration_s=0.0,
                 allow_adaptation=adaptation_languages_enabled(),
             )
-            return await state.original_create(handler, *args, **kwargs)
+            result = await state.original_create(handler, *args, **kwargs)
+            if (
+                getattr(handler, "task_type", None) == "transcribe"
+                and getattr(request, "response_format", None) == "text"
+                and isinstance(result, TranscriptionResponse)
+            ):
+                return state.marked_response_type.model_validate(result.model_dump())
+            return result
         except RequestValidationError as error:
             return _validation_error_response(handler, error)
 
@@ -205,10 +279,15 @@ def install_compatibility_hook() -> None:
     state = _PatchState(
         original_create=original_create,
         original_preprocess=original_preprocess,
+        original_json_response=original_json_response,
         wrapped_create=wrapped_create,
         wrapped_preprocess=wrapped_preprocess,
+        wrapped_json_response=PlainTextAwareJSONResponse,
+        marked_response_type=MarkedPlainTextTranscriptionResponse,
+        marked_payload_type=MarkedPlainTextPayload,
     )
     OpenAISpeechToText._create_speech_to_text = wrapped_create
     OpenAISpeechToText._preprocess_speech_to_text = wrapped_preprocess
+    api_router.JSONResponse = PlainTextAwareJSONResponse
     setattr(OpenAISpeechToText, _PATCH_SENTINEL, state)
     _PATCH_STATE = state

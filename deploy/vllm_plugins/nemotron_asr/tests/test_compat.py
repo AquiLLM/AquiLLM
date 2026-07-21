@@ -8,6 +8,8 @@ from importlib import reload
 from types import SimpleNamespace
 
 import pytest
+from starlette.background import BackgroundTask
+from starlette.responses import JSONResponse as StarletteJSONResponse
 
 vllm = pytest.importorskip("vllm", reason="compatibility hook requires vLLM")
 if getattr(vllm, "__version__", None) != "0.21.0":
@@ -90,6 +92,7 @@ def test_version_gate_rejects_v2_model_runner(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_install_is_reentrant_and_preserves_original_descriptors() -> None:
+    from vllm.entrypoints.openai.speech_to_text import api_router
     from vllm.entrypoints.openai.speech_to_text.speech_to_text import (
         OpenAISpeechToText,
     )
@@ -98,18 +101,24 @@ def test_install_is_reentrant_and_preserves_original_descriptors() -> None:
     assert state is not None
     create_wrapper = state.wrapped_create
     preprocess_wrapper = state.wrapped_preprocess
+    json_response_wrapper = state.wrapped_json_response
+    marked_response_type = state.marked_response_type
 
     compat.install_compatibility_hook()
 
     assert compat._PATCH_STATE is state
     assert state.wrapped_create is create_wrapper
     assert state.wrapped_preprocess is preprocess_wrapper
+    assert state.wrapped_json_response is json_response_wrapper
+    assert state.marked_response_type is marked_response_type
     assert state.original_create is not create_wrapper
     assert state.original_preprocess is not preprocess_wrapper
     assert OpenAISpeechToText._create_speech_to_text is create_wrapper
     assert OpenAISpeechToText._preprocess_speech_to_text is preprocess_wrapper
+    assert api_router.JSONResponse is json_response_wrapper
     assert create_wrapper.__wrapped__ is state.original_create
     assert preprocess_wrapper.__wrapped__ is state.original_preprocess
+    assert issubclass(json_response_wrapper, state.original_json_response)
 
 
 def test_install_rejects_a_partially_replaced_existing_hook(
@@ -129,8 +138,22 @@ def test_install_rejects_a_partially_replaced_existing_hook(
         compat.install_compatibility_hook()
 
 
+def test_install_rejects_a_partially_replaced_json_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vllm.entrypoints.openai.speech_to_text import api_router
+
+    state = compat._PATCH_STATE
+    assert state is not None
+    monkeypatch.setattr(api_router, "JSONResponse", state.original_json_response)
+
+    with pytest.raises(RuntimeError, match="partially replaced"):
+        compat.install_compatibility_hook()
+
+
 def test_reload_reuses_the_existing_wrapper_state_without_stacking() -> None:
     import aquillm_vllm_nemotron_asr as plugin
+    from vllm.entrypoints.openai.speech_to_text import api_router
     from vllm.entrypoints.openai.speech_to_text.speech_to_text import (
         OpenAISpeechToText,
     )
@@ -141,6 +164,9 @@ def test_reload_reuses_the_existing_wrapper_state_without_stacking() -> None:
     original_preprocess = original_state.original_preprocess
     original_create_wrapper = original_state.wrapped_create
     original_preprocess_wrapper = original_state.wrapped_preprocess
+    original_json_response = original_state.original_json_response
+    original_json_response_wrapper = original_state.wrapped_json_response
+    original_marked_response_type = original_state.marked_response_type
 
     reloaded_compat = reload(compat)
     reloaded_plugin = reload(plugin)
@@ -149,8 +175,11 @@ def test_reload_reuses_the_existing_wrapper_state_without_stacking() -> None:
     assert reloaded_compat._PATCH_STATE is original_state
     assert OpenAISpeechToText._create_speech_to_text is original_create_wrapper
     assert OpenAISpeechToText._preprocess_speech_to_text is original_preprocess_wrapper
+    assert api_router.JSONResponse is original_json_response_wrapper
     assert original_state.original_create is original_create
     assert original_state.original_preprocess is original_preprocess
+    assert original_state.original_json_response is original_json_response
+    assert original_state.marked_response_type is original_marked_response_type
 
 
 def test_non_nemotron_create_is_an_exact_original_passthrough(installed_hook) -> None:
@@ -270,6 +299,8 @@ def test_nemotron_option_errors_are_stable_400s_before_generation(
 def test_translation_handler_returns_stable_400_before_generation(
     monkeypatch: pytest.MonkeyPatch, installed_hook
 ) -> None:
+    from vllm.entrypoints.openai.speech_to_text import api_router
+
     monkeypatch.setattr(compat, "_is_nemotron_handler", lambda handler: True)
     handler = Handler()
     handler.task_type = "translate"
@@ -289,12 +320,18 @@ def test_translation_handler_returns_stable_400_before_generation(
     assert response.status_code == 400
     assert "task_type" in response.message
     assert called is False
+    rendered = api_router.JSONResponse(
+        content=response.__dict__, status_code=response.status_code
+    )
+    assert rendered.media_type == "application/json"
+    assert b'"err_type":"BadRequestError"' in rendered.body
 
 
 def test_nemotron_validation_uses_vllms_real_error_response_surface(
     monkeypatch: pytest.MonkeyPatch, installed_hook
 ) -> None:
     from vllm.entrypoints.openai.engine.serving import create_error_response
+    from vllm.entrypoints.openai.speech_to_text import api_router
 
     monkeypatch.setattr(compat, "_is_nemotron_handler", lambda handler: True)
     handler = Handler()
@@ -315,6 +352,11 @@ def test_nemotron_validation_uses_vllms_real_error_response_surface(
     assert response.error.type == "BadRequestError"
     assert "temperature" in response.error.message
     assert response.error.param == "temperature"
+    rendered = api_router.JSONResponse(
+        content=response.model_dump(), status_code=response.error.code
+    )
+    assert rendered.media_type == "application/json"
+    assert b'"type":"BadRequestError"' in rendered.body
 
 
 def test_outer_wrapper_converts_preprocess_duration_error_before_generation(
@@ -421,3 +463,263 @@ def test_preprocess_rejects_391s_after_the_original_resampled_duration(
         run(installed_hook.wrapped_preprocess(Handler(), Request(), b"x", "id"))
 
     assert calls == 1
+
+
+def _transcription_response(text: str):
+    from vllm.entrypoints.openai.speech_to_text.protocol import (
+        TranscriptionResponse,
+        TranscriptionUsageAudio,
+    )
+
+    return TranscriptionResponse(text=text, usage=TranscriptionUsageAudio(seconds=7))
+
+
+def _render_vllm_response(result, **kwargs):
+    """Exercise the same dynamic JSONResponse boundary as vLLM's route."""
+    from vllm.entrypoints.openai.speech_to_text import api_router
+
+    return api_router.JSONResponse(content=result.model_dump(), **kwargs)
+
+
+@pytest.mark.parametrize("text", ["", "café ☕", 'say "hello"', "line 1\nline 2\n"])
+def test_nemotron_text_response_is_byte_exact_plain_text(
+    monkeypatch: pytest.MonkeyPatch, installed_hook, text: str
+) -> None:
+    monkeypatch.setattr(compat, "_is_nemotron_handler", lambda handler: True)
+    original_result = _transcription_response(text)
+
+    async def original(*args, **kwargs):
+        return original_result
+
+    installed_hook.original_create = original
+    result = run(
+        installed_hook.wrapped_create(
+            Handler(),
+            b"audio",
+            Request(response_format="text"),
+            object(),
+            object(),
+            object(),
+        )
+    )
+    background = BackgroundTask(lambda: None)
+    response = _render_vllm_response(
+        result,
+        status_code=201,
+        headers={"x-test": "preserved"},
+        background=background,
+    )
+
+    assert isinstance(result, type(original_result))
+    assert result.text == text
+    assert result.usage == original_result.usage
+    assert isinstance(result.model_dump(), dict)
+    assert response.body == text.encode("utf-8")
+    assert response.media_type == "text/plain"
+    assert response.headers["content-type"] == "text/plain; charset=utf-8"
+    assert response.headers["x-test"] == "preserved"
+    assert response.status_code == 201
+    assert response.background is background
+    assert isinstance(response, installed_hook.original_json_response)
+
+
+def test_marked_model_dump_remains_an_ordinary_json_serializable_dict(
+    monkeypatch: pytest.MonkeyPatch, installed_hook
+) -> None:
+    import json
+
+    monkeypatch.setattr(compat, "_is_nemotron_handler", lambda handler: True)
+
+    async def original(*args, **kwargs):
+        return _transcription_response("plain")
+
+    installed_hook.original_create = original
+    result = run(
+        installed_hook.wrapped_create(
+            Handler(),
+            b"audio",
+            Request(response_format="text"),
+            object(),
+            object(),
+            object(),
+        )
+    )
+    payload = result.model_dump()
+
+    assert json.loads(json.dumps(payload)) == {
+        "text": "plain",
+        "usage": {"type": "duration", "seconds": 7},
+    }
+
+
+def test_nemotron_json_response_remains_stock_json_with_usage(
+    monkeypatch: pytest.MonkeyPatch, installed_hook
+) -> None:
+    monkeypatch.setattr(compat, "_is_nemotron_handler", lambda handler: True)
+    original_result = _transcription_response("hello")
+
+    async def original(*args, **kwargs):
+        return original_result
+
+    installed_hook.original_create = original
+    result = run(
+        installed_hook.wrapped_create(
+            Handler(),
+            b"audio",
+            Request(response_format="json"),
+            object(),
+            object(),
+            object(),
+        )
+    )
+    response = _render_vllm_response(result)
+
+    assert result is original_result
+    assert response.body == b'{"text":"hello","usage":{"type":"duration","seconds":7}}'
+    assert response.media_type == "application/json"
+
+
+@pytest.mark.parametrize("response_format", ["text", "json"])
+def test_non_nemotron_responses_remain_stock_json(
+    installed_hook, response_format: str
+) -> None:
+    original_result = _transcription_response("unchanged")
+
+    async def original(*args, **kwargs):
+        return original_result
+
+    installed_hook.original_create = original
+    result = run(
+        installed_hook.wrapped_create(
+            Handler(),
+            b"audio",
+            Request(response_format=response_format),
+            object(),
+            object(),
+            object(),
+        )
+    )
+    response = _render_vllm_response(result)
+
+    assert result is original_result
+    assert response.body.startswith(b'{"text":"unchanged"')
+    assert response.media_type == "application/json"
+
+
+def test_nemotron_text_preserves_original_exception_and_cancellation(
+    monkeypatch: pytest.MonkeyPatch, installed_hook
+) -> None:
+    monkeypatch.setattr(compat, "_is_nemotron_handler", lambda handler: True)
+
+    async def raises_runtime(*args, **kwargs):
+        raise RuntimeError("generation failed")
+
+    installed_hook.original_create = raises_runtime
+    with pytest.raises(RuntimeError, match="generation failed"):
+        run(
+            installed_hook.wrapped_create(
+                Handler(),
+                b"audio",
+                Request(response_format="text"),
+                object(),
+                object(),
+                object(),
+            )
+        )
+
+    async def raises_cancelled(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    installed_hook.original_create = raises_cancelled
+    with pytest.raises(asyncio.CancelledError):
+        run(
+            installed_hook.wrapped_create(
+                Handler(),
+                b"audio",
+                Request(response_format="text"),
+                object(),
+                object(),
+                object(),
+            )
+        )
+
+
+def test_error_payloads_remain_json(installed_hook) -> None:
+    from vllm.entrypoints.openai.speech_to_text import api_router
+
+    payload = {"error": {"message": "bad request", "code": 400}}
+    response = api_router.JSONResponse(content=payload, status_code=400)
+
+    assert response.body == b'{"error":{"message":"bad request","code":400}}'
+    assert response.media_type == "application/json"
+    assert response.status_code == 400
+
+
+def test_concurrent_requests_do_not_cross_contaminate_plain_text_marker(
+    monkeypatch: pytest.MonkeyPatch, installed_hook
+) -> None:
+    class NemotronHandler(Handler):
+        pass
+
+    nemotron_handler = NemotronHandler()
+    other_handler = Handler()
+    monkeypatch.setattr(
+        compat,
+        "_is_nemotron_handler",
+        lambda handler: isinstance(handler, NemotronHandler),
+    )
+
+    async def original(handler, *args, **kwargs):
+        await asyncio.sleep(0)
+        return _transcription_response(args[1].response_format)
+
+    installed_hook.original_create = original
+
+    async def exercise():
+        calls = [
+            installed_hook.wrapped_create(
+                nemotron_handler,
+                b"a",
+                Request(response_format="text"),
+                object(),
+                object(),
+                object(),
+            ),
+            installed_hook.wrapped_create(
+                nemotron_handler,
+                b"a",
+                Request(response_format="json"),
+                object(),
+                object(),
+                object(),
+            ),
+            installed_hook.wrapped_create(
+                other_handler,
+                b"a",
+                Request(response_format="text"),
+                object(),
+                object(),
+                object(),
+            ),
+            installed_hook.wrapped_create(
+                other_handler,
+                b"a",
+                Request(response_format="json"),
+                object(),
+                object(),
+                object(),
+            ),
+        ]
+        return await asyncio.gather(*calls)
+
+    results = run(exercise())
+    responses = [_render_vllm_response(result) for result in results]
+
+    assert [response.media_type for response in responses] == [
+        "text/plain",
+        "application/json",
+        "application/json",
+        "application/json",
+    ]
+    assert responses[0].body == b"text"
+    assert all(isinstance(response, StarletteJSONResponse) for response in responses)
