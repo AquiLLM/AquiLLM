@@ -153,7 +153,8 @@ def test_start_script_recovers_transcribe_args_by_service_kind_and_gates_revisio
     assert contents.index(service_kind) < contents.index(runner_recovery)
     assert contents.index(service_kind) < contents.index(model_recovery)
     assert "*whisper*|*Whisper*) export VLLM_EXTRA_ARGS=" not in contents
-    assert 'export VLLM_EXTRA_ARGS="${TRANSCRIBE_VLLM_EXTRA_ARGS:-}"' in contents
+    assert 'export VLLM_EXTRA_ARGS="${TRANSCRIBE_VLLM_EXTRA_ARGS}"' in contents
+    assert 'export VLLM_EXTRA_ARGS="${_DEFAULT_TRANSCRIBE_VLLM_EXTRA_ARGS}"' in contents
 
     assert (
         'if [ -n "${VLLM_REVISION:-}" ] && supports_arg "--revision"; then' in contents
