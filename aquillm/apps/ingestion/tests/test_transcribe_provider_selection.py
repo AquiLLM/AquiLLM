@@ -1,5 +1,7 @@
 """Tests for media transcription provider selection and configuration."""
 
+import pytest
+
 from aquillm.ingestion import media
 
 
@@ -30,3 +32,42 @@ def test_transcribe_rejects_unconfigured_provider(monkeypatch):
         raise AssertionError("Expected RuntimeError")
     except RuntimeError as exc:
         assert "No supported transcription provider configured" in str(exc)
+
+
+@pytest.mark.parametrize(
+    ("configured_language", "expected_kwargs"),
+    [
+        (None, {"model": "asr-model"}),
+        ("", {"model": "asr-model"}),
+        ("  \t\n", {"model": "asr-model"}),
+        ("  en-US  ", {"model": "asr-model", "language": "en-US"}),
+    ],
+)
+def test_transcribe_passes_optional_configured_language(
+    monkeypatch, configured_language, expected_kwargs
+):
+    monkeypatch.setenv("INGEST_TRANSCRIBE_PROVIDER", "openai")
+    monkeypatch.setenv("INGEST_TRANSCRIBE_MODEL", "asr-model")
+    if configured_language is None:
+        monkeypatch.delenv("INGEST_TRANSCRIBE_LANGUAGE", raising=False)
+    else:
+        monkeypatch.setenv("INGEST_TRANSCRIBE_LANGUAGE", configured_language)
+
+    captured = {}
+
+    class FakeTranscriptions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return type("Transcription", (), {"text": " hello "})()
+
+    class FakeClient:
+        audio = type("Audio", (), {"transcriptions": FakeTranscriptions()})()
+
+    monkeypatch.setattr(media, "_openai_client", lambda: FakeClient())
+
+    assert media.transcribe_media_bytes(b"audio-bytes", "sample.wav") == "hello"
+    assert set(captured) == {"file", *expected_kwargs}
+    assert {
+        key: value for key, value in captured.items() if key != "file"
+    } == expected_kwargs
+    assert captured["file"].name == "sample.wav"
