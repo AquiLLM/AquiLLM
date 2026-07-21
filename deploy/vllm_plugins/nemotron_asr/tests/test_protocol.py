@@ -161,8 +161,16 @@ def test_vllm_detokenization_drops_terminal_pad_and_preserves_repeated_tokens() 
     assert Nemotron3_5AsrForRNNT.post_process_output(decoded) == "repeat repeat"
 
 
-def test_model_blank_is_decoder_start_not_hf_processor_blank() -> None:
-    config = SimpleNamespace(blank_token_id=13087, decoder_start_token_id=13087)
+def test_model_blank_not_processor_blank_when_decoder_start_is_unset() -> None:
+    # Pinned Nemotron metadata uses model blank 13087, while the processor
+    # reports 13088 and the config has no separate decoder-start field.
+    config = SimpleNamespace(blank_token_id=13087, decoder_start_token_id=None)
     processor = SimpleNamespace(blank_token_id=13088)
 
-    assert Nemotron3_5AsrForRNNT.decoder_start_token_id(config, processor) == 13087
+    prompt = Nemotron3_5AsrForRNNT.get_generation_prompt(_params())
+
+    assert config.blank_token_id == 13087
+    assert config.decoder_start_token_id is None
+    assert processor.blank_token_id == 13088
+    assert prompt["decoder_prompt"]["prompt_token_ids"] == [config.blank_token_id]
+    assert not hasattr(Nemotron3_5AsrForRNNT, "decoder_start_token_id")

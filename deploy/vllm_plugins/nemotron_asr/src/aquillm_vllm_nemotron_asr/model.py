@@ -163,15 +163,6 @@ class Nemotron3_5AsrForRNNT(
         return re.sub(r"\s*<[a-z]{2}-[A-Z]{2}>\s*$", "", text).strip()
 
     @classmethod
-    def decoder_start_token_id(cls, config: object, processor: object) -> int:
-        """Read the model config, never the processor's incompatible blank ID."""
-        blank_token_id = getattr(config, "blank_token_id", None)
-        decoder_start_token_id = getattr(config, "decoder_start_token_id", None)
-        if blank_token_id != BLANK_TOKEN_ID or decoder_start_token_id != BLANK_TOKEN_ID:
-            raise ValueError("Nemotron config must use blank/decoder-start token 13087")
-        return BLANK_TOKEN_ID
-
-    @classmethod
     def get_placeholder_str(cls, modality: str, i: int) -> str | None:
         if modality.startswith("audio"):
             return None
