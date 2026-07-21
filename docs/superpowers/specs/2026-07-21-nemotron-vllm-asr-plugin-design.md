@@ -194,9 +194,13 @@ not be overwritten wholesale.
    post-encoder attention mask, crops the corresponding encoder tensor to that
    length, and returns only the cropped tensors accepted by vLLM 0.21's
    `MultiModalEmbeddings` interface. The real request's `forward()` prefill call
-   receives the cropped encoder output whether vLLM computed it for this call
-   or recovered it from its multimodal content-hash cache. That prefill performs
-   RNNT greedy decoding, atomically replaces the previous sequence, and appends
+   receives the freshly computed cropped encoder output. Pinned vLLM 0.21's
+   `EncoderDecoderCacheManager` is scheduling-only and its
+   `check_and_update_cache()` unconditionally returns `False`; it also disables
+   the multimodal processor cache for encoder-decoder models. Duplicate audio
+   is therefore recomputed rather than recovered from a cross-request encoder
+   cache. That prefill performs RNNT greedy decoding,
+   atomically replaces the previous sequence, and appends
    a dedicated terminal token. Profiling/dummy calls may create provisional
    state, but every real prefill must overwrite it atomically before any
    user-visible replay.
@@ -218,9 +222,11 @@ not be overwritten wholesale.
 `max-num-seqs=1` and V1 make model-local state safe only when combined with
 these rules. Each real prefill atomically overwrites state, positions rather
 than a call counter select replay tokens, and cancellation/abort is followed by
-a fresh prefill before any subsequent replay. Duplicate audio must rebuild
-replay state correctly even when the multimodal encoder output comes from
-vLLM's content-hash cache. The plugin must fail fast if V2 is enabled. If vLLM
+a fresh prefill before any subsequent replay. Duplicate audio must re-run the
+encoder and rebuild replay state; tests assert both computations occur under
+vLLM 0.21. The wrapper remains idempotent if a future runner supplies cached
+encoder tensors, but enabling a new cross-request encoder cache is outside this
+release. The plugin must fail fast if V2 is enabled. If vLLM
 0.21 does not expose enough lifecycle information to prove these invariants,
 `compat.py` will add the smallest version-gated state lifecycle hook; this is a
 planned deliverable, not an untracked fallback.
@@ -290,7 +296,8 @@ documentation will identify the model license.
 - Unsupported request options and translations return stable 4xx errors while
   server startup remains healthy.
 - Empty transcripts remain errors in AquiLLM's existing ingestion adapter.
-- Sequential requests, cache hits, cancellation, preprocessing errors, and
+- Sequential requests, duplicate-audio recomputation, cancellation,
+  preprocessing errors, and
   dummy profiling must not leak forced-token state into the next utterance.
 - The service health check gates dependent inference services as it does today.
 - Operators can restore Whisper by changing the documented model, tokenizer,
@@ -352,10 +359,11 @@ documentation will identify the model license.
    processor kwargs, prompt ID, and FP32 dtype.
 6. Verify omitted-language auto detection, explicit language, invalid language,
    and the complete request-validation matrix through HTTP.
-7. Submit different sequential utterances, duplicate audio through a confirmed
-   multimodal encoder-cache hit, and an aborted request followed by a successful
+7. Submit different sequential utterances, duplicate audio with confirmed
+   encoder recomputation, and an aborted request followed by a successful
    request; verify every real prefill rebuilds replay state and no transcript or
-   language state leaks.
+   language state leaks. Also unit-test direct cached-tensor idempotence as a
+   future-runner guard without claiming a vLLM 0.21 cache hit.
 8. Prove 389/390-second acceptance and 391-second rejection without truncation.
 9. Reconfigure the same image with the complete documented Whisper environment
    block and verify the rollback endpoint.
