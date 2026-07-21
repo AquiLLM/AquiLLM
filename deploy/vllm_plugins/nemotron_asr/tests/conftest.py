@@ -21,6 +21,7 @@ def plugin_source_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
 def fake_model_registry(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Install the public registry surface used by vLLM 0.21 plugins."""
     model_info = namedtuple("ModelInfo", "module_name class_name")
+    registered_model = namedtuple("RegisteredModel", "model_cls")
 
     class FakeModelRegistry:
         models: dict[str, object] = {}
@@ -49,6 +50,7 @@ def fake_model_registry(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     return SimpleNamespace(
         registry=FakeModelRegistry,
         model_info=model_info,
+        registered_model=registered_model,
     )
 
 

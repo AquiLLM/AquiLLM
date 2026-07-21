@@ -38,6 +38,7 @@ def test_register_adds_the_lazy_model_target(
     assert fake_model_registry.registry.register_calls == [
         ("Nemotron3_5AsrForRNNT", "aquillm_vllm_nemotron_asr.model:Nemotron3_5AsrForRNNT")
     ]
+    assert "aquillm_vllm_nemotron_asr.model" not in sys.modules
 
 
 def test_register_is_a_no_op_when_the_same_model_is_already_registered(
@@ -67,4 +68,24 @@ def test_register_rejects_a_conflicting_existing_architecture(
     assert fake_model_registry.registry.models["Nemotron3_5AsrForRNNT"] == (
         fake_model_registry.model_info("another_module", "OtherModel")
     )
+    assert fake_model_registry.registry.register_calls == []
+
+
+def test_register_rejects_an_eager_conflicting_architecture(
+    fake_model_registry, fresh_plugin_module: None
+) -> None:
+    plugin = importlib.import_module("aquillm_vllm_nemotron_asr")
+    existing_model = fake_model_registry.registered_model(object)
+    fake_model_registry.registry.models["Nemotron3_5AsrForRNNT"] = existing_model
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"builtins\.object.*aquillm_vllm_nemotron_asr\.model:"
+            r"Nemotron3_5AsrForRNNT"
+        ),
+    ):
+        plugin.register()
+
+    assert fake_model_registry.registry.models["Nemotron3_5AsrForRNNT"] is existing_model
     assert fake_model_registry.registry.register_calls == []
