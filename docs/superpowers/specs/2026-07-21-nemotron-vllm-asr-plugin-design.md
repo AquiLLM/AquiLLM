@@ -148,8 +148,14 @@ execution:   eager
 sequences:   1
 runner:      V1 (`VLLM_USE_V2_MODEL_RUNNER=0`)
 GPU budget:  0.20 initially; finalized by RTX 3090 startup measurement
-model len:   4096 initially; finalized by maximum replay tests
+model len:   50000, covering the 390-second theoretical RNNT replay ceiling
 ```
+
+Because this explicit length exceeds the checkpoint's encoder-position value,
+the service will opt into vLLM's long-model-length override. The wrapper does
+not use text-model positional embeddings or a decoder KV cache; its decoder
+position is only a replay index. Startup tests must prove the override does not
+allocate an unintended text KV cache.
 
 `INGEST_TRANSCRIBE_MODEL` must equal the served name. `.env.example` will
 include complete Nemotron and Whisper blocks covering model, revision,
@@ -175,13 +181,16 @@ not be overwritten wholesale.
 6. The Transformers-compatible greedy RNNT algorithm emits the transcript
    sequence. Blank token `13087` advances the encoder frame; nonblank tokens
    remain on the frame, with the checkpoint's ten-symbol-per-frame cap.
-7. `embed_multimodal()` returns encoder output and valid frame length. On the
-   required V1 encoder-decoder path, vLLM reruns this encoder for every request;
-   the cache manager does not reuse encoder output. The real request's
-   `forward()` prefill call receives the output, performs RNNT greedy decoding,
-   atomically replaces the previous sequence, and appends a dedicated terminal
-   token. Profiling/dummy calls may create provisional state, but the first real
-   prefill must overwrite it atomically before any user-visible replay.
+7. `embed_multimodal()` derives each item's valid encoder-frame length from the
+   post-encoder attention mask, crops the corresponding encoder tensor to that
+   length, and returns only the cropped tensors accepted by vLLM 0.21's
+   `MultiModalEmbeddings` interface. On the required V1 encoder-decoder path,
+   vLLM reruns this encoder for every request; the cache manager does not reuse
+   encoder output. The real request's `forward()` prefill call receives the
+   cropped output, performs RNNT greedy decoding, atomically replaces the
+   previous sequence, and appends a dedicated terminal token. Profiling/dummy
+   calls may create provisional state, but the first real prefill must overwrite
+   it atomically before any user-visible replay.
 8. Decode positions are derived from vLLM's absolute `positions` tensor and
    the one-token decoder prompt, never from a mutable counter. Positions inside
    the transcript force the corresponding token; the next and all later
@@ -253,8 +262,11 @@ and 8x subsampling, offline utterances approach a hard ceiling near 400 seconds.
 min_energy_split_window_size=None)`, which disables vLLM chunking. A version-
 gated request check will reject audio longer than 390 seconds rather than
 silently processing an over-limit clip. Boundary tests cover 389, 390, and 391
-seconds. `TRANSCRIBE_VLLM_MAX_MODEL_LEN` is separately sized for replayed text
-tokens and is not treated as an audio-duration control.
+seconds. `TRANSCRIBE_VLLM_MAX_MODEL_LEN=50000` is separately sized for the
+worst-case replay: 390 seconds / 80 ms per encoder frame * at most 10 nonblank
+emissions per frame, plus prompt and terminal tokens. Tests use a synthetic
+maximum-emission decoder to prove the terminal token fits and that vLLM never
+returns a partial length-finished transcript.
 
 The model weights are licensed under OpenMDW 1.1; the Transformers integration
 code is Apache-2.0. AquiLLM will download rather than redistribute weights, and
@@ -289,6 +301,11 @@ documentation will identify the model license.
 - Greedy RNNT state handling covers blank emissions, repeated real tokens,
   maximum symbols per frame, first/last/empty replay, explicit termination,
   duplicate inputs, cancellation, profiling, and reset between requests.
+- Processor/model tests prove encoder outputs are cropped to their
+  attention-mask-derived valid frame counts before entering replay decode.
+- A synthetic 390-second worst-case replay fits prompt, 48,750 emitted tokens,
+  and terminal token under the configured model length; no test path may return
+  a partial transcript with a length finish reason.
 - Output cleanup removes blank and language-tag special tokens without
   collapsing valid repetition.
 - Lightweight mapping tests cover checkpoint tensor names; the full 2.55 GB
