@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from typing import cast
 
 import torch
 from torch import nn
+from transformers import Nemotron3_5AsrForRNNT as HfNemotron3_5AsrForRNNT
+from transformers.models.nemotron3_5_asr.generation_nemotron3_5_asr import (
+    Nemotron3_5AsrRNNTDecoderCache,
+)
 from vllm.config import ModelConfig, SpeechToTextConfig, VllmConfig
 from vllm.config.speech_to_text import SpeechToTextParams
 from vllm.inputs import (
@@ -27,7 +32,7 @@ from vllm.model_executor.models.interfaces import (
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
-from .decoding import BLANK_TOKEN_ID
+from .decoding import BLANK_TOKEN_ID, greedy_rnnt_decode
 from .languages import (
     PRODUCTION_LOCALES,
     adaptation_languages_enabled,
@@ -40,6 +45,54 @@ from .processing import (
     NemotronMultiModalProcessor,
     NemotronProcessingInfo,
 )
+from .state import ReplayState
+
+_REQUIRED_MAX_MODEL_LEN = 50_000
+_CHECKPOINT_PREFIXES = (
+    "encoder.",
+    "decoder.",
+    "encoder_projector.",
+    "prompt_projector.",
+    "joint.",
+)
+_WEIGHT_NAME_ALLOWLIST: frozenset[str] = frozenset()
+
+
+class _TorchRNNTAdapter:
+    """Torch/HF bridge for the framework-independent RNN-T decoder loop.
+
+    Transformers 5.13's decoder mutates a
+    ``Nemotron3_5AsrRNNTDecoderCache`` in place.  Passing that same cache to
+    the next call gives its exact initial-blank/nonblank/later-blank behavior.
+    """
+
+    def __init__(self, model: Nemotron3_5AsrForRNNT) -> None:
+        self._model = model
+
+    def predict(
+        self,
+        frame: object,
+        previous_token: int,
+        cache: object | None,
+    ) -> tuple[int, object]:
+        frame_tensor = cast(torch.Tensor, frame)
+        decoder_cache = cast(Nemotron3_5AsrRNNTDecoderCache | None, cache)
+        if decoder_cache is None:
+            decoder_cache = Nemotron3_5AsrRNNTDecoderCache(self._model.config)
+
+        decoder_input_ids = torch.tensor(
+            [[previous_token]], dtype=torch.long, device=frame_tensor.device
+        )
+        decoder_hidden_states = self._model.decoder(
+            decoder_input_ids, cache=decoder_cache
+        )
+        logits = self._model.joint(
+            encoder_hidden_states=frame_tensor.reshape(1, 1, 1, -1),
+            decoder_hidden_states=decoder_hidden_states[:, None, :, :],
+        ).squeeze(2)
+        predicted = int(logits.reshape(-1, logits.shape[-1]).argmax(dim=-1).item())
+        return predicted, decoder_cache
+
 
 _LANGUAGE_NAMES = {
     "ar": "Arabic",
@@ -170,10 +223,93 @@ class Nemotron3_5AsrForRNNT(
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
+        self._validate_runtime_config(vllm_config)
         self.config = vllm_config.model_config.hf_config
+        # Deliberately construct from config, rather than from_pretrained: vLLM
+        # owns checkpoint loading.  Rehome only these modules so their parameter
+        # names stay checkpoint-identical (``encoder.*``, never ``model.*``).
+        hf_model = HfNemotron3_5AsrForRNNT(self.config)
+        self.encoder = hf_model.encoder
+        self.decoder = hf_model.decoder
+        self.encoder_projector = hf_model.encoder_projector
+        self.prompt_projector = hf_model.prompt_projector
+        self.joint = hf_model.joint
+        self.replay_state = ReplayState()
+
+    @staticmethod
+    def _validate_runtime_config(vllm_config: VllmConfig) -> None:
+        scheduler = vllm_config.scheduler_config
+        model = vllm_config.model_config
+        parallel = vllm_config.parallel_config
+        if scheduler.max_num_seqs != 1:
+            raise ValueError("Nemotron ASR requires scheduler max_num_seqs=1")
+        if not model.enforce_eager:
+            raise ValueError("Nemotron ASR requires enforce_eager=True")
+        if parallel.tensor_parallel_size != 1:
+            raise ValueError("Nemotron ASR requires tensor_parallel_size=1")
+        if model.max_model_len != _REQUIRED_MAX_MODEL_LEN:
+            raise ValueError(
+                f"Nemotron ASR requires max_model_len={_REQUIRED_MAX_MODEL_LEN}"
+            )
+        if scheduler.max_num_batched_tokens != _REQUIRED_MAX_MODEL_LEN:
+            raise ValueError(
+                "Nemotron ASR requires "
+                f"max_num_batched_tokens={_REQUIRED_MAX_MODEL_LEN}"
+            )
+        # vLLM 0.21 is V1-only.  Keep an explicit guard for injected/future
+        # config objects that expose the runner mode rather than assuming it.
+        if getattr(vllm_config, "use_v1", True) is False:
+            raise ValueError("Nemotron ASR requires the V1 runner")
+        if getattr(vllm_config, "runner_type", "generate") != "generate":
+            raise ValueError("Nemotron ASR requires the V1 generate runner")
 
     def embed_multimodal(self, **kwargs: object) -> MultiModalEmbeddings:
-        raise NotImplementedError("Nemotron runtime embedding is implemented in Task 6")
+        input_features = cast(torch.Tensor, kwargs["input_features"])
+        attention_mask = cast(torch.Tensor | None, kwargs.get("attention_mask"))
+        prompt_ids = cast(torch.Tensor | None, kwargs.get("prompt_ids"))
+        num_lookahead_tokens = kwargs.get("num_lookahead_tokens")
+
+        encoder_kwargs: dict[str, object] = {
+            "input_features": input_features,
+            "attention_mask": attention_mask,
+        }
+        if num_lookahead_tokens is not None:
+            if isinstance(num_lookahead_tokens, torch.Tensor):
+                lookahead_values = num_lookahead_tokens.reshape(-1)
+                if lookahead_values.numel() == 0 or not torch.equal(
+                    lookahead_values, lookahead_values[:1].expand_as(lookahead_values)
+                ):
+                    raise ValueError(
+                        "Nemotron ASR requires a uniform num_lookahead_tokens value"
+                    )
+                num_lookahead_tokens = int(lookahead_values[0].item())
+            encoder_kwargs["num_lookahead_tokens"] = num_lookahead_tokens
+        encoder_outputs = self.encoder(**encoder_kwargs)
+        hidden_states = encoder_outputs.last_hidden_state
+        if prompt_ids is None:
+            prompt_ids = torch.full(
+                (hidden_states.shape[0],),
+                self.config.default_prompt_id,
+                dtype=torch.long,
+                device=hidden_states.device,
+            )
+        prompt_ids = prompt_ids.to(hidden_states.device)
+        one_hot = torch.nn.functional.one_hot(
+            prompt_ids, num_classes=self.config.num_prompts
+        ).to(hidden_states.dtype)
+        one_hot = one_hot[:, None, :].expand(-1, hidden_states.shape[1], -1)
+        pooled = self.encoder_projector(
+            self.prompt_projector(torch.cat([hidden_states, one_hot], dim=-1))
+        )
+
+        post_encoder_mask = getattr(encoder_outputs, "attention_mask", None)
+        if post_encoder_mask is None:
+            post_encoder_mask = attention_mask
+        if post_encoder_mask is None:
+            lengths = [pooled.shape[1]] * pooled.shape[0]
+        else:
+            lengths = [int(length) for length in post_encoder_mask.sum(dim=-1).tolist()]
+        return [pooled[index, :length] for index, length in enumerate(lengths)]
 
     def embed_input_ids(
         self,
@@ -182,7 +318,15 @@ class Nemotron3_5AsrForRNNT(
         *,
         is_multimodal: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        raise NotImplementedError("Nemotron runtime embedding is implemented in Task 6")
+        # This model has a fixed one-token decoder prompt.  The V1 runner only
+        # needs a 2-D active-token embedding carrier; RNNT work happens in the
+        # encoder prefill, not in a decoder attention stack.
+        hidden_size = int(getattr(self.config, "decoder_hidden_size", 1))
+        return torch.zeros(
+            (input_ids.numel(), hidden_size),
+            dtype=torch.float32,
+            device=input_ids.device,
+        )
 
     def forward(
         self,
@@ -191,10 +335,69 @@ class Nemotron3_5AsrForRNNT(
         encoder_outputs: list[torch.Tensor] | None = None,
         **kwargs: object,
     ) -> torch.Tensor:
-        raise NotImplementedError("Nemotron runtime forward is implemented in Task 6")
+        if encoder_outputs is not None:
+            if len(encoder_outputs) != 1:
+                raise ValueError("Nemotron ASR supports one encoder output per request")
+            transcript = greedy_rnnt_decode(
+                [encoder_outputs[0]],
+                _TorchRNNTAdapter(self),
+            )
+            # This executes for both actual current 0.21 encoder prefills and a
+            # future cached encoder tensor path.  Never retain a stale replay.
+            self.replay_state.replace_real(transcript)
+        else:
+            # vLLM profiling has no audio.  It may seed a placeholder but can
+            # never overwrite a completed real request.
+            self.replay_state.replace_profiling(())
+
+        forced_ids = self.replay_state.forced_ids(
+            (positions.to(dtype=torch.long) + 1).tolist()
+        )
+        # V1's logits selector indexes hidden_states[logits_indices], therefore
+        # retain an explicit feature axis instead of a scalar vector.
+        return torch.tensor(forced_ids, dtype=torch.long, device=positions.device).view(
+            -1, 1
+        )
 
     def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError("Nemotron runtime logits are implemented in Task 6")
+        forced_ids = hidden_states.to(dtype=torch.long).reshape(-1)
+        vocab_size = int(getattr(self.config, "vocab_size", BLANK_TOKEN_ID + 1))
+        if forced_ids.numel() and (
+            forced_ids.min().item() < 0 or forced_ids.max().item() >= vocab_size
+        ):
+            raise ValueError("forced token ID is outside the Nemotron vocabulary")
+        logits = torch.full(
+            (forced_ids.numel(), vocab_size),
+            float("-inf"),
+            dtype=torch.float32,
+            device=hidden_states.device,
+        )
+        if forced_ids.numel():
+            logits.scatter_(1, forced_ids[:, None], 0.0)
+        return logits
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        raise NotImplementedError("Nemotron runtime loading is implemented in Task 6")
+        from vllm.model_executor.models.utils import default_weight_loader
+
+        parameters = dict(self.named_parameters())
+        required_names = set(parameters) - _WEIGHT_NAME_ALLOWLIST
+        loaded_names: set[str] = set()
+
+        for checkpoint_name, weight in weights:
+            if not checkpoint_name.startswith(_CHECKPOINT_PREFIXES):
+                raise ValueError(f"unknown checkpoint parameter {checkpoint_name!r}")
+            if checkpoint_name not in parameters:
+                if checkpoint_name in _WEIGHT_NAME_ALLOWLIST:
+                    continue
+                raise ValueError(f"unknown checkpoint parameter {checkpoint_name!r}")
+            if checkpoint_name in loaded_names:
+                raise ValueError(f"duplicate checkpoint parameter {checkpoint_name!r}")
+            default_weight_loader(parameters[checkpoint_name], weight)
+            loaded_names.add(checkpoint_name)
+
+        missing = required_names - loaded_names
+        if missing:
+            raise ValueError(
+                "missing checkpoint parameters: " + ", ".join(sorted(missing))
+            )
+        return loaded_names
