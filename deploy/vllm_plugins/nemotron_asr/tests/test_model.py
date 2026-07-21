@@ -121,7 +121,7 @@ def test_forward_replaces_replay_state_for_fresh_and_future_cached_encoder_outpu
     assert model.replay_state.forced_ids([1, 2, 3]) == [99, 100, BLANK_TOKEN_ID]
 
 
-def test_forward_translates_vllm_positions_and_logits_force_one_id_per_row(
+def test_forward_returns_sampler_safe_float_carrier_and_forces_one_id_per_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = _bare_model()
@@ -134,13 +134,17 @@ def test_forward_translates_vllm_positions_and_logits_force_one_id_per_row(
         torch.tensor([0, 1, 2, 1]),
         encoder_outputs=[torch.ones((1, 2))],
     )
+    dummy_hidden_states = torch.rand_like(forced_ids)
     logits = model.compute_logits(forced_ids)
+    dummy_logits = model.compute_logits(dummy_hidden_states)
 
-    assert forced_ids.dtype == torch.long
-    assert forced_ids.tolist() == [[7], [8], [BLANK_TOKEN_ID], [8]]
+    assert forced_ids.dtype == torch.float32
+    assert forced_ids.tolist() == [[7.0], [8.0], [float(BLANK_TOKEN_ID)], [8.0]]
     assert logits.shape == (4, 13088)
-    assert logits.argmax(dim=-1).tolist() == forced_ids.flatten().tolist()
+    assert logits.argmax(dim=-1).tolist() == [7, 8, BLANK_TOKEN_ID, 8]
     assert torch.isfinite(logits).sum(dim=-1).tolist() == [1, 1, 1, 1]
+    assert dummy_logits.shape == (4, 13088)
+    assert torch.isfinite(dummy_logits).sum(dim=-1).tolist() == [1, 1, 1, 1]
 
 
 def test_empty_transcript_forces_terminal_blank_without_large_logits(

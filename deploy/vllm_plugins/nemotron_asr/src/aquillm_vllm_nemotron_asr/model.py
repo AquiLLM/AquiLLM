@@ -364,9 +364,12 @@ class Nemotron3_5AsrForRNNT(
         )
         # V1's logits selector indexes hidden_states[logits_indices], therefore
         # retain an explicit feature axis instead of a scalar vector.
-        return torch.tensor(forced_ids, dtype=torch.long, device=positions.device).view(
-            -1, 1
-        )
+        # The runner replaces hidden states with ``torch.rand_like`` during
+        # sampler warmup, so this carrier must be floating point. Every token
+        # ID is exactly representable in float32 and recovered by compute_logits.
+        return torch.tensor(
+            forced_ids, dtype=torch.float32, device=positions.device
+        ).view(-1, 1)
 
     def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor:
         forced_ids = hidden_states.to(dtype=torch.long).reshape(-1)
