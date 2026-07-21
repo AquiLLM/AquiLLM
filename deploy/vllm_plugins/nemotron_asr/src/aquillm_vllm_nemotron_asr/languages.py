@@ -7,7 +7,6 @@ from collections import defaultdict
 from collections.abc import Mapping
 from typing import Any
 
-
 # https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/blob/f3d333391852ba876df169dcc9ba902d25b6ab0b/README.md
 PRODUCTION_LOCALES = (
     "en-US",
@@ -117,10 +116,14 @@ def _language_error(
         if adaptation
         else ""
     )
+    message = (
+        f"Unsupported language {value!r}; supported choices: {supported_choices}."
+        f"{detail}"
+    )
     return RequestValidationError(
         "language",
         value,
-        f"Unsupported language {value!r}; supported choices: {supported_choices}.{detail}",
+        message,
     )
 
 
@@ -159,6 +162,10 @@ def normalize_language(value: str | None, *, allow_adaptation: bool = False) -> 
         if len(adaptation_locales) == 1:
             if allow_adaptation:
                 return adaptation_locales[0]
-            raise _language_error(value, adaptation=True, allow_adaptation=allow_adaptation)
+            raise _language_error(
+                value,
+                adaptation=True,
+                allow_adaptation=allow_adaptation,
+            )
 
     raise _language_error(value, allow_adaptation=allow_adaptation)

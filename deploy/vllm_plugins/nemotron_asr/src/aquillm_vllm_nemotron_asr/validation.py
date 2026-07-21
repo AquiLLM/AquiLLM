@@ -36,7 +36,11 @@ def validate_request(
 
     vllm_xargs = _request_value(request, "vllm_xargs", None)
     if vllm_xargs is not None and (not isinstance(vllm_xargs, dict) or vllm_xargs):
-        raise _unsupported("vllm_xargs", vllm_xargs, "custom vLLM arguments are not supported")
+        raise _unsupported(
+            "vllm_xargs",
+            vllm_xargs,
+            "custom vLLM arguments are not supported",
+        )
 
     max_completion_tokens = _request_value(request, "max_completion_tokens", None)
     if max_completion_tokens is not None:
@@ -62,7 +66,11 @@ def validate_request(
 
     use_beam_search = _request_value(request, "use_beam_search", False)
     if use_beam_search is not False:
-        raise _unsupported("use_beam_search", use_beam_search, "beam search is not supported")
+        raise _unsupported(
+            "use_beam_search",
+            use_beam_search,
+            "beam search is not supported",
+        )
 
     n = _request_value(request, "n", 1)
     if n != 1:
@@ -91,7 +99,10 @@ def validate_request(
     stream_continuous_usage_stats = _request_value(
         request, "stream_continuous_usage_stats", False
     )
-    if stream_continuous_usage_stats is not False and stream_continuous_usage_stats is not None:
+    if (
+        stream_continuous_usage_stats is not False
+        and stream_continuous_usage_stats is not None
+    ):
         raise _unsupported(
             "stream_continuous_usage_stats",
             stream_continuous_usage_stats,
@@ -99,7 +110,7 @@ def validate_request(
         )
 
     response_format = _request_value(request, "response_format", "json")
-    if response_format not in {"json", "text"}:
+    if not isinstance(response_format, str) or response_format not in {"json", "text"}:
         raise _unsupported(
             "response_format",
             response_format,
@@ -115,7 +126,11 @@ def validate_request(
         )
 
     if duration_s > 390.0:
-        raise _unsupported("duration_s", duration_s, "audio must be 390 seconds or shorter")
+        raise _unsupported(
+            "duration_s",
+            duration_s,
+            "audio must be 390 seconds or shorter",
+        )
 
     return normalize_language(
         _request_value(request, "language", None), allow_adaptation=allow_adaptation
