@@ -1,8 +1,10 @@
 from .constants import ARCHITECTURE, MODEL_CLASS
+from .compat import install_compatibility_hook
 
 
 def register() -> None:
     """Register the Nemotron ASR architecture with vLLM's model registry."""
+    install_compatibility_hook()
     from vllm.model_executor.models.registry import ModelRegistry
 
     existing_model = ModelRegistry.models.get(ARCHITECTURE)
