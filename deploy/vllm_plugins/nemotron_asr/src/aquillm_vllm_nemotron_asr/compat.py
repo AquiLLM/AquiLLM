@@ -1,7 +1,8 @@
 """Narrow, version-pinned vLLM HTTP validation for Nemotron ASR.
 
-This module intentionally reaches into two private vLLM 0.21 methods.  Keep
-the patch small and fail fast rather than attempting to support a nearby vLLM
+This module intentionally reaches into two private vLLM 0.21 speech-to-text
+methods and the API router's ``JSONResponse`` binding/response class.  Keep the
+patch small and fail fast rather than attempting to support a nearby vLLM
 release with potentially different request lifecycles.
 """
 
