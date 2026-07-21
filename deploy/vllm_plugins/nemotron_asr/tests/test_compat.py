@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from importlib import reload
 from types import SimpleNamespace
 
 import pytest
@@ -126,6 +127,30 @@ def test_install_rejects_a_partially_replaced_existing_hook(
 
     with pytest.raises(RuntimeError, match="partially replaced"):
         compat.install_compatibility_hook()
+
+
+def test_reload_reuses_the_existing_wrapper_state_without_stacking() -> None:
+    import aquillm_vllm_nemotron_asr as plugin
+    from vllm.entrypoints.openai.speech_to_text.speech_to_text import (
+        OpenAISpeechToText,
+    )
+
+    original_state = compat._PATCH_STATE
+    assert original_state is not None
+    original_create = original_state.original_create
+    original_preprocess = original_state.original_preprocess
+    original_create_wrapper = original_state.wrapped_create
+    original_preprocess_wrapper = original_state.wrapped_preprocess
+
+    reloaded_compat = reload(compat)
+    reloaded_plugin = reload(plugin)
+    reloaded_plugin.register()
+
+    assert reloaded_compat._PATCH_STATE is original_state
+    assert OpenAISpeechToText._create_speech_to_text is original_create_wrapper
+    assert OpenAISpeechToText._preprocess_speech_to_text is original_preprocess_wrapper
+    assert original_state.original_create is original_create
+    assert original_state.original_preprocess is original_preprocess
 
 
 def test_non_nemotron_create_is_an_exact_original_passthrough(installed_hook) -> None:

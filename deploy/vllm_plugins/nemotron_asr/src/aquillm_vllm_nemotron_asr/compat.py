@@ -20,6 +20,8 @@ _SUPPORTED_VLLM_VERSION = "0.21.0"
 _NEMOTRON_MODEL_MODULE = "aquillm_vllm_nemotron_asr.model"
 _NEMOTRON_MODEL_NAME = "Nemotron3_5AsrForRNNT"
 _PATCH_SENTINEL = "__aquillm_nemotron_asr_compat_patch__"
+_PATCH_OWNER = "aquillm_vllm_nemotron_asr.compat"
+_PATCH_VERSION = 1
 
 
 @dataclass
@@ -30,9 +32,46 @@ class _PatchState:
     original_preprocess: Callable[..., Awaitable[Any]]
     wrapped_create: Callable[..., Awaitable[Any]]
     wrapped_preprocess: Callable[..., Awaitable[Any]]
+    owner: str = _PATCH_OWNER
+    version: int = _PATCH_VERSION
 
 
 _PATCH_STATE: _PatchState | None = None
+
+
+def _validate_existing_patch_state(
+    handler_class: type[object], existing: object
+) -> _PatchState:
+    """Validate a reload-stable sentinel without depending on class identity."""
+    if (
+        getattr(existing, "owner", None) != _PATCH_OWNER
+        or getattr(existing, "version", None) != _PATCH_VERSION
+    ):
+        raise RuntimeError("Nemotron ASR compatibility hook has a foreign sentinel.")
+
+    original_create = getattr(existing, "original_create", None)
+    original_preprocess = getattr(existing, "original_preprocess", None)
+    wrapped_create = getattr(existing, "wrapped_create", None)
+    wrapped_preprocess = getattr(existing, "wrapped_preprocess", None)
+    if not all(
+        callable(value)
+        for value in (
+            original_create,
+            original_preprocess,
+            wrapped_create,
+            wrapped_preprocess,
+        )
+    ):
+        raise RuntimeError("Nemotron ASR compatibility hook has a malformed sentinel.")
+    if (
+        handler_class._create_speech_to_text is not wrapped_create
+        or handler_class._preprocess_speech_to_text is not wrapped_preprocess
+    ):
+        raise RuntimeError(
+            "Nemotron ASR compatibility hook was partially replaced; "
+            "refusing to stack wrappers."
+        )
+    return cast(_PatchState, existing)
 
 
 def verify_vllm_compatibility() -> None:
@@ -107,17 +146,8 @@ def install_compatibility_hook() -> None:
     )
 
     existing = getattr(OpenAISpeechToText, _PATCH_SENTINEL, None)
-    if isinstance(existing, _PatchState):
-        if (
-            OpenAISpeechToText._create_speech_to_text is not existing.wrapped_create
-            or OpenAISpeechToText._preprocess_speech_to_text
-            is not existing.wrapped_preprocess
-        ):
-            raise RuntimeError(
-                "Nemotron ASR compatibility hook was partially replaced; "
-                "refusing to stack wrappers."
-            )
-        _PATCH_STATE = existing
+    if existing is not None:
+        _PATCH_STATE = _validate_existing_patch_state(OpenAISpeechToText, existing)
         return
 
     original_create = cast(
