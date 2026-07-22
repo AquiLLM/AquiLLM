@@ -38,10 +38,11 @@ class _ProcessorContext:
 
     def call_hf_processor(self, processor, data, kwargs):
         self.calls.append((processor, data, kwargs))
+        prompt_id = {"fr-FR": 42, "auto": 7}.get(kwargs.get("language"), 1)
         return {
             "input_features": torch.zeros((1, 4, 128), dtype=torch.float32),
             "attention_mask": torch.ones((1, 4), dtype=torch.bool),
-            "prompt_ids": torch.tensor([1], dtype=torch.long),
+            "prompt_ids": torch.tensor([prompt_id], dtype=torch.long),
             "num_lookahead_tokens": 3,
         }
 
@@ -107,6 +108,39 @@ def test_hf_processor_receives_audio_only_auto_language_and_normalizes_lookahead
     }
     assert outputs["num_lookahead_tokens"].dtype is torch.long
     assert outputs["num_lookahead_tokens"].tolist() == [3]
+
+
+def test_explicit_language_then_omitted_language_does_not_leak_processor_state(
+    processing_info: NemotronProcessingInfo,
+) -> None:
+    processor = _processor_without_constructor(processing_info)
+    first_audio = object()
+    second_audio = object()
+
+    explicit_outputs = processor._call_hf_processor(
+        prompt="",
+        mm_data={"audios": [first_audio]},
+        mm_kwargs={"language": "fr-FR"},
+        tok_kwargs={},
+    )
+    automatic_outputs = processor._call_hf_processor(
+        prompt="",
+        mm_data={"audios": [second_audio]},
+        mm_kwargs={},
+        tok_kwargs={},
+    )
+
+    context = processing_info.ctx
+    assert context.calls[-2][1:] == (
+        {"audio": [first_audio]},
+        {"sampling_rate": SAMPLE_RATE, "language": "fr-FR"},
+    )
+    assert context.calls[-1][1:] == (
+        {"audio": [second_audio]},
+        {"sampling_rate": SAMPLE_RATE, "language": "auto"},
+    )
+    assert explicit_outputs["prompt_ids"].tolist() == [42]
+    assert automatic_outputs["prompt_ids"].tolist() == [7]
 
 
 def test_all_nemotron_hf_fields_are_batched_audio(

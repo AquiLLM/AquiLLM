@@ -709,13 +709,22 @@ Stop/remove Whisper and recreate Nemotron explicitly from `$env:NEMOTRON_ASR_ENV
 
 Then test base Compose's required `vllm` profile services, excluding optional OCR: `vllm` at utilization 0.45, `vllm_transcribe` at measured/default 0.20, `vllm_embed` at 0.12, and `vllm_rerank` at 0.08. Start each with `--no-deps --wait --wait-timeout 900` in that order, probe `http://localhost:8000/health` inside each container via `docker compose exec -T`, and sample VRAM. On failure, collect project `ps` and service logs, stop the newest service to recover, and document the largest passing subset/order. Shut the verification project down when finished. Do not include `vllm_ocr` unless the separate `ocr-sidecar` profile is requested.
 
+Before any profile service starts, build both the generic and transcription
+images from the checkout, probe the transcription plugin with an explicit
+entrypoint, and record both image IDs. Require `/v1/models` to equal the one
+expected alias for each service before adding it to the passing prefix.
+Classify failure evidence as capacity, timeout, or configuration/infrastructure.
+The default authoritative command fails unless the full profile passes;
+`-AllowIncompleteProfile` is an explicit local measurement-only opt-in and may
+tolerate only capacity or timeout outcomes.
+
 - [ ] **Step 3: Run rollback assertions**
 
 ```powershell
 .\scripts\verify_nemotron_asr.ps1 -VerifyWhisperRollback -VerifyProfile
 ```
 
-Expected: both models use the identical image ID; rollback needs environment changes only; the validator is inert for Whisper; and the profile harness truthfully records either the complete passing order or the largest passing prefix. The local RTX 3090 result may remain inconclusive when system RAM cannot load the main checkpoint; the user runs the same `-VerifyProfile` command on the H100/256 GB report server for the authoritative full-profile result.
+Expected: both ASR models use the identical transcription image ID; rollback needs environment changes only; the validator is inert for Whisper; and the profile harness records the complete passing order. The local RTX 3090 result may remain inconclusive when system RAM cannot load the main checkpoint; use `-VerifyProfile -AllowIncompleteProfile` only to retain that local capacity/timeout measurement. The user runs strict `-VerifyProfile` on the H100/256 GB report server for the authoritative full-profile result.
 
 - [ ] **Step 4: Commit any verification/doc correction**
 

@@ -6,7 +6,8 @@ param(
     [switch]$SelfTest,
     [switch]$VerifyNemotron,
     [switch]$VerifyWhisperRollback,
-    [switch]$VerifyProfile
+    [switch]$VerifyProfile,
+    [switch]$AllowIncompleteProfile
 )
 
 $ErrorActionPreference = "Stop"
@@ -231,7 +232,35 @@ function Invoke-VerificationSelfTests {
             "/opt/aquillm/nemotron-generation-config"
         )
     })
-    Write-Host "Environment restoration, artifact freshness, and runtime argument self-tests passed."
+    if ((Get-ProfileFailureClassification -Reason "CUDA out of memory") -ne "capacity") {
+        throw "Profile capacity classification self-test failed"
+    }
+    $oomInspection = [pscustomobject]@{
+        State = [pscustomobject]@{ OOMKilled = $true }
+    }
+    if ((Get-ProfileFailureClassification `
+        -Reason "error response from daemon" `
+        -Inspection $oomInspection) -ne "capacity") {
+        throw "Profile OOM container-state precedence self-test failed"
+    }
+    if ((Get-ProfileFailureClassification -Reason "health timeout after 900 seconds") -ne "timeout") {
+        throw "Profile timeout classification self-test failed"
+    }
+    if ((Get-ProfileFailureClassification -Reason "context deadline exceeded") -ne "timeout") {
+        throw "Profile deadline classification self-test failed"
+    }
+    if ((Get-ProfileFailureClassification -Reason "unrecognized arguments: --bad") -ne "configuration/infrastructure") {
+        throw "Profile configuration/infrastructure classification self-test failed"
+    }
+    $fakeImageId = "sha256:" + ("a" * 64)
+    $provenance = New-ProfileImageProvenance `
+        -GenericImageId $fakeImageId `
+        -TranscribeImageId $fakeImageId
+    if ($provenance.generic_image_id -ne $fakeImageId -or
+        $provenance.transcribe_image_id -ne $fakeImageId) {
+        throw "Profile image provenance self-test failed"
+    }
+    Write-Host "Environment restoration, artifact freshness, runtime argument, profile failure classification, and profile image provenance self-tests passed."
 }
 
 function Get-RunningGpuContainers {
@@ -574,6 +603,77 @@ function Get-LocalImageId {
     $id = (& docker image inspect $Name --format "{{.Id}}") -join ""
     if ($LASTEXITCODE -ne 0 -or -not $id) { throw "Could not inspect image: $Name" }
     return $id.Trim()
+}
+
+function New-ProfileImageProvenance {
+    param(
+        [Parameter(Mandatory)] [string]$GenericImageId,
+        [Parameter(Mandatory)] [string]$TranscribeImageId
+    )
+    foreach ($id in @($GenericImageId, $TranscribeImageId)) {
+        if ($id -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw "Profile image provenance contains an invalid local image ID: $id"
+        }
+    }
+    return [pscustomobject]@{
+        captured_at = ([DateTimeOffset](Get-Date)).ToString("o")
+        generic_image = $ProfileImage
+        generic_image_id = $GenericImageId
+        transcribe_image = $Image
+        transcribe_image_id = $TranscribeImageId
+    }
+}
+
+function Assert-ExpectedModelAlias {
+    param(
+        [Parameter(Mandatory)] [string]$ModelsJson,
+        [Parameter(Mandatory)] [string]$ExpectedAlias,
+        [Parameter(Mandatory)] [string]$Service
+    )
+    try {
+        $document = $ModelsJson | ConvertFrom-Json
+        $ids = @($document.data | ForEach-Object { [string]$_.id })
+    }
+    catch {
+        throw "$Service returned invalid /v1/models JSON: $($_.Exception.Message)"
+    }
+    if ($ids.Count -ne 1 -or $ids[0] -ne $ExpectedAlias) {
+        throw "$Service /v1/models mismatch: expected only '$ExpectedAlias', received '$($ids -join ', ')'"
+    }
+    return $ids
+}
+
+function Get-ProfileFailureClassification {
+    param(
+        [Parameter(Mandatory)] [string]$Reason,
+        [string]$Logs = "",
+        $Inspection = $null
+    )
+    $evidence = ($Reason + [Environment]::NewLine + $Logs).ToLowerInvariant()
+    $oomKilled = $false
+    if ($null -ne $Inspection -and $null -ne $Inspection.State) {
+        $oomKilled = [bool]$Inspection.State.OOMKilled
+    }
+    if ($oomKilled) { return "capacity" }
+    $configurationPatterns = @(
+        "unrecognized arguments", "validationerror", "invalid argument",
+        "no such file", "permission denied", "manifest unknown",
+        "pull access denied", "failed to solve", "error response from daemon",
+        "could not select device driver", "nvidia-container-cli",
+        "failed to create task"
+    )
+    foreach ($pattern in $configurationPatterns) {
+        if ($evidence.Contains($pattern)) { return "configuration/infrastructure" }
+    }
+    $capacityPatterns = @(
+        "cuda out of memory", "out of memory", "insufficient memory",
+        "cannot allocate memory", "not enough memory", "no space left on device"
+    )
+    foreach ($pattern in $capacityPatterns) {
+        if ($evidence.Contains($pattern)) { return "capacity" }
+    }
+    if ($evidence -match 'timed?\s*out|timeout|deadline exceeded') { return "timeout" }
+    return "configuration/infrastructure"
 }
 
 function Get-ComposeServiceInspection {
@@ -1203,12 +1303,40 @@ function Invoke-ProfileVerification {
         "build", "-f", (Join-Path $RepoRoot "deploy\docker\vllm\Dockerfile"),
         "-t", $ProfileImage, $RepoRoot
     )
+    Invoke-Checked -FilePath docker -ArgumentList @(
+        "build", "-f", (Join-Path $RepoRoot "deploy\docker\vllm\Dockerfile.transcribe"),
+        "-t", $Image, $RepoRoot
+    )
     $profileImageId = Get-LocalImageId -Name $ProfileImage
+    $transcribeImageId = Get-LocalImageId -Name $Image
+    $genericProbe = @(& docker run --rm --entrypoint python3 $ProfileImage -c "import importlib.metadata as m; assert m.version('vllm') == '0.21.0', m.version('vllm'); print('vllm=' + m.version('vllm')); print('transformers=' + m.version('transformers')); print('torch=' + m.version('torch'))")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Generic profile image dependency probe failed"
+    }
+    ($genericProbe -join [Environment]::NewLine) | Set-Utf8NoBom -Path (
+        Join-Path $ArtifactRoot "profile-generic-image-probe.txt"
+    )
+    Invoke-Checked -FilePath docker -ArgumentList @(
+        "run", "--rm", "--gpus", "all", "--entrypoint", "python3", $Image,
+        "/probe_nemotron_plugin.py", "--generation-config", "/opt/aquillm/nemotron-generation-config"
+    )
+    $imageProvenance = New-ProfileImageProvenance `
+        -GenericImageId $profileImageId `
+        -TranscribeImageId $transcribeImageId
+    $imageProvenance | ConvertTo-Json -Depth 5 | Set-Utf8NoBom -Path (
+        Join-Path $ArtifactRoot "profile-image-provenance.json"
+    )
     & docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath down --remove-orphans
     Assert-GpuIsIdle -AllowedPids $AllowGpuPid
 
     $serviceOrder = @("vllm", "vllm_transcribe", "vllm_embed", "vllm_rerank")
     $fractions = @{ vllm = "0.45"; vllm_transcribe = "0.20"; vllm_embed = "0.12"; vllm_rerank = "0.08" }
+    $expectedAliases = @{
+        vllm = "qwen3.6:27b-mtp-awq"
+        vllm_transcribe = $ServedName
+        vllm_embed = "Qwen/Qwen3-VL-Embedding-2B"
+        vllm_rerank = "Qwen/Qwen3-VL-Reranker-2B"
+    }
     $gpuName = ((& nvidia-smi --query-gpu=name --format=csv,noheader | Select-Object -First 1) -join "").Trim()
     if ($LASTEXITCODE -ne 0 -or -not $gpuName) { throw "Could not identify profile GPU" }
     $records = [Collections.Generic.List[object]]::new()
@@ -1238,6 +1366,11 @@ function Invoke-ProfileVerification {
                 $modelsOutput = @(& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath `
                     -f $ProfileComposePath exec -T $service python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/v1/models', timeout=5).read().decode())")
                 if ($LASTEXITCODE -ne 0) { throw "Model inventory probe failed for $service" }
+                $modelsText = $modelsOutput -join [Environment]::NewLine
+                $modelIds = Assert-ExpectedModelAlias `
+                    -ModelsJson $modelsText `
+                    -ExpectedAlias $expectedAliases[$service] `
+                    -Service $service
                 $record = [pscustomobject]@{
                     service = $service
                     fraction = $fractions[$service]
@@ -1245,22 +1378,44 @@ function Invoke-ProfileVerification {
                     healthy_at = ([DateTimeOffset](Get-Date)).ToString("o")
                     startup_seconds = [Math]::Round(((Get-Date) - $startedAt.DateTime).TotalSeconds, 3)
                     overall_gpu_memory_mib = $memoryUsed
-                    models_json = $modelsOutput -join [Environment]::NewLine
+                    expected_model_alias = $expectedAliases[$service]
+                    model_ids = @($modelIds)
+                    models_json = $modelsText
                 }
                 $records.Add($record)
                 $passing.Add($service)
                 $record | ConvertTo-Json -Depth 5 | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-$service-measurement.json")
             }
             catch {
+                $failureReason = $_.Exception.Message
+                $failureLogs = @(& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath logs --no-color $service) -join [Environment]::NewLine
+                $failureLogs | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-$service-failure.log")
+                $failedContainerId = (@(& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath ps -aq $service) -join "").Trim()
+                $failedInspection = $null
+                if ($failedContainerId) {
+                    try {
+                        $failedInspection = (& docker inspect $failedContainerId | ConvertFrom-Json)[0]
+                        $failedInspection | ConvertTo-Json -Depth 12 | Set-Utf8NoBom -Path (
+                            Join-Path $ArtifactRoot "profile-$service-failure-inspect.json"
+                        )
+                    }
+                    catch {
+                        $failureLogs += [Environment]::NewLine + "docker inspect failed: $($_.Exception.Message)"
+                    }
+                }
+                $classification = Get-ProfileFailureClassification `
+                    -Reason $failureReason `
+                    -Logs $failureLogs `
+                    -Inspection $failedInspection
                 $failure = [pscustomobject]@{
                     service = $service
                     exit_code = $exitCode
-                    reason = $_.Exception.Message
+                    classification = $classification
+                    reason = $failureReason
                     started_at = $startedAt.ToString("o")
                     elapsed_seconds = [Math]::Round(((Get-Date) - $startedAt.DateTime).TotalSeconds, 3)
                 }
                 (& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath ps -a) -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-failure-ps.txt")
-                (& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath logs --no-color $service) -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-$service-failure.log")
                 & docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath stop $service
                 break
             }
@@ -1279,6 +1434,9 @@ function Invoke-ProfileVerification {
         optional_ocr_excluded = $true
         generic_image = $ProfileImage
         generic_image_id = $profileImageId
+        transcribe_image = $Image
+        transcribe_image_id = $transcribeImageId
+        allow_incomplete_profile = [bool]$AllowIncompleteProfile
         passing_services = @($passing)
         largest_passing_prefix = @($passing)
         full_profile_passed = ($null -eq $failure -and $passing.Count -eq $serviceOrder.Count)
@@ -1287,7 +1445,12 @@ function Invoke-ProfileVerification {
     } | ConvertTo-Json -Depth 8 | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-summary.json")
     Assert-GpuIsIdle -AllowedPids $AllowGpuPid
     if ($null -ne $failure) {
-        Write-Warning "Required profile bounded measurement stopped at $($failure.service); largest passing prefix: $($passing -join ', ')"
+        $message = "Required profile verification failed at $($failure.service) ($($failure.classification)); largest passing prefix: $($passing -join ', ')"
+        if ($AllowIncompleteProfile -and $failure.classification -in @("capacity", "timeout")) {
+            Write-Warning "$message. Incomplete measurement was explicitly allowed."
+        } else {
+            throw "Required profile verification failed: $message"
+        }
     } else {
         Write-Host "All required profile services started in order; OCR remained excluded."
     }
@@ -1295,6 +1458,9 @@ function Invoke-ProfileVerification {
 
 if (-not ($AssertGpuIdle -or $PrepareEnvironments -or $SelfTest -or $VerifyNemotron -or $VerifyWhisperRollback -or $VerifyProfile)) {
     throw "Select at least one switch: -AssertGpuIdle, -PrepareEnvironments, -SelfTest, -VerifyNemotron, -VerifyWhisperRollback, or -VerifyProfile"
+}
+if ($AllowIncompleteProfile -and -not $VerifyProfile) {
+    throw "-AllowIncompleteProfile is valid only with -VerifyProfile"
 }
 if ($SelfTest) {
     Invoke-VerificationSelfTests

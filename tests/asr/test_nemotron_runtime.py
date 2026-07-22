@@ -137,11 +137,16 @@ def _multipart_upload(
     }
 
 
-async def _transcribe_fixture(client: httpx.AsyncClient, utterance_id: str) -> str:
+async def _transcribe_fixture(
+    client: httpx.AsyncClient, utterance_id: str, *, language: str | None = None
+) -> str:
     audio, _ = _fixture(utterance_id)
+    data = {"model": MODEL_ID}
+    if language is not None:
+        data["language"] = language
     response = await client.post(
         _TRANSCRIPTIONS_URL,
-        data={"model": MODEL_ID},
+        data=data,
         files={"file": (f"{utterance_id}.flac", audio, "audio/flac")},
     )
     assert response.status_code == 200, response.text
@@ -173,10 +178,15 @@ async def test_sequential_and_duplicate_requests_rebuild_their_own_transcript() 
     _, second_expected = _fixture(second_id)
 
     async with httpx.AsyncClient(headers=_AUTH, timeout=420.0) as client:
-        actual = [
-            await _transcribe_fixture(client, utterance_id)
-            for utterance_id in (first_id, second_id, first_id, first_id)
-        ]
+        # The explicit locale must be request-local: every later call omits the
+        # field and therefore exercises automatic language selection.
+        actual = [await _transcribe_fixture(client, first_id, language="en")]
+        actual.extend(
+            [
+                await _transcribe_fixture(client, utterance_id)
+                for utterance_id in (second_id, first_id, first_id)
+            ]
+        )
 
     normalized = [_canonical_lexical(text) for text in actual]
     assert normalized[0] == normalized[2] == normalized[3]

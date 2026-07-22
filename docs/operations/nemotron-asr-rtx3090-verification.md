@@ -13,10 +13,12 @@ container still fails isolation.
 
 ## Immutable runtime inputs
 
-- Image: `aquillm-vllm-transcribe:test`, image ID and local repository digest
-  `sha256:912270f4cd22011f2a4d985d4d41cd5f667a325f14ef982da87f46e341699d20`.
-  The script also records the complete inspection JSON under its temporary
-  artifact directory.
+- Image: `aquillm-vllm-transcribe:test`; the latest local evidence artifact
+  records image ID and local repository digest
+  `sha256:ed542e28147e646798b3f21a1fe38071fb7c1b538718e5b0bc05c24aac7fb438`.
+  Local image IDs/digests identify that measured build only; they are evidence,
+  not stable reproducible identifiers. The script records complete inspection
+  JSON under its temporary artifact directory.
 - vLLM 0.21.0, Transformers 5.13.0, Torch 2.11.0+cu130, librosa 0.11.0,
   tokenizers 0.22.2, safetensors 0.8.0.
 - Installed plugin distribution 0.1.0 loaded from
@@ -163,7 +165,7 @@ repository `.env`. It prints an activation script exposing their paths.
 ## Same-image Whisper rollback
 
 Rollback was verified at 2026-07-21 19:49 PDT with the exact transcription
-image ID above; the harness did not rebuild it. The live process command line
+measured image ID above; the harness did not rebuild it. The live process command line
 from `/proc/1/cmdline` used `openai/whisper-large-v3-turbo`, served alias
 `whisper-large-v3-turbo`, FP16, model length 448, maximum batched tokens 1,500,
 and one 30-second audio item. It contained no revision, Nemotron generation
@@ -177,7 +179,7 @@ same image and Hugging Face cache were then recreated with the explicit
 Nemotron environment, `/proc/1/cmdline` contained the pinned generation config
 and no Whisper quantization flags, `/v1/models` exposed only the Nemotron alias,
 and a second SDK transcription succeeded. Before and after image IDs were both
-`sha256:912270f4cd22011f2a4d985d4d41cd5f667a325f14ef982da87f46e341699d20`.
+the measured local ID recorded above.
 `pip check` reported no broken requirements. Both services and their harness
 network were removed, and the final GPU/container isolation check passed.
 
@@ -215,3 +217,15 @@ The harness generates a standalone Compose project, starts services in the
 order above with in-container health and model probes, records VRAM after every
 success, stops the newest service on failure, writes `profile-summary.json`
 under the printed temporary artifact root, and removes only its own project.
+Before startup it builds both profile images from the checked-out source,
+probes the transcription plugin with an explicit container entrypoint, and
+records both local image IDs. Each healthy service must expose exactly its
+expected `/v1/models` alias before it joins the passing prefix.
+
+The authoritative command exits nonzero unless all four required services
+pass. Failures are classified from Compose output, container state/inspection,
+and logs as `capacity`, `timeout`, or `configuration/infrastructure`. For a
+desktop-only bounded measurement, use `-VerifyProfile -AllowIncompleteProfile`;
+that opt-in tolerates only capacity or timeout outcomes while retaining the
+largest-passing-prefix evidence. Setup/configuration failures always fail. No
+H100 profile pass has yet been claimed.
