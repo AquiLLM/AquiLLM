@@ -14,6 +14,7 @@ from functools import wraps
 from http import HTTPStatus
 from typing import Any, cast
 
+from .decoding import BLANK_TOKEN_ID
 from .languages import RequestValidationError, adaptation_languages_enabled
 from .validation import validate_request
 
@@ -22,7 +23,7 @@ _NEMOTRON_MODEL_MODULE = "aquillm_vllm_nemotron_asr.model"
 _NEMOTRON_MODEL_NAME = "Nemotron3_5AsrForRNNT"
 _PATCH_SENTINEL = "__aquillm_nemotron_asr_compat_patch__"
 _PATCH_OWNER = "aquillm_vllm_nemotron_asr.compat"
-_PATCH_VERSION = 2
+_PATCH_VERSION = 3
 _PLAIN_TEXT_ATTRIBUTE = "__aquillm_nemotron_plain_text__"
 
 
@@ -32,9 +33,11 @@ class _PatchState:
 
     original_create: Callable[..., Awaitable[Any]]
     original_preprocess: Callable[..., Awaitable[Any]]
+    original_decoder_start: Callable[[object], int]
     original_json_response: type[Any]
     wrapped_create: Callable[..., Awaitable[Any]]
     wrapped_preprocess: Callable[..., Awaitable[Any]]
+    wrapped_decoder_start: Callable[[object], int]
     wrapped_json_response: type[Any]
     marked_response_type: type[Any]
     marked_payload_type: type[dict[str, Any]]
@@ -46,7 +49,10 @@ _PATCH_STATE: _PatchState | None = None
 
 
 def _validate_existing_patch_state(
-    handler_class: type[object], api_router: object, existing: object
+    handler_class: type[object],
+    renderer_class: type[object],
+    api_router: object,
+    existing: object,
 ) -> _PatchState:
     """Validate a reload-stable sentinel without depending on class identity."""
     if (
@@ -57,9 +63,11 @@ def _validate_existing_patch_state(
 
     original_create = getattr(existing, "original_create", None)
     original_preprocess = getattr(existing, "original_preprocess", None)
+    original_decoder_start = getattr(existing, "original_decoder_start", None)
     original_json_response = getattr(existing, "original_json_response", None)
     wrapped_create = getattr(existing, "wrapped_create", None)
     wrapped_preprocess = getattr(existing, "wrapped_preprocess", None)
+    wrapped_decoder_start = getattr(existing, "wrapped_decoder_start", None)
     wrapped_json_response = getattr(existing, "wrapped_json_response", None)
     marked_response_type = getattr(existing, "marked_response_type", None)
     marked_payload_type = getattr(existing, "marked_payload_type", None)
@@ -68,9 +76,11 @@ def _validate_existing_patch_state(
         for value in (
             original_create,
             original_preprocess,
+            original_decoder_start,
             original_json_response,
             wrapped_create,
             wrapped_preprocess,
+            wrapped_decoder_start,
             wrapped_json_response,
             marked_response_type,
             marked_payload_type,
@@ -80,6 +90,7 @@ def _validate_existing_patch_state(
     if (
         handler_class._create_speech_to_text is not wrapped_create
         or handler_class._preprocess_speech_to_text is not wrapped_preprocess
+        or renderer_class.get_dec_start_token_id is not wrapped_decoder_start
         or getattr(api_router, "JSONResponse", None) is not wrapped_json_response
     ):
         raise RuntimeError(
@@ -117,6 +128,16 @@ def _is_nemotron_handler(handler: object) -> bool:
     return (
         getattr(model_cls, "__module__", None) == _NEMOTRON_MODEL_MODULE
         and getattr(model_cls, "__qualname__", None) == _NEMOTRON_MODEL_NAME
+    )
+
+
+def _is_nemotron_renderer(renderer: object) -> bool:
+    """Identify only the pinned Nemotron architecture from renderer config."""
+    model_config = getattr(renderer, "model_config", None)
+    hf_config = getattr(model_config, "hf_config", None)
+    architectures = getattr(hf_config, "architectures", None)
+    return isinstance(architectures, (list, tuple)) and (
+        _NEMOTRON_MODEL_NAME in architectures
     )
 
 
@@ -160,11 +181,12 @@ def install_compatibility_hook() -> None:
     from vllm.entrypoints.openai.speech_to_text.speech_to_text import (
         OpenAISpeechToText,
     )
+    from vllm.renderers.base import BaseRenderer
 
     existing = getattr(OpenAISpeechToText, _PATCH_SENTINEL, None)
     if existing is not None:
         _PATCH_STATE = _validate_existing_patch_state(
-            OpenAISpeechToText, api_router, existing
+            OpenAISpeechToText, BaseRenderer, api_router, existing
         )
         return
 
@@ -178,6 +200,9 @@ def install_compatibility_hook() -> None:
     )
     original_preprocess = cast(
         Callable[..., Awaitable[Any]], OpenAISpeechToText._preprocess_speech_to_text
+    )
+    original_decoder_start = cast(
+        Callable[[object], int], BaseRenderer.get_dec_start_token_id
     )
     original_json_response = api_router.JSONResponse
 
@@ -277,18 +302,30 @@ def install_compatibility_hook() -> None:
         )
         return result
 
+    @wraps(original_decoder_start)
+    def wrapped_decoder_start(renderer: object) -> int:
+        hf_config = getattr(getattr(renderer, "model_config", None), "hf_config", None)
+        if _is_nemotron_renderer(renderer) and (
+            getattr(hf_config, "decoder_start_token_id", None) is None
+        ):
+            return BLANK_TOKEN_ID
+        return state.original_decoder_start(renderer)
+
     state = _PatchState(
         original_create=original_create,
         original_preprocess=original_preprocess,
+        original_decoder_start=original_decoder_start,
         original_json_response=original_json_response,
         wrapped_create=wrapped_create,
         wrapped_preprocess=wrapped_preprocess,
+        wrapped_decoder_start=wrapped_decoder_start,
         wrapped_json_response=PlainTextAwareJSONResponse,
         marked_response_type=MarkedPlainTextTranscriptionResponse,
         marked_payload_type=MarkedPlainTextPayload,
     )
     OpenAISpeechToText._create_speech_to_text = wrapped_create
     OpenAISpeechToText._preprocess_speech_to_text = wrapped_preprocess
+    BaseRenderer.get_dec_start_token_id = wrapped_decoder_start
     api_router.JSONResponse = PlainTextAwareJSONResponse
     setattr(OpenAISpeechToText, _PATCH_SENTINEL, state)
     _PATCH_STATE = state

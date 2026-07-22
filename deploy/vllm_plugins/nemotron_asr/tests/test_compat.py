@@ -18,6 +18,8 @@ if getattr(vllm, "__version__", None) != "0.21.0":
     )
 
 from aquillm_vllm_nemotron_asr import compat  # noqa: E402
+from aquillm_vllm_nemotron_asr.decoding import BLANK_TOKEN_ID  # noqa: E402
+from vllm.renderers.base import BaseRenderer  # noqa: E402
 
 
 @dataclass
@@ -65,10 +67,13 @@ def installed_hook(monkeypatch: pytest.MonkeyPatch):
     compat.install_compatibility_hook()
     state = compat._PATCH_STATE
     assert state is not None
-    create, preprocess = state.original_create, state.original_preprocess
+    create = state.original_create
+    preprocess = state.original_preprocess
+    decoder_start = state.original_decoder_start
     yield state
     state.original_create = create
     state.original_preprocess = preprocess
+    state.original_decoder_start = decoder_start
     monkeypatch.undo()
 
 
@@ -101,6 +106,7 @@ def test_install_is_reentrant_and_preserves_original_descriptors() -> None:
     assert state is not None
     create_wrapper = state.wrapped_create
     preprocess_wrapper = state.wrapped_preprocess
+    decoder_start_wrapper = state.wrapped_decoder_start
     json_response_wrapper = state.wrapped_json_response
     marked_response_type = state.marked_response_type
 
@@ -109,15 +115,19 @@ def test_install_is_reentrant_and_preserves_original_descriptors() -> None:
     assert compat._PATCH_STATE is state
     assert state.wrapped_create is create_wrapper
     assert state.wrapped_preprocess is preprocess_wrapper
+    assert state.wrapped_decoder_start is decoder_start_wrapper
     assert state.wrapped_json_response is json_response_wrapper
     assert state.marked_response_type is marked_response_type
     assert state.original_create is not create_wrapper
     assert state.original_preprocess is not preprocess_wrapper
+    assert state.original_decoder_start is not decoder_start_wrapper
     assert OpenAISpeechToText._create_speech_to_text is create_wrapper
     assert OpenAISpeechToText._preprocess_speech_to_text is preprocess_wrapper
+    assert BaseRenderer.get_dec_start_token_id is decoder_start_wrapper
     assert api_router.JSONResponse is json_response_wrapper
     assert create_wrapper.__wrapped__ is state.original_create
     assert preprocess_wrapper.__wrapped__ is state.original_preprocess
+    assert decoder_start_wrapper.__wrapped__ is state.original_decoder_start
     assert issubclass(json_response_wrapper, state.original_json_response)
 
 
@@ -151,6 +161,19 @@ def test_install_rejects_a_partially_replaced_json_response(
         compat.install_compatibility_hook()
 
 
+def test_install_rejects_a_partially_replaced_decoder_start_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = compat._PATCH_STATE
+    assert state is not None
+    monkeypatch.setattr(
+        BaseRenderer, "get_dec_start_token_id", state.original_decoder_start
+    )
+
+    with pytest.raises(RuntimeError, match="partially replaced"):
+        compat.install_compatibility_hook()
+
+
 def test_reload_reuses_the_existing_wrapper_state_without_stacking() -> None:
     import aquillm_vllm_nemotron_asr as plugin
     from vllm.entrypoints.openai.speech_to_text import api_router
@@ -164,6 +187,8 @@ def test_reload_reuses_the_existing_wrapper_state_without_stacking() -> None:
     original_preprocess = original_state.original_preprocess
     original_create_wrapper = original_state.wrapped_create
     original_preprocess_wrapper = original_state.wrapped_preprocess
+    original_decoder_start = original_state.original_decoder_start
+    original_decoder_start_wrapper = original_state.wrapped_decoder_start
     original_json_response = original_state.original_json_response
     original_json_response_wrapper = original_state.wrapped_json_response
     original_marked_response_type = original_state.marked_response_type
@@ -175,11 +200,100 @@ def test_reload_reuses_the_existing_wrapper_state_without_stacking() -> None:
     assert reloaded_compat._PATCH_STATE is original_state
     assert OpenAISpeechToText._create_speech_to_text is original_create_wrapper
     assert OpenAISpeechToText._preprocess_speech_to_text is original_preprocess_wrapper
+    assert BaseRenderer.get_dec_start_token_id is original_decoder_start_wrapper
     assert api_router.JSONResponse is original_json_response_wrapper
     assert original_state.original_create is original_create
     assert original_state.original_preprocess is original_preprocess
+    assert original_state.original_decoder_start is original_decoder_start
     assert original_state.original_json_response is original_json_response
     assert original_state.marked_response_type is original_marked_response_type
+
+
+def _renderer(
+    *,
+    architectures: list[str] | None,
+    decoder_start_token_id: int | None,
+) -> BaseRenderer:
+    class Renderer(BaseRenderer):
+        def render_messages(self, *args, **kwargs):
+            raise AssertionError("render_messages must not be called")
+
+    renderer = Renderer.__new__(Renderer)
+    renderer.model_config = SimpleNamespace(
+        hf_config=SimpleNamespace(
+            architectures=architectures,
+            decoder_start_token_id=decoder_start_token_id,
+        )
+    )
+    renderer.tokenizer = None
+    return renderer
+
+
+def test_nemotron_renderer_without_decoder_start_or_bos_uses_blank_token(
+    installed_hook,
+) -> None:
+    renderer = _renderer(
+        architectures=["Nemotron3_5AsrForRNNT"], decoder_start_token_id=None
+    )
+    with pytest.raises(RuntimeError, match="Cannot find decoder start token"):
+        installed_hook.original_decoder_start(renderer)
+
+    assert renderer.get_dec_start_token_id() == BLANK_TOKEN_ID
+
+
+def test_non_nemotron_decoder_start_is_an_exact_original_passthrough(
+    installed_hook,
+) -> None:
+    renderer = _renderer(
+        architectures=["WhisperForConditionalGeneration"],
+        decoder_start_token_id=None,
+    )
+    result = object()
+    calls: list[object] = []
+
+    def original(actual_renderer):
+        calls.append(actual_renderer)
+        return result
+
+    installed_hook.original_decoder_start = original
+
+    assert renderer.get_dec_start_token_id() is result
+    assert calls == [renderer]
+
+
+def test_non_nemotron_decoder_start_preserves_original_exception(
+    installed_hook,
+) -> None:
+    renderer = _renderer(architectures=None, decoder_start_token_id=None)
+    expected = RuntimeError("stock renderer failure")
+
+    def original(actual_renderer):
+        raise expected
+
+    installed_hook.original_decoder_start = original
+
+    with pytest.raises(RuntimeError) as raised:
+        renderer.get_dec_start_token_id()
+
+    assert raised.value is expected
+
+
+def test_nemotron_explicit_decoder_start_delegates_to_original(
+    installed_hook,
+) -> None:
+    renderer = _renderer(
+        architectures=["Nemotron3_5AsrForRNNT"], decoder_start_token_id=27
+    )
+    calls: list[object] = []
+
+    def original(actual_renderer):
+        calls.append(actual_renderer)
+        return 27
+
+    installed_hook.original_decoder_start = original
+
+    assert renderer.get_dec_start_token_id() == 27
+    assert calls == [renderer]
 
 
 def test_non_nemotron_create_is_an_exact_original_passthrough(installed_hook) -> None:
