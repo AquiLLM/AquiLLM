@@ -1,9 +1,10 @@
 """Narrow, version-pinned vLLM HTTP validation for Nemotron ASR.
 
 This module intentionally reaches into two private vLLM 0.21 speech-to-text
-methods and the API router's ``JSONResponse`` binding/response class.  Keep the
-patch small and fail fast rather than attempting to support a nearby vLLM
-release with potentially different request lifecycles.
+methods, ``BaseRenderer.get_dec_start_token_id``, and the API router's
+``JSONResponse`` binding/response class.  Keep the patch small and fail fast
+rather than attempting to support a nearby vLLM release with potentially
+different request lifecycles.
 """
 
 from __future__ import annotations
@@ -173,7 +174,7 @@ def _validation_error_response(handler: object, error: RequestValidationError) -
 
 
 def install_compatibility_hook() -> None:
-    """Install re-entrant wrappers on vLLM 0.21 speech-to-text handlers."""
+    """Wrap pinned speech handlers, decoder-start rendering, and JSON output."""
     global _PATCH_STATE
 
     verify_vllm_compatibility()
