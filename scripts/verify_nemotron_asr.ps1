@@ -4,7 +4,9 @@ param(
     [int[]]$AllowGpuPid = @(),
     [switch]$PrepareEnvironments,
     [switch]$SelfTest,
-    [switch]$VerifyNemotron
+    [switch]$VerifyNemotron,
+    [switch]$VerifyWhisperRollback,
+    [switch]$VerifyProfile
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,13 +17,18 @@ $Revision = "f3d333391852ba876df169dcc9ba902d25b6ab0b"
 $ServedName = "nemotron-3.5-asr-streaming-0.6b"
 $Image = "aquillm-vllm-transcribe:test"
 $Project = "aquillm-asr-verification"
+$ProfileProject = "aquillm-vllm-profile-verification"
+$ProfileImage = "aquillm-vllm-profile:test"
 $CacheVolume = "aquillm_nemotron_asr_hf_cache"
+$ProfileCacheVolume = "aquillm_vllm_profile_hf_cache"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $StateRoot = Join-Path ([IO.Path]::GetTempPath()) "aquillm-nemotron-asr-verification"
 $ArtifactRoot = Join-Path $StateRoot "artifacts"
 $ComposePath = Join-Path $StateRoot "compose.yml"
 $NemotronEnvPath = Join-Path $StateRoot "nemotron.env"
 $WhisperEnvPath = Join-Path $StateRoot "whisper.env"
+$ProfileEnvPath = Join-Path $StateRoot "profile.env"
+$ProfileComposePath = Join-Path $StateRoot "profile-compose.yml"
 $ActivationPath = Join-Path $StateRoot "activate.ps1"
 $MemoryCsv = Join-Path $ArtifactRoot "gpu-memory.csv"
 $DirectParityArtifactNames = @(
@@ -209,7 +216,22 @@ function Invoke-VerificationSelfTests {
         Remove-DirectParityArtifacts -Root $selfTestRoot
         Remove-Item -LiteralPath $selfTestRoot -Force -ErrorAction SilentlyContinue
     }
-    Write-Host "Environment restoration and artifact freshness self-tests passed."
+    Assert-RuntimeArguments -Runtime Whisper -Inspection ([pscustomobject]@{
+        runtime_proc_1_args = @(
+            "python3", "-m", "vllm.entrypoints.openai.api_server",
+            "--model", "openai/whisper-large-v3-turbo",
+            "--max-num-batched-tokens", "1500",
+            "--limit-mm-per-prompt", '{"audio":{"count":1,"length":30}}'
+        )
+    })
+    Assert-RuntimeArguments -Runtime Nemotron -Inspection ([pscustomobject]@{
+        runtime_proc_1_args = @(
+            "python3", "-m", "vllm.entrypoints.openai.api_server",
+            "--model", $ModelId, "--generation-config",
+            "/opt/aquillm/nemotron-generation-config"
+        )
+    })
+    Write-Host "Environment restoration, artifact freshness, and runtime argument self-tests passed."
 }
 
 function Get-RunningGpuContainers {
@@ -282,6 +304,7 @@ TRANSCRIBE_VLLM_DTYPE=float32
 TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 TRANSCRIBE_VLLM_TRUST_REMOTE_CODE=1
 TRANSCRIBE_VLLM_EXTRA_ARGS=--enforce-eager --max-num-seqs 1 --max-num-batched-tokens 50000 --generation-config /opt/aquillm/nemotron-generation-config
+INGEST_TRANSCRIBE_MODEL=$ServedName
 "@ | Set-Utf8NoBom -Path $NemotronEnvPath
     @"
 ASR_SERVICE_ENV=$($WhisperEnvPath.Replace('\', '/'))
@@ -295,7 +318,8 @@ TRANSCRIBE_VLLM_MAX_MODEL_LEN=448
 TRANSCRIBE_VLLM_DTYPE=float16
 TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=0
 TRANSCRIBE_VLLM_TRUST_REMOTE_CODE=1
-TRANSCRIBE_VLLM_EXTRA_ARGS=--quantization bitsandbytes --load-format bitsandbytes --model-loader-extra-config '{"load_in_8bit":true}' --max-num-seqs 1 --max-num-batched-tokens 448 --limit-mm-per-prompt '{"audio":{"count":1,"length":30}}'
+TRANSCRIBE_VLLM_EXTRA_ARGS=--max-num-seqs 1 --max-num-batched-tokens 1500 --limit-mm-per-prompt '{"audio":{"count":1,"length":30}}'
+INGEST_TRANSCRIBE_MODEL=whisper-large-v3-turbo
 "@ | Set-Utf8NoBom -Path $WhisperEnvPath
     @"
 name: $Project
@@ -319,6 +343,7 @@ services:
       VLLM_ALLOW_LONG_MAX_MODEL_LEN: `${TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN:?}
       VLLM_TRUST_REMOTE_CODE: `${TRANSCRIBE_VLLM_TRUST_REMOTE_CODE:?}
       VLLM_EXTRA_ARGS: `${TRANSCRIBE_VLLM_EXTRA_ARGS:?}
+      INGEST_TRANSCRIBE_MODEL: `${INGEST_TRANSCRIBE_MODEL:?}
       HF_HOME: /root/.cache/huggingface
     ports:
       - "8005:8000"
@@ -343,16 +368,129 @@ volumes:
     name: $CacheVolume
 "@ | Set-Utf8NoBom -Path $ComposePath
     @"
+PROFILE_MAIN_MODEL=hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16
+PROFILE_MAIN_SERVED_NAME=qwen3.6:27b-mtp-awq
+PROFILE_MAIN_GPU_MEMORY_UTILIZATION=0.45
+PROFILE_MAIN_MAX_MODEL_LEN=40960
+PROFILE_MAIN_EXTRA_ARGS=--kv-cache-dtype turboquant_4bit_nc --dtype float16 --download-dir /root/.cache/huggingface/hub --attention-backend TURBOQUANT --chat-template /templates/qwen_fixed_chat_template.jinja --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-num-seqs 1 --no-enable-prefix-caching --speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+PROFILE_EMBED_MODEL=Qwen/Qwen3-VL-Embedding-2B
+PROFILE_EMBED_GPU_MEMORY_UTILIZATION=0.12
+PROFILE_EMBED_MAX_MODEL_LEN=2048
+PROFILE_EMBED_EXTRA_ARGS=--quantization bitsandbytes --load-format bitsandbytes --dtype float16 --model-loader-extra-config '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}'
+PROFILE_RERANK_MODEL=Qwen/Qwen3-VL-Reranker-2B
+PROFILE_RERANK_GPU_MEMORY_UTILIZATION=0.08
+PROFILE_RERANK_MAX_MODEL_LEN=1024
+PROFILE_RERANK_EXTRA_ARGS=--runner pooling --dtype float16 --chat-template /templates/qwen3_vl_reranker.jinja --hf-overrides '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+"@ | Set-Utf8NoBom -Path $ProfileEnvPath
+    @"
+name: $ProfileProject
+services:
+  vllm:
+    image: $ProfileImage
+    environment:
+      VLLM_HOST: 0.0.0.0
+      VLLM_PORT: "8000"
+      VLLM_MODEL: `${PROFILE_MAIN_MODEL:?}
+      VLLM_SERVED_MODEL_NAME: `${PROFILE_MAIN_SERVED_NAME:?}
+      VLLM_TENSOR_PARALLEL_SIZE: "1"
+      VLLM_GPU_MEMORY_UTILIZATION: `${PROFILE_MAIN_GPU_MEMORY_UTILIZATION:?}
+      VLLM_MAX_MODEL_LEN: `${PROFILE_MAIN_MAX_MODEL_LEN:?}
+      VLLM_TRUST_REMOTE_CODE: "1"
+      VLLM_EXTRA_ARGS: `${PROFILE_MAIN_EXTRA_ARGS:?}
+      HF_HOME: /root/.cache/huggingface
+    volumes: ["profile_hf_cache:/root/.cache/huggingface"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    healthcheck: &healthcheck
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\""]
+      interval: 10s
+      timeout: 10s
+      retries: 90
+      start_period: 60s
+  vllm_transcribe:
+    image: $Image
+    environment:
+      VLLM_USE_V2_MODEL_RUNNER: "0"
+      VLLM_SERVICE_KIND: transcribe
+      VLLM_MODEL: $ModelId
+      VLLM_REVISION: $Revision
+      VLLM_SERVED_MODEL_NAME: $ServedName
+      VLLM_TOKENIZER: $ModelId
+      VLLM_TENSOR_PARALLEL_SIZE: "1"
+      VLLM_GPU_MEMORY_UTILIZATION: "0.20"
+      VLLM_MAX_MODEL_LEN: "50000"
+      VLLM_DTYPE: float32
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+      VLLM_TRUST_REMOTE_CODE: "1"
+      VLLM_EXTRA_ARGS: --enforce-eager --max-num-seqs 1 --max-num-batched-tokens 50000 --generation-config /opt/aquillm/nemotron-generation-config
+      HF_HOME: /root/.cache/huggingface
+    volumes: ["nemotron_hf_cache:/root/.cache/huggingface"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    healthcheck: *healthcheck
+  vllm_embed:
+    image: $ProfileImage
+    environment:
+      VLLM_MODEL: `${PROFILE_EMBED_MODEL:?}
+      VLLM_SERVED_MODEL_NAME: `${PROFILE_EMBED_MODEL:?}
+      VLLM_RUNNER: pooling
+      VLLM_TENSOR_PARALLEL_SIZE: "1"
+      VLLM_GPU_MEMORY_UTILIZATION: `${PROFILE_EMBED_GPU_MEMORY_UTILIZATION:?}
+      VLLM_MAX_MODEL_LEN: `${PROFILE_EMBED_MAX_MODEL_LEN:?}
+      VLLM_TRUST_REMOTE_CODE: "1"
+      VLLM_EXTRA_ARGS: `${PROFILE_EMBED_EXTRA_ARGS:?}
+      HF_HOME: /root/.cache/huggingface
+    volumes: ["profile_hf_cache:/root/.cache/huggingface"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    healthcheck: *healthcheck
+  vllm_rerank:
+    image: $ProfileImage
+    environment:
+      VLLM_MODEL: `${PROFILE_RERANK_MODEL:?}
+      VLLM_SERVED_MODEL_NAME: `${PROFILE_RERANK_MODEL:?}
+      VLLM_TASK: score
+      VLLM_TENSOR_PARALLEL_SIZE: "1"
+      VLLM_GPU_MEMORY_UTILIZATION: `${PROFILE_RERANK_GPU_MEMORY_UTILIZATION:?}
+      VLLM_MAX_MODEL_LEN: `${PROFILE_RERANK_MAX_MODEL_LEN:?}
+      VLLM_TRUST_REMOTE_CODE: "1"
+      VLLM_EXTRA_ARGS: `${PROFILE_RERANK_EXTRA_ARGS:?}
+      HF_HOME: /root/.cache/huggingface
+    volumes: ["profile_hf_cache:/root/.cache/huggingface"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    healthcheck: *healthcheck
+volumes:
+  nemotron_hf_cache:
+    external: true
+    name: $CacheVolume
+  profile_hf_cache:
+    external: true
+    name: $ProfileCacheVolume
+"@ | Set-Utf8NoBom -Path $ProfileComposePath
+    @"
 `$env:NEMOTRON_ASR_ENV = '$NemotronEnvPath'
 `$env:WHISPER_ASR_ENV = '$WhisperEnvPath'
 `$env:NEMOTRON_ASR_OVERRIDE = '$ComposePath'
 `$env:NEMOTRON_ASR_RUNTIME_COMPOSE = '$ComposePath'
+`$env:NEMOTRON_ASR_PROFILE_ENV = '$ProfileEnvPath'
+`$env:NEMOTRON_ASR_PROFILE_COMPOSE = '$ProfileComposePath'
 "@ | Set-Utf8NoBom -Path $ActivationPath
 
     $env:NEMOTRON_ASR_ENV = $NemotronEnvPath
     $env:WHISPER_ASR_ENV = $WhisperEnvPath
     $env:NEMOTRON_ASR_OVERRIDE = $ComposePath
     $env:NEMOTRON_ASR_RUNTIME_COMPOSE = $ComposePath
+    $env:NEMOTRON_ASR_PROFILE_ENV = $ProfileEnvPath
+    $env:NEMOTRON_ASR_PROFILE_COMPOSE = $ProfileComposePath
     Write-Host "Prepared isolated runtime files under $StateRoot"
     Write-Host "Dot-source $ActivationPath to expose paths in another PowerShell process."
 }
@@ -387,6 +525,164 @@ function Assert-RenderedNemotronConfig {
     Write-Host "Rendered standalone Compose config passed exact Nemotron assertions."
 }
 
+function Assert-RenderedWhisperConfig {
+    $renderedPath = Join-Path $ArtifactRoot "whisper-compose-config.json"
+    $rendered = @(& docker compose --project-name $Project --env-file $WhisperEnvPath -f $ComposePath config --format json)
+    if ($LASTEXITCODE -ne 0) { throw "docker compose Whisper config failed" }
+    $renderedText = $rendered -join [Environment]::NewLine
+    $renderedText | Set-Utf8NoBom -Path $renderedPath
+    $service = ($renderedText | ConvertFrom-Json).services.vllm_transcribe
+    $expected = @{
+        VLLM_MODEL = "openai/whisper-large-v3-turbo"
+        VLLM_REVISION = ""
+        VLLM_SERVED_MODEL_NAME = "whisper-large-v3-turbo"
+        VLLM_TOKENIZER = "openai/whisper-large-v3-turbo"
+        VLLM_TENSOR_PARALLEL_SIZE = "1"
+        VLLM_GPU_MEMORY_UTILIZATION = "0.08"
+        VLLM_MAX_MODEL_LEN = "448"
+        VLLM_DTYPE = "float16"
+        VLLM_ALLOW_LONG_MAX_MODEL_LEN = "0"
+        VLLM_TRUST_REMOTE_CODE = "1"
+        VLLM_USE_V2_MODEL_RUNNER = "0"
+        VLLM_SERVICE_KIND = "transcribe"
+        INGEST_TRANSCRIBE_MODEL = "whisper-large-v3-turbo"
+    }
+    foreach ($entry in $expected.GetEnumerator()) {
+        if ([string]$service.environment.($entry.Key) -ne $entry.Value) {
+            throw "Rendered Whisper $($entry.Key) did not match: $($service.environment.($entry.Key))"
+        }
+    }
+    $extra = [string]$service.environment.VLLM_EXTRA_ARGS
+    foreach ($required in @(
+        "--max-num-seqs 1",
+        "--max-num-batched-tokens 1500",
+        '"audio":{"count":1,"length":30}'
+    )) {
+        if (-not $extra.Contains($required)) {
+            throw "Rendered Whisper arguments did not contain: $required"
+        }
+    }
+    if ($extra -match "generation-config|nemotron") {
+        throw "Rendered Whisper arguments contain Nemotron-only flags"
+    }
+    if ($service.image -ne $Image) { throw "Rendered Whisper image was $($service.image)" }
+    Write-Host "Rendered standalone Compose config passed exact Whisper rollback assertions."
+}
+
+function Get-LocalImageId {
+    param([Parameter(Mandatory)] [string]$Name)
+    $id = (& docker image inspect $Name --format "{{.Id}}") -join ""
+    if ($LASTEXITCODE -ne 0 -or -not $id) { throw "Could not inspect image: $Name" }
+    return $id.Trim()
+}
+
+function Get-ComposeServiceInspection {
+    param(
+        [Parameter(Mandatory)] [string]$ProjectName,
+        [Parameter(Mandatory)] [string]$EnvironmentPath,
+        [Parameter(Mandatory)] [string]$ComposeFile,
+        [Parameter(Mandatory)] [string]$Service,
+        [Parameter(Mandatory)] [string]$ArtifactName
+    )
+    $containerId = (@(& docker compose --project-name $ProjectName --env-file $EnvironmentPath -f $ComposeFile ps -q $Service) -join "").Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $containerId) { throw "No container ID for $Service" }
+    $inspection = (& docker inspect $containerId | ConvertFrom-Json)[0]
+    $runtimeArguments = @(& docker exec $containerId python3 -c "from pathlib import Path; print(Path('/proc/1/cmdline').read_bytes().replace(bytes([0]), bytes([10])).decode(), end='')")
+    if ($LASTEXITCODE -ne 0 -or -not $runtimeArguments.Count) {
+        throw "Could not read live /proc/1/cmdline for $Service"
+    }
+    $evidence = [pscustomobject]@{
+        container_id = $containerId
+        image = $inspection.Image
+        configured_path = $inspection.Path
+        configured_args = @($inspection.Args)
+        runtime_proc_1_args = @($runtimeArguments)
+        inspected_at = ([DateTimeOffset](Get-Date)).ToString("o")
+    }
+    $evidence | ConvertTo-Json -Depth 12 | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot $ArtifactName)
+    return $evidence
+}
+
+function Assert-RuntimeArguments {
+    param(
+        [Parameter(Mandatory)] $Inspection,
+        [Parameter(Mandatory)] [ValidateSet("Whisper", "Nemotron")] [string]$Runtime
+    )
+    $arguments = @($Inspection.runtime_proc_1_args)
+    $argumentText = $arguments -join " "
+    if ($Runtime -eq "Whisper") {
+        foreach ($forbidden in @("--revision", "--generation-config", "/opt/aquillm/nemotron-generation-config")) {
+            if ($arguments -contains $forbidden -or $argumentText.Contains($forbidden)) {
+                throw "Whisper runtime arguments contain forbidden value: $forbidden"
+            }
+        }
+        foreach ($required in @("--max-num-batched-tokens", "1500", "--limit-mm-per-prompt")) {
+            if (-not ($arguments -contains $required)) { throw "Whisper runtime arguments omit: $required" }
+        }
+        foreach ($forbidden in @("--quantization", "bitsandbytes", "--load-format", "--model-loader-extra-config")) {
+            if ($arguments -contains $forbidden -or $argumentText.Contains($forbidden)) {
+                throw "Whisper runtime arguments contain unsupported quantization value: $forbidden"
+            }
+        }
+    } else {
+        if (-not ($arguments -contains "--generation-config") -or
+            -not ($arguments -contains "/opt/aquillm/nemotron-generation-config")) {
+            throw "Nemotron runtime arguments omit the pinned generation config"
+        }
+        foreach ($forbidden in @("bitsandbytes", "--quantization", "--load-format")) {
+            if ($arguments -contains $forbidden -or $argumentText.Contains($forbidden)) {
+                throw "Nemotron runtime arguments contain Whisper rollback value: $forbidden"
+            }
+        }
+    }
+}
+
+function Invoke-AsrSdkSmoke {
+    param(
+        [Parameter(Mandatory)] [string]$Model,
+        [Parameter(Mandatory)] [string]$ArtifactName,
+        [string]$Prompt = ""
+    )
+    $hostPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $hostPython)) { throw "Host test Python not found: $hostPython" }
+    $scriptPath = Join-Path $StateRoot "asr-sdk-smoke.py"
+    @'
+import json
+import os
+from pathlib import Path
+
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8005/v1", api_key="EMPTY", timeout=180.0)
+models = [item.id for item in client.models.list().data]
+expected = os.environ["ASR_SMOKE_MODEL"]
+assert models == [expected], models
+kwargs = {"model": expected}
+prompt = os.environ.get("ASR_SMOKE_PROMPT", "")
+if prompt:
+    kwargs["prompt"] = prompt
+fixture = Path(os.environ["ASR_SMOKE_FIXTURE"])
+with fixture.open("rb") as audio:
+    result = client.audio.transcriptions.create(file=audio, **kwargs)
+assert isinstance(result.text, str) and result.text.strip(), result
+Path(os.environ["ASR_SMOKE_ARTIFACT"]).write_text(json.dumps({
+    "model": expected,
+    "models": models,
+    "prompt": prompt,
+    "text": result.text,
+}, indent=2, sort_keys=True), encoding="utf-8")
+print(result.text)
+'@ | Set-Utf8NoBom -Path $scriptPath
+    Invoke-WithTemporaryEnvironment -Environment @{
+        ASR_SMOKE_MODEL = $Model
+        ASR_SMOKE_PROMPT = $Prompt
+        ASR_SMOKE_FIXTURE = (Join-Path $RepoRoot "tests\fixtures\audio\librispeech_1272-128104-0000.flac")
+        ASR_SMOKE_ARTIFACT = (Join-Path $ArtifactRoot $ArtifactName)
+    } -ScriptBlock {
+        Invoke-Checked -FilePath $hostPython -ArgumentList @($scriptPath)
+    }
+}
+
 function Assert-RepositoryComposeProfiles {
     $mirrorRoot = Join-Path $StateRoot "repository-compose-render"
     $mirrorCompose = Join-Path $mirrorRoot "deploy\compose"
@@ -416,6 +712,35 @@ function Assert-RepositoryComposeProfiles {
         )
     }
     Write-Host "Rendered base/development/production profiles passed float32 assertions."
+}
+
+function Assert-RenderedProfileConfig {
+    $rendered = @(& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath config --format json)
+    if ($LASTEXITCODE -ne 0) { throw "Failed to render standalone profile Compose" }
+    $renderedText = $rendered -join [Environment]::NewLine
+    $renderedText | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-compose-config.json")
+    $services = ($renderedText | ConvertFrom-Json).services
+    $expected = @{
+        vllm = @{ image = $ProfileImage; fraction = "0.45"; model = "hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16" }
+        vllm_transcribe = @{ image = $Image; fraction = "0.20"; model = $ModelId }
+        vllm_embed = @{ image = $ProfileImage; fraction = "0.12"; model = "Qwen/Qwen3-VL-Embedding-2B" }
+        vllm_rerank = @{ image = $ProfileImage; fraction = "0.08"; model = "Qwen/Qwen3-VL-Reranker-2B" }
+    }
+    foreach ($entry in $expected.GetEnumerator()) {
+        $service = $services.($entry.Key)
+        if ($null -eq $service) { throw "Profile omitted required service: $($entry.Key)" }
+        if ($service.image -ne $entry.Value.image) { throw "$($entry.Key) rendered unexpected image: $($service.image)" }
+        if ([string]$service.environment.VLLM_GPU_MEMORY_UTILIZATION -ne $entry.Value.fraction) {
+            throw "$($entry.Key) rendered unexpected GPU fraction"
+        }
+        if ($service.environment.VLLM_MODEL -ne $entry.Value.model) {
+            throw "$($entry.Key) rendered unexpected model: $($service.environment.VLLM_MODEL)"
+        }
+    }
+    if ($services.PSObject.Properties.Name -contains "vllm_ocr") {
+        throw "Standalone required profile unexpectedly contains optional OCR"
+    }
+    Write-Host "Rendered required profile passed exact service/order budget assertions; OCR is excluded."
 }
 
 function Prefetch-PinnedCheckpoint {
@@ -772,8 +1097,204 @@ function Invoke-FullNemotronVerification {
     Write-Host "Nemotron verification artifacts: $ArtifactRoot"
 }
 
-if (-not ($AssertGpuIdle -or $PrepareEnvironments -or $SelfTest -or $VerifyNemotron)) {
-    throw "Select at least one switch: -AssertGpuIdle, -PrepareEnvironments, -SelfTest, or -VerifyNemotron"
+function Invoke-WhisperRollbackVerification {
+    Invoke-VerificationSelfTests
+    Write-IsolatedEnvironmentFiles
+    Assert-RenderedWhisperConfig
+    Assert-RenderedNemotronConfig
+    New-Item -ItemType Directory -Force $ArtifactRoot | Out-Null
+    Invoke-Checked -FilePath docker -ArgumentList @("volume", "create", $CacheVolume) | Out-Null
+    & docker compose --project-name $Project --env-file $WhisperEnvPath -f $ComposePath down --remove-orphans
+    Assert-GpuIsIdle -AllowedPids $AllowGpuPid
+
+    $imageIdBefore = Get-LocalImageId -Name $Image
+    $whisperInspection = $null
+    $nemotronInspection = $null
+    $whisperStartedAt = $null
+    $nemotronStartedAt = $null
+    try {
+        $whisperStartedAt = [DateTimeOffset](Get-Date)
+        Invoke-Checked -FilePath docker -ArgumentList @(
+            "compose", "--project-name", $Project, "--env-file", $WhisperEnvPath,
+            "-f", $ComposePath, "up", "-d", "--no-deps", "--wait", "--wait-timeout", "900",
+            "vllm_transcribe"
+        )
+        $whisperInspection = Get-ComposeServiceInspection `
+            -ProjectName $Project -EnvironmentPath $WhisperEnvPath `
+            -ComposeFile $ComposePath -Service "vllm_transcribe" `
+            -ArtifactName "whisper-live-container.json"
+        if ($whisperInspection.image -ne $imageIdBefore) {
+            throw "Whisper container did not reuse exact image ID: $($whisperInspection.image)"
+        }
+        Assert-RuntimeArguments -Inspection $whisperInspection -Runtime Whisper
+        $whisperModels = Invoke-RestMethod -Uri "http://127.0.0.1:8005/v1/models" -Headers @{ Authorization = "Bearer EMPTY" }
+        $whisperIds = @($whisperModels.data | ForEach-Object { $_.id })
+        if ($whisperIds.Count -ne 1 -or $whisperIds[0] -ne "whisper-large-v3-turbo") {
+            throw "Unexpected Whisper served model IDs: $($whisperIds -join ', ')"
+        }
+        Invoke-AsrSdkSmoke `
+            -Model "whisper-large-v3-turbo" `
+            -Prompt "MISTER QUILTER" `
+            -ArtifactName "whisper-sdk-smoke.json"
+        $packageOutput = @(& docker run --rm --entrypoint python3 $Image -c "import importlib.metadata as m; import aquillm_vllm_nemotron_asr as p; print('image_plugin=' + p.__file__); print('vllm=' + m.version('vllm')); print('transformers=' + m.version('transformers')); print('torch=' + m.version('torch')); print('bitsandbytes=' + m.version('bitsandbytes')); print('accelerate=' + m.version('accelerate'))")
+        if ($LASTEXITCODE -ne 0) { throw "Same-image package evidence probe failed" }
+        $packageOutput -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "rollback-package-versions.txt")
+        $pipCheckOutput = @(& docker run --rm --entrypoint python3 $Image -m pip check)
+        if ($LASTEXITCODE -ne 0) { throw "Same-image pip check failed" }
+        (($pipCheckOutput -join [Environment]::NewLine) + [Environment]::NewLine) | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "rollback-pip-check.txt")
+    }
+    finally {
+        (& docker compose --project-name $Project --env-file $WhisperEnvPath -f $ComposePath logs --no-color vllm_transcribe) -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "whisper-service.log")
+        & docker compose --project-name $Project --env-file $WhisperEnvPath -f $ComposePath down --remove-orphans
+    }
+    Assert-GpuIsIdle -AllowedPids $AllowGpuPid
+
+    try {
+        $nemotronStartedAt = [DateTimeOffset](Get-Date)
+        Invoke-Checked -FilePath docker -ArgumentList @(
+            "compose", "--project-name", $Project, "--env-file", $NemotronEnvPath,
+            "-f", $ComposePath, "up", "-d", "--no-deps", "--wait", "--wait-timeout", "900",
+            "vllm_transcribe"
+        )
+        $nemotronInspection = Get-ComposeServiceInspection `
+            -ProjectName $Project -EnvironmentPath $NemotronEnvPath `
+            -ComposeFile $ComposePath -Service "vllm_transcribe" `
+            -ArtifactName "nemotron-restored-live-container.json"
+        if ($nemotronInspection.image -ne $imageIdBefore) {
+            throw "Restored Nemotron container did not reuse exact image ID: $($nemotronInspection.image)"
+        }
+        Assert-RuntimeArguments -Inspection $nemotronInspection -Runtime Nemotron
+        $nemotronModels = Invoke-RestMethod -Uri "http://127.0.0.1:8005/v1/models" -Headers @{ Authorization = "Bearer EMPTY" }
+        $nemotronIds = @($nemotronModels.data | ForEach-Object { $_.id })
+        if ($nemotronIds.Count -ne 1 -or $nemotronIds[0] -ne $ServedName) {
+            throw "Unexpected restored Nemotron served model IDs: $($nemotronIds -join ', ')"
+        }
+        Invoke-AsrSdkSmoke -Model $ServedName -ArtifactName "nemotron-restored-sdk-smoke.json"
+    }
+    finally {
+        (& docker compose --project-name $Project --env-file $NemotronEnvPath -f $ComposePath logs --no-color vllm_transcribe) -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "nemotron-restored-service.log")
+        & docker compose --project-name $Project --env-file $NemotronEnvPath -f $ComposePath down --remove-orphans
+    }
+    Assert-GpuIsIdle -AllowedPids $AllowGpuPid
+    $imageIdAfter = Get-LocalImageId -Name $Image
+    if ($imageIdAfter -ne $imageIdBefore) { throw "Transcription image changed during environment-only rollback" }
+    [pscustomobject]@{
+        verified_at = ([DateTimeOffset](Get-Date)).ToString("o")
+        image = $Image
+        image_id_before = $imageIdBefore
+        image_id_after = $imageIdAfter
+        image_rebuilt = $false
+        whisper_model = "whisper-large-v3-turbo"
+        whisper_started_at = $whisperStartedAt.ToString("o")
+        whisper_prompt = "MISTER QUILTER"
+        nemotron_model = $ServedName
+        nemotron_started_at = $nemotronStartedAt.ToString("o")
+        shared_cache_volume = $CacheVolume
+    } | ConvertTo-Json -Depth 4 | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "whisper-rollback-summary.json")
+    Write-Host "Same-image Whisper rollback and explicit Nemotron restoration passed."
+}
+
+function Invoke-ProfileVerification {
+    Write-IsolatedEnvironmentFiles
+    Assert-RenderedProfileConfig
+    Invoke-Checked -FilePath docker -ArgumentList @("volume", "create", $CacheVolume) | Out-Null
+    Invoke-Checked -FilePath docker -ArgumentList @("volume", "create", $ProfileCacheVolume) | Out-Null
+    Invoke-Checked -FilePath docker -ArgumentList @(
+        "build", "-f", (Join-Path $RepoRoot "deploy\docker\vllm\Dockerfile"),
+        "-t", $ProfileImage, $RepoRoot
+    )
+    $profileImageId = Get-LocalImageId -Name $ProfileImage
+    & docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath down --remove-orphans
+    Assert-GpuIsIdle -AllowedPids $AllowGpuPid
+
+    $serviceOrder = @("vllm", "vllm_transcribe", "vllm_embed", "vllm_rerank")
+    $fractions = @{ vllm = "0.45"; vllm_transcribe = "0.20"; vllm_embed = "0.12"; vllm_rerank = "0.08" }
+    $gpuName = ((& nvidia-smi --query-gpu=name --format=csv,noheader | Select-Object -First 1) -join "").Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $gpuName) { throw "Could not identify profile GPU" }
+    $records = [Collections.Generic.List[object]]::new()
+    $passing = [Collections.Generic.List[string]]::new()
+    $failure = $null
+    try {
+        foreach ($service in $serviceOrder) {
+            $startedAt = [DateTimeOffset](Get-Date)
+            $exitCode = 0
+            try {
+                $output = @(& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath `
+                    -f $ProfileComposePath up -d --no-deps --wait --wait-timeout 900 $service)
+                $exitCode = $LASTEXITCODE
+                $outputText = $output -join [Environment]::NewLine
+                $outputText | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-$service-up.log")
+                if ($exitCode -ne 0) { throw "docker compose up --wait failed with exit code $exitCode" }
+                $healthOutput = @(& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath `
+                    -f $ProfileComposePath exec -T $service python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health', timeout=5).status)")
+                if ($LASTEXITCODE -ne 0 -or ($healthOutput -join "") -notmatch "200") {
+                    throw "Explicit in-container health probe failed for $service"
+                }
+                $memoryRaw = (& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | Select-Object -First 1).Trim()
+                if ($LASTEXITCODE -ne 0 -or $memoryRaw -notmatch '^\d+$') {
+                    throw "GPU memory probe failed for $service"
+                }
+                $memoryUsed = [int]$memoryRaw
+                $modelsOutput = @(& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath `
+                    -f $ProfileComposePath exec -T $service python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/v1/models', timeout=5).read().decode())")
+                if ($LASTEXITCODE -ne 0) { throw "Model inventory probe failed for $service" }
+                $record = [pscustomobject]@{
+                    service = $service
+                    fraction = $fractions[$service]
+                    started_at = $startedAt.ToString("o")
+                    healthy_at = ([DateTimeOffset](Get-Date)).ToString("o")
+                    startup_seconds = [Math]::Round(((Get-Date) - $startedAt.DateTime).TotalSeconds, 3)
+                    overall_gpu_memory_mib = $memoryUsed
+                    models_json = $modelsOutput -join [Environment]::NewLine
+                }
+                $records.Add($record)
+                $passing.Add($service)
+                $record | ConvertTo-Json -Depth 5 | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-$service-measurement.json")
+            }
+            catch {
+                $failure = [pscustomobject]@{
+                    service = $service
+                    exit_code = $exitCode
+                    reason = $_.Exception.Message
+                    started_at = $startedAt.ToString("o")
+                    elapsed_seconds = [Math]::Round(((Get-Date) - $startedAt.DateTime).TotalSeconds, 3)
+                }
+                (& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath ps -a) -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-failure-ps.txt")
+                (& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath logs --no-color $service) -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-$service-failure.log")
+                & docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath stop $service
+                break
+            }
+        }
+    }
+    finally {
+        (& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath ps -a) -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-final-ps.txt")
+        (& docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath logs --no-color) -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-all-services.log")
+        & docker compose --project-name $ProfileProject --env-file $ProfileEnvPath -f $ProfileComposePath down --remove-orphans
+    }
+    [pscustomobject]@{
+        measured_at = ([DateTimeOffset](Get-Date)).ToString("o")
+        gpu = $gpuName
+        service_order = $serviceOrder
+        fractions = $fractions
+        optional_ocr_excluded = $true
+        generic_image = $ProfileImage
+        generic_image_id = $profileImageId
+        passing_services = @($passing)
+        largest_passing_prefix = @($passing)
+        full_profile_passed = ($null -eq $failure -and $passing.Count -eq $serviceOrder.Count)
+        failure = $failure
+        measurements = @($records)
+    } | ConvertTo-Json -Depth 8 | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "profile-summary.json")
+    Assert-GpuIsIdle -AllowedPids $AllowGpuPid
+    if ($null -ne $failure) {
+        Write-Warning "Required profile bounded measurement stopped at $($failure.service); largest passing prefix: $($passing -join ', ')"
+    } else {
+        Write-Host "All required profile services started in order; OCR remained excluded."
+    }
+}
+
+if (-not ($AssertGpuIdle -or $PrepareEnvironments -or $SelfTest -or $VerifyNemotron -or $VerifyWhisperRollback -or $VerifyProfile)) {
+    throw "Select at least one switch: -AssertGpuIdle, -PrepareEnvironments, -SelfTest, -VerifyNemotron, -VerifyWhisperRollback, or -VerifyProfile"
 }
 if ($SelfTest) {
     Invoke-VerificationSelfTests
@@ -781,6 +1302,8 @@ if ($SelfTest) {
 if ($PrepareEnvironments) {
     Write-IsolatedEnvironmentFiles
     Assert-RenderedNemotronConfig
+    Assert-RenderedWhisperConfig
+    Assert-RenderedProfileConfig
     Assert-RepositoryComposeProfiles
 }
 if ($AssertGpuIdle) {
@@ -788,4 +1311,10 @@ if ($AssertGpuIdle) {
 }
 if ($VerifyNemotron) {
     Invoke-FullNemotronVerification
+}
+if ($VerifyWhisperRollback) {
+    Invoke-WhisperRollbackVerification
+}
+if ($VerifyProfile) {
+    Invoke-ProfileVerification
 }

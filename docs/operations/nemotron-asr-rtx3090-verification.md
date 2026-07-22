@@ -156,9 +156,62 @@ Useful preparation/isolation-only commands are:
 .\scripts\verify_nemotron_asr.ps1 -SelfTest
 ```
 
-Preparation creates a standalone temporary Compose file plus complete Nemotron
-and Whisper environment files without creating or changing repository `.env`.
-It prints an activation script exposing `NEMOTRON_ASR_ENV`, `WHISPER_ASR_ENV`,
-`NEMOTRON_ASR_OVERRIDE`, and `NEMOTRON_ASR_RUNTIME_COMPOSE` for the subsequent
-rollback verification. This document does not claim that rollback or a shared
-multi-model profile has passed; those are separate verification tasks.
+Preparation creates standalone temporary Compose files plus complete Nemotron,
+Whisper, and required-profile environment files without creating or changing
+repository `.env`. It prints an activation script exposing their paths.
+
+## Same-image Whisper rollback
+
+Rollback was verified at 2026-07-21 19:49 PDT with the exact transcription
+image ID above; the harness did not rebuild it. The live process command line
+from `/proc/1/cmdline` used `openai/whisper-large-v3-turbo`, served alias
+`whisper-large-v3-turbo`, FP16, model length 448, maximum batched tokens 1,500,
+and one 30-second audio item. It contained no revision, Nemotron generation
+configuration, or bitsandbytes/load-format/loader-extra flags. The 1,500-token
+batch budget is required because vLLM 0.21 represents a 30-second Whisper audio
+item as 1,500 encoder tokens even though the decoder model length remains 448.
+
+The OpenAI SDK received a nonempty transcript while sending the nonempty prompt
+`MISTER QUILTER`, proving the Nemotron-only request validator was inert. The
+same image and Hugging Face cache were then recreated with the explicit
+Nemotron environment, `/proc/1/cmdline` contained the pinned generation config
+and no Whisper quantization flags, `/v1/models` exposed only the Nemotron alias,
+and a second SDK transcription succeeded. Before and after image IDs were both
+`sha256:912270f4cd22011f2a4d985d4d41cd5f667a325f14ef982da87f46e341699d20`.
+`pip check` reported no broken requirements. Both services and their harness
+network were removed, and the final GPU/container isolation check passed.
+
+The initial documented rollback was corrected from 448 to 1,500 batched tokens
+after vLLM rejected the smaller encoder budget. An attempted bitsandbytes
+`load_in_8bit` configuration was also removed: vLLM 0.21 did not consume that
+loader-extra setting for this unquantized checkpoint and entered its broken
+4-bit Whisper fused-QKV path. Plain FP16 is the measured rollback configuration.
+
+Run the complete environment-only rollback proof with:
+
+```powershell
+.\scripts\verify_nemotron_asr.ps1 -VerifyWhisperRollback
+```
+
+## Required multi-model profile
+
+The required order is main chat (0.45), Nemotron transcription (0.20), embedding
+(0.12), and reranking (0.08); optional OCR is explicitly excluded. The desktop
+RTX 3090 run is inconclusive and is not a passing compatibility result. Its
+retained warm-start log records the main checkpoint as 26.86 GiB while the
+desktop Linux VM exposed only 26.81 GiB of available RAM; the user stopped the
+follow-up run before it could prove a healthy first service. No profile service
+is therefore recorded as passing, and the H100/256 GB report server remains the
+authoritative target for the full measurement.
+
+On that server, from the repository root with Docker/GPU access and no unrelated
+GPU container, run:
+
+```powershell
+.\scripts\verify_nemotron_asr.ps1 -VerifyProfile
+```
+
+The harness generates a standalone Compose project, starts services in the
+order above with in-container health and model probes, records VRAM after every
+success, stops the newest service on failure, writes `profile-summary.json`
+under the printed temporary artifact root, and removes only its own project.

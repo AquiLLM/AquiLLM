@@ -211,11 +211,8 @@ def test_readme_documents_a_complete_environment_only_whisper_rollback():
         "TRANSCRIBE_VLLM_DTYPE=float16",
         "TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=0",
         "TRANSCRIBE_VLLM_TRUST_REMOTE_CODE=1",
-        "--quantization bitsandbytes",
-        "--load-format bitsandbytes",
-        '\\"load_in_8bit\\":true',
         "--max-num-seqs 1",
-        "--max-num-batched-tokens 448",
+        "--max-num-batched-tokens 1500",
         '\\"audio\\":{\\"count\\":1,\\"length\\":30}',
         "INGEST_TRANSCRIBE_MODEL=whisper-large-v3-turbo",
         "--force-recreate vllm_transcribe",
@@ -225,6 +222,9 @@ def test_readme_documents_a_complete_environment_only_whisper_rollback():
         "not a second resident model",
     ):
         assert setting in rollback
+    assert "--quantization bitsandbytes" not in rollback
+    assert "--load-format bitsandbytes" not in rollback
+    assert "--model-loader-extra-config" not in rollback
 
     assert "--generation-config" not in rollback
     assert "TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=1" not in rollback

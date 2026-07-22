@@ -528,7 +528,7 @@ VLLM_USE_V2_MODEL_RUNNER=0
 
 The Nemotron default sets the long-length variable to `1`; the Whisper rollback block sets it to `0`. Make the start script pass `--revision "$VLLM_REVISION"` only when nonempty and supported by vLLM 0.21. Recover `TRANSCRIBE_VLLM_EXTRA_ARGS` before model-name dispatch. Include service-kind and revision wrapper variables in the final unset block, but leave `VLLM_ALLOW_LONG_MAX_MODEL_LEN` and `VLLM_USE_V2_MODEL_RUNNER` visible to vLLM itself.
 
-In `.env.example`, provide an active, complete Nemotron block and a commented, complete Whisper rollback block. The rollback block must restore the Whisper model, tokenizer, served alias, blank revision, float16 dtype, 448 model/batch-token limits, `TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=0`, bitsandbytes load flags, and matching `INGEST_TRANSCRIBE_MODEL`.
+In `.env.example`, provide an active, complete Nemotron block and a commented, complete Whisper rollback block. The rollback block must restore the Whisper model, tokenizer, served alias, blank revision, float16 dtype, 448 model length, 1,500 batch-token limit (vLLM 0.21 requires at least the 30-second audio encoder budget), `TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=0`, unquantized loading (vLLM 0.21's bitsandbytes loader selects its broken 4-bit fused-QKV path for this checkpoint), and matching `INGEST_TRANSCRIBE_MODEL`.
 
 - [ ] **Step 4: Render Compose and verify scheduler arguments**
 
@@ -701,7 +701,7 @@ git commit -m "test(asr): verify Nemotron checkpoint parity"
 
 - [ ] **Step 1: Recreate the same image with the documented Whisper block**
 
-Record `docker image inspect aquillm-vllm-transcribe:test --format '{{.Id}}'`. Stop/remove only the verification project's transcription container, then start it with `$env:WHISPER_ASR_ENV`, the same override/image, `--no-deps --wait --wait-timeout 900`, and no rebuild. Render config first and assert model, tokenizer, blank revision, served alias, dtype, 448 limits, long-length flag 0, bitsandbytes args, and `INGEST_TRANSCRIBE_MODEL=whisper-large-v3-turbo` switch together despite root `.env`. Require the Whisper alias and SDK transcript. Send a nonempty prompt and require success to prove the Nemotron validator is inert. Assert the image ID after recreation is unchanged.
+Record `docker image inspect aquillm-vllm-transcribe:test --format '{{.Id}}'`. Stop/remove only the verification project's transcription container, then start it with `$env:WHISPER_ASR_ENV`, the same override/image, `--no-deps --wait --wait-timeout 900`, and no rebuild. Render config first and assert model, tokenizer, blank revision, served alias, dtype, 448 model length, 1,500 batch-token limit, long-length flag 0, absence of unsupported bitsandbytes args, and `INGEST_TRANSCRIBE_MODEL=whisper-large-v3-turbo` switch together despite root `.env`. Require the Whisper alias and SDK transcript. Send a nonempty prompt and require success to prove the Nemotron validator is inert. Assert the image ID after recreation is unchanged.
 
 - [ ] **Step 2: Restore Nemotron and test the intended inference profile**
 
@@ -715,7 +715,7 @@ Then test base Compose's required `vllm` profile services, excluding optional OC
 .\scripts\verify_nemotron_asr.ps1 -VerifyWhisperRollback -VerifyProfile
 ```
 
-Expected: both models use the identical image ID; rollback needs environment changes only; the validator is inert for Whisper; and the documented profile exactly matches observed hardware behavior.
+Expected: both models use the identical image ID; rollback needs environment changes only; the validator is inert for Whisper; and the profile harness truthfully records either the complete passing order or the largest passing prefix. The local RTX 3090 result may remain inconclusive when system RAM cannot load the main checkpoint; the user runs the same `-VerifyProfile` command on the H100/256 GB report server for the authoritative full-profile result.
 
 - [ ] **Step 4: Commit any verification/doc correction**
 

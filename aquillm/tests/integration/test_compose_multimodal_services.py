@@ -118,13 +118,14 @@ def test_env_example_defines_nemotron_and_complete_whisper_rollback():
         "# TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=0",
         "# TRANSCRIBE_VLLM_TRUST_REMOTE_CODE=1",
         "# INGEST_TRANSCRIBE_MODEL=whisper-large-v3-turbo",
-        "--quantization bitsandbytes --load-format bitsandbytes",
-        "--model-loader-extra-config '{\\\"load_in_8bit\\\":true}'",
-        "--max-num-seqs 1 --max-num-batched-tokens 448",
+        "--max-num-seqs 1 --max-num-batched-tokens 1500",
         '--limit-mm-per-prompt \'{\\"audio\\":{\\"count\\":1,\\"length\\":30}}\'',
     }
     for expected in expected_rollback:
         assert expected in rollback
+    assert "--quantization bitsandbytes" not in rollback
+    assert "--load-format bitsandbytes" not in rollback
+    assert "--model-loader-extra-config" not in rollback
     assert "generation-config" not in rollback
 
     assert contents.count("\nINGEST_TRANSCRIBE_MODEL=") == 1

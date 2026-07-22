@@ -224,9 +224,15 @@ TRANSCRIBE_VLLM_MAX_MODEL_LEN=448
 TRANSCRIBE_VLLM_DTYPE=float16
 TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=0
 TRANSCRIBE_VLLM_TRUST_REMOTE_CODE=1
-TRANSCRIBE_VLLM_EXTRA_ARGS="--quantization bitsandbytes --load-format bitsandbytes --model-loader-extra-config '{\"load_in_8bit\":true}' --max-num-seqs 1 --max-num-batched-tokens 448 --limit-mm-per-prompt '{\"audio\":{\"count\":1,\"length\":30}}'"
+TRANSCRIBE_VLLM_EXTRA_ARGS="--max-num-seqs 1 --max-num-batched-tokens 1500 --limit-mm-per-prompt '{\"audio\":{\"count\":1,\"length\":30}}'"
 INGEST_TRANSCRIBE_MODEL=whisper-large-v3-turbo
 ```
+
+Keep the decoder model length at 448, but do not lower the batch-token limit
+below 1,500: vLLM 0.21 accounts a 30-second Whisper audio item as 1,500 encoder
+tokens. This rollback deliberately uses plain FP16 weights. vLLM 0.21 routes
+this unquantized checkpoint through its incompatible 4-bit fused-QKV path even
+when bitsandbytes loader extras request 8-bit.
 
 Apply the environment change by recreating the transcription process without
 rebuilding, then recreate the application processes so they receive the new
