@@ -157,7 +157,7 @@ def test_readme_documents_the_nemotron_operator_contract():
         "390 seconds",
         "--max-num-seqs 1",
         "no concurrency promise",
-        "dtype auto",
+        "dtype float32",
         "FP32",
         "VLLM_USE_V2_MODEL_RUNNER=0",
         "--enforce-eager",

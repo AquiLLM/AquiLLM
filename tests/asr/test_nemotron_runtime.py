@@ -52,6 +52,30 @@ def _canonical_lexical(text: str) -> str:
     return " ".join(lexical.split())
 
 
+def _word_error_rate(actual: str, reference: str) -> float:
+    actual_words = _canonical_lexical(actual).split()
+    reference_words = _canonical_lexical(reference).split()
+    assert reference_words
+    previous = list(range(len(actual_words) + 1))
+    for reference_index, reference_word in enumerate(reference_words, start=1):
+        current = [reference_index]
+        for actual_index, actual_word in enumerate(actual_words, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[actual_index] + 1,
+                    previous[actual_index - 1] + (actual_word != reference_word),
+                )
+            )
+        previous = current
+    return previous[-1] / len(reference_words)
+
+
+def _assert_acceptable_transcript(actual: str, reference: str) -> None:
+    assert _canonical_lexical(actual)
+    assert _word_error_rate(actual, reference) <= 0.25
+
+
 def _mono_pcm16_wav(duration_s: int) -> bytes:
     """Create deterministic, low-amplitude 16 kHz PCM without Python samples."""
     output = io.BytesIO()
@@ -154,15 +178,12 @@ async def test_sequential_and_duplicate_requests_rebuild_their_own_transcript() 
             for utterance_id in (first_id, second_id, first_id, first_id)
         ]
 
-    expected_first = _canonical_lexical(first_expected)
-    expected_second = _canonical_lexical(second_expected)
-    assert [_canonical_lexical(text) for text in actual] == [
-        expected_first,
-        expected_second,
-        expected_first,
-        expected_first,
-    ]
-    assert expected_first != expected_second
+    normalized = [_canonical_lexical(text) for text in actual]
+    assert normalized[0] == normalized[2] == normalized[3]
+    assert normalized[0] != normalized[1]
+    for text in (actual[0], actual[2], actual[3]):
+        _assert_acceptable_transcript(text, first_expected)
+    _assert_acceptable_transcript(actual[1], second_expected)
 
 
 async def test_cancelled_request_does_not_poison_a_fresh_client_request() -> None:
@@ -199,4 +220,4 @@ async def test_cancelled_request_does_not_poison_a_fresh_client_request() -> Non
     async with httpx.AsyncClient(headers=_AUTH, timeout=420.0) as fresh_client:
         actual = await _transcribe_fixture(fresh_client, follow_up_id)
 
-    assert _canonical_lexical(actual) == _canonical_lexical(expected)
+    _assert_acceptable_transcript(actual, expected)

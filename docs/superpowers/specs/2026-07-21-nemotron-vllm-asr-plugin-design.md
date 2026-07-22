@@ -143,7 +143,7 @@ Defaults will select:
 model:       nvidia/nemotron-3.5-asr-streaming-0.6b
 served name: nemotron-3.5-asr-streaming-0.6b
 tokenizer:   nvidia/nemotron-3.5-asr-streaming-0.6b
-dtype:       auto (checkpoint resolves to FP32)
+dtype:       float32 (explicit; vLLM 0.21 `auto` resolves this checkpoint to BF16)
 execution:   eager
 sequences:   1
 runner:      V1 (`VLLM_USE_V2_MODEL_RUNNER=0`)

@@ -504,7 +504,7 @@ Expected: PASS.
 
 - [ ] **Step 1: Write deployment invariants first**
 
-For all three GPU Compose files assert only `vllm_transcribe` uses `Dockerfile.transcribe`; model/tokenizer/revision/served alias, `VLLM_DTYPE=auto`, GPU utilization, 50,000 model length, `VLLM_USE_V2_MODEL_RUNNER=0`, `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`, service kind, and trust settings agree. `TRANSCRIBE_VLLM_EXTRA_ARGS` contains eager, max sequences 1, max batched tokens 50,000, and `--generation-config /opt/aquillm/nemotron-generation-config`, with no bitsandbytes/TurboQuant flags. Assert no-GPU remains `whisper-1`. Test that `vllm_start.sh` restores transcription args via `VLLM_SERVICE_KIND=transcribe`, not model-name matching.
+For all three GPU Compose files assert only `vllm_transcribe` uses `Dockerfile.transcribe`; model/tokenizer/revision/served alias, `VLLM_DTYPE=float32`, GPU utilization, 50,000 model length, `VLLM_USE_V2_MODEL_RUNNER=0`, `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`, service kind, and trust settings agree. `TRANSCRIBE_VLLM_EXTRA_ARGS` contains eager, max sequences 1, max batched tokens 50,000, and `--generation-config /opt/aquillm/nemotron-generation-config`, with no bitsandbytes/TurboQuant flags. Assert no-GPU remains `whisper-1`. Test that `vllm_start.sh` restores transcription args via `VLLM_SERVICE_KIND=transcribe`, not model-name matching.
 
 - [ ] **Step 2: Run and observe failure**
 

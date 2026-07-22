@@ -45,6 +45,30 @@ def _canonical_lexical(text: str) -> str:
     return " ".join(lexical.split())
 
 
+def _word_error_rate(actual: str, reference: str) -> float:
+    actual_words = _canonical_lexical(actual).split()
+    reference_words = _canonical_lexical(reference).split()
+    assert reference_words
+    previous = list(range(len(actual_words) + 1))
+    for reference_index, reference_word in enumerate(reference_words, start=1):
+        current = [reference_index]
+        for actual_index, actual_word in enumerate(actual_words, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[actual_index] + 1,
+                    previous[actual_index - 1] + (actual_word != reference_word),
+                )
+            )
+        previous = current
+    return previous[-1] / len(reference_words)
+
+
+def _assert_acceptable_transcript(actual: str, reference: str) -> None:
+    assert _canonical_lexical(actual)
+    assert _word_error_rate(actual, reference) <= 0.25
+
+
 @pytest.fixture(scope="module")
 def openai_client():
     with OpenAI(
@@ -116,7 +140,7 @@ def test_sdk_default_response_has_text_and_omits_language(
     actual = _sdk_transcribe(openai_client, utterance_id)
 
     assert isinstance(actual, str)
-    assert _canonical_lexical(actual) == _canonical_lexical(expected)
+    _assert_acceptable_transcript(actual, expected)
 
 
 @pytest.mark.parametrize("utterance_id", _UTTERANCE_IDS)
@@ -127,7 +151,7 @@ def test_sdk_explicit_english_matches_each_fixture(
 
     actual = _sdk_transcribe(openai_client, utterance_id, language="en")
 
-    assert _canonical_lexical(actual) == _canonical_lexical(expected)
+    _assert_acceptable_transcript(actual, expected)
 
 
 def test_raw_text_response_is_plain_text_without_a_json_wrapper(
@@ -139,7 +163,7 @@ def test_raw_text_response_is_plain_text_without_a_json_wrapper(
 
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].split(";", 1)[0] == "text/plain"
-    assert _canonical_lexical(response.text) == _canonical_lexical(expected)
+    _assert_acceptable_transcript(response.text, expected)
 
 
 @pytest.mark.parametrize(

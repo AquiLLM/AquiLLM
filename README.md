@@ -163,7 +163,7 @@ AquiLLM keeps the existing OpenAI-compatible contract: uploads go to
 "streaming" in the upstream checkpoint name. It accepts clips of at most 390
 seconds and is deliberately restricted to one active sequence with
 `--max-num-seqs 1`; it makes no concurrency promise. The checkpoint runs in
-FP32 as resolved by `dtype auto`, with the vLLM V1 runner
+FP32 via explicit `dtype float32`, with the vLLM V1 runner
 (`VLLM_USE_V2_MODEL_RUNNER=0`) and eager execution (`--enforce-eager`).
 Translations, diarization, word timestamps, verbose responses, and realtime
 WebSockets are outside this release.
