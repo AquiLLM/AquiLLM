@@ -154,8 +154,8 @@ This assumes you have Docker and Docker Compose installed.
 The local GPU/vLLM transcription default is
 [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/blob/f3d333391852ba876df169dcc9ba902d25b6ab0b/README.md),
 pinned at revision `f3d333391852ba876df169dcc9ba902d25b6ab0b` and served as
-`nemotron-3.5-asr-streaming-0.6b`. The `no_gpu_dev` profile is unchanged: it
-uses the hosted `whisper-1` service instead of this local model.
+`nemotron-3.5-asr-streaming-0.6b`. The `no_gpu_dev` Compose configuration is
+unchanged: it uses the hosted `whisper-1` service instead of this local model.
 
 AquiLLM keeps the existing OpenAI-compatible contract: uploads go to
 `POST /v1/audio/transcriptions`, and the OpenAI SDK result is read through its
