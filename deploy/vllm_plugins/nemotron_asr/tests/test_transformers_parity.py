@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import importlib
 import json
 import os
 import sys
 import unicodedata
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
+from importlib.abc import MetaPathFinder
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,6 +37,53 @@ _FIXTURE = (
     / "librispeech_1272-128104-0000.flac"
 )
 _SIDECAR = _FIXTURE.with_suffix(".txt")
+_PLUGIN_MODULE_PREFIX = "aquillm_vllm_nemotron_asr"
+
+
+class _PluginImportBlocker(MetaPathFinder):
+    def find_spec(
+        self,
+        fullname: str,
+        path: object = None,
+        target: object = None,
+    ) -> None:
+        del path, target
+        if fullname == _PLUGIN_MODULE_PREFIX or fullname.startswith(
+            f"{_PLUGIN_MODULE_PREFIX}."
+        ):
+            raise ImportError(f"direct parity forbids plugin import: {fullname}")
+        return None
+
+
+@contextmanager
+def _block_plugin_imports():
+    leaked_before = [
+        name for name in sys.modules if name.startswith(_PLUGIN_MODULE_PREFIX)
+    ]
+    if leaked_before:
+        raise AssertionError(
+            "direct oracle process imported the plugin before isolation: "
+            + ", ".join(sorted(leaked_before))
+        )
+
+    blocker = _PluginImportBlocker()
+    sys.meta_path.insert(0, blocker)
+    try:
+        yield
+        leaked_after = [
+            name for name in sys.modules if name.startswith(_PLUGIN_MODULE_PREFIX)
+        ]
+        if leaked_after:
+            raise AssertionError(
+                "direct oracle imported the plugin inside isolation: "
+                + ", ".join(sorted(leaked_after))
+            )
+    finally:
+        if blocker in sys.meta_path:
+            sys.meta_path.remove(blocker)
+        for name in tuple(sys.modules):
+            if name.startswith(_PLUGIN_MODULE_PREFIX):
+                del sys.modules[name]
 
 
 def _artifact_paths() -> tuple[Path, Path]:
@@ -270,11 +320,30 @@ def test_pinned_nemotron_generate_matches_the_pure_rnnt_core(
 
 @pytest.mark.gpu
 @pytest.mark.skipif(_FULL_PHASE != "direct", reason="set ASR_FULL_PARITY_PHASE=direct")
+def test_direct_phase_blocks_plugin_imports_for_its_entire_scope() -> None:
+    with _block_plugin_imports():
+        with pytest.raises(ImportError, match="direct parity forbids plugin import"):
+            importlib.import_module("aquillm_vllm_nemotron_asr")
+        assert not any(
+            name.startswith("aquillm_vllm_nemotron_asr") for name in sys.modules
+        )
+
+    assert not any(name.startswith("aquillm_vllm_nemotron_asr") for name in sys.modules)
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(_FULL_PHASE != "direct", reason="set ASR_FULL_PARITY_PHASE=direct")
 def test_full_checkpoint_direct_transformers_export() -> None:
     """Export an independent native-Transformers FP32 parity oracle."""
-    assert not any(
-        name.startswith("aquillm_vllm_nemotron_asr") for name in sys.modules
-    ), "direct oracle process imported the plugin"
+    with _block_plugin_imports():
+        _export_direct_transformers_oracle()
+    assert not any(name.startswith(_PLUGIN_MODULE_PREFIX) for name in sys.modules)
+
+
+def _export_direct_transformers_oracle() -> None:
+    assert not any(name.startswith(_PLUGIN_MODULE_PREFIX) for name in sys.modules), (
+        "direct oracle process imported the plugin"
+    )
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
     assert transformers.__version__ == "5.13.0"

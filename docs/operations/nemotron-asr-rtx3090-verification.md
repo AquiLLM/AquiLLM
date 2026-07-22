@@ -1,6 +1,6 @@
 # Nemotron ASR RTX 3090 verification
 
-Verified 2026-07-21 18:29 PDT (America/Los_Angeles) on one NVIDIA GeForce RTX
+Verified 2026-07-21 18:59 PDT (America/Los_Angeles) on one NVIDIA GeForce RTX
 3090 (24,576 MiB), Windows driver 591.86. The host reports CUDA 13.1; the
 container uses Torch 2.11.0+cu130 with CUDA 13.0. No chat model or other Docker
 GPU container was running during any ASR phase. Windows WDDM desktop processes
@@ -10,7 +10,7 @@ treated as numeric compute allocations.
 ## Immutable runtime inputs
 
 - Image: `aquillm-vllm-transcribe:test`, image ID and local repository digest
-  `sha256:0b345d5ba0be3306842514c9ac8d3177bd87d9f52aa33163e305e6683ab8fd36`.
+  `sha256:0d61fe50ce0f367822590e67048d015bd4836bebac65de2d0a39fd7dded560ce`.
   The script also records the complete inspection JSON under its temporary
   artifact directory.
 - vLLM 0.21.0, Transformers 5.13.0, Torch 2.11.0+cu130, librosa 0.11.0,
@@ -92,8 +92,17 @@ the post-request steady window:
 | Measurement | Overall GPU memory | Above WDDM baseline |
 | --- | ---: | ---: |
 | Baseline | 4,463 MiB | 0 MiB |
-| Peak (FP32 long-boundary requests) | 20,742 MiB | 16,279 MiB |
-| Steady average | 10,700.4 MiB | 6,237.4 MiB |
+| Peak (FP32 long-boundary requests) | 20,722 MiB | 16,259 MiB |
+| Post-request steady average | 20,715.3 MiB | 16,252.3 MiB |
+
+The baseline was captured at `2026-07-21T18:57:44.3375777-07:00`. The HTTP
+suite completed at `2026-07-21T18:59:09.8310106-07:00`, and the post-request
+window ended at `2026-07-21T18:59:44.8585449-07:00`, 35.028 seconds later.
+The steady average uses only the seven timestamped samples inside that window,
+from `2026-07-21T18:59:14.5344259-07:00` through
+`2026-07-21T18:59:42.1529389-07:00`; it does not include startup or request
+samples. There were 24 samples across the full run. The resident FP32 model
+therefore remained near the measured peak after requests completed.
 
 `TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION=0.20` started successfully and all
 requests completed. It is retained because this attention-free model allocates
@@ -105,7 +114,7 @@ engine with this FP32 ASR service on a 24 GiB card.
 
 The temporary Compose project started only `vllm_transcribe`, exposed exactly
 `nemotron-3.5-asr-streaming-0.6b` from `/v1/models`, and passed all 29 tests in
-`tests/asr` in 18.09 seconds of pytest runtime (27.613 seconds including host
+`tests/asr` in 18.56 seconds of pytest runtime (29.145 seconds including host
 runner setup/teardown). This covered SDK `.text`, normal JSON and text output, omitted and
 explicit language, every request-validation 4xx, translation rejection,
 sequential and duplicate state isolation, cancellation recovery, and 389/390

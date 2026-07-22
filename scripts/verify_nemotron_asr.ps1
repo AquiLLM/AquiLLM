@@ -343,15 +343,50 @@ function Start-GpuMemorySampler {
 }
 
 function Get-MemorySummary {
-    param([string]$Path, [int]$Baseline)
-    $samples = @(Import-Csv $Path | ForEach-Object { [int]$_.memory_used_mib })
+    param(
+        [string]$Path,
+        [int]$Baseline,
+        [DateTimeOffset]$BaselineAt,
+        [DateTimeOffset]$RequestCompletedAt,
+        [DateTimeOffset]$PostWindowEndedAt
+    )
+    $samples = @(
+        Import-Csv $Path | ForEach-Object {
+            [pscustomobject]@{
+                timestamp = [DateTimeOffset]::Parse($_.timestamp)
+                memory_used_mib = [int]$_.memory_used_mib
+            }
+        }
+    )
     if (-not $samples.Count) { throw "No GPU memory samples were recorded" }
-    $steadyWindow = @($samples | Select-Object -Last ([Math]::Min(30, $samples.Count)))
+    $postWindowDuration = ($PostWindowEndedAt - $RequestCompletedAt).TotalSeconds
+    if ($postWindowDuration -lt 30) {
+        throw "Post-request GPU memory window was shorter than 30 seconds"
+    }
+    $steadyWindow = @(
+        $samples | Where-Object {
+            $_.timestamp -ge $RequestCompletedAt -and
+            $_.timestamp -le $PostWindowEndedAt
+        }
+    )
+    if ($steadyWindow.Count -lt 6) {
+        throw "Post-request GPU memory window had only $($steadyWindow.Count) samples; require at least 6"
+    }
     return [pscustomobject]@{
         baseline_mib = $Baseline
-        peak_mib = ($samples | Measure-Object -Maximum).Maximum
-        steady_mib = [Math]::Round(($steadyWindow | Measure-Object -Average).Average, 1)
+        baseline_at = $BaselineAt.ToString("o")
+        peak_mib = ($samples.memory_used_mib | Measure-Object -Maximum).Maximum
+        steady_mib = [Math]::Round(
+            ($steadyWindow.memory_used_mib | Measure-Object -Average).Average,
+            1
+        )
         sample_count = $samples.Count
+        request_completed_at = $RequestCompletedAt.ToString("o")
+        post_window_ended_at = $PostWindowEndedAt.ToString("o")
+        post_window_duration_seconds = [Math]::Round($postWindowDuration, 3)
+        post_window_sample_count = $steadyWindow.Count
+        post_window_first_sample_at = $steadyWindow[0].timestamp.ToString("o")
+        post_window_last_sample_at = $steadyWindow[-1].timestamp.ToString("o")
     }
 }
 
@@ -428,8 +463,11 @@ function Invoke-FullNemotronVerification {
         -Command "python3 -m pip install -q pytest==8.4.1 && python3 -m pytest deploy/vllm_plugins/nemotron_asr/tests/test_transformers_parity.py deploy/vllm_plugins/nemotron_asr/tests/test_weight_loading.py -q -m gpu"
     Assert-GpuIsIdle -AllowedPids $AllowGpuPid
 
+    $baselineAt = [DateTimeOffset](Get-Date)
     $baseline = [int]((& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | Select-Object -First 1).Trim())
     $sampler = Start-GpuMemorySampler -OutputPath $MemoryCsv
+    $requestCompletedAt = $null
+    $postWindowEndedAt = $null
     try {
         Invoke-Checked -FilePath docker -ArgumentList @(
             "compose", "--project-name", $Project, "--env-file", $NemotronEnvPath,
@@ -471,6 +509,7 @@ function Invoke-FullNemotronVerification {
         try {
             $runtimeOutput = @(& $hostPython -m pytest tests/asr -q 2>&1)
             $runtimeExitCode = $LASTEXITCODE
+            $requestCompletedAt = [DateTimeOffset](Get-Date)
             $runtimeText = $runtimeOutput -join [Environment]::NewLine
             Write-Host $runtimeText
             $runtimeText | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "http-pytest.log")
@@ -490,7 +529,8 @@ function Invoke-FullNemotronVerification {
             )
         }
         finally { Pop-Location }
-        Start-Sleep -Seconds 30
+        Start-Sleep -Seconds 35
+        $postWindowEndedAt = [DateTimeOffset](Get-Date)
     } finally {
         Stop-Job $sampler -ErrorAction SilentlyContinue
         Receive-Job $sampler -ErrorAction SilentlyContinue | Out-Null
@@ -498,7 +538,12 @@ function Invoke-FullNemotronVerification {
         (& docker compose --project-name $Project --env-file $NemotronEnvPath -f $ComposePath logs --no-color vllm_transcribe) -join [Environment]::NewLine | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "nemotron-service.log")
         & docker compose --project-name $Project --env-file $NemotronEnvPath -f $ComposePath down --remove-orphans
     }
-    $memory = Get-MemorySummary -Path $MemoryCsv -Baseline $baseline
+    $memory = Get-MemorySummary `
+        -Path $MemoryCsv `
+        -Baseline $baseline `
+        -BaselineAt $baselineAt `
+        -RequestCompletedAt $requestCompletedAt `
+        -PostWindowEndedAt $postWindowEndedAt
     $memory | ConvertTo-Json | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "gpu-memory-summary.json")
     $memory | Format-List | Out-String | Write-Host
     Assert-GpuIsIdle -AllowedPids $AllowGpuPid
