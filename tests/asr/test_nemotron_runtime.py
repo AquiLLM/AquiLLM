@@ -7,6 +7,7 @@ import io
 import os
 import unicodedata
 import wave
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
@@ -62,6 +63,56 @@ def _mono_pcm16_wav(duration_s: int) -> bytes:
     return output.getvalue()
 
 
+class _CompletionAwareUpload(httpx.AsyncByteStream):
+    """Signal only after the transport has consumed the final body chunk."""
+
+    def __init__(
+        self,
+        body: bytes,
+        upload_complete: asyncio.Event,
+        *,
+        chunk_size: int = 64 * 1024,
+    ) -> None:
+        self._body = body
+        self._upload_complete = upload_complete
+        self._chunk_size = chunk_size
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for offset in range(0, len(self._body), self._chunk_size):
+            yield self._body[offset : offset + self._chunk_size]
+        # httpcore requests the next chunk only after its send of the preceding
+        # chunk completes, so reaching here proves the final chunk was consumed.
+        self._upload_complete.set()
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _multipart_upload(
+    filename: str,
+    content: bytes,
+    content_type: str,
+    upload_complete: asyncio.Event,
+) -> tuple[_CompletionAwareUpload, dict[str, str]]:
+    boundary = "aquillm-nemotron-cancellation-boundary"
+    opening = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="model"\r\n'
+        "\r\n"
+        f"{MODEL_ID}\r\n"
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n"
+        "\r\n"
+    ).encode("ascii")
+    closing = f"\r\n--{boundary}--\r\n".encode("ascii")
+    body = opening + content + closing
+    return _CompletionAwareUpload(body, upload_complete), {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Content-Length": str(len(body)),
+    }
+
+
 async def _transcribe_fixture(client: httpx.AsyncClient, utterance_id: str) -> str:
     audio, _ = _fixture(utterance_id)
     response = await client.post(
@@ -115,34 +166,29 @@ async def test_sequential_and_duplicate_requests_rebuild_their_own_transcript() 
 
 
 async def test_cancelled_request_does_not_poison_a_fresh_client_request() -> None:
-    request_started = asyncio.Event()
-
-    async def signal_request_start(request: httpx.Request) -> None:
-        request_started.set()
+    upload_complete = asyncio.Event()
+    upload, upload_headers = _multipart_upload(
+        "cancel.wav",
+        _mono_pcm16_wav(390),
+        "audio/wav",
+        upload_complete,
+    )
 
     async def consume_entire_stream(client: httpx.AsyncClient) -> None:
         async with client.stream(
             "POST",
             _TRANSCRIPTIONS_URL,
-            data={"model": MODEL_ID},
-            files={
-                "file": (
-                    "cancel.wav",
-                    _mono_pcm16_wav(390),
-                    "audio/wav",
-                )
-            },
+            content=upload,
+            headers=upload_headers,
         ) as response:
             await response.aread()
 
     async with httpx.AsyncClient(
         headers=_AUTH,
         timeout=900.0,
-        event_hooks={"request": [signal_request_start]},
     ) as cancelling_client:
         request_task = asyncio.create_task(consume_entire_stream(cancelling_client))
-        await asyncio.wait_for(request_started.wait(), timeout=10.0)
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(upload_complete.wait(), timeout=30.0)
         assert not request_task.done()
         request_task.cancel()
         with pytest.raises(asyncio.CancelledError):

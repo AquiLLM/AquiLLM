@@ -25,6 +25,9 @@ pytest.importorskip("vllm")
 
 from aquillm_vllm_nemotron_asr import model as model_module  # noqa: E402
 from aquillm_vllm_nemotron_asr.decoding import BLANK_TOKEN_ID  # noqa: E402
+from vllm.distributed.parallel_state import (  # noqa: E402
+    cleanup_dist_env_and_memory,
+)
 from vllm.engine.arg_utils import EngineArgs  # noqa: E402
 from vllm.engine.llm_engine import LLMEngine  # noqa: E402
 from vllm.inputs import (  # noqa: E402
@@ -118,6 +121,8 @@ def engine() -> Iterator[LLMEngine]:
         yield result
     finally:
         result.engine_core.shutdown()
+        del result
+        cleanup_dist_env_and_memory()
 
 
 def _prompt(sample: int) -> ExplicitEncoderDecoderPrompt:
@@ -139,11 +144,20 @@ def _run_to_completion(engine: LLMEngine, request_id: str, sample: int):
         SamplingParams(temperature=0, max_tokens=8),
     )
     final = None
-    while engine.has_unfinished_requests():
+    max_steps = 16
+    for _ in range(max_steps):
         for output in engine.step():
             if output.request_id == request_id:
                 final = output
-    assert final is not None and final.finished
+        if not engine.has_unfinished_requests():
+            break
+    else:
+        engine.abort_request([request_id])
+        pytest.fail(
+            f"request {request_id!r} remained unfinished after {max_steps} steps"
+        )
+    assert final is not None, f"request {request_id!r} produced no output"
+    assert final.finished, f"request {request_id!r} final output was unfinished"
     return final
 
 
@@ -198,17 +212,25 @@ def test_inproc_engine_recomputes_prefills_and_recovers_after_abort(
     first = _run_to_completion(engine, "duplicate-1", sample=1)
     second = _run_to_completion(engine, "duplicate-2", sample=1)
     assert counters == {"embed": 2, "prefill": 2, "replace": 2}
-    assert first.outputs[0].token_ids == second.outputs[0].token_ids
+    assert first.outputs[0].token_ids == [41, BLANK_TOKEN_ID]
+    assert second.outputs[0].token_ids == [41, BLANK_TOKEN_ID]
 
     engine.add_request(
         "abort-after-prefill",
         _prompt(sample=2),
         SamplingParams(temperature=0, max_tokens=8),
     )
-    for _ in range(4):
+    max_prefill_steps = 4
+    for _ in range(max_prefill_steps):
         engine.step()
         if counters["prefill"] == 3:
             break
+    else:
+        engine.abort_request(["abort-after-prefill"])
+        pytest.fail(
+            "abort request did not prefill within "
+            f"{max_prefill_steps} steps: {counters!r}"
+        )
     assert counters == {"embed": 3, "prefill": 3, "replace": 3}
     assert engine.has_unfinished_requests()
     engine.abort_request(["abort-after-prefill"])
@@ -219,5 +241,6 @@ def test_inproc_engine_recomputes_prefills_and_recovers_after_abort(
     assert fresh.finished
     assert fresh.outputs[0].finish_reason == "stop"
     assert fresh.outputs[0].finish_reason != "length"
-    assert fresh.outputs[0].token_ids[-1] == BLANK_TOKEN_ID
+    assert fresh.outputs[0].token_ids == [90, BLANK_TOKEN_ID]
+    assert len(fresh.outputs[0].token_ids) == 2
     assert model.replay_state.forced_ids([2]) == [BLANK_TOKEN_ID]
