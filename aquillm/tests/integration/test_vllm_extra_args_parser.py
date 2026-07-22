@@ -193,3 +193,12 @@ def test_vllm_start_script_uses_parser_helper():
 
     assert "/parse_vllm_extra_args.py" in contents
     assert "mapfile -d '' -t extra_args" in contents
+
+
+def test_repository_forces_shell_scripts_to_lf():
+    repo_root = Path(__file__).resolve().parents[3]
+    attributes_path = repo_root / ".gitattributes"
+
+    assert attributes_path.exists(), ".gitattributes must define shell line endings"
+    attributes = attributes_path.read_text(encoding="utf-8").splitlines()
+    assert "*.sh text eol=lf" in attributes
