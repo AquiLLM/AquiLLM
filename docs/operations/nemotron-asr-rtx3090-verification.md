@@ -15,7 +15,7 @@ container still fails isolation.
 
 - Image: `aquillm-vllm-transcribe:test`; the latest local evidence artifact
   records image ID and local repository digest
-  `sha256:ed542e28147e646798b3f21a1fe38071fb7c1b538718e5b0bc05c24aac7fb438`.
+  `sha256:83d16a33aa6b3da1f9581d9bcb2be47d3bcdcde63c9a96ad36e9ff552008b839`.
   Local image IDs/digests identify that measured build only; they are evidence,
   not stable reproducible identifiers. The script records complete inspection
   JSON under its temporary artifact directory.
@@ -164,9 +164,9 @@ repository `.env`. It prints an activation script exposing their paths.
 
 ## Same-image Whisper rollback
 
-Rollback was verified at 2026-07-21 19:49 PDT with the exact transcription
-measured image ID above; the harness did not rebuild it. The live process command line
-from `/proc/1/cmdline` used `openai/whisper-large-v3-turbo`, served alias
+Rollback was verified at 2026-07-21 20:48 PDT with the exact transcription
+measured image ID above; the harness did not rebuild it. The live process
+command line from `/proc/1/cmdline` used `openai/whisper-large-v3-turbo`, served alias
 `whisper-large-v3-turbo`, FP16, model length 448, maximum batched tokens 1,500,
 and one 30-second audio item. It contained no revision, Nemotron generation
 configuration, or bitsandbytes/load-format/loader-extra flags. The 1,500-token

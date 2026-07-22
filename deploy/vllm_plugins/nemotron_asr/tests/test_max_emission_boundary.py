@@ -20,7 +20,6 @@ from vllm.v1.request import Request  # noqa: E402
 from vllm.v1.sample.metadata import LogitsProcessors, SamplingMetadata  # noqa: E402
 from vllm.v1.sample.sampler import Sampler  # noqa: E402
 
-
 MAX_MODEL_LEN = 50_000
 MAX_EMISSIONS = 48_750
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
