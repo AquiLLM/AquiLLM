@@ -3,6 +3,7 @@ param(
     [switch]$AssertGpuIdle,
     [int[]]$AllowGpuPid = @(),
     [switch]$PrepareEnvironments,
+    [switch]$SelfTest,
     [switch]$VerifyNemotron
 )
 
@@ -23,6 +24,11 @@ $NemotronEnvPath = Join-Path $StateRoot "nemotron.env"
 $WhisperEnvPath = Join-Path $StateRoot "whisper.env"
 $ActivationPath = Join-Path $StateRoot "activate.ps1"
 $MemoryCsv = Join-Path $ArtifactRoot "gpu-memory.csv"
+$DirectParityArtifactNames = @(
+    "direct-transformers.json",
+    "direct-joint-logits.npy"
+)
+$DirectParitySummaryName = "direct-phase-summary.json"
 
 function Set-Utf8NoBom {
     param([Parameter(Mandatory)] [string]$Path, [Parameter(ValueFromPipeline)] [string]$Content)
@@ -44,6 +50,166 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed ($LASTEXITCODE): $FilePath $($ArgumentList -join ' ')"
     }
+}
+
+function Get-ProcessEnvironmentSnapshot {
+    param([Parameter(Mandatory)] [string[]]$Names)
+
+    $processEnvironment = [Environment]::GetEnvironmentVariables("Process")
+    $snapshot = @{}
+    foreach ($name in $Names) {
+        $exists = $processEnvironment.Contains($name)
+        $snapshot[$name] = [pscustomobject]@{
+            Exists = $exists
+            Value = if ($exists) { [string]$processEnvironment[$name] } else { $null }
+        }
+    }
+    return $snapshot
+}
+
+function Restore-ProcessEnvironment {
+    param([Parameter(Mandatory)] [hashtable]$Snapshot)
+
+    foreach ($name in $Snapshot.Keys) {
+        $entry = $Snapshot[$name]
+        $value = if ($entry.Exists) { $entry.Value } else { $null }
+        [Environment]::SetEnvironmentVariable($name, $value, "Process")
+    }
+}
+
+function Invoke-WithTemporaryEnvironment {
+    param(
+        [Parameter(Mandatory)] [hashtable]$Environment,
+        [Parameter(Mandatory)] [scriptblock]$ScriptBlock
+    )
+
+    $snapshot = Get-ProcessEnvironmentSnapshot -Names @($Environment.Keys)
+    try {
+        foreach ($entry in $Environment.GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable(
+                $entry.Key,
+                [string]$entry.Value,
+                "Process"
+            )
+        }
+        & $ScriptBlock
+    }
+    finally {
+        Restore-ProcessEnvironment -Snapshot $snapshot
+    }
+}
+
+function Remove-DirectParityArtifacts {
+    param([Parameter(Mandatory)] [string]$Root)
+
+    foreach ($name in $DirectParityArtifactNames) {
+        Remove-Item -LiteralPath (Join-Path $Root $name) `
+            -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath (Join-Path $Root $DirectParitySummaryName) `
+        -Force -ErrorAction SilentlyContinue
+}
+
+function Assert-FreshDirectParityArtifacts {
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [DateTime]$PhaseStartedUtc
+    )
+
+    foreach ($name in $DirectParityArtifactNames) {
+        $path = Join-Path $Root $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Direct parity artifact was not produced: $path"
+        }
+        $artifact = Get-Item -LiteralPath $path
+        if ($artifact.Length -le 0) {
+            throw "Direct parity artifact was empty: $path"
+        }
+        if ($artifact.LastWriteTimeUtc -lt $PhaseStartedUtc) {
+            throw "Direct parity artifact was stale: $path ($($artifact.LastWriteTimeUtc.ToString('o')) < $($PhaseStartedUtc.ToString('o')))"
+        }
+    }
+}
+
+function Invoke-VerificationSelfTests {
+    $setName = "AQUILLM_VERIFY_ENV_SET_$PID"
+    $unsetName = "AQUILLM_VERIFY_ENV_UNSET_$PID"
+    $outerSnapshot = Get-ProcessEnvironmentSnapshot -Names @($setName, $unsetName)
+    try {
+        [Environment]::SetEnvironmentVariable($setName, "before", "Process")
+        [Environment]::SetEnvironmentVariable($unsetName, $null, "Process")
+        $deliberateFailureObserved = $false
+        try {
+            Invoke-WithTemporaryEnvironment `
+                -Environment @{ $setName = "during"; $unsetName = "during" } `
+                -ScriptBlock {
+                    if ([Environment]::GetEnvironmentVariable($setName, "Process") -ne "during") {
+                        throw "Temporary set environment value was not applied"
+                    }
+                    if ([Environment]::GetEnvironmentVariable($unsetName, "Process") -ne "during") {
+                        throw "Temporary unset environment value was not applied"
+                    }
+                    throw "deliberate environment restoration self-test failure"
+                }
+        }
+        catch {
+            if ($_.Exception.Message -ne "deliberate environment restoration self-test failure") {
+                throw
+            }
+            $deliberateFailureObserved = $true
+        }
+        if (-not $deliberateFailureObserved) {
+            throw "Environment restoration self-test did not observe its deliberate failure"
+        }
+        if ([Environment]::GetEnvironmentVariable($setName, "Process") -ne "before") {
+            throw "Previously set environment value was not restored"
+        }
+        if ($null -ne [Environment]::GetEnvironmentVariable($unsetName, "Process")) {
+            throw "Previously unset environment value was not removed"
+        }
+    }
+    finally {
+        Restore-ProcessEnvironment -Snapshot $outerSnapshot
+    }
+
+    $selfTestRoot = Join-Path $StateRoot "self-test-$PID"
+    New-Item -ItemType Directory -Force $selfTestRoot | Out-Null
+    try {
+        $phaseStartedUtc = [DateTime]::UtcNow
+        foreach ($name in $DirectParityArtifactNames) {
+            $path = Join-Path $selfTestRoot $name
+            "stale" | Set-Content -LiteralPath $path -Encoding ascii
+            (Get-Item -LiteralPath $path).LastWriteTimeUtc = $phaseStartedUtc.AddMinutes(-5)
+        }
+        $staleFailureObserved = $false
+        try {
+            Assert-FreshDirectParityArtifacts `
+                -Root $selfTestRoot `
+                -PhaseStartedUtc $phaseStartedUtc
+        }
+        catch {
+            if ($_.Exception.Message -notmatch "Direct parity artifact was stale") {
+                throw
+            }
+            $staleFailureObserved = $true
+        }
+        if (-not $staleFailureObserved) {
+            throw "Artifact freshness self-test accepted stale files"
+        }
+        foreach ($name in $DirectParityArtifactNames) {
+            "fresh" | Set-Content `
+                -LiteralPath (Join-Path $selfTestRoot $name) `
+                -Encoding ascii
+        }
+        Assert-FreshDirectParityArtifacts `
+            -Root $selfTestRoot `
+            -PhaseStartedUtc $phaseStartedUtc
+    }
+    finally {
+        Remove-DirectParityArtifacts -Root $selfTestRoot
+        Remove-Item -LiteralPath $selfTestRoot -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "Environment restoration and artifact freshness self-tests passed."
 }
 
 function Get-RunningGpuContainers {
@@ -318,14 +484,36 @@ print(json.dumps({
 }
 
 function Invoke-ContainerPytest {
-    param([string]$Command, [hashtable]$Environment = @{}, [string[]]$Volumes = @())
+    param(
+        [string]$Command,
+        [hashtable]$Environment = @{},
+        [string[]]$Volumes = @(),
+        [string]$ExpectedOutput = ""
+    )
     $arguments = @("run", "--rm", "--gpus", "all", "--entrypoint", "bash")
     foreach ($entry in $Environment.GetEnumerator()) {
         $arguments += @("-e", "$($entry.Key)=$($entry.Value)")
     }
     foreach ($volume in $Volumes) { $arguments += @("-v", $volume) }
     $arguments += @("-v", "${RepoRoot}:/workspace", "-w", "/workspace", $Image, "-lc", $Command)
-    Invoke-Checked -FilePath docker -ArgumentList $arguments
+    if (-not $ExpectedOutput) {
+        Invoke-Checked -FilePath docker -ArgumentList $arguments
+        return
+    }
+
+    # Pytest's pass summary is stdout. Leave stderr attached to the host so
+    # native warnings do not become terminating PowerShell ErrorRecords under
+    # the script-wide ErrorActionPreference = Stop.
+    $output = @(& docker @arguments)
+    $exitCode = $LASTEXITCODE
+    $output | ForEach-Object { Write-Host $_ }
+    if ($exitCode -ne 0) {
+        throw "Container pytest failed with exit code $exitCode"
+    }
+    $outputText = $output -join [Environment]::NewLine
+    if (-not $outputText.Contains($ExpectedOutput)) {
+        throw "Container pytest did not report expected output: $ExpectedOutput"
+    }
 }
 
 function Start-GpuMemorySampler {
@@ -406,6 +594,7 @@ function Wait-AsrHealth {
 }
 
 function Invoke-FullNemotronVerification {
+    Invoke-VerificationSelfTests
     Write-IsolatedEnvironmentFiles
     Assert-RenderedNemotronConfig
     Assert-RepositoryComposeProfiles
@@ -413,7 +602,8 @@ function Invoke-FullNemotronVerification {
     Assert-GpuIsIdle -AllowedPids $AllowGpuPid
 
     Invoke-Checked -FilePath docker -ArgumentList @(
-        "build", "-f", "deploy/docker/vllm/Dockerfile.transcribe", "-t", $Image, "."
+        "build", "-f", (Join-Path $RepoRoot "deploy\docker\vllm\Dockerfile.transcribe"),
+        "-t", $Image, $RepoRoot
     )
     $imageInspect = & docker image inspect $Image | ConvertFrom-Json
     $imageInspect | ConvertTo-Json -Depth 12 | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "image-inspect.json")
@@ -435,6 +625,8 @@ function Invoke-FullNemotronVerification {
         -Command "python3 -m pip install -q pytest==8.4.1 && python3 -m pytest deploy/vllm_plugins/nemotron_asr/tests/test_engine_lifecycle.py deploy/vllm_plugins/nemotron_asr/tests/test_model.py -q"
     Assert-GpuIsIdle -AllowedPids $AllowGpuPid
 
+    Remove-DirectParityArtifacts -Root $ArtifactRoot
+    $directPhaseStartedUtc = [DateTime]::UtcNow
     Invoke-ContainerPytest `
         -Environment @{
             ASR_FULL_PARITY_PHASE = "direct"
@@ -445,7 +637,28 @@ function Invoke-FullNemotronVerification {
             CUBLAS_WORKSPACE_CONFIG = ":4096:8"
         } `
         -Volumes @("${CacheVolume}:/root/.cache/huggingface", "${ArtifactRoot}:/artifacts") `
+        -ExpectedOutput "2 passed" `
         -Command "python3 -m pip install -q pytest==8.4.1 && python3 -m pytest deploy/vllm_plugins/nemotron_asr/tests/test_transformers_parity.py -q -m gpu"
+    Assert-FreshDirectParityArtifacts `
+        -Root $ArtifactRoot `
+        -PhaseStartedUtc $directPhaseStartedUtc
+    [pscustomobject]@{
+        phase_started_utc = $directPhaseStartedUtc.ToString("o")
+        validated_utc = ([DateTime]::UtcNow).ToString("o")
+        expected_pytest_output = "2 passed"
+        artifacts = @(
+            $DirectParityArtifactNames | ForEach-Object {
+                $artifact = Get-Item -LiteralPath (Join-Path $ArtifactRoot $_)
+                [pscustomobject]@{
+                    name = $_
+                    bytes = $artifact.Length
+                    last_write_utc = $artifact.LastWriteTimeUtc.ToString("o")
+                }
+            }
+        )
+    } | ConvertTo-Json -Depth 4 | Set-Utf8NoBom -Path (
+        Join-Path $ArtifactRoot $DirectParitySummaryName
+    )
     Assert-GpuIsIdle -AllowedPids $AllowGpuPid
 
     Invoke-ContainerPytest `
@@ -497,38 +710,47 @@ function Invoke-FullNemotronVerification {
         }
         $hostPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
         if (-not (Test-Path $hostPython)) { throw "Host test Python not found: $hostPython" }
-        $env:RUN_ASR_RUNTIME = "1"
-        $env:ASR_BASE_URL = "http://127.0.0.1:8005/v1"
-        $env:SECRET_KEY = "nemotron-runtime-verification-only"
-        $env:GOOGLE_OAUTH2_CLIENT_ID = "nemotron-runtime-verification"
-        $env:GOOGLE_OAUTH2_CLIENT_SECRET = "nemotron-runtime-verification"
-        $env:OPENAI_API_KEY = "sk-nemotron-runtime-verification"
-        $env:GEMINI_API_KEY = "nemotron-runtime-verification"
-        Push-Location $RepoRoot
-        $runtimeStarted = Get-Date
-        try {
-            $runtimeOutput = @(& $hostPython -m pytest tests/asr -q 2>&1)
-            $runtimeExitCode = $LASTEXITCODE
-            $requestCompletedAt = [DateTimeOffset](Get-Date)
-            $runtimeText = $runtimeOutput -join [Environment]::NewLine
-            Write-Host $runtimeText
-            $runtimeText | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "http-pytest.log")
-            if ($runtimeExitCode -ne 0) {
-                throw "Live ASR HTTP pytest failed with exit code $runtimeExitCode"
-            }
-            if (-not $runtimeText.Contains("29 passed")) {
-                throw "Live ASR HTTP pytest did not report all 29 passing tests"
-            }
-            [pscustomobject]@{
-                test_count = 29
-                elapsed_seconds = [Math]::Round(((Get-Date) - $runtimeStarted).TotalSeconds, 3)
-                base_url = $env:ASR_BASE_URL
-                model = $ServedName
-            } | ConvertTo-Json | Set-Utf8NoBom -Path (
-                Join-Path $ArtifactRoot "http-pytest-summary.json"
-            )
+        $runtimeEnvironment = @{
+            RUN_ASR_RUNTIME = "1"
+            ASR_BASE_URL = "http://127.0.0.1:8005/v1"
+            SECRET_KEY = "nemotron-runtime-verification-only"
+            GOOGLE_OAUTH2_CLIENT_ID = "nemotron-runtime-verification"
+            GOOGLE_OAUTH2_CLIENT_SECRET = "nemotron-runtime-verification"
+            OPENAI_API_KEY = "sk-nemotron-runtime-verification"
+            GEMINI_API_KEY = "nemotron-runtime-verification"
         }
-        finally { Pop-Location }
+        $requestCompletedAt = Invoke-WithTemporaryEnvironment `
+            -Environment $runtimeEnvironment `
+            -ScriptBlock {
+                Push-Location $RepoRoot
+                $runtimeStarted = Get-Date
+                try {
+                    $runtimeOutput = @(& $hostPython -m pytest tests/asr -q 2>&1)
+                    $runtimeExitCode = $LASTEXITCODE
+                    $completedAt = [DateTimeOffset](Get-Date)
+                    $runtimeText = $runtimeOutput -join [Environment]::NewLine
+                    Write-Host $runtimeText
+                    $runtimeText | Set-Utf8NoBom -Path (Join-Path $ArtifactRoot "http-pytest.log")
+                    if ($runtimeExitCode -ne 0) {
+                        throw "Live ASR HTTP pytest failed with exit code $runtimeExitCode"
+                    }
+                    if (-not $runtimeText.Contains("29 passed")) {
+                        throw "Live ASR HTTP pytest did not report all 29 passing tests"
+                    }
+                    [pscustomobject]@{
+                        test_count = 29
+                        elapsed_seconds = [Math]::Round(((Get-Date) - $runtimeStarted).TotalSeconds, 3)
+                        base_url = $env:ASR_BASE_URL
+                        model = $ServedName
+                    } | ConvertTo-Json | Set-Utf8NoBom -Path (
+                        Join-Path $ArtifactRoot "http-pytest-summary.json"
+                    )
+                    return $completedAt
+                }
+                finally {
+                    Pop-Location
+                }
+            }
         Start-Sleep -Seconds 35
         $postWindowEndedAt = [DateTimeOffset](Get-Date)
     } finally {
@@ -550,8 +772,11 @@ function Invoke-FullNemotronVerification {
     Write-Host "Nemotron verification artifacts: $ArtifactRoot"
 }
 
-if (-not ($AssertGpuIdle -or $PrepareEnvironments -or $VerifyNemotron)) {
-    throw "Select at least one switch: -AssertGpuIdle, -PrepareEnvironments, or -VerifyNemotron"
+if (-not ($AssertGpuIdle -or $PrepareEnvironments -or $SelfTest -or $VerifyNemotron)) {
+    throw "Select at least one switch: -AssertGpuIdle, -PrepareEnvironments, -SelfTest, or -VerifyNemotron"
+}
+if ($SelfTest) {
+    Invoke-VerificationSelfTests
 }
 if ($PrepareEnvironments) {
     Write-IsolatedEnvironmentFiles

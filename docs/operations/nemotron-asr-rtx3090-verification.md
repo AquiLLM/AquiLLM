@@ -1,16 +1,20 @@
 # Nemotron ASR RTX 3090 verification
 
-Verified 2026-07-21 18:59 PDT (America/Los_Angeles) on one NVIDIA GeForce RTX
+Verified 2026-07-21 19:24 PDT (America/Los_Angeles) on one NVIDIA GeForce RTX
 3090 (24,576 MiB), Windows driver 591.86. The host reports CUDA 13.1; the
 container uses Torch 2.11.0+cu130 with CUDA 13.0. No chat model or other Docker
 GPU container was running during any ASR phase. Windows WDDM desktop processes
 were visible to `nvidia-smi` with `N/A` memory and were recorded rather than
-treated as numeric compute allocations.
+treated as numeric compute allocations. This driver exposes no reliable
+read-only `pmon`/type-C per-process memory signal for those WDDM rows, so that
+remains a visibility limitation. The harness pairs the inventory with Docker
+GPU `DeviceRequests`; any numeric compute allocation or GPU-requesting
+container still fails isolation.
 
 ## Immutable runtime inputs
 
 - Image: `aquillm-vllm-transcribe:test`, image ID and local repository digest
-  `sha256:0d61fe50ce0f367822590e67048d015bd4836bebac65de2d0a39fd7dded560ce`.
+  `sha256:912270f4cd22011f2a4d985d4d41cd5f667a325f14ef982da87f46e341699d20`.
   The script also records the complete inspection JSON under its temporary
   artifact directory.
 - vLLM 0.21.0, Transformers 5.13.0, Torch 2.11.0+cu130, librosa 0.11.0,
@@ -68,6 +72,15 @@ importing plugin decoding or cleanup code.
   expected replay ID. They were deliberately not compared with acoustic joint
   logits.
 
+Immediately before the direct phase, the harness deletes both oracle outputs
+and records its UTC start. The verified run started at
+`2026-07-22T02:21:31.6328866Z`; `direct-joint-logits.npy` (6,491,776 bytes) and
+`direct-transformers.json` (5,193 bytes) were rewritten at
+`2026-07-22T02:21:43.5730963Z` and `2026-07-22T02:21:43.6099626Z`, respectively.
+The harness required the direct pytest `2 passed` token, nonempty files, and
+write timestamps no earlier than phase start before plugin parity could run.
+These facts are persisted in `direct-phase-summary.json`.
+
 ## Deployed scheduler and memory
 
 The standalone rendered runtime and all repository base/development/production
@@ -91,16 +104,16 @@ the post-request steady window:
 
 | Measurement | Overall GPU memory | Above WDDM baseline |
 | --- | ---: | ---: |
-| Baseline | 4,463 MiB | 0 MiB |
-| Peak (FP32 long-boundary requests) | 20,722 MiB | 16,259 MiB |
-| Post-request steady average | 20,715.3 MiB | 16,252.3 MiB |
+| Baseline | 4,459 MiB | 0 MiB |
+| Peak (FP32 long-boundary requests) | 20,733 MiB | 16,274 MiB |
+| Post-request steady average | 20,720.2 MiB | 16,261.2 MiB |
 
-The baseline was captured at `2026-07-21T18:57:44.3375777-07:00`. The HTTP
-suite completed at `2026-07-21T18:59:09.8310106-07:00`, and the post-request
-window ended at `2026-07-21T18:59:44.8585449-07:00`, 35.028 seconds later.
-The steady average uses only the seven timestamped samples inside that window,
-from `2026-07-21T18:59:14.5344259-07:00` through
-`2026-07-21T18:59:42.1529389-07:00`; it does not include startup or request
+The baseline was captured at `2026-07-21T19:22:14.5939211-07:00`. The HTTP
+suite completed at `2026-07-21T19:23:38.8541956-07:00`, and the post-request
+window ended at `2026-07-21T19:24:13.8725910-07:00`, 35.018 seconds later.
+The steady average uses only the eight timestamped samples inside that window,
+from `2026-07-21T19:23:39.1012829-07:00` through
+`2026-07-21T19:24:12.0399745-07:00`; it does not include startup or request
 samples. There were 24 samples across the full run. The resident FP32 model
 therefore remained near the measured peak after requests completed.
 
@@ -114,7 +127,7 @@ engine with this FP32 ASR service on a 24 GiB card.
 
 The temporary Compose project started only `vllm_transcribe`, exposed exactly
 `nemotron-3.5-asr-streaming-0.6b` from `/v1/models`, and passed all 29 tests in
-`tests/asr` in 18.56 seconds of pytest runtime (29.145 seconds including host
+`tests/asr` in 18.36 seconds of pytest runtime (27.902 seconds including host
 runner setup/teardown). This covered SDK `.text`, normal JSON and text output, omitted and
 explicit language, every request-validation 4xx, translation rejection,
 sequential and duplicate state isolation, cancellation recovery, and 389/390
@@ -127,11 +140,20 @@ The exact full command is:
 .\scripts\verify_nemotron_asr.ps1 -VerifyNemotron
 ```
 
+The final full run was invoked from the system temporary directory to prove
+that its absolute Dockerfile and build-context paths do not depend on the
+caller's current directory. Before the host HTTP tests, the harness snapshots
+all seven process environment variables it overrides and restores their exact
+set/unset state and values in `finally`. The verification wrapper supplied a
+mix of set and unset sentinel values and confirmed an identical state after
+the full run.
+
 Useful preparation/isolation-only commands are:
 
 ```powershell
 .\scripts\verify_nemotron_asr.ps1 -PrepareEnvironments
 .\scripts\verify_nemotron_asr.ps1 -AssertGpuIdle
+.\scripts\verify_nemotron_asr.ps1 -SelfTest
 ```
 
 Preparation creates a standalone temporary Compose file plus complete Nemotron
