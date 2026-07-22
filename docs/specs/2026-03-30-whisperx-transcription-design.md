@@ -8,13 +8,13 @@
 
 ## Problem
 
-Media ingestion today transcribes audio and video through an **OpenAI-compatible** HTTP API (`audio.transcriptions.create`), typically backed by **vLLM** serving a Whisper-family model (`vllm_transcribe` in Compose). That path yields a **single plain transcript** string. It does **not** provide the extras that [WhisperX](https://github.com/m-bain/whisperX) is known for: **accurate word-level alignment**, optional **speaker diarization**, and structured segments that often **improve perceived quality** on challenging audio.
+Media ingestion today transcribes audio and video through the **configured OpenAI-compatible ASR** HTTP API (`audio.transcriptions.create`), backed by `vllm_transcribe` in local GPU Compose deployments. Nemotron 3.5 ASR is the default local model, with an environment-only Whisper rollback. That path yields a **single plain transcript** string. It does **not** provide the extras that [WhisperX](https://github.com/m-bain/whisperX) is known for: **accurate word-level alignment**, optional **speaker diarization**, and structured segments that often **improve perceived quality** on challenging audio.
 
-Operators want a **local WhisperX service** that **enhances** the existing Whisper (vLLM) deployment: keep the current stack as the baseline ASR, and add an **optional second stage** without replacing `vllm_transcribe` or changing the default ingestion contract unless explicitly enabled.
+Operators want a **local WhisperX service** that **enhances** the configured ASR deployment: keep the current OpenAI-compatible stack as the baseline ASR, and add an **optional second stage** without replacing `vllm_transcribe` or changing the default ingestion contract unless explicitly enabled.
 
 ## Goals
 
-1. **Preserve the existing Whisper deploy** — `INGEST_TRANSCRIBE_PROVIDER=openai` with `vllm_transcribe` remains the **primary** transcription path for media ingestion.
+1. **Preserve the configured ASR baseline** — `INGEST_TRANSCRIBE_PROVIDER=openai` with `vllm_transcribe` remains the **primary** transcription path for media ingestion, whether the operator uses the Nemotron default or Whisper rollback.
 2. **Add a local WhisperX HTTP service** (same Docker/Compose network as the app) that **optionally post-processes** the same upload: receives the **original audio (or demuxed audio)** and the **baseline transcript from vLLM** (or runs WhisperX’s own ASR where required by the pipeline), then returns an **enhanced** transcript and optional structured fields.
 3. **Operator control** — Enhancement is **off by default**; a single clear flag (or equivalent) enables the second stage so dev/staging can validate GPU and latency.
 4. **Clear deployment contract** — Dedicated container with health checks, GPU expectations, optional Hugging Face tokens for diarization, timeouts, and upload size limits.
@@ -32,7 +32,7 @@ Operators want a **local WhisperX service** that **enhances** the existing Whisp
 |--------|------|
 | `aquillm/aquillm/ingestion/media.py` | `transcribe_media_bytes()` — OpenAI client, `audio.transcriptions.create`, returns plain text. |
 | `INGEST_TRANSCRIBE_PROVIDER` | `openai` for the vLLM-backed path; base URL often `http://vllm_transcribe:8000/v1`. |
-| `deploy/compose/*.yml` | `vllm_transcribe` serves Whisper via vLLM. |
+| `deploy/compose/*.yml` | `vllm_transcribe` serves the configured OpenAI-compatible ASR via vLLM (Nemotron default or Whisper rollback). |
 | `ExtractedTextPayload` | `full_text` plus optional `metadata` for structured extras. |
 
 ## Proposed behavior: enhance, not replace
@@ -44,7 +44,7 @@ Operators want a **local WhisperX service** that **enhances** the existing Whisp
       │
       ▼
 ┌─────────────────────┐
-│ vLLM Whisper (v1)   │  ← existing deploy; unchanged default
+│ Configured ASR (v1) │  ← existing OpenAI-compatible baseline
 │ audio.transcriptions│
 └──────────┬──────────┘
            │ baseline text
@@ -98,7 +98,7 @@ Exact paths, field names, and error codes belong in the implementation plan and 
 | Approach | Upside | Downside |
 |----------|--------|----------|
 | **A. Local WhisperX HTTP service as second stage** (chosen) | Keeps vLLM deploy; adds quality/structure; clear boundary. | Extra container; two steps latency. |
-| **B. `INGEST_TRANSCRIBE_PROVIDER=whisperx` only** | Single HTTP hop | Replaces rather than *enhances* the existing Whisper story. |
+| **B. `INGEST_TRANSCRIBE_PROVIDER=whisperx` only** | Single HTTP hop | Replaces rather than *enhances* the configured baseline ASR. |
 | **C. WhisperX inside Django** | One fewer service | GPU contention; heavy deps in app image. |
 
 ## Security and privacy

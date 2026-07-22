@@ -3,11 +3,36 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _markdown_section(document: str, heading: str) -> str:
+    """Return one Markdown section without coupling tests to prose wrapping."""
+    lines = document.splitlines(keepends=True)
+    in_fence = False
+    start: int | None = None
+    level: int | None = None
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = re.match(r"^(?P<marks>#+)\s+(?P<title>.*?)\s*$", line)
+        if match is None:
+            continue
+        if start is None and match.group("title") == heading:
+            start = index + 1
+            level = len(match.group("marks"))
+        elif start is not None and len(match.group("marks")) <= level:
+            return "".join(lines[start:index])
+    assert start is not None, f"missing Markdown heading: {heading}"
+    return "".join(lines[start:])
 
 
 def test_transcription_image_is_pinned_and_self_contained():
@@ -114,3 +139,139 @@ def test_dockerignore_excludes_disposable_virtual_environments():
 
     assert ".venv*/" in ignored
     assert "venv/" in ignored
+
+
+def test_readme_documents_the_nemotron_operator_contract():
+    readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
+    section = " ".join(
+        _markdown_section(readme, "Local GPU ASR (Nemotron 3.5)").split()
+    )
+
+    for required in (
+        "nvidia/nemotron-3.5-asr-streaming-0.6b",
+        "served as `nemotron-3.5-asr-streaming-0.6b`",
+        "pinned at revision `f3d333391852ba876df169dcc9ba902d25b6ab0b`",
+        "POST /v1/audio/transcriptions",
+        ".text",
+        "batch/offline only",
+        "390 seconds",
+        "--max-num-seqs 1",
+        "no concurrency promise",
+        "dtype auto",
+        "FP32",
+        "VLLM_USE_V2_MODEL_RUNNER=0",
+        "--enforce-eager",
+        "INGEST_TRANSCRIBE_LANGUAGE",
+        "automatic language detection",
+        "en-US",
+        "NEMOTRON_ASR_ALLOW_ADAPTATION_LANGUAGES=1",
+        "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/"
+        "blob/f3d333391852ba876df169dcc9ba902d25b6ab0b/README.md",
+        "https://openmdw.ai/license/1-1/",
+        "distinct from the AquiLLM source license",
+        "does not redistribute them",
+        "--env-file .env -f deploy/compose/base.yml",
+        "--profile vllm",
+        "--no-deps --wait --wait-timeout 900",
+        "http://localhost:8000/health",
+        "http://127.0.0.1:8005/v1/models",
+        "http://127.0.0.1:8005/v1/audio/transcriptions",
+        "tests/fixtures/audio/librispeech_1272-128104-0000.flac",
+        "0.20",
+        "features, activations, and runtime overhead",
+        "no_gpu_dev",
+        "whisper-1",
+        "development",
+        "does not publish host port 8005",
+    ):
+        assert required in section
+
+    for outside_release in (
+        "translations",
+        "diarization",
+        "word timestamps",
+        "verbose",
+        "realtime WebSockets",
+    ):
+        assert outside_release.lower() in section.lower()
+
+
+def test_readme_documents_a_complete_environment_only_whisper_rollback():
+    readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
+    rollback = " ".join(_markdown_section(readme, "Whisper rollback").split())
+
+    for setting in (
+        "TRANSCRIBE_VLLM_MODEL=openai/whisper-large-v3-turbo",
+        "TRANSCRIBE_VLLM_REVISION=",
+        "TRANSCRIBE_VLLM_SERVED_MODEL_NAME=whisper-large-v3-turbo",
+        "TRANSCRIBE_VLLM_TOKENIZER=openai/whisper-large-v3-turbo",
+        "TRANSCRIBE_VLLM_TENSOR_PARALLEL_SIZE=1",
+        "TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION=0.08",
+        "TRANSCRIBE_VLLM_MAX_MODEL_LEN=448",
+        "TRANSCRIBE_VLLM_DTYPE=float16",
+        "TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=0",
+        "TRANSCRIBE_VLLM_TRUST_REMOTE_CODE=1",
+        "--quantization bitsandbytes",
+        "--load-format bitsandbytes",
+        '\\"load_in_8bit\\":true',
+        "--max-num-seqs 1",
+        "--max-num-batched-tokens 448",
+        '\\"audio\\":{\\"count\\":1,\\"length\\":30}',
+        "INGEST_TRANSCRIBE_MODEL=whisper-large-v3-turbo",
+        "--force-recreate vllm_transcribe",
+        "--force-recreate web worker",
+        "without rebuilding",
+        "not automatic",
+        "not a second resident model",
+    ):
+        assert setting in rollback
+
+    assert "--generation-config" not in rollback
+    assert "TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=1" not in rollback
+
+
+def test_whisperx_docs_use_the_configurable_asr_baseline():
+    root = _repo_root()
+    paths = (
+        root / "docs/specs/2026-03-30-whisperx-transcription-design.md",
+        root / "docs/roadmap/plans/pending/"
+        "2026-03-30-whisperx-transcription-implementation.md",
+    )
+    stale_phrases = (
+        "serving a whisper-family model",
+        "existing whisper (vllm) deployment",
+        "vllm_transcribe serves whisper",
+        "vllm whisper (v1)",
+        "existing **vllm whisper**",
+        "enhancer for the existing whisper (vllm) stack",
+    )
+
+    for path in paths:
+        contents = path.read_text(encoding="utf-8").lower()
+        assert "configured openai-compatible asr" in contents
+        assert "nemotron" in contents and "default" in contents
+        assert "whisper rollback" in contents
+        assert "ingest_transcribe_provider=openai" in contents
+        for stale in stale_phrases:
+            assert stale not in contents
+
+
+def test_roadmap_tracks_the_optional_whisperx_enhancement():
+    roadmap = (_repo_root() / "docs/roadmap/roadmap-status.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(
+        line
+        for line in roadmap.splitlines()
+        if line.startswith("| Optional WhisperX enhancement ")
+    )
+
+    assert "docs/specs/2026-03-30-whisperx-transcription-design.md" in row
+    assert (
+        "docs/roadmap/plans/pending/2026-03-30-whisperx-transcription-implementation.md"
+        in row
+    )
+    assert "**Not started**" in row
+    assert "Nemotron default" in row
+    assert "Whisper rollback" in row
+    assert "without changing the baseline contract" in row

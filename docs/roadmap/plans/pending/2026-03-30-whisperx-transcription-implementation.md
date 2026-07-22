@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a **local WhisperX HTTP service** that **enhances** the existing **vLLM Whisper** (`vllm_transcribe`) deployment: primary ASR stays OpenAI-compatible; an **optional second stage** calls WhisperX for alignment, optional diarization, and richer transcript text/metadata.
+**Goal:** Add a **local WhisperX HTTP service** that **enhances** the **configured OpenAI-compatible ASR** (`vllm_transcribe`) deployment: the Nemotron default or Whisper rollback remains the primary ASR, while an **optional second stage** calls WhisperX for alignment, optional diarization, and richer transcript text/metadata.
 
 **Architecture:** (1) `transcribe_media_bytes` keeps calling vLLM via the existing client when `INGEST_TRANSCRIBE_PROVIDER=openai`. (2) If `INGEST_TRANSCRIBE_WHISPERX_ENHANCE` is enabled and `INGEST_TRANSCRIBE_WHISPERX_BASE_URL` is set, POST the **same media bytes** (and **baseline transcript** from step 1) to the local WhisperX service; use its JSON `text` as the final transcript (subject to failure policy). WhisperX runs in its **own container** on the Compose network (e.g. `whisperx` or `whisperx_transcribe`).
 
@@ -41,7 +41,7 @@
 | `deploy/docker/whisperx/` | Create | Dockerfile + FastAPI (or similar) + WhisperX pipeline. |
 | `deploy/compose/base.yml` (and env-specific) | Modify | `whisperx` service; `depends_on` ordering vs `vllm_transcribe` if app needs both URLs (app may only need network access). |
 | `.env.example` | Modify | `INGEST_TRANSCRIBE_WHISPERX_*` vars. |
-| `README.md` | Modify | “vLLM Whisper + optional local WhisperX enhance” subsection. |
+| `README.md` | Modify | Configured ASR + optional local WhisperX enhancement subsection. |
 | `aquillm/aquillm/ingestion/tests/` | Modify/Create | Enhancement and fallback tests. |
 
 ---
@@ -110,7 +110,7 @@
 
 ### Task 5: README and operator note
 
-- [ ] **Step 1:** README: describe **local** WhisperX as an **enhancer** for the existing Whisper (vLLM) stack.
+- [ ] **Step 1:** README: describe **local** WhisperX as an **enhancer** for the configured ASR baseline (Nemotron default or Whisper rollback).
 - [ ] **Step 2:** Note HF token for diarization and failure policy defaults.
 
 ---
