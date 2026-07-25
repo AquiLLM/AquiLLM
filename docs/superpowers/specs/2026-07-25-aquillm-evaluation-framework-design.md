@@ -112,6 +112,7 @@ The first implementation will extend `aquillm/apps/chat/evals/` with independent
 
 6. **Artifact writer**
    - Writes JSONL per-case results, aggregate JSON, a human-readable Markdown report, and JUnit for CI.
+   - Applies the field-level artifact policy in Section 5.4 before serialization.
    - Never stores secrets or unredacted private corpora in tracked artifacts.
 
 7. **Human-study envelope**
@@ -171,6 +172,89 @@ Each run result must record:
 - gate failures and warnings.
 
 Private production text is not an evaluation artifact. Production-derived cases must be consented, minimized, redacted, and converted into reviewed fixtures before entering the suite.
+
+### 5.4 Metric Applicability
+
+Every metric is represented as a structured result:
+
+```json
+{
+  "status": "measured",
+  "value": 0.9,
+  "numerator": 9,
+  "denominator": 10,
+  "reason": null
+}
+```
+
+Allowed statuses are:
+
+- `measured`: the metric is valid for this case and has a numeric or Boolean value;
+- `not_applicable`: the case intentionally has no applicable gold target, such as retrieval recall for a true-negative unanswerable case;
+- `unavailable`: the metric applies, but required data was not collected or a configured optional scorer was absent;
+- `failed`: scoring was attempted and failed, with a stable error category.
+
+Aggregates include only `measured` values in their numeric estimate and always report measured, not-applicable, unavailable, and failed counts. Macro averages across cases are the default. Micro aggregation is emitted only for metrics with meaningful pooled numerators and denominators and is labeled explicitly.
+
+Zero-denominator and empty-result rules are:
+
+- empty gold relevant set: retrieval recall, MRR, NDCG, and document coverage are `not_applicable`; false-positive retrieval and correct-abstention metrics cover true-negative cases;
+- nonempty gold with no retrieved results: recall, MRR, NDCG, and relevant precision values are measured as zero;
+- Precision@k uses configured `k` as its denominator, even if fewer than `k` results are returned; a separate returned-count field exposes truncation;
+- fewer than two selected evidence items: evidence redundancy is measured as zero because no duplicate pair exists;
+- no emitted citations when citations are not required: citation validity is `not_applicable`;
+- no emitted citations when citations are required: citation validity and required-claim citation coverage are measured as zero;
+- no supported reference claims: claim recall and citation recall are `not_applicable`; unsupported-claim and abstention metrics remain applicable;
+- no factual claims in the response: claim/citation precision is `not_applicable` unless the answer contract required a factual answer, in which case the corresponding completeness/coverage metric is zero;
+- no cache lookups: cache hit rate is `not_applicable`;
+- zero supported claims: tokens, cost, and time per supported claim are `not_applicable` with reason `zero_supported_claims`; total tokens, cost, time, and the zero-supported-claim count remain measured.
+
+### 5.5 Artifact Sensitivity and Redaction
+
+Every case declares one sensitivity:
+
+- `public_fixture`: reviewed synthetic or redistributable content;
+- `restricted_fixture`: licensed or internal fixture that may be processed locally but not committed;
+- `private_live`: consented live/production-derived content that cannot enter normal evaluation artifacts.
+
+Sensitivity propagates from the case and corpus to every result. The writer supports two explicit profiles:
+
+1. `local_detailed`
+   - May contain query, retrieved snippets, evidence, final answer, citations, and judge rationale when the case policy permits.
+   - Is always gitignored and stored outside tracked baseline directories.
+
+2. `tracked_summary`
+   - Contains IDs, hashes, ranks, counts, timings, metric results, gate reasons, and redacted error categories only.
+   - Excludes query text, conversation text, retrieved content, final answer, raw citations containing private identifiers, judge rationale, provider payloads, and stack traces.
+
+Serialization is fail-closed. A field allow-list is defined per output profile; unknown fields or a result whose sensitivity exceeds the profile cause an artifact-policy error. Secrets are redacted before policy validation. JUnit contains case IDs and stable gate messages only. Markdown escapes Markdown metacharacters, strips control characters, and never renders result text as raw HTML. Spreadsheet-oriented exports, if added later, must neutralize formula-prefixed cells.
+
+The checked-in baseline uses only `tracked_summary` results from `public_fixture` cases. Restricted and private summaries may be exported only to an explicitly configured untracked directory.
+
+### 5.6 Existing Harness Compatibility
+
+The current command remains supported throughout migration:
+
+```text
+cd aquillm
+python -m apps.chat.evals.run_rag_eval
+```
+
+During the first two milestones, the runner loads both the legacy schema and v1. A deterministic translator maps legacy fields:
+
+| Legacy field | v1 destination |
+|---|---|
+| `id` | `id` |
+| `description` | case metadata `description` |
+| `message` | `conversation.messages[-1]` as a user message |
+| `collection_ids` | identity `allowed_collection_ids` and selected collection state |
+| `mock_retrieval_status` | fixture adapter response and expected retrieval outcome |
+| `mock_retrieved_count` | fixture adapter response count |
+| `expect_outcome` | expected pipeline outcome |
+| `expect_retrieval_called` | expected route/retrieval-call contract |
+| `expect_content_contains` | legacy answer-contract substring assertions |
+
+All six existing cases must produce parity with the legacy runner before their source representation is replaced. Compatibility tests assert case IDs, handled/skipped outcomes, retrieval-call behavior, and substring expectations. The command's exit-code contract remains zero for all passing cases and nonzero for any failed case. Removal of the translator is a later, separately reviewed cleanup after all checked-in cases use v1.
 
 ## 6. Metric Dictionary
 
@@ -238,11 +322,12 @@ Citation allow-list validity and authorization are deterministic hard gates. Cit
 These rates must be exactly zero:
 
 - unauthorized retrieved chunks;
-- unauthorized answer claims;
 - unauthorized citations, images, PDFs, or source URLs;
 - cross-user and cross-project canary leakage.
 
 Cases cover guessed IDs, inherited access, revocation with stale caches, prompt injection, and denied selected collections.
+
+Deterministic gates operate on resource IDs, access decisions, resolved citation/image/PDF/source targets, and exact forbidden canaries. Semantic leakage in paraphrased answer claims cannot be proven deterministically from those signals; it is a separate human- or calibrated-judge metric and remains non-blocking until validated. A deterministic answer-leakage gate may be added only when a case supplies an exact or normalized forbidden-canary contract.
 
 ### 6.7 Reliability and Efficiency
 
@@ -478,9 +563,14 @@ Tracked confounds include expertise, prompt skill, discipline, corpus difficulty
 - One run failure creates a structured failed result and does not corrupt other results.
 - Missing optional services produce a named skip only when the manifest permits it.
 - Timeouts, malformed provider responses, parser failures, and permission denials use stable error categories.
-- Resume uses case/config/repeat identity and never silently mixes manifests.
+- Each run writes to a unique directory keyed by manifest fingerprint and run ID.
+- JSONL and aggregate outputs are written to a temporary file in the destination directory, flushed, and atomically replaced only after successful serialization and policy validation.
+- A per-run lock prevents concurrent writers from targeting the same run directory. Independent run IDs may execute concurrently.
+- Existing output causes a collision error unless explicit resume is requested.
+- Resume requires an exact manifest fingerprint and schema version match, uses case/config/repeat identity, and ignores only records that passed checksum validation.
+- Manifest mismatch, corrupt/truncated records, serialization failure, failed atomic replacement, and artifact-policy failure stop final report publication and preserve the last valid artifact.
 - Reports always include missing, skipped, and failed counts.
-- Secret values are redacted; private source text is excluded by default.
+- Secret values are redacted, and source text is included only when the explicit `local_detailed` field policy and case sensitivity permit it.
 - Result artifacts carry schema versions for future migration.
 
 ## 12. CI and Execution Tiers
@@ -532,18 +622,43 @@ Record counts, timings, provider/model/config versions, fallback choices, and er
 
 ## 14. First Implementation Slice
 
-The first slice is complete when the repository has:
+The first slice is divided into three independently committable milestones. Each milestone must keep the existing eval command green.
 
-1. a validated v1 case and experiment-manifest schema;
-2. pure deterministic retrieval, routing, citation, security, and efficiency scorers;
-3. 20–30 versioned cases expanding the existing six mocked cases;
-4. a local AquiLLM adapter that emits normalized JSONL results;
-5. aggregate JSON, Markdown, and JUnit reports;
-6. unit tests for formulas, validation, failure isolation, and artifact stability;
-7. one documented command for Tier 1;
-8. a checked-in baseline artifact containing configuration fingerprints but no secrets or private text.
+### Milestone A: Schema and Core Scorers
 
-The first slice does not add RAGAS, a live LLM judge, graph retrieval, learning-layer implementation, a dashboard, or automated commercial-product control.
+Complete when the repository has:
+
+1. validated v1 case, manifest, result, metric-result, and artifact-policy schemas;
+2. pure retrieval and routing scorers with the applicability rules from Section 5.4;
+3. hand-computed unit tests for formulas, empty gold, empty results, unavailable data, and scorer failure;
+4. configuration and dataset fingerprints;
+5. no changes to live pipeline instrumentation.
+
+### Milestone B: Legacy-Compatible Runner
+
+Complete when the repository has:
+
+1. a translator for all legacy fields in Section 5.6;
+2. parity tests for all six existing cases;
+3. a local mocked AquiLLM adapter that emits normalized in-memory results;
+4. 20–30 v1 routing, retrieval-contract, citation-contract, and deterministic security cases;
+5. unchanged command and exit-code behavior;
+6. no seeded database or external service requirement.
+
+### Milestone C: Safe Artifacts and Tier 1 CI
+
+Complete when the repository has:
+
+1. local detailed JSONL output and tracked-summary JSON;
+2. aggregate Markdown and JUnit produced only from the safe summary model;
+3. fail-closed field policy, escaping, sensitivity propagation, atomic writes, collision handling, and manifest-checked resume;
+4. tests for redaction, unknown fields, interruption, corrupt resume records, concurrent-writer rejection, and artifact stability;
+5. one documented Tier 1 command;
+6. a checked-in public-fixture baseline summary containing fingerprints but no raw query, evidence, answer, or rationale.
+
+Seeded Postgres retrieval, live instrumentation, ingestion fidelity, LLM judges, and human-study tooling begin only after Milestone C.
+
+The first slice does not add RAGAS, a live LLM judge, graph retrieval, learning-layer implementation, a dashboard, seeded integration fixtures, or automated commercial-product control.
 
 ## 15. Follow-on Slices
 
