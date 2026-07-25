@@ -128,6 +128,7 @@ schema_version: 1
 id: unique_case_id
 split: smoke|regression|challenge|human_task
 tags: [single_hop, pdf, answerable]
+sensitivity: public_fixture|restricted_fixture|private_live
 corpus:
   fixture_ids: []
   content_hashes: {}
@@ -141,17 +142,26 @@ expected:
   route: direct_rag|agentic_rag|no_rag|refuse
   retrieval_query: null
   answerable: true
-  relevant_documents: {}
-  relevant_chunks: {}
-  relevant_figures: {}
-  reference_claims: []
-  allowed_citations: []
+  relevant_documents: null
+  relevant_chunks: null
+  relevant_figures: null
+  reference_claims: null
+  allowed_citations: null
   forbidden_canaries: []
 faults: {}
 budgets: {}
 ```
 
-Relevant documents/chunks may use binary or graded relevance. Cases that cannot support a metric omit its gold labels explicitly rather than receiving an artificial zero.
+Required top-level fields are `schema_version`, `id`, `split`, `tags`, `sensitivity`, `corpus`, `identity`, `conversation`, `expected`, `faults`, and `budgets`. Required `expected` fields are `route`, `retrieval_query`, `answerable`, `relevant_documents`, `relevant_chunks`, `relevant_figures`, `reference_claims`, `allowed_citations`, and `forbidden_canaries`.
+
+Gold-label fields are never omitted:
+
+- `null` means the case was not annotated for that target, so dependent metrics are `unavailable`;
+- an empty mapping/list means annotation is complete and the gold set is known to be empty, enabling true-negative metrics;
+- a nonempty mapping/list contains the reviewed gold target;
+- an omitted required gold field is a schema validation error.
+
+The same convention applies when a future schema adds tables, equations, memory facts, or other gold targets. `retrieval_query: null` is valid only when no exact query contract applies. Optional descriptive metadata may be omitted because it cannot change scoring.
 
 ### 5.3 Result Schema
 
@@ -271,6 +281,18 @@ For retrieved set \(R_k\), gold relevant set \(G\), and first relevant rank \(r\
 - `document_coverage = relevant_documents_represented / relevant_documents`
 
 Metrics must be reported at multiple useful cutoffs, at minimum 1, 5, and 10 where the configuration permits.
+
+Canonical ranked-relevance rules are:
+
+- gold relevance is an integer in `{0, 1, 2, 3}`, where zero is nonrelevant and positive grades represent increasing relevance;
+- binary gold labels are encoded as grade 1;
+- duplicate result IDs are deduplicated before cutoff application, preserving their first occurrence;
+- the adapter must emit a total order; score ties preserve adapter order and may not be reordered by the scorer;
+- DCG uses gain `2^grade - 1` and discount `log2(rank + 1)` for one-based rank;
+- IDCG sorts the case's positive gold grades descending and truncates at `k`;
+- NDCG is `not_applicable` for a completely annotated empty gold set, `unavailable` for a null/unannotated gold field, and measured as zero when positive gold exists but no relevant result is returned;
+- unknown returned IDs have relevance zero;
+- configured `k`, not returned-list length, is used for Precision@k, while DCG/NDCG sum only available deduplicated results through `k`.
 
 ### 6.2 Routing and Query Construction
 
@@ -629,10 +651,14 @@ The first slice is divided into three independently committable milestones. Each
 Complete when the repository has:
 
 1. validated v1 case, manifest, result, metric-result, and artifact-policy schemas;
-2. pure retrieval and routing scorers with the applicability rules from Section 5.4;
-3. hand-computed unit tests for formulas, empty gold, empty results, unavailable data, and scorer failure;
-4. configuration and dataset fingerprints;
-5. no changes to live pipeline instrumentation.
+2. pure retrieval and routing scorers with the applicability and ranked-relevance rules from Sections 5.4 and 6.1;
+3. pure citation-token validity/required-coverage scorers;
+4. pure resource-authorization and exact forbidden-canary gates;
+5. pure reliability-outcome and efficiency helpers for classified failure, calls, tokens, time, cache, and per-supported-claim metrics;
+6. an explicit scorer registry identifying implemented, deferred, and optional-judge metrics;
+7. hand-computed unit tests for formulas, empty gold, empty results, unavailable data, and scorer failure;
+8. configuration and dataset fingerprints;
+9. no changes to live pipeline instrumentation.
 
 ### Milestone B: Legacy-Compatible Runner
 
@@ -643,7 +669,8 @@ Complete when the repository has:
 3. a local mocked AquiLLM adapter that emits normalized in-memory results;
 4. 20–30 v1 routing, retrieval-contract, citation-contract, and deterministic security cases;
 5. unchanged command and exit-code behavior;
-6. no seeded database or external service requirement.
+6. Tier 1 citation and deterministic resource-security gates wired to the Milestone A scorers;
+7. no seeded database or external service requirement.
 
 ### Milestone C: Safe Artifacts and Tier 1 CI
 
@@ -656,7 +683,7 @@ Complete when the repository has:
 5. one documented Tier 1 command;
 6. a checked-in public-fixture baseline summary containing fingerprints but no raw query, evidence, answer, or rationale.
 
-Seeded Postgres retrieval, live instrumentation, ingestion fidelity, LLM judges, and human-study tooling begin only after Milestone C.
+Seeded Postgres retrieval, live instrumentation, ingestion fidelity scorers and fixtures, semantic answer-leakage scoring, LLM judges, and human-study tooling begin only after Milestone C. These families remain part of the overall framework in Section 5.1 but are explicitly outside the first implementation slice.
 
 The first slice does not add RAGAS, a live LLM judge, graph retrieval, learning-layer implementation, a dashboard, seeded integration fixtures, or automated commercial-product control.
 
