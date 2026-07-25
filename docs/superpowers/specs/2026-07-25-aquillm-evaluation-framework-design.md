@@ -112,7 +112,7 @@ The first implementation will extend `aquillm/apps/chat/evals/` with independent
 
 6. **Artifact writer**
    - Writes JSONL per-case results, aggregate JSON, a human-readable Markdown report, and JUnit for CI.
-   - Applies the field-level artifact policy in Section 5.4 before serialization.
+   - Applies the field-level artifact policy in Section 5.5 before serialization.
    - Never stores secrets or unredacted private corpora in tracked artifacts.
 
 7. **Human-study envelope**
