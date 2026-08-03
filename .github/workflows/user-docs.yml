@@ -41,6 +41,9 @@ jobs:
           SPHINX_HTML_BASEURL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/user-docs/
         run: python -m sphinx -b html user-docs/docs/source user-docs/docs/build/html/user-docs
 
+      - name: Add root redirect to /user-docs/
+        run: echo '<meta http-equiv="refresh" content="0; url=user-docs/">' > user-docs/docs/build/html/index.html
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
