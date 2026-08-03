@@ -1,0 +1,4 @@
+sphinx>=7.0
+sphinx-rtd-theme>=3.0
+structlog>=24.1.0
+pydantic>=2.0
