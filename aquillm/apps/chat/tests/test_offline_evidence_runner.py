@@ -1,0 +1,564 @@
+from __future__ import annotations
+
+import copy
+import json
+import os
+import socket
+import textwrap
+
+import pytest
+
+from apps.chat.evals.offline import runner
+from apps.chat.evals.offline.network import NetworkAccessError, deny_network
+from apps.chat.evals.offline.runner import (
+    REQUIRED_ARTIFACTS,
+    normalized_reproducibility_bytes,
+    regenerate_paper_table,
+    run_component_evaluation,
+    run_test_manifest,
+    validate_artifacts,
+    write_artifacts,
+    write_provenance,
+)
+from apps.chat.evals.run_offline_evidence import main
+
+
+def test_deny_network_blocks_and_counts_all_socket_entry_points():
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+    original_create_connection = socket.create_connection
+
+    with deny_network() as attempts:
+        sock = socket.socket()
+        try:
+            with pytest.raises(NetworkAccessError):
+                sock.connect(("example.invalid", 443))
+            with pytest.raises(NetworkAccessError):
+                sock.connect_ex(("example.invalid", 443))
+            with pytest.raises(NetworkAccessError):
+                socket.create_connection(("example.invalid", 443))
+        finally:
+            sock.close()
+
+    assert attempts.total == 3
+    assert [item["operation"] for item in attempts.details] == [
+        "socket.socket.connect",
+        "socket.socket.connect_ex",
+        "socket.create_connection",
+    ]
+    assert socket.socket.connect is original_connect
+    assert socket.socket.connect_ex is original_connect_ex
+    assert socket.create_connection is original_create_connection
+
+
+def test_deny_network_leaves_local_pure_computation_available():
+    with deny_network() as attempts:
+        assert sum([1, 2, 3]) == 6
+
+    assert attempts.total == 0
+    assert attempts.details == []
+
+
+def _minimal_datasets():
+    envelope = {
+        "schema_version": "1.1",
+        "frozen_at": "2026-08-06T17:00:00Z",
+        "provenance": "synthetic_public",
+        "sensitivity": "synthetic_public",
+        "rubric_version": "1.1",
+        "review": {"status": "approved", "record": "review.yaml"},
+    }
+    routing = {
+        **envelope,
+        "dataset_id": "routing-v2",
+        "cases": [
+            {
+                "id": "routing-mini-retrieve",
+                "stratum": "favorable",
+                "input": {
+                    "text": "Search the documents for alpha.",
+                    "selected_collection_ids": ["public-a"],
+                    "prior_tools": [],
+                },
+                "gold": {
+                    "classifier": {
+                        "requires_rag": True,
+                        "wants_figures": False,
+                        "wants_whole_document": False,
+                        "is_retry": False,
+                        "requires_local_tools": False,
+                    },
+                    "reason": "explicit_search",
+                    "production_action": "retrieve",
+                    "expected_query": "Search the documents for alpha.",
+                },
+            },
+            {
+                "id": "routing-mini-prompt",
+                "stratum": "favorable",
+                "input": {
+                    "text": "Search the documents for beta.",
+                    "selected_collection_ids": [],
+                    "prior_tools": [],
+                },
+                "gold": {
+                    "classifier": {
+                        "requires_rag": True,
+                        "wants_figures": False,
+                        "wants_whole_document": False,
+                        "is_retry": False,
+                        "requires_local_tools": False,
+                    },
+                    "reason": "explicit_search",
+                    "production_action": "prompt_select_collection",
+                    "expected_query": "Search the documents for beta.",
+                },
+            },
+            {
+                "id": "routing-mini-retry",
+                "stratum": "unfavorable",
+                "input": {
+                    "text": "Please retry.",
+                    "selected_collection_ids": ["public-a"],
+                    "prior_tools": ["vector_search"],
+                    "prior_vector_queries": ["alpha query"],
+                },
+                "gold": {
+                    "classifier": {
+                        "requires_rag": True,
+                        "wants_figures": False,
+                        "wants_whole_document": False,
+                        "is_retry": True,
+                        "requires_local_tools": False,
+                    },
+                    "reason": "retry_request",
+                    "production_action": "retrieve",
+                    "direct_pipeline_action": "skip_normal_tool_loop",
+                    "expected_query": "alpha query",
+                },
+            },
+            {
+                "id": "routing-mini-skip",
+                "stratum": "favorable",
+                "input": {
+                    "text": "Hello there.",
+                    "selected_collection_ids": [],
+                    "prior_tools": [],
+                },
+                "gold": {
+                    "classifier": {
+                        "requires_rag": False,
+                        "wants_figures": False,
+                        "wants_whole_document": False,
+                        "is_retry": False,
+                        "requires_local_tools": False,
+                    },
+                    "reason": "no_retrieval_needed",
+                    "production_action": "skip_normal_tool_loop",
+                },
+            },
+        ],
+    }
+    evidence = {
+        **envelope,
+        "dataset_id": "evidence-v2",
+        "cases": [
+            {
+                "id": "evidence-mini",
+                "stratum": "favorable",
+                "question": "What is alpha?",
+                "answer_target": "Alpha is one.",
+                "token_budget": 16,
+                "candidates": [
+                    {
+                        "evidence_id": "e1",
+                        "doc_id": "doc-a",
+                        "chunk_id": 1,
+                        "rank": 1,
+                        "text": "Alpha is one.",
+                        "citation": "[doc:doc-a chunk:1]",
+                        "relevant": True,
+                        "estimated_tokens": 3,
+                    },
+                    {
+                        "evidence_id": "e2",
+                        "doc_id": "doc-b",
+                        "chunk_id": 1,
+                        "rank": 2,
+                        "text": "Noise only.",
+                        "citation": "[doc:doc-b chunk:1]",
+                        "relevant": False,
+                        "estimated_tokens": 2,
+                    },
+                ],
+                "gold": {
+                    "relevant_evidence_ids": ["e1"],
+                    "relevant_document_ids": ["doc-a"],
+                },
+            }
+        ],
+    }
+    memory = {
+        **envelope,
+        "dataset_id": "memory-v2",
+        "cases": [
+            {
+                "id": "memory-mini-remember",
+                "stratum": "favorable",
+                "input": {
+                    "user_content": "Remember that the synthetic project uses YAML.",
+                    "assistant_content": "Okay.",
+                },
+                "gold": {"normalized_facts": ["The synthetic project uses YAML."]},
+            },
+            {
+                "id": "memory-mini-heuristic",
+                "stratum": "favorable",
+                "input": {
+                    "user_content": "I prefer concise reports.",
+                    "assistant_content": "Okay.",
+                },
+                "gold": {"normalized_facts": ["I prefer concise reports."]},
+            },
+        ],
+    }
+    return {"routing": routing, "evidence": evidence, "memory": memory}
+
+
+def test_component_runner_calls_actual_production_functions_and_restores_env(
+    tmp_path, monkeypatch
+):
+    datasets = _minimal_datasets()
+    fixture_dir = tmp_path / "fixtures"
+    fixture_dir.mkdir()
+    for name in datasets:
+        (fixture_dir / f"{name}.yaml").write_text(
+            "temporary fixture\n", encoding="utf-8"
+        )
+
+    monkeypatch.setattr(
+        runner,
+        "load_dataset",
+        lambda path, kind: copy.deepcopy(datasets[kind]),
+    )
+    original_values = {name: os.environ.get(name) for name in runner.CANONICAL_ENV}
+    os.environ["RAG_DIRECT_ENABLED"] = "ambient-value"
+
+    wrapped_names = [
+        "classify_chat_message",
+        "build_retrieval_query",
+        "build_evidence_packet",
+        "heuristic_facts_from_turn",
+        "clean_stable_facts",
+        "run_direct_rag_turn",
+        "_configure_append_tools",
+        "promote_profile_facts_for_turn",
+    ]
+    originals = {name: getattr(runner, name) for name in wrapped_names}
+    calls = dict.fromkeys(wrapped_names, 0)
+
+    for name, original in originals.items():
+
+        def wrapper(*args, __name=name, __original=original, **kwargs):
+            calls[__name] += 1
+            return __original(*args, **kwargs)
+
+        monkeypatch.setattr(runner, name, wrapper)
+
+    result = run_component_evaluation(fixture_dir, timing_repeats=2)
+
+    assert all(count > 0 for count in calls.values())
+    assert result["network_attempts"]["total"] == 0
+    assert result["canonical_env"] == runner.CANONICAL_ENV
+    retry = next(r for r in result["routing"] if r["case_id"] == "routing-mini-retry")
+    assert retry["actual"]["helper_action"] == "retrieve"
+    assert retry["actual"]["direct_action"] == "skip_normal_tool_loop"
+    assert retry["actual"]["query"] == "alpha query"
+    assert (
+        result["memory_fallback"]["explicit_remember"]["branch"] == "explicit_remember"
+    )
+    assert result["memory_fallback"]["heuristic"]["branch"] == "heuristic"
+    assert result["memory_fallback"]["network_failure_latency_seconds"] >= 0
+    assert len(result["routing"]) == len(datasets["routing"]["cases"])
+    assert all(item["phase"] == "timing" for item in result["timings"])
+    assert result["aggregate"]["routing"]["support"] == len(
+        datasets["routing"]["cases"]
+    )
+    assert os.environ["RAG_DIRECT_ENABLED"] == "ambient-value"
+    for name, value in original_values.items():
+        if name == "RAG_DIRECT_ENABLED":
+            continue
+        assert os.environ.get(name) == value
+
+
+def test_run_test_manifest_counts_junit_and_represents_blocked_nodes(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_mini.py").write_text(
+        "def test_passes():\n    assert True\n",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "test_manifest.yaml"
+    manifest.write_text(
+        textwrap.dedent(
+            """
+            schema_version: "1.0"
+            entries:
+              - node_id: "tests/test_mini.py::test_passes"
+                status: included
+                prerequisite: none
+                reason: "Pure test."
+              - node_id: "tests/test_db.py::test_blocked"
+                status: prerequisite_blocked
+                prerequisite: postgresql_test_database
+                reason: "Database unavailable."
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_test_manifest(manifest, tmp_path)
+
+    assert result["summary"] == {
+        "collected": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0,
+        "unavailable": 1,
+    }
+    assert [entry["outcome"] for entry in result["entries"]] == [
+        "passed",
+        "unavailable",
+    ]
+    assert result["network_scope"] == "component_execution_only"
+    assert result["declared_network_policy"] == "no_network"
+    assert "test-only" not in result["stdout"] + result["stderr"]
+
+
+def _artifact_result(timestamp="2026-08-06T18:00:00Z", sample=0.001):
+    record = {
+        "schema_version": "1.0",
+        "module": "routing",
+        "case_id": "routing-mini",
+        "stratum": "favorable",
+        "expected": {"requires_rag": True},
+        "actual": {"requires_rag": False},
+        "conformant": False,
+        "diagnostics": {"reason": "fixed-set miss"},
+    }
+    aggregate = {
+        "schema_version": "1.0",
+        "run": {"run_id": "mini", "timestamp_utc": timestamp},
+        "routing": {
+            "support": 1,
+            "conformance": {
+                "numerator": 0,
+                "denominator": 1,
+                "value": 0.0,
+                "status": "ok",
+            },
+        },
+        "action": {"support": 1},
+        "query": {"support": 0},
+        "evidence": {"support": 0},
+        "memory": {"support": 0},
+        "tests": {"passed": 1, "failed": 0, "unavailable": 1},
+        "timing": {
+            "routing": {"raw_samples_seconds": [sample], "median_seconds": sample}
+        },
+        "excluded_claims": ["No generated-answer correctness claim."],
+    }
+    return {
+        "manifest": {
+            "schema_version": "1.0",
+            "run_id": "mini",
+            "timestamp_utc": timestamp,
+            "source_commit": "a" * 40,
+            "source_dirty": False,
+            "fixture_hashes": {"routing.yaml": "b" * 64},
+            "code_hashes": {"runner.py": "c" * 64},
+            "config_hashes": {"canonical_env": "d" * 64},
+            "canonical_env": dict(runner.CANONICAL_ENV),
+            "environment": {
+                "os": "Windows",
+                "processor": "generic",
+                "python": "3.13.0",
+            },
+            "component_network_attempts": {"total": 0, "details": []},
+            "test_manifest_hash": "e" * 64,
+        },
+        "routing": [record],
+        "evidence": [],
+        "memory": [],
+        "timings": [
+            {
+                "schema_version": "1.0",
+                "module": "routing",
+                "phase": "timing",
+                "raw_samples_seconds": [sample],
+            }
+        ],
+        "tests": {
+            "entries": [
+                {
+                    "node_id": "tests/test_mini.py::test_passes",
+                    "status": "included",
+                    "outcome": "passed",
+                },
+                {
+                    "node_id": "tests/test_db.py::test_blocked",
+                    "status": "prerequisite_blocked",
+                    "outcome": "unavailable",
+                    "reason": "Database unavailable.",
+                },
+            ],
+            "summary": aggregate["tests"],
+        },
+        "aggregate": aggregate,
+    }
+
+
+def test_artifact_write_is_atomic_complete_immutable_and_valid(tmp_path):
+    output = tmp_path / "run"
+    write_artifacts(_artifact_result(), output)
+
+    assert set(path.name for path in output.iterdir()) == REQUIRED_ARTIFACTS
+    validate_artifacts(output)
+    complete = json.loads((output / "COMPLETE").read_text(encoding="utf-8"))
+    assert set(complete["sha256"]) == REQUIRED_ARTIFACTS - {"COMPLETE"}
+    assert (output / "paper-table.md").read_text(
+        encoding="utf-8"
+    ) == regenerate_paper_table(output / "aggregate.json")
+    assert (output / "routing.jsonl").read_bytes().endswith(b"\n")
+
+    with pytest.raises(FileExistsError):
+        write_artifacts(_artifact_result(), output)
+
+
+@pytest.mark.parametrize(
+    "private_value",
+    [
+        "api_key=super-secret-value",
+        "AKIAIOSFODNN7EXAMPLE",
+        "C:\\Users\\private-person\\source.txt",
+        "/home/private-person/source.txt",
+    ],
+)
+def test_artifact_writer_rejects_secret_and_private_path_patterns(
+    tmp_path, private_value
+):
+    result = _artifact_result()
+    result["routing"][0]["diagnostics"]["unsafe"] = private_value
+
+    with pytest.raises(ValueError, match="sensitive|private|credential"):
+        write_artifacts(result, tmp_path / "unsafe")
+
+
+def test_artifact_writer_rejects_non_public_fixture_sensitivity(tmp_path):
+    result = _artifact_result()
+    result["manifest"]["fixture_sensitivity"] = "private"
+
+    with pytest.raises(ValueError, match="synthetic_public"):
+        write_artifacts(result, tmp_path / "unsafe")
+
+
+def test_normalized_reproducibility_and_table_are_timing_independent(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    write_artifacts(_artifact_result("2026-08-06T18:00:00Z", 0.001), first)
+    write_artifacts(_artifact_result("2026-08-06T18:00:01Z", 0.009), second)
+
+    assert normalized_reproducibility_bytes(first) == normalized_reproducibility_bytes(
+        second
+    )
+    assert regenerate_paper_table(first / "aggregate.json") == (
+        first / "paper-table.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_write_provenance_records_existing_artifact_commit_and_hashes(tmp_path):
+    output = tmp_path / "run"
+    write_artifacts(_artifact_result(), output)
+    provenance = tmp_path / "provenance.json"
+
+    write_provenance(output / "aggregate.json", "f" * 40, provenance)
+
+    payload = json.loads(provenance.read_text(encoding="utf-8"))
+    assert payload["evaluated_source_commit"] == "a" * 40
+    assert payload["artifact_commit"] == "f" * 40
+    assert payload["aggregate_sha256"]
+    assert payload["artifact_hashes"]
+
+
+def test_validate_rejects_unknown_extra_and_changed_hash(tmp_path):
+    output = tmp_path / "run"
+    write_artifacts(_artifact_result(), output)
+    (output / "extra.txt").write_text("extra", encoding="utf-8")
+    with pytest.raises(ValueError, match="unexpected"):
+        validate_artifacts(output)
+    (output / "extra.txt").unlink()
+    (output / "routing.csv").write_text("changed\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="hash"):
+        validate_artifacts(output)
+
+
+def test_cli_conformance_misses_succeed_but_integrity_failures_do_not(
+    tmp_path, monkeypatch
+):
+    result = _artifact_result()
+    monkeypatch.setattr(
+        runner,
+        "run_component_evaluation",
+        lambda *_args, **_kwargs: copy.deepcopy(result),
+    )
+    monkeypatch.setattr(
+        runner, "run_test_manifest", lambda *_args, **_kwargs: result["tests"]
+    )
+    monkeypatch.setattr(runner, "_git_source_state", lambda _root: ("a" * 40, False))
+
+    first = tmp_path / "first"
+    assert (
+        main(
+            [
+                "run",
+                "--fixtures",
+                str(tmp_path),
+                "--test-manifest",
+                str(tmp_path / "manifest.yaml"),
+                "--output",
+                str(first),
+                "--timing-repeats",
+                "1",
+                "--skip-tests",
+            ]
+        )
+        == 0
+    )
+
+    failing = copy.deepcopy(result)
+    failing["manifest"]["component_network_attempts"] = {
+        "total": 1,
+        "details": [{"operation": "socket.create_connection", "address": "redacted"}],
+    }
+    monkeypatch.setattr(
+        runner, "run_component_evaluation", lambda *_args, **_kwargs: failing
+    )
+    assert (
+        main(
+            [
+                "run",
+                "--fixtures",
+                str(tmp_path),
+                "--test-manifest",
+                str(tmp_path / "manifest.yaml"),
+                "--output",
+                str(tmp_path / "second"),
+                "--timing-repeats",
+                "1",
+                "--skip-tests",
+            ]
+        )
+        == 1
+    )

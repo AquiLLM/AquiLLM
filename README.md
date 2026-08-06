@@ -61,6 +61,19 @@ Key env vars:
 | `RAG_ATTACH_TOOLS_WHEN_COLLECTIONS_SELECTED` | `1` | Auto-attach document tools when collections are selected and intent requires RAG |
 | `RAG_TOOL_DEFAULT_TOP_K` | `10` | Default `top_k` injected into `vector_search` calls when the LLM omits it |
 
+### Offline component evidence evaluation
+
+From the repository root, run the approved synthetic fixtures and exact no-database test manifest with:
+
+```powershell
+cd aquillm
+python -m apps.chat.evals.run_offline_evidence run --fixtures apps/chat/evals/offline/fixtures --test-manifest apps/chat/evals/offline/test_manifest.yaml --output ../docs/evaluation/offline/2026-08-06-canonical-a --timing-repeats 100
+```
+
+The command requires a clean Git worktree, refuses to overwrite a completed output directory, denies socket connections during component execution, and records that the pytest subprocess is governed by the manifest's declared no-network policy rather than the process-local socket guard. Use `--skip-tests` only for component-development runs; every manifest node is then reported as unavailable. Fixed-fixture conformance misses remain report data and do not make the command fail, while integrity failures, attempted component network access, included-test failures, dirty source, invalid artifacts, or a reproducibility mismatch return a nonzero status.
+
+This is a preliminary offline component evaluation of deterministic routing, query construction, orchestration reachability, evidence packing, memory heuristics, and local microbenchmark overhead. It does not establish generated-answer correctness, relevance, faithfulness, citation entailment, authorization, database isolation, end-to-end latency, concurrency, GPU performance, production throughput, or population-level accuracy.
+
 Offline eval cases live in `aquillm/apps/chat/evals/rag_cases.yaml`; run `python -m apps.chat.evals.run_rag_eval` from the `aquillm/` directory to execute them without a live LLM or database.
 
 ### RAG retrieval defaults and benchmarking
