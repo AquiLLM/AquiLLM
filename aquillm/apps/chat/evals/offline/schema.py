@@ -153,6 +153,8 @@ def validate_test_manifest(data: dict, *, project_root: Path | None = None) -> N
         if node_id in seen:
             raise ValueError(f"duplicate manifest node: {node_id}")
         seen.add(node_id)
+        if "allow_skip" in entry:
+            raise ValueError("test manifest entries may not define allow_skip")
         status = entry.get("status")
         if status not in {"included", "prerequisite_blocked"}:
             raise ValueError(f"manifest entry {node_id} has invalid or missing status")

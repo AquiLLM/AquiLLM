@@ -242,7 +242,22 @@ def _routing_records(
         helper_action = _helper_action(case)
         direct_action = _direct_action(case, event_loop)
         expected_query = case["gold"].get("expected_query")
-        expected_direct = case["gold"].get("direct_pipeline_action")
+        gold = case["gold"]
+        if "direct_pipeline_action" in gold:
+            expected_direct = gold["direct_pipeline_action"]
+        elif (
+            not gold["classifier"]["requires_local_tools"]
+            and not gold["classifier"]["is_retry"]
+            and gold["production_action"]
+            in {
+                "retrieve",
+                "prompt_select_collection",
+                "skip_normal_tool_loop",
+            }
+        ):
+            expected_direct = gold["production_action"]
+        else:
+            expected_direct = None
         actual = {
             "classifier": _classifier_dict(intent),
             "reason": intent.reason,
@@ -747,6 +762,7 @@ def _aggregate(routing: list[dict], evidence: list[dict], memory: list[dict], ti
     comparison_metrics = (
         "relevant_evidence_recall",
         "relevant_document_coverage",
+        "distinct_selected_documents",
         "estimated_token_use",
         "overrun_tokens",
         "syntax_validity",
@@ -758,6 +774,12 @@ def _aggregate(routing: list[dict], evidence: list[dict], memory: list[dict], ti
     timing_aggregate = {}
     for record in timings:
         timing_aggregate.setdefault(record["module"], []).append(record)
+    paired_comparisons = {
+        metric: compare_policies(policy_pairs, metric) for metric in comparison_metrics
+    }
+    paired_comparisons["distinct_selected_documents"]["interpretation"] = (
+        "descriptive_not_quality"
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "routing": {
@@ -774,10 +796,7 @@ def _aggregate(routing: list[dict], evidence: list[dict], memory: list[dict], ti
             "sequential": _aggregate_evidence_policy(
                 [record["sequential"] for record in evidence]
             ),
-            "paired_comparisons": {
-                metric: compare_policies(policy_pairs, metric)
-                for metric in comparison_metrics
-            },
+            "paired_comparisons": paired_comparisons,
         },
         "memory": memory_stratum_errors(memory),
         "tests": {

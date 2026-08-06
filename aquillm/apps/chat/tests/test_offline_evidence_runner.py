@@ -91,7 +91,6 @@ def _minimal_datasets():
                     },
                     "reason": "explicit_search",
                     "production_action": "retrieve",
-                    "direct_pipeline_action": "retrieve",
                     "expected_query": "Search the documents for alpha.",
                 },
             },
@@ -113,7 +112,6 @@ def _minimal_datasets():
                     },
                     "reason": "explicit_search",
                     "production_action": "prompt_select_collection",
-                    "direct_pipeline_action": "prompt_select_collection",
                     "expected_query": "Search the documents for beta.",
                 },
             },
@@ -158,7 +156,6 @@ def _minimal_datasets():
                     },
                     "reason": "no_retrieval_needed",
                     "production_action": "skip_normal_tool_loop",
-                    "direct_pipeline_action": "skip_normal_tool_loop",
                 },
             },
             {
@@ -321,6 +318,10 @@ def test_component_runner_calls_actual_production_functions_and_restores_env(
     assert local["expected"]["direct_action"] is None
     assert local["diagnostics"]["checks"]["direct_action"]["status"] == "not_applicable"
     assert result["aggregate"]["action"]["direct"]["support"] == 4
+    direct_labels = result["aggregate"]["action"]["direct"]["by_label"]
+    assert direct_labels["retrieve"]["support"] > 0
+    assert direct_labels["prompt_select_collection"]["support"] > 0
+    assert direct_labels["skip_normal_tool_loop"]["support"] > 0
     assert (
         result["aggregate"]["action"]["direct"]["by_stratum"]["unfavorable"]["support"]
         == 0
@@ -335,6 +336,11 @@ def test_component_runner_calls_actual_production_functions_and_restores_env(
         "image_path_prefix_behavior"
         in result["aggregate"]["evidence"]["paired_comparisons"]
     )
+    diversity = result["aggregate"]["evidence"]["paired_comparisons"][
+        "distinct_selected_documents"
+    ]
+    assert diversity["higher_is_better"] is True
+    assert diversity["interpretation"] == "descriptive_not_quality"
     evidence_timings = [
         item for item in result["timings"] if item["module"] == "evidence"
     ]
@@ -448,6 +454,32 @@ def test_run_test_manifest_aggregates_parametrized_nodes_by_identity(tmp_path):
         "skipped": 1,
         "errors": 0,
     }
+
+
+def test_test_manifest_rejects_allow_skip_escape_hatch(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_skip.py").write_text(
+        "def test_skip():\n    pass\n", encoding="utf-8"
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        textwrap.dedent(
+            """
+            schema_version: "1.0"
+            entries:
+              - node_id: "tests/test_skip.py::test_skip"
+                status: included
+                prerequisite: none
+                reason: "Included tests must pass."
+                allow_skip: true
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="allow_skip"):
+        run_test_manifest(manifest, tmp_path)
 
 
 def _artifact_result(timestamp="2026-08-06T18:00:00Z", sample=0.001):
@@ -745,6 +777,27 @@ def test_cli_conformance_misses_succeed_but_integrity_failures_do_not(
                         "outcome": "missing",
                     }
                 ]
+            },
+            1,
+        ),
+        (
+            {
+                "summary": {
+                    "collected": 1,
+                    "passed": 0,
+                    "failed": 0,
+                    "skipped": 1,
+                    "errors": 0,
+                    "unavailable": 0,
+                },
+                "entries": [
+                    {
+                        "node_id": "tests/x.py::test_x",
+                        "status": "included",
+                        "outcome": "skipped",
+                        "allow_skip": True,
+                    }
+                ],
             },
             1,
         ),

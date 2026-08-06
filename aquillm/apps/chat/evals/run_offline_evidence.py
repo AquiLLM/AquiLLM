@@ -121,21 +121,13 @@ def _run(args) -> int:
     invalid_included_outcomes = [
         entry
         for entry in tests.get("entries", [])
-        if entry.get("status") == "included"
-        and entry.get("outcome") != "passed"
-        and not (entry.get("outcome") == "skipped" and entry.get("allow_skip") is True)
+        if entry.get("status") == "included" and entry.get("outcome") != "passed"
     ]
-    permitted_skip = any(
-        entry.get("status") == "included"
-        and entry.get("outcome") == "skipped"
-        and entry.get("allow_skip") is True
-        for entry in tests.get("entries", [])
-    )
     if (
         tests.get("exit_code", 0) != 0
         or summary.get("failed", 0)
         or summary.get("errors", 0)
-        or (summary.get("skipped", 0) and not permitted_skip)
+        or summary.get("skipped", 0)
         or invalid_included_outcomes
     ):
         return 1
