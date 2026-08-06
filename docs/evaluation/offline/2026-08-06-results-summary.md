@@ -6,13 +6,15 @@ These results are a deterministic, network-blocked evaluation of locally executa
 AquiLLM components. They are not an end-to-end answer-quality benchmark. The frozen
 `synthetic_public` case sets contain 60 routing cases, 24 evidence-packing cases, and
 40 memory-normalization cases. The evaluated source was commit
-`cc05031a69df3699a6f8c03a4ae7e74173dd7842`; both manifests report a clean source
-tree and zero component network attempts.
+`e78e31356285716db5e2cd3b076f3bb66818cfaf`; both manifests report a clean source
+tree and zero component network attempts. Fixture, source-code, and test-manifest
+lineage use the explicitly versioned `sha256-utf8-lf-v1` canonical-text algorithm;
+artifact integrity in `COMPLETE` remains exact raw-byte SHA-256.
 
 Canonical A and B were generated independently with 200 timing repetitions. After
 removing only the declared timestamps and timing measurements, their normalized
-artifact bytes were identical (194,735 bytes; SHA-256
-`c4d5023f9b13b5a42bda1a3499d1e14b21f1f7f6c8ea11cb829b796d20ce78d7`). Timing
+artifact bytes were identical (194,779 bytes; SHA-256
+`64ed23c266701715d9aaeadbc0cf10889a77f8f810e825bcce25bbfc0178a771`). Timing
 is therefore reported separately. All counts below come from the committed JSONL,
 aggregate JSON, and test-manifest artifacts; fixed-set misses were retained.
 
@@ -116,15 +118,15 @@ microbenchmarks, not end-to-end or production throughput results.
 
 | Component/input | A median / p95 | B median / p95 |
 |---|---:|---:|
-| Routing, 48 characters | 10.9 / 11.5 us | 10.8 / 11.2 us |
-| Evidence, 1 candidate | 3.3 / 3.8 us | 3.3 / 6.9 us |
-| Evidence, 10 candidates | 11.9 / 19.9 us | 12.3 / 21.9 us |
-| Evidence, 100 candidates | 33.4 / 45.4 us | 34.5 / 45.3 us |
-| Memory normalization, 82 characters | 21.5 / 42.4 us | 21.6 / 27.2 us |
+| Routing, 48 characters | 5.9 / 11.2 us | 10.3 / 12.5 us |
+| Evidence, 1 candidate | 6.7 / 7.6 us | 7.4 / 8.1 us |
+| Evidence, 10 candidates | 12.5 / 23.1 us | 26.5 / 27.9 us |
+| Evidence, 100 candidates | 53.0 / 66.1 us | 71.7 / 75.5 us |
+| Memory normalization, 82 characters | 25.2 / 41.2 us | 46.5 / 49.7 us |
 
-The controlled memory-fallback observation was 64.34 ms (A) and 75.96 ms (B) for
-the explicit-remember branch, and 0.468 ms (A) and 0.360 ms (B) for the heuristic
-branch. The combined controlled-failure observations were 64.81 ms and 76.32 ms.
+The controlled memory-fallback observation was 65.33 ms (A) and 70.51 ms (B) for
+the explicit-remember branch, and 0.348 ms in both runs for the heuristic branch.
+The combined controlled-failure observations were 65.68 ms and 70.86 ms.
 They include local exception/fallback orchestration and are not network latency.
 
 ## Canonical configuration

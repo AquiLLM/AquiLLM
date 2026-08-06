@@ -29,11 +29,11 @@ Limitations: No generated-answer correctness, relevance, faithfulness, or citati
 
 | Module | Input size | Median seconds | p95 seconds | Throughput/s |
 |---|---|---:|---:|---:|
-| evidence | {"candidate_count": 1} | 0.000003300 | 0.000003800 | 303027.996 |
-| evidence | {"candidate_count": 10} | 0.000011900 | 0.000019900 | 84033.385 |
-| evidence | {"candidate_count": 100} | 0.000033400 | 0.000045400 | 29940.153 |
-| memory | {"characters": 82} | 0.000021500 | 0.000042400 | 46511.652 |
-| routing | {"characters": 48} | 0.000010900 | 0.000011500 | 91742.911 |
+| evidence | {"candidate_count": 1} | 0.000006700 | 0.000007600 | 149253.892 |
+| evidence | {"candidate_count": 10} | 0.000012500 | 0.000023100 | 79999.763 |
+| evidence | {"candidate_count": 100} | 0.000053050 | 0.000066100 | 18850.143 |
+| memory | {"characters": 82} | 0.000025150 | 0.000041200 | 39761.405 |
+| routing | {"characters": 48} | 0.000005900 | 0.000011200 | 169491.907 |
 
 ## Detailed aggregate metrics
 
