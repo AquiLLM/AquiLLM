@@ -1,6 +1,7 @@
-# Offline Evidence Annotation Rubric 1.0
+# Offline Evidence Annotation Rubric 1.1
 
 **Written:** 2026-08-06, before fixture labels or production measurements
+**Revised:** 2026-08-06, before independent re-approval and without production execution
 **Scope:** synthetic-public routing, evidence-packing, and deterministic memory-helper fixtures
 
 ## Non-negotiable protocol
@@ -125,21 +126,23 @@ Candidate extraction is deterministic:
 1. split user content into sentence-like clauses at terminal punctuation;
 2. reject clauses that are interrogative, hypothetical, negated action requests,
    quoted/example content, or contain only vague reference;
-3. accept an explicit clause beginning with `remember` or `please remember`, or the
+3. accept an explicit clause beginning with bare `remember` or `please remember`, or the
    complete imperative `Keep <substantive content> in mind`;
 4. otherwise accept the declarative clause beginning at the first stable marker:
    `I prefer`, `I like`, `I dislike`, `Call me`, `My name is`, `I work on`,
    `I am working on`, `Our stack is`, `We use`, or `The project is`;
 5. discard discourse prefaces such as `For context`, `For this collaboration`, or
    `By the way` when a stable declarative clause follows;
-6. process clauses in source order, then normalize and deduplicate as below.
+6. process clauses in source order, sentence-case the first alphabetic character of
+   every accepted candidate, then normalize and deduplicate as below. Sentence-casing
+   does not lowercase or otherwise alter later characters.
 
 Normalize each candidate in this exact order:
 
 1. strip leading/trailing whitespace and collapse every internal whitespace run to
    one ASCII space;
-2. for explicit remember candidates, remove a leading case-insensitive
-   `please remember`, optional `this`, optional
+2. for explicit remember candidates, remove a leading case-insensitive bare
+   `remember` or `please remember`, optional `this`, optional
    `going forward`, and adjacent `:`, comma, or hyphen;
 3. remove a remaining leading case-insensitive `that `;
 4. strip surrounding whitespace and single/double quotes;
@@ -148,7 +151,8 @@ Normalize each candidate in this exact order:
 6. reject empty/vague reflexive memory such as `this`, `that`, `it`, `remember this`,
    `remember that`, `you should remember this`, `I'll remember that`, or
    `keep that in mind`;
-7. preserve spelling, punctuation, and case otherwise; remove exact duplicates after
+7. sentence-case the first alphabetic character, preserve spelling, punctuation, and
+   all remaining case otherwise, then remove exact duplicates after
    normalization while retaining first-occurrence order.
 
 Ambiguity tie-break: a declarative preference—including a direct dislike—or project

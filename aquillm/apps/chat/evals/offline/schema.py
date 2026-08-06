@@ -37,6 +37,8 @@ _CLASSIFIER_FIELDS = {
     "requires_local_tools",
 }
 _CITATION_RE = re.compile(r"\[doc:([^\]\s]+) chunk:(\d+)\]")
+_DATASET_SCHEMA_VERSION = "1.1"
+_RUBRIC_VERSION = "1.1"
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -79,8 +81,8 @@ def validate_dataset(data: dict, kind: str, *, allow_pending: bool = False) -> N
     if not isinstance(data, dict):
         raise ValueError("dataset must be a mapping")
 
-    _require_equal(data, "schema_version", "1.0")
-    _require_nonempty_string(data, "dataset_id")
+    _require_equal(data, "schema_version", _DATASET_SCHEMA_VERSION)
+    _require_equal(data, "dataset_id", f"{kind}-v2")
     frozen_at = _require_nonempty_string(data, "frozen_at")
     try:
         parsed = datetime.fromisoformat(frozen_at.replace("Z", "+00:00"))
@@ -90,7 +92,7 @@ def validate_dataset(data: dict, kind: str, *, allow_pending: bool = False) -> N
         raise ValueError("frozen_at must be a UTC timestamp ending in Z")
     _require_equal(data, "provenance", "synthetic_public")
     _require_equal(data, "sensitivity", "synthetic_public")
-    _require_equal(data, "rubric_version", "1.0")
+    _require_equal(data, "rubric_version", _RUBRIC_VERSION)
 
     annotation = _require_mapping(data, "annotation")
     _require_equal(annotation, "author_role", "fixture_author")
@@ -343,16 +345,22 @@ def _validate_memory_case(case: dict) -> None:
                 f"memory case {case_id} gold facts violate "
                 "the static normalization contract"
             )
+        first_alpha = next(
+            (character for character in fact if character.isalpha()), None
+        )
+        if first_alpha is not None and not first_alpha.isupper():
+            raise ValueError(f"memory case {case_id} gold facts must be sentence-cased")
 
 
 def _validate_review_record(record: Any, dataset: dict, dataset_path: Path) -> None:
     if not isinstance(record, dict):
         raise ValueError("review record must be a mapping")
-    _require_equal(record, "schema_version", "1.0")
+    _require_equal(record, "schema_version", _DATASET_SCHEMA_VERSION)
     _require_equal(record, "rubric_version", dataset["rubric_version"])
     if record.get("status") != dataset["review"]["status"]:
         raise ValueError("review record status does not match dataset")
     _require_equal(record, "reviewer_role", "independent_reviewer")
+    _require_nonempty_string(record, "reviewer_identity")
     _require_nonempty_string(record, "review_date")
     if record.get("production_functions_executed") is not False:
         raise ValueError("review record must state production_functions_executed false")
@@ -363,20 +371,136 @@ def _validate_review_record(record: Any, dataset: dict, dataset_path: Path) -> N
     if record["status"] == "approved":
         if record.get("approval") is not True:
             raise ValueError("approved review record must set approval true")
-        for field in (
-            "label_changes",
-            "adjudications",
-            "retained_ambiguities",
-            "evidence_relevance_adjudications",
-        ):
-            value = record.get(field)
-            if not isinstance(value, list) or not value:
-                raise ValueError(f"approved review record {field} must be non-empty")
+        _validate_approved_audit(record, dataset, dataset_path)
     elif record.get("approval") is not None:
         raise ValueError("pending review record approval must be null")
     for field in ("label_changes", "retained_ambiguities", "adjudications"):
         if not isinstance(record.get(field), list):
             raise ValueError(f"review record {field} must be a list")
+
+
+def _validate_approved_audit(record: dict, dataset: dict, dataset_path: Path) -> None:
+    inventory = _fixture_case_inventory(dataset, dataset_path)
+    case_ids = set(inventory)
+
+    label_changes = record.get("label_changes")
+    if not isinstance(label_changes, list) or not label_changes:
+        raise ValueError("approved review record label_changes must be non-empty")
+    for entry in label_changes:
+        _validate_audit_entry(
+            entry,
+            "label_changes",
+            case_ids,
+            required=("case_id", "field", "before", "after", "reason"),
+        )
+
+    adjudications = record.get("adjudications")
+    if not isinstance(adjudications, list) or not adjudications:
+        raise ValueError("approved review record adjudications must be non-empty")
+    for entry in adjudications:
+        _validate_audit_entry(
+            entry,
+            "adjudications",
+            case_ids,
+            required=("case_id", "decision"),
+        )
+
+    evidence_entries = record.get("evidence_relevance_adjudications")
+    if not isinstance(evidence_entries, list):
+        raise ValueError("approved review requires complete evidence adjudications")
+    evidence_cases = {
+        case_id: case
+        for case_id, case in inventory.items()
+        if case_id.startswith("evidence-")
+    }
+    evidence_ids = [
+        entry.get("case_id") for entry in evidence_entries if isinstance(entry, dict)
+    ]
+    if len(evidence_entries) != len(evidence_cases) or set(evidence_ids) != set(
+        evidence_cases
+    ):
+        raise ValueError("approved review requires complete evidence adjudications")
+    for entry in evidence_entries:
+        _validate_audit_entry(
+            entry,
+            "evidence_relevance_adjudications",
+            case_ids,
+            required=("case_id", "decision", "relevant_evidence_ids"),
+        )
+        expected_ids = evidence_cases[entry["case_id"]]["gold"]["relevant_evidence_ids"]
+        if entry["relevant_evidence_ids"] != expected_ids:
+            raise ValueError(
+                "evidence adjudication relevant_evidence_ids must match fixture gold"
+            )
+
+    ambiguity_entries = record.get("retained_ambiguities")
+    if not isinstance(ambiguity_entries, list):
+        raise ValueError("approved review requires complete retained ambiguity entries")
+    expected_ambiguous = {
+        case_id
+        for case_id, case in inventory.items()
+        if case.get("stratum") == "ambiguous"
+    }
+    ambiguity_ids = [
+        entry.get("case_id") for entry in ambiguity_entries if isinstance(entry, dict)
+    ]
+    if (
+        len(ambiguity_entries) != len(expected_ambiguous)
+        or set(ambiguity_ids) != expected_ambiguous
+    ):
+        raise ValueError("approved review requires complete retained ambiguity entries")
+    for entry in ambiguity_entries:
+        _validate_audit_entry(
+            entry,
+            "retained_ambiguities",
+            case_ids,
+            required=("case_id", "decision"),
+        )
+
+
+def _fixture_case_inventory(dataset: dict, dataset_path: Path) -> dict[str, dict]:
+    inventory: dict[str, dict] = {}
+    for kind in sorted(_KINDS):
+        sibling = dataset_path.parent / f"{kind}.yaml"
+        if sibling.resolve() == dataset_path.resolve():
+            sibling_data = dataset
+        elif sibling.is_file():
+            with sibling.open("r", encoding="utf-8") as handle:
+                sibling_data = yaml.safe_load(handle)
+        else:
+            continue
+        for case in sibling_data.get("cases", []):
+            case_id = case.get("id")
+            if not isinstance(case_id, str) or case_id in inventory:
+                raise ValueError(
+                    "fixture inventory contains invalid or duplicate case id"
+                )
+            inventory[case_id] = case
+    return inventory
+
+
+def _validate_audit_entry(
+    entry: Any,
+    field: str,
+    case_ids: set[str],
+    *,
+    required: tuple[str, ...],
+) -> None:
+    if not isinstance(entry, dict):
+        raise ValueError(f"approved review {field} entry must be a mapping")
+    for key in required:
+        if key not in entry:
+            raise ValueError(f"approved review {field} entry missing {key}")
+        if key not in {"before", "after", "relevant_evidence_ids"} and (
+            not isinstance(entry[key], str) or not entry[key].strip()
+        ):
+            raise ValueError(f"approved review {field} entry has invalid {key}")
+    if entry["case_id"] not in case_ids:
+        raise ValueError(f"approved review {field} references unknown case id")
+    if "relevant_evidence_ids" in required and not isinstance(
+        entry["relevant_evidence_ids"], list
+    ):
+        raise ValueError("approved review evidence relevance entry IDs must be a list")
 
 
 def _validate_static_node(node_id: str, project_root: Path) -> None:

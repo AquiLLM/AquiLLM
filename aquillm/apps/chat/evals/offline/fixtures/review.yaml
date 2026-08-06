@@ -1,14 +1,20 @@
-schema_version: "1.0"
+schema_version: "1.1"
 review_id: offline-evidence-fixtures-v1
-rubric_version: "1.0"
-status: approved
+rubric_version: "1.1"
+status: pending_independent_review
+reviewer_identity: "codex-agent:/root/offline_fixtures_spec_review"
 reviewer_role: independent_reviewer
 review_date: "2026-08-06"
 production_functions_executed: false
 fixture_hashes:
-  routing.yaml: 8d8ee1fdba225748905fe3b427472d655ea26216a13bef3bea5bbdd428a8518b
-  evidence.yaml: cd875ebaaf7119c252034f48137e9c886c916a8dd9427236d466ec16a0eb37e5
-  memory.yaml: 239c7dbbd080fc0f0c13210e4e65e18a4b6d4a246923ec4f73a3bc82bcbb7e93
+  routing.yaml: 438c56f022f280332c5a2fc6c2dd2642024c9014dbef4ad8dad407bf099cece6
+  evidence.yaml: 1a355094e252c077664b0b609841bf8fd4b8964ffe94b741eabcf16d82ebd9b3
+  memory.yaml: 2e816f459b581bb492edaee01080401ef2eaa46b25da7a2a384a8db160c3f9ef
+protocol_changes:
+  - {field: schema_version, before: "1.0", after: "1.1", reason: "Evidence target/token fields and structured review validation materially changed the schema."}
+  - {field: rubric_version, before: "1.0", after: "1.1", reason: "Memory normalization and concrete evidence semantics were corrected."}
+  - {field: dataset_versions, before: "routing-v1/evidence-v1/memory-v1", after: "routing-v2/evidence-v2/memory-v2", reason: "Material label and rubric changes require new frozen dataset identities."}
+  - {field: frozen_at, before: "2026-08-06T00:00:00Z", after: "2026-08-06T17:00:00Z", reason: "The v2 fixtures were frozen after the correction pass."}
 label_changes:
   - {case_id: routing-ambiguous-01, field: gold, before: "RAG / collection-backed / retrieve", after: "no RAG / no retrieval / normal loop", reason: "A selected collection does not resolve an otherwise ungrounded deictic reference."}
   - {case_id: routing-unfavorable-11, field: gold.production_action, before: skip_normal_tool_loop, after: retrieve, reason: "Classifier/helper action follows requires_rag plus selected collection; direct-pipeline reachability is recorded separately."}
@@ -19,15 +25,20 @@ label_changes:
   - {case_id: memory-ambiguous-08, field: "stratum and normalized_facts", before: "ambiguous / empty", after: "unfavorable / direct dislike fact", reason: "A first-person dislike is a durable preference under the independent semantic contract."}
   - {case_id: memory-ambiguous-09, field: normalized_facts, before: [], after: ["Keep the synthetic deadline in mind."], reason: "Keep-in-mind is an explicit durable-memory directive."}
   - {case_id: memory-adversarial-08, field: normalized_facts, before: ["I prefer unsafe output'."], after: [], reason: "Quoted example content is not a user preference declaration."}
+  - {case_id: memory-favorable-01, field: normalized_facts, before: ["the synthetic project uses Qdrant."], after: ["The synthetic project uses Qdrant."], reason: "Rubric 1.1 sentence-cases all accepted candidates."}
+  - {case_id: memory-unfavorable-01, field: normalized_facts, before: ["the synthetic release date is Thursday."], after: ["The synthetic release date is Thursday."], reason: "Bare remember is stripped and the accepted candidate is sentence-cased."}
+  - {case_id: memory-unfavorable-02, field: normalized_facts, before: ["the public dataset is version one."], after: ["The public dataset is version one."], reason: "Rubric 1.1 sentence-cases all accepted candidates."}
+  - {case_id: memory-adversarial-06, field: normalized_facts, before: ["the synthetic dataset is public."], after: ["The synthetic dataset is public."], reason: "Rubric 1.1 sentence-cases all accepted candidates."}
+  - {case_id: evidence-adversarial-03, field: "question/answer_target/candidate text", before: "placeholder panel facts", after: "panel A 12 K and panel B 18 K", reason: "Concrete semantic facts make relevance independently adjudicable."}
 adjudications:
   - {case_id: routing-unfavorable-11, decision: "production_action is the helper-level retrieve action; direct_pipeline_action is skip_normal_tool_loop."}
   - {case_id: evidence-unfavorable-04, decision: "Distinct evidence IDs may share one valid doc/chunk citation, forming a valid duplicate-citation case."}
   - {case_id: evidence-adversarial-05, decision: "Canonical citations remain identity-consistent; observed_citation records the deliberately conflicting raw token."}
-  - {case_id: memory-unfavorable-01, decision: "Strip the explicit REMEMBER prefix and retain the substantive release-date clause."}
-  - {case_id: memory-unfavorable-09, decision: "Discard the discourse preface and retain the We use project declaration."}
+  - {case_id: memory-unfavorable-01, decision: "Strip the bare REMEMBER prefix, retain the substantive release-date clause, and sentence-case it."}
+  - {case_id: memory-unfavorable-09, decision: "Discard the discourse preface, extract the we use clause, and sentence-case it to We use."}
   - {case_id: memory-unfavorable-10, decision: "Discard the discourse preface and retain the I work on continuing-work declaration."}
-  - {case_id: memory-ambiguous-07, decision: "Discard conversational framing and retain the Our stack declaration."}
-  - {case_id: memory-adversarial-05, decision: "Explicit-directive and preference extraction converge; first occurrence deduplication yields one fact."}
+  - {case_id: memory-ambiguous-07, decision: "Discard conversational framing, extract the our stack clause, and sentence-case it to Our stack."}
+  - {case_id: memory-adversarial-05, decision: "The explicit directive and repeated preference clause yield two identical candidates; first-occurrence deduplication yields one fact."}
 evidence_relevance_adjudications:
   - {case_id: evidence-favorable-01, decision: "ef01-a alone states the requested 12-day period.", relevant_evidence_ids: [ef01-a]}
   - {case_id: evidence-favorable-02, decision: "Both method operations are required by the two-part target.", relevant_evidence_ids: [ef02-a, ef02-b]}
@@ -49,7 +60,7 @@ evidence_relevance_adjudications:
   - {case_id: evidence-ambiguous-06, decision: "Bibliography noise supports no answer evidence.", relevant_evidence_ids: []}
   - {case_id: evidence-adversarial-01, decision: "Only ea01-b states zeta despite the rank tie.", relevant_evidence_ids: [ea01-b]}
   - {case_id: evidence-adversarial-02, decision: "Keyword density is insufficient; ea02-b alone states eleven.", relevant_evidence_ids: [ea02-b]}
-  - {case_id: evidence-adversarial-03, decision: "The two-part panel target requires both panel passages.", relevant_evidence_ids: [ea03-a, ea03-b]}
+  - {case_id: evidence-adversarial-03, decision: "The 12 K and 18 K two-part target requires both concrete panel passages.", relevant_evidence_ids: [ea03-a, ea03-b]}
   - {case_id: evidence-adversarial-04, decision: "ea04-a alone states code seven.", relevant_evidence_ids: [ea04-a]}
   - {case_id: evidence-adversarial-05, decision: "ea05-a alone states that the boundary answer is finite.", relevant_evidence_ids: [ea05-a]}
   - {case_id: evidence-adversarial-06, decision: "The empty-text candidate supports nothing; ea06-b supplies the target.", relevant_evidence_ids: [ea06-b]}
@@ -85,5 +96,5 @@ retained_ambiguities:
   - {case_id: memory-ambiguous-07, decision: "Conversational framing does not cancel a direct stack declaration."}
   - {case_id: memory-ambiguous-09, decision: "Keep-in-mind is an explicit durable-memory directive."}
   - {case_id: memory-ambiguous-10, decision: "A general statement about tables is not user-specific durable context."}
-approval: true
-note: "Review used only the written rubric and fixture text; no production function or fixture scoring was executed."
+approval: null
+note: "Corrections use only the written rubric and fixture text; production functions and fixture scoring were not executed. Independent re-approval is required."
