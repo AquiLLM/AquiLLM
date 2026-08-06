@@ -1327,7 +1327,7 @@ def render_report(aggregate: dict) -> str:
         "| Module | Input size | Median seconds | p95 seconds | Throughput/s |",
         "|---|---|---:|---:|---:|",
     ]
-    for module, value in aggregate.get("timing", {}).items():
+    for module, value in sorted(aggregate.get("timing", {}).items()):
         records = value if isinstance(value, list) else [value]
         for record in records:
             if not isinstance(record, dict) or "median_seconds" not in record:

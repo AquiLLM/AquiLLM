@@ -1028,6 +1028,20 @@ def test_artifact_write_is_atomic_complete_immutable_and_valid(tmp_path):
         write_artifacts(_artifact_result(), output)
 
 
+def test_report_regenerates_after_canonical_json_sorts_timing_modules(tmp_path):
+    result = _artifact_result()
+    timing = result["aggregate"]["timing"]["routing"]
+    result["aggregate"]["timing"] = {
+        "routing": timing,
+        "evidence": {**timing, "input_size": {"candidate_count": 1}},
+    }
+
+    output = tmp_path / "run"
+    write_artifacts(result, output)
+
+    validate_artifacts(output)
+
+
 @pytest.mark.parametrize(
     "private_value",
     [
