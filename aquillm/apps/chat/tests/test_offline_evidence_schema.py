@@ -439,17 +439,17 @@ def test_canonical_json_and_sha256_are_deterministic(tmp_path):
     assert sha256_file(path) == hashlib.sha256(expected).hexdigest()
 
 
-def test_pending_fixtures_are_frozen_balanced_synthetic_and_review_hashes_match():
+def test_approved_fixtures_are_frozen_balanced_synthetic_and_review_hashes_match():
     minimums = {"routing": 60, "evidence": 24, "memory": 40}
     datasets = {}
     for kind in KINDS:
-        data = load_dataset(FIXTURE_DIR / f"{kind}.yaml", kind, allow_pending=True)
+        data = load_dataset(FIXTURE_DIR / f"{kind}.yaml", kind)
         datasets[kind] = data
         assert len(data["cases"]) >= minimums[kind]
         assert data["provenance"] == "synthetic_public"
         assert data["sensitivity"] == "synthetic_public"
         assert data["review"] == {
-            "status": "pending_independent_review",
+            "status": "approved",
             "record": "review.yaml",
         }
         assert data["schema_version"] == "1.1"
@@ -472,14 +472,15 @@ def test_pending_fixtures_are_frozen_balanced_synthetic_and_review_hashes_match(
     assert max(routing_actions.values()) - min(routing_actions.values()) <= 1
 
     review = yaml.safe_load((FIXTURE_DIR / "review.yaml").read_text(encoding="utf-8"))
-    assert review["status"] == "pending_independent_review"
+    assert review["review_id"] == "offline-evidence-fixtures-v2"
+    assert review["status"] == "approved"
     assert review["reviewer_identity"] == (
         "codex-agent:/root/offline_fixtures_spec_review"
     )
     assert review["reviewer_role"] == "independent_reviewer"
     assert review["review_date"] == "2026-08-06"
     assert review["production_functions_executed"] is False
-    assert review["approval"] is None
+    assert review["approval"] is True
     assert review["label_changes"]
     assert len(review["evidence_relevance_adjudications"]) == 24
     ambiguous_count = sum(
@@ -499,8 +500,6 @@ def test_pending_fixtures_fail_canonical_approval_validation():
     with pytest.raises(ValueError, match="approved independent review"):
         validate_dataset(dataset, "routing")
     validate_dataset(dataset, "routing", allow_pending=True)
-    with pytest.raises(ValueError, match="approved independent review"):
-        load_dataset(FIXTURE_DIR / "routing.yaml", "routing")
 
 
 def test_exact_test_manifest_is_deterministically_ordered_and_covers_required_nodes():

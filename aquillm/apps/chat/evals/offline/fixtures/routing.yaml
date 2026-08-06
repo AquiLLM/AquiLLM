@@ -5,7 +5,7 @@ provenance: synthetic_public
 sensitivity: synthetic_public
 rubric_version: "1.1"
 annotation: {author_role: fixture_author, annotated_at: "2026-08-06"}
-review: {status: pending_independent_review, record: review.yaml}
+review: {status: approved, record: review.yaml}
 cases:
   # Favorable: direct expressions aligned with the ontology.
   - {id: routing-favorable-01, stratum: favorable, rationale: "Direct search request with a selected collection.", input: {text: "Search the documents for the calibration method.", selected_collection_ids: [collection-public-a], prior_tools: []}, gold: {classifier: {requires_rag: true, wants_figures: false, wants_whole_document: false, is_retry: false, requires_local_tools: false}, reason: explicit_search, production_action: retrieve, expected_query: "Search the documents for the calibration method."}}

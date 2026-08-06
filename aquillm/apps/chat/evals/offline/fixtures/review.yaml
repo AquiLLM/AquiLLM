@@ -1,15 +1,15 @@
 schema_version: "1.1"
-review_id: offline-evidence-fixtures-v1
+review_id: offline-evidence-fixtures-v2
 rubric_version: "1.1"
-status: pending_independent_review
+status: approved
 reviewer_identity: "codex-agent:/root/offline_fixtures_spec_review"
 reviewer_role: independent_reviewer
 review_date: "2026-08-06"
 production_functions_executed: false
 fixture_hashes:
-  routing.yaml: 438c56f022f280332c5a2fc6c2dd2642024c9014dbef4ad8dad407bf099cece6
-  evidence.yaml: 1a355094e252c077664b0b609841bf8fd4b8964ffe94b741eabcf16d82ebd9b3
-  memory.yaml: 2e816f459b581bb492edaee01080401ef2eaa46b25da7a2a384a8db160c3f9ef
+  routing.yaml: 7817419d94fe964715ceb829fba27f106d10ba5fcb0ca9dbab9fbff847d1009e
+  evidence.yaml: 27f0b3ffea9dc28a95886daf86e03c17a9857d38a5d47f9857604018665561e4
+  memory.yaml: 0458edefd121d7a7f860756402f6522f6ba27571a60a5cb02f2d469f257e46ba
 protocol_changes:
   - {field: schema_version, before: "1.0", after: "1.1", reason: "Evidence target/token fields and structured review validation materially changed the schema."}
   - {field: rubric_version, before: "1.0", after: "1.1", reason: "Memory normalization and concrete evidence semantics were corrected."}
@@ -96,5 +96,5 @@ retained_ambiguities:
   - {case_id: memory-ambiguous-07, decision: "Conversational framing does not cancel a direct stack declaration."}
   - {case_id: memory-ambiguous-09, decision: "Keep-in-mind is an explicit durable-memory directive."}
   - {case_id: memory-ambiguous-10, decision: "A general statement about tables is not user-specific durable context."}
-approval: null
-note: "Corrections use only the written rubric and fixture text; production functions and fixture scoring were not executed. Independent re-approval is required."
+approval: true
+reviewer_note: "Independent re-review approved 124 cases and 68 exact test nodes; no production functions or fixture scoring were executed."

@@ -8,7 +8,7 @@ annotation:
   author_role: fixture_author
   annotated_at: '2026-08-06'
 review:
-  status: pending_independent_review
+  status: approved
   record: review.yaml
 cases:
 - id: evidence-favorable-01

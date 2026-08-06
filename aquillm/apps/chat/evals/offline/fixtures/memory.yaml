@@ -5,7 +5,7 @@ provenance: synthetic_public
 sensitivity: synthetic_public
 rubric_version: "1.1"
 annotation: {author_role: fixture_author, annotated_at: "2026-08-06"}
-review: {status: pending_independent_review, record: review.yaml}
+review: {status: approved, record: review.yaml}
 cases:
   - {id: memory-favorable-01, stratum: favorable, rationale: "Explicit remember directive yields its sentence-cased substantive fact.", input: {user_content: "Please remember going forward that the synthetic project uses Qdrant.", assistant_content: "Acknowledged."}, gold: {normalized_facts: ["The synthetic project uses Qdrant."]}}
   - {id: memory-favorable-02, stratum: favorable, rationale: "A direct preference is durable.", input: {user_content: "I prefer concise technical summaries.", assistant_content: "I can do that."}, gold: {normalized_facts: ["I prefer concise technical summaries."]}}
