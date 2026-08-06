@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
 import os
 import socket
@@ -400,7 +401,11 @@ def test_run_test_manifest_counts_junit_and_represents_blocked_nodes(tmp_path):
     assert result["network_scope"] == "component_and_pytest_subprocess"
     assert result["declared_network_policy"] == "no_network"
     assert result["enforced_subprocess_network_denial"] is True
-    assert result["subprocess_network_attempts"] == {"total": 0, "details": []}
+    assert result["subprocess_network_attempts"] == {
+        "status": "available",
+        "total": 0,
+        "details": [],
+    }
     assert "test-only" not in result["stdout"] + result["stderr"]
 
 
@@ -418,6 +423,23 @@ def test_subprocess_environment_is_allowlisted_and_strips_ambient_secrets(
     assert "UNRELATED_SETTING" not in env
     assert env["DJANGO_SETTINGS_MODULE"] == "aquillm.settings"
     assert env["OPENAI_API_KEY"] == "offline-test-only"
+
+
+def test_subprocess_environment_resolves_dependency_roots_without_site_discovery(
+    monkeypatch,
+):
+    monkeypatch.setattr(runner.site, "getsitepackages", lambda: [])
+    monkeypatch.setattr(runner.site, "getusersitepackages", lambda: [])
+
+    env = runner._subprocess_environment(Path(runner.__file__).parents[4])
+    python_paths = set(env["PYTHONPATH"].split(os.pathsep))
+
+    for module_name in ("pytest", "yaml", "django"):
+        spec = importlib.util.find_spec(module_name)
+        assert spec is not None
+        assert spec.submodule_search_locations is not None
+        package_dir = Path(next(iter(spec.submodule_search_locations)))
+        assert str(package_dir.parent.resolve()) in python_paths
 
 
 def test_run_test_manifest_times_out_and_terminates_process_tree(
@@ -475,7 +497,59 @@ def test_run_test_manifest_times_out_and_terminates_process_tree(
     assert result["entries"][0]["outcome"] == "timeout"
 
 
-def test_run_test_manifest_enforces_network_denial_inside_pytest(tmp_path):
+def test_run_test_manifest_reports_unavailable_network_audit_as_initialization_failure(
+    tmp_path, monkeypatch
+):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_startup.py").write_text(
+        "def test_startup():\n    assert True\n", encoding="utf-8"
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        textwrap.dedent(
+            """
+            schema_version: "1.0"
+            entries:
+              - node_id: "tests/test_startup.py::test_startup"
+                status: included
+                prerequisite: none
+                reason: "Startup failure contract."
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    class FailedStartup:
+        pid = 456
+        returncode = 1
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def communicate(self, timeout=None):
+            return "", "No module named pytest"
+
+    monkeypatch.setattr(runner.subprocess, "Popen", FailedStartup)
+
+    result = run_test_manifest(manifest, tmp_path)
+
+    assert (
+        result["integrity_failure"]
+        == "subprocess_initialization_or_network_audit_failure"
+    )
+    assert result["subprocess_network_attempts"] == {
+        "status": "unavailable",
+        "total": None,
+        "details": [],
+    }
+
+
+def test_run_test_manifest_enforces_network_denial_inside_pytest(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(runner.site, "getsitepackages", lambda: [])
+    monkeypatch.setattr(runner.site, "getusersitepackages", lambda: [])
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
     (tests_dir / "test_network.py").write_text(
@@ -509,8 +583,18 @@ def test_run_test_manifest_enforces_network_denial_inside_pytest(tmp_path):
 
     result = run_test_manifest(manifest, tmp_path)
 
+    assert result["summary"]["collected"] == 1
     assert result["enforced_subprocess_network_denial"] is True
-    assert result["subprocess_network_attempts"]["total"] == 1
+    assert result["subprocess_network_attempts"] == {
+        "status": "available",
+        "total": 1,
+        "details": [
+            {
+                "operation": "socket.create_connection",
+                "address": "('example.invalid', 443)",
+            }
+        ],
+    }
     assert result["integrity_failure"] == "subprocess_network_attempt"
     assert result["exit_code"] != 0
 

@@ -6,6 +6,7 @@ import asyncio
 import copy
 import csv
 import hashlib
+import importlib.util
 import io
 import json
 import math
@@ -893,6 +894,14 @@ def _subprocess_environment(module_root: Path) -> dict[str, str]:
         if name.upper() in runtime_names and value
     }
     python_paths = [str(Path(module_root).resolve())]
+    for module_name in ("pytest", "yaml", "django"):
+        spec = importlib.util.find_spec(module_name)
+        if spec is None or spec.submodule_search_locations is None:
+            raise RuntimeError(
+                f"required test dependency is unavailable: {module_name}"
+            )
+        package_dir = Path(next(iter(spec.submodule_search_locations)))
+        python_paths.append(str(package_dir.resolve().parent))
     python_paths.extend(site.getsitepackages())
     user_site = site.getusersitepackages()
     if isinstance(user_site, str):
@@ -946,9 +955,12 @@ def _read_network_audit(path: Path) -> tuple[dict, str | None]:
             raise ValueError
         if total != len(details):
             raise ValueError
-        return {"total": total, "details": details}, None
+        return {"status": "available", "total": total, "details": details}, None
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return {"total": 0, "details": []}, "network_audit_missing_or_invalid"
+        return (
+            {"status": "unavailable", "total": None, "details": []},
+            "subprocess_initialization_or_network_audit_failure",
+        )
 
 
 def run_test_manifest(
