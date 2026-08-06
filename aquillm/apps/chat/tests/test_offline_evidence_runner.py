@@ -27,7 +27,7 @@ from apps.chat.evals.offline.runner import (
 from apps.chat.evals.run_offline_evidence import main
 
 
-def test_offline_evidence_cli_bootstraps_django_in_fresh_process():
+def test_offline_evidence_cli_bootstraps_without_network_or_database_access():
     env = os.environ.copy()
     env.pop("DJANGO_SETTINGS_MODULE", None)
     env.update(
@@ -41,8 +41,67 @@ def test_offline_evidence_cli_bootstraps_django_in_fresh_process():
         }
     )
 
+    audit_script = textwrap.dedent(
+        """
+        import json
+        import runpy
+        import socket
+        import sys
+
+        from django.db.backends.base.base import BaseDatabaseWrapper
+
+        network_attempts = []
+        database_attempts = []
+        original_connect = socket.socket.connect
+        original_connect_ex = socket.socket.connect_ex
+
+        def is_loopback(address):
+            return isinstance(address, tuple) and address[0] in {
+                "127.0.0.1", "::1", "localhost"
+            }
+
+        def record_connect(sock, address):
+            if is_loopback(address):
+                return original_connect(sock, address)
+            network_attempts.append("socket.connect")
+            raise RuntimeError("network access during offline CLI bootstrap")
+
+        def record_connect_ex(sock, address):
+            if is_loopback(address):
+                return original_connect_ex(sock, address)
+            network_attempts.append("socket.connect_ex")
+            raise RuntimeError("network access during offline CLI bootstrap")
+
+        def record_create_connection(*args, **kwargs):
+            network_attempts.append("socket.create_connection")
+            raise RuntimeError("network access during offline CLI bootstrap")
+
+        def record_database(*args, **kwargs):
+            database_attempts.append("cursor")
+            raise RuntimeError("database access during offline CLI bootstrap")
+
+        socket.socket.connect = record_connect
+        socket.socket.connect_ex = record_connect_ex
+        socket.create_connection = record_create_connection
+        BaseDatabaseWrapper.cursor = record_database
+        sys.argv = ["run_offline_evidence", "--help"]
+        exit_code = 0
+        try:
+            runpy.run_module(
+                "apps.chat.evals.run_offline_evidence", run_name="__main__"
+            )
+        except SystemExit as exc:
+            exit_code = int(exc.code or 0)
+        print("BOOTSTRAP_AUDIT=" + json.dumps({
+            "database_attempts": database_attempts,
+            "network_attempts": network_attempts,
+        }, sort_keys=True))
+        raise SystemExit(exit_code)
+        """
+    )
+
     completed = subprocess.run(
-        [sys.executable, "-m", "apps.chat.evals.run_offline_evidence", "--help"],
+        [sys.executable, "-c", audit_script],
         cwd=Path(__file__).parents[3],
         env=env,
         capture_output=True,
@@ -53,6 +112,87 @@ def test_offline_evidence_cli_bootstraps_django_in_fresh_process():
 
     assert completed.returncode == 0, completed.stderr
     assert "reproducible offline evidence evaluation" in completed.stdout
+    audit_line = next(
+        line
+        for line in completed.stdout.splitlines()
+        if line.startswith("BOOTSTRAP_AUDIT=")
+    )
+    assert json.loads(audit_line.removeprefix("BOOTSTRAP_AUDIT=")) == {
+        "database_attempts": [],
+        "network_attempts": [],
+    }
+
+
+def test_offline_startup_context_is_explicit_and_restored():
+    from aquillm.startup import (
+        is_offline_evaluation_startup,
+        offline_evaluation_startup,
+    )
+
+    assert is_offline_evaluation_startup() is False
+    with offline_evaluation_startup():
+        assert is_offline_evaluation_startup() is True
+    assert is_offline_evaluation_startup() is False
+
+
+def test_aquillm_ready_skips_clients_and_prewarm_only_in_offline_context(
+    monkeypatch,
+):
+    import importlib
+
+    from aquillm import apps as aquillm_apps
+    from aquillm.startup import offline_evaluation_startup
+
+    calls = []
+
+    def record(name):
+        def factory(*args, **kwargs):
+            calls.append(name)
+            return object()
+
+        return factory
+
+    monkeypatch.delenv("COHERE_KEY", raising=False)
+    monkeypatch.setenv("LLM_CHOICE", "OPENAI")
+    monkeypatch.setattr(aquillm_apps.openai, "AsyncOpenAI", record("openai"))
+    monkeypatch.setattr(aquillm_apps.anthropic, "Anthropic", record("anthropic"))
+    monkeypatch.setattr(
+        aquillm_apps.anthropic, "AsyncAnthropic", record("async_anthropic")
+    )
+    monkeypatch.setattr(
+        aquillm_apps.anthropic,
+        "AsyncAnthropicBedrock",
+        record("async_anthropic_bedrock"),
+    )
+    monkeypatch.setattr(
+        aquillm_apps.google_genai, "Client", record("google_genai")
+    )
+    monkeypatch.setattr(
+        aquillm_apps.AquillmConfig,
+        "_prewarm_vector_index",
+        lambda self: calls.append("prewarm"),
+    )
+
+    offline_config = aquillm_apps.AquillmConfig(
+        "aquillm", importlib.import_module("aquillm")
+    )
+    with offline_evaluation_startup():
+        offline_config.ready()
+    assert calls == []
+    assert offline_config.llm_interface is None
+
+    production_config = aquillm_apps.AquillmConfig(
+        "aquillm", importlib.import_module("aquillm")
+    )
+    production_config.ready()
+    assert calls == [
+        "openai",
+        "anthropic",
+        "async_anthropic",
+        "async_anthropic_bedrock",
+        "google_genai",
+        "prewarm",
+    ]
 
 
 def test_deny_network_blocks_and_counts_all_socket_entry_points():

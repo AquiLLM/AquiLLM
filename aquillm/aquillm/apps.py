@@ -13,6 +13,7 @@ from typing import TypedDict
 
 from .llm import LLMInterface, ClaudeInterface, OpenAIInterface, GeminiInterface  # GeminiInterface added for Gemini backend support
 from .settings import DEBUG
+from .startup import is_offline_evaluation_startup
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -89,6 +90,17 @@ class AquillmConfig(AppConfig):
 #                       <------->  chunk_overlap
 #                       |-----------CHUNK-----------|
     def ready(self):
+        if is_offline_evaluation_startup():
+            self.cohere_client = None
+            self.openai_client = None
+            self.anthropic_client = None
+            self.async_anthropic_client = None
+            self.async_anthropic_bedrock_client = None
+            self.google_genai_client = None
+            self.get_embedding = None
+            self.llm_interface = None
+            return
+
         cohere_key = (getenv('COHERE_KEY') or '').strip()
         if cohere_key and not cohere_key.startswith('your-'):
             self.cohere_client = cohere.Client(cohere_key)

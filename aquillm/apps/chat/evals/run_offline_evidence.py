@@ -11,10 +11,13 @@ from pathlib import Path
 import django
 import yaml
 
+from aquillm.startup import offline_evaluation_startup
+
 # This module is a standalone CLI, so it must initialize Django before importing
 # the runner and its model-dependent production services.
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aquillm.settings")
-django.setup()
+with offline_evaluation_startup():
+    django.setup()
 
 from apps.chat.evals.offline import runner  # noqa: E402
 
