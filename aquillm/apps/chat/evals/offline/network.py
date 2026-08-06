@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -23,8 +24,22 @@ class NetworkAttempts:
         return len(self.details)
 
 
+def _is_loopback(address: object) -> bool:
+    if not isinstance(address, tuple) or not address:
+        return False
+    host = address[0]
+    if not isinstance(host, str):
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 @contextmanager
-def deny_network() -> Iterator[NetworkAttempts]:
+def deny_network(*, allow_loopback: bool = False) -> Iterator[NetworkAttempts]:
     """Deny common socket connection APIs and restore them on context exit."""
     attempts = NetworkAttempts()
     original_connect = socket.socket.connect
@@ -36,12 +51,18 @@ def deny_network() -> Iterator[NetworkAttempts]:
         raise NetworkAccessError(f"network access denied: {operation}")
 
     def connect(_socket, address):
+        if allow_loopback and _is_loopback(address):
+            return original_connect(_socket, address)
         return blocked("socket.socket.connect", address)
 
     def connect_ex(_socket, address):
+        if allow_loopback and _is_loopback(address):
+            return original_connect_ex(_socket, address)
         return blocked("socket.socket.connect_ex", address)
 
     def create_connection(address, *args, **kwargs):
+        if allow_loopback and _is_loopback(address):
+            return original_create_connection(address, *args, **kwargs)
         return blocked("socket.create_connection", address)
 
     socket.socket.connect = connect

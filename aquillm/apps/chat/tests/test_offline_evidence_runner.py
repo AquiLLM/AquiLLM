@@ -392,14 +392,127 @@ def test_run_test_manifest_counts_junit_and_represents_blocked_nodes(tmp_path):
         "skipped": 0,
         "errors": 0,
         "unavailable": 1,
-    }
+    }, result["stderr"] + result["stdout"]
     assert [entry["outcome"] for entry in result["entries"]] == [
         "passed",
         "unavailable",
     ]
-    assert result["network_scope"] == "component_execution_only"
+    assert result["network_scope"] == "component_and_pytest_subprocess"
     assert result["declared_network_policy"] == "no_network"
+    assert result["enforced_subprocess_network_denial"] is True
+    assert result["subprocess_network_attempts"] == {"total": 0, "details": []}
     assert "test-only" not in result["stdout"] + result["stderr"]
+
+
+def test_subprocess_environment_is_allowlisted_and_strips_ambient_secrets(
+    monkeypatch,
+):
+    monkeypatch.setenv("UNLISTED_SERVICE_TOKEN", "ambient-never-leak-value")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid")
+    monkeypatch.setenv("UNRELATED_SETTING", "private-value")
+
+    env = runner._subprocess_environment(Path(runner.__file__).parents[4])
+
+    assert "UNLISTED_SERVICE_TOKEN" not in env
+    assert "HTTPS_PROXY" not in env
+    assert "UNRELATED_SETTING" not in env
+    assert env["DJANGO_SETTINGS_MODULE"] == "aquillm.settings"
+    assert env["OPENAI_API_KEY"] == "offline-test-only"
+
+
+def test_run_test_manifest_times_out_and_terminates_process_tree(
+    tmp_path, monkeypatch
+):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_slow.py").write_text(
+        "def test_slow():\n    assert True\n", encoding="utf-8"
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        textwrap.dedent(
+            """
+            schema_version: "1.0"
+            entries:
+              - node_id: "tests/test_slow.py::test_slow"
+                status: included
+                prerequisite: none
+                reason: "Timeout contract."
+            """
+        ),
+        encoding="utf-8",
+    )
+    terminated = []
+
+    class FakeProcess:
+        pid = 321
+        returncode = None
+
+        def __init__(self, *_args, **_kwargs):
+            self.communications = 0
+
+        def communicate(self, timeout=None):
+            self.communications += 1
+            if self.communications == 1:
+                raise runner.subprocess.TimeoutExpired(["pytest"], timeout)
+            self.returncode = -9
+            return "partial stdout", "partial stderr"
+
+    monkeypatch.setattr(runner.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(
+        runner,
+        "_terminate_process_tree",
+        lambda process: terminated.append(process.pid),
+    )
+
+    result = run_test_manifest(manifest, tmp_path, timeout_seconds=0.01)
+
+    assert terminated == [321]
+    assert result["timed_out"] is True
+    assert result["timeout_seconds"] == 0.01
+    assert result["exit_code"] == 124
+    assert result["integrity_failure"] == "pytest_timeout"
+    assert result["entries"][0]["outcome"] == "timeout"
+
+
+def test_run_test_manifest_enforces_network_denial_inside_pytest(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_network.py").write_text(
+        textwrap.dedent(
+            """
+            import socket
+
+            def test_network_attempt():
+                try:
+                    socket.create_connection(("example.invalid", 443))
+                except RuntimeError:
+                    pass
+            """
+        ),
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        textwrap.dedent(
+            """
+            schema_version: "1.0"
+            entries:
+              - node_id: "tests/test_network.py::test_network_attempt"
+                status: included
+                prerequisite: none
+                reason: "Network denial contract."
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_test_manifest(manifest, tmp_path)
+
+    assert result["enforced_subprocess_network_denial"] is True
+    assert result["subprocess_network_attempts"]["total"] == 1
+    assert result["integrity_failure"] == "subprocess_network_attempt"
+    assert result["exit_code"] != 0
 
 
 def test_run_test_manifest_aggregates_parametrized_nodes_by_identity(tmp_path):
@@ -617,6 +730,21 @@ def test_artifact_writer_rejects_secret_and_private_path_patterns(
         write_artifacts(result, tmp_path / "unsafe")
 
 
+def test_artifact_writer_rejects_unknown_inherited_secret_without_echoing_it(
+    tmp_path, monkeypatch
+):
+    secret = "ambient-never-leak-value"
+    monkeypatch.setenv("UNLISTED_SERVICE_TOKEN", secret)
+    result = _artifact_result()
+    result["routing"][0]["diagnostics"]["unsafe"] = f"prefix-{secret}-suffix"
+
+    with pytest.raises(ValueError) as exc_info:
+        write_artifacts(result, tmp_path / "unsafe")
+
+    assert "inherited credential" in str(exc_info.value)
+    assert secret not in str(exc_info.value)
+
+
 def test_artifact_writer_rejects_non_public_fixture_sensitivity(tmp_path):
     result = _artifact_result()
     result["manifest"]["fixture_sensitivity"] = "private"
@@ -693,6 +821,40 @@ def test_validate_rejects_unknown_extra_and_changed_hash(tmp_path):
         validate_artifacts(output)
 
 
+@pytest.mark.parametrize(
+    "artifact_name",
+    ["routing.csv", "evidence.csv", "memory.csv", "report.md"],
+)
+def test_validate_rejects_regenerated_artifact_tampering_with_updated_hash(
+    tmp_path, artifact_name
+):
+    output = tmp_path / "run"
+    write_artifacts(_artifact_result(), output)
+    artifact = output / artifact_name
+    artifact.write_text(
+        artifact.read_text(encoding="utf-8") + "tampered\n", encoding="utf-8"
+    )
+    complete_path = output / "COMPLETE"
+    complete = json.loads(complete_path.read_text(encoding="utf-8"))
+    complete["sha256"][artifact_name] = runner.sha256_file(artifact)
+    complete_path.write_bytes(runner.canonical_json_bytes(complete))
+
+    with pytest.raises(ValueError, match="does not regenerate"):
+        validate_artifacts(output)
+
+
+def test_csv_and_report_renderers_are_pure_and_deterministic():
+    result = _artifact_result()
+
+    first_csv = runner.render_csv(result["routing"])
+    first_report = runner.render_report(result["aggregate"])
+
+    assert runner.render_csv(copy.deepcopy(result["routing"])) == first_csv
+    assert runner.render_report(copy.deepcopy(result["aggregate"])) == first_report
+    assert first_csv.startswith("schema_version,module,case_id")
+    assert first_report.startswith("# Preliminary offline component evaluation report")
+
+
 def test_cli_conformance_misses_succeed_but_integrity_failures_do_not(
     tmp_path, monkeypatch
 ):
@@ -755,6 +917,7 @@ def test_cli_conformance_misses_succeed_but_integrity_failures_do_not(
     ("test_update", "expected_exit"),
     [
         ({"exit_code": 3}, 1),
+        ({"integrity_failure": "pytest_timeout", "timed_out": True}, 1),
         (
             {
                 "summary": {

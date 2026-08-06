@@ -6,11 +6,14 @@ import asyncio
 import copy
 import csv
 import hashlib
+import io
 import json
 import math
 import os
 import platform
 import re
+import signal
+import site
 import statistics
 import subprocess
 import sys
@@ -56,6 +59,7 @@ from .schema import (
 )
 
 SCHEMA_VERSION = "1.0"
+DEFAULT_TEST_TIMEOUT_SECONDS = 300.0
 CANONICAL_ENV = {
     "RAG_DIRECT_ENABLED": "1",
     "RAG_DIRECT_TOP_K": "10",
@@ -868,7 +872,91 @@ def run_component_evaluation(fixture_dir: Path, timing_repeats: int) -> dict:
     }
 
 
-def run_test_manifest(path: Path, project_root: Path) -> dict:
+def _subprocess_environment(module_root: Path) -> dict[str, str]:
+    """Build a minimal environment without ambient credentials or proxies."""
+    runtime_names = {
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATH",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+        "PYTHONIOENCODING",
+        "PYTHONUTF8",
+    }
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name.upper() in runtime_names and value
+    }
+    python_paths = [str(Path(module_root).resolve())]
+    python_paths.extend(site.getsitepackages())
+    user_site = site.getusersitepackages()
+    if isinstance(user_site, str):
+        python_paths.append(user_site)
+    else:
+        python_paths.extend(user_site)
+    environment.update(
+        {
+            "PYTHONPATH": os.pathsep.join(dict.fromkeys(python_paths)),
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUTF8": "1",
+            "DJANGO_SETTINGS_MODULE": "aquillm.settings",
+            "SECRET_KEY": "offline-test-only",
+            "GOOGLE_OAUTH2_CLIENT_ID": "offline-test-only",
+            "GOOGLE_OAUTH2_CLIENT_SECRET": "offline-test-only",
+            "OPENAI_API_KEY": "offline-test-only",
+            "GEMINI_API_KEY": "offline-test-only",
+            "ANTHROPIC_API_KEY": "offline-test-only",
+        }
+    )
+    return environment
+
+
+def _terminate_process_tree(process) -> None:
+    """Forcefully terminate a pytest process and all descendants."""
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+        except OSError:
+            process.kill()
+        return
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.kill()
+
+
+def _read_network_audit(path: Path) -> tuple[dict, str | None]:
+    try:
+        audit = json.loads(path.read_text(encoding="utf-8"))
+        total = audit["total"]
+        details = audit["details"]
+        if not isinstance(total, int) or total < 0 or not isinstance(details, list):
+            raise ValueError
+        if total != len(details):
+            raise ValueError
+        return {"total": total, "details": details}, None
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return {"total": 0, "details": []}, "network_audit_missing_or_invalid"
+
+
+def run_test_manifest(
+    path: Path,
+    project_root: Path,
+    *,
+    timeout_seconds: float = DEFAULT_TEST_TIMEOUT_SECONDS,
+) -> dict:
     """Run every included exact node once and report blocked entries as unavailable."""
     path, project_root = Path(path), Path(project_root)
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -879,47 +967,69 @@ def run_test_manifest(path: Path, project_root: Path) -> dict:
             {"schema_version": "1.0", "entries": [entry]},
             project_root=project_root,
         )
-    env = os.environ.copy()
-    env.pop("DJANGO_SETTINGS_MODULE", None)
-    env.pop("PYTEST_ADDOPTS", None)
-    env.update(
-        {
-            "SECRET_KEY": "offline-test-only",
-            "GOOGLE_OAUTH2_CLIENT_ID": "offline-test-only",
-            "GOOGLE_OAUTH2_CLIENT_SECRET": "offline-test-only",
-            "OPENAI_API_KEY": "offline-test-only",
-            "GEMINI_API_KEY": "offline-test-only",
-            "ANTHROPIC_API_KEY": "offline-test-only",
-        }
-    )
+    if timeout_seconds <= 0:
+        raise ValueError("test timeout must be positive")
+    module_root = Path(__file__).resolve().parents[4]
+    env = _subprocess_environment(module_root)
     with tempfile.TemporaryDirectory(prefix="aquillm-junit-") as temp:
         junit = Path(temp) / "junit.xml"
+        network_audit_path = Path(temp) / "network-attempts.json"
+        env["AQUILLM_OFFLINE_NETWORK_ATTEMPTS_FILE"] = str(network_audit_path)
         command = [
             sys.executable,
             "-m",
             "pytest",
+            "-p",
+            "apps.chat.evals.offline.pytest_no_network",
             *[entry["node_id"] for entry in included],
             "--junitxml",
             str(junit),
             "-q",
         ]
-        completed = subprocess.run(
-            command,
-            cwd=project_root,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        popen_options = {
+            "cwd": project_root,
+            "env": env,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+        }
+        if os.name == "nt":
+            popen_options["creationflags"] = getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+            )
+        else:
+            popen_options["start_new_session"] = True
+        process = subprocess.Popen(command, **popen_options)
+        timed_out = False
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+            exit_code = process.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _terminate_process_tree(process)
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            exit_code = 124
         counts, node_results = _parse_junit(
             junit, [entry["node_id"] for entry in included]
         )
+        network_attempts, audit_failure = _read_network_audit(network_audit_path)
+    integrity_failure = None
+    if timed_out:
+        integrity_failure = "pytest_timeout"
+    elif audit_failure:
+        integrity_failure = audit_failure
+    elif network_attempts["total"]:
+        integrity_failure = "subprocess_network_attempt"
     entries = []
     for entry in data["entries"]:
         item = dict(entry)
         if entry["status"] == "included":
             observed = node_results[entry["node_id"]]
-            item["outcome"] = observed["outcome"]
+            item["outcome"] = "timeout" if timed_out else observed["outcome"]
             item["instances"] = observed["instances"]
         else:
             item["outcome"] = "unavailable"
@@ -929,9 +1039,9 @@ def run_test_manifest(path: Path, project_root: Path) -> dict:
         "schema_version": SCHEMA_VERSION,
         "entries": entries,
         "summary": counts,
-        "exit_code": completed.returncode,
-        "stdout": _redact_subprocess_output(completed.stdout),
-        "stderr": _redact_subprocess_output(completed.stderr),
+        "exit_code": exit_code,
+        "stdout": _redact_subprocess_output(stdout),
+        "stderr": _redact_subprocess_output(stderr),
         "command": [
             "python",
             "-m",
@@ -940,8 +1050,13 @@ def run_test_manifest(path: Path, project_root: Path) -> dict:
             "--junitxml",
             "<temporary>",
         ],
-        "network_scope": "component_execution_only",
+        "network_scope": "component_and_pytest_subprocess",
         "declared_network_policy": "no_network",
+        "enforced_subprocess_network_denial": True,
+        "subprocess_network_attempts": network_attempts,
+        "timeout_seconds": timeout_seconds,
+        "timed_out": timed_out,
+        "integrity_failure": integrity_failure,
     }
 
 
@@ -1062,7 +1177,8 @@ def _jsonl_bytes(records: list[dict]) -> bytes:
     return b"".join(canonical_json_bytes(record) for record in records)
 
 
-def _write_csv(path: Path, records: list[dict]) -> None:
+def render_csv(records: list[dict]) -> str:
+    """Render evaluation records as deterministic CSV without filesystem access."""
     fields = (
         "schema_version",
         "module",
@@ -1073,23 +1189,24 @@ def _write_csv(path: Path, records: list[dict]) -> None:
         "actual",
         "diagnostics",
     )
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
-        writer.writeheader()
-        for record in records:
-            writer.writerow(
-                {
-                    field: json.dumps(
-                        record.get(field),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    if field in {"expected", "actual", "diagnostics"}
-                    else record.get(field)
-                    for field in fields
-                }
-            )
+    handle = io.StringIO(newline="")
+    writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
+    writer.writeheader()
+    for record in records:
+        writer.writerow(
+            {
+                field: json.dumps(
+                    record.get(field),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if field in {"expected", "actual", "diagnostics"}
+                else record.get(field)
+                for field in fields
+            }
+        )
+    return handle.getvalue()
 
 
 def regenerate_paper_table(aggregate_path: Path) -> str:
@@ -1162,7 +1279,8 @@ def _paper_table_text(aggregate: dict) -> str:
     return "\n".join(lines)
 
 
-def _report_text(aggregate: dict) -> str:
+def render_report(aggregate: dict) -> str:
+    """Render the human-readable report solely from aggregate JSON data."""
     tests = aggregate["tests"]
     test_lines = "".join(
         f"- {name}: {tests.get(name, 0)}\n"
@@ -1220,6 +1338,11 @@ def _report_text(aggregate: dict) -> str:
     )
 
 
+def _report_text(aggregate: dict) -> str:
+    """Backward-compatible internal alias for the pure report renderer."""
+    return render_report(aggregate)
+
+
 def write_artifacts(result: dict, output_dir: Path) -> None:
     """Atomically create one immutable, complete artifact directory."""
     output_dir = Path(output_dir)
@@ -1243,9 +1366,11 @@ def write_artifacts(result: dict, output_dir: Path) -> None:
             canonical_json_bytes(payload["aggregate"])
         )
         for module in ("routing", "evidence", "memory"):
-            _write_csv(temp_dir / f"{module}.csv", payload[module])
+            (temp_dir / f"{module}.csv").write_text(
+                render_csv(payload[module]), encoding="utf-8", newline=""
+            )
         (temp_dir / "report.md").write_text(
-            _report_text(payload["aggregate"]), encoding="utf-8", newline="\n"
+            render_report(payload["aggregate"]), encoding="utf-8", newline="\n"
         )
         (temp_dir / "paper-table.md").write_text(
             regenerate_paper_table(temp_dir / "aggregate.json"),
@@ -1357,6 +1482,15 @@ def validate_artifacts(output_dir: Path) -> None:
         ]
     _validate_result_contract(result)
     _scan_sensitive(result)
+    for module in ("routing", "evidence", "memory"):
+        if (output_dir / f"{module}.csv").read_text(
+            encoding="utf-8"
+        ) != render_csv(result[module]):
+            raise ValueError(f"{module}.csv does not regenerate from canonical JSON")
+    if (output_dir / "report.md").read_text(
+        encoding="utf-8"
+    ) != render_report(result["aggregate"]):
+        raise ValueError("report.md does not regenerate from aggregate JSON")
     if (output_dir / "paper-table.md").read_text(
         encoding="utf-8"
     ) != regenerate_paper_table(output_dir / "aggregate.json"):
@@ -1387,6 +1521,18 @@ def _scan_sensitive(value: object) -> None:
     for private in (os.getenv("USERNAME", ""), platform.node()):
         if len(private) >= 4 and private.lower() in lowered:
             raise ValueError("artifact contains private username or hostname")
+    inherited_secret_name = re.compile(
+        r"(?:credential|token|secret|password|(?:^|_)key(?:_|$))",
+        flags=re.IGNORECASE,
+    )
+    inherited_secret_values = {
+        secret
+        for name, secret in os.environ.items()
+        if secret and inherited_secret_name.search(name)
+    }
+    for secret in inherited_secret_values:
+        if any(secret in item for item in strings):
+            raise ValueError("artifact contains an inherited credential value")
 
 
 def _iter_strings(value: object):

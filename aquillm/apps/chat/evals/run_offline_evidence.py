@@ -125,6 +125,8 @@ def _run(args) -> int:
     ]
     if (
         tests.get("exit_code", 0) != 0
+        or tests.get("integrity_failure")
+        or tests.get("subprocess_network_attempts", {}).get("total", 0)
         or summary.get("failed", 0)
         or summary.get("errors", 0)
         or summary.get("skipped", 0)
