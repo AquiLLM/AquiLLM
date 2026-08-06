@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
+import django
 import yaml
 
-from apps.chat.evals.offline import runner
+# This module is a standalone CLI, so it must initialize Django before importing
+# the runner and its model-dependent production services.
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aquillm.settings")
+django.setup()
+
+from apps.chat.evals.offline import runner  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:

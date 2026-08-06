@@ -5,6 +5,8 @@ import importlib.util
 import json
 import os
 import socket
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -23,6 +25,34 @@ from apps.chat.evals.offline.runner import (
     write_provenance,
 )
 from apps.chat.evals.run_offline_evidence import main
+
+
+def test_offline_evidence_cli_bootstraps_django_in_fresh_process():
+    env = os.environ.copy()
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    env.update(
+        {
+            "GEMINI_API_KEY": "offline-dummy",
+            "OPENAI_API_KEY": "offline-dummy",
+            "ANTHROPIC_API_KEY": "offline-dummy",
+            "GOOGLE_OAUTH2_CLIENT_ID": "offline-dummy",
+            "GOOGLE_OAUTH2_CLIENT_SECRET": "offline-dummy",
+            "SECRET_KEY": "offline-dummy-secret-key",
+        }
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "apps.chat.evals.run_offline_evidence", "--help"],
+        cwd=Path(__file__).parents[3],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "reproducible offline evidence evaluation" in completed.stdout
 
 
 def test_deny_network_blocks_and_counts_all_socket_entry_points():
