@@ -19,6 +19,7 @@ import time
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -241,9 +242,7 @@ def _routing_records(
         helper_action = _helper_action(case)
         direct_action = _direct_action(case, event_loop)
         expected_query = case["gold"].get("expected_query")
-        expected_direct = case["gold"].get(
-            "direct_pipeline_action", case["gold"]["production_action"]
-        )
+        expected_direct = case["gold"].get("direct_pipeline_action")
         actual = {
             "classifier": _classifier_dict(intent),
             "reason": intent.reason,
@@ -258,13 +257,35 @@ def _routing_records(
             "direct_action": expected_direct,
             "query": expected_query,
         }
+        direct_check = (
+            {
+                "status": "not_applicable",
+                "conformant": None,
+                "reason": "fixture has no direct_pipeline_action gold label",
+            }
+            if expected_direct is None
+            else {
+                "status": "ok",
+                "conformant": direct_action == expected_direct,
+            }
+        )
         checks = {
             "classifier": actual["classifier"] == expected["classifier"],
             "reason": actual["reason"] == expected["reason"],
             "helper_action": helper_action == expected["helper_action"],
-            "direct_action": direct_action == expected_direct,
+            "direct_action": direct_check,
             "query": expected_query is None or query.strip() == expected_query.strip(),
         }
+        conformant = all(
+            (
+                checks["classifier"],
+                checks["reason"],
+                checks["helper_action"],
+                checks["query"],
+                direct_check["status"] == "not_applicable"
+                or direct_check["conformant"],
+            )
+        )
         records.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -273,7 +294,7 @@ def _routing_records(
                 "stratum": case["stratum"],
                 "expected": expected,
                 "actual": actual,
-                "conformant": all(checks.values()),
+                "conformant": conformant,
                 "diagnostics": {
                     "checks": checks,
                     "rationale": case.get("rationale", ""),
@@ -348,6 +369,8 @@ def _memory_records(cases: list[dict]) -> list[dict]:
 
 
 def _memory_fallback_reachability(cases: list[dict]) -> dict:
+    import aquillm.memory as memory_module
+
     explicit = next(
         case for case in cases if "remember" in case["input"]["user_content"].lower()
     )
@@ -361,15 +384,38 @@ def _memory_fallback_reachability(cases: list[dict]) -> dict:
     )
     persisted: list[list[str]] = []
     fake_user = SimpleNamespace(id=7)
+    counters = {
+        "remote_attempt_count": 0,
+        "has_remember_intent_calls": 0,
+        "normalize_calls": 0,
+        "heuristic_calls": 0,
+    }
+    original_has_remember = memory_module.has_remember_intent
+    original_normalize = memory_module.normalize_remember_fact
+    original_heuristic = memory_module.heuristic_facts_from_turn
 
     def fail_immediately(*_args, **_kwargs):
+        counters["remote_attempt_count"] += 1
         raise RuntimeError("controlled offline extraction failure")
 
     def persist(_user, facts):
         persisted.append(list(facts))
 
+    def observed_has_remember(*args, **kwargs):
+        counters["has_remember_intent_calls"] += 1
+        return original_has_remember(*args, **kwargs)
+
+    def observed_normalize(*args, **kwargs):
+        counters["normalize_calls"] += 1
+        return original_normalize(*args, **kwargs)
+
+    def observed_heuristic(*args, **kwargs):
+        counters["heuristic_calls"] += 1
+        return original_heuristic(*args, **kwargs)
+
     def execute(case):
         before = len(persisted)
+        before_counts = dict(counters)
         start = time.perf_counter()
         count = promote_profile_facts_for_turn(
             7,
@@ -377,7 +423,20 @@ def _memory_fallback_reachability(cases: list[dict]) -> dict:
             case["input"]["assistant_content"],
         )
         elapsed = time.perf_counter() - start
-        return count, persisted[before], elapsed
+        observed = {name: counters[name] - before_counts[name] for name in counters}
+        if observed["heuristic_calls"]:
+            branch = "heuristic"
+        elif observed["normalize_calls"]:
+            branch = "explicit_remember"
+        else:
+            branch = "none"
+        return {
+            "branch": branch,
+            "fact_count": count,
+            "facts": persisted[before] if len(persisted) > before else [],
+            "latency_seconds": elapsed,
+            **observed,
+        }
 
     with (
         patch("aquillm.memory.User.objects.filter") as lookup,
@@ -386,25 +445,25 @@ def _memory_fallback_reachability(cases: list[dict]) -> dict:
             "lib.memory.extraction.stable_facts.requests.post",
             side_effect=fail_immediately,
         ),
+        patch.object(
+            memory_module, "has_remember_intent", side_effect=observed_has_remember
+        ),
+        patch.object(
+            memory_module, "normalize_remember_fact", side_effect=observed_normalize
+        ),
+        patch.object(
+            memory_module, "heuristic_facts_from_turn", side_effect=observed_heuristic
+        ),
     ):
         lookup.return_value.first.return_value = fake_user
-        explicit_count, explicit_facts, explicit_latency = execute(explicit)
-        heuristic_count, heuristic_facts, heuristic_latency = execute(heuristic)
+        explicit_observed = execute(explicit)
+        heuristic_observed = execute(heuristic)
     return {
         "orchestration_failure": "controlled_immediate_extraction_failure",
-        "explicit_remember": {
-            "branch": "explicit_remember",
-            "fact_count": explicit_count,
-            "facts": explicit_facts,
-            "latency_seconds": explicit_latency,
-        },
-        "heuristic": {
-            "branch": "heuristic",
-            "fact_count": heuristic_count,
-            "facts": heuristic_facts,
-            "latency_seconds": heuristic_latency,
-        },
-        "network_failure_latency_seconds": explicit_latency + heuristic_latency,
+        "explicit_remember": explicit_observed,
+        "heuristic": heuristic_observed,
+        "network_failure_latency_seconds": explicit_observed["latency_seconds"]
+        + heuristic_observed["latency_seconds"],
     }
 
 
@@ -439,9 +498,11 @@ def _timings(datasets: dict, repeats: int) -> list[dict]:
     if repeats < 1:
         raise ValueError("timing_repeats must be positive")
     routing_case = datasets["routing"]["cases"][0]
-    evidence_case = datasets["evidence"]["cases"][0]
+    evidence_case = next(
+        case for case in datasets["evidence"]["cases"] if case["candidates"]
+    )
     memory_case = datasets["memory"]["cases"][0]
-    return [
+    timings = [
         _timing_record(
             "routing",
             lambda: classify_chat_message(
@@ -453,17 +514,6 @@ def _timings(datasets: dict, repeats: int) -> list[dict]:
             ),
             repeats,
             {"characters": len(routing_case["input"]["text"])},
-        ),
-        _timing_record(
-            "evidence",
-            lambda: build_evidence_packet(
-                {"result": evidence_case["candidates"]},
-                query=evidence_case["question"],
-                search_scope="synthetic fixtures",
-                token_budget=evidence_case["token_budget"],
-            ),
-            repeats,
-            {"candidate_count": len(evidence_case["candidates"])},
         ),
         _timing_record(
             "memory",
@@ -478,37 +528,210 @@ def _timings(datasets: dict, repeats: int) -> list[dict]:
             },
         ),
     ]
+    for candidate_count in (1, 10, 100):
+        candidates = _scaled_evidence_candidates(evidence_case, candidate_count)
+        timings.insert(
+            -1,
+            _timing_record(
+                "evidence",
+                lambda candidates=candidates: build_evidence_packet(
+                    {"result": candidates},
+                    query=evidence_case["question"],
+                    search_scope="synthetic fixtures",
+                    token_budget=1_000_000,
+                ),
+                repeats,
+                {"candidate_count": candidate_count},
+            ),
+        )
+    return timings
+
+
+def _scaled_evidence_candidates(case: dict, count: int) -> list[dict]:
+    base = case["candidates"]
+    candidates = []
+    for index in range(count):
+        item = copy.deepcopy(base[index % len(base)])
+        item["evidence_id"] = f"timing-evidence-{index + 1}"
+        item["doc_id"] = f"timing-doc-{index % 10 + 1}"
+        item["chunk_id"] = index + 1
+        item["citation"] = f"[doc:{item['doc_id']} chunk:{item['chunk_id']}]"
+        candidates.append(item)
+    return candidates
+
+
+def _ratio(numerator: int | float, denominator: int | float) -> dict:
+    return {
+        "status": "not_applicable" if denominator == 0 else "ok",
+        "value": None if denominator == 0 else numerator / denominator,
+        "numerator": numerator,
+        "denominator": denominator,
+    }
+
+
+def _by_stratum(
+    records: list[dict], scorer, *, strata: list[str] | None = None
+) -> dict:
+    strata = strata or sorted({record["stratum"] for record in records})
+    return {
+        stratum: scorer([record for record in records if record["stratum"] == stratum])
+        for stratum in strata
+    }
+
+
+def _categorical_summary(records: list[dict], expected_key: str, actual_key: str):
+    return categorical_conformance(
+        [record["expected"][expected_key] for record in records],
+        [record["actual"][actual_key] for record in records],
+        labels=list(_ACTIONS if "action" in expected_key else _REASONS),
+    )
+
+
+def _query_summary(records: list[dict]) -> dict:
+    return query_conformance(
+        [record["expected"]["query"] for record in records],
+        [record["actual"]["query"] for record in records],
+    )
+
+
+def _metric_pool(records: list[dict], key: str) -> dict:
+    applicable = [record[key] for record in records if record[key]["status"] == "ok"]
+    return _ratio(
+        sum(metric["numerator"] for metric in applicable),
+        sum(metric["denominator"] for metric in applicable),
+    )
+
+
+def _summarize_evidence_policy(records: list[dict]) -> dict:
+    recall = aggregate_evidence(records)
+    doc_applicable = [
+        record["relevant_document_coverage"]
+        for record in records
+        if record["relevant_document_coverage"]["status"] == "ok"
+    ]
+    diversity_total = sum(record["distinct_selected_documents"] for record in records)
+    token_total = sum(record["estimated_token_use"] for record in records)
+    overrun_total = sum(record["overrun_tokens"] for record in records)
+    citations = [record["citation_diagnostics"] for record in records]
+    return {
+        "support": len(records),
+        **recall,
+        "macro_relevant_document_coverage": _ratio(
+            sum(metric["value"] for metric in doc_applicable), len(doc_applicable)
+        ),
+        "relevant_document_coverage": _metric_pool(
+            records, "relevant_document_coverage"
+        ),
+        "selected_document_diversity": {
+            "support": len(records),
+            "total": diversity_total,
+            "mean": _ratio(diversity_total, len(records)),
+        },
+        "estimated_token_use": {
+            "support": len(records),
+            "total": token_total,
+            "mean": _ratio(token_total, len(records)),
+        },
+        "overrun_tokens": {
+            "support": len(records),
+            "total": overrun_total,
+            "mean": _ratio(overrun_total, len(records)),
+            "within_budget": _ratio(
+                sum(record["overrun_tokens"] == 0 for record in records),
+                len(records),
+            ),
+        },
+        "citation_syntax_validity": _metric_pool(
+            [{"syntax": diagnostic["syntax_validity"]} for diagnostic in citations],
+            "syntax",
+        ),
+        "citation_chunk_consistency": _metric_pool(
+            [
+                {"consistency": diagnostic["chunk_consistency"]}
+                for diagnostic in citations
+            ],
+            "consistency",
+        ),
+        "duplicate_citation_count": sum(
+            diagnostic["duplicate_count"] for diagnostic in citations
+        ),
+        "conflicting_citation_count": sum(
+            diagnostic["conflict_count"] for diagnostic in citations
+        ),
+        "image_path_prefix_behavior": _metric_pool(
+            [
+                {"image": diagnostic["image_path_prefix_behavior"]}
+                for diagnostic in citations
+            ],
+            "image",
+        ),
+    }
+
+
+def _aggregate_evidence_policy(records: list[dict]) -> dict:
+    return {
+        "overall": _summarize_evidence_policy(records),
+        "by_stratum": _by_stratum(records, _summarize_evidence_policy),
+    }
 
 
 def _aggregate(routing: list[dict], evidence: list[dict], memory: list[dict], timings):
     classifier = {}
     for field in _CLASSIFIER_FIELDS:
-        classifier[field] = binary_metrics(
-            [record["expected"]["classifier"][field] for record in routing],
-            [record["actual"]["classifier"][field] for record in routing],
+
+        def score_field(records, field=field):
+            return binary_metrics(
+                [record["expected"]["classifier"][field] for record in records],
+                [record["actual"]["classifier"][field] for record in records],
+            )
+
+        classifier[field] = {
+            **score_field(routing),
+            "by_stratum": _by_stratum(routing, score_field),
+        }
+
+    def score_reason(records):
+        return categorical_conformance(
+            [record["expected"]["reason"] for record in records],
+            [record["actual"]["reason"] for record in records],
+            labels=list(_REASONS),
         )
-    reason = categorical_conformance(
-        [record["expected"]["reason"] for record in routing],
-        [record["actual"]["reason"] for record in routing],
-        labels=list(_REASONS),
-    )
-    helper_action = categorical_conformance(
-        [record["expected"]["helper_action"] for record in routing],
-        [record["actual"]["helper_action"] for record in routing],
-        labels=list(_ACTIONS),
-    )
-    direct_action = categorical_conformance(
-        [record["expected"]["direct_action"] for record in routing],
-        [record["actual"]["direct_action"] for record in routing],
-        labels=list(_ACTIONS),
-    )
+
+    def score_helper(records):
+        return _categorical_summary(records, "helper_action", "helper_action")
+
+    def score_direct(records):
+        return _categorical_summary(records, "direct_action", "direct_action")
+
+    reason = {**score_reason(routing), "by_stratum": _by_stratum(routing, score_reason)}
+    helper_action = {
+        **score_helper(routing),
+        "by_stratum": _by_stratum(routing, score_helper),
+    }
+    direct_records = [
+        record for record in routing if record["expected"]["direct_action"] is not None
+    ]
+    direct_action = {
+        **score_direct(direct_records),
+        "not_applicable": len(routing) - len(direct_records),
+        "by_stratum": _by_stratum(
+            direct_records,
+            score_direct,
+            strata=sorted({record["stratum"] for record in routing}),
+        ),
+    }
     query_records = [
         record for record in routing if record["expected"]["query"] is not None
     ]
-    query = query_conformance(
-        [record["expected"]["query"] for record in query_records],
-        [record["actual"]["query"] for record in query_records],
-    )
+    query = {
+        **_query_summary(query_records),
+        "not_applicable": len(routing) - len(query_records),
+        "by_stratum": _by_stratum(
+            query_records,
+            _query_summary,
+            strata=sorted({record["stratum"] for record in routing}),
+        ),
+    }
     policy_pairs = []
     for record in evidence:
         pair = {
@@ -517,16 +740,24 @@ def _aggregate(routing: list[dict], evidence: list[dict], memory: list[dict], ti
         }
         for policy in ("aquillm", "sequential"):
             pair[policy].update(pair[policy]["citation_diagnostics"])
+            pair[policy]["image_path_prefix_behavior"] = pair[policy][
+                "citation_diagnostics"
+            ]["image_path_prefix_behavior"]
         policy_pairs.append(pair)
     comparison_metrics = (
         "relevant_evidence_recall",
         "relevant_document_coverage",
-        "distinct_selected_documents",
         "estimated_token_use",
         "overrun_tokens",
+        "syntax_validity",
+        "chunk_consistency",
         "duplicate_count",
         "conflict_count",
+        "image_path_prefix_behavior",
     )
+    timing_aggregate = {}
+    for record in timings:
+        timing_aggregate.setdefault(record["module"], []).append(record)
     return {
         "schema_version": SCHEMA_VERSION,
         "routing": {
@@ -537,8 +768,10 @@ def _aggregate(routing: list[dict], evidence: list[dict], memory: list[dict], ti
         "action": {"helper": helper_action, "direct": direct_action},
         "query": query,
         "evidence": {
-            "aquillm": aggregate_evidence([record["aquillm"] for record in evidence]),
-            "sequential": aggregate_evidence(
+            "aquillm": _aggregate_evidence_policy(
+                [record["aquillm"] for record in evidence]
+            ),
+            "sequential": _aggregate_evidence_policy(
                 [record["sequential"] for record in evidence]
             ),
             "paired_comparisons": {
@@ -555,7 +788,7 @@ def _aggregate(routing: list[dict], evidence: list[dict], memory: list[dict], ti
             "errors": 0,
             "unavailable": 0,
         },
-        "timing": {record["module"]: record for record in timings},
+        "timing": timing_aggregate,
         "excluded_claims": list(_EXCLUDED_CLAIMS),
     }
 
@@ -659,14 +892,16 @@ def run_test_manifest(path: Path, project_root: Path) -> dict:
             text=True,
             check=False,
         )
-        counts, outcomes = _parse_junit(junit, len(included))
+        counts, node_results = _parse_junit(
+            junit, [entry["node_id"] for entry in included]
+        )
     entries = []
-    outcome_index = 0
     for entry in data["entries"]:
         item = dict(entry)
         if entry["status"] == "included":
-            item["outcome"] = outcomes[outcome_index]
-            outcome_index += 1
+            observed = node_results[entry["node_id"]]
+            item["outcome"] = observed["outcome"]
+            item["instances"] = observed["instances"]
         else:
             item["outcome"] = "unavailable"
         entries.append(item)
@@ -691,17 +926,23 @@ def run_test_manifest(path: Path, project_root: Path) -> dict:
     }
 
 
-def _parse_junit(path: Path, expected: int) -> tuple[dict, list[str]]:
+def _parse_junit(path: Path, node_ids: list[str]) -> tuple[dict, dict]:
     if not path.is_file():
         return (
             {
-                "collected": expected,
+                "collected": 0,
                 "passed": 0,
                 "failed": 0,
                 "skipped": 0,
-                "errors": expected,
+                "errors": len(node_ids),
             },
-            ["error"] * expected,
+            {
+                node_id: {
+                    "outcome": "missing",
+                    "instances": _instance_counts([]),
+                }
+                for node_id in node_ids
+            },
         )
     root = ET.parse(path).getroot()
     suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
@@ -710,25 +951,73 @@ def _parse_junit(path: Path, expected: int) -> tuple[dict, list[str]]:
     errors = sum(int(suite.attrib.get("errors", 0)) for suite in suites)
     skipped = sum(int(suite.attrib.get("skipped", 0)) for suite in suites)
     passed = collected - failed - errors - skipped
-    outcomes = []
+    observed_cases = []
     for case in root.iter("testcase"):
         if case.find("failure") is not None:
-            outcomes.append("failed")
+            outcome = "failed"
         elif case.find("error") is not None:
-            outcomes.append("error")
+            outcome = "error"
         elif case.find("skipped") is not None:
-            outcomes.append("skipped")
+            outcome = "skipped"
         else:
-            outcomes.append("passed")
-    if len(outcomes) < expected:
-        outcomes.extend(["error"] * (expected - len(outcomes)))
+            outcome = "passed"
+        observed_cases.append((case, outcome))
+    by_node = {}
+    for node_id in node_ids:
+        outcomes = [
+            outcome
+            for case, outcome in observed_cases
+            if _junit_case_matches_node(case, node_id)
+        ]
+        if "error" in outcomes:
+            node_outcome = "error"
+        elif "failed" in outcomes:
+            node_outcome = "failed"
+        elif "skipped" in outcomes:
+            node_outcome = "skipped"
+        elif outcomes:
+            node_outcome = "passed"
+        else:
+            node_outcome = "missing"
+        by_node[node_id] = {
+            "outcome": node_outcome,
+            "instances": _instance_counts(outcomes),
+        }
     return {
         "collected": collected,
         "passed": passed,
         "failed": failed,
         "skipped": skipped,
         "errors": errors,
-    }, outcomes[:expected]
+    }, by_node
+
+
+def _instance_counts(outcomes: list[str]) -> dict:
+    return {
+        "collected": len(outcomes),
+        "passed": outcomes.count("passed"),
+        "failed": outcomes.count("failed"),
+        "skipped": outcomes.count("skipped"),
+        "errors": outcomes.count("error"),
+    }
+
+
+def _junit_case_matches_node(case: ET.Element, node_id: str) -> bool:
+    file_selector, *selectors = node_id.replace("\\", "/").split("::")
+    case_name = case.attrib.get("name", "").split("[", 1)[0]
+    if not selectors or case_name != selectors[-1]:
+        return False
+    case_file = case.attrib.get("file", "").replace("\\", "/")
+    classname = case.attrib.get("classname", "")
+    if len(selectors) == 2 and classname.split(".")[-1] != selectors[0]:
+        return False
+    if case_file:
+        return case_file.endswith(file_selector)
+    module_parts = classname.split(".")
+    if len(selectors) == 2:
+        module_parts = module_parts[:-1]
+    module_path = "/".join(module_parts) + ".py"
+    return module_path.endswith(file_selector)
 
 
 def _redact_subprocess_output(raw: str) -> str:
@@ -787,6 +1076,10 @@ def _write_csv(path: Path, records: list[dict]) -> None:
 def regenerate_paper_table(aggregate_path: Path) -> str:
     """Render the paper table using aggregate JSON as the sole data source."""
     aggregate = json.loads(Path(aggregate_path).read_text(encoding="utf-8"))
+    return _paper_table_text(aggregate)
+
+
+def _paper_table_text(aggregate: dict) -> str:
 
     def ratio(value):
         if not isinstance(value, dict) or value.get("status") != "ok":
@@ -818,7 +1111,15 @@ def regenerate_paper_table(aggregate_path: Path) -> str:
         ("Query conformance", ratio(nested("query", "conformance"))),
         (
             "AquiLLM evidence macro recall",
-            ratio(nested("evidence", "aquillm", "macro_relevant_evidence_recall")),
+            ratio(
+                nested(
+                    "evidence",
+                    "aquillm",
+                    "overall",
+                    "macro_relevant_evidence_recall",
+                )
+                or nested("evidence", "aquillm", "macro_relevant_evidence_recall")
+            ),
         ),
         (
             "Memory exact-set conformance",
@@ -843,11 +1144,58 @@ def regenerate_paper_table(aggregate_path: Path) -> str:
 
 
 def _report_text(aggregate: dict) -> str:
+    tests = aggregate["tests"]
+    test_lines = "".join(
+        f"- {name}: {tests.get(name, 0)}\n"
+        for name in (
+            "collected",
+            "passed",
+            "failed",
+            "skipped",
+            "errors",
+            "unavailable",
+        )
+    )
+    timing_lines = [
+        "| Module | Input size | Median seconds | p95 seconds | Throughput/s |",
+        "|---|---|---:|---:|---:|",
+    ]
+    for module, value in aggregate.get("timing", {}).items():
+        records = value if isinstance(value, list) else [value]
+        for record in records:
+            if not isinstance(record, dict) or "median_seconds" not in record:
+                continue
+            timing_lines.append(
+                "| "
+                + " | ".join(
+                    (
+                        module,
+                        json.dumps(record.get("input_size", {}), sort_keys=True),
+                        f"{record.get('median_seconds', 0):.9f}",
+                        f"{record.get('p95_seconds', 0):.9f}",
+                        f"{record.get('throughput_per_second', 0):.3f}",
+                    )
+                )
+                + " |"
+            )
+    detailed_metrics = {
+        name: aggregate[name]
+        for name in ("routing", "action", "query", "evidence", "memory")
+    }
     return (
         "# Preliminary offline component evaluation report\n\n"
         "This report separates deterministic component conformance, contract-test "
         "counts, and local microbenchmarks. Fixed-set misses remain visible and are "
         "not integrity failures.\n\n"
+        + _paper_table_text(aggregate)
+        + "\n## Contract tests\n\n"
+        + test_lines
+        + "\n## Timings\n\n"
+        + "\n".join(timing_lines)
+        + "\n\n"
+        + "## Detailed aggregate metrics\n\n```json\n"
+        + json.dumps(detailed_metrics, ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n```\n\n"
         "## Excluded claims\n\n"
         + "".join(f"- {claim}\n" for claim in aggregate["excluded_claims"])
     )
@@ -1098,15 +1446,25 @@ def write_provenance(
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", artifact_commit):
         raise ValueError("artifact commit must be a full hexadecimal SHA")
     aggregate_path, output_path = Path(aggregate_path), Path(output_path)
-    manifest_path = aggregate_path.parent / "manifest.json"
-    complete_path = aggregate_path.parent / "COMPLETE"
+    artifact_dir = aggregate_path if aggregate_path.is_dir() else aggregate_path.parent
+    aggregate_path = artifact_dir / "aggregate.json"
+    validate_artifacts(artifact_dir)
+    manifest_path = artifact_dir / "manifest.json"
+    complete_path = artifact_dir / "COMPLETE"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     complete = json.loads(complete_path.read_text(encoding="utf-8"))
+    aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    aggregate_hash = sha256_file(aggregate_path)
+    if complete["sha256"].get("aggregate.json") != aggregate_hash:
+        raise ValueError("aggregate hash does not match COMPLETE")
+    aggregate_source = aggregate.get("run", {}).get("source_commit")
+    if aggregate_source != manifest["source_commit"]:
+        raise ValueError("aggregate and manifest source commits contradict")
     payload = {
         "schema_version": SCHEMA_VERSION,
         "evaluated_source_commit": manifest["source_commit"],
         "artifact_commit": artifact_commit.lower(),
-        "aggregate_sha256": sha256_file(aggregate_path),
+        "aggregate_sha256": aggregate_hash,
         "artifact_hashes": complete["sha256"],
         "fixture_hashes": manifest["fixture_hashes"],
         "code_hashes": manifest["code_hashes"],
@@ -1146,8 +1504,10 @@ def build_manifest(
     project_root: Path,
     timing_repeats: int,
     network_attempts: dict,
+    *,
+    source_state: tuple[str, bool] | None = None,
 ) -> dict:
-    source_commit, source_dirty = _git_source_state(project_root)
+    source_commit, source_dirty = source_state or _git_source_state(project_root)
     fixture_hashes = {
         path.name: sha256_file(path)
         for path in sorted(Path(fixture_dir).iterdir())
@@ -1156,12 +1516,36 @@ def build_manifest(
     code_paths = [
         Path(__file__),
         Path(__file__).with_name("network.py"),
+        Path(__file__).with_name("metrics.py"),
+        Path(__file__).with_name("policies.py"),
+        Path(__file__).with_name("schema.py"),
+        Path(__file__).parent.parent / "run_offline_evidence.py",
+        project_root / "apps/chat/consumers/chat_receive.py",
         project_root / "apps/chat/services/rag_intent.py",
         project_root / "apps/chat/services/rag_query.py",
         project_root / "apps/chat/services/rag_evidence.py",
+        project_root / "apps/chat/services/rag_config.py",
         project_root / "apps/chat/services/rag_pipeline.py",
+        project_root / "aquillm/memory.py",
+        project_root / "lib/llm/types/conversation.py",
+        project_root / "lib/llm/types/messages.py",
+        project_root / "lib/llm/types/tools.py",
         project_root / "lib/memory/extraction/stable_facts.py",
     ]
+    dependencies = {}
+    for distribution in (
+        "Django",
+        "PyYAML",
+        "pydantic",
+        "pytest",
+        "requests",
+        "asgiref",
+        "structlog",
+    ):
+        try:
+            dependencies[distribution] = version(distribution)
+        except PackageNotFoundError:
+            dependencies[distribution] = "unavailable"
     config_hash = hashlib.sha256(canonical_json_bytes(CANONICAL_ENV)).hexdigest()
     now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return {
@@ -1172,7 +1556,12 @@ def build_manifest(
         "source_dirty": source_dirty,
         "fixture_hashes": fixture_hashes,
         "fixture_sensitivity": "synthetic_public",
-        "code_hashes": {path.name: sha256_file(path) for path in code_paths},
+        "code_hashes": {
+            path.resolve().relative_to(project_root.resolve()).as_posix(): sha256_file(
+                path
+            )
+            for path in code_paths
+        },
         "config_hashes": {"canonical_env": config_hash},
         "canonical_env": dict(CANONICAL_ENV),
         "environment": {
@@ -1181,6 +1570,8 @@ def build_manifest(
             "python": platform.python_version(),
             "timing_repeats": timing_repeats,
             "timing_warmups": 1,
+            "evidence_timing_candidate_sizes": [1, 10, 100],
+            "dependencies": dependencies,
         },
         "component_network_attempts": network_attempts,
         "test_manifest_hash": sha256_file(test_manifest),

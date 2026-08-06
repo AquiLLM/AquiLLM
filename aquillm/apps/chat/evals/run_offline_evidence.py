@@ -79,6 +79,9 @@ def _unavailable_tests(path: Path) -> dict:
 
 def _run(args) -> int:
     project_root = Path.cwd()
+    source_state = runner._git_source_state(project_root)
+    if source_state[1]:
+        return 1
     result = runner.run_component_evaluation(args.fixtures, args.timing_repeats)
     tests = (
         _unavailable_tests(args.test_manifest)
@@ -94,21 +97,47 @@ def _run(args) -> int:
             project_root,
             args.timing_repeats,
             result["network_attempts"],
+            source_state=source_state,
         )
     else:
         result["manifest"].setdefault(
             "component_network_attempts",
             result.get("network_attempts", {"total": 0, "details": []}),
         )
+        if (
+            result["manifest"].get("source_commit") != source_state[0]
+            or result["manifest"].get("source_dirty") is not False
+        ):
+            return 1
     result["aggregate"]["run"] = {
         "run_id": result["manifest"]["run_id"],
         "timestamp_utc": result["manifest"]["timestamp_utc"],
+        "source_commit": result["manifest"]["source_commit"],
     }
     attempts = result["manifest"]["component_network_attempts"].get("total", 0)
     if result["manifest"].get("source_dirty") or attempts:
         return 1
     summary = tests["summary"]
-    if summary.get("failed", 0) or summary.get("errors", 0):
+    invalid_included_outcomes = [
+        entry
+        for entry in tests.get("entries", [])
+        if entry.get("status") == "included"
+        and entry.get("outcome") != "passed"
+        and not (entry.get("outcome") == "skipped" and entry.get("allow_skip") is True)
+    ]
+    permitted_skip = any(
+        entry.get("status") == "included"
+        and entry.get("outcome") == "skipped"
+        and entry.get("allow_skip") is True
+        for entry in tests.get("entries", [])
+    )
+    if (
+        tests.get("exit_code", 0) != 0
+        or summary.get("failed", 0)
+        or summary.get("errors", 0)
+        or (summary.get("skipped", 0) and not permitted_skip)
+        or invalid_included_outcomes
+    ):
         return 1
     runner.write_artifacts(result, args.output)
     runner.validate_artifacts(args.output)

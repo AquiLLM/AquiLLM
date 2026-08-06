@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -90,6 +91,7 @@ def _minimal_datasets():
                     },
                     "reason": "explicit_search",
                     "production_action": "retrieve",
+                    "direct_pipeline_action": "retrieve",
                     "expected_query": "Search the documents for alpha.",
                 },
             },
@@ -111,12 +113,13 @@ def _minimal_datasets():
                     },
                     "reason": "explicit_search",
                     "production_action": "prompt_select_collection",
+                    "direct_pipeline_action": "prompt_select_collection",
                     "expected_query": "Search the documents for beta.",
                 },
             },
             {
                 "id": "routing-mini-retry",
-                "stratum": "unfavorable",
+                "stratum": "adversarial_boundary",
                 "input": {
                     "text": "Please retry.",
                     "selected_collection_ids": ["public-a"],
@@ -155,6 +158,27 @@ def _minimal_datasets():
                     },
                     "reason": "no_retrieval_needed",
                     "production_action": "skip_normal_tool_loop",
+                    "direct_pipeline_action": "skip_normal_tool_loop",
+                },
+            },
+            {
+                "id": "routing-mini-local-helper-only",
+                "stratum": "unfavorable",
+                "input": {
+                    "text": "Run the FITS tool on the uploaded file.",
+                    "selected_collection_ids": [],
+                    "prior_tools": [],
+                },
+                "gold": {
+                    "classifier": {
+                        "requires_rag": False,
+                        "wants_figures": False,
+                        "wants_whole_document": False,
+                        "is_retry": False,
+                        "requires_local_tools": True,
+                    },
+                    "reason": "local_tool_request",
+                    "production_action": "local_tool_handling",
                 },
             },
         ],
@@ -278,12 +302,47 @@ def test_component_runner_calls_actual_production_functions_and_restores_env(
         result["memory_fallback"]["explicit_remember"]["branch"] == "explicit_remember"
     )
     assert result["memory_fallback"]["heuristic"]["branch"] == "heuristic"
+    assert result["memory_fallback"]["explicit_remember"]["remote_attempt_count"] == 1
+    assert result["memory_fallback"]["explicit_remember"]["normalize_calls"] > 0
+    assert result["memory_fallback"]["explicit_remember"]["heuristic_calls"] == 0
+    assert result["memory_fallback"]["heuristic"]["remote_attempt_count"] == 1
+    assert result["memory_fallback"]["heuristic"]["heuristic_calls"] > 0
     assert result["memory_fallback"]["network_failure_latency_seconds"] >= 0
     assert len(result["routing"]) == len(datasets["routing"]["cases"])
     assert all(item["phase"] == "timing" for item in result["timings"])
     assert result["aggregate"]["routing"]["support"] == len(
         datasets["routing"]["cases"]
     )
+    local = next(
+        record
+        for record in result["routing"]
+        if record["case_id"] == "routing-mini-local-helper-only"
+    )
+    assert local["expected"]["direct_action"] is None
+    assert local["diagnostics"]["checks"]["direct_action"]["status"] == "not_applicable"
+    assert result["aggregate"]["action"]["direct"]["support"] == 4
+    assert (
+        result["aggregate"]["action"]["direct"]["by_stratum"]["unfavorable"]["support"]
+        == 0
+    )
+    assert result["aggregate"]["action"]["helper"]["by_stratum"]
+    assert result["aggregate"]["query"]["by_stratum"]
+    evidence_aggregate = result["aggregate"]["evidence"]["aquillm"]
+    assert evidence_aggregate["overall"]["relevant_document_coverage"]
+    assert evidence_aggregate["by_stratum"]["favorable"]["support"] == 1
+    assert evidence_aggregate["overall"]["citation_syntax_validity"]
+    assert (
+        "image_path_prefix_behavior"
+        in result["aggregate"]["evidence"]["paired_comparisons"]
+    )
+    evidence_timings = [
+        item for item in result["timings"] if item["module"] == "evidence"
+    ]
+    assert [item["input_size"]["candidate_count"] for item in evidence_timings] == [
+        1,
+        10,
+        100,
+    ]
     assert os.environ["RAG_DIRECT_ENABLED"] == "ambient-value"
     for name, value in original_values.items():
         if name == "RAG_DIRECT_ENABLED":
@@ -337,6 +396,60 @@ def test_run_test_manifest_counts_junit_and_represents_blocked_nodes(tmp_path):
     assert "test-only" not in result["stdout"] + result["stderr"]
 
 
+def test_run_test_manifest_aggregates_parametrized_nodes_by_identity(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_params.py").write_text(
+        textwrap.dedent(
+            """
+            import pytest
+
+            @pytest.mark.parametrize("value", [0, 1])
+            def test_param(value):
+                if value == 1:
+                    pytest.skip("visible parameter skip")
+
+            def test_final():
+                assert True
+            """
+        ),
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        textwrap.dedent(
+            """
+            schema_version: "1.0"
+            entries:
+              - node_id: "tests/test_params.py::test_param"
+                status: included
+                prerequisite: none
+                reason: "Parametrized."
+              - node_id: "tests/test_params.py::test_final"
+                status: included
+                prerequisite: none
+                reason: "Final node."
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_test_manifest(manifest, tmp_path)
+
+    assert result["summary"]["collected"] == 3
+    assert [entry["outcome"] for entry in result["entries"]] == [
+        "skipped",
+        "passed",
+    ]
+    assert result["entries"][0]["instances"] == {
+        "collected": 2,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 1,
+        "errors": 0,
+    }
+
+
 def _artifact_result(timestamp="2026-08-06T18:00:00Z", sample=0.001):
     record = {
         "schema_version": "1.0",
@@ -350,7 +463,11 @@ def _artifact_result(timestamp="2026-08-06T18:00:00Z", sample=0.001):
     }
     aggregate = {
         "schema_version": "1.0",
-        "run": {"run_id": "mini", "timestamp_utc": timestamp},
+        "run": {
+            "run_id": "mini",
+            "timestamp_utc": timestamp,
+            "source_commit": "a" * 40,
+        },
         "routing": {
             "support": 1,
             "conformance": {
@@ -364,7 +481,14 @@ def _artifact_result(timestamp="2026-08-06T18:00:00Z", sample=0.001):
         "query": {"support": 0},
         "evidence": {"support": 0},
         "memory": {"support": 0},
-        "tests": {"passed": 1, "failed": 0, "unavailable": 1},
+        "tests": {
+            "collected": 1,
+            "passed": 1,
+            "failed": 0,
+            "skipped": 0,
+            "errors": 0,
+            "unavailable": 1,
+        },
         "timing": {
             "routing": {"raw_samples_seconds": [sample], "median_seconds": sample}
         },
@@ -415,6 +539,7 @@ def _artifact_result(timestamp="2026-08-06T18:00:00Z", sample=0.001):
                 },
             ],
             "summary": aggregate["tests"],
+            "exit_code": 0,
         },
         "aggregate": aggregate,
     }
@@ -432,6 +557,10 @@ def test_artifact_write_is_atomic_complete_immutable_and_valid(tmp_path):
         encoding="utf-8"
     ) == regenerate_paper_table(output / "aggregate.json")
     assert (output / "routing.jsonl").read_bytes().endswith(b"\n")
+    report = (output / "report.md").read_text(encoding="utf-8")
+    assert "Routing reason conformance" in report
+    assert "passed: 1" in report
+    assert "routing" in report and "Median" in report
 
     with pytest.raises(FileExistsError):
         write_artifacts(_artifact_result(), output)
@@ -483,13 +612,41 @@ def test_write_provenance_records_existing_artifact_commit_and_hashes(tmp_path):
     write_artifacts(_artifact_result(), output)
     provenance = tmp_path / "provenance.json"
 
-    write_provenance(output / "aggregate.json", "f" * 40, provenance)
+    write_provenance(output, "f" * 40, provenance)
 
     payload = json.loads(provenance.read_text(encoding="utf-8"))
     assert payload["evaluated_source_commit"] == "a" * 40
     assert payload["artifact_commit"] == "f" * 40
     assert payload["aggregate_sha256"]
     assert payload["artifact_hashes"]
+
+
+def test_write_provenance_rejects_tampered_aggregate(tmp_path):
+    output = tmp_path / "run"
+    write_artifacts(_artifact_result(), output)
+    aggregate_path = output / "aggregate.json"
+    aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    aggregate["routing"]["support"] = 999
+    aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="hash"):
+        write_provenance(output, "f" * 40, tmp_path / "provenance.json")
+
+
+def test_write_provenance_rejects_contradictory_source_commit(tmp_path):
+    output = tmp_path / "run"
+    write_artifacts(_artifact_result(), output)
+    aggregate_path = output / "aggregate.json"
+    aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    aggregate["run"]["source_commit"] = "b" * 40
+    aggregate_path.write_bytes(runner.canonical_json_bytes(aggregate))
+    complete_path = output / "COMPLETE"
+    complete = json.loads(complete_path.read_text(encoding="utf-8"))
+    complete["sha256"]["aggregate.json"] = runner.sha256_file(aggregate_path)
+    complete_path.write_bytes(runner.canonical_json_bytes(complete))
+
+    with pytest.raises(ValueError, match="source commits contradict"):
+        write_provenance(output, "f" * 40, tmp_path / "provenance.json")
 
 
 def test_validate_rejects_unknown_extra_and_changed_hash(tmp_path):
@@ -531,7 +688,6 @@ def test_cli_conformance_misses_succeed_but_integrity_failures_do_not(
                 str(first),
                 "--timing-repeats",
                 "1",
-                "--skip-tests",
             ]
         )
         == 0
@@ -557,8 +713,137 @@ def test_cli_conformance_misses_succeed_but_integrity_failures_do_not(
                 str(tmp_path / "second"),
                 "--timing-repeats",
                 "1",
-                "--skip-tests",
             ]
         )
         == 1
+    )
+
+
+@pytest.mark.parametrize(
+    ("test_update", "expected_exit"),
+    [
+        ({"exit_code": 3}, 1),
+        (
+            {
+                "summary": {
+                    "collected": 1,
+                    "passed": 0,
+                    "failed": 0,
+                    "skipped": 1,
+                    "errors": 0,
+                    "unavailable": 0,
+                }
+            },
+            1,
+        ),
+        (
+            {
+                "entries": [
+                    {
+                        "node_id": "tests/x.py::test_x",
+                        "status": "included",
+                        "outcome": "missing",
+                    }
+                ]
+            },
+            1,
+        ),
+    ],
+)
+def test_cli_rejects_pytest_exit_skip_and_missing_outcomes(
+    tmp_path, monkeypatch, test_update, expected_exit
+):
+    result = _artifact_result()
+    tests = copy.deepcopy(result["tests"])
+    tests.update(test_update)
+    monkeypatch.setattr(runner, "_git_source_state", lambda _root: ("a" * 40, False))
+    monkeypatch.setattr(
+        runner,
+        "run_component_evaluation",
+        lambda *_args, **_kwargs: copy.deepcopy(result),
+    )
+    monkeypatch.setattr(runner, "run_test_manifest", lambda *_args, **_kwargs: tests)
+
+    assert (
+        main(
+            [
+                "run",
+                "--fixtures",
+                str(tmp_path),
+                "--test-manifest",
+                str(tmp_path / "manifest.yaml"),
+                "--output",
+                str(tmp_path / "out"),
+                "--timing-repeats",
+                "1",
+            ]
+        )
+        == expected_exit
+    )
+
+
+def test_cli_preflights_clean_source_before_execution(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runner,
+        "_git_source_state",
+        lambda _root: calls.append("preflight") or ("a" * 40, True),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_component_evaluation",
+        lambda *_args, **_kwargs: calls.append("component"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_test_manifest",
+        lambda *_args, **_kwargs: calls.append("tests"),
+    )
+
+    assert (
+        main(
+            [
+                "run",
+                "--fixtures",
+                str(tmp_path),
+                "--test-manifest",
+                str(tmp_path / "manifest.yaml"),
+                "--output",
+                str(tmp_path / "out"),
+                "--timing-repeats",
+                "1",
+            ]
+        )
+        == 1
+    )
+    assert calls == ["preflight"]
+
+
+def test_build_manifest_hashes_all_exercised_code_and_dependencies(tmp_path):
+    fixture_dir = tmp_path / "fixtures"
+    fixture_dir.mkdir()
+    (fixture_dir / "routing.yaml").write_text("synthetic\n", encoding="utf-8")
+    test_manifest = tmp_path / "manifest.yaml"
+    test_manifest.write_text("synthetic\n", encoding="utf-8")
+    project_root = Path(__file__).parents[3]
+
+    manifest = runner.build_manifest(
+        fixture_dir,
+        test_manifest,
+        project_root,
+        2,
+        {"total": 0, "details": []},
+        source_state=("a" * 40, False),
+    )
+
+    assert {
+        "apps/chat/consumers/chat_receive.py",
+        "aquillm/memory.py",
+        "apps/chat/evals/offline/metrics.py",
+        "apps/chat/evals/offline/policies.py",
+        "apps/chat/evals/offline/schema.py",
+        "apps/chat/evals/offline/runner.py",
+    }.issubset(manifest["code_hashes"])
+    assert {"Django", "PyYAML", "pydantic", "pytest"}.issubset(
+        manifest["environment"]["dependencies"]
     )

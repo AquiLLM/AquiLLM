@@ -1,4 +1,5 @@
 """JSON-serializable metrics for deterministic offline evaluation."""
+
 from __future__ import annotations
 
 import re
@@ -15,6 +16,7 @@ _POLICY_METRIC_DIRECTIONS = {
     "estimated_token_use": False,
     "duplicate_count": False,
     "conflict_count": False,
+    "image_path_prefix_behavior": True,
     "overrun_tokens": False,
 }
 
@@ -67,10 +69,7 @@ def categorical_conformance(
     if unknown:
         raise ValueError(f"unknown label: {unknown[0]}")
 
-    confusion = {
-        want: {got: 0 for got in known_labels}
-        for want in known_labels
-    }
+    confusion = {want: {got: 0 for got in known_labels} for want in known_labels}
     for want, got in zip(expected, actual):
         confusion[want][got] += 1
 
@@ -208,12 +207,8 @@ def aggregate_evidence(records: list[dict]) -> dict:
     return {
         "support": len(records),
         "applicable_support": len(applicable),
-        "macro_relevant_evidence_recall": _ratio(
-            macro_numerator, len(applicable)
-        ),
-        "micro_relevant_evidence_recall": _ratio(
-            micro_numerator, micro_denominator
-        ),
+        "macro_relevant_evidence_recall": _ratio(macro_numerator, len(applicable)),
+        "micro_relevant_evidence_recall": _ratio(micro_numerator, micro_denominator),
     }
 
 
