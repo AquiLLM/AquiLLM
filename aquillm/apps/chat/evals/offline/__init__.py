@@ -13,14 +13,17 @@ from .metrics import (
 )
 from .policies import sequential_select
 from .schema import (
+    SOURCE_TEXT_HASH_ALGORITHM,
     canonical_json_bytes,
     load_dataset,
+    sha256_canonical_text,
     sha256_file,
     validate_dataset,
     validate_test_manifest,
 )
 
 __all__ = [
+    "SOURCE_TEXT_HASH_ALGORITHM",
     "aggregate_evidence",
     "binary_metrics",
     "canonical_json_bytes",
@@ -33,6 +36,7 @@ __all__ = [
     "query_conformance",
     "score_evidence_case",
     "sequential_select",
+    "sha256_canonical_text",
     "sha256_file",
     "validate_dataset",
     "validate_test_manifest",

@@ -46,8 +46,9 @@ as evidence of positive-case detection.
 ## Evidence packing versus a same-budget sequential policy
 
 There were 22 relevance-applicable cases and two empty-retrieval cases. AquiLLM's
-selected evidence set exactly matched the gold set in 18/24 cases; the six visible
-misses comprised four unfavorable and two adversarial-boundary cases.
+raw selected-ID set exactly matched the gold set in 8/24 cases. It contained every
+gold evidence ID in 18/24 cases; the six all-gold-containment misses comprised four
+unfavorable and two adversarial-boundary cases.
 
 | Measure | AquiLLM | Sequential baseline |
 |---|---:|---:|
@@ -104,9 +105,8 @@ unavailable:
 - `apps/documents/tests/test_citation_api.py::test_citation_sources_groups_and_enforces_access`
   requires citation models, authorization fixtures, and a PostgreSQL test database.
 
-Immediately before the canonical run, the broader focused and adjacent verification
-set reported 153 passed tests. The canonical manifest count of 68 is the count to
-use for the frozen evidence package because it is preserved inside both runs.
+The canonical manifest count of 68 is the test count to use for the frozen evidence
+package because it is preserved inside both runs.
 
 ## Local timing observations
 

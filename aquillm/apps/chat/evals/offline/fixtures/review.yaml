@@ -6,15 +6,17 @@ reviewer_identity: "codex-agent:/root/offline_fixtures_spec_review"
 reviewer_role: independent_reviewer
 review_date: "2026-08-06"
 production_functions_executed: false
+source_hash_algorithm: sha256-utf8-lf-v1
 fixture_hashes:
   routing.yaml: 7817419d94fe964715ceb829fba27f106d10ba5fcb0ca9dbab9fbff847d1009e
-  evidence.yaml: 27f0b3ffea9dc28a95886daf86e03c17a9857d38a5d47f9857604018665561e4
+  evidence.yaml: ce2709d85ff7c7c908b58ea58c141fdc046959b5e1b74c2b3e8ad1c19d8dba2e
   memory.yaml: 0458edefd121d7a7f860756402f6522f6ba27571a60a5cb02f2d469f257e46ba
 protocol_changes:
   - {field: schema_version, before: "1.0", after: "1.1", reason: "Evidence target/token fields and structured review validation materially changed the schema."}
   - {field: rubric_version, before: "1.0", after: "1.1", reason: "Memory normalization and concrete evidence semantics were corrected."}
   - {field: dataset_versions, before: "routing-v1/evidence-v1/memory-v1", after: "routing-v2/evidence-v2/memory-v2", reason: "Material label and rubric changes require new frozen dataset identities."}
   - {field: frozen_at, before: "2026-08-06T00:00:00Z", after: "2026-08-06T17:00:00Z", reason: "The v2 fixtures were frozen after the correction pass."}
+  - {field: source_hash_algorithm, before: sha256-raw-bytes, after: sha256-utf8-lf-v1, reason: "Canonical UTF-8 LF hashing preserves review identity across Git newline conversions; labels and rubric decisions are unchanged."}
 label_changes:
   - {case_id: routing-ambiguous-01, field: gold, before: "RAG / collection-backed / retrieve", after: "no RAG / no retrieval / normal loop", reason: "A selected collection does not resolve an otherwise ungrounded deictic reference."}
   - {case_id: routing-unfavorable-11, field: gold.production_action, before: skip_normal_tool_loop, after: retrieve, reason: "Classifier/helper action follows requires_rag plus selected collection; direct-pipeline reachability is recorded separately."}

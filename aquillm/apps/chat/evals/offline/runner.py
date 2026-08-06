@@ -53,8 +53,10 @@ from .metrics import (
 from .network import deny_network
 from .policies import sequential_select
 from .schema import (
+    SOURCE_TEXT_HASH_ALGORITHM,
     canonical_json_bytes,
     load_dataset,
+    sha256_canonical_text,
     sha256_file,
     validate_test_manifest,
 )
@@ -1437,12 +1439,15 @@ def _validate_result_contract(result: dict) -> None:
         "environment",
         "component_network_attempts",
         "test_manifest_hash",
+        "source_hash_algorithm",
     }
     missing = required_manifest - set(result.get("manifest", {}))
     if missing:
         raise ValueError(f"manifest missing required fields: {sorted(missing)}")
     if result["manifest"]["source_dirty"] is not False:
         raise ValueError("canonical source must be clean")
+    if result["manifest"]["source_hash_algorithm"] != SOURCE_TEXT_HASH_ALGORITHM:
+        raise ValueError("manifest source_hash_algorithm is unsupported")
     if result["manifest"].get("fixture_sensitivity") != "synthetic_public":
         raise ValueError("fixture sensitivity must be synthetic_public")
     required_aggregate = {
@@ -1663,6 +1668,7 @@ def write_provenance(
         "artifact_hashes": complete["sha256"],
         "fixture_hashes": manifest["fixture_hashes"],
         "code_hashes": manifest["code_hashes"],
+        "source_hash_algorithm": manifest["source_hash_algorithm"],
         "config_hashes": manifest["config_hashes"],
     }
     if output_path.exists():
@@ -1704,7 +1710,7 @@ def build_manifest(
 ) -> dict:
     source_commit, source_dirty = source_state or _git_source_state(project_root)
     fixture_hashes = {
-        path.name: sha256_file(path)
+        path.name: sha256_canonical_text(path)
         for path in sorted(Path(fixture_dir).iterdir())
         if path.is_file()
     }
@@ -1749,12 +1755,13 @@ def build_manifest(
         "timestamp_utc": now,
         "source_commit": source_commit,
         "source_dirty": source_dirty,
+        "source_hash_algorithm": SOURCE_TEXT_HASH_ALGORITHM,
         "fixture_hashes": fixture_hashes,
         "fixture_sensitivity": "synthetic_public",
         "code_hashes": {
-            path.resolve().relative_to(project_root.resolve()).as_posix(): sha256_file(
-                path
-            )
+            path.resolve().relative_to(
+                project_root.resolve()
+            ).as_posix(): sha256_canonical_text(path)
             for path in code_paths
         },
         "config_hashes": {"canonical_env": config_hash},
@@ -1769,7 +1776,7 @@ def build_manifest(
             "dependencies": dependencies,
         },
         "component_network_attempts": network_attempts,
-        "test_manifest_hash": sha256_file(test_manifest),
+        "test_manifest_hash": sha256_canonical_text(test_manifest),
     }
 
 

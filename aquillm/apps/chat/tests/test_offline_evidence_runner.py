@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -963,6 +964,7 @@ def _artifact_result(timestamp="2026-08-06T18:00:00Z", sample=0.001):
             "timestamp_utc": timestamp,
             "source_commit": "a" * 40,
             "source_dirty": False,
+            "source_hash_algorithm": "sha256-utf8-lf-v1",
             "fixture_hashes": {"routing.yaml": "b" * 64},
             "code_hashes": {"runner.py": "c" * 64},
             "config_hashes": {"canonical_env": "d" * 64},
@@ -1026,6 +1028,28 @@ def test_artifact_write_is_atomic_complete_immutable_and_valid(tmp_path):
 
     with pytest.raises(FileExistsError):
         write_artifacts(_artifact_result(), output)
+
+
+def test_complete_and_provenance_hash_exact_artifact_bytes(tmp_path):
+    output = tmp_path / "run"
+    write_artifacts(_artifact_result(), output)
+    complete = json.loads((output / "COMPLETE").read_text(encoding="utf-8"))
+    report_bytes = (output / "report.md").read_bytes()
+
+    assert complete["sha256"]["report.md"] == hashlib.sha256(
+        report_bytes
+    ).hexdigest()
+    assert hashlib.sha256(report_bytes.replace(b"\n", b"\r\n")).hexdigest() != (
+        complete["sha256"]["report.md"]
+    )
+
+    provenance = tmp_path / "provenance.json"
+    write_provenance(output, "f" * 40, provenance)
+    payload = json.loads(provenance.read_text(encoding="utf-8"))
+    assert payload["aggregate_sha256"] == hashlib.sha256(
+        (output / "aggregate.json").read_bytes()
+    ).hexdigest()
+    assert payload["source_hash_algorithm"] == "sha256-utf8-lf-v1"
 
 
 def test_report_regenerates_after_canonical_json_sorts_timing_modules(tmp_path):
@@ -1394,3 +1418,28 @@ def test_build_manifest_hashes_all_exercised_code_and_dependencies(tmp_path):
     assert {"Django", "PyYAML", "pydantic", "pytest"}.issubset(
         manifest["environment"]["dependencies"]
     )
+
+
+def test_build_manifest_uses_canonical_text_hashes_for_source_lineage(tmp_path):
+    fixture_dir = tmp_path / "fixtures"
+    fixture_dir.mkdir()
+    fixture = fixture_dir / "routing.yaml"
+    fixture.write_bytes(b"alpha\r\nbeta\r\n")
+    test_manifest = tmp_path / "manifest.yaml"
+    test_manifest.write_bytes(b"alpha\rbeta\r")
+    project_root = Path(__file__).parents[3]
+
+    manifest = runner.build_manifest(
+        fixture_dir,
+        test_manifest,
+        project_root,
+        2,
+        {"total": 0, "details": []},
+        source_state=("a" * 40, False),
+    )
+
+    expected = hashlib.sha256(b"alpha\nbeta\n").hexdigest()
+    assert manifest["source_hash_algorithm"] == "sha256-utf8-lf-v1"
+    assert manifest["fixture_hashes"] == {"routing.yaml": expected}
+    assert manifest["test_manifest_hash"] == expected
+    assert manifest["fixture_hashes"]["routing.yaml"] != runner.sha256_file(fixture)

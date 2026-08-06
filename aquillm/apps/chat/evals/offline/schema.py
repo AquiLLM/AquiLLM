@@ -39,6 +39,7 @@ _CLASSIFIER_FIELDS = {
 _CITATION_RE = re.compile(r"\[doc:([^\]\s]+) chunk:(\d+)\]")
 _DATASET_SCHEMA_VERSION = "1.1"
 _RUBRIC_VERSION = "1.1"
+SOURCE_TEXT_HASH_ALGORITHM = "sha256-utf8-lf-v1"
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -56,6 +57,14 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def sha256_canonical_text(path: Path) -> str:
+    """Hash UTF-8 source text after canonicalizing every newline form to LF."""
+
+    text = Path(path).read_bytes().decode("utf-8")
+    canonical = text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def load_dataset(path: Path, kind: str, *, allow_pending: bool = False) -> dict:
@@ -364,9 +373,12 @@ def _validate_review_record(record: Any, dataset: dict, dataset_path: Path) -> N
     _require_nonempty_string(record, "review_date")
     if record.get("production_functions_executed") is not False:
         raise ValueError("review record must state production_functions_executed false")
+    _require_equal(
+        record, "source_hash_algorithm", SOURCE_TEXT_HASH_ALGORITHM
+    )
     fixture_hashes = _require_mapping(record, "fixture_hashes")
     expected_hash = fixture_hashes.get(dataset_path.name)
-    if expected_hash != sha256_file(dataset_path):
+    if expected_hash != sha256_canonical_text(dataset_path):
         raise ValueError(f"review record fixture hash mismatch for {dataset_path.name}")
     if record["status"] == "approved":
         if record.get("approval") is not True:
@@ -563,8 +575,10 @@ def _require_positive_integer(value: object, label: str) -> int:
 
 
 __all__ = [
+    "SOURCE_TEXT_HASH_ALGORITHM",
     "canonical_json_bytes",
     "load_dataset",
+    "sha256_canonical_text",
     "sha256_file",
     "validate_dataset",
     "validate_test_manifest",

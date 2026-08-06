@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from apps.chat.evals.offline import schema as offline_schema
 from apps.chat.evals.offline.schema import (
     canonical_json_bytes,
     load_dataset,
@@ -129,8 +130,12 @@ def _write_approved_fixture_set(
         "reviewer_role": "independent_reviewer",
         "review_date": "2026-08-06",
         "production_functions_executed": False,
+        "source_hash_algorithm": "sha256-utf8-lf-v1",
         "fixture_hashes": {
-            f"{kind}.yaml": sha256_file(tmp_path / f"{kind}.yaml") for kind in KINDS
+            f"{kind}.yaml": offline_schema.sha256_canonical_text(
+                tmp_path / f"{kind}.yaml"
+            )
+            for kind in KINDS
         },
         "label_changes": [
             {
@@ -458,6 +463,46 @@ def test_canonical_json_and_sha256_are_deterministic(tmp_path):
     assert sha256_file(path) == hashlib.sha256(expected).hexdigest()
 
 
+def test_source_text_hash_normalizes_all_newline_encodings_but_raw_hash_does_not(
+    tmp_path,
+):
+    variants = {
+        "lf": b"alpha\nbeta\n",
+        "crlf": b"alpha\r\nbeta\r\n",
+        "cr": b"alpha\rbeta\r",
+    }
+    paths = {}
+    for name, content in variants.items():
+        path = tmp_path / f"{name}.txt"
+        path.write_bytes(content)
+        paths[name] = path
+
+    canonical_hashes = {
+        offline_schema.sha256_canonical_text(path) for path in paths.values()
+    }
+    assert canonical_hashes == {hashlib.sha256(variants["lf"]).hexdigest()}
+    assert offline_schema.SOURCE_TEXT_HASH_ALGORITHM == "sha256-utf8-lf-v1"
+
+    raw_hashes = {sha256_file(path) for path in paths.values()}
+    assert len(raw_hashes) == 3
+    assert raw_hashes == {
+        hashlib.sha256(content).hexdigest() for content in variants.values()
+    }
+
+
+def test_approved_review_requires_explicit_source_hash_algorithm(tmp_path):
+    routing_path = _write_approved_fixture_set(tmp_path)
+    review_path = tmp_path / "review.yaml"
+    review = yaml.safe_load(review_path.read_text(encoding="utf-8"))
+    review.pop("source_hash_algorithm", None)
+    review_path.write_text(
+        yaml.safe_dump(review, sort_keys=False), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="source_hash_algorithm"):
+        load_dataset(routing_path, "routing")
+
+
 def test_approved_fixtures_are_frozen_balanced_synthetic_and_review_hashes_match():
     minimums = {"routing": 60, "evidence": 24, "memory": 40}
     datasets = {}
@@ -499,6 +544,7 @@ def test_approved_fixtures_are_frozen_balanced_synthetic_and_review_hashes_match
     assert review["reviewer_role"] == "independent_reviewer"
     assert review["review_date"] == "2026-08-06"
     assert review["production_functions_executed"] is False
+    assert review["source_hash_algorithm"] == "sha256-utf8-lf-v1"
     assert review["approval"] is True
     assert review["label_changes"]
     assert len(review["evidence_relevance_adjudications"]) == 24
@@ -509,7 +555,10 @@ def test_approved_fixtures_are_frozen_balanced_synthetic_and_review_hashes_match
     )
     assert len(review["retained_ambiguities"]) == ambiguous_count
     assert review["fixture_hashes"] == {
-        f"{kind}.yaml": sha256_file(FIXTURE_DIR / f"{kind}.yaml") for kind in KINDS
+        f"{kind}.yaml": offline_schema.sha256_canonical_text(
+            FIXTURE_DIR / f"{kind}.yaml"
+        )
+        for kind in KINDS
     }
 
 
