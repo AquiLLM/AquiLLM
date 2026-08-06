@@ -1,0 +1,65 @@
+schema_version: "1.0"
+entries:
+  - {node_id: "apps/chat/tests/test_rag_eval_runner.py::test_all_yaml_cases_pass", status: included, prerequisite: none, reason: "Offline RAG case contract."}
+  - {node_id: "apps/chat/tests/test_rag_eval_runner.py::test_collection_backed_question_case_passes", status: included, prerequisite: none, reason: "Offline RAG case contract."}
+  - {node_id: "apps/chat/tests/test_rag_eval_runner.py::test_explicit_search_case_passes", status: included, prerequisite: none, reason: "Offline RAG case contract."}
+  - {node_id: "apps/chat/tests/test_rag_eval_runner.py::test_figure_request_case_passes", status: included, prerequisite: none, reason: "Offline RAG case contract."}
+  - {node_id: "apps/chat/tests/test_rag_eval_runner.py::test_load_cases_have_required_fields", status: included, prerequisite: none, reason: "Offline RAG case schema."}
+  - {node_id: "apps/chat/tests/test_rag_eval_runner.py::test_load_cases_returns_at_least_three", status: included, prerequisite: none, reason: "Offline RAG case schema."}
+  - {node_id: "apps/chat/tests/test_rag_eval_runner.py::test_no_results_case_handled_without_llm", status: included, prerequisite: none, reason: "Offline no-results control flow."}
+  - {node_id: "apps/chat/tests/test_rag_eval_runner.py::test_non_rag_message_is_skipped", status: included, prerequisite: none, reason: "Offline routing control flow."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_citation_tokens_extracted", status: included, prerequisite: none, reason: "Citation syntax extraction."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_default_token_budget_from_env", status: included, prerequisite: none, reason: "Evidence budget configuration."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_explicit_token_budget_overrides_env", status: included, prerequisite: none, reason: "Evidence budget configuration."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_image_urls_extracted", status: included, prerequisite: none, reason: "Multimodal metadata extraction."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_multi_doc_diversification_no_single_doc_dominates", status: included, prerequisite: none, reason: "Evidence diversification contract."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_no_image_urls_when_none_present", status: included, prerequisite: none, reason: "Multimodal metadata extraction."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_no_results_does_not_raise", status: included, prerequisite: none, reason: "Empty retrieval contract."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_no_results_includes_diagnostic_message", status: included, prerequisite: none, reason: "Empty retrieval diagnostics."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_no_results_produces_empty_chunks", status: included, prerequisite: none, reason: "Empty retrieval contract."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_packet_fields_populated", status: included, prerequisite: none, reason: "Evidence packet schema."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_per_doc_cap_1_allows_one_per_doc", status: included, prerequisite: none, reason: "Per-document cap contract."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_per_doc_cap_limits_snippets", status: included, prerequisite: none, reason: "Per-document cap contract."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_returns_evidence_packet", status: included, prerequisite: none, reason: "Evidence packet type."}
+  - {node_id: "apps/chat/tests/test_rag_evidence.py::test_token_budget_limits_total_content", status: included, prerequisite: none, reason: "Evidence budget contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_brand_new_chat_no_rag", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_collection_backed_explain_question", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_collection_backed_how_question", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_collection_backed_question_no_collections_returns_false", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_collection_backed_question_requires_rag", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_explicit_document_search_requires_rag", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_explicit_search_without_collections_still_requires_rag", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_figure_request_requires_rag", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_fits_processing_requires_local_tools", status: included, prerequisite: none, reason: "Local-tool routing contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_followup_figure_request_no_source_word", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_local_tool_request_sets_requires_local_tools", status: included, prerequisite: none, reason: "Local-tool routing contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_regular_followup_no_rag", status: included, prerequisite: none, reason: "Routing classifier contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_retry_request_is_retry", status: included, prerequisite: none, reason: "Retry routing contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_retry_with_no_prior_tools_not_rag", status: included, prerequisite: none, reason: "Retry routing contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_retry_with_prior_tools_requires_rag", status: included, prerequisite: none, reason: "Retry routing contract."}
+  - {node_id: "apps/chat/tests/test_rag_intent.py::test_returns_chat_intent_dataclass", status: included, prerequisite: none, reason: "Routing result schema."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_no_pronoun_in_followup_returns_text_as_is", status: included, prerequisite: none, reason: "Query construction contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_plain_query_returned_as_is", status: included, prerequisite: none, reason: "Query construction contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_pronoun_it_prepends_recent_document_title", status: included, prerequisite: none, reason: "Coreference query contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_pronoun_they_prepends_recent_document_title", status: included, prerequisite: none, reason: "Coreference query contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_pronoun_this_prepends_recent_document_title", status: included, prerequisite: none, reason: "Coreference query contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_pronoun_without_prior_retrieval_returns_text_as_is", status: included, prerequisite: none, reason: "Coreference query contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_retry_case_insensitive", status: included, prerequisite: none, reason: "Retry query contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_retry_reuses_last_vector_search_query", status: included, prerequisite: none, reason: "Retry query contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_retry_reuses_most_recent_query_when_multiple_turns", status: included, prerequisite: none, reason: "Retry query contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_retry_with_no_prior_search_falls_back_to_text", status: included, prerequisite: none, reason: "Retry query contract."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_rewrite_disabled_returns_plain_query", status: included, prerequisite: none, reason: "Query rewrite configuration."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_rewrite_enabled_calls_rewrite_function", status: included, prerequisite: none, reason: "Query rewrite configuration."}
+  - {node_id: "apps/chat/tests/test_rag_query.py::test_whitespace_trimmed", status: included, prerequisite: none, reason: "Query normalization contract."}
+  - {node_id: "apps/documents/tests/test_citation_api.py::test_citation_sources_groups_and_enforces_access", status: prerequisite_blocked, prerequisite: postgresql_test_database, reason: "Requires citation models, authorization fixtures, and PostgreSQL."}
+  - {node_id: "lib/memory/tests/test_mem0_search_isolation.py::test_parse_mem0_search_items_requires_matching_user_and_excludes_current_session", status: included, prerequisite: none, reason: "Memory user/session isolation helper."}
+  - {node_id: "lib/memory/tests/test_stable_facts_quality.py::test_durable_project_tooling_statement_is_retained", status: included, prerequisite: none, reason: "Deterministic memory helper quality."}
+  - {node_id: "lib/memory/tests/test_stable_facts_quality.py::test_explicit_remember_directive_normalizes_to_durable_fact", status: included, prerequisite: none, reason: "Deterministic memory normalization."}
+  - {node_id: "lib/memory/tests/test_stable_facts_quality.py::test_transient_tactical_turn_is_not_promoted_to_memory", status: included, prerequisite: none, reason: "Deterministic memory rejection."}
+  - {node_id: "lib/memory/tests/test_stable_facts_quality.py::test_vague_self_referential_remember_text_is_filtered", status: included, prerequisite: none, reason: "Deterministic memory noise filtering."}
+  - {node_id: "lib/tools/search/tests/test_vector_search_pack.py::VectorSearchPackTests::test_pack_empty_results_explains_no_relevant_passages", status: included, prerequisite: none, reason: "Vector result packing diagnostics."}
+  - {node_id: "lib/tools/search/tests/test_vector_search_pack.py::VectorSearchPackTests::test_pack_includes_image_url_when_storage_has_image", status: included, prerequisite: none, reason: "Vector result image metadata."}
+  - {node_id: "lib/tools/search/tests/test_vector_search_pack.py::VectorSearchPackTests::test_pack_omits_image_url_when_storage_missing_file", status: included, prerequisite: none, reason: "Vector result image metadata."}
+  - {node_id: "tests/integration/test_architecture_import_boundaries.py::test_no_direct_aquillm_models_imports_in_runtime_modules", status: included, prerequisite: none, reason: "Runtime import boundary."}
+  - {node_id: "tests/integration/test_settings_security_flags.py::test_celery_accept_content_excludes_pickle", status: included, prerequisite: none, reason: "Serializer security configuration."}
+  - {node_id: "tests/integration/test_settings_security_flags.py::test_celery_tasks_do_not_force_pickle_serializer", status: included, prerequisite: none, reason: "Serializer security configuration."}

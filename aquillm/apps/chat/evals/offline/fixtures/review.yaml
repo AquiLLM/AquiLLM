@@ -1,0 +1,17 @@
+schema_version: "1.0"
+review_id: offline-evidence-fixtures-v1
+rubric_version: "1.0"
+status: pending_independent_review
+reviewer:
+  role: independent_reviewer
+  identity: null
+  reviewed_at: null
+fixture_hashes:
+  routing.yaml: d5dd35044615c1c2324615c99a387a9090c745151c3f84161178f601bcb46aaa
+  evidence.yaml: 8ec63d2fcbdcce7ec08ee673296576f6cec60ade6731af5305f1a080fe5ed2b2
+  memory.yaml: 37cbc201e57e04488e670ae6e773094d80a8721445f7921ac2c15a1e2498a0ca
+label_changes: []
+retained_ambiguities: []
+adjudications: []
+approval: null
+note: "Independent review has not occurred. Canonical benchmark execution is blocked."

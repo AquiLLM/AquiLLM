@@ -12,16 +12,28 @@ from .metrics import (
     score_evidence_case,
 )
 from .policies import sequential_select
+from .schema import (
+    canonical_json_bytes,
+    load_dataset,
+    sha256_file,
+    validate_dataset,
+    validate_test_manifest,
+)
 
 __all__ = [
     "aggregate_evidence",
     "binary_metrics",
+    "canonical_json_bytes",
     "categorical_conformance",
     "citation_diagnostics",
     "compare_policies",
     "exact_set_metrics",
+    "load_dataset",
     "memory_stratum_errors",
     "query_conformance",
     "score_evidence_case",
     "sequential_select",
+    "sha256_file",
+    "validate_dataset",
+    "validate_test_manifest",
 ]
