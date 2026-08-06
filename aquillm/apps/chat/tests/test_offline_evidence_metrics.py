@@ -4,10 +4,12 @@ from apps.chat.evals.offline import policies
 from apps.chat.evals.offline.metrics import (
     aggregate_evidence,
     binary_metrics,
+    categorical_conformance,
     citation_diagnostics,
     compare_policies,
     exact_set_metrics,
     memory_stratum_errors,
+    query_conformance,
     score_evidence_case,
 )
 from apps.chat.evals.offline.policies import sequential_select
@@ -63,6 +65,72 @@ def test_binary_metrics_marks_zero_denominators_not_applicable():
 def test_binary_metrics_rejects_mismatched_case_counts():
     with pytest.raises(ValueError, match="same length"):
         binary_metrics([True], [])
+
+
+def test_categorical_conformance_reports_support_and_full_confusion_matrix():
+    result = categorical_conformance(
+        ["explicit_search", "retry", "retry", "none"],
+        ["explicit_search", "explicit_search", "retry", "none"],
+        labels=["explicit_search", "retry", "figure", "none"],
+    )
+
+    assert result["support"] == 4
+    assert result["conformance"] == {
+        "status": "ok",
+        "value": 0.75,
+        "numerator": 3,
+        "denominator": 4,
+    }
+    assert result["by_label"]["retry"] == {
+        "support": 2,
+        "conformance": {
+            "status": "ok",
+            "value": 0.5,
+            "numerator": 1,
+            "denominator": 2,
+        },
+    }
+    assert result["by_label"]["figure"]["support"] == 0
+    assert result["by_label"]["figure"]["conformance"]["status"] == "not_applicable"
+    assert result["confusion_matrix"]["retry"]["explicit_search"] == 1
+    assert result["confusion_matrix"]["figure"] == {
+        "explicit_search": 0,
+        "retry": 0,
+        "figure": 0,
+        "none": 0,
+    }
+
+
+@pytest.mark.parametrize("unknown_side", ["expected", "actual"])
+def test_categorical_conformance_rejects_unknown_labels(unknown_side):
+    expected = ["known"] if unknown_side == "actual" else ["unknown"]
+    actual = ["unknown"] if unknown_side == "actual" else ["known"]
+
+    with pytest.raises(ValueError, match="unknown label"):
+        categorical_conformance(expected, actual, labels=["known"])
+
+
+def test_query_conformance_strips_only_leading_and_trailing_whitespace():
+    result = query_conformance(
+        ["  alpha  ", "two  spaces", "Case"],
+        ["alpha", "two spaces", "case"],
+    )
+
+    assert result["normalized_expected"] == ["alpha", "two  spaces", "Case"]
+    assert result["normalized_actual"] == ["alpha", "two spaces", "case"]
+    assert result["conformance"] == {
+        "status": "ok",
+        "value": pytest.approx(1 / 3),
+        "numerator": 1,
+        "denominator": 3,
+    }
+    assert result["support"] == 3
+
+
+def test_query_conformance_reports_empty_support_and_rejects_mismatched_counts():
+    assert query_conformance([], [])["conformance"]["status"] == "not_applicable"
+    with pytest.raises(ValueError, match="same length"):
+        query_conformance(["query"], [])
 
 
 def test_exact_set_metrics_use_exact_identity_and_remove_duplicates_in_order():
@@ -159,6 +227,34 @@ def test_citation_diagnostics_measure_raw_syntax_consistency_and_prefix_behavior
     assert "author" not in repr(result).lower()
 
 
+def test_citation_diagnostics_reject_nonnumeric_chunk_syntax():
+    result = citation_diagnostics(
+        [
+            {
+                "doc_id": "doc-a",
+                "chunk_id": "not-a-number",
+                "citation": "[doc:doc-a chunk:not-a-number]",
+            }
+        ]
+    )
+
+    assert result["syntax_validity"]["numerator"] == 0
+    assert result["chunk_consistency"]["numerator"] == 0
+
+
+def test_citation_conflicts_include_reused_malformed_tokens_before_deduplication():
+    result = citation_diagnostics(
+        [
+            {"doc_id": "doc-a", "chunk_id": 1, "citation": "malformed"},
+            {"doc_id": "doc-b", "chunk_id": 2, "citation": "malformed"},
+        ]
+    )
+
+    assert result["syntax_validity"]["numerator"] == 0
+    assert result["duplicate_count"] == 1
+    assert result["conflict_count"] == 1
+
+
 def _evidence_case(case_id="case-a", *, gold=None, budget=1):
     return {
         "id": case_id,
@@ -191,8 +287,8 @@ def test_score_evidence_case_uses_evidence_identity_and_reports_budget_diagnosti
     }
     assert result["relevant_document_coverage"] == {
         "status": "ok",
-        "value": 0.5,
-        "numerator": 1,
+        "value": 1.0,
+        "numerator": 2,
         "denominator": 2,
     }
     assert result["distinct_selected_documents"] == 2
@@ -206,6 +302,31 @@ def test_score_evidence_case_marks_zero_gold_recall_not_applicable():
     assert result["relevant_evidence_recall"]["status"] == "not_applicable"
     assert result["relevant_document_coverage"]["status"] == "not_applicable"
     assert result["distinct_selected_documents"] == 0
+
+
+def test_relevant_document_coverage_uses_selected_doc_identity_not_evidence_id():
+    case = {
+        "id": "same-document",
+        "token_budget": 10,
+        "gold": {
+            "relevant_evidence_ids": ["gold-chunk"],
+            "relevant_document_ids": ["doc-a"],
+        },
+        "candidates": [
+            {"evidence_id": "gold-chunk", "doc_id": "doc-a", "text": "gold"},
+            {"evidence_id": "other-chunk", "doc_id": "doc-a", "text": "context"},
+        ],
+    }
+
+    result = score_evidence_case(case, [case["candidates"][1]])
+
+    assert result["relevant_evidence_recall"]["value"] == 0.0
+    assert result["relevant_document_coverage"] == {
+        "status": "ok",
+        "value": 1.0,
+        "numerator": 1,
+        "denominator": 1,
+    }
 
 
 def test_aggregate_evidence_reports_macro_micro_recall_and_support():
@@ -245,14 +366,26 @@ def test_aggregate_evidence_marks_all_zero_gold_not_applicable():
 
 def test_compare_policies_counts_metric_specific_favorable_and_unfavorable_cases():
     records = [
-        {"sequential": {"recall": 0.5}, "aquillm": {"recall": 1.0}},
-        {"sequential": {"recall": 1.0}, "aquillm": {"recall": 0.5}},
-        {"sequential": {"recall": 0.5}, "aquillm": {"recall": 0.5}},
-        {"sequential": {"recall": None}, "aquillm": {"recall": None}},
+        {
+            "sequential": {"relevant_evidence_recall": 0.5},
+            "aquillm": {"relevant_evidence_recall": 1.0},
+        },
+        {
+            "sequential": {"relevant_evidence_recall": 1.0},
+            "aquillm": {"relevant_evidence_recall": 0.5},
+        },
+        {
+            "sequential": {"relevant_evidence_recall": 0.5},
+            "aquillm": {"relevant_evidence_recall": 0.5},
+        },
+        {
+            "sequential": {"relevant_evidence_recall": None},
+            "aquillm": {"relevant_evidence_recall": None},
+        },
     ]
 
-    assert compare_policies(records, "recall") == {
-        "metric": "recall",
+    assert compare_policies(records, "relevant_evidence_recall") == {
+        "metric": "relevant_evidence_recall",
         "higher_is_better": True,
         "wins": 1,
         "ties": 1,
@@ -264,6 +397,24 @@ def test_compare_policies_counts_metric_specific_favorable_and_unfavorable_cases
         [{"sequential": {"overrun_tokens": 2}, "aquillm": {"overrun_tokens": 0}}],
         "overrun_tokens",
     )["wins"] == 1
+
+
+@pytest.mark.parametrize(
+    "metric",
+    ["estimated_token_use", "duplicate_count", "conflict_count", "overrun_tokens"],
+)
+def test_compare_policies_declares_cost_and_error_metrics_lower_is_better(metric):
+    result = compare_policies(
+        [{"sequential": {metric: 2}, "aquillm": {metric: 1}}], metric
+    )
+
+    assert result["higher_is_better"] is False
+    assert result["wins"] == 1
+
+
+def test_compare_policies_rejects_metrics_without_an_explicit_direction():
+    with pytest.raises(ValueError, match="unknown policy-comparison metric"):
+        compare_policies([], "overrunish")
 
 
 def test_memory_stratum_errors_report_exact_fp_fn_conformance_and_duplicates():

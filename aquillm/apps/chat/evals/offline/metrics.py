@@ -5,7 +5,18 @@ import re
 
 from apps.chat.services.rag_evidence import _chunk_text, _estimate_tokens
 
-_CITATION_RE = re.compile(r"^\[doc:([^\[\]\s]+) chunk:([^\[\]\s]+)\]$")
+_CITATION_RE = re.compile(r"^\[doc:([^\[\]\s]+) chunk:(\d+)\]$")
+_POLICY_METRIC_DIRECTIONS = {
+    "relevant_evidence_recall": True,
+    "relevant_document_coverage": True,
+    "distinct_selected_documents": True,
+    "syntax_validity": True,
+    "chunk_consistency": True,
+    "estimated_token_use": False,
+    "duplicate_count": False,
+    "conflict_count": False,
+    "overrun_tokens": False,
+}
 
 
 def _ratio(numerator: int | float, denominator: int | float) -> dict:
@@ -40,6 +51,60 @@ def binary_metrics(expected: list[bool], actual: list[bool]) -> dict:
         "recall": _ratio(tp, tp + fn),
         "f1": _ratio(2 * tp, 2 * tp + fp + fn),
         "support": len(expected),
+    }
+
+
+def categorical_conformance(
+    expected: list[str], actual: list[str], *, labels: list[str] | None = None
+) -> dict:
+    """Score single-label reason or action conformance with explicit support."""
+    if len(expected) != len(actual):
+        raise ValueError("expected and actual must have the same length")
+
+    known_labels = _unique(labels if labels is not None else [*expected, *actual])
+    known_label_set = set(known_labels)
+    unknown = [label for label in [*expected, *actual] if label not in known_label_set]
+    if unknown:
+        raise ValueError(f"unknown label: {unknown[0]}")
+
+    confusion = {
+        want: {got: 0 for got in known_labels}
+        for want in known_labels
+    }
+    for want, got in zip(expected, actual):
+        confusion[want][got] += 1
+
+    by_label = {}
+    for label in known_labels:
+        support = expected.count(label)
+        by_label[label] = {
+            "support": support,
+            "conformance": _ratio(confusion[label][label], support),
+        }
+    conforming = sum(want == got for want, got in zip(expected, actual))
+    return {
+        "labels": known_labels,
+        "support": len(expected),
+        "conformance": _ratio(conforming, len(expected)),
+        "by_label": by_label,
+        "confusion_matrix": confusion,
+    }
+
+
+def query_conformance(expected: list[str], actual: list[str]) -> dict:
+    """Score exact query strings after trimming edge whitespace only."""
+    if len(expected) != len(actual):
+        raise ValueError("expected and actual must have the same length")
+    normalized_expected = [query.strip() for query in expected]
+    normalized_actual = [query.strip() for query in actual]
+    conforming = sum(
+        want == got for want, got in zip(normalized_expected, normalized_actual)
+    )
+    return {
+        "normalized_expected": normalized_expected,
+        "normalized_actual": normalized_actual,
+        "support": len(expected),
+        "conformance": _ratio(conforming, len(expected)),
     }
 
 
@@ -104,12 +169,10 @@ def score_evidence_case(case: dict, selected: list[dict]) -> dict:
         )
     )
     gold_doc_set = set(gold_doc_ids)
-    selected_relevant_doc_ids = _unique(
-        _doc_id(candidates_by_id[item])
-        for item in selected_relevant_ids
-        if item in candidates_by_id and _doc_id(candidates_by_id[item]) in gold_doc_set
-    )
     selected_doc_ids = _unique(_doc_id(chunk) for chunk in selected)
+    selected_relevant_doc_ids = [
+        doc_id for doc_id in selected_doc_ids if doc_id in gold_doc_set
+    ]
     total_tokens = sum(_estimate_tokens(_chunk_text(chunk)) for chunk in selected)
     budget = case.get("token_budget", 0)
 
@@ -156,7 +219,10 @@ def aggregate_evidence(records: list[dict]) -> dict:
 
 def compare_policies(records: list[dict], metric: str) -> dict:
     """Count paired AquiLLM wins, ties, and losses for one named metric."""
-    higher_is_better = "overrun" not in metric
+    try:
+        higher_is_better = _POLICY_METRIC_DIRECTIONS[metric]
+    except KeyError as exc:
+        raise ValueError(f"unknown policy-comparison metric: {metric}") from exc
     wins = ties = losses = not_applicable = 0
     for record in records:
         aquillm_value = _metric_value(record.get("aquillm", {}).get(metric))
@@ -191,13 +257,14 @@ def citation_diagnostics(selected: list[dict]) -> dict:
         citation = chunk.get("citation") or chunk.get("ref")
         citations.append(citation if isinstance(citation, str) else None)
         match = _CITATION_RE.fullmatch(citation) if isinstance(citation, str) else None
+        if isinstance(citation, str):
+            actual_pair = (str(_doc_id(chunk)), str(_chunk_id(chunk)))
+            mappings.setdefault(citation, set()).add(actual_pair)
         if match:
             valid_count += 1
             citation_pair = match.groups()
-            actual_pair = (str(_doc_id(chunk)), str(_chunk_id(chunk)))
             if citation_pair == actual_pair:
                 consistent_count += 1
-            mappings.setdefault(citation, set()).add(actual_pair)
 
         image_path = chunk.get("image_url") or chunk.get("u")
         if isinstance(image_path, str):
