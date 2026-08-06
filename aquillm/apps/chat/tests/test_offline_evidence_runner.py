@@ -410,13 +410,15 @@ def test_run_test_manifest_counts_junit_and_represents_blocked_nodes(tmp_path):
 
 
 def test_subprocess_environment_is_allowlisted_and_strips_ambient_secrets(
-    monkeypatch,
+    tmp_path, monkeypatch
 ):
     monkeypatch.setenv("UNLISTED_SERVICE_TOKEN", "ambient-never-leak-value")
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid")
     monkeypatch.setenv("UNRELATED_SETTING", "private-value")
 
-    env = runner._subprocess_environment(Path(runner.__file__).parents[4])
+    env = runner._subprocess_environment(
+        Path(runner.__file__).parents[4], tmp_path / "runtime"
+    )
 
     assert "UNLISTED_SERVICE_TOKEN" not in env
     assert "HTTPS_PROXY" not in env
@@ -426,12 +428,14 @@ def test_subprocess_environment_is_allowlisted_and_strips_ambient_secrets(
 
 
 def test_subprocess_environment_resolves_dependency_roots_without_site_discovery(
-    monkeypatch,
+    tmp_path, monkeypatch
 ):
     monkeypatch.setattr(runner.site, "getsitepackages", lambda: [])
     monkeypatch.setattr(runner.site, "getusersitepackages", lambda: [])
 
-    env = runner._subprocess_environment(Path(runner.__file__).parents[4])
+    env = runner._subprocess_environment(
+        Path(runner.__file__).parents[4], tmp_path / "runtime"
+    )
     python_paths = set(env["PYTHONPATH"].split(os.pathsep))
 
     for module_name in ("pytest", "yaml", "django"):
@@ -543,6 +547,64 @@ def test_run_test_manifest_reports_unavailable_network_audit_as_initialization_f
         "total": None,
         "details": [],
     }
+    assert result["configured_subprocess_network_denial"] is True
+    assert result["enforced_subprocess_network_denial"] is False
+
+
+def test_run_test_manifest_uses_ephemeral_home_without_leaking_its_path(
+    tmp_path, monkeypatch
+):
+    for name in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+        monkeypatch.delenv(name, raising=False)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_home.py").write_text(
+        textwrap.dedent(
+            """
+            from pathlib import Path
+
+            def test_home_is_available():
+                assert Path.home().is_dir()
+            """
+        ),
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        textwrap.dedent(
+            """
+            schema_version: "1.0"
+            entries:
+              - node_id: "tests/test_home.py::test_home_is_available"
+                status: included
+                prerequisite: none
+                reason: "Synthetic home contract."
+            """
+        ),
+        encoding="utf-8",
+    )
+    original_popen = runner.subprocess.Popen
+    synthetic_paths = {}
+
+    def recording_popen(*args, **kwargs):
+        child_env = kwargs["env"]
+        for name in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+            path = Path(child_env[name])
+            assert path.is_dir()
+            synthetic_paths[name] = path
+        return original_popen(*args, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", recording_popen)
+
+    result = run_test_manifest(manifest, tmp_path)
+
+    assert result["summary"]["collected"] == 1
+    assert result["entries"][0]["outcome"] == "passed"
+    assert synthetic_paths["HOME"] == synthetic_paths["USERPROFILE"]
+    serialized = json.dumps(result)
+    for path in synthetic_paths.values():
+        assert not path.exists()
+        assert str(path) not in serialized
 
 
 def test_run_test_manifest_enforces_network_denial_inside_pytest(
@@ -585,6 +647,7 @@ def test_run_test_manifest_enforces_network_denial_inside_pytest(
 
     assert result["summary"]["collected"] == 1
     assert result["enforced_subprocess_network_denial"] is True
+    assert result["configured_subprocess_network_denial"] is True
     assert result["subprocess_network_attempts"] == {
         "status": "available",
         "total": 1,

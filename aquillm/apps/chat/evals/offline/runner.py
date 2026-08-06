@@ -873,7 +873,9 @@ def run_component_evaluation(fixture_dir: Path, timing_repeats: int) -> dict:
     }
 
 
-def _subprocess_environment(module_root: Path) -> dict[str, str]:
+def _subprocess_environment(
+    module_root: Path, runtime_root: Path
+) -> dict[str, str]:
     """Build a minimal environment without ambient credentials or proxies."""
     runtime_names = {
         "SYSTEMROOT",
@@ -908,11 +910,23 @@ def _subprocess_environment(module_root: Path) -> dict[str, str]:
         python_paths.append(user_site)
     else:
         python_paths.extend(user_site)
+    runtime_root = Path(runtime_root)
+    home = runtime_root / "home"
+    appdata = runtime_root / "config" / "roaming"
+    local_appdata = runtime_root / "config" / "local"
+    xdg_config = runtime_root / "config" / "xdg"
+    for directory in (home, appdata, local_appdata, xdg_config):
+        directory.mkdir(parents=True, exist_ok=True)
     environment.update(
         {
             "PYTHONPATH": os.pathsep.join(dict.fromkeys(python_paths)),
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "APPDATA": str(appdata),
+            "LOCALAPPDATA": str(local_appdata),
+            "XDG_CONFIG_HOME": str(xdg_config),
             "DJANGO_SETTINGS_MODULE": "aquillm.settings",
             "SECRET_KEY": "offline-test-only",
             "GOOGLE_OAUTH2_CLIENT_ID": "offline-test-only",
@@ -982,10 +996,11 @@ def run_test_manifest(
     if timeout_seconds <= 0:
         raise ValueError("test timeout must be positive")
     module_root = Path(__file__).resolve().parents[4]
-    env = _subprocess_environment(module_root)
     with tempfile.TemporaryDirectory(prefix="aquillm-junit-") as temp:
-        junit = Path(temp) / "junit.xml"
-        network_audit_path = Path(temp) / "network-attempts.json"
+        runtime_root = Path(temp)
+        env = _subprocess_environment(module_root, runtime_root)
+        junit = runtime_root / "junit.xml"
+        network_audit_path = runtime_root / "network-attempts.json"
         env["AQUILLM_OFFLINE_NETWORK_ATTEMPTS_FILE"] = str(network_audit_path)
         command = [
             sys.executable,
@@ -1064,7 +1079,10 @@ def run_test_manifest(
         ],
         "network_scope": "component_and_pytest_subprocess",
         "declared_network_policy": "no_network",
-        "enforced_subprocess_network_denial": True,
+        "configured_subprocess_network_denial": True,
+        "enforced_subprocess_network_denial": (
+            network_attempts["status"] == "available"
+        ),
         "subprocess_network_attempts": network_attempts,
         "timeout_seconds": timeout_seconds,
         "timed_out": timed_out,
