@@ -51,6 +51,11 @@ entries:
   - {node_id: "apps/chat/tests/test_rag_query.py::test_rewrite_disabled_returns_plain_query", status: included, prerequisite: none, reason: "Query rewrite configuration."}
   - {node_id: "apps/chat/tests/test_rag_query.py::test_rewrite_enabled_calls_rewrite_function", status: included, prerequisite: none, reason: "Query rewrite configuration."}
   - {node_id: "apps/chat/tests/test_rag_query.py::test_whitespace_trimmed", status: included, prerequisite: none, reason: "Query normalization contract."}
+  - {node_id: "apps/chat/tests/test_tool_payload_compaction.py::PackChunkSearchTests::test_pack_chunk_search_results_compact_fields_preserved", status: included, prerequisite: none, reason: "Compact retrieval payload identity parity."}
+  - {node_id: "apps/chat/tests/test_tool_payload_compaction.py::PackChunkSearchTests::test_pack_chunk_search_results_verbose_list_items", status: included, prerequisite: none, reason: "Full retrieval payload identity parity."}
+  - {node_id: "apps/documents/tests/test_chunk_rerank_parse.py::test_parse_rerank_results_accepts_results_and_data_shapes", status: included, prerequisite: none, reason: "Pure reranker response parsing."}
+  - {node_id: "apps/documents/tests/test_chunk_rerank_parse.py::test_parse_rerank_results_deduplicates_and_skips_invalid_indexes", status: included, prerequisite: none, reason: "Pure reranker response validation."}
+  - {node_id: "apps/documents/tests/test_chunk_rerank_parse.py::test_score_parsers_accept_supported_response_shapes", status: included, prerequisite: none, reason: "Pure reranker score parsing."}
   - {node_id: "apps/documents/tests/test_citation_api.py::test_citation_sources_groups_and_enforces_access", status: prerequisite_blocked, prerequisite: postgresql_test_database, reason: "Requires citation models, authorization fixtures, and PostgreSQL."}
   - {node_id: "lib/memory/tests/test_mem0_search_isolation.py::test_parse_mem0_search_items_requires_matching_user_and_excludes_current_session", status: included, prerequisite: none, reason: "Memory user/session isolation helper."}
   - {node_id: "lib/memory/tests/test_stable_facts_quality.py::test_durable_project_tooling_statement_is_retained", status: included, prerequisite: none, reason: "Deterministic memory helper quality."}

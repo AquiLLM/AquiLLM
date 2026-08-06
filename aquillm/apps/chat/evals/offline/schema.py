@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -130,7 +131,7 @@ def validate_dataset(data: dict, kind: str, *, allow_pending: bool = False) -> N
             _validate_memory_case(case)
 
 
-def validate_test_manifest(data: dict) -> None:
+def validate_test_manifest(data: dict, *, project_root: Path | None = None) -> None:
     """Validate an ordered manifest of exact pytest node IDs."""
     if not isinstance(data, dict):
         raise ValueError("test manifest must be a mapping")
@@ -163,6 +164,8 @@ def validate_test_manifest(data: dict) -> None:
             raise ValueError(
                 f"blocked manifest entry {node_id} requires a prerequisite"
             )
+        if project_root is not None:
+            _validate_static_node(node_id, Path(project_root))
 
 
 def _validate_routing_case(case: dict) -> None:
@@ -190,10 +193,56 @@ def _validate_routing_case(case: dict) -> None:
         raise ValueError(f"routing case {case_id} has invalid gold production action")
     if "expected_query" in gold and not isinstance(gold["expected_query"], str):
         raise ValueError(f"routing case {case_id} expected_query must be a string")
+    direct_action = gold.get("direct_pipeline_action")
+    if direct_action is not None and direct_action not in _ROUTING_ACTIONS:
+        raise ValueError(f"routing case {case_id} has invalid direct_pipeline_action")
+
+    is_retry = classifier["is_retry"]
+    local = classifier["requires_local_tools"]
+    figures = classifier["wants_figures"]
+    requires_rag = classifier["requires_rag"]
+    reason = gold["reason"]
+    if is_retry:
+        expected_reason = "retry_request"
+    elif local:
+        expected_reason = "local_tool_request"
+    elif figures:
+        expected_reason = "figure_request"
+    elif requires_rag:
+        expected_reason = reason
+        if reason not in {"explicit_search", "collection_backed_question"}:
+            raise ValueError(f"routing case {case_id} violates reason priority")
+    else:
+        expected_reason = "no_retrieval_needed"
+    if reason != expected_reason:
+        raise ValueError(f"routing case {case_id} violates reason priority")
+    if figures and not requires_rag:
+        raise ValueError(f"routing case {case_id} figure request must require RAG")
+    if local and requires_rag:
+        raise ValueError(
+            f"routing case {case_id} local tools and RAG are mutually exclusive"
+        )
+
+    selected = inputs["selected_collection_ids"]
+    expected_action = (
+        "local_tool_handling"
+        if local
+        else "retrieve"
+        if requires_rag and selected
+        else "prompt_select_collection"
+        if requires_rag
+        else "skip_normal_tool_loop"
+    )
+    if gold["production_action"] != expected_action:
+        raise ValueError(
+            f"routing case {case_id} violates collection/action consistency"
+        )
 
 
 def _validate_evidence_case(case: dict) -> None:
     case_id = case["id"]
+    _require_nonempty_string(case, "question")
+    _require_nonempty_string(case, "answer_target")
     budget = case.get("token_budget")
     if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
         raise ValueError(
@@ -224,6 +273,12 @@ def _validate_evidence_case(case: dict) -> None:
             raise ValueError(f"evidence case {case_id} rank must be positive numeric")
         if not isinstance(candidate.get("text"), str):
             raise ValueError(f"evidence case {case_id} text must be a string")
+        estimated_tokens = candidate.get("estimated_tokens")
+        expected_tokens = max(1, len(candidate["text"]) // 4)
+        if estimated_tokens != expected_tokens:
+            raise ValueError(
+                f"evidence case {case_id} estimated_tokens must be {expected_tokens}"
+            )
         citation = candidate.get("citation")
         match = _CITATION_RE.fullmatch(citation) if isinstance(citation, str) else None
         if not match:
@@ -232,6 +287,12 @@ def _validate_evidence_case(case: dict) -> None:
             raise ValueError(
                 f"evidence case {case_id} citation identity is inconsistent"
             )
+        observed_citation = candidate.get("observed_citation")
+        if observed_citation is not None and not (
+            isinstance(observed_citation, str)
+            and _CITATION_RE.fullmatch(observed_citation)
+        ):
+            raise ValueError(f"evidence case {case_id} observed_citation is malformed")
         if not isinstance(candidate.get("relevant"), bool):
             raise ValueError(f"evidence case {case_id} relevant must be boolean")
         image_url = candidate.get("image_url")
@@ -276,12 +337,12 @@ def _validate_memory_case(case: dict) -> None:
         raise ValueError(
             f"memory case {case_id} normalized_facts must be duplicate-free"
         )
-    from lib.memory.extraction.stable_facts import clean_stable_facts
-
-    if clean_stable_facts(facts) != facts:
-        raise ValueError(
-            f"memory case {case_id} gold facts are not canonically normalized"
-        )
+    for fact in facts:
+        if fact != " ".join(fact.split()) or fact != fact.strip(" \t\r\n\"'"):
+            raise ValueError(
+                f"memory case {case_id} gold facts violate "
+                "the static normalization contract"
+            )
 
 
 def _validate_review_record(record: Any, dataset: dict, dataset_path: Path) -> None:
@@ -291,22 +352,65 @@ def _validate_review_record(record: Any, dataset: dict, dataset_path: Path) -> N
     _require_equal(record, "rubric_version", dataset["rubric_version"])
     if record.get("status") != dataset["review"]["status"]:
         raise ValueError("review record status does not match dataset")
-    reviewer = _require_mapping(record, "reviewer")
-    _require_equal(reviewer, "role", "independent_reviewer")
+    _require_equal(record, "reviewer_role", "independent_reviewer")
+    _require_nonempty_string(record, "review_date")
+    if record.get("production_functions_executed") is not False:
+        raise ValueError("review record must state production_functions_executed false")
     fixture_hashes = _require_mapping(record, "fixture_hashes")
     expected_hash = fixture_hashes.get(dataset_path.name)
     if expected_hash != sha256_file(dataset_path):
         raise ValueError(f"review record fixture hash mismatch for {dataset_path.name}")
     if record["status"] == "approved":
-        _require_nonempty_string(reviewer, "identity")
-        _require_nonempty_string(reviewer, "reviewed_at")
         if record.get("approval") is not True:
             raise ValueError("approved review record must set approval true")
+        for field in (
+            "label_changes",
+            "adjudications",
+            "retained_ambiguities",
+            "evidence_relevance_adjudications",
+        ):
+            value = record.get(field)
+            if not isinstance(value, list) or not value:
+                raise ValueError(f"approved review record {field} must be non-empty")
     elif record.get("approval") is not None:
         raise ValueError("pending review record approval must be null")
     for field in ("label_changes", "retained_ambiguities", "adjudications"):
         if not isinstance(record.get(field), list):
             raise ValueError(f"review record {field} must be a list")
+
+
+def _validate_static_node(node_id: str, project_root: Path) -> None:
+    file_selector, *selectors = node_id.split("::")
+    root = project_root.resolve()
+    test_path = (root / file_selector).resolve()
+    try:
+        test_path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"pytest node escapes project root: {node_id}") from exc
+    if not test_path.is_file() or test_path.suffix != ".py":
+        raise ValueError(f"pytest node does not resolve to a test file: {node_id}")
+    tree = ast.parse(test_path.read_text(encoding="utf-8"), filename=str(test_path))
+    if len(selectors) == 1:
+        found = any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == selectors[0]
+            for node in tree.body
+        )
+    elif len(selectors) == 2:
+        found = any(
+            isinstance(node, ast.ClassDef)
+            and node.name == selectors[0]
+            and any(
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name == selectors[1]
+                for child in node.body
+            )
+            for node in tree.body
+        )
+    else:
+        found = False
+    if not found:
+        raise ValueError(f"pytest node does not resolve statically: {node_id}")
 
 
 def _require_mapping(data: dict, field: str) -> dict:

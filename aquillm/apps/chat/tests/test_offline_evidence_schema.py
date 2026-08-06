@@ -54,6 +54,8 @@ def _valid_case(kind: str) -> dict:
     if kind == "evidence":
         return {
             **base,
+            "question": "What calibration context is reported?",
+            "answer_target": "The synthetic calibration context.",
             "token_budget": 64,
             "candidates": [
                 {
@@ -62,6 +64,7 @@ def _valid_case(kind: str) -> dict:
                     "chunk_id": 1,
                     "rank": 1,
                     "text": "Synthetic calibration context.",
+                    "estimated_tokens": 7,
                     "citation": "[doc:doc-public-a chunk:1]",
                     "relevant": True,
                 }
@@ -179,6 +182,74 @@ def test_evidence_identity_gold_and_relevance_flags_are_consistent():
         validate_dataset(dataset, "evidence")
 
 
+@pytest.mark.parametrize("field", ["question", "answer_target"])
+def test_evidence_cases_require_explicit_question_and_answer_target(field):
+    dataset = _valid_dataset("evidence")
+    del dataset["cases"][0][field]
+
+    with pytest.raises(ValueError, match=field):
+        validate_dataset(dataset, "evidence")
+
+
+def test_evidence_candidate_token_estimate_matches_documented_approximation():
+    dataset = _valid_dataset("evidence")
+    dataset["cases"][0]["candidates"][0]["estimated_tokens"] = 999
+
+    with pytest.raises(ValueError, match="estimated_tokens"):
+        validate_dataset(dataset, "evidence")
+
+
+def test_duplicate_citations_and_observed_conflicts_preserve_candidate_identity():
+    dataset = _valid_dataset("evidence")
+    first = dataset["cases"][0]["candidates"][0]
+    duplicate = {
+        **first,
+        "evidence_id": "evidence-002",
+        "relevant": False,
+        "observed_citation": "[doc:other-public-doc chunk:2]",
+    }
+    dataset["cases"][0]["candidates"].append(duplicate)
+
+    validate_dataset(dataset, "evidence")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda case: case["gold"]["classifier"].update(requires_local_tools=True),
+            "reason priority",
+        ),
+        (
+            lambda case: case["gold"].update(
+                production_action="prompt_select_collection"
+            ),
+            "collection/action consistency",
+        ),
+    ],
+)
+def test_routing_gold_enforces_reason_priority_and_action_consistency(mutate, message):
+    dataset = _valid_dataset("routing")
+    mutate(dataset["cases"][0])
+
+    with pytest.raises(ValueError, match=message):
+        validate_dataset(dataset, "routing")
+
+
+def test_memory_validation_is_independent_of_production_fact_cleaner(monkeypatch):
+    import lib.memory.extraction.stable_facts as stable_facts
+
+    monkeypatch.setattr(
+        stable_facts,
+        "clean_stable_facts",
+        lambda _facts: (_ for _ in ()).throw(
+            AssertionError("production helper called")
+        ),
+    )
+
+    validate_dataset(_valid_dataset("memory"), "memory")
+
+
 def test_manifest_rejects_file_only_selector():
     manifest = {
         "schema_version": "1.0",
@@ -216,6 +287,25 @@ def test_manifest_requires_known_status_prerequisite_reason_and_unique_nodes():
         validate_test_manifest(duplicate)
 
 
+def test_manifest_static_resolution_rejects_nonexistent_node(tmp_path):
+    test_file = tmp_path / "test_example.py"
+    test_file.write_text("def test_present():\n    pass\n", encoding="utf-8")
+    manifest = {
+        "schema_version": "1.0",
+        "entries": [
+            {
+                "node_id": "test_example.py::test_missing",
+                "status": "included",
+                "prerequisite": "none",
+                "reason": "Synthetic static-resolution contract.",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="does not resolve"):
+        validate_test_manifest(manifest, project_root=tmp_path)
+
+
 def test_canonical_json_and_sha256_are_deterministic(tmp_path):
     first = {"z": [3, 2, 1], "a": {"b": True}}
     second = {"a": {"b": True}, "z": [3, 2, 1]}
@@ -229,17 +319,17 @@ def test_canonical_json_and_sha256_are_deterministic(tmp_path):
     assert sha256_file(path) == hashlib.sha256(expected).hexdigest()
 
 
-def test_authoring_fixtures_are_frozen_balanced_synthetic_and_review_hashes_match():
+def test_reviewed_fixtures_are_frozen_balanced_synthetic_and_review_hashes_match():
     minimums = {"routing": 60, "evidence": 24, "memory": 40}
     datasets = {}
     for kind in KINDS:
-        data = load_dataset(FIXTURE_DIR / f"{kind}.yaml", kind, allow_pending=True)
+        data = load_dataset(FIXTURE_DIR / f"{kind}.yaml", kind)
         datasets[kind] = data
         assert len(data["cases"]) >= minimums[kind]
         assert data["provenance"] == "synthetic_public"
         assert data["sensitivity"] == "synthetic_public"
         assert data["review"] == {
-            "status": "pending_independent_review",
+            "status": "approved",
             "record": "review.yaml",
         }
         counts = Counter(case["stratum"] for case in data["cases"])
@@ -258,22 +348,35 @@ def test_authoring_fixtures_are_frozen_balanced_synthetic_and_review_hashes_matc
     assert max(routing_actions.values()) - min(routing_actions.values()) <= 1
 
     review = yaml.safe_load((FIXTURE_DIR / "review.yaml").read_text(encoding="utf-8"))
-    assert review["status"] == "pending_independent_review"
-    assert review["reviewer"]["role"] == "independent_reviewer"
-    assert review["approval"] is None
+    assert review["status"] == "approved"
+    assert review["reviewer_role"] == "independent_reviewer"
+    assert review["review_date"] == "2026-08-06"
+    assert review["production_functions_executed"] is False
+    assert review["approval"] is True
+    assert review["label_changes"]
+    assert len(review["evidence_relevance_adjudications"]) == 24
+    ambiguous_count = sum(
+        case["stratum"] == "ambiguous"
+        for dataset in datasets.values()
+        for case in dataset["cases"]
+    )
+    assert len(review["retained_ambiguities"]) == ambiguous_count
     assert review["fixture_hashes"] == {
         f"{kind}.yaml": sha256_file(FIXTURE_DIR / f"{kind}.yaml") for kind in KINDS
     }
 
 
 def test_pending_fixtures_fail_canonical_approval_validation():
+    dataset = _valid_dataset("routing")
+    dataset["review"]["status"] = "pending_independent_review"
     with pytest.raises(ValueError, match="approved independent review"):
-        load_dataset(FIXTURE_DIR / "routing.yaml", "routing")
+        validate_dataset(dataset, "routing")
+    validate_dataset(dataset, "routing", allow_pending=True)
 
 
 def test_exact_test_manifest_is_deterministically_ordered_and_covers_required_nodes():
     manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
-    validate_test_manifest(manifest)
+    validate_test_manifest(manifest, project_root=Path(__file__).parents[3])
     nodes = [entry["node_id"] for entry in manifest["entries"]]
     assert nodes == sorted(nodes)
 
@@ -311,6 +414,11 @@ def test_exact_test_manifest_is_deterministically_ordered_and_covers_required_no
         "tests/integration/test_architecture_import_boundaries.py::test_no_direct_aquillm_models_imports_in_runtime_modules",
         "tests/integration/test_settings_security_flags.py::test_celery_accept_content_excludes_pickle",
         "tests/integration/test_settings_security_flags.py::test_celery_tasks_do_not_force_pickle_serializer",
+        "apps/chat/tests/test_tool_payload_compaction.py::PackChunkSearchTests::test_pack_chunk_search_results_compact_fields_preserved",
+        "apps/chat/tests/test_tool_payload_compaction.py::PackChunkSearchTests::test_pack_chunk_search_results_verbose_list_items",
+        "apps/documents/tests/test_chunk_rerank_parse.py::test_parse_rerank_results_accepts_results_and_data_shapes",
+        "apps/documents/tests/test_chunk_rerank_parse.py::test_parse_rerank_results_deduplicates_and_skips_invalid_indexes",
+        "apps/documents/tests/test_chunk_rerank_parse.py::test_score_parsers_accept_supported_response_shapes",
     }
     assert required <= set(nodes)
 
@@ -319,9 +427,7 @@ def test_exact_test_manifest_is_deterministically_ordered_and_covers_required_no
         "test_citation_sources_groups_and_enforces_access"
     )
     citation = next(
-        entry
-        for entry in manifest["entries"]
-        if entry["node_id"] == citation_node
+        entry for entry in manifest["entries"] if entry["node_id"] == citation_node
     )
     assert citation["status"] == "prerequisite_blocked"
     assert citation["prerequisite"] == "postgresql_test_database"

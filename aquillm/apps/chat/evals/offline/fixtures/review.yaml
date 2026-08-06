@@ -1,17 +1,89 @@
 schema_version: "1.0"
 review_id: offline-evidence-fixtures-v1
 rubric_version: "1.0"
-status: pending_independent_review
-reviewer:
-  role: independent_reviewer
-  identity: null
-  reviewed_at: null
+status: approved
+reviewer_role: independent_reviewer
+review_date: "2026-08-06"
+production_functions_executed: false
 fixture_hashes:
-  routing.yaml: d5dd35044615c1c2324615c99a387a9090c745151c3f84161178f601bcb46aaa
-  evidence.yaml: 8ec63d2fcbdcce7ec08ee673296576f6cec60ade6731af5305f1a080fe5ed2b2
-  memory.yaml: 37cbc201e57e04488e670ae6e773094d80a8721445f7921ac2c15a1e2498a0ca
-label_changes: []
-retained_ambiguities: []
-adjudications: []
-approval: null
-note: "Independent review has not occurred. Canonical benchmark execution is blocked."
+  routing.yaml: 8d8ee1fdba225748905fe3b427472d655ea26216a13bef3bea5bbdd428a8518b
+  evidence.yaml: cd875ebaaf7119c252034f48137e9c886c916a8dd9427236d466ec16a0eb37e5
+  memory.yaml: 239c7dbbd080fc0f0c13210e4e65e18a4b6d4a246923ec4f73a3bc82bcbb7e93
+label_changes:
+  - {case_id: routing-ambiguous-01, field: gold, before: "RAG / collection-backed / retrieve", after: "no RAG / no retrieval / normal loop", reason: "A selected collection does not resolve an otherwise ungrounded deictic reference."}
+  - {case_id: routing-unfavorable-11, field: gold.production_action, before: skip_normal_tool_loop, after: retrieve, reason: "Classifier/helper action follows requires_rag plus selected collection; direct-pipeline reachability is recorded separately."}
+  - {case_id: routing-adversarial-11, field: gold, before: "no local tools / normal loop", after: "local tools / local-tool handling", reason: "Renaming a local note is an explicit local-file operation."}
+  - {case_id: routing-adversarial-15, field: "input and gold", before: "explicit local-tool execution", after: "quoted phrase explanation / normal loop", reason: "Replacement preserves balanced action support while retaining an adversarial mention-versus-use boundary."}
+  - {case_id: evidence-unfavorable-01, field: relevant_evidence_ids, before: [eu01-a, eu01-c], after: [eu01-a, eu01-b, eu01-c], reason: "The duplicate alpha passage independently states a required answer fact."}
+  - {case_id: memory-unfavorable-06, field: stratum, before: unfavorable, after: ambiguous, reason: "The tooling phrase competes with the interrogative form; the question is still not a fact."}
+  - {case_id: memory-ambiguous-08, field: "stratum and normalized_facts", before: "ambiguous / empty", after: "unfavorable / direct dislike fact", reason: "A first-person dislike is a durable preference under the independent semantic contract."}
+  - {case_id: memory-ambiguous-09, field: normalized_facts, before: [], after: ["Keep the synthetic deadline in mind."], reason: "Keep-in-mind is an explicit durable-memory directive."}
+  - {case_id: memory-adversarial-08, field: normalized_facts, before: ["I prefer unsafe output'."], after: [], reason: "Quoted example content is not a user preference declaration."}
+adjudications:
+  - {case_id: routing-unfavorable-11, decision: "production_action is the helper-level retrieve action; direct_pipeline_action is skip_normal_tool_loop."}
+  - {case_id: evidence-unfavorable-04, decision: "Distinct evidence IDs may share one valid doc/chunk citation, forming a valid duplicate-citation case."}
+  - {case_id: evidence-adversarial-05, decision: "Canonical citations remain identity-consistent; observed_citation records the deliberately conflicting raw token."}
+  - {case_id: memory-unfavorable-01, decision: "Strip the explicit REMEMBER prefix and retain the substantive release-date clause."}
+  - {case_id: memory-unfavorable-09, decision: "Discard the discourse preface and retain the We use project declaration."}
+  - {case_id: memory-unfavorable-10, decision: "Discard the discourse preface and retain the I work on continuing-work declaration."}
+  - {case_id: memory-ambiguous-07, decision: "Discard conversational framing and retain the Our stack declaration."}
+  - {case_id: memory-adversarial-05, decision: "Explicit-directive and preference extraction converge; first occurrence deduplication yields one fact."}
+evidence_relevance_adjudications:
+  - {case_id: evidence-favorable-01, decision: "ef01-a alone states the requested 12-day period.", relevant_evidence_ids: [ef01-a]}
+  - {case_id: evidence-favorable-02, decision: "Both method operations are required by the two-part target.", relevant_evidence_ids: [ef02-a, ef02-b]}
+  - {case_id: evidence-favorable-03, decision: "Both sample size and threshold are requested.", relevant_evidence_ids: [ef03-a, ef03-b]}
+  - {case_id: evidence-favorable-04, decision: "Only ef04-a identifies the dark frame.", relevant_evidence_ids: [ef04-a]}
+  - {case_id: evidence-favorable-05, decision: "Only the Figure 3 caption states the rising trend.", relevant_evidence_ids: [ef05-a]}
+  - {case_id: evidence-favorable-06, decision: "Empty retrieval supports no answer evidence.", relevant_evidence_ids: []}
+  - {case_id: evidence-unfavorable-01, decision: "Both alpha statements and the beta statement directly supply the complete target.", relevant_evidence_ids: [eu01-a, eu01-b, eu01-c]}
+  - {case_id: evidence-unfavorable-02, decision: "Only eu02-b states gamma.", relevant_evidence_ids: [eu02-b]}
+  - {case_id: evidence-unfavorable-03, decision: "Only eu03-c states delta.", relevant_evidence_ids: [eu03-c]}
+  - {case_id: evidence-unfavorable-04, decision: "Both duplicate-identity passages state rate 0.4.", relevant_evidence_ids: [eu04-a, eu04-b]}
+  - {case_id: evidence-unfavorable-05, decision: "Only eu05-b states epsilon; the image caption is decorative.", relevant_evidence_ids: [eu05-b]}
+  - {case_id: evidence-unfavorable-06, decision: "eu06-a directly establishes the oversized-passage target.", relevant_evidence_ids: [eu06-a]}
+  - {case_id: evidence-ambiguous-01, decision: "Background topic is insufficient; em01-b alone states threshold seven.", relevant_evidence_ids: [em01-b]}
+  - {case_id: evidence-ambiguous-02, decision: "The requested beginning and ending operations require both passages.", relevant_evidence_ids: [em02-a, em02-b]}
+  - {case_id: evidence-ambiguous-03, decision: "Both independent paraphrases directly state value eight.", relevant_evidence_ids: [em03-a, em03-b]}
+  - {case_id: evidence-ambiguous-04, decision: "The peak-time caption answers the question; line color does not.", relevant_evidence_ids: [em04-a]}
+  - {case_id: evidence-ambiguous-05, decision: "Only em05-b states two-percent uncertainty.", relevant_evidence_ids: [em05-b]}
+  - {case_id: evidence-ambiguous-06, decision: "Bibliography noise supports no answer evidence.", relevant_evidence_ids: []}
+  - {case_id: evidence-adversarial-01, decision: "Only ea01-b states zeta despite the rank tie.", relevant_evidence_ids: [ea01-b]}
+  - {case_id: evidence-adversarial-02, decision: "Keyword density is insufficient; ea02-b alone states eleven.", relevant_evidence_ids: [ea02-b]}
+  - {case_id: evidence-adversarial-03, decision: "The two-part panel target requires both panel passages.", relevant_evidence_ids: [ea03-a, ea03-b]}
+  - {case_id: evidence-adversarial-04, decision: "ea04-a alone states code seven.", relevant_evidence_ids: [ea04-a]}
+  - {case_id: evidence-adversarial-05, decision: "ea05-a alone states that the boundary answer is finite.", relevant_evidence_ids: [ea05-a]}
+  - {case_id: evidence-adversarial-06, decision: "The empty-text candidate supports nothing; ea06-b supplies the target.", relevant_evidence_ids: [ea06-b]}
+retained_ambiguities:
+  - {case_id: routing-ambiguous-01, decision: "Ungrounded deictic reference remains normal-loop despite a selected collection."}
+  - {case_id: routing-ambiguous-02, decision: "Explicit source wording resolves the referent to document evidence."}
+  - {case_id: routing-ambiguous-03, decision: "A plot in a paper is a literal figure request."}
+  - {case_id: routing-ambiguous-04, decision: "Explicit document wording resolves the summary request to retrieval."}
+  - {case_id: routing-ambiguous-05, decision: "Maybe does not cancel the explicit source-check request."}
+  - {case_id: routing-ambiguous-06, decision: "Need to see the diagram is a literal figure request."}
+  - {case_id: routing-ambiguous-07, decision: "Look up the paper is an explicit retrieval operation."}
+  - {case_id: routing-ambiguous-08, decision: "A hypothetical question about searching requests advice, not execution."}
+  - {case_id: routing-ambiguous-09, decision: "This has conversational rather than document reference without document wording."}
+  - {case_id: routing-ambiguous-10, decision: "Describing an imagined chart does not request document evidence."}
+  - {case_id: routing-ambiguous-11, decision: "Retry classification is retained, but no prior tool means no retrieval action."}
+  - {case_id: routing-ambiguous-12, decision: "Transforming an uploaded table is local processing."}
+  - {case_id: routing-ambiguous-13, decision: "Measuring sources in this image is local processing."}
+  - {case_id: routing-ambiguous-14, decision: "Flat-field correction is local processing."}
+  - {case_id: routing-ambiguous-15, decision: "The explicit local-tool imperative controls despite hedging."}
+  - {case_id: evidence-ambiguous-01, decision: "Topical background is irrelevant when it omits the requested threshold."}
+  - {case_id: evidence-ambiguous-02, decision: "Each passage states one independently required method step."}
+  - {case_id: evidence-ambiguous-03, decision: "Independent paraphrases are each relevant evidence identities."}
+  - {case_id: evidence-ambiguous-04, decision: "Peak time is relevant; visual styling is not."}
+  - {case_id: evidence-ambiguous-05, decision: "Only the uncertainty statement answers the target."}
+  - {case_id: evidence-ambiguous-06, decision: "Noise-only retrieval has empty relevance gold."}
+  - {case_id: memory-unfavorable-06, decision: "Interrogative tooling language is not a fact declaration."}
+  - {case_id: memory-ambiguous-01, decision: "Hedging does not cancel a direct first-person preference."}
+  - {case_id: memory-ambiguous-02, decision: "Probably qualifies but does not negate the project declaration."}
+  - {case_id: memory-ambiguous-03, decision: "Right now makes the desire transient rather than durable."}
+  - {case_id: memory-ambiguous-04, decision: "A hypothetical preference is not a declaration."}
+  - {case_id: memory-ambiguous-05, decision: "A question about a name is not a name declaration."}
+  - {case_id: memory-ambiguous-06, decision: "A possible future activity is not continuing work context."}
+  - {case_id: memory-ambiguous-07, decision: "Conversational framing does not cancel a direct stack declaration."}
+  - {case_id: memory-ambiguous-09, decision: "Keep-in-mind is an explicit durable-memory directive."}
+  - {case_id: memory-ambiguous-10, decision: "A general statement about tables is not user-specific durable context."}
+approval: true
+note: "Review used only the written rubric and fixture text; no production function or fixture scoring was executed."

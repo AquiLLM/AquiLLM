@@ -1,36 +1,691 @@
-schema_version: "1.0"
+schema_version: '1.0'
 dataset_id: evidence-v1
-frozen_at: "2026-08-06T00:00:00Z"
+frozen_at: '2026-08-06T00:00:00Z'
 provenance: synthetic_public
 sensitivity: synthetic_public
-rubric_version: "1.0"
-annotation: {author_role: fixture_author, annotated_at: "2026-08-06"}
-review: {status: pending_independent_review, record: review.yaml}
+rubric_version: '1.0'
+annotation:
+  author_role: fixture_author
+  annotated_at: '2026-08-06'
+review:
+  status: approved
+  record: review.yaml
 cases:
-  - {id: evidence-favorable-01, stratum: favorable, rationale: "One relevant chunk fits a relaxed budget.", token_budget: 128, candidates: [{evidence_id: ef01-a, doc_id: doc-a, chunk_id: 1, rank: 1, text: "The synthetic target has a 12-day period.", citation: "[doc:doc-a chunk:1]", relevant: true}, {evidence_id: ef01-b, doc_id: doc-b, chunk_id: 1, rank: 2, text: "The instrument was commissioned in spring.", citation: "[doc:doc-b chunk:1]", relevant: false}], gold: {relevant_evidence_ids: [ef01-a], relevant_document_ids: [doc-a]}}
-  - {id: evidence-favorable-02, stratum: favorable, rationale: "Relevant evidence is distributed across two sources.", token_budget: 128, candidates: [{evidence_id: ef02-a, doc_id: doc-a, chunk_id: 2, rank: 1, text: "Synthetic method A removes the bias.", citation: "[doc:doc-a chunk:2]", relevant: true}, {evidence_id: ef02-b, doc_id: doc-b, chunk_id: 2, rank: 2, text: "Synthetic method B estimates uncertainty.", citation: "[doc:doc-b chunk:2]", relevant: true}], gold: {relevant_evidence_ids: [ef02-a, ef02-b], relevant_document_ids: [doc-a, doc-b]}}
-  - {id: evidence-favorable-03, stratum: favorable, rationale: "Two answer facts come from one source.", token_budget: 96, candidates: [{evidence_id: ef03-a, doc_id: doc-c, chunk_id: 1, rank: 1, text: "The sample contains 40 synthetic objects.", citation: "[doc:doc-c chunk:1]", relevant: true}, {evidence_id: ef03-b, doc_id: doc-c, chunk_id: 2, rank: 2, text: "The reported threshold is five sigma.", citation: "[doc:doc-c chunk:2]", relevant: true}], gold: {relevant_evidence_ids: [ef03-a, ef03-b], relevant_document_ids: [doc-c]}}
-  - {id: evidence-favorable-04, stratum: favorable, rationale: "A distractor follows the relevant top-ranked chunk.", token_budget: 64, candidates: [{evidence_id: ef04-a, doc_id: doc-d, chunk_id: 1, rank: 1, text: "Synthetic calibration uses a dark frame.", citation: "[doc:doc-d chunk:1]", relevant: true}, {evidence_id: ef04-b, doc_id: doc-e, chunk_id: 1, rank: 2, text: "The bibliography contains ten entries.", citation: "[doc:doc-e chunk:1]", relevant: false}], gold: {relevant_evidence_ids: [ef04-a], relevant_document_ids: [doc-d]}}
-  - {id: evidence-favorable-05, stratum: favorable, rationale: "Valid multimodal metadata accompanies relevant text.", token_budget: 96, candidates: [{evidence_id: ef05-a, doc_id: doc-f, chunk_id: 3, rank: 1, text: "Figure 3 shows the synthetic rising trend.", citation: "[doc:doc-f chunk:3]", image_url: "/aquillm/synthetic/figure-3.png", relevant: true}, {evidence_id: ef05-b, doc_id: doc-g, chunk_id: 1, rank: 2, text: "A text-only distractor discusses formatting.", citation: "[doc:doc-g chunk:1]", relevant: false}], gold: {relevant_evidence_ids: [ef05-a], relevant_document_ids: [doc-f]}}
-  - {id: evidence-favorable-06, stratum: favorable, rationale: "Empty retrieval has empty gold and remains auditable.", token_budget: 64, candidates: [], gold: {relevant_evidence_ids: [], relevant_document_ids: []}}
-
-  - {id: evidence-unfavorable-01, stratum: unfavorable, rationale: "Redundant high ranks from one document precede distributed evidence.", token_budget: 24, candidates: [{evidence_id: eu01-a, doc_id: doc-a, chunk_id: 10, rank: 1, text: "The synthetic answer is alpha with extended redundant wording.", citation: "[doc:doc-a chunk:10]", relevant: true}, {evidence_id: eu01-b, doc_id: doc-a, chunk_id: 11, rank: 2, text: "The synthetic answer is alpha repeated with more redundant wording.", citation: "[doc:doc-a chunk:11]", relevant: false}, {evidence_id: eu01-c, doc_id: doc-b, chunk_id: 10, rank: 3, text: "The second required answer is beta.", citation: "[doc:doc-b chunk:10]", relevant: true}], gold: {relevant_evidence_ids: [eu01-a, eu01-c], relevant_document_ids: [doc-a, doc-b]}}
-  - {id: evidence-unfavorable-02, stratum: unfavorable, rationale: "A tight budget puts a distractor before relevant evidence.", token_budget: 10, candidates: [{evidence_id: eu02-a, doc_id: doc-c, chunk_id: 10, rank: 1, text: "Long synthetic background distractor consumes the available evidence budget.", citation: "[doc:doc-c chunk:10]", relevant: false}, {evidence_id: eu02-b, doc_id: doc-d, chunk_id: 10, rank: 2, text: "The answer is gamma.", citation: "[doc:doc-d chunk:10]", relevant: true}], gold: {relevant_evidence_ids: [eu02-b], relevant_document_ids: [doc-d]}}
-  - {id: evidence-unfavorable-03, stratum: unfavorable, rationale: "All relevant evidence is deep within a single source.", token_budget: 18, candidates: [{evidence_id: eu03-a, doc_id: doc-e, chunk_id: 10, rank: 1, text: "Related synthetic context without the answer.", citation: "[doc:doc-e chunk:10]", relevant: false}, {evidence_id: eu03-b, doc_id: doc-e, chunk_id: 11, rank: 2, text: "More related context without the answer.", citation: "[doc:doc-e chunk:11]", relevant: false}, {evidence_id: eu03-c, doc_id: doc-e, chunk_id: 12, rank: 3, text: "The exact synthetic answer is delta.", citation: "[doc:doc-e chunk:12]", relevant: true}], gold: {relevant_evidence_ids: [eu03-c], relevant_document_ids: [doc-e]}}
-  - {id: evidence-unfavorable-04, stratum: unfavorable, rationale: "Duplicate content has distinct stable evidence identities.", token_budget: 32, candidates: [{evidence_id: eu04-a, doc_id: doc-f, chunk_id: 10, rank: 1, text: "The synthetic rate is 0.4.", citation: "[doc:doc-f chunk:10]", relevant: true}, {evidence_id: eu04-b, doc_id: doc-f, chunk_id: 11, rank: 2, text: "The synthetic rate is 0.4.", citation: "[doc:doc-f chunk:11]", relevant: true}, {evidence_id: eu04-c, doc_id: doc-g, chunk_id: 10, rank: 3, text: "Unrelated synthetic metadata.", citation: "[doc:doc-g chunk:10]", relevant: false}], gold: {relevant_evidence_ids: [eu04-a, eu04-b], relevant_document_ids: [doc-f]}}
-  - {id: evidence-unfavorable-05, stratum: unfavorable, rationale: "A large image-bearing distractor precedes text evidence.", token_budget: 14, candidates: [{evidence_id: eu05-a, doc_id: doc-h, chunk_id: 10, rank: 1, text: "Decorative synthetic image caption with no answer information.", citation: "[doc:doc-h chunk:10]", image_url: "/aquillm/synthetic/decorative.png", relevant: false}, {evidence_id: eu05-b, doc_id: doc-i, chunk_id: 10, rank: 2, text: "The answer is epsilon.", citation: "[doc:doc-i chunk:10]", relevant: true}], gold: {relevant_evidence_ids: [eu05-b], relevant_document_ids: [doc-i]}}
-  - {id: evidence-unfavorable-06, stratum: unfavorable, rationale: "A first oversized relevant chunk tests the documented soft budget.", token_budget: 2, candidates: [{evidence_id: eu06-a, doc_id: doc-j, chunk_id: 10, rank: 1, text: "This relevant synthetic passage is deliberately longer than the tiny budget.", citation: "[doc:doc-j chunk:10]", relevant: true}], gold: {relevant_evidence_ids: [eu06-a], relevant_document_ids: [doc-j]}}
-
-  - {id: evidence-ambiguous-01, stratum: ambiguous, rationale: "Background is topically related but only one chunk states the answer.", token_budget: 64, candidates: [{evidence_id: em01-a, doc_id: doc-a, chunk_id: 20, rank: 1, text: "The synthetic experiment concerns red objects.", citation: "[doc:doc-a chunk:20]", relevant: false}, {evidence_id: em01-b, doc_id: doc-b, chunk_id: 20, rank: 2, text: "Red objects were selected at threshold seven.", citation: "[doc:doc-b chunk:20]", relevant: true}], gold: {relevant_evidence_ids: [em01-b], relevant_document_ids: [doc-b]}}
-  - {id: evidence-ambiguous-02, stratum: ambiguous, rationale: "Two passages independently state different necessary answer facts.", token_budget: 64, candidates: [{evidence_id: em02-a, doc_id: doc-c, chunk_id: 20, rank: 1, text: "The synthetic method begins with normalization.", citation: "[doc:doc-c chunk:20]", relevant: true}, {evidence_id: em02-b, doc_id: doc-d, chunk_id: 20, rank: 2, text: "It ends with uncertainty propagation.", citation: "[doc:doc-d chunk:20]", relevant: true}], gold: {relevant_evidence_ids: [em02-a, em02-b], relevant_document_ids: [doc-c, doc-d]}}
-  - {id: evidence-ambiguous-03, stratum: ambiguous, rationale: "A near-duplicate paraphrase remains independently relevant.", token_budget: 32, candidates: [{evidence_id: em03-a, doc_id: doc-e, chunk_id: 20, rank: 1, text: "The reported synthetic value is eight.", citation: "[doc:doc-e chunk:20]", relevant: true}, {evidence_id: em03-b, doc_id: doc-f, chunk_id: 20, rank: 2, text: "Eight is the value reported by the study.", citation: "[doc:doc-f chunk:20]", relevant: true}], gold: {relevant_evidence_ids: [em03-a, em03-b], relevant_document_ids: [doc-e, doc-f]}}
-  - {id: evidence-ambiguous-04, stratum: ambiguous, rationale: "The caption directly supplies the requested visual fact.", token_budget: 32, candidates: [{evidence_id: em04-a, doc_id: doc-g, chunk_id: 20, rank: 1, text: "Figure 2 peaks at synthetic time nine.", citation: "[doc:doc-g chunk:20]", image_url: "/aquillm/synthetic/peak.png", relevant: true}, {evidence_id: em04-b, doc_id: doc-g, chunk_id: 21, rank: 2, text: "The figure uses a blue line.", citation: "[doc:doc-g chunk:21]", relevant: false}], gold: {relevant_evidence_ids: [em04-a], relevant_document_ids: [doc-g]}}
-  - {id: evidence-ambiguous-05, stratum: ambiguous, rationale: "A relaxed budget retains related noise for behavior auditing.", token_budget: 256, candidates: [{evidence_id: em05-a, doc_id: doc-h, chunk_id: 20, rank: 1, text: "Synthetic background about the instrument.", citation: "[doc:doc-h chunk:20]", relevant: false}, {evidence_id: em05-b, doc_id: doc-i, chunk_id: 20, rank: 2, text: "The instrument uncertainty is two percent.", citation: "[doc:doc-i chunk:20]", relevant: true}, {evidence_id: em05-c, doc_id: doc-j, chunk_id: 20, rank: 3, text: "Synthetic publication history.", citation: "[doc:doc-j chunk:20]", relevant: false}], gold: {relevant_evidence_ids: [em05-b], relevant_document_ids: [doc-i]}}
-  - {id: evidence-ambiguous-06, stratum: ambiguous, rationale: "Noise-only retrieval has empty relevance gold.", token_budget: 64, candidates: [{evidence_id: em06-a, doc_id: doc-k, chunk_id: 20, rank: 1, text: "Synthetic bibliography entry.", citation: "[doc:doc-k chunk:20]", relevant: false}], gold: {relevant_evidence_ids: [], relevant_document_ids: []}}
-
-  - {id: evidence-adversarial-01, stratum: adversarial_boundary, rationale: "Equal ranks retain fixture order under a tight budget.", token_budget: 8, candidates: [{evidence_id: ea01-a, doc_id: doc-a, chunk_id: 30, rank: 1, text: "Synthetic distractor occupies first position.", citation: "[doc:doc-a chunk:30]", relevant: false}, {evidence_id: ea01-b, doc_id: doc-b, chunk_id: 30, rank: 1, text: "The answer is zeta.", citation: "[doc:doc-b chunk:30]", relevant: true}], gold: {relevant_evidence_ids: [ea01-b], relevant_document_ids: [doc-b]}}
-  - {id: evidence-adversarial-02, stratum: adversarial_boundary, rationale: "Keyword-heavy distractor does not state the requested fact.", token_budget: 32, candidates: [{evidence_id: ea02-a, doc_id: doc-c, chunk_id: 30, rank: 1, text: "Answer calibration result threshold figure answer.", citation: "[doc:doc-c chunk:30]", relevant: false}, {evidence_id: ea02-b, doc_id: doc-d, chunk_id: 30, rank: 2, text: "The synthetic threshold is eleven.", citation: "[doc:doc-d chunk:30]", relevant: true}], gold: {relevant_evidence_ids: [ea02-b], relevant_document_ids: [doc-d]}}
-  - {id: evidence-adversarial-03, stratum: adversarial_boundary, rationale: "Repeated image metadata is associated with distinct evidence.", token_budget: 64, candidates: [{evidence_id: ea03-a, doc_id: doc-e, chunk_id: 30, rank: 1, text: "Panel A supplies the first answer fact.", citation: "[doc:doc-e chunk:30]", image_url: "/aquillm/synthetic/shared.png", relevant: true}, {evidence_id: ea03-b, doc_id: doc-e, chunk_id: 31, rank: 2, text: "Panel B supplies the second answer fact.", citation: "[doc:doc-e chunk:31]", image_url: "/aquillm/synthetic/shared.png", relevant: true}], gold: {relevant_evidence_ids: [ea03-a, ea03-b], relevant_document_ids: [doc-e]}}
-  - {id: evidence-adversarial-04, stratum: adversarial_boundary, rationale: "Numeric-looking document identity remains a string in citations.", token_budget: 32, candidates: [{evidence_id: ea04-a, doc_id: "007", chunk_id: 32, rank: 1, text: "The synthetic code is seven.", citation: "[doc:007 chunk:32]", relevant: true}], gold: {relevant_evidence_ids: [ea04-a], relevant_document_ids: ["007"]}}
-  - {id: evidence-adversarial-05, stratum: adversarial_boundary, rationale: "Very large numeric chunk identity is valid and consistent.", token_budget: 32, candidates: [{evidence_id: ea05-a, doc_id: doc-f, chunk_id: 999999, rank: 1, text: "The boundary answer is finite.", citation: "[doc:doc-f chunk:999999]", relevant: true}, {evidence_id: ea05-b, doc_id: doc-g, chunk_id: 31, rank: 2, text: "Unrelated finite wording.", citation: "[doc:doc-g chunk:31]", relevant: false}], gold: {relevant_evidence_ids: [ea05-a], relevant_document_ids: [doc-f]}}
-  - {id: evidence-adversarial-06, stratum: adversarial_boundary, rationale: "An empty text candidate is eligible metadata but not relevant.", token_budget: 1, candidates: [{evidence_id: ea06-a, doc_id: doc-h, chunk_id: 30, rank: 1, text: "", citation: "[doc:doc-h chunk:30]", relevant: false}, {evidence_id: ea06-b, doc_id: doc-i, chunk_id: 30, rank: 2, text: "Answer.", citation: "[doc:doc-i chunk:30]", relevant: true}], gold: {relevant_evidence_ids: [ea06-b], relevant_document_ids: [doc-i]}}
+- id: evidence-favorable-01
+  stratum: favorable
+  rationale: One relevant chunk fits a relaxed budget.
+  token_budget: 128
+  candidates:
+  - evidence_id: ef01-a
+    doc_id: doc-a
+    chunk_id: 1
+    rank: 1
+    text: The synthetic target has a 12-day period.
+    citation: '[doc:doc-a chunk:1]'
+    relevant: true
+    estimated_tokens: 10
+  - evidence_id: ef01-b
+    doc_id: doc-b
+    chunk_id: 1
+    rank: 2
+    text: The instrument was commissioned in spring.
+    citation: '[doc:doc-b chunk:1]'
+    relevant: false
+    estimated_tokens: 10
+  gold:
+    relevant_evidence_ids:
+    - ef01-a
+    relevant_document_ids:
+    - doc-a
+  question: What period does the synthetic target have?
+  answer_target: A 12-day period.
+- id: evidence-favorable-02
+  stratum: favorable
+  rationale: Relevant evidence is distributed across two sources.
+  token_budget: 128
+  candidates:
+  - evidence_id: ef02-a
+    doc_id: doc-a
+    chunk_id: 2
+    rank: 1
+    text: Synthetic method A removes the bias.
+    citation: '[doc:doc-a chunk:2]'
+    relevant: true
+    estimated_tokens: 9
+  - evidence_id: ef02-b
+    doc_id: doc-b
+    chunk_id: 2
+    rank: 2
+    text: Synthetic method B estimates uncertainty.
+    citation: '[doc:doc-b chunk:2]'
+    relevant: true
+    estimated_tokens: 10
+  gold:
+    relevant_evidence_ids:
+    - ef02-a
+    - ef02-b
+    relevant_document_ids:
+    - doc-a
+    - doc-b
+  question: What two operations define synthetic method A and B?
+  answer_target: Method A removes bias and method B estimates uncertainty.
+- id: evidence-favorable-03
+  stratum: favorable
+  rationale: Two answer facts come from one source.
+  token_budget: 96
+  candidates:
+  - evidence_id: ef03-a
+    doc_id: doc-c
+    chunk_id: 1
+    rank: 1
+    text: The sample contains 40 synthetic objects.
+    citation: '[doc:doc-c chunk:1]'
+    relevant: true
+    estimated_tokens: 10
+  - evidence_id: ef03-b
+    doc_id: doc-c
+    chunk_id: 2
+    rank: 2
+    text: The reported threshold is five sigma.
+    citation: '[doc:doc-c chunk:2]'
+    relevant: true
+    estimated_tokens: 9
+  gold:
+    relevant_evidence_ids:
+    - ef03-a
+    - ef03-b
+    relevant_document_ids:
+    - doc-c
+  question: What are the sample size and reported threshold?
+  answer_target: 40 synthetic objects and a five-sigma threshold.
+- id: evidence-favorable-04
+  stratum: favorable
+  rationale: A distractor follows the relevant top-ranked chunk.
+  token_budget: 64
+  candidates:
+  - evidence_id: ef04-a
+    doc_id: doc-d
+    chunk_id: 1
+    rank: 1
+    text: Synthetic calibration uses a dark frame.
+    citation: '[doc:doc-d chunk:1]'
+    relevant: true
+    estimated_tokens: 10
+  - evidence_id: ef04-b
+    doc_id: doc-e
+    chunk_id: 1
+    rank: 2
+    text: The bibliography contains ten entries.
+    citation: '[doc:doc-e chunk:1]'
+    relevant: false
+    estimated_tokens: 9
+  gold:
+    relevant_evidence_ids:
+    - ef04-a
+    relevant_document_ids:
+    - doc-d
+  question: Which frame does synthetic calibration use?
+  answer_target: A dark frame.
+- id: evidence-favorable-05
+  stratum: favorable
+  rationale: Valid multimodal metadata accompanies relevant text.
+  token_budget: 96
+  candidates:
+  - evidence_id: ef05-a
+    doc_id: doc-f
+    chunk_id: 3
+    rank: 1
+    text: Figure 3 shows the synthetic rising trend.
+    citation: '[doc:doc-f chunk:3]'
+    image_url: /aquillm/synthetic/figure-3.png
+    relevant: true
+    estimated_tokens: 10
+  - evidence_id: ef05-b
+    doc_id: doc-g
+    chunk_id: 1
+    rank: 2
+    text: A text-only distractor discusses formatting.
+    citation: '[doc:doc-g chunk:1]'
+    relevant: false
+    estimated_tokens: 11
+  gold:
+    relevant_evidence_ids:
+    - ef05-a
+    relevant_document_ids:
+    - doc-f
+  question: What trend is shown in Figure 3?
+  answer_target: A rising trend.
+- id: evidence-favorable-06
+  stratum: favorable
+  rationale: Empty retrieval has empty gold and remains auditable.
+  token_budget: 64
+  candidates: []
+  gold:
+    relevant_evidence_ids: []
+    relevant_document_ids: []
+  question: What period is reported for the missing synthetic target?
+  answer_target: No answer is available in empty retrieval.
+- id: evidence-unfavorable-01
+  stratum: unfavorable
+  rationale: Redundant high ranks from one document precede distributed evidence.
+  token_budget: 24
+  candidates:
+  - evidence_id: eu01-a
+    doc_id: doc-a
+    chunk_id: 10
+    rank: 1
+    text: The synthetic answer is alpha with extended redundant wording.
+    citation: '[doc:doc-a chunk:10]'
+    relevant: true
+    estimated_tokens: 15
+  - evidence_id: eu01-b
+    doc_id: doc-a
+    chunk_id: 11
+    rank: 2
+    text: The synthetic answer is alpha repeated with more redundant wording.
+    citation: '[doc:doc-a chunk:11]'
+    relevant: true
+    estimated_tokens: 16
+  - evidence_id: eu01-c
+    doc_id: doc-b
+    chunk_id: 10
+    rank: 3
+    text: The second required answer is beta.
+    citation: '[doc:doc-b chunk:10]'
+    relevant: true
+    estimated_tokens: 8
+  gold:
+    relevant_evidence_ids:
+    - eu01-a
+    - eu01-b
+    - eu01-c
+    relevant_document_ids:
+    - doc-a
+    - doc-b
+  question: What complete two-part answer is reported?
+  answer_target: Alpha and beta.
+- id: evidence-unfavorable-02
+  stratum: unfavorable
+  rationale: A tight budget puts a distractor before relevant evidence.
+  token_budget: 10
+  candidates:
+  - evidence_id: eu02-a
+    doc_id: doc-c
+    chunk_id: 10
+    rank: 1
+    text: Long synthetic background distractor consumes the available evidence budget.
+    citation: '[doc:doc-c chunk:10]'
+    relevant: false
+    estimated_tokens: 19
+  - evidence_id: eu02-b
+    doc_id: doc-d
+    chunk_id: 10
+    rank: 2
+    text: The answer is gamma.
+    citation: '[doc:doc-d chunk:10]'
+    relevant: true
+    estimated_tokens: 5
+  gold:
+    relevant_evidence_ids:
+    - eu02-b
+    relevant_document_ids:
+    - doc-d
+  question: What is the reported answer?
+  answer_target: Gamma.
+- id: evidence-unfavorable-03
+  stratum: unfavorable
+  rationale: All relevant evidence is deep within a single source.
+  token_budget: 18
+  candidates:
+  - evidence_id: eu03-a
+    doc_id: doc-e
+    chunk_id: 10
+    rank: 1
+    text: Related synthetic context without the answer.
+    citation: '[doc:doc-e chunk:10]'
+    relevant: false
+    estimated_tokens: 11
+  - evidence_id: eu03-b
+    doc_id: doc-e
+    chunk_id: 11
+    rank: 2
+    text: More related context without the answer.
+    citation: '[doc:doc-e chunk:11]'
+    relevant: false
+    estimated_tokens: 10
+  - evidence_id: eu03-c
+    doc_id: doc-e
+    chunk_id: 12
+    rank: 3
+    text: The exact synthetic answer is delta.
+    citation: '[doc:doc-e chunk:12]'
+    relevant: true
+    estimated_tokens: 9
+  gold:
+    relevant_evidence_ids:
+    - eu03-c
+    relevant_document_ids:
+    - doc-e
+  question: What is the exact synthetic answer?
+  answer_target: Delta.
+- id: evidence-unfavorable-04
+  stratum: unfavorable
+  rationale: Duplicate content has distinct stable evidence identities.
+  token_budget: 32
+  candidates:
+  - evidence_id: eu04-a
+    doc_id: doc-f
+    chunk_id: 10
+    rank: 1
+    text: The synthetic rate is 0.4.
+    citation: '[doc:doc-f chunk:10]'
+    relevant: true
+    estimated_tokens: 6
+  - evidence_id: eu04-b
+    doc_id: doc-f
+    chunk_id: 10
+    rank: 2
+    text: The synthetic rate is 0.4.
+    citation: '[doc:doc-f chunk:10]'
+    relevant: true
+    estimated_tokens: 6
+  - evidence_id: eu04-c
+    doc_id: doc-g
+    chunk_id: 10
+    rank: 3
+    text: Unrelated synthetic metadata.
+    citation: '[doc:doc-g chunk:10]'
+    relevant: false
+    estimated_tokens: 7
+  gold:
+    relevant_evidence_ids:
+    - eu04-a
+    - eu04-b
+    relevant_document_ids:
+    - doc-f
+  question: What synthetic rate is reported?
+  answer_target: 0.4.
+- id: evidence-unfavorable-05
+  stratum: unfavorable
+  rationale: A large image-bearing distractor precedes text evidence.
+  token_budget: 14
+  candidates:
+  - evidence_id: eu05-a
+    doc_id: doc-h
+    chunk_id: 10
+    rank: 1
+    text: Decorative synthetic image caption with no answer information.
+    citation: '[doc:doc-h chunk:10]'
+    image_url: /aquillm/synthetic/decorative.png
+    relevant: false
+    estimated_tokens: 15
+  - evidence_id: eu05-b
+    doc_id: doc-i
+    chunk_id: 10
+    rank: 2
+    text: The answer is epsilon.
+    citation: '[doc:doc-i chunk:10]'
+    relevant: true
+    estimated_tokens: 5
+  gold:
+    relevant_evidence_ids:
+    - eu05-b
+    relevant_document_ids:
+    - doc-i
+  question: What is the answer after the decorative image?
+  answer_target: Epsilon.
+- id: evidence-unfavorable-06
+  stratum: unfavorable
+  rationale: A first oversized relevant chunk tests the documented soft budget.
+  token_budget: 2
+  candidates:
+  - evidence_id: eu06-a
+    doc_id: doc-j
+    chunk_id: 10
+    rank: 1
+    text: This relevant synthetic passage is deliberately longer than the tiny budget.
+    citation: '[doc:doc-j chunk:10]'
+    relevant: true
+    estimated_tokens: 19
+  gold:
+    relevant_evidence_ids:
+    - eu06-a
+    relevant_document_ids:
+    - doc-j
+  question: What does the oversized passage establish?
+  answer_target: The passage is deliberately longer than the tiny budget.
+- id: evidence-ambiguous-01
+  stratum: ambiguous
+  rationale: Background is topically related but only one chunk states the answer.
+  token_budget: 64
+  candidates:
+  - evidence_id: em01-a
+    doc_id: doc-a
+    chunk_id: 20
+    rank: 1
+    text: The synthetic experiment concerns red objects.
+    citation: '[doc:doc-a chunk:20]'
+    relevant: false
+    estimated_tokens: 11
+  - evidence_id: em01-b
+    doc_id: doc-b
+    chunk_id: 20
+    rank: 2
+    text: Red objects were selected at threshold seven.
+    citation: '[doc:doc-b chunk:20]'
+    relevant: true
+    estimated_tokens: 11
+  gold:
+    relevant_evidence_ids:
+    - em01-b
+    relevant_document_ids:
+    - doc-b
+  question: At what threshold were red objects selected?
+  answer_target: Threshold seven.
+- id: evidence-ambiguous-02
+  stratum: ambiguous
+  rationale: Two passages independently state different necessary answer facts.
+  token_budget: 64
+  candidates:
+  - evidence_id: em02-a
+    doc_id: doc-c
+    chunk_id: 20
+    rank: 1
+    text: The synthetic method begins with normalization.
+    citation: '[doc:doc-c chunk:20]'
+    relevant: true
+    estimated_tokens: 11
+  - evidence_id: em02-b
+    doc_id: doc-d
+    chunk_id: 20
+    rank: 2
+    text: It ends with uncertainty propagation.
+    citation: '[doc:doc-d chunk:20]'
+    relevant: true
+    estimated_tokens: 9
+  gold:
+    relevant_evidence_ids:
+    - em02-a
+    - em02-b
+    relevant_document_ids:
+    - doc-c
+    - doc-d
+  question: How does the synthetic method begin and end?
+  answer_target: It begins with normalization and ends with uncertainty propagation.
+- id: evidence-ambiguous-03
+  stratum: ambiguous
+  rationale: A near-duplicate paraphrase remains independently relevant.
+  token_budget: 32
+  candidates:
+  - evidence_id: em03-a
+    doc_id: doc-e
+    chunk_id: 20
+    rank: 1
+    text: The reported synthetic value is eight.
+    citation: '[doc:doc-e chunk:20]'
+    relevant: true
+    estimated_tokens: 9
+  - evidence_id: em03-b
+    doc_id: doc-f
+    chunk_id: 20
+    rank: 2
+    text: Eight is the value reported by the study.
+    citation: '[doc:doc-f chunk:20]'
+    relevant: true
+    estimated_tokens: 10
+  gold:
+    relevant_evidence_ids:
+    - em03-a
+    - em03-b
+    relevant_document_ids:
+    - doc-e
+    - doc-f
+  question: What value does the study report?
+  answer_target: Eight.
+- id: evidence-ambiguous-04
+  stratum: ambiguous
+  rationale: The caption directly supplies the requested visual fact.
+  token_budget: 32
+  candidates:
+  - evidence_id: em04-a
+    doc_id: doc-g
+    chunk_id: 20
+    rank: 1
+    text: Figure 2 peaks at synthetic time nine.
+    citation: '[doc:doc-g chunk:20]'
+    image_url: /aquillm/synthetic/peak.png
+    relevant: true
+    estimated_tokens: 9
+  - evidence_id: em04-b
+    doc_id: doc-g
+    chunk_id: 21
+    rank: 2
+    text: The figure uses a blue line.
+    citation: '[doc:doc-g chunk:21]'
+    relevant: false
+    estimated_tokens: 7
+  gold:
+    relevant_evidence_ids:
+    - em04-a
+    relevant_document_ids:
+    - doc-g
+  question: When does Figure 2 peak?
+  answer_target: Synthetic time nine.
+- id: evidence-ambiguous-05
+  stratum: ambiguous
+  rationale: A relaxed budget retains related noise for behavior auditing.
+  token_budget: 256
+  candidates:
+  - evidence_id: em05-a
+    doc_id: doc-h
+    chunk_id: 20
+    rank: 1
+    text: Synthetic background about the instrument.
+    citation: '[doc:doc-h chunk:20]'
+    relevant: false
+    estimated_tokens: 10
+  - evidence_id: em05-b
+    doc_id: doc-i
+    chunk_id: 20
+    rank: 2
+    text: The instrument uncertainty is two percent.
+    citation: '[doc:doc-i chunk:20]'
+    relevant: true
+    estimated_tokens: 10
+  - evidence_id: em05-c
+    doc_id: doc-j
+    chunk_id: 20
+    rank: 3
+    text: Synthetic publication history.
+    citation: '[doc:doc-j chunk:20]'
+    relevant: false
+    estimated_tokens: 7
+  gold:
+    relevant_evidence_ids:
+    - em05-b
+    relevant_document_ids:
+    - doc-i
+  question: What is the instrument uncertainty?
+  answer_target: Two percent.
+- id: evidence-ambiguous-06
+  stratum: ambiguous
+  rationale: Noise-only retrieval has empty relevance gold.
+  token_budget: 64
+  candidates:
+  - evidence_id: em06-a
+    doc_id: doc-k
+    chunk_id: 20
+    rank: 1
+    text: Synthetic bibliography entry.
+    citation: '[doc:doc-k chunk:20]'
+    relevant: false
+    estimated_tokens: 7
+  gold:
+    relevant_evidence_ids: []
+    relevant_document_ids: []
+  question: What answer is supported by the retrieved passage?
+  answer_target: No answer; the retrieval contains bibliography noise only.
+- id: evidence-adversarial-01
+  stratum: adversarial_boundary
+  rationale: Equal ranks retain fixture order under a tight budget.
+  token_budget: 8
+  candidates:
+  - evidence_id: ea01-a
+    doc_id: doc-a
+    chunk_id: 30
+    rank: 1
+    text: Synthetic distractor occupies first position.
+    citation: '[doc:doc-a chunk:30]'
+    relevant: false
+    estimated_tokens: 11
+  - evidence_id: ea01-b
+    doc_id: doc-b
+    chunk_id: 30
+    rank: 1
+    text: The answer is zeta.
+    citation: '[doc:doc-b chunk:30]'
+    relevant: true
+    estimated_tokens: 4
+  gold:
+    relevant_evidence_ids:
+    - ea01-b
+    relevant_document_ids:
+    - doc-b
+  question: What is the answer after the tied-rank distractor?
+  answer_target: Zeta.
+- id: evidence-adversarial-02
+  stratum: adversarial_boundary
+  rationale: Keyword-heavy distractor does not state the requested fact.
+  token_budget: 32
+  candidates:
+  - evidence_id: ea02-a
+    doc_id: doc-c
+    chunk_id: 30
+    rank: 1
+    text: Answer calibration result threshold figure answer.
+    citation: '[doc:doc-c chunk:30]'
+    relevant: false
+    estimated_tokens: 12
+  - evidence_id: ea02-b
+    doc_id: doc-d
+    chunk_id: 30
+    rank: 2
+    text: The synthetic threshold is eleven.
+    citation: '[doc:doc-d chunk:30]'
+    relevant: true
+    estimated_tokens: 8
+  gold:
+    relevant_evidence_ids:
+    - ea02-b
+    relevant_document_ids:
+    - doc-d
+  question: What threshold is actually stated?
+  answer_target: Eleven.
+- id: evidence-adversarial-03
+  stratum: adversarial_boundary
+  rationale: Repeated image metadata is associated with distinct evidence.
+  token_budget: 64
+  candidates:
+  - evidence_id: ea03-a
+    doc_id: doc-e
+    chunk_id: 30
+    rank: 1
+    text: Panel A supplies the first answer fact.
+    citation: '[doc:doc-e chunk:30]'
+    image_url: /aquillm/synthetic/shared.png
+    relevant: true
+    estimated_tokens: 9
+  - evidence_id: ea03-b
+    doc_id: doc-e
+    chunk_id: 31
+    rank: 2
+    text: Panel B supplies the second answer fact.
+    citation: '[doc:doc-e chunk:31]'
+    image_url: /aquillm/synthetic/shared.png
+    relevant: true
+    estimated_tokens: 10
+  gold:
+    relevant_evidence_ids:
+    - ea03-a
+    - ea03-b
+    relevant_document_ids:
+    - doc-e
+  question: Which two panel facts are required?
+  answer_target: The answer facts supplied by panels A and B.
+- id: evidence-adversarial-04
+  stratum: adversarial_boundary
+  rationale: Numeric-looking document identity remains a string in citations.
+  token_budget: 32
+  candidates:
+  - evidence_id: ea04-a
+    doc_id: '007'
+    chunk_id: 32
+    rank: 1
+    text: The synthetic code is seven.
+    citation: '[doc:007 chunk:32]'
+    relevant: true
+    estimated_tokens: 7
+  gold:
+    relevant_evidence_ids:
+    - ea04-a
+    relevant_document_ids:
+    - '007'
+  question: What synthetic code is reported?
+  answer_target: Seven.
+- id: evidence-adversarial-05
+  stratum: adversarial_boundary
+  rationale: Very large numeric chunk identity is valid and consistent.
+  token_budget: 32
+  candidates:
+  - evidence_id: ea05-a
+    doc_id: doc-f
+    chunk_id: 999999
+    rank: 1
+    text: The boundary answer is finite.
+    citation: '[doc:doc-f chunk:999999]'
+    relevant: true
+    estimated_tokens: 7
+  - evidence_id: ea05-b
+    doc_id: doc-g
+    chunk_id: 31
+    rank: 2
+    text: Unrelated finite wording.
+    citation: '[doc:doc-g chunk:31]'
+    relevant: false
+    estimated_tokens: 6
+    observed_citation: '[doc:doc-f chunk:999999]'
+  gold:
+    relevant_evidence_ids:
+    - ea05-a
+    relevant_document_ids:
+    - doc-f
+  question: What property does the boundary answer have?
+  answer_target: It is finite.
+- id: evidence-adversarial-06
+  stratum: adversarial_boundary
+  rationale: An empty text candidate is eligible metadata but not relevant.
+  token_budget: 1
+  candidates:
+  - evidence_id: ea06-a
+    doc_id: doc-h
+    chunk_id: 30
+    rank: 1
+    text: ''
+    citation: '[doc:doc-h chunk:30]'
+    relevant: false
+    estimated_tokens: 1
+  - evidence_id: ea06-b
+    doc_id: doc-i
+    chunk_id: 30
+    rank: 2
+    text: Answer.
+    citation: '[doc:doc-i chunk:30]'
+    relevant: true
+    estimated_tokens: 1
+  gold:
+    relevant_evidence_ids:
+    - ea06-b
+    relevant_document_ids:
+    - doc-i
+  question: What answer follows the empty-text candidate?
+  answer_target: Answer.
