@@ -272,6 +272,25 @@ def test_evidence_candidate_token_estimate_matches_documented_approximation():
         validate_dataset(dataset, "evidence")
 
 
+@pytest.mark.parametrize(
+    "field", ["token_budget", "chunk_id", "rank", "estimated_tokens"]
+)
+@pytest.mark.parametrize(
+    "invalid_value",
+    [True, False, float("nan"), float("inf"), float("-inf"), 1.5, 1.0, 0, -1],
+)
+def test_evidence_numeric_fields_require_positive_finite_integers(field, invalid_value):
+    dataset = _valid_dataset("evidence")
+    case = dataset["cases"][0]
+    if field == "token_budget":
+        case[field] = invalid_value
+    else:
+        case["candidates"][0][field] = invalid_value
+
+    with pytest.raises(ValueError, match=rf"{field} must be a positive integer"):
+        validate_dataset(dataset, "evidence")
+
+
 def test_duplicate_citations_and_observed_conflicts_preserve_candidate_identity():
     dataset = _valid_dataset("evidence")
     first = dataset["cases"][0]["candidates"][0]

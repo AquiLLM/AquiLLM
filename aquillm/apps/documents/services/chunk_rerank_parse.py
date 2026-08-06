@@ -1,12 +1,26 @@
 """Parse local vLLM / OpenAI-style rerank and score HTTP responses."""
+
 from __future__ import annotations
 
-from typing import Type, TYPE_CHECKING
+import math
+from typing import TYPE_CHECKING, Type
 
 from django.db.models import Case, When
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
+
+
+def _is_integer(value) -> bool:
+    return type(value) is int
+
+
+def _is_finite_number(value) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+    )
 
 
 def fallback_rerank(model_cls: Type["TextChunk"], chunks, top_k: int):
@@ -35,7 +49,7 @@ def parse_rerank_results(body, chunks_list) -> list[int]:
     seen: set[int] = set()
     for result in results:
         idx = result.get("index") if isinstance(result, dict) else None
-        if not isinstance(idx, int) or idx < 0 or idx >= len(chunks_list):
+        if not _is_integer(idx) or idx < 0 or idx >= len(chunks_list):
             continue
         chunk_pk = chunks_list[idx].pk
         if chunk_pk in seen:
@@ -60,36 +74,36 @@ def parse_score_results(body) -> list[tuple[int, float]]:
         if not isinstance(item, dict):
             continue
         idx = item.get("index")
-        if not isinstance(idx, int):
+        if not _is_integer(idx):
             continue
         score = item.get("score")
-        if not isinstance(score, (int, float)):
+        if not _is_finite_number(score):
             score = item.get("relevance_score")
-        if not isinstance(score, (int, float)):
+        if not _is_finite_number(score):
             continue
         pairs.append((idx, float(score)))
     return pairs
 
 
 def parse_single_score(body) -> float:
-    if isinstance(body, (int, float)):
+    if _is_finite_number(body):
         return float(body)
     if isinstance(body, dict):
-        if isinstance(body.get("score"), (int, float)):
+        if _is_finite_number(body.get("score")):
             return float(body["score"])
         data = body.get("data")
         if isinstance(data, list) and data:
             first = data[0]
             if isinstance(first, dict):
                 for key in ("score", "relevance_score"):
-                    if isinstance(first.get(key), (int, float)):
+                    if _is_finite_number(first.get(key)):
                         return float(first[key])
         results = body.get("results")
         if isinstance(results, list) and results:
             first = results[0]
             if isinstance(first, dict):
                 for key in ("score", "relevance_score"):
-                    if isinstance(first.get(key), (int, float)):
+                    if _is_finite_number(first.get(key)):
                         return float(first[key])
     raise ValueError(f"Unable to parse score response: {body!r}")
 

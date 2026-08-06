@@ -246,10 +246,7 @@ def _validate_evidence_case(case: dict) -> None:
     _require_nonempty_string(case, "question")
     _require_nonempty_string(case, "answer_target")
     budget = case.get("token_budget")
-    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
-        raise ValueError(
-            f"evidence case {case_id} token_budget must be a positive integer"
-        )
+    _require_positive_integer(budget, f"evidence case {case_id} token_budget")
     candidates = case.get("candidates")
     if not isinstance(candidates, list):
         raise ValueError(f"evidence case {case_id} candidates must be a list")
@@ -268,14 +265,15 @@ def _validate_evidence_case(case: dict) -> None:
         evidence_ids.add(evidence_id)
         doc_id = _require_nonempty_string(candidate, "doc_id")
         chunk_id = candidate.get("chunk_id")
-        if isinstance(chunk_id, bool) or not isinstance(chunk_id, (int, float)):
-            raise ValueError(f"evidence case {case_id} chunk_id must be numeric")
+        _require_positive_integer(chunk_id, f"evidence case {case_id} chunk_id")
         rank = candidate.get("rank")
-        if isinstance(rank, bool) or not isinstance(rank, (int, float)) or rank < 1:
-            raise ValueError(f"evidence case {case_id} rank must be positive numeric")
+        _require_positive_integer(rank, f"evidence case {case_id} rank")
         if not isinstance(candidate.get("text"), str):
             raise ValueError(f"evidence case {case_id} text must be a string")
         estimated_tokens = candidate.get("estimated_tokens")
+        _require_positive_integer(
+            estimated_tokens, f"evidence case {case_id} estimated_tokens"
+        )
         expected_tokens = max(1, len(candidate["text"]) // 4)
         if estimated_tokens != expected_tokens:
             raise ValueError(
@@ -554,6 +552,12 @@ def _require_nonempty_string(data: dict, field: str) -> str:
 def _require_equal(data: dict, field: str, expected: object) -> None:
     if data.get(field) != expected:
         raise ValueError(f"{field} must be {expected!r}")
+
+
+def _require_positive_integer(value: object, label: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{label} must be a positive integer")
+    return value
 
 
 __all__ = [
