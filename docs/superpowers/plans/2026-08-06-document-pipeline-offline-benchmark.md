@@ -17,6 +17,7 @@
 - Modify `aquillm/apps/documents/tasks/chunking.py`: build `TextChunk` instances from the pure helper without changing historical behavior.
 - Create `aquillm/apps/ingestion/tests/test_primary_text_extraction.py`: parser fidelity and one-detection/no-figure tests.
 - Create `aquillm/apps/documents/tests/test_text_chunk_plan.py`: historical chunk-boundary equivalence tests.
+- Create `aquillm/apps/documents/tests/test_text_chunk_task_plan.py`: task-level multi-window persistence, batching, progress, and image-position equivalence.
 - Create `aquillm/apps/chat/evals/offline/document_pipeline_schema.py`: inventory schema, deterministic minimal-PDF generator, absolute metrics, canonical case records, and safe diagnostics.
 - Create `aquillm/apps/chat/evals/offline/document_pipeline_runner.py`: corpus matching, production pipeline execution, rotating timing sweeps, memory passes, aggregation, and manifest creation.
 - Create `aquillm/apps/chat/evals/offline/document_pipeline_artifacts.py`: exact artifact writing, validation, normalized comparison, table/report/CSV rendering, and provenance.
@@ -54,6 +55,8 @@ def extract_primary_text_payload(
 # document_pipeline_schema.py
 def load_document_inventory(path: Path) -> dict: ...
 def validate_document_inventory(data: dict) -> None: ...
+def load_document_review(path: Path, inventory_path: Path, *, allow_pending: bool = False) -> dict: ...
+def validate_document_review(data: dict, inventory: dict, *, allow_pending: bool = False) -> None: ...
 def generate_synthetic_pdf(page_count: int) -> tuple[bytes, str]: ...
 def build_document_record(case: dict, outcome: dict) -> dict: ...
 def aggregate_document_results(...) -> dict: ...
@@ -81,28 +84,33 @@ def write_document_provenance(aggregate_path: Path, artifact_commit: str, output
 - Modify: `aquillm/apps/documents/tasks/chunking.py`
 - Create: `aquillm/apps/ingestion/tests/test_primary_text_extraction.py`
 - Create: `aquillm/apps/documents/tests/test_text_chunk_plan.py`
+- Create: `aquillm/apps/documents/tests/test_text_chunk_task_plan.py`
 
 - [ ] **Step 1: Write RED parser-fidelity tests**
 
-Patch only call counters. Require `extract_text_payloads("paper.pdf", ...)` to call type detection once, call the new primary helper once, and append figures once under the default path. Require a benchmark-style call to `extract_primary_text_payload(..., ingest_type="document")` to execute the real `extract_pdf_text` without invoking the figure hook. Assert primary payload fields and text are identical.
+Patch only call counters. Require `extract_text_payloads("paper.pdf", ...)` to call type detection once, call the new PDF-only primary helper once, and append figures once under the default path. Require a benchmark-style call to `extract_primary_text_payload(..., ingest_type="document")` to execute the real `extract_pdf_text` without invoking the figure hook. Assert primary payload fields and text are identical, and prove that supplying `ingest_type` prevents re-detection. Keep existing parameterized tests over every non-PDF extension/type to prove their dispatch and figure policies do not change.
 
 - [ ] **Step 2: Verify parser tests fail for the missing boundary**
 
-Run from `aquillm/`:
+Run from the worktree root:
 
 ```powershell
+Set-Location aquillm
 python -m pytest apps/ingestion/tests/test_primary_text_extraction.py -q
+Set-Location ..
 ```
 
 Expected: import failure for `extract_primary_text_payload`.
 
 - [ ] **Step 3: Implement the minimal primary-text helper**
 
-Move extension/type dispatch for the primary payload into the helper. Accept a precomputed type so the caller does not detect twice. Keep `extract_text_payloads` defaults and every non-PDF behavior unchanged; for PDF/DOCX/etc., append figures after the primary helper exactly as before.
+Scope the new helper to the PDF primary payload only. Accept a precomputed type so the caller does not detect twice. `extract_text_payloads` detects once, calls the helper only for `.pdf`, and then appends PDF figures exactly as before. Leave archive, image, audio/video, text, DOCX, spreadsheet, presentation, EPUB, transcript, and structured-format branches behaviorally unchanged, including their existing per-format figure policies.
 
 - [ ] **Step 4: Write RED chunk-planning tests**
 
 Use a test-only historical slice implementation as the oracle. Cover invalid configuration and lengths 0, 1, 1663, 1664, 2047, 2048, 2049, and 10,000. Assert exact content, half-open spans, numbering, final span, and coverage.
+
+Add task-level RED tests for empty and 10,000-character documents. With model/database boundaries patched as existing task tests do, require exact persisted contents/spans/numbers, planner invocation, embedding batch input order, progress completion, and unchanged image-chunk position after the last text span.
 
 - [ ] **Step 5: Implement the pure helper and adopt it in the task**
 
@@ -111,13 +119,15 @@ The helper returns immutable specs only. `create_chunks` converts specs to `Text
 - [ ] **Step 6: Run focused and adjacent tests**
 
 ```powershell
-python -m pytest apps/ingestion/tests/test_primary_text_extraction.py apps/ingestion/tests/test_unified_ingestion_parsers.py apps/documents/tests/test_text_chunk_plan.py apps/documents/tests/test_multimodal_chunk_position_uniqueness.py -q
+Set-Location aquillm
+python -m pytest apps/ingestion/tests/test_primary_text_extraction.py apps/ingestion/tests/test_unified_ingestion_parsers.py apps/documents/tests/test_text_chunk_plan.py apps/documents/tests/test_text_chunk_task_plan.py apps/documents/tests/test_multimodal_chunk_position_uniqueness.py -q
+Set-Location ..
 ```
 
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add aquillm/aquillm/ingestion/parsers.py aquillm/apps/documents/services/text_chunk_plan.py aquillm/apps/documents/tasks/chunking.py aquillm/apps/ingestion/tests/test_primary_text_extraction.py aquillm/apps/documents/tests/test_text_chunk_plan.py
+git add aquillm/aquillm/ingestion/parsers.py aquillm/apps/documents/services/text_chunk_plan.py aquillm/apps/documents/tasks/chunking.py aquillm/apps/ingestion/tests/test_primary_text_extraction.py aquillm/apps/documents/tests/test_text_chunk_plan.py aquillm/apps/documents/tests/test_text_chunk_task_plan.py
 git commit -m "refactor(ingest): expose offline preprocessing boundaries"
 ```
 
@@ -131,11 +141,11 @@ git commit -m "refactor(ingest): expose offline preprocessing boundaries"
 
 - [ ] **Step 1: Write RED inventory-schema tests**
 
-Require schema/version, exactly 17 unique `real-NNN` cases, SHA-256, positive size, fixed rationale/lineage/sensitivity/license fields, approved independent review, no basename/path/title/content fields, no absolute path, and exact review hashes. Require non-PDF sidecars ignored and missing/extra/duplicate/hash-mismatched PDFs rejected.
+Require schema/version, exactly 17 unique `real-NNN` cases, raw PDF SHA-256, positive size, fixed rationale/lineage/sensitivity/license fields, no basename/path/title/content fields, and no absolute path. Define a sibling review schema containing canonical-text hash algorithm `sha256-utf8-lf-v1`, canonical inventory/protocol hashes, a deliberate stable agent identifier, reviewer role/date/decisions, and status. Prove pending review is rejected by default, `allow_pending=True` accepts only structurally valid pending input, and independently approved review is accepted. Privacy validation covers both YAML files.
 
-- [ ] **Step 2: Implement inventory validation and corpus matching**
+- [ ] **Step 2: Implement inventory and review validation**
 
-Use raw-byte SHA-256 to map local PDFs to case IDs. Never serialize the supplied corpus root. Diagnostics use enums only.
+Implement `load_document_inventory`, `validate_document_inventory`, `load_document_review`, and `validate_document_review`. Use raw-byte SHA-256 only for PDF inventory members and newline-canonical hashes for YAML/review lineage. Do not implement local directory matching until Task 3 owns `resolve_real_corpus`.
 
 - [ ] **Step 3: Generate and freeze the 17-member inventory before measuring outputs**
 
@@ -143,24 +153,30 @@ Hash only `*.pdf` files in the selected corpus. Order case IDs by ascending raw 
 
 - [ ] **Step 4: Write RED deterministic minimal-PDF tests**
 
-Require exact byte identity across two generation calls, exact page count, authored ASCII page strings in order, and exact expected post-sanitize/strip text at 1, 10, 50, and 100 pages. Assert corrupt generation fails closed.
+Require exact byte identity across two generation calls, exact page count, authored ASCII page strings in order, and exact expected post-sanitize/strip text `"\n\n".join(page_strings).strip()` at 1, 10, 50, and 100 pages. To test corruption, truncate the returned bytes before passing them to the parser/fixture validator; generation itself accepts only a positive page count and has no corruption mode.
 
 - [ ] **Step 5: Implement the minimal PDF builder and frozen expected hashes**
 
-Build offsets and xref data deterministically with ASCII only. Use no current time, random ID, hostname, path, downloaded font, or external generator. Store expected generated-byte and normalized-output hashes in the reviewed fixture protocol.
+Build a PDF 1.4 file deterministically with ASCII only: object 1 catalog, object 2 pages tree, page objects in ascending order, one shared built-in Helvetica font object, and one content-stream object per page. Content streams use ASCII `BT /F1 12 Tf 72 720 Td (...) Tj ET`, byte-exact `/Length`, escaped literal delimiters, ten-digit zero-padded xref offsets, one free xref entry, `trailer /Size /Root`, exact `startxref`, and `%%EOF`. Page strings use four-digit numbering. Use no current time, random ID, hostname, path, downloaded font, or external generator. Store expected generated-byte and normalized-output hashes in the pending protocol.
 
 - [ ] **Step 6: Write RED absolute-metric tests**
 
 Assert Unicode code points, UTF-8 bytes, whitespace words, actual production estimated-token function call, chunk counts, union coverage, excess overlap, ratio denominator, chunk summaries, exact output preimage hash, and empty/failure conventions.
 
-- [ ] **Step 7: Implement metric records and independent fixture review**
+- [ ] **Step 7: Commit pending frozen inputs before review**
 
-The review file records reviewer identity/role/date, inventory hash, synthetic hashes, protocol decisions, sensitivity/license statement, and approval without claiming human annotation or corpus representativeness.
+Write `document_corpus_review.yaml` with `status: pending_independent_review` and no claimed reviewer approval. Run schema tests with `allow_pending=True`, confirm normal loading rejects it, and commit the inventory, pending protocol, schema implementation, and tests. No production parser or benchmark run is allowed yet.
 
-- [ ] **Step 8: Run tests and commit frozen inputs**
+- [ ] **Step 8: Obtain and record genuinely independent approval**
+
+Dispatch a fresh reviewer that did not author the inventory. Give it read-only access to the 17 local PDFs, pending inventory/protocol, generator tests, and approved spec. It verifies exact PDF membership/total, raw hashes/sizes, absence of private fields, authored strings, generated hashes, sensitivity/license wording, and that production functions have not been measured. The reviewer returns a stable task identifier and decisions. The coordinator records that returned identity/decision and `status: approved`, then re-dispatches the same reviewer to verify the exact approved bytes and canonical hashes. The implementer must not self-approve.
+
+- [ ] **Step 9: Run tests and commit approved frozen inputs**
 
 ```powershell
+Set-Location aquillm
 python -m pytest apps/chat/tests/test_offline_document_pipeline_schema.py -q
+Set-Location ..
 git add aquillm/apps/chat/evals/offline/document_pipeline_schema.py aquillm/apps/chat/evals/offline/fixtures/document_corpus_inventory.yaml aquillm/apps/chat/evals/offline/fixtures/document_corpus_review.yaml aquillm/apps/chat/tests/test_offline_document_pipeline_schema.py
 git commit -m "test(eval): freeze offline document benchmark inputs"
 ```
@@ -177,7 +193,7 @@ Do not run the canonical benchmark before this commit and its independent review
 
 - [ ] **Step 1: Write RED production-execution tests**
 
-Patch call counters only and require the runner to execute detection, production primary extraction, exact sanitize/strip, production chunk planner, and production token estimator. Assert figures, database, embeddings, and network are never called.
+First test `resolve_real_corpus`: discover direct-child files only, match `.pdf` case-insensitively, ignore non-PDF sidecars, default `allow_unlisted_pdfs=False`, reject unlisted PDFs, missing inventory hashes, duplicate file hashes, and size/hash mismatch, and return only stable case IDs plus in-memory bytes with path-free diagnostic codes. Patch call counters only and require the runner to execute detection, production primary extraction, exact sanitize/strip, production chunk planner, and production token estimator. Assert figures, database, embeddings, and network are never called.
 
 - [ ] **Step 2: Write RED stage/failure tests**
 
@@ -206,7 +222,9 @@ Record non-secret machine context, fixed chunk config, source/corpus/config hash
 - [ ] **Step 8: Run focused tests and commit**
 
 ```powershell
+Set-Location aquillm
 python -m pytest apps/chat/tests/test_offline_document_pipeline_runner.py apps/chat/tests/test_offline_document_pipeline_schema.py -q
+Set-Location ..
 git add aquillm/apps/chat/evals/offline/document_pipeline_runner.py aquillm/apps/chat/tests/test_offline_document_pipeline_runner.py
 git commit -m "feat(eval): measure offline document preprocessing"
 ```
@@ -250,8 +268,10 @@ Subcommands: `run`, `validate`, `compare`, `table`, and `provenance`. `run` acce
 - [ ] **Step 8: Run all new and adjacent tests and commit**
 
 ```powershell
+Set-Location aquillm
 python -m pytest apps/ingestion/tests/test_primary_text_extraction.py apps/documents/tests/test_text_chunk_plan.py apps/chat/tests/test_offline_document_pipeline_schema.py apps/chat/tests/test_offline_document_pipeline_runner.py apps/chat/tests/test_offline_document_pipeline_artifacts.py -q
 python -m pytest apps/ingestion/tests/test_unified_ingestion_parsers.py apps/documents/tests/test_multimodal_chunk_position_uniqueness.py apps/chat/tests/test_offline_evidence_metrics.py apps/chat/tests/test_offline_evidence_schema.py apps/chat/tests/test_offline_evidence_runner.py -q
+Set-Location ..
 git diff --check
 git add aquillm/apps/chat/evals/offline/document_pipeline_artifacts.py aquillm/apps/chat/evals/run_document_pipeline.py aquillm/apps/chat/tests/test_offline_document_pipeline_artifacts.py README.md
 git commit -m "feat(eval): add reproducible document benchmark artifacts"
