@@ -136,6 +136,8 @@ _TIMING_SWEEP_EXCLUSIONS = {
 }
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _SOURCE_HASH_KEYS = {
+    "apps.chat.services.rag_evidence",
+    "aquillm.task_ingest_helpers",
     "document_pipeline_artifacts",
     "document_pipeline_runner",
     "document_pipeline_schema",
@@ -143,6 +145,7 @@ _SOURCE_HASH_KEYS = {
     "network_guard",
     "run_offline_evidence",
     "text_chunk_plan",
+    "lib.parsers.documents.pdf",
 }
 _DOCUMENT_EXTENSION_RE = re.compile(
     r"(?i)(?:^|[/\\])[^/\\]+\.(?:pdf|docx?|rtf|odt|epub|txt|md|html?|"
@@ -211,7 +214,7 @@ def _privacy_scan(value: object) -> None:
     inherited_secrets = {
         secret
         for name, secret in os.environ.items()
-        if secret
+        if len(secret) >= 8
         and re.search(
             r"credential|token|secret|password|(?:^|_)key(?:_|$)",
             name,
@@ -923,8 +926,10 @@ def write_document_provenance(
     """Write non-self-referential source, artifact, hash, and algorithm lineage."""
 
     aggregate_path = Path(aggregate_path).resolve()
-    output_path = Path(output_path)
+    output_path = Path(output_path).resolve(strict=False)
     artifact_dir = aggregate_path.parent
+    if output_path == artifact_dir or artifact_dir in output_path.parents:
+        raise ValueError("provenance output must be outside the artifact directory")
     if repository is None:
         repository = Path(
             subprocess.run(
@@ -1011,12 +1016,21 @@ def write_document_provenance(
     }
     _privacy_scan(payload)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp = output_path.with_name(f".{output_path.name}.tmp")
+    temp: Path | None = None
     try:
-        temp.write_bytes(canonical_json_bytes(payload))
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=f".{output_path.name}-",
+            suffix=".tmp",
+            dir=output_path.parent,
+            delete=False,
+        ) as handle:
+            temp = Path(handle.name)
+            handle.write(canonical_json_bytes(payload))
         os.replace(temp, output_path)
     finally:
-        temp.unlink(missing_ok=True)
+        if temp is not None:
+            temp.unlink(missing_ok=True)
 
 
 def validate_document_provenance(path: Path, repository: Path) -> None:

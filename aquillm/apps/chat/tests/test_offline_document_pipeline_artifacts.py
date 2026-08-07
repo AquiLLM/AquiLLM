@@ -135,6 +135,8 @@ def _canonical_result() -> dict:
     source_hashes = {
         name: hashlib.sha256(name.encode()).hexdigest()
         for name in (
+            "apps.chat.services.rag_evidence",
+            "aquillm.task_ingest_helpers",
             "document_pipeline_artifacts",
             "document_pipeline_runner",
             "document_pipeline_schema",
@@ -142,6 +144,7 @@ def _canonical_result() -> dict:
             "network_guard",
             "run_offline_evidence",
             "text_chunk_plan",
+            "lib.parsers.documents.pdf",
         )
     }
     manifest = {
@@ -479,6 +482,59 @@ def test_validator_rejects_corrupt_derived_and_private_payload(tmp_path: Path):
         write_document_artifacts(private, tmp_path / "private")
 
 
+def test_short_ambient_credential_values_do_not_false_positive(
+    tmp_path: Path, monkeypatch
+):
+    from apps.chat.evals.offline.document_pipeline_artifacts import (
+        validate_document_artifacts,
+        write_document_artifacts,
+    )
+
+    monkeypatch.setenv("TOKEN", "1")
+    monkeypatch.setenv("SECRET_KEY", "test")
+    output = tmp_path / "canonical"
+    write_document_artifacts(_canonical_result(), output)
+    validate_document_artifacts(output)
+
+
+def test_long_ambient_credential_sentinel_is_rejected(tmp_path: Path, monkeypatch):
+    from apps.chat.evals.offline.document_pipeline_artifacts import (
+        write_document_artifacts,
+    )
+
+    sentinel = "supersecret-sentinel-123"
+    monkeypatch.setenv("BENCHMARK_SECRET_KEY", sentinel)
+    result = _canonical_result()
+    result["manifest"]["environment"]["machine"] = sentinel
+    with pytest.raises(ValueError, match="credential"):
+        write_document_artifacts(result, tmp_path / "leak")
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_provenance_output_must_be_outside_artifact_directory(
+    tmp_path: Path, monkeypatch, nested: bool
+):
+    from apps.chat.evals.offline import document_pipeline_artifacts as artifacts
+
+    artifact_dir = tmp_path / "canonical"
+    artifact_dir.mkdir()
+    aggregate = artifact_dir / "aggregate.json"
+    output = artifact_dir / "nested" / "PROVENANCE.json" if nested else artifact_dir
+    monkeypatch.setattr(artifacts, "validate_document_artifacts", lambda path: None)
+    monkeypatch.setattr(
+        artifacts, "_git_repository_for_commit", lambda repository, commit: tmp_path
+    )
+
+    with pytest.raises(ValueError, match="outside.*artifact"):
+        artifacts.write_document_provenance(
+            aggregate,
+            "a" * 40,
+            output,
+            tmp_path,
+        )
+    assert not (artifact_dir / "nested").exists()
+
+
 def test_provenance_binds_committed_artifact_blobs_and_lineage(
     tmp_path: Path, monkeypatch
 ):
@@ -532,6 +588,8 @@ def test_provenance_binds_committed_artifact_blobs_and_lineage(
         text=True,
     ).stdout.strip()
     output = repository / "PROVENANCE.json"
+    predictable_temp = repository / ".PROVENANCE.json.tmp"
+    predictable_temp.write_bytes(b"pre-existing sentinel")
 
     write_document_provenance(
         artifact_dir / "aggregate.json",
@@ -539,6 +597,7 @@ def test_provenance_binds_committed_artifact_blobs_and_lineage(
         output,
         repository,
     )
+    assert predictable_temp.read_bytes() == b"pre-existing sentinel"
     validate_document_provenance(output, repository)
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["artifact_commit"] == artifact_commit
@@ -591,6 +650,19 @@ def test_provenance_binds_committed_artifact_blobs_and_lineage(
         extracted,
     )
     validate_document_provenance(archive_provenance, extracted)
+
+    for forbidden_output in (
+        artifact_dir / "nested" / "PROVENANCE.json",
+        artifact_dir,
+    ):
+        with pytest.raises(ValueError, match="outside.*artifact"):
+            write_document_provenance(
+                artifact_dir / "aggregate.json",
+                artifact_commit,
+                forbidden_output,
+                repository,
+            )
+    assert not (artifact_dir / "nested").exists()
 
 
 def test_document_cli_parser_preserves_old_and_adds_document_commands():
@@ -657,6 +729,49 @@ def test_document_cli_caught_network_attempt_is_operation_only_and_not_promoted(
     assert "private.example.invalid" not in message
     assert "443" not in message
     assert not output.exists()
+
+
+def test_document_cli_ignores_empty_staging_cleanup_failure_after_promotion(
+    tmp_path: Path, monkeypatch
+):
+    from apps.chat.evals import run_offline_evidence as cli
+    from apps.chat.evals.offline import document_pipeline_runner
+    from apps.chat.evals.offline.document_pipeline_artifacts import (
+        validate_document_artifacts,
+    )
+
+    monkeypatch.setattr(
+        document_pipeline_runner,
+        "run_document_benchmark",
+        lambda *args, **kwargs: _canonical_result(),
+    )
+    monkeypatch.setattr(
+        document_pipeline_runner,
+        "_source_state",
+        lambda: {"commit": "a" * 40, "dirty": False},
+    )
+    real_rmdir = Path.rmdir
+
+    def fail_guarded_container_rmdir(path: Path):
+        if "-guarded-" in path.name:
+            raise OSError("simulated empty-directory cleanup failure")
+        return real_rmdir(path)
+
+    monkeypatch.setattr(Path, "rmdir", fail_guarded_container_rmdir)
+    output = tmp_path / "canonical"
+    args = SimpleNamespace(
+        real_corpus=tmp_path / "corpus",
+        inventory=tmp_path / "inventory.yaml",
+        review=tmp_path / "review.yaml",
+        output=output,
+        sweeps=30,
+        memory_repeats=3,
+        noncanonical_smoke=False,
+        synthetic_pages=None,
+    )
+
+    assert cli._document_run(args) == 0
+    validate_document_artifacts(output)
 
 
 def test_document_cli_fresh_subprocess_help_and_noncanonical_smoke(tmp_path: Path):

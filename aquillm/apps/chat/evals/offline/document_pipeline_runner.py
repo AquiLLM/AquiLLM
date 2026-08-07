@@ -34,6 +34,7 @@ from apps.chat.services import rag_evidence
 from apps.documents.services.text_chunk_plan import plan_text_chunks
 from aquillm.ingestion import parsers
 from aquillm.task_ingest_helpers import sanitize_db_text
+from lib.parsers.documents import pdf as pdf_document_parser
 
 SCHEMA_VERSION = "1.0"
 
@@ -585,6 +586,10 @@ def _source_state() -> dict[str, object]:
 
 def _source_hashes() -> dict[str, str]:
     paths = {
+        "apps.chat.services.rag_evidence": Path(rag_evidence.__file__),
+        "aquillm.task_ingest_helpers": Path(
+            sys.modules[sanitize_db_text.__module__].__file__
+        ),
         "document_pipeline_artifacts": Path(__file__).with_name(
             "document_pipeline_artifacts.py"
         ),
@@ -597,6 +602,7 @@ def _source_hashes() -> dict[str, str]:
         "run_offline_evidence": Path(__file__).parent.parent
         / "run_offline_evidence.py",
         "text_chunk_plan": Path(sys.modules[plan_text_chunks.__module__].__file__),
+        "lib.parsers.documents.pdf": Path(pdf_document_parser.__file__),
     }
     return {name: sha256_canonical_text(path) for name, path in sorted(paths.items())}
 

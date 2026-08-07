@@ -1086,6 +1086,8 @@ def test_source_hashes_cover_every_executed_document_benchmark_boundary():
     from apps.chat.evals.offline import document_pipeline_runner as runner
 
     assert set(runner._source_hashes()) == {
+        "apps.chat.services.rag_evidence",
+        "aquillm.task_ingest_helpers",
         "document_pipeline_artifacts",
         "document_pipeline_runner",
         "document_pipeline_schema",
@@ -1093,6 +1095,7 @@ def test_source_hashes_cover_every_executed_document_benchmark_boundary():
         "network_guard",
         "run_offline_evidence",
         "text_chunk_plan",
+        "lib.parsers.documents.pdf",
     }
 
 

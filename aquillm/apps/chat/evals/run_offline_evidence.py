@@ -321,7 +321,10 @@ def _document_run(args) -> int:
             operations = [detail["operation"] for detail in audit["details"]]
             raise RuntimeError(f"network attempts observed: operations={operations!r}")
         os.replace(staged_output, output)
-        staging_container.rmdir()
+        try:
+            staging_container.rmdir()
+        except OSError:
+            pass
         return 0
     except Exception:
         _remove_verified_staging(staging_container, output.parent)
