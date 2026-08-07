@@ -544,6 +544,47 @@ curl --compressed -L -b cookies.txt "http://localhost:8000/api/feedback/ratings.
 
 ## Tests and hygiene
 
+### Reproducible offline document preprocessing benchmark
+
+The publication benchmark runs the production PDF text extraction, sanitization,
+and chunk-planning boundaries locally without database, embedding, inference, or
+external network services. Canonical runs require a clean source tree, the frozen
+17-document inventory and approved review, exactly 30 timing sweeps per arm, and
+three memory passes per case:
+
+```bash
+cd aquillm
+python -m apps.chat.evals.run_offline_evidence document-run \
+  --real-corpus "$AQUILLM_LOCAL_ASTRO_CORPUS" \
+  --inventory apps/chat/evals/offline/document_corpus_inventory.yaml \
+  --review apps/chat/evals/offline/document_corpus_review.yaml \
+  --output ../document-canonical-a --sweeps 30 --memory-repeats 3
+python -m apps.chat.evals.run_offline_evidence document-validate ../document-canonical-a
+python -m apps.chat.evals.run_offline_evidence document-compare ../document-canonical-a ../document-canonical-b
+python -m apps.chat.evals.run_offline_evidence document-table \
+  ../document-canonical-a/aggregate.json --output ../document-table.md
+```
+
+Generate provenance only after the 13-file artifact directory has been committed;
+the provenance file must remain outside that directory:
+
+```bash
+python -m apps.chat.evals.run_offline_evidence document-provenance \
+  --aggregate ../document-canonical-a/aggregate.json --repository .. \
+  --artifact-commit "$ARTIFACT_COMMIT" --output ../document-PROVENANCE.json
+python -m apps.chat.evals.run_offline_evidence document-provenance \
+  --validate ../document-PROVENANCE.json --repository ..
+```
+
+For a non-publication pipeline check, use the explicitly isolated smoke mode. It
+writes only `smoke-result.json`, cannot be validated as canonical evidence, and
+must not be copied into publication directories:
+
+```bash
+python -m apps.chat.evals.run_offline_evidence document-run \
+  --noncanonical-smoke --synthetic-pages 1 --output ../noncanonical-smoke
+```
+
 Backend tests use pytest from the `aquillm/` directory (where `manage.py` lives), with `DJANGO_SETTINGS_MODULE=aquillm.settings`. Set the same environment variables as runtime (at minimum `SECRET_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and Google OAuth variables if `DJANGO_DEBUG` is off). PostgreSQL must be reachable for tests that use `@pytest.mark.django_db`.
 
 ```bash
