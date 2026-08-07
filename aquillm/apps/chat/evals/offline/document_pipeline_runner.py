@@ -7,6 +7,7 @@ import hashlib
 import io
 import os
 import platform
+import stat
 import struct
 import subprocess
 import sys
@@ -25,9 +26,10 @@ from apps.chat.evals.offline.document_pipeline_schema import (
     aggregate_document_results,
     build_document_record,
     generate_synthetic_pdf,
-    validate_document_review,
+    load_document_inventory,
+    load_document_review,
 )
-from apps.chat.evals.offline.schema import canonical_json_bytes, sha256_canonical_text
+from apps.chat.evals.offline.schema import sha256_canonical_text
 from apps.chat.services import rag_evidence
 from apps.documents.services.text_chunk_plan import plan_text_chunks
 from aquillm.ingestion import parsers
@@ -49,6 +51,14 @@ def _page_count(pdf_bytes: bytes) -> int | None:
         return len(PdfReader(io.BytesIO(pdf_bytes)).pages)
     except Exception:
         return None
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attributes & reparse_flag)
 
 
 def resolve_real_corpus(
@@ -73,7 +83,11 @@ def resolve_real_corpus(
 
     observed: dict[str, bytes] = {}
     for path in Path(corpus_dir).iterdir():
-        if not path.is_file() or path.suffix.casefold() != ".pdf":
+        if path.suffix.casefold() != ".pdf":
+            continue
+        if _is_link_or_reparse(path):
+            raise _integrity_error("linked_pdf")
+        if not path.is_file():
             continue
         pdf_bytes = path.read_bytes()
         raw_hash = hashlib.sha256(pdf_bytes).hexdigest()
@@ -235,6 +249,31 @@ def _rate(numerator: int, denominator_ns: int) -> float | None:
     return numerator * 1_000_000_000 / denominator_ns if denominator_ns else None
 
 
+def _build_observed_static(case: dict, observation: Mapping[str, object]) -> dict:
+    return build_document_record(
+        arm=case["arm"],
+        case_id=case["case_id"],
+        input_bytes=len(case["pdf_bytes"]),
+        page_count=case["page_count"],
+        success=observation["success"],
+        diagnostic_code=observation["diagnostic_code"],
+        sanitized_text=observation.get("_sanitized_text"),
+        chunk_specs=observation.get("_chunk_specs"),
+    )
+
+
+def _require_static_match(
+    case: dict,
+    observation: Mapping[str, object],
+    frozen_static: Mapping[str, object],
+    *,
+    phase: str,
+) -> None:
+    observed_static = _build_observed_static(case, observation)
+    if observed_static != frozen_static:
+        raise BenchmarkIntegrityError(f"{phase} output drift from static record")
+
+
 def _sweep_record(
     arm: str,
     sweep_index: int,
@@ -317,6 +356,8 @@ def _run_timing_sweeps(
             warmup = _observe_pipeline(
                 case, chunk_size=chunk_size, overlap=overlap, clock=clock
             )
+            static = static_by_identity[(arm, case["case_id"])]
+            _require_static_match(case, warmup, static, phase="timing warm-up")
             if arm == "synthetic" and warmup["success"] is not True:
                 raise BenchmarkIntegrityError("synthetic warm-up failed")
         for sweep_index in range(sweeps):
@@ -327,19 +368,13 @@ def _run_timing_sweeps(
                 observation = _observe_pipeline(
                     case, chunk_size=chunk_size, overlap=overlap, clock=clock
                 )
+                static = static_by_identity[(arm, case["case_id"])]
+                _require_static_match(case, observation, static, phase="timing")
                 observation = {
                     key: value
                     for key, value in observation.items()
                     if not key.startswith("_")
                 }
-                static = static_by_identity[(arm, case["case_id"])]
-                if (
-                    observation["success"] != static["success"]
-                    or observation["diagnostic_code"] != static["diagnostic_code"]
-                ):
-                    raise BenchmarkIntegrityError(
-                        "timing outcome differs from validated static record"
-                    )
                 row = {
                     "schema_version": SCHEMA_VERSION,
                     "arm": arm,
@@ -387,16 +422,34 @@ def _run_pipeline_unmeasured(
         )
         sanitized_text = sanitize_db_text(payload.full_text or "").strip()
         if not sanitized_text:
-            return {"success": False, "diagnostic_code": "empty_primary_text"}
-        plan_text_chunks(sanitized_text, chunk_size=chunk_size, overlap=overlap)
-        return {"success": True, "diagnostic_code": "ok"}
+            return {
+                "success": False,
+                "diagnostic_code": "empty_primary_text",
+                "_sanitized_text": None,
+                "_chunk_specs": None,
+            }
+        chunk_specs = plan_text_chunks(
+            sanitized_text, chunk_size=chunk_size, overlap=overlap
+        )
+        return {
+            "success": True,
+            "diagnostic_code": "ok",
+            "_sanitized_text": sanitized_text,
+            "_chunk_specs": chunk_specs,
+        }
     except Exception as exc:
         diagnostic_code = _diagnostic_for(exc, page_count=case["page_count"])
-        return {"success": False, "diagnostic_code": diagnostic_code}
+        return {
+            "success": False,
+            "diagnostic_code": diagnostic_code,
+            "_sanitized_text": None,
+            "_chunk_specs": None,
+        }
 
 
 def _run_memory_passes(
     cases_by_arm: dict[str, list[dict]],
+    static_records: list[dict],
     *,
     memory_repeats: int,
     chunk_size: int,
@@ -405,6 +458,7 @@ def _run_memory_passes(
     """Collect isolated incremental Python allocation peaks for every attempt."""
 
     records = []
+    static_by_identity = {(row["arm"], row["case_id"]): row for row in static_records}
     for arm in ("real", "synthetic"):
         cases = sorted(cases_by_arm.get(arm, []), key=lambda case: case["case_id"])
         for case in cases:
@@ -419,6 +473,8 @@ def _run_memory_passes(
                     _, peak = tracemalloc.get_traced_memory()
                 finally:
                     tracemalloc.stop()
+                static = static_by_identity[(arm, case["case_id"])]
+                _require_static_match(case, outcome, static, phase="memory")
                 if arm == "synthetic" and outcome["success"] is not True:
                     raise BenchmarkIntegrityError("synthetic memory pass failed")
                 records.append(
@@ -498,10 +554,6 @@ def _source_state() -> dict[str, object]:
     return {"commit": commit, "dirty": dirty}
 
 
-def _mapping_hash(value: Mapping[str, object]) -> str:
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
-
-
 def _source_hashes() -> dict[str, str]:
     paths = {
         "document_pipeline_runner": Path(__file__),
@@ -514,20 +566,63 @@ def _source_hashes() -> dict[str, str]:
     return {name: sha256_canonical_text(path) for name, path in sorted(paths.items())}
 
 
-def _normalize_network_audit(network_audit: Mapping[str, object]) -> dict:
-    normalized = dict(network_audit)
-    if normalized.get("total_attempts") == 0:
-        normalized["scope"] = (
-            "zero connection attempts observed through the configured process-local "
-            "socket guard"
-        )
-    return normalized
+def _validate_network_audit(network_audit: Mapping[str, object]) -> dict:
+    required_keys = {"guard", "scope", "total_attempts", "details"}
+    if not isinstance(network_audit, Mapping) or set(network_audit) != required_keys:
+        raise BenchmarkIntegrityError("network audit keys are invalid")
+    if network_audit["guard"] != "deny_network":
+        raise BenchmarkIntegrityError("network audit guard identity is invalid")
+    if network_audit["scope"] != "fixture_generation_through_artifact_validation":
+        raise BenchmarkIntegrityError("network audit scope identity is invalid")
+    total_attempts = network_audit["total_attempts"]
+    if type(total_attempts) is not int or total_attempts < 0:
+        raise BenchmarkIntegrityError("network audit total type is invalid")
+    details = network_audit["details"]
+    if not isinstance(details, list):
+        raise BenchmarkIntegrityError("network audit details type is invalid")
+    allowed_operations = {
+        "socket.socket.connect",
+        "socket.socket.connect_ex",
+        "socket.create_connection",
+    }
+    for detail in details:
+        if (
+            not isinstance(detail, Mapping)
+            or set(detail) != {"operation"}
+            or detail["operation"] not in allowed_operations
+        ):
+            raise BenchmarkIntegrityError("network audit detail is invalid or unsafe")
+    if total_attempts != len(details):
+        raise BenchmarkIntegrityError("network audit total does not match details")
+    if total_attempts:
+        raise BenchmarkIntegrityError("network audit observed a connection attempt")
+    return {
+        "guard": network_audit["guard"],
+        "scope": network_audit["scope"],
+        "total_attempts": total_attempts,
+        "details": [dict(detail) for detail in details],
+    }
+
+
+def _load_benchmark_inputs(inventory_path: Path, review_path: Path) -> dict:
+    inventory_path = Path(inventory_path)
+    review_path = Path(review_path)
+    inventory = load_document_inventory(inventory_path)
+    review = load_document_review(review_path, inventory_path)
+    return {
+        "inventory": inventory,
+        "review": review,
+        "inventory_source_hash": sha256_canonical_text(inventory_path),
+        "review_source_hash": sha256_canonical_text(review_path),
+    }
 
 
 def _build_manifest(
     *,
     inventory: Mapping[str, object],
     review: Mapping[str, object],
+    inventory_source_hash: str,
+    review_source_hash: str,
     synthetic_cases: list[dict],
     network_audit: Mapping[str, object],
     chunk_size: int,
@@ -548,19 +643,30 @@ def _build_manifest(
         "timestamp_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "source": _source_state(),
         "hashes": {
-            "algorithm": "sha256-utf8-lf-v1",
-            "source_code": _source_hashes(),
-            "inventory_source": review.get("inventory_hash")
-            or _mapping_hash(inventory),
-            "review_config": _mapping_hash(review),
-            "synthetic_protocol": review.get("protocol_hash")
-            or _mapping_hash(review.get("protocol", {})),
+            "source_code": {
+                "algorithm": "sha256-utf8-lf-v1",
+                "values": _source_hashes(),
+            },
+            "inventory_source": {
+                "algorithm": "sha256-utf8-lf-v1",
+                "sha256": inventory_source_hash,
+            },
+            "review_source": {
+                "algorithm": "sha256-utf8-lf-v1",
+                "sha256": review_source_hash,
+            },
+            "synthetic_protocol": {
+                "algorithm": review["protocol_hash_algorithm"],
+                "sha256": review["protocol_hash"],
+            },
         },
         "synthetic_inputs": [
             {
                 "case_id": case["case_id"],
                 "pdf_sha256": case["raw_sha256"],
+                "pdf_hash_algorithm": "sha256-raw-bytes-v1",
                 "expected_output_sha256": case["expected_output_sha256"],
+                "expected_output_hash_algorithm": "sha256-utf8-lf-v1",
                 "page_count": case["page_count"],
             }
             for case in synthetic_cases
@@ -594,13 +700,17 @@ def _build_manifest(
             "memory_repeats_per_case": memory_repeats,
         },
         "network_audit": dict(network_audit),
+        "network_audit_statement": (
+            "zero connection attempts observed through the configured process-local "
+            "socket guard"
+        ),
     }
 
 
 def run_document_benchmark(
     corpus_dir: Path,
-    inventory: dict,
-    review: dict,
+    inventory_path: Path,
+    review_path: Path,
     *,
     network_audit: Mapping[str, object],
     sweeps: int = 30,
@@ -612,7 +722,10 @@ def run_document_benchmark(
 ) -> dict:
     """Prepare, measure, aggregate, and return the canonical in-memory result."""
 
-    validate_document_review(review, inventory)
+    validated_audit = _validate_network_audit(network_audit)
+    loaded_inputs = _load_benchmark_inputs(inventory_path, review_path)
+    inventory = loaded_inputs["inventory"]
+    review = loaded_inputs["review"]
     real_cases = resolve_real_corpus(
         corpus_dir, inventory, allow_unlisted_pdfs=allow_unlisted_pdfs
     )
@@ -643,22 +756,24 @@ def run_document_benchmark(
     )
     memory_records = _run_memory_passes(
         cases_by_arm,
+        static_records,
         memory_repeats=memory_repeats,
         chunk_size=chunk_size,
         overlap=overlap,
     )
-    normalized_audit = _normalize_network_audit(network_audit)
     aggregate = aggregate_document_results(
         static_records,
         timing_sweeps,
         memory_records,
-        network_audit=normalized_audit,
+        network_audit=validated_audit,
     )
     manifest = _build_manifest(
         inventory=inventory,
         review=review,
+        inventory_source_hash=loaded_inputs["inventory_source_hash"],
+        review_source_hash=loaded_inputs["review_source_hash"],
         synthetic_cases=synthetic_cases,
-        network_audit=normalized_audit,
+        network_audit=validated_audit,
         chunk_size=chunk_size,
         overlap=overlap,
         sweeps=sweeps,
