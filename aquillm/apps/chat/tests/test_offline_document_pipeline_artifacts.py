@@ -193,7 +193,6 @@ def _canonical_result() -> dict:
             "machine": "AMD64",
             "python_version": "3.13.5",
             "logical_cpu_count": 8,
-            "cpu": "generic",
             "total_system_ram_bytes": 1_000_000,
             "process_bits": 64,
             "timer": "time.perf_counter_ns",
@@ -424,6 +423,27 @@ def test_manifest_rejects_relative_paths_and_document_basenames(
     result["manifest"][section][field] = value
     with pytest.raises(ValueError, match="privacy|manifest|version|environment"):
         write_document_artifacts(result, tmp_path / "private")
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "Private Paper Title",
+        "Galaxy formation results show dark matter",
+        "Introduction This paper presents a new method",
+    ],
+)
+def test_manifest_environment_rejects_free_form_document_prose(
+    tmp_path: Path, prose: str
+):
+    from apps.chat.evals.offline.document_pipeline_artifacts import (
+        write_document_artifacts,
+    )
+
+    result = _canonical_result()
+    result["manifest"]["environment"]["cpu"] = prose
+    with pytest.raises(ValueError, match="environment"):
+        write_document_artifacts(result, tmp_path / "prose")
 
 
 @pytest.mark.parametrize("field", ["content", "title", "text"])

@@ -740,7 +740,6 @@ def _build_manifest(
             "machine": platform.machine(),
             "python_version": platform.python_version(),
             "logical_cpu_count": os.cpu_count(),
-            "cpu": platform.processor() or "unknown",
             "total_system_ram_bytes": psutil.virtual_memory().total,
             "process_bits": struct.calcsize("P") * 8,
             "timer": "time.perf_counter_ns",

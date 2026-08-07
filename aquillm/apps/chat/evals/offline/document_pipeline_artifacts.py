@@ -148,7 +148,8 @@ _DOCUMENT_EXTENSION_RE = re.compile(
     r"(?i)(?:^|[/\\])[^/\\]+\.(?:pdf|docx?|rtf|odt|epub|txt|md|html?|"
     r"csv|tsv|xlsx?|ods|pptx?|odp|jsonl?|xml|ya?ml|vtt|srt)\Z"
 )
-_SAFE_MACHINE_TEXT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _().,+-]{0,127}\Z")
+_SAFE_ARCHITECTURE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}\Z")
+_OS_RELEASE_RE = re.compile(r"[0-9][A-Za-z0-9_.+-]{0,63}\Z")
 _VERSION_RE = re.compile(r"(?:unavailable|[0-9]+(?:\.[0-9]+)*(?:[A-Za-z0-9.+_-]*)?)\Z")
 _SENSITIVE_KEY_RE = re.compile(
     r"(?:filename|basename|content|text|(?:document_)?title|(?:raw_)?exception|"
@@ -384,7 +385,6 @@ def _validate_manifest(manifest: object) -> None:
         "machine",
         "python_version",
         "logical_cpu_count",
-        "cpu",
         "total_system_ram_bytes",
         "process_bits",
         "timer",
@@ -392,11 +392,16 @@ def _validate_manifest(manifest: object) -> None:
     }
     if not isinstance(environment, Mapping) or set(environment) != environment_keys:
         raise ValueError("manifest environment keys are invalid")
-    for field in ("os", "os_release", "machine", "cpu"):
-        if type(environment[field]) is not str or not _SAFE_MACHINE_TEXT_RE.fullmatch(
-            environment[field]
-        ):
-            raise ValueError(f"manifest environment {field} is invalid")
+    if environment["os"] not in {"Windows", "Linux", "Darwin"}:
+        raise ValueError("manifest environment os is invalid")
+    if type(environment["machine"]) is not str or not _SAFE_ARCHITECTURE_RE.fullmatch(
+        environment["machine"]
+    ):
+        raise ValueError("manifest environment machine is invalid")
+    if type(environment["os_release"]) is not str or not _OS_RELEASE_RE.fullmatch(
+        environment["os_release"]
+    ):
+        raise ValueError("manifest environment os_release is invalid")
     if type(environment["python_version"]) is not str or not _VERSION_RE.fullmatch(
         environment["python_version"]
     ):
