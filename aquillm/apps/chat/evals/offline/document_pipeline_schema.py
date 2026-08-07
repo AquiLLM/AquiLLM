@@ -71,7 +71,10 @@ _PROTOCOL_CASE_KEYS = {
     "expected_page_count",
 }
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-_AGENT_ID_RE = re.compile(r"codex-agent:[a-z0-9][a-z0-9._:/-]*\Z")
+_AGENT_ID_RE = re.compile(
+    r"codex-agent:(?!(?:self|ambient)\Z)/?[a-z0-9][a-z0-9._-]*"
+    r"(?:/[a-z0-9][a-z0-9._-]*)*\Z"
+)
 _PROHIBITED_KEYS = {"filename", "basename", "path", "title", "content", "text"}
 _SYNTHETIC_PAGE_TEMPLATE = (
     "AquiLLM synthetic preprocessing page NNNN. The quick brown fox jumps over "

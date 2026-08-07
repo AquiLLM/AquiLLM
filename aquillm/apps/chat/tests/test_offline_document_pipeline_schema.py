@@ -257,6 +257,39 @@ def test_review_requires_exact_keys_hashes_and_independent_approval(tmp_path):
         load_document_review(review_path, inventory_path)
 
 
+def test_approved_review_accepts_slash_rooted_stable_task_identity(tmp_path):
+    inventory_path = tmp_path / "inventory.yaml"
+    inventory = _valid_inventory()
+    _write_yaml(inventory_path, inventory)
+    review = _valid_review(inventory_path)
+    review["reviewer_identity"] = "codex-agent:/root/document_task2_input_review"
+
+    validate_document_review(review, inventory)
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        "codex-agent:self",
+        "codex-agent:ambient",
+        "codex-agent:/",
+        "codex-agent://root/reviewer",
+        "codex-agent:/root/../reviewer",
+    ],
+)
+def test_approved_review_rejects_placeholder_or_invalid_task_identity(
+    tmp_path, identity
+):
+    inventory_path = tmp_path / "inventory.yaml"
+    inventory = _valid_inventory()
+    _write_yaml(inventory_path, inventory)
+    review = _valid_review(inventory_path)
+    review["reviewer_identity"] = identity
+
+    with pytest.raises(ValueError, match="reviewer_identity"):
+        validate_document_review(review, inventory)
+
+
 def test_pending_review_requires_opt_in_and_is_structurally_strict(tmp_path):
     inventory_path = tmp_path / "inventory.yaml"
     review_path = tmp_path / "review.yaml"
@@ -739,12 +772,16 @@ def test_build_pending_review_exact_shape_and_hashes():
     )
 
 
-def test_pending_review_requires_opt_in():
-    with pytest.raises(ValueError, match="approved independent review"):
-        load_document_review(REVIEW_PATH, INVENTORY_PATH)
+def test_pending_review_requires_opt_in(tmp_path):
+    pending_path = tmp_path / "document_corpus_review.yaml"
+    pending = build_pending_document_review(INVENTORY_PATH)
+    _write_yaml(pending_path, pending)
 
-    loaded = load_document_review(REVIEW_PATH, INVENTORY_PATH, allow_pending=True)
-    assert loaded == build_pending_document_review(INVENTORY_PATH)
+    with pytest.raises(ValueError, match="approved independent review"):
+        load_document_review(pending_path, INVENTORY_PATH)
+
+    loaded = load_document_review(pending_path, INVENTORY_PATH, allow_pending=True)
+    assert loaded == pending
 
 
 def test_committed_inventory_and_review_are_path_free():
