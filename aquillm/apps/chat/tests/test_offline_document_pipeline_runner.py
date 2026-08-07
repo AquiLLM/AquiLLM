@@ -1077,8 +1077,14 @@ def test_manifest_labels_each_hash_family_with_its_actual_algorithm(monkeypatch)
     assert manifest["synthetic_inputs"][0]["pdf_hash_algorithm"] == (
         "sha256-raw-bytes-v1"
     )
+    cr_text = "left\rright"
+    exact_utf8_hash = hashlib.sha256(cr_text.encode("utf-8")).hexdigest()
+    lf_canonical_hash = hashlib.sha256(
+        cr_text.replace("\r", "\n").encode("utf-8")
+    ).hexdigest()
+    assert exact_utf8_hash != lf_canonical_hash
     assert manifest["synthetic_inputs"][0]["expected_output_hash_algorithm"] == (
-        "sha256-utf8-lf-v1"
+        "sha256-utf8-bytes-v1"
     )
 
 

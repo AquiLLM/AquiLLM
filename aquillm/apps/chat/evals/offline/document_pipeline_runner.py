@@ -666,7 +666,7 @@ def _build_manifest(
                 "pdf_sha256": case["raw_sha256"],
                 "pdf_hash_algorithm": "sha256-raw-bytes-v1",
                 "expected_output_sha256": case["expected_output_sha256"],
-                "expected_output_hash_algorithm": "sha256-utf8-lf-v1",
+                "expected_output_hash_algorithm": "sha256-utf8-bytes-v1",
                 "page_count": case["page_count"],
             }
             for case in synthetic_cases
