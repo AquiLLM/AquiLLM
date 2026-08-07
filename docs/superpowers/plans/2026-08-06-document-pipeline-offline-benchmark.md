@@ -57,6 +57,9 @@ def load_document_inventory(path: Path) -> dict: ...
 def validate_document_inventory(data: dict) -> None: ...
 def load_document_review(path: Path, inventory_path: Path, *, allow_pending: bool = False) -> dict: ...
 def validate_document_review(data: dict, inventory: dict, *, allow_pending: bool = False) -> None: ...
+def freeze_document_inventory(
+    corpus_dir: Path, *, expected_count: int, expected_total_bytes: int
+) -> dict: ...
 def generate_synthetic_pdf(page_count: int) -> tuple[bytes, str]: ...
 def build_document_record(case: dict, outcome: dict) -> dict: ...
 def aggregate_document_results(...) -> dict: ...
@@ -106,17 +109,35 @@ Expected: import failure for `extract_primary_text_payload`.
 
 Scope the new helper to the PDF primary payload only. Accept a precomputed type so the caller does not detect twice. `extract_text_payloads` detects once, calls the helper only for `.pdf`, and then appends PDF figures exactly as before. Leave archive, image, audio/video, text, DOCX, spreadsheet, presentation, EPUB, transcript, and structured-format branches behaviorally unchanged, including their existing per-format figure policies.
 
-- [ ] **Step 4: Write RED chunk-planning tests**
+- [ ] **Step 4: Run the parser suite to prove GREEN before writing chunk tests**
+
+```powershell
+Set-Location aquillm
+python -m pytest apps/ingestion/tests/test_primary_text_extraction.py apps/ingestion/tests/test_unified_ingestion_parsers.py -q
+Set-Location ..
+```
+
+- [ ] **Step 5: Write RED chunk-planning tests**
 
 Use a test-only historical slice implementation as the oracle. Cover invalid configuration and lengths 0, 1, 1663, 1664, 2047, 2048, 2049, and 10,000. Assert exact content, half-open spans, numbering, final span, and coverage.
 
 Add task-level RED tests for empty and 10,000-character documents. With model/database boundaries patched as existing task tests do, require exact persisted contents/spans/numbers, planner invocation, embedding batch input order, progress completion, and unchanged image-chunk position after the last text span.
 
-- [ ] **Step 5: Implement the pure helper and adopt it in the task**
+- [ ] **Step 6: Verify both chunk suites fail for the missing planner/adoption**
+
+```powershell
+Set-Location aquillm
+python -m pytest apps/documents/tests/test_text_chunk_plan.py apps/documents/tests/test_text_chunk_task_plan.py -q
+Set-Location ..
+```
+
+Expected: FAIL because the planner is missing and the task has not adopted it.
+
+- [ ] **Step 7: Implement the pure helper and adopt it in the task**
 
 The helper returns immutable specs only. `create_chunks` converts specs to `TextChunk` model instances and preserves modality, positions, numbers, embedding batching, progress, and image-chunk behavior.
 
-- [ ] **Step 6: Run focused and adjacent tests**
+- [ ] **Step 8: Run focused and adjacent tests to prove GREEN**
 
 ```powershell
 Set-Location aquillm
@@ -124,7 +145,7 @@ python -m pytest apps/ingestion/tests/test_primary_text_extraction.py apps/inges
 Set-Location ..
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```powershell
 git add aquillm/aquillm/ingestion/parsers.py aquillm/apps/documents/services/text_chunk_plan.py aquillm/apps/documents/tasks/chunking.py aquillm/apps/ingestion/tests/test_primary_text_extraction.py aquillm/apps/documents/tests/test_text_chunk_plan.py aquillm/apps/documents/tests/test_text_chunk_task_plan.py
@@ -143,35 +164,77 @@ git commit -m "refactor(ingest): expose offline preprocessing boundaries"
 
 Require schema/version, exactly 17 unique `real-NNN` cases, raw PDF SHA-256, positive size, fixed rationale/lineage/sensitivity/license fields, no basename/path/title/content fields, and no absolute path. Define a sibling review schema containing canonical-text hash algorithm `sha256-utf8-lf-v1`, canonical inventory/protocol hashes, a deliberate stable agent identifier, reviewer role/date/decisions, and status. Prove pending review is rejected by default, `allow_pending=True` accepts only structurally valid pending input, and independently approved review is accepted. Privacy validation covers both YAML files.
 
-- [ ] **Step 2: Implement inventory and review validation**
+- [ ] **Step 2: Run inventory tests to prove RED**
 
-Implement `load_document_inventory`, `validate_document_inventory`, `load_document_review`, and `validate_document_review`. Use raw-byte SHA-256 only for PDF inventory members and newline-canonical hashes for YAML/review lineage. Do not implement local directory matching until Task 3 owns `resolve_real_corpus`.
+```powershell
+Set-Location aquillm
+python -m pytest apps/chat/tests/test_offline_document_pipeline_schema.py -q
+Set-Location ..
+```
 
-- [ ] **Step 3: Generate and freeze the 17-member inventory before measuring outputs**
+Expected: FAIL because the inventory/review schema module is missing.
 
-Hash only `*.pdf` files in the selected corpus. Order case IDs by ascending raw SHA-256, not private filename. Record the PDF-only total of 97,006,698 bytes and verify it mechanically. Do not execute production extraction yet.
+- [ ] **Step 3: Implement inventory and review validation**
 
-- [ ] **Step 4: Write RED deterministic minimal-PDF tests**
+Implement `load_document_inventory`, `validate_document_inventory`, `load_document_review`, `validate_document_review`, and `freeze_document_inventory`. Use raw-byte SHA-256 only for PDF inventory members and newline-canonical hashes for YAML/review lineage. `freeze_document_inventory` discovers direct-child `.pdf` members case-insensitively, rejects duplicate hashes, sorts by raw hash, assigns `real-NNN`, verifies the caller-supplied exact count and byte total, and emits no filename/path. It is the only Task 2 filesystem discovery helper; Task 3 still owns runtime matching and diagnostics.
+
+Define `sha256-utf8-lf-v1` exactly: decode source YAML as UTF-8 with an optional leading BOM removed, parse it with `yaml.safe_load`, serialize the selected semantic mapping with `yaml.safe_dump(sort_keys=True, default_flow_style=False, allow_unicode=True, line_break="\n")`, remove any trailing line breaks, append exactly one ASCII LF, encode UTF-8 without a BOM, then SHA-256 those bytes. The inventory hash covers the complete inventory mapping. The review file contains a dedicated `protocol` mapping, and the protocol hash covers only that mapping; it therefore excludes `protocol_hash`, `status`, reviewer identity/date/decisions, and other approval fields by construction. Inventory member hashes remain hashes of unmodified raw PDF bytes.
+
+- [ ] **Step 4: Run inventory tests to prove GREEN**
+
+```powershell
+Set-Location aquillm
+python -m pytest apps/chat/tests/test_offline_document_pipeline_schema.py -q
+Set-Location ..
+```
+
+- [ ] **Step 5: Generate and freeze the 17-member inventory before measuring outputs**
+
+Operator precondition: the private corpus must exist at `C:\Users\jackj\Github\Semantic Extraction Experiment\data\raw_docs\astro_test`. Run the exact API below from `aquillm/`; it hashes only direct-child PDFs and writes canonical YAML containing no path or filename. The function must abort before writing unless it observes exactly 17 PDFs totaling exactly 97,006,698 bytes. Do not execute production extraction yet.
+
+```powershell
+Set-Location aquillm
+python -c "from pathlib import Path; import yaml; from apps.chat.evals.offline.document_pipeline_schema import freeze_document_inventory; p=Path(r'C:\Users\jackj\Github\Semantic Extraction Experiment\data\raw_docs\astro_test'); d=freeze_document_inventory(p, expected_count=17, expected_total_bytes=97006698); Path('apps/chat/evals/offline/fixtures/document_corpus_inventory.yaml').write_text(yaml.safe_dump(d, sort_keys=True, allow_unicode=True, line_break='\n'), encoding='utf-8', newline='\n')"
+Set-Location ..
+```
+
+- [ ] **Step 6: Write RED deterministic minimal-PDF tests**
 
 Require exact byte identity across two generation calls, exact page count, authored ASCII page strings in order, and exact expected post-sanitize/strip text `"\n\n".join(page_strings).strip()` at 1, 10, 50, and 100 pages. To test corruption, truncate the returned bytes before passing them to the parser/fixture validator; generation itself accepts only a positive page count and has no corruption mode.
 
-- [ ] **Step 5: Implement the minimal PDF builder and frozen expected hashes**
+- [ ] **Step 7: Run deterministic-PDF tests to prove RED**
 
-Build a PDF 1.4 file deterministically with ASCII only: object 1 catalog, object 2 pages tree, page objects in ascending order, one shared built-in Helvetica font object, and one content-stream object per page. Content streams use ASCII `BT /F1 12 Tf 72 720 Td (...) Tj ET`, byte-exact `/Length`, escaped literal delimiters, ten-digit zero-padded xref offsets, one free xref entry, `trailer /Size /Root`, exact `startxref`, and `%%EOF`. Page strings use four-digit numbering. Use no current time, random ID, hostname, path, downloaded font, or external generator. Store expected generated-byte and normalized-output hashes in the pending protocol.
+Run the four generator/parser tests explicitly. Expected: FAIL because `generate_synthetic_pdf` is missing.
 
-- [ ] **Step 6: Write RED absolute-metric tests**
+- [ ] **Step 8: Implement the minimal PDF builder and frozen expected hashes**
+
+Build a PDF 1.4 file deterministically with ASCII only: object 1 catalog, object 2 pages tree, page objects in ascending order, one shared built-in Helvetica font object, and one content-stream object per page. Content streams use ASCII `BT /F1 12 Tf 72 720 Td (...) Tj ET`, byte-exact `/Length`, escaped literal delimiters, ten-digit zero-padded xref offsets, one free xref entry, `trailer /Size /Root`, exact `startxref`, and `%%EOF`. Headers, objects, stream separators, xref, trailer, `startxref`, and EOF use literal ASCII `b"\n"` only, never platform line endings. Page strings use four-digit numbering. Use no current time, random ID, hostname, path, downloaded font, or external generator. The tests construct authored expected page strings and expected normalized text independently of the generator return value. Store expected generated-byte and normalized-output hashes in the pending protocol.
+
+- [ ] **Step 9: Run deterministic-PDF tests to prove GREEN**
+
+Run the same four tests and require PASS before adding metric tests.
+
+- [ ] **Step 10: Write RED absolute-metric tests**
 
 Assert Unicode code points, UTF-8 bytes, whitespace words, actual production estimated-token function call, chunk counts, union coverage, excess overlap, ratio denominator, chunk summaries, exact output preimage hash, and empty/failure conventions.
 
-- [ ] **Step 7: Commit pending frozen inputs before review**
+- [ ] **Step 11: Run absolute-metric tests to prove RED**
+
+Run the named metric and aggregation tests. Expected: FAIL because `build_document_record` and `aggregate_document_results` are missing.
+
+- [ ] **Step 12: Implement and prove GREEN for absolute metrics**
+
+Implement `build_document_record` and `aggregate_document_results` using integer absolute units, the production token estimator, explicit null failure conventions, union-of-half-open-spans coverage, excess overlap, and ratio-of-sums denominators. Re-run the complete schema test file and require PASS.
+
+- [ ] **Step 13: Commit pending frozen inputs before review**
 
 Write `document_corpus_review.yaml` with `status: pending_independent_review` and no claimed reviewer approval. Run schema tests with `allow_pending=True`, confirm normal loading rejects it, and commit the inventory, pending protocol, schema implementation, and tests. No production parser or benchmark run is allowed yet.
 
-- [ ] **Step 8: Obtain and record genuinely independent approval**
+- [ ] **Step 14: Obtain and record genuinely independent approval**
 
 Dispatch a fresh reviewer that did not author the inventory. Give it read-only access to the 17 local PDFs, pending inventory/protocol, generator tests, and approved spec. It verifies exact PDF membership/total, raw hashes/sizes, absence of private fields, authored strings, generated hashes, sensitivity/license wording, and that production functions have not been measured. The reviewer returns a stable task identifier and decisions. The coordinator records that returned identity/decision and `status: approved`, then re-dispatches the same reviewer to verify the exact approved bytes and canonical hashes. The implementer must not self-approve.
 
-- [ ] **Step 9: Run tests and commit approved frozen inputs**
+- [ ] **Step 15: Run tests and commit approved frozen inputs**
 
 ```powershell
 Set-Location aquillm
