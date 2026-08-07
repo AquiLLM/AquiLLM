@@ -221,6 +221,73 @@ def test_run_document_case_uses_exact_production_pipeline(monkeypatch):
     assert result["timing"]["terminal_stage"] == "complete"
 
 
+def test_timed_and_unmeasured_paths_share_one_execution_core(monkeypatch):
+    from apps.chat.evals.offline import document_pipeline_runner as runner
+    from apps.documents.services.text_chunk_plan import plan_text_chunks as real_plan
+
+    case = _one_page_case()
+    core_calls = []
+    stage_calls = []
+    real_core = runner._execute_pipeline_core
+
+    def core(*args, **kwargs):
+        core_calls.append(True)
+        return real_core(*args, **kwargs)
+
+    class Payload:
+        full_text = "parser output"
+
+    monkeypatch.setattr(runner, "_execute_pipeline_core", core)
+    monkeypatch.setattr(
+        runner.parsers,
+        "detect_ingest_type",
+        lambda *args, **kwargs: (stage_calls.append("detect") or "document"),
+    )
+    monkeypatch.setattr(
+        runner.parsers,
+        "extract_primary_text_payload",
+        lambda *args, **kwargs: (stage_calls.append("extract") or Payload()),
+    )
+    monkeypatch.setattr(
+        runner,
+        "sanitize_db_text",
+        lambda value: (stage_calls.append("sanitize") or "changed\x00output"),
+    )
+
+    def plan(text, *, chunk_size, overlap):
+        stage_calls.append("chunk_plan")
+        return real_plan(text, chunk_size=chunk_size, overlap=overlap)
+
+    monkeypatch.setattr(runner, "plan_text_chunks", plan)
+
+    timed = runner._observe_pipeline(
+        case, chunk_size=2048, overlap=384, clock=_TickClock()
+    )
+    execution = runner._run_pipeline_unmeasured(
+        case, chunk_size=2048, overlap=384
+    )
+    unmeasured = runner._finalize_pipeline_execution(execution, case)
+
+    assert len(core_calls) == 2
+    assert stage_calls == [
+        "detect",
+        "extract",
+        "sanitize",
+        "chunk_plan",
+        "detect",
+        "extract",
+        "sanitize",
+        "chunk_plan",
+    ]
+    for field in (
+        "success",
+        "diagnostic_code",
+        "_sanitized_text",
+        "_chunk_specs",
+    ):
+        assert timed[field] == unmeasured[field]
+
+
 class _TickClock:
     def __init__(self, step: int = 10):
         self.value = -step
@@ -433,7 +500,7 @@ def _observed_outputs(static: dict) -> dict:
     }
 
 
-def test_timing_sweeps_warm_each_arm_and_rotate_case_order(monkeypatch):
+def test_timing_sweeps_do_not_add_a_second_warmup_and_rotate_case_order(monkeypatch):
     from apps.chat.evals.offline import document_pipeline_runner as runner
 
     static_records = [
@@ -486,11 +553,11 @@ def test_timing_sweeps_warm_each_arm_and_rotate_case_order(monkeypatch):
     )
 
     assert events[:2] == [("real", "real-a"), ("real", "real-b")]
-    assert events[8:10] == [
+    assert events[6:8] == [
         ("synthetic", "synthetic-a"),
         ("synthetic", "synthetic-b"),
     ]
-    assert len(events) == 16  # one two-case warm-up and three sweeps per arm
+    assert len(events) == 12
     assert len(timing_cases) == 12
     assert len(timing_sweeps) == 6
     assert [
@@ -565,10 +632,8 @@ def test_timing_sweep_fails_closed_when_successful_output_drifts(monkeypatch):
         "pdf_bytes": b"x" * static["input_bytes"],
         "page_count": static["page_count"],
     }
-    observed_texts = iter(("abcdefgh", changed_text))
-
     def observe(*args, **kwargs):
-        text = next(observed_texts)
+        text = changed_text
         return {
             "success": True,
             "diagnostic_code": "ok",
@@ -678,7 +743,8 @@ def test_memory_passes_use_fresh_tracing_lifecycle_three_times(monkeypatch):
         static = next(row for row in static_records if row["arm"] == case["arm"])
         return {
             "success": True,
-            "diagnostic_code": "ok",
+            "terminal_stage": "complete",
+            "_exception": None,
             **_observed_outputs(static),
         }
 
@@ -706,6 +772,33 @@ def test_memory_passes_use_fresh_tracing_lifecycle_three_times(monkeypatch):
         assert events[offset : offset + 6][0:3] == ["gc", "start", "reset_peak"]
         assert events[offset + 3][0] == "pipeline"
         assert events[offset + 4 : offset + 6] == ["get_peak", "stop"]
+
+
+def test_memory_pass_rejects_caller_owned_active_tracing_before_gc(monkeypatch):
+    from apps.chat.evals.offline import document_pipeline_runner as runner
+
+    static = _static_record("real", "real-a", success=True)
+    events = []
+    monkeypatch.setattr(runner.tracemalloc, "is_tracing", lambda: True)
+    monkeypatch.setattr(runner.gc, "collect", lambda: events.append("gc"))
+    monkeypatch.setattr(runner.tracemalloc, "start", lambda: events.append("start"))
+    monkeypatch.setattr(runner.tracemalloc, "stop", lambda: events.append("stop"))
+    monkeypatch.setattr(
+        runner,
+        "_run_pipeline_unmeasured",
+        lambda *args, **kwargs: events.append("pipeline"),
+    )
+
+    with pytest.raises(runner.BenchmarkIntegrityError, match="already active"):
+        runner._run_memory_passes(
+            {"real": [_case_for_static(static)], "synthetic": []},
+            [static],
+            memory_repeats=1,
+            chunk_size=2048,
+            overlap=384,
+        )
+
+    assert events == []
 
 
 def test_memory_pass_stops_tracing_when_pipeline_raises(monkeypatch):
@@ -749,7 +842,8 @@ def test_memory_pass_retains_failed_real_peak_and_rejects_synthetic(monkeypatch)
         "_run_pipeline_unmeasured",
         lambda *args, **kwargs: {
             "success": False,
-            "diagnostic_code": "invalid_pdf",
+            "terminal_stage": "extract",
+            "_exception": PdfReadError("invalid PDF"),
             "_sanitized_text": None,
             "_chunk_specs": None,
         },
@@ -828,7 +922,8 @@ def test_memory_pass_fails_closed_on_static_outcome_or_output_drift(
         "_run_pipeline_unmeasured",
         lambda *args, **kwargs: {
             "success": observed_success,
-            "diagnostic_code": "ok" if observed_success else "invalid_pdf",
+            "terminal_stage": "complete" if observed_success else "extract",
+            "_exception": None if observed_success else PdfReadError("invalid PDF"),
             "_sanitized_text": observed_text,
             "_chunk_specs": (
                 plan_text_chunks(observed_text, chunk_size=5, overlap=1)
@@ -860,6 +955,7 @@ def test_memory_metrics_are_built_only_after_tracing_stops(monkeypatch):
     }
     tracing = {"active": False}
     real_build = runner.build_document_record
+    real_finalize = runner._finalize_pipeline_execution
     monkeypatch.setattr(runner.gc, "collect", lambda: None)
     monkeypatch.setattr(
         runner.tracemalloc, "start", lambda: tracing.__setitem__("active", True)
@@ -874,17 +970,23 @@ def test_memory_metrics_are_built_only_after_tracing_stops(monkeypatch):
         "_run_pipeline_unmeasured",
         lambda *args, **kwargs: {
             "success": True,
-            "diagnostic_code": "ok",
+            "terminal_stage": "complete",
+            "_exception": None,
             "_sanitized_text": "abcdefgh",
             "_chunk_specs": plan_text_chunks("abcdefgh", chunk_size=5, overlap=1),
         },
     )
+
+    def finalize(execution, current_case):
+        assert tracing["active"] is False
+        return real_finalize(execution, current_case)
 
     def build(**kwargs):
         assert tracing["active"] is False
         return real_build(**kwargs)
 
     monkeypatch.setattr(runner, "build_document_record", build)
+    monkeypatch.setattr(runner, "_finalize_pipeline_execution", finalize)
 
     runner._run_memory_passes(
         {"real": [case], "synthetic": []},
@@ -1178,7 +1280,7 @@ def test_run_document_benchmark_gates_production_and_returns_canonical_result(
         return real_estimate(text)
 
     def detect(*args, **kwargs):
-        events.append("detect")
+        events.append(("detect", args[0]))
         return real_detect(*args, **kwargs)
 
     monkeypatch.setattr(rag_evidence, "_estimate_tokens", estimate)
@@ -1195,7 +1297,17 @@ def test_run_document_benchmark_gates_production_and_returns_canonical_result(
     )
 
     assert events[0:2] == ["review", "estimate"]
-    assert events.index("estimate") < events.index("detect")
+    detect_order = [event[1] for event in events if isinstance(event, tuple)]
+    assert detect_order == [
+        "real-001.pdf",
+        "real-001.pdf",
+        "real-001.pdf",
+        "synthetic-001.pdf",
+        "synthetic-001.pdf",
+        "synthetic-001.pdf",
+        "real-001.pdf",
+        "synthetic-001.pdf",
+    ]
     assert set(result) == {
         "manifest",
         "inventory",
@@ -1234,9 +1346,57 @@ def test_run_document_benchmark_gates_production_and_returns_canonical_result(
     assert manifest["execution"] == {
         "mode": "single_thread_sequential",
         "warmups_per_arm": 1,
+        "warmup_role": "static_record_pass",
         "timing_sweeps_per_arm": 2,
         "memory_repeats_per_case": 1,
     }
     assert "hostname" not in repr(manifest).lower()
     assert "username" not in repr(manifest).lower()
     assert str(tmp_path) not in repr(manifest)
+
+
+@pytest.mark.parametrize(
+    "invalid_config",
+    [
+        {"sweeps": 0},
+        {"sweeps": -1},
+        {"sweeps": True},
+        {"sweeps": 1.0},
+        {"memory_repeats": 0},
+        {"memory_repeats": -1},
+        {"memory_repeats": True},
+        {"memory_repeats": 1.0},
+        {"chunk_size": 0},
+        {"chunk_size": -1},
+        {"chunk_size": True},
+        {"chunk_size": 8.0},
+        {"overlap": -1},
+        {"overlap": True},
+        {"overlap": 1.0},
+        {"chunk_size": 8, "overlap": 8},
+        {"chunk_size": 8, "overlap": 9},
+    ],
+)
+def test_run_document_benchmark_rejects_invalid_config_before_source_access(
+    tmp_path: Path, monkeypatch, invalid_config
+):
+    from apps.chat.evals.offline import document_pipeline_runner as runner
+
+    source_access = []
+
+    def fail_source_access(*args, **kwargs):
+        source_access.append(True)
+        raise AssertionError("invalid config must fail before source access")
+
+    monkeypatch.setattr(runner, "_load_benchmark_inputs", fail_source_access)
+
+    with pytest.raises(runner.BenchmarkIntegrityError, match="configuration"):
+        runner.run_document_benchmark(
+            tmp_path,
+            Path("inventory.yaml"),
+            Path("review.yaml"),
+            network_audit=_zero_network_audit(),
+            **invalid_config,
+        )
+
+    assert source_access == []

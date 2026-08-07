@@ -120,11 +120,95 @@ def resolve_real_corpus(
 
 
 def _diagnostic_for(exc: Exception, *, page_count: int | None) -> str:
+    if isinstance(exc, _EmptyPrimaryTextError):
+        return "empty_primary_text"
     if isinstance(exc, FileNotDecryptedError):
         return "encrypted_pdf"
     if isinstance(exc, PdfReadError) or page_count is None:
         return "invalid_pdf"
     return "parser_error"
+
+
+class _EmptyPrimaryTextError(ValueError):
+    pass
+
+
+def _execute_pipeline_core(
+    case: dict,
+    *,
+    chunk_size: int,
+    overlap: int,
+    stage_runner: Callable[[str, Callable[[], object]], object] | None = None,
+) -> dict:
+    """Execute the single production stage sequence and retain raw outcome state."""
+
+    run_stage = stage_runner or (lambda _stage, operation: operation())
+    terminal_stage = "detect"
+    try:
+        ingest_type = run_stage(
+            "detect",
+            lambda: parsers.detect_ingest_type(
+                f"{case['case_id']}.pdf", "application/pdf"
+            ),
+        )
+        terminal_stage = "extract"
+        payload = run_stage(
+            "extract",
+            lambda: parsers.extract_primary_text_payload(
+                f"{case['case_id']}.pdf",
+                case["pdf_bytes"],
+                content_type="application/pdf",
+                ingest_type=ingest_type,
+            ),
+        )
+
+        terminal_stage = "sanitize"
+
+        def sanitize() -> str:
+            text = sanitize_db_text(payload.full_text or "").strip()
+            if not text:
+                raise _EmptyPrimaryTextError
+            return text
+
+        sanitized_text = run_stage("sanitize", sanitize)
+        terminal_stage = "chunk_plan"
+        chunk_specs = run_stage(
+            "chunk_plan",
+            lambda: plan_text_chunks(
+                sanitized_text, chunk_size=chunk_size, overlap=overlap
+            ),
+        )
+        return {
+            "success": True,
+            "terminal_stage": "complete",
+            "_exception": None,
+            "_sanitized_text": sanitized_text,
+            "_chunk_specs": chunk_specs,
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "terminal_stage": terminal_stage,
+            "_exception": exc,
+            "_sanitized_text": None,
+            "_chunk_specs": None,
+        }
+
+
+def _finalize_pipeline_execution(execution: Mapping[str, object], case: dict) -> dict:
+    success = execution["success"]
+    diagnostic_code = (
+        "ok"
+        if success
+        else _diagnostic_for(execution["_exception"], page_count=case["page_count"])
+    )
+    return {
+        "success": success,
+        "diagnostic_code": diagnostic_code,
+        "terminal_stage": execution["terminal_stage"],
+        "_sanitized_text": execution["_sanitized_text"],
+        "_chunk_specs": execution["_chunk_specs"],
+    }
 
 
 def run_document_case(
@@ -177,71 +261,27 @@ def _observe_pipeline(
         "sanitize_ns": None,
         "chunk_plan_ns": None,
     }
-    sanitized_text = None
-    chunk_specs = None
-    success = False
-    diagnostic_code = "parser_error"
-    terminal_stage = "detect"
+    def time_stage(stage: str, operation: Callable[[], object]) -> object:
+        stage_start = clock()
+        try:
+            return operation()
+        finally:
+            timings[f"{stage}_ns"] = clock() - stage_start
+
     combined_start = clock()
-    try:
-        stage_start = clock()
-        try:
-            ingest_type = parsers.detect_ingest_type(
-                f"{case['case_id']}.pdf", "application/pdf"
-            )
-        finally:
-            timings["detect_ns"] = clock() - stage_start
-
-        terminal_stage = "extract"
-        stage_start = clock()
-        try:
-            payload = parsers.extract_primary_text_payload(
-                f"{case['case_id']}.pdf",
-                case["pdf_bytes"],
-                content_type="application/pdf",
-                ingest_type=ingest_type,
-            )
-        finally:
-            timings["extract_ns"] = clock() - stage_start
-
-        terminal_stage = "sanitize"
-        stage_start = clock()
-        try:
-            sanitized_text = sanitize_db_text(payload.full_text or "").strip()
-            if not sanitized_text:
-                diagnostic_code = "empty_primary_text"
-                raise ValueError("empty primary text")
-        finally:
-            timings["sanitize_ns"] = clock() - stage_start
-
-        terminal_stage = "chunk_plan"
-        stage_start = clock()
-        try:
-            chunk_specs = plan_text_chunks(
-                sanitized_text, chunk_size=chunk_size, overlap=overlap
-            )
-        finally:
-            timings["chunk_plan_ns"] = clock() - stage_start
-        combined_end = clock()
-        success = True
-        diagnostic_code = "ok"
-        terminal_stage = "complete"
-    except Exception as exc:
-        combined_end = clock()
-        if diagnostic_code != "empty_primary_text":
-            diagnostic_code = _diagnostic_for(exc, page_count=case["page_count"])
-        sanitized_text = None
-        chunk_specs = None
-    combined_ns = combined_end - combined_start
+    execution = _execute_pipeline_core(
+        case,
+        chunk_size=chunk_size,
+        overlap=overlap,
+        stage_runner=time_stage,
+    )
+    combined_ns = clock() - combined_start
+    outcome = _finalize_pipeline_execution(execution, case)
 
     return {
-        "success": success,
-        "diagnostic_code": diagnostic_code,
-        "terminal_stage": terminal_stage,
+        **outcome,
         **timings,
         "combined_ns": combined_ns,
-        "_sanitized_text": sanitized_text,
-        "_chunk_specs": chunk_specs,
     }
 
 
@@ -352,14 +392,6 @@ def _run_timing_sweeps(
         base = sorted(cases_by_arm.get(arm, []), key=lambda case: case["case_id"])
         if not base:
             continue
-        for case in base:
-            warmup = _observe_pipeline(
-                case, chunk_size=chunk_size, overlap=overlap, clock=clock
-            )
-            static = static_by_identity[(arm, case["case_id"])]
-            _require_static_match(case, warmup, static, phase="timing warm-up")
-            if arm == "synthetic" and warmup["success"] is not True:
-                raise BenchmarkIntegrityError("synthetic warm-up failed")
         for sweep_index in range(sweeps):
             offset = sweep_index % len(base)
             ordered = base[offset:] + base[:offset]
@@ -407,44 +439,9 @@ def _run_pipeline_unmeasured(
     chunk_size: int,
     overlap: int,
 ) -> dict:
-    """Execute the production stages without timing or post-processing metrics."""
+    """Execute the shared production core without timing or finalization."""
 
-    diagnostic_code = "parser_error"
-    try:
-        ingest_type = parsers.detect_ingest_type(
-            f"{case['case_id']}.pdf", "application/pdf"
-        )
-        payload = parsers.extract_primary_text_payload(
-            f"{case['case_id']}.pdf",
-            case["pdf_bytes"],
-            content_type="application/pdf",
-            ingest_type=ingest_type,
-        )
-        sanitized_text = sanitize_db_text(payload.full_text or "").strip()
-        if not sanitized_text:
-            return {
-                "success": False,
-                "diagnostic_code": "empty_primary_text",
-                "_sanitized_text": None,
-                "_chunk_specs": None,
-            }
-        chunk_specs = plan_text_chunks(
-            sanitized_text, chunk_size=chunk_size, overlap=overlap
-        )
-        return {
-            "success": True,
-            "diagnostic_code": "ok",
-            "_sanitized_text": sanitized_text,
-            "_chunk_specs": chunk_specs,
-        }
-    except Exception as exc:
-        diagnostic_code = _diagnostic_for(exc, page_count=case["page_count"])
-        return {
-            "success": False,
-            "diagnostic_code": diagnostic_code,
-            "_sanitized_text": None,
-            "_chunk_specs": None,
-        }
+    return _execute_pipeline_core(case, chunk_size=chunk_size, overlap=overlap)
 
 
 def _run_memory_passes(
@@ -457,6 +454,8 @@ def _run_memory_passes(
 ) -> list[dict]:
     """Collect isolated incremental Python allocation peaks for every attempt."""
 
+    if tracemalloc.is_tracing():
+        raise BenchmarkIntegrityError("tracemalloc is already active")
     records = []
     static_by_identity = {(row["arm"], row["case_id"]): row for row in static_records}
     for arm in ("real", "synthetic"):
@@ -467,12 +466,13 @@ def _run_memory_passes(
                 tracemalloc.start()
                 try:
                     tracemalloc.reset_peak()
-                    outcome = _run_pipeline_unmeasured(
+                    execution = _run_pipeline_unmeasured(
                         case, chunk_size=chunk_size, overlap=overlap
                     )
                     _, peak = tracemalloc.get_traced_memory()
                 finally:
                     tracemalloc.stop()
+                outcome = _finalize_pipeline_execution(execution, case)
                 static = static_by_identity[(arm, case["case_id"])]
                 _require_static_match(case, outcome, static, phase="memory")
                 if arm == "synthetic" and outcome["success"] is not True:
@@ -604,6 +604,24 @@ def _validate_network_audit(network_audit: Mapping[str, object]) -> dict:
     }
 
 
+def _validate_benchmark_config(
+    *, sweeps: int, memory_repeats: int, chunk_size: int, overlap: int
+) -> None:
+    for field, value in (
+        ("sweeps", sweeps),
+        ("memory_repeats", memory_repeats),
+        ("chunk_size", chunk_size),
+    ):
+        if type(value) is not int or value <= 0:
+            raise BenchmarkIntegrityError(
+                f"benchmark configuration {field} must be a positive integer"
+            )
+    if type(overlap) is not int or overlap < 0 or overlap >= chunk_size:
+        raise BenchmarkIntegrityError(
+            "benchmark configuration overlap must be an integer in [0, chunk_size)"
+        )
+
+
 def _load_benchmark_inputs(inventory_path: Path, review_path: Path) -> dict:
     inventory_path = Path(inventory_path)
     review_path = Path(review_path)
@@ -696,6 +714,7 @@ def _build_manifest(
         "execution": {
             "mode": "single_thread_sequential",
             "warmups_per_arm": 1,
+            "warmup_role": "static_record_pass",
             "timing_sweeps_per_arm": sweeps,
             "memory_repeats_per_case": memory_repeats,
         },
@@ -722,6 +741,12 @@ def run_document_benchmark(
 ) -> dict:
     """Prepare, measure, aggregate, and return the canonical in-memory result."""
 
+    _validate_benchmark_config(
+        sweeps=sweeps,
+        memory_repeats=memory_repeats,
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
     validated_audit = _validate_network_audit(network_audit)
     loaded_inputs = _load_benchmark_inputs(inventory_path, review_path)
     inventory = loaded_inputs["inventory"]
@@ -734,7 +759,10 @@ def run_document_benchmark(
     _initialize_dependencies()
 
     static_records = []
+    timing_cases = []
+    timing_sweeps = []
     for arm in ("real", "synthetic"):
+        arm_static_records = []
         for case in sorted(cases_by_arm[arm], key=lambda value: value["case_id"]):
             result = run_document_case(
                 case, chunk_size=chunk_size, overlap=overlap, clock=clock
@@ -745,15 +773,17 @@ def run_document_benchmark(
             ):
                 raise BenchmarkIntegrityError("synthetic extracted text hash mismatch")
             static_records.append(static)
-
-    timing_cases, timing_sweeps = _run_timing_sweeps(
-        cases_by_arm,
-        static_records,
-        sweeps=sweeps,
-        chunk_size=chunk_size,
-        overlap=overlap,
-        clock=clock,
-    )
+            arm_static_records.append(static)
+        arm_timing_cases, arm_timing_sweeps = _run_timing_sweeps(
+            {arm: cases_by_arm[arm]},
+            arm_static_records,
+            sweeps=sweeps,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            clock=clock,
+        )
+        timing_cases.extend(arm_timing_cases)
+        timing_sweeps.extend(arm_timing_sweeps)
     memory_records = _run_memory_passes(
         cases_by_arm,
         static_records,
