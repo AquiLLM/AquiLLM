@@ -852,7 +852,6 @@ def run_document_benchmark(
     return {
         "manifest": manifest,
         "inventory": inventory,
-        "review": review,
         "real_records": [row for row in static_records if row["arm"] == "real"],
         "synthetic_records": [
             row for row in static_records if row["arm"] == "synthetic"

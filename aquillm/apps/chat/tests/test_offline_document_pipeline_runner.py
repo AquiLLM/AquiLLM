@@ -1404,7 +1404,6 @@ def test_run_document_benchmark_gates_production_and_returns_canonical_result(
     assert set(result) == {
         "manifest",
         "inventory",
-        "review",
         "real_records",
         "synthetic_records",
         "timing_cases",
