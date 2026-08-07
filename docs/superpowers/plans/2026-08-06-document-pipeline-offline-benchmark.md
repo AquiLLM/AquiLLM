@@ -65,7 +65,7 @@ def build_pending_document_review(inventory_path: Path) -> dict: ...
 def build_document_record(
     *, arm: str, case_id: str, input_bytes: int, page_count: int | None,
     success: bool, diagnostic_code: str, sanitized_text: str | None,
-    chunk_specs: Sequence[TextChunkSpec] | None, estimated_tokens: int | None,
+    chunk_specs: Sequence[TextChunkSpec] | None,
 ) -> dict[str, object]: ...
 def aggregate_document_results(
     static_records: Sequence[Mapping[str, object]],
@@ -103,7 +103,9 @@ def validate_document_provenance(path: Path, repository: Path) -> None: ...
 
 - [ ] **Step 1: Write RED parser-fidelity tests**
 
-Patch only call counters. Add a small test-owned valid one-page PDF byte fixture directly in `test_primary_text_extraction.py`; it is independent of the production synthetic generator created in Task 2. Require `extract_text_payloads("paper.pdf", ...)` to call type detection once, call the new PDF-only primary helper once, and append figures once under the default path. Require a benchmark-style call to `extract_primary_text_payload(..., ingest_type="document")` to execute the real `extract_pdf_text` over that fixture without invoking the figure hook. Assert primary payload fields and text are identical, and prove that supplying `ingest_type` prevents re-detection. In the same new test file, explicitly parameterize every existing non-PDF dispatcher branch: archive, image, audio, video, plain text, DOCX, XLSX, ODS, PPTX, EPUB, transcript, and structured JSON. Patch each existing extractor and the figure hook, then assert the selected extractor and the current figure/no-figure policy for every branch remain unchanged.
+Patch only call counters. Add a small test-owned valid one-page PDF byte fixture directly in `test_primary_text_extraction.py`; it is independent of the production synthetic generator created in Task 2. Require `extract_text_payloads("paper.pdf", ...)` to call type detection once, call the new PDF-only primary helper once, and append figures once under the default path. Require a benchmark-style call to `extract_primary_text_payload(..., ingest_type="document")` to execute the real `extract_pdf_text` over that fixture without invoking the figure hook. Assert primary payload fields and text are identical, and prove that supplying `ingest_type` prevents re-detection.
+
+In the same new test file, explicitly parameterize every existing non-PDF dispatch group and patch its selected extractor: archive; image; audio; video; raw-text `.txt/.md/.doc/.rtf`; HTML `.html/.htm`; DOCX; raw ODT; EPUB; CSV; TSV; XLSX; XLS; ODS; PPTX; raw PPT; ODP; JSON; JSONL; XML; YAML/YML; VTT; SRT; MIME-only `text/*` fallback; and unsupported fallback. Assert the current figure hook executes only for DOCX, EPUB, XLSX, ODS, and PPTX, and does not execute for every other non-PDF group. Assert the same normalized types, singleton/list shapes, archive depth, and unsupported error behavior.
 
 - [ ] **Step 2: Verify parser tests fail for the missing boundary**
 
@@ -190,7 +192,7 @@ Expected: FAIL because the inventory/review schema module is missing.
 
 Implement `load_document_inventory`, `validate_document_inventory`, `load_document_review`, `validate_document_review`, and `freeze_document_inventory`. Use raw-byte SHA-256 only for PDF inventory members and newline-canonical hashes for YAML/review lineage. `freeze_document_inventory` discovers direct-child `.pdf` members case-insensitively, rejects duplicate hashes, sorts by raw hash, assigns `real-NNN`, verifies the caller-supplied exact count and byte total, and emits no filename/path. It is the only Task 2 filesystem discovery helper; Task 3 still owns runtime matching and diagnostics.
 
-Reuse the repository's existing `sha256-utf8-lf-v1` implementation exactly for the committed inventory source file: decode strict UTF-8 without accepting a BOM, replace CRLF and lone CR with LF, preserve all other bytes including the presence/absence of a final newline, encode UTF-8, then SHA-256. Add fixed LF/CRLF/lone-CR/no-final-newline/BOM-rejection test vectors copied against `sha256_canonical_text` so no second interpretation can emerge. Inventory member hashes remain hashes of unmodified raw PDF bytes.
+Reuse the repository's existing `sha256-utf8-lf-v1` implementation exactly for the committed inventory source file: decode UTF-8, replace CRLF and lone CR with LF, preserve all other decoded code points and bytes including a leading `U+FEFF` and the presence/absence of a final newline, encode UTF-8, then SHA-256. Add fixed LF/CRLF/lone-CR/no-final-newline/leading-BOM test vectors against `sha256_canonical_text` so no second interpretation can emerge. Separately, the document inventory/review loaders reject a leading BOM as invalid fixture syntax before calling the hash helper; this does not redefine the shared algorithm. Inventory member hashes remain hashes of unmodified raw PDF bytes.
 
 The review file contains a dedicated `protocol` mapping. Its hash algorithm is separately named `sha256-canonical-json-v1`: serialize only that mapping using the existing `canonical_json_bytes` helper (sorted keys, compact separators, UTF-8, exactly one final LF), then SHA-256. Add a fixed protocol test vector with a literal expected digest. Because only `protocol` is hashed, `protocol_hash`, `status`, reviewer identity/date/decisions, and all mutable approval fields are excluded by construction.
 
@@ -204,11 +206,11 @@ Set-Location ..
 
 - [ ] **Step 5: Generate and freeze the 17-member inventory before measuring outputs**
 
-Operator precondition: the private corpus must exist at `C:\Users\jackj\Github\Semantic Extraction Experiment\data\raw_docs\astro_test`. Run the exact API below from `aquillm/`; it hashes only direct-child PDFs and writes canonical YAML containing no path or filename. The function must abort before writing unless it observes exactly 17 PDFs totaling exactly 97,006,698 bytes. Do not execute production extraction yet.
+Operator precondition: set the process-local `AQUILLM_LOCAL_ASTRO_CORPUS` environment variable to the private selected corpus directory without writing its value to any committed file or captured diagnostic. Run the exact API below from `aquillm/`; it hashes only direct-child PDFs and writes canonical YAML containing no path or filename. The function must abort before writing unless it observes exactly 17 PDFs totaling exactly 97,006,698 bytes. Do not execute production extraction yet.
 
 ```powershell
 Set-Location aquillm
-python -c "from pathlib import Path; import yaml; from apps.chat.evals.offline.document_pipeline_schema import freeze_document_inventory; p=Path(r'C:\Users\jackj\Github\Semantic Extraction Experiment\data\raw_docs\astro_test'); d=freeze_document_inventory(p, expected_count=17, expected_total_bytes=97006698); print(yaml.safe_dump(d, sort_keys=True, allow_unicode=True, line_break='\n'), end='')"
+python -c "import os; from pathlib import Path; import yaml; from apps.chat.evals.offline.document_pipeline_schema import freeze_document_inventory; p=Path(os.environ['AQUILLM_LOCAL_ASTRO_CORPUS']); d=freeze_document_inventory(p, expected_count=17, expected_total_bytes=97006698); print(yaml.safe_dump(d, sort_keys=True, allow_unicode=True, line_break='\n'), end='')"
 Set-Location ..
 ```
 
@@ -254,23 +256,40 @@ Expected: FAIL because `build_document_record` and `aggregate_document_results` 
 
 Implement the exact public signatures above. `build_document_record` returns precisely the static-record keys/types enumerated under **Versioned artifacts and schemas** in the design; successful metrics derive from `sanitized_text` and `chunk_specs`, while every output-conditioned field is null on failure. `aggregate_document_results` returns precisely the eight top-level mappings and nested arm/timing/memory/failure contracts enumerated in that same section. Use integer absolute units, the production token estimator, explicit null failure conventions, union-of-half-open-spans coverage, excess overlap, and ratio-of-sums denominators. Re-run the complete schema test file and require PASS.
 
-- [ ] **Step 13: Commit pending frozen inputs before review**
+- [ ] **Step 13: Write and verify RED pending-review construction tests**
 
-Implement `build_pending_document_review(inventory_path)` and use it to produce this exact mapping shape: `schema_version`, `review_id`, `status`, `source_hash_algorithm`, `inventory_hash`, `protocol_hash_algorithm`, `protocol_hash`, `protocol`, `reviewer_identity`, `reviewer_role`, `review_date`, and `decisions`. `protocol` contains `generator_version`, `page_counts: [1, 10, 50, 100]`, the exact authored string template, and four entries containing page count, generated-PDF raw SHA-256, expected-normalized-text SHA-256, and expected page count. In pending state the three reviewer fields are null and `decisions` is empty. Write `document_corpus_review.yaml` with `status: pending_independent_review` and no claimed reviewer approval.
+Specify this exact mapping shape: `schema_version`, `review_id`, `status`, `source_hash_algorithm`, `inventory_hash`, `protocol_hash_algorithm`, `protocol_hash`, `protocol`, `reviewer_identity`, `reviewer_role`, `review_date`, and `decisions`. `protocol` contains `generator_version`, `page_counts: [1, 10, 50, 100]`, the exact authored string template, and four entries containing page count, generated-PDF raw SHA-256, expected-normalized-text SHA-256, and expected page count. In pending state the three reviewer fields are null and `decisions` is empty.
 
 ```powershell
 Set-Location aquillm
+python -m pytest apps/chat/tests/test_offline_document_pipeline_schema.py::test_build_pending_review_exact_shape_and_hashes -q
+Set-Location ..
+```
+
+Expected: FAIL because `build_pending_document_review` is missing.
+
+- [ ] **Step 14: Implement pending-review construction and prove GREEN**
+
+Implement `build_pending_document_review(inventory_path)` exactly as specified and rerun Step 13 to PASS. Then generate the canonical pending YAML into a temporary file outside the repository and add its exact path-free bytes to the committed fixture using `apply_patch`:
+
+```powershell
+Set-Location aquillm
+python -c "import os; from pathlib import Path; import yaml; from apps.chat.evals.offline.document_pipeline_schema import build_pending_document_review; p=Path('apps/chat/evals/offline/document_corpus_inventory.yaml'); d=build_pending_document_review(p); Path(os.environ['TEMP']).joinpath('document_corpus_review.yaml').write_text(yaml.safe_dump(d, sort_keys=True, allow_unicode=True, line_break='\n'), encoding='utf-8', newline='\n')"
 python -m pytest apps/chat/tests/test_offline_document_pipeline_schema.py::test_build_pending_review_exact_shape_and_hashes apps/chat/tests/test_offline_document_pipeline_schema.py::test_pending_review_requires_opt_in apps/chat/tests/test_offline_document_pipeline_schema.py::test_review_hash_fixed_vectors -q
 Set-Location ..
 ```
 
-Require PASS with `allow_pending=True` and explicit rejection without it, then commit the inventory, pending protocol, schema implementation, and tests. No production parser or benchmark run is allowed yet.
+Require PASS with `allow_pending=True` and explicit rejection without it. No production parser or benchmark run is allowed yet.
 
-- [ ] **Step 14: Obtain and record genuinely independent approval**
+- [ ] **Step 15: Commit pending frozen inputs before review**
+
+Commit the inventory, pending review/protocol, schema implementation, and tests.
+
+- [ ] **Step 16: Obtain and record genuinely independent approval**
 
 Dispatch a fresh reviewer that did not author the inventory. Give it read-only access to the 17 local PDFs, pending inventory/protocol, generator tests, and approved spec. It verifies exact PDF membership/total, raw hashes/sizes, absence of private fields, authored strings, generated hashes, sensitivity/license wording, and that production functions have not been measured. The reviewer returns a stable task identifier and decisions. The coordinator records that returned identity/decision and `status: approved`, then re-dispatches the same reviewer to verify the exact approved bytes and canonical hashes. The implementer must not self-approve.
 
-- [ ] **Step 15: Run tests and commit approved frozen inputs**
+- [ ] **Step 17: Run tests and commit approved frozen inputs**
 
 ```powershell
 Set-Location aquillm
@@ -324,7 +343,7 @@ Use `time.perf_counter_ns` for the direct interval and each nested stage. The di
 
 - [ ] **Step 5: Write and verify RED sweep tests**
 
-Assert dependencies and the production token estimator are initialized before a single unreported warm-up, then exactly 30 measured sweeps **per arm independently**. Each arm starts from case-ID-sorted order and rotates by `sweep_index mod arm_case_count`. Require 630 timing-case rows, 60 timing-sweep rows, exact copied static work-unit fields, `case_combined_sum_ns`, successful-only denominator, effective and success-conditioned rates, nearest-rank p95 over sweep values, and no pooled pseudo-replication. Input loading/hashing/page counting, synthetic generation, token estimation, metric calculation, and validation must never occur inside an observation.
+Assert dependencies and the production token estimator are initialized before warm-up. Run one full-arm unreported warm-up for the real arm and separately one full-arm unreported warm-up for the synthetic arm (two warm-ups total), immediately followed by exactly 30 measured sweeps for that arm. Each arm starts from case-ID-sorted order and rotates by `sweep_index mod arm_case_count`. Require 630 timing-case rows, 60 timing-sweep rows, exact copied static work-unit fields, `case_combined_sum_ns`, successful-only denominator, effective and success-conditioned rates, nearest-rank p95 over sweep values, and no pooled pseudo-replication. Input loading/hashing/page counting, synthetic generation, token estimation, metric calculation, and validation must never occur inside an observation.
 
 ```powershell
 Set-Location aquillm
@@ -340,7 +359,7 @@ Use raw integer nanoseconds. Regenerate each sweep row from case rows and static
 
 - [ ] **Step 7: Write and verify RED memory/manifest tests**
 
-Patch `tracemalloc` and GC to prove three separate memory-only passes per case, tracing starts after input allocation, timing code never traces, failed peaks remain separate, and per-case/arm maxima follow the specification. Require non-secret machine context, fixed chunk config, source/corpus/config hashes, timer resolution, repetitions, dependency versions, and the exact process-local network-audit wording.
+Patch `tracemalloc` and GC to prove this exact lifecycle for each of three separate memory-only passes per case: preload input bytes and precompute page count outside tracing; call `gc.collect()`; call fresh `tracemalloc.start()`; call `tracemalloc.reset_peak()`; execute the same detect→extract→sanitize→chunk pipeline; read the peak; and call `tracemalloc.stop()` in `finally` on both success and failure. Assert input allocation, page counting, token estimation, metric construction, and validation remain outside tracing; timing code never traces; failed peaks remain separate; and per-case/arm maxima follow the specification. Require non-secret machine context, fixed chunk config, source/corpus/config hashes, timer resolution, repetitions, dependency versions, and the exact process-local network-audit wording.
 
 ```powershell
 Set-Location aquillm
@@ -464,7 +483,7 @@ Run every new test plus the existing 146-test offline evaluation suite. Commit a
 From `aquillm/`, use a new explicit system temporary directory and the quoted local corpus path:
 
 ```powershell
-python -m apps.chat.evals.run_offline_evidence document-run --real-corpus "C:\Users\jackj\Github\Semantic Extraction Experiment\data\raw_docs\astro_test" --inventory apps/chat/evals/offline/document_corpus_inventory.yaml --output "<TEMP>\canonical-a" --sweeps 30 --memory-repeats 3
+python -m apps.chat.evals.run_offline_evidence document-run --real-corpus "$env:AQUILLM_LOCAL_ASTRO_CORPUS" --inventory apps/chat/evals/offline/document_corpus_inventory.yaml --output "<TEMP>\canonical-a" --sweeps 30 --memory-repeats 3
 python -m apps.chat.evals.run_offline_evidence document-validate "<TEMP>\canonical-a"
 ```
 
@@ -498,11 +517,11 @@ $artifactCommit = git rev-parse HEAD
 
 Export `git archive $artifactCommit` into a new explicit system temporary directory, extract it, and from that archive re-run both validators, normalized A/B comparison, table/summary byte regeneration, raw `COMPLETE` checks, total/rate/quantile recomputation, and privacy scans. The archived files—not the mutable worktree—are authoritative for provenance.
 
-From the worktree's `aquillm/` directory, generate provenance with the captured artifact SHA and canonical-A aggregate, then validate its lineage, artifact hashes, source/config/corpus hashes, and privacy against the repository:
+From the worktree's `aquillm/` directory, generate provenance using the canonical-A aggregate and repository root inside the extracted `$artifactCommit` archive; only the resulting provenance file is written back into the worktree. Validate lineage, artifact hashes, source/config/corpus hashes, and privacy against that same immutable archive:
 
 ```powershell
-python -m apps.chat.evals.run_offline_evidence document-provenance --aggregate ..\docs\evaluation\offline\document-pipeline\2026-08-06-canonical-a\aggregate.json --artifact-commit $artifactCommit --output ..\docs\evaluation\offline\document-pipeline\2026-08-06-PROVENANCE.json
-python -m apps.chat.evals.run_offline_evidence document-provenance --validate ..\docs\evaluation\offline\document-pipeline\2026-08-06-PROVENANCE.json
+python -m apps.chat.evals.run_offline_evidence document-provenance --aggregate "$archiveRoot\repo\docs\evaluation\offline\document-pipeline\2026-08-06-canonical-a\aggregate.json" --repository "$archiveRoot\repo" --artifact-commit $artifactCommit --output ..\docs\evaluation\offline\document-pipeline\2026-08-06-PROVENANCE.json
+python -m apps.chat.evals.run_offline_evidence document-provenance --validate ..\docs\evaluation\offline\document-pipeline\2026-08-06-PROVENANCE.json --repository "$archiveRoot\repo"
 ```
 
 - [ ] **Step 9: Commit provenance and push from a clean worktree**
