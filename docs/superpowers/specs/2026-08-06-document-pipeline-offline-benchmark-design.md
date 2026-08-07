@@ -144,8 +144,9 @@ The source text for every absolute count is the successful primary PDF text afte
   all are null when no chunks exist.
 
 Successful PDF extraction requires exactly one nonempty primary text payload.
-Empty extraction is a structured real-corpus failure with count fields null except
-input bytes/pages. Synthetic empty extraction fails closed.
+Empty extraction is a structured real-corpus failure with output count fields null;
+input bytes remain known and page count remains known only if structural PDF reading
+succeeded. Synthetic empty extraction fails closed.
 
 ## Timing protocol
 
@@ -154,7 +155,9 @@ input bytes/pages. Synthetic empty extraction fails closed.
 The primary timing estimand is warm-process, in-memory local preprocessing. Load and
 hash all PDF bytes before timing. Initialize Django, parser dependencies, and the
 token estimator before the warm-up. Run one unreported full-corpus warm-up, then 30
-measured full-corpus sweeps sequentially in one process with no concurrency.
+measured full-corpus sweeps sequentially in one process with no concurrency. These
+are repeated, potentially autocorrelated observations in one process; they are not
+independent samples and support no confidence interval or population inference.
 
 Rotate the sorted case order by `sweep_index mod case_count` to reduce fixed-order
 effects. Run the real and synthetic arms independently. Use `time.perf_counter_ns`
@@ -171,28 +174,26 @@ calculation, page counting, token estimation, hashing, validation, JSON generati
 garbage collection, fixture generation, and document loading are excluded. The
 combined duration is the direct outer interval, never the sum of nested durations.
 
-For each of the 30 corpus sweeps, derive ratio-of-sums rates using that sweep's
-direct combined duration:
+For each sweep, define `case_combined_sum_ns` as the sum of all case-level direct
+`combined_ns` observations and `successful_case_combined_sum_ns` as the sum over
+successful cases only. No separately timed sweep wall-clock interval is used in the
+primary rates. Derive these ratio-of-sums rates:
 
-- attempted documents/s = all attempted cases / sweep seconds;
-- successful documents/s = successful cases / sweep seconds;
-- successful pages/s, MiB/s, characters/s, and estimated tokens/s = successful work
-  totals / sweep seconds;
-- ms/attempted document and success-conditioned ms/page and ms/MiB.
+- attempted documents/s = attempted count / `case_combined_sum_ns` in seconds;
+- effective successful documents/s, pages/s, MiB/s, characters/s, and estimated
+  tokens/s = successful work totals / `case_combined_sum_ns` in seconds; these rates
+  include time spent on failures in the denominator;
+- success-conditioned documents/s, pages/s, MiB/s, characters/s, and estimated
+  tokens/s = successful work totals / `successful_case_combined_sum_ns` in seconds;
+- ms/attempted document = `case_combined_sum_ns` / attempted count;
+- ms/successful document = `successful_case_combined_sum_ns` / successful count.
 
-Report median and nearest-rank p95 across the 30 independent sweep-level values.
+Report median and nearest-rank p95 across the 30 repeated sweep-level values.
 Per-case median/p95 may be computed from that case's 30 observations. Never pool all
 case observations into a pseudo-replicated corpus p95. A failed real case remains in
-attempted-document counts and sweep elapsed time, while work-normalized rates are
-explicitly success-conditioned.
-
-### File-read observation
-
-If retained, file-read timings are a secondary warm-cache-biased observation. Run
-one unreported read sweep and 30 measured rotating-order read sweeps. Label the
-results `filesystem read, cache state uncontrolled/warm-biased`; do not call them
-disk throughput. They are excluded from combined preprocessing latency and from the
-primary paper table unless clearly footnoted.
+attempted-document counts and `case_combined_sum_ns`. If no case fails, effective
+and success-conditioned work rates coincide. Canonical runs omit file-read timing;
+input loading is setup outside the measured path.
 
 ### Local hardware context
 
@@ -213,10 +214,12 @@ observations per case:
 5. record peak traced bytes and stop tracing.
 
 Metric calculation and input-byte allocation occur outside tracing. Raw peaks for
-all three observations are retained. Report the maximum per case and the maximum
-over cases as conservative **peak incremental Python-traced allocation**. This is
-not process RSS, total system memory, or GPU memory, and it is never mixed into
-timing aggregates.
+all three observations are retained for successful and failed attempts. Report the
+maximum per successful case, the maximum over successful cases, and a separate
+maximum over all attempts. A failed-attempt peak never substitutes for the
+successful-case memory result. These are conservative **peak incremental
+Python-traced allocation** values, not process RSS, total system memory, or GPU
+memory, and they are never mixed into timing aggregates.
 
 ## Network audit wording
 
@@ -268,33 +271,75 @@ chunk_median_codepoints, chunk_max_codepoints,
 output_sha256
 ```
 
-No document text or raw exception string is stored. `diagnostic_code` is one of
+`output_sha256` is SHA-256 over the exact UTF-8 bytes of the sanitized, stripped
+source text. No document text or raw exception string is stored. `diagnostic_code` is one of
 `ok`, `invalid_pdf`, `encrypted_pdf`, `empty_primary_text`, or `parser_error`.
 Successful fields are integers/floats with their stated units. Failure-conditioned
-output fields are null.
+output fields are null. `page_count` is also null when PDF structure cannot be read;
+otherwise it remains populated even when later extraction fails.
 
 ### Timing records
 
 `timing-cases.jsonl` has exactly `21 * 30 = 630` rows. Required identity fields are
 `schema_version`, `arm`, `case_id`, `sweep_index`, `order_index`, `success`, and
-`diagnostic_code`. Required timings are integer `detect_ns`, `extract_ns`,
-`sanitize_ns`, `chunk_plan_ns`, and `combined_ns`. Work-unit denominators repeat the
-validated static counts or are null on failure.
+`diagnostic_code`. `terminal_stage` is one of `detect`, `extract`, `sanitize`,
+`chunk_plan`, or `complete`. `combined_ns` is always a nonnegative integer spanning
+all work attempted through the terminal stage. Each of `detect_ns`, `extract_ns`,
+`sanitize_ns`, and `chunk_plan_ns` is a nonnegative integer when executed and null
+when its stage was not reached. Work-unit denominators repeat the validated static
+counts or are null on failure.
 
-`timing-sweeps.jsonl` has exactly 60 rows: 30 per arm. Each row records the ordered
-case IDs, attempted/success/failed counts, direct `combined_ns`, successful work
-totals, and every ratio-of-sums rate with explicit unit names. Sweep totals are
-derived from case rows; validation regenerates them.
+`timing-sweeps.jsonl` has exactly 60 rows: 30 per arm. Every row has these exact
+keys, and validation regenerates every value from case rows and static records:
+
+```text
+schema_version, arm, sweep_index, ordered_case_ids,
+attempted_count, success_count, failure_count,
+case_combined_sum_ns, successful_case_combined_sum_ns,
+successful_input_bytes, successful_page_count,
+successful_extracted_codepoints, successful_estimated_tokens,
+attempted_documents_per_second,
+effective_successful_documents_per_second,
+effective_pages_per_second, effective_mib_per_second,
+effective_codepoints_per_second, effective_estimated_tokens_per_second,
+success_conditioned_documents_per_second,
+success_conditioned_pages_per_second, success_conditioned_mib_per_second,
+success_conditioned_codepoints_per_second,
+success_conditioned_estimated_tokens_per_second,
+milliseconds_per_attempted_document,
+milliseconds_per_successful_document
+```
+
+All rates are null when their stated denominator is zero.
 
 ### Memory and aggregate records
 
 `memory.jsonl` has exactly `21 * 3 = 63` rows with `arm`, `case_id`,
 `memory_index`, `success`, `diagnostic_code`, and `peak_python_traced_bytes`.
 
-`aggregate.json` contains `real`, `synthetic`, `timing`, `memory`, `failures`,
-`network_audit`, and `excluded_claims`. Every aggregate metric records numerator,
-denominator, support, applicability, and units where applicable. Generated report,
-CSV, and paper-table files are pure renderings of canonical JSON/JSONL sources.
+`aggregate.json` contains these exact top-level keys: `schema_version`, `real`,
+`synthetic`, `timing`, `memory`, `failures`, `network_audit`, and
+`excluded_claims`. `real` and `synthetic` each contain `attempted_count`,
+`success_count`, `failure_count`, `success_rate`, `total_input_bytes`,
+`total_page_count`, `total_extracted_codepoints`, `total_estimated_tokens`,
+`total_chunk_count`, `total_coverage_codepoints`, and
+`total_excess_overlap_codepoints`. Work totals sum successful static records;
+attempted/success/failure totals include every frozen case.
+
+`timing` contains one object per arm and, within each arm, one object for every
+exact sweep rate named above plus `case_combined_sum_ns` and
+`successful_case_combined_sum_ns`. Each metric object contains
+`support_sweeps=30`, `median`, `nearest_rank_p95`, and `unit`. `memory` contains,
+per arm, `successful_case_count`, `max_peak_python_traced_bytes_per_case`,
+`max_peak_python_traced_bytes_over_successes`, and
+`max_peak_python_traced_bytes_over_all_attempts`. `failures` contains attempted and
+failed counts by arm and counts for every diagnostic enum. `network_audit` contains
+`guard`, `scope`, `total_attempts`, and redacted operation-only details.
+`excluded_claims` is the fixed list from this specification.
+
+Every aggregate metric records numerator, denominator, support, applicability, and
+units where applicable. Generated report, CSV, and paper-table files are pure
+renderings of canonical JSON/JSONL sources.
 
 `manifest.json` records a clean source commit, newline-stable code/config hashes,
 exact corpus inventory hash, synthetic spec and generated input hashes, fixed chunk
@@ -320,8 +365,26 @@ The normalized logical-result comparison excludes only these value families:
 
 ```text
 manifest.timestamp_utc
-timing-cases[*].{detect_ns,extract_ns,sanitize_ns,chunk_plan_ns,combined_ns}
-timing-sweeps[*].{combined_ns,*_per_second,*_ms}
+timing-cases[*].detect_ns
+timing-cases[*].extract_ns
+timing-cases[*].sanitize_ns
+timing-cases[*].chunk_plan_ns
+timing-cases[*].combined_ns
+timing-sweeps[*].case_combined_sum_ns
+timing-sweeps[*].successful_case_combined_sum_ns
+timing-sweeps[*].attempted_documents_per_second
+timing-sweeps[*].effective_successful_documents_per_second
+timing-sweeps[*].effective_pages_per_second
+timing-sweeps[*].effective_mib_per_second
+timing-sweeps[*].effective_codepoints_per_second
+timing-sweeps[*].effective_estimated_tokens_per_second
+timing-sweeps[*].success_conditioned_documents_per_second
+timing-sweeps[*].success_conditioned_pages_per_second
+timing-sweeps[*].success_conditioned_mib_per_second
+timing-sweeps[*].success_conditioned_codepoints_per_second
+timing-sweeps[*].success_conditioned_estimated_tokens_per_second
+timing-sweeps[*].milliseconds_per_attempted_document
+timing-sweeps[*].milliseconds_per_successful_document
 memory[*].peak_python_traced_bytes
 aggregate.timing
 aggregate.memory
