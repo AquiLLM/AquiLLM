@@ -286,8 +286,12 @@ otherwise it remains populated even when later extraction fails.
 `chunk_plan`, or `complete`. `combined_ns` is always a nonnegative integer spanning
 all work attempted through the terminal stage. Each of `detect_ns`, `extract_ns`,
 `sanitize_ns`, and `chunk_plan_ns` is a nonnegative integer when executed and null
-when its stage was not reached. Work-unit denominators repeat the validated static
-counts or are null on failure.
+when its stage was not reached. The exact repeated work-unit fields are
+`input_bytes`, `page_count`, `extracted_codepoints`, and `estimated_tokens`; each
+copies the corresponding validated static-record value. Thus `input_bytes` remains
+populated on every failure, `page_count` remains populated when PDF structural
+reading succeeded, and output-derived `extracted_codepoints` and `estimated_tokens`
+are null on failures.
 
 `timing-sweeps.jsonl` has exactly 60 rows: 30 per arm. Every row has these exact
 keys, and validation regenerates every value from case rows and static records:
@@ -335,11 +339,11 @@ per arm, `successful_case_count`, `max_peak_python_traced_bytes_per_case`,
 `max_peak_python_traced_bytes_over_all_attempts`. `failures` contains attempted and
 failed counts by arm and counts for every diagnostic enum. `network_audit` contains
 `guard`, `scope`, `total_attempts`, and redacted operation-only details.
-`excluded_claims` is the fixed list from this specification.
-
-Every aggregate metric records numerator, denominator, support, applicability, and
-units where applicable. Generated report, CSV, and paper-table files are pure
-renderings of canonical JSON/JSONL sources.
+`excluded_claims` is the fixed list from this specification. The enumerated scalar
+totals and count fields use the units encoded in their exact field names; only the
+timing summary objects use the separately defined metric-object schema. Generated
+report, CSV, and paper-table files are pure renderings of canonical JSON/JSONL
+sources.
 
 `manifest.json` records a clean source commit, newline-stable code/config hashes,
 exact corpus inventory hash, synthetic spec and generated input hashes, fixed chunk
