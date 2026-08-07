@@ -64,12 +64,6 @@ _PROTOCOL_KEYS = {
     "page_string_template",
     "cases",
 }
-_PROTOCOL_CASE_KEYS = {
-    "page_count",
-    "pdf_sha256",
-    "normalized_text_sha256",
-    "expected_page_count",
-}
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _AGENT_ID_RE = re.compile(
     r"codex-agent:(?!(?:self|ambient)\Z)/?[a-z0-9][a-z0-9._-]*"
@@ -104,6 +98,17 @@ _OUTPUT_FIELDS = (
     "chunk_max_codepoints",
     "output_sha256",
 )
+_STATIC_RECORD_KEYS = {
+    "schema_version",
+    "arm",
+    "case_id",
+    "success",
+    "diagnostic_code",
+    "input_bytes",
+    "input_mib",
+    "page_count",
+    *_OUTPUT_FIELDS,
+}
 _TIMING_UNITS = {
     "case_combined_sum_ns": "nanoseconds",
     "successful_case_combined_sum_ns": "nanoseconds",
@@ -120,6 +125,29 @@ _TIMING_UNITS = {
     "success_conditioned_estimated_tokens_per_second": "estimated_tokens_per_second",
     "milliseconds_per_attempted_document": "milliseconds_per_document",
     "milliseconds_per_successful_document": "milliseconds_per_document",
+}
+_TIMING_SWEEP_KEYS = {
+    "schema_version",
+    "arm",
+    "sweep_index",
+    "ordered_case_ids",
+    "attempted_count",
+    "success_count",
+    "failure_count",
+    "successful_input_bytes",
+    "successful_page_count",
+    "successful_extracted_codepoints",
+    "successful_estimated_tokens",
+    *_TIMING_UNITS,
+}
+_MEMORY_RECORD_KEYS = {
+    "schema_version",
+    "arm",
+    "case_id",
+    "memory_index",
+    "success",
+    "diagnostic_code",
+    "peak_python_traced_bytes",
 }
 _EXCLUDED_CLAIMS = [
     "No vector-embedding or vector-index insertion claim.",
@@ -257,30 +285,8 @@ def _validate_protocol(protocol: object) -> None:
     if not isinstance(protocol, dict):
         raise ValueError("protocol must be a mapping")
     _require_exact_keys(protocol, _PROTOCOL_KEYS, "protocol")
-    if (
-        not isinstance(protocol["generator_version"], str)
-        or not protocol["generator_version"]
-    ):
-        raise ValueError("generator_version must be a non-empty string")
-    if protocol["page_counts"] != [1, 10, 50, 100]:
-        raise ValueError("page_counts must be [1, 10, 50, 100]")
-    if protocol["page_string_template"] != (
-        "AquiLLM synthetic preprocessing page NNNN. The quick brown fox jumps "
-        "over the lazy dog. Value NNNN."
-    ):
-        raise ValueError("page_string_template must use the frozen authored string")
-    cases = protocol["cases"]
-    if not isinstance(cases, list) or len(cases) != 4:
-        raise ValueError("protocol cases must contain four entries")
-    for case, count in zip(cases, (1, 10, 50, 100), strict=True):
-        if not isinstance(case, dict):
-            raise ValueError("protocol case must be a mapping")
-        _require_exact_keys(case, _PROTOCOL_CASE_KEYS, "protocol case")
-        if case["page_count"] != count or case["expected_page_count"] != count:
-            raise ValueError("protocol page count does not match the frozen sequence")
-        for key in ("pdf_sha256", "normalized_text_sha256"):
-            if not isinstance(case[key], str) or not _SHA256_RE.fullmatch(case[key]):
-                raise ValueError(f"{key} must be a lowercase SHA-256 digest")
+    if protocol != _expected_synthetic_protocol():
+        raise ValueError("protocol does not match the frozen synthetic generator")
 
 
 def validate_document_review(
@@ -461,6 +467,34 @@ def generate_synthetic_pdf(page_count: int) -> tuple[bytes, str]:
         ).encode("ascii")
     )
     return bytes(output), "\n\n".join(page_strings).strip()
+
+
+def _expected_synthetic_protocol() -> dict[str, object]:
+    page_counts = [1, 10, 50, 100]
+    cases = []
+    for page_count in page_counts:
+        pdf_bytes, _ = generate_synthetic_pdf(page_count)
+        authored_pages = [
+            _SYNTHETIC_PAGE_TEMPLATE.replace("NNNN", f"{index:04d}")
+            for index in range(1, page_count + 1)
+        ]
+        authored_text = "\n\n".join(authored_pages).strip()
+        cases.append(
+            {
+                "page_count": page_count,
+                "pdf_sha256": hashlib.sha256(pdf_bytes).hexdigest(),
+                "normalized_text_sha256": hashlib.sha256(
+                    authored_text.encode("utf-8")
+                ).hexdigest(),
+                "expected_page_count": page_count,
+            }
+        )
+    return {
+        "generator_version": "aquillm-ascii-pdf-v1",
+        "page_counts": page_counts,
+        "page_string_template": _SYNTHETIC_PAGE_TEMPLATE,
+        "cases": cases,
+    }
 
 
 def _chunk_bounds(chunk: object) -> tuple[int, int]:
@@ -663,6 +697,174 @@ def _failure_summary(
     }
 
 
+def _require_nonnegative_int(value: object, field: str) -> None:
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{field} must be a nonnegative integer")
+
+
+def _require_nonnegative_number(
+    value: object, field: str, *, allow_none: bool = False
+) -> None:
+    if value is None and allow_none:
+        return
+    if type(value) not in {int, float} or not math.isfinite(value) or value < 0:
+        raise ValueError(f"{field} must be a nonnegative finite number")
+
+
+def _validate_record_identity(record: Mapping[str, object]) -> tuple[str, str]:
+    arm = record["arm"]
+    case_id = record["case_id"]
+    if type(arm) is not str or arm not in _ARMS:
+        raise ValueError("arm must be real or synthetic")
+    if type(case_id) is not str or not case_id:
+        raise ValueError("case_id must be a non-empty string")
+    return arm, case_id
+
+
+def _validate_success_diagnostic(record: Mapping[str, object]) -> None:
+    success = record["success"]
+    diagnostic_code = record["diagnostic_code"]
+    if type(success) is not bool:
+        raise ValueError("success must be a boolean")
+    if (
+        type(diagnostic_code) is not str
+        or diagnostic_code not in _DIAGNOSTIC_CODES
+    ):
+        raise ValueError("diagnostic_code must be a safe diagnostic enum")
+    if success != (diagnostic_code == "ok"):
+        raise ValueError("success and diagnostic_code are inconsistent")
+
+
+def _validate_static_record(record: object) -> tuple[str, str]:
+    if not isinstance(record, Mapping):
+        raise ValueError("static record must be a mapping")
+    _require_exact_keys(record, _STATIC_RECORD_KEYS, "static record")
+    if record["schema_version"] != SCHEMA_VERSION:
+        raise ValueError("static record schema_version must be 1.0")
+    identity = _validate_record_identity(record)
+    _validate_success_diagnostic(record)
+    _require_nonnegative_int(record["input_bytes"], "input_bytes")
+    _require_nonnegative_number(record["input_mib"], "input_mib")
+    if record["input_mib"] != record["input_bytes"] / 1_048_576:
+        raise ValueError("input_mib must derive exactly from input_bytes")
+    page_count = record["page_count"]
+    if page_count is not None and (type(page_count) is not int or page_count <= 0):
+        raise ValueError("page_count must be null or a positive integer")
+
+    if record["success"] is True:
+        if page_count is None:
+            raise ValueError("successful static record requires page_count")
+        for field in (
+            "extracted_codepoints",
+            "extracted_utf8_bytes",
+            "word_count",
+            "estimated_tokens",
+            "chunk_count",
+            "coverage_codepoints",
+            "total_chunk_codepoints",
+            "excess_overlap_codepoints",
+            "chunk_min_codepoints",
+            "chunk_max_codepoints",
+        ):
+            _require_nonnegative_int(record[field], field)
+        for field in (
+            "overlap_ratio",
+            "chunk_mean_codepoints",
+            "chunk_median_codepoints",
+        ):
+            _require_nonnegative_number(record[field], field)
+        output_hash = record["output_sha256"]
+        if type(output_hash) is not str or not _SHA256_RE.fullmatch(output_hash):
+            raise ValueError("output_sha256 must be a lowercase SHA-256 digest")
+    else:
+        for field in _OUTPUT_FIELDS:
+            if record[field] is not None:
+                raise ValueError(f"failed static record requires null {field}")
+    return identity
+
+
+def _validate_timing_sweep(
+    row: object, static_identities: set[tuple[str, str]]
+) -> None:
+    if not isinstance(row, Mapping):
+        raise ValueError("timing sweep must be a mapping")
+    _require_exact_keys(row, _TIMING_SWEEP_KEYS, "timing sweep")
+    if row["schema_version"] != SCHEMA_VERSION:
+        raise ValueError("timing sweep schema_version must be 1.0")
+    arm = row["arm"]
+    if type(arm) is not str or arm not in _ARMS:
+        raise ValueError("timing sweep arm must be real or synthetic")
+    _require_nonnegative_int(row["sweep_index"], "sweep_index")
+    ordered_case_ids = row["ordered_case_ids"]
+    if not isinstance(ordered_case_ids, list) or any(
+        type(case_id) is not str or not case_id for case_id in ordered_case_ids
+    ):
+        raise ValueError("ordered_case_ids must be a list of non-empty strings")
+    if len(ordered_case_ids) != len(set(ordered_case_ids)):
+        raise ValueError("ordered_case_ids must not contain duplicate identities")
+    for case_id in ordered_case_ids:
+        if (arm, case_id) not in static_identities:
+            raise ValueError(
+                "timing case identity is absent from matching-arm static rows"
+            )
+    for field in (
+        "attempted_count",
+        "success_count",
+        "failure_count",
+        "case_combined_sum_ns",
+        "successful_case_combined_sum_ns",
+        "successful_input_bytes",
+        "successful_page_count",
+        "successful_extracted_codepoints",
+        "successful_estimated_tokens",
+    ):
+        _require_nonnegative_int(row[field], field)
+    if row["attempted_count"] != len(ordered_case_ids):
+        raise ValueError("attempted_count must equal ordered_case_ids length")
+    if row["success_count"] + row["failure_count"] != row["attempted_count"]:
+        raise ValueError("success_count plus failure_count must equal attempted_count")
+    for field in set(_TIMING_UNITS) - {
+        "case_combined_sum_ns",
+        "successful_case_combined_sum_ns",
+    }:
+        _require_nonnegative_number(row[field], field, allow_none=True)
+
+
+def _validate_memory_record(
+    row: object, static_identities: set[tuple[str, str]]
+) -> None:
+    if not isinstance(row, Mapping):
+        raise ValueError("memory record must be a mapping")
+    _require_exact_keys(row, _MEMORY_RECORD_KEYS, "memory record")
+    if row["schema_version"] != SCHEMA_VERSION:
+        raise ValueError("memory record schema_version must be 1.0")
+    identity = _validate_record_identity(row)
+    if identity not in static_identities:
+        raise ValueError("memory case_id is absent from matching-arm static rows")
+    _require_nonnegative_int(row["memory_index"], "memory_index")
+    _validate_success_diagnostic(row)
+    _require_nonnegative_int(
+        row["peak_python_traced_bytes"], "peak_python_traced_bytes"
+    )
+
+
+def _validate_aggregate_inputs(
+    static_records: Sequence[Mapping[str, object]],
+    timing_sweeps: Sequence[Mapping[str, object]],
+    memory_records: Sequence[Mapping[str, object]],
+) -> None:
+    static_identities: set[tuple[str, str]] = set()
+    for record in static_records:
+        identity = _validate_static_record(record)
+        if identity in static_identities:
+            raise ValueError("duplicate static record case identity")
+        static_identities.add(identity)
+    for row in timing_sweeps:
+        _validate_timing_sweep(row, static_identities)
+    for row in memory_records:
+        _validate_memory_record(row, static_identities)
+
+
 def aggregate_document_results(
     static_records: Sequence[Mapping[str, object]],
     timing_sweeps: Sequence[Mapping[str, object]],
@@ -672,6 +874,7 @@ def aggregate_document_results(
 ) -> dict[str, object]:
     """Deterministically aggregate already-created static, timing, and memory rows."""
 
+    _validate_aggregate_inputs(static_records, timing_sweeps, memory_records)
     return {
         "schema_version": SCHEMA_VERSION,
         "real": _arm_totals(static_records, "real"),
@@ -689,25 +892,7 @@ def build_pending_document_review(inventory_path: Path) -> dict:
 
     inventory_path = Path(inventory_path)
     inventory = load_document_inventory(inventory_path)
-    protocol_cases = []
-    for page_count in (1, 10, 50, 100):
-        pdf_bytes, normalized_text = generate_synthetic_pdf(page_count)
-        protocol_cases.append(
-            {
-                "page_count": page_count,
-                "pdf_sha256": hashlib.sha256(pdf_bytes).hexdigest(),
-                "normalized_text_sha256": hashlib.sha256(
-                    normalized_text.encode("utf-8")
-                ).hexdigest(),
-                "expected_page_count": page_count,
-            }
-        )
-    protocol = {
-        "generator_version": "aquillm-ascii-pdf-v1",
-        "page_counts": [1, 10, 50, 100],
-        "page_string_template": _SYNTHETIC_PAGE_TEMPLATE,
-        "cases": protocol_cases,
-    }
+    protocol = _expected_synthetic_protocol()
     review = {
         "schema_version": SCHEMA_VERSION,
         "review_id": "document-corpus-and-synthetic-v1",

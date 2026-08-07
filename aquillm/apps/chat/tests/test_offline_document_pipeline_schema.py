@@ -36,6 +36,24 @@ CASE_FIELDS = {
     "sensitivity",
     "redistribution_license_status",
 }
+EXPECTED_PROTOCOL_HASHES = {
+    1: (
+        "0b304609233fd7b533791266f7b710a78e544c5609ce8cf20c445256f9a0366c",
+        "d85906ee650bc6e4f0cbcf9886de0fabd2b1e5009a272a5d7332d818c273cd4b",
+    ),
+    10: (
+        "04db9b687f0db956d89bd00aa1e995cd6963523aca94b95aa1b34d916ee18f23",
+        "0813edeff259151ebee235f36e08a0069652e39ad00ce5d2b38a842efbb4038b",
+    ),
+    50: (
+        "355b101287598dba241370980e150ae32f015ff751119be1244e490e15663ac5",
+        "b74c7693f8bfd08d3070bd3e3bd4081f1c57c42a737fd2930b40f54d46b6daad",
+    ),
+    100: (
+        "25c3560f0e505ceb5c5f88f9c4b8b9f5ab39ebe66b5e70770770808b56f406ec",
+        "1fb1ad1e78be21e42ba3a0058e0633cfd0a01f6637eed87a49aff058ba120a0c",
+    ),
+}
 
 
 def _valid_inventory() -> dict:
@@ -83,10 +101,8 @@ def _valid_protocol() -> dict:
         "cases": [
             {
                 "page_count": count,
-                "pdf_sha256": hashlib.sha256(f"pdf-{count}".encode()).hexdigest(),
-                "normalized_text_sha256": hashlib.sha256(
-                    f"text-{count}".encode()
-                ).hexdigest(),
+                "pdf_sha256": EXPECTED_PROTOCOL_HASHES[count][0],
+                "normalized_text_sha256": EXPECTED_PROTOCOL_HASHES[count][1],
                 "expected_page_count": count,
             }
             for count in (1, 10, 50, 100)
@@ -257,6 +273,38 @@ def test_review_requires_exact_keys_hashes_and_independent_approval(tmp_path):
     _write_yaml(review_path, review)
     with pytest.raises(ValueError, match="inventory_hash"):
         load_document_review(review_path, inventory_path)
+
+
+@pytest.mark.parametrize(
+    "case_index,field",
+    [
+        (None, "generator_version"),
+        *((index, "page_count") for index in range(4)),
+        *((index, "expected_page_count") for index in range(4)),
+        *((index, "pdf_sha256") for index in range(4)),
+        *((index, "normalized_text_sha256") for index in range(4)),
+    ],
+)
+def test_review_protocol_rejects_any_frozen_generator_drift(
+    tmp_path, case_index, field
+):
+    inventory_path = tmp_path / "inventory.yaml"
+    inventory = _valid_inventory()
+    _write_yaml(inventory_path, inventory)
+    review = _valid_review(inventory_path)
+
+    if field == "generator_version":
+        review["protocol"][field] = "aquillm-ascii-pdf-v2"
+    elif field in {"page_count", "expected_page_count"}:
+        review["protocol"]["cases"][case_index][field] += 1
+    else:
+        review["protocol"]["cases"][case_index][field] = "f" * 64
+    review["protocol_hash"] = hashlib.sha256(
+        canonical_json_bytes(review["protocol"])
+    ).hexdigest()
+
+    with pytest.raises(ValueError, match="protocol|generator_version|page count"):
+        validate_document_review(review, inventory)
 
 
 def test_approved_review_accepts_slash_rooted_stable_task_identity(tmp_path):
@@ -645,6 +693,75 @@ TIMING_METRICS = (
     "milliseconds_per_attempted_document",
     "milliseconds_per_successful_document",
 )
+TIMING_SWEEP_FIELDS = {
+    "schema_version",
+    "arm",
+    "sweep_index",
+    "ordered_case_ids",
+    "attempted_count",
+    "success_count",
+    "failure_count",
+    "successful_input_bytes",
+    "successful_page_count",
+    "successful_extracted_codepoints",
+    "successful_estimated_tokens",
+    *TIMING_METRICS,
+}
+MEMORY_FIELDS = {
+    "schema_version",
+    "arm",
+    "case_id",
+    "memory_index",
+    "success",
+    "diagnostic_code",
+    "peak_python_traced_bytes",
+}
+
+
+def _timing_sweep_record(
+    arm, sweep_index, ordered_case_ids, *, success_count=None, multiplier=1
+):
+    attempted_count = len(ordered_case_ids)
+    if success_count is None:
+        success_count = attempted_count
+    row = {
+        "schema_version": "1.0",
+        "arm": arm,
+        "sweep_index": sweep_index,
+        "ordered_case_ids": ordered_case_ids,
+        "attempted_count": attempted_count,
+        "success_count": success_count,
+        "failure_count": attempted_count - success_count,
+        "successful_input_bytes": success_count,
+        "successful_page_count": success_count,
+        "successful_extracted_codepoints": success_count,
+        "successful_estimated_tokens": success_count,
+    }
+    row.update(
+        {
+            metric: (
+                2 * multiplier * (index + 1)
+                if metric.endswith("_ns")
+                else 2.0 * multiplier * (index + 1)
+            )
+            for index, metric in enumerate(TIMING_METRICS)
+        }
+    )
+    return row
+
+
+def _memory_record(
+    arm, case_id, memory_index, success, diagnostic_code, peak_bytes
+):
+    return {
+        "schema_version": "1.0",
+        "arm": arm,
+        "case_id": case_id,
+        "memory_index": memory_index,
+        "success": success,
+        "diagnostic_code": diagnostic_code,
+        "peak_python_traced_bytes": peak_bytes,
+    }
 
 
 def _success_record(arm, case_id, input_bytes, pages, text):
@@ -677,46 +794,24 @@ def test_aggregate_document_results_ratio_denominators():
     ]
     timing_sweeps = []
     for arm, multiplier in (("real", 1), ("synthetic", 10)):
-        for sweep_index, base in enumerate((2.0, 4.0)):
-            row = {"arm": arm, "sweep_index": sweep_index}
-            row.update(
-                {
-                    metric: base * multiplier * (index + 1)
-                    for index, metric in enumerate(TIMING_METRICS)
-                }
+        for sweep_index, scale in enumerate((1, 2)):
+            timing_sweeps.append(
+                _timing_sweep_record(
+                    arm,
+                    sweep_index,
+                    ["real-001", "real-002"]
+                    if arm == "real"
+                    else ["synthetic-001"],
+                    success_count=1,
+                    multiplier=multiplier * scale,
+                )
             )
-            timing_sweeps.append(row)
     memory_records = [
-        {
-            "arm": "real",
-            "case_id": "real-001",
-            "success": True,
-            "peak_python_traced_bytes": 100,
-        },
-        {
-            "arm": "real",
-            "case_id": "real-001",
-            "success": True,
-            "peak_python_traced_bytes": 125,
-        },
-        {
-            "arm": "real",
-            "case_id": "real-001",
-            "success": False,
-            "peak_python_traced_bytes": 400,
-        },
-        {
-            "arm": "real",
-            "case_id": "real-002",
-            "success": False,
-            "peak_python_traced_bytes": 300,
-        },
-        {
-            "arm": "synthetic",
-            "case_id": "synthetic-001",
-            "success": True,
-            "peak_python_traced_bytes": 55,
-        },
+        _memory_record("real", "real-001", 0, True, "ok", 100),
+        _memory_record("real", "real-001", 1, True, "ok", 125),
+        _memory_record("real", "real-001", 2, False, "parser_error", 400),
+        _memory_record("real", "real-002", 0, False, "invalid_pdf", 300),
+        _memory_record("synthetic", "synthetic-001", 0, True, "ok", 55),
     ]
     network_audit = {
         "guard": "process_local_socket_guard",
@@ -782,6 +877,109 @@ def test_aggregate_document_results_ratio_denominators():
     }
     assert aggregate["network_audit"] == network_audit
     assert aggregate["excluded_claims"]
+
+
+def _minimal_aggregate_inputs():
+    static_records = [
+        _success_record("real", "real-001", 10, 1, "real"),
+        _success_record("synthetic", "synthetic-001", 20, 1, "synthetic"),
+    ]
+    timing_sweeps = [
+        _timing_sweep_record("real", 0, ["real-001"]),
+        _timing_sweep_record("synthetic", 0, ["synthetic-001"]),
+    ]
+    memory_records = [
+        _memory_record("real", "real-001", 0, True, "ok", 10),
+        _memory_record("synthetic", "synthetic-001", 0, True, "ok", 20),
+    ]
+    return static_records, timing_sweeps, memory_records
+
+
+def _aggregate_minimal(static_records, timing_sweeps, memory_records):
+    return aggregate_document_results(
+        static_records,
+        timing_sweeps,
+        memory_records,
+        network_audit={
+            "guard": "process_local_socket_guard",
+            "scope": "benchmark_process",
+            "total_attempts": 0,
+            "details": [],
+        },
+    )
+
+
+@pytest.mark.parametrize("collection_index", [0, 1, 2])
+@pytest.mark.parametrize("invalid_arm", ["unknown", True])
+def test_aggregate_rejects_unknown_or_mistyped_arm(collection_index, invalid_arm):
+    inputs = list(_minimal_aggregate_inputs())
+    inputs[collection_index][0]["arm"] = invalid_arm
+
+    with pytest.raises(ValueError, match="arm"):
+        _aggregate_minimal(*inputs)
+
+
+@pytest.mark.parametrize(
+    "collection_index,field,value",
+    [
+        (0, "input_bytes", True),
+        (0, "input_bytes", "10"),
+        (1, "case_combined_sum_ns", True),
+        (1, "case_combined_sum_ns", "10"),
+        (2, "peak_python_traced_bytes", True),
+        (2, "peak_python_traced_bytes", "10"),
+    ],
+)
+def test_aggregate_rejects_bool_or_string_numeric_fields(
+    collection_index, field, value
+):
+    inputs = list(_minimal_aggregate_inputs())
+    inputs[collection_index][0][field] = value
+
+    with pytest.raises(ValueError, match=field):
+        _aggregate_minimal(*inputs)
+
+
+@pytest.mark.parametrize("collection_index", [0, 1, 2])
+@pytest.mark.parametrize("change", ["missing", "extra"])
+def test_aggregate_rejects_missing_or_extra_row_keys(collection_index, change):
+    inputs = list(_minimal_aggregate_inputs())
+    row = inputs[collection_index][0]
+    if change == "missing":
+        del row["schema_version"]
+    else:
+        row["unexpected"] = "value"
+
+    with pytest.raises(ValueError, match="keys"):
+        _aggregate_minimal(*inputs)
+
+
+@pytest.mark.parametrize("collection_index", [0, 2])
+@pytest.mark.parametrize(
+    "field,value",
+    [("success", 1), ("diagnostic_code", "unsafe_raw_exception")],
+)
+def test_aggregate_rejects_invalid_success_or_diagnostic(
+    collection_index, field, value
+):
+    inputs = list(_minimal_aggregate_inputs())
+    inputs[collection_index][0][field] = value
+
+    with pytest.raises(ValueError, match=field):
+        _aggregate_minimal(*inputs)
+
+
+@pytest.mark.parametrize("collection_index", [1, 2])
+def test_aggregate_rejects_unknown_or_cross_arm_case_identity(collection_index):
+    inputs = list(_minimal_aggregate_inputs())
+    row = inputs[collection_index][0]
+    if collection_index == 1:
+        row["ordered_case_ids"] = ["synthetic-001"]
+    else:
+        row["case_id"] = "synthetic-001"
+
+    with pytest.raises(ValueError, match="case_id|identity|static"):
+        _aggregate_minimal(*inputs)
 
 
 INVENTORY_PATH = (
