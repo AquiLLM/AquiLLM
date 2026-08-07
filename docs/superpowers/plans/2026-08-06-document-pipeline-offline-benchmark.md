@@ -283,7 +283,15 @@ Require PASS with `allow_pending=True` and explicit rejection without it. No pro
 
 - [ ] **Step 15: Commit pending frozen inputs before review**
 
-Commit the inventory, pending review/protocol, schema implementation, and tests.
+Validate the generated review explicitly in pending mode, prove default loading still rejects it, then commit the inventory, pending review/protocol, schema implementation, and tests as a distinct checkpoint before dispatching the reviewer:
+
+```powershell
+Set-Location aquillm
+python -m pytest apps/chat/tests/test_offline_document_pipeline_schema.py::test_pending_review_requires_opt_in apps/chat/tests/test_offline_document_pipeline_schema.py::test_build_pending_review_exact_shape_and_hashes -q
+Set-Location ..
+git add aquillm/apps/chat/evals/offline/document_pipeline_schema.py aquillm/apps/chat/evals/offline/document_corpus_inventory.yaml aquillm/apps/chat/evals/offline/document_corpus_review.yaml aquillm/apps/chat/tests/test_offline_document_pipeline_schema.py
+git commit -m "test(eval): freeze pending document benchmark inputs"
+```
 
 - [ ] **Step 16: Obtain and record genuinely independent approval**
 
