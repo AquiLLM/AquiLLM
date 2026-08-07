@@ -1,0 +1,125 @@
+case_count: 17
+cases:
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-001
+  input_bytes: 1296541
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 238d7a3895f6b4766096837b88342a6e0af4ee37dbf42307657e1b7800c7de30
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-002
+  input_bytes: 1450427
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 2925f97c4e883cd65be40e0014fd20ed5ac2aabdedd34e27480abb895bfd4657
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-003
+  input_bytes: 4672354
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 374ecbf7cb48c42420f38a68fe5fba303f48eb70bc5fc5d7124cf35fbfb488ac
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-004
+  input_bytes: 1426833
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 4dad34bf8c7655bf97815ae82983fb1df5a04d13df2d6f475390f77c3fc6b8f5
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-005
+  input_bytes: 2464143
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 4fd3f9021b3bdb0a2df4035065d23945bc62926bfcb3cd5cce99b51202f34c2e
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-006
+  input_bytes: 16221373
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 5680d192e36a8277722c763e75cd738c81b2824a3833988be73cf44355663d94
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-007
+  input_bytes: 31522977
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 5c9e79a6fcf923fc02be00642b7ce558e16bb731bfea0cd88179c248cca87426
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-008
+  input_bytes: 856640
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 66b7a90752fe8a5931e9c5a383d03063dabcd1de4325254c8e755ef25461dd4a
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-009
+  input_bytes: 2683362
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 6d2af03bf9666a3fbca537a4d9647c8d91d3fddb78415cd3fb31a8e01b738393
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-010
+  input_bytes: 1424841
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 6d6ba03988401a6a0523e2a6abb6aecd9d70bc0f6254398d83bb6c36102d4321
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-011
+  input_bytes: 5389891
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 70a0589e08867ec0a9e70c8fe37b26002696dc43b7e7e1ae269bf02b5264b913
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-012
+  input_bytes: 11982418
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: 80e6526d6592a5cd098f53da630eb877c543a73b6de293376465bc8367b6a188
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-013
+  input_bytes: 6683316
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: b50e784ec68eedd70abcd92621f2d8e07ad8af677b9cdb74f5d00d09a5950de9
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-014
+  input_bytes: 3588553
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: be7b54a0f6d97be646130d8b923ee6075222dd59193b89a2270ac60dfbbd7af6
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-015
+  input_bytes: 1426954
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: df6195d0741e09bc5a7809f1baf6ac9e4c83b6494df81b2e29b0d1a9cde6f986
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-016
+  input_bytes: 3354220
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: f2ede77717653b786fbaca22f95ccd40b43654c0af1b6eb328ca13e51c92415f
+- acquisition_lineage: existing Semantic Extraction Experiment astro_test set
+  case_id: real-017
+  input_bytes: 561855
+  redistribution_license_status: not redistributed; source license not asserted
+  selection_rationale: all PDF members of the fixed astro_test convenience set
+  sensitivity: public-paper-like local research corpus
+  sha256: fce7a111505eb707be8136221f545705e0edcd7f8ed02ae0909df52b36e77fc0
+inventory_id: astro-test-real-v1
+schema_version: '1.0'
+source_hash_algorithm: sha256-raw-bytes-v1
+total_bytes: 97006698

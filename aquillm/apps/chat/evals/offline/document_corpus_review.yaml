@@ -1,0 +1,37 @@
+decisions: []
+inventory_hash: 17a89c2e4fb74dda4be49e83b1a4afb27dd05ed0bf03ea1849a7f14961c3c131
+protocol:
+  cases:
+  - expected_page_count: 1
+    normalized_text_sha256: d85906ee650bc6e4f0cbcf9886de0fabd2b1e5009a272a5d7332d818c273cd4b
+    page_count: 1
+    pdf_sha256: 0b304609233fd7b533791266f7b710a78e544c5609ce8cf20c445256f9a0366c
+  - expected_page_count: 10
+    normalized_text_sha256: 0813edeff259151ebee235f36e08a0069652e39ad00ce5d2b38a842efbb4038b
+    page_count: 10
+    pdf_sha256: 04db9b687f0db956d89bd00aa1e995cd6963523aca94b95aa1b34d916ee18f23
+  - expected_page_count: 50
+    normalized_text_sha256: b74c7693f8bfd08d3070bd3e3bd4081f1c57c42a737fd2930b40f54d46b6daad
+    page_count: 50
+    pdf_sha256: 355b101287598dba241370980e150ae32f015ff751119be1244e490e15663ac5
+  - expected_page_count: 100
+    normalized_text_sha256: 1fb1ad1e78be21e42ba3a0058e0633cfd0a01f6637eed87a49aff058ba120a0c
+    page_count: 100
+    pdf_sha256: 25c3560f0e505ceb5c5f88f9c4b8b9f5ab39ebe66b5e70770770808b56f406ec
+  generator_version: aquillm-ascii-pdf-v1
+  page_counts:
+  - 1
+  - 10
+  - 50
+  - 100
+  page_string_template: AquiLLM synthetic preprocessing page NNNN. The quick brown
+    fox jumps over the lazy dog. Value NNNN.
+protocol_hash: 1125d1212f33f92c2d0529a998fc42fa0579f04153653c522fd1fdd0b658a6cd
+protocol_hash_algorithm: sha256-canonical-json-v1
+review_date: null
+review_id: document-corpus-and-synthetic-v1
+reviewer_identity: null
+reviewer_role: null
+schema_version: '1.0'
+source_hash_algorithm: sha256-utf8-lf-v1
+status: pending_independent_review
