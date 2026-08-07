@@ -25,6 +25,7 @@ from apps.documents.services.document_meta import (
     document_provider_name,
 )
 from apps.documents.services.image_payloads import _env_bool, _env_int, doc_image_data_url
+from apps.documents.services.text_chunk_plan import plan_text_chunks
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -83,19 +84,22 @@ def create_chunks(self, doc_id: str):
 
         chunk_size = django_apps.get_app_config("aquillm").chunk_size
         overlap = django_apps.get_app_config("aquillm").chunk_overlap
-        chunk_pitch = chunk_size - overlap
         TextChunk.objects.filter(doc_id=doc.id).delete()
-        last_character = len(doc.full_text) - 1
+        chunk_specs = plan_text_chunks(
+            doc.full_text,
+            chunk_size=chunk_size,
+            overlap=overlap,
+        )
         chunks = [
             TextChunk(
-                content=doc.full_text[chunk_pitch * i : min((chunk_pitch * i) + chunk_size, last_character + 1)],
-                start_position=chunk_pitch * i,
-                end_position=min((chunk_pitch * i) + chunk_size, last_character + 1),
+                content=spec.content,
+                start_position=spec.start_position,
+                end_position=spec.end_position,
                 doc_id=doc.id,
-                chunk_number=i,
+                chunk_number=spec.chunk_number,
                 modality=TextChunk.Modality.TEXT,
             )
-            for i in range(last_character // chunk_pitch + 1)
+            for spec in chunk_specs
         ]
 
         enable_image_chunks = _env_bool("APP_RAG_ENABLE_IMAGE_CHUNKS", True)

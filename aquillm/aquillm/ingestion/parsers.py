@@ -60,20 +60,26 @@ def detect_ingest_type(filename: str, content_type: str | None = None) -> str:
         raise UnsupportedFileTypeError(str(e)) from e
 
 
-def _extract_pdf(filename: str, data: bytes) -> list[ExtractedTextPayload]:
-    """Extract text and figures from a PDF."""
-    payloads: list[ExtractedTextPayload] = []
-    full_text = extract_pdf_text(data)
-    
-    payloads.append(ExtractedTextPayload(
+def extract_primary_text_payload(
+    filename: str,
+    data: bytes,
+    *,
+    content_type: str | None = None,
+    ingest_type: str | None = None,
+) -> ExtractedTextPayload:
+    """Extract the primary text payload from a PDF without extracting figures."""
+    resolved_ingest_type = ingest_type or detect_ingest_type(filename, content_type)
+    extension = os.path.splitext(_clean_name(filename))[1].lower()
+    if resolved_ingest_type != "document" or extension != ".pdf":
+        raise UnsupportedFileTypeError(
+            f"Primary text extraction is only available for PDF documents, not {filename!r}."
+        )
+
+    return ExtractedTextPayload(
         title=_stem(filename),
         normalized_type="pdf",
-        full_text=full_text,
-    ))
-    
-    extract_figure_payloads_for_format(filename, data, "pdf", payloads)
-    
-    return payloads
+        full_text=extract_pdf_text(data),
+    )
 
 
 def _extract_html(filename: str, data: bytes) -> ExtractedTextPayload:
@@ -212,7 +218,16 @@ def extract_text_payloads(filename: str, data: bytes, content_type: str | None =
         return [_extract_media_transcript(filename, data, normalized_type="video_transcript")]
 
     if extension == ".pdf":
-        return _extract_pdf(filename, data)
+        payloads = [
+            extract_primary_text_payload(
+                filename,
+                data,
+                content_type=content_type,
+                ingest_type=ingest_type,
+            )
+        ]
+        extract_figure_payloads_for_format(filename, data, "pdf", payloads)
+        return payloads
     if extension in (".txt", ".md", ".doc", ".rtf"):
         return [ExtractedTextPayload(title=_stem(filename), normalized_type=extension.lstrip("."), full_text=_read_text_bytes(data))]
     if extension in (".html", ".htm"):
