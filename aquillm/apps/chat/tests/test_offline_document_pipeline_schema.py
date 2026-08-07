@@ -24,6 +24,8 @@ from apps.chat.evals.offline.document_pipeline_schema import (
 from apps.chat.evals.offline.schema import canonical_json_bytes, sha256_canonical_text
 from apps.chat.services import rag_evidence
 from apps.documents.services.text_chunk_plan import TextChunkSpec
+from aquillm.ingestion import parsers
+from aquillm.task_ingest_helpers import sanitize_db_text
 
 CASE_FIELDS = {
     "case_id",
@@ -348,8 +350,34 @@ def test_synthetic_pdf_is_byte_deterministic(page_count):
     assert b"\r" not in first_bytes
 
 
-@pytest.mark.parametrize("page_count", [1, 10, 50, 100])
-def test_synthetic_pdf_page_count_and_expected_text(page_count):
+@pytest.mark.parametrize(
+    "page_count,expected_pdf_sha256,expected_text_sha256",
+    [
+        (
+            1,
+            "0b304609233fd7b533791266f7b710a78e544c5609ce8cf20c445256f9a0366c",
+            "d85906ee650bc6e4f0cbcf9886de0fabd2b1e5009a272a5d7332d818c273cd4b",
+        ),
+        (
+            10,
+            "04db9b687f0db956d89bd00aa1e995cd6963523aca94b95aa1b34d916ee18f23",
+            "0813edeff259151ebee235f36e08a0069652e39ad00ce5d2b38a842efbb4038b",
+        ),
+        (
+            50,
+            "355b101287598dba241370980e150ae32f015ff751119be1244e490e15663ac5",
+            "b74c7693f8bfd08d3070bd3e3bd4081f1c57c42a737fd2930b40f54d46b6daad",
+        ),
+        (
+            100,
+            "25c3560f0e505ceb5c5f88f9c4b8b9f5ab39ebe66b5e70770770808b56f406ec",
+            "1fb1ad1e78be21e42ba3a0058e0633cfd0a01f6637eed87a49aff058ba120a0c",
+        ),
+    ],
+)
+def test_synthetic_pdf_page_count_and_expected_text(
+    monkeypatch, page_count, expected_pdf_sha256, expected_text_sha256
+):
     pdf_bytes, normalized_text = generate_synthetic_pdf(page_count)
     page_strings = [
         (
@@ -362,8 +390,31 @@ def test_synthetic_pdf_page_count_and_expected_text(page_count):
 
     reader = PdfReader(io.BytesIO(pdf_bytes))
     assert len(reader.pages) == page_count
-    extracted_pages = [(page.extract_text() or "").strip() for page in reader.pages]
-    assert extracted_pages == page_strings
+
+    figure_calls = []
+
+    def fail_figure_hook(*args, **kwargs):
+        figure_calls.append((args, kwargs))
+        raise AssertionError("primary-text extraction must exclude figures")
+
+    monkeypatch.setattr(
+        parsers, "extract_figure_payloads_for_format", fail_figure_hook
+    )
+    payload = parsers.extract_primary_text_payload(
+        "synthetic.pdf",
+        pdf_bytes,
+        content_type="application/pdf",
+        ingest_type="document",
+    )
+    production_text = sanitize_db_text(payload.full_text).strip()
+
+    assert figure_calls == []
+    assert payload.normalized_type == "pdf"
+    assert hashlib.sha256(pdf_bytes).hexdigest() == expected_pdf_sha256
+    assert production_text == independently_expected
+    assert hashlib.sha256(production_text.encode("utf-8")).hexdigest() == (
+        expected_text_sha256
+    )
     assert normalized_text == independently_expected
 
     size = 4 + (2 * page_count)
@@ -478,6 +529,55 @@ def test_build_document_record_uses_production_token_estimator(monkeypatch):
     )
     assert calls == ["token source"]
     assert record["estimated_tokens"] == 777
+
+
+def _valid_document_record_kwargs() -> dict:
+    return {
+        "arm": "real",
+        "case_id": "real-001",
+        "input_bytes": 10,
+        "page_count": 1,
+        "success": True,
+        "diagnostic_code": "ok",
+        "sanitized_text": "text",
+        "chunk_specs": [TextChunkSpec("text", 0, 4, 0)],
+    }
+
+
+def test_build_document_record_requires_exact_bool_success():
+    kwargs = _valid_document_record_kwargs()
+    kwargs["success"] = 1
+
+    with pytest.raises(ValueError, match="success"):
+        build_document_record(**kwargs)
+
+
+def test_build_document_record_success_requires_known_page_count():
+    kwargs = _valid_document_record_kwargs()
+    kwargs["page_count"] = None
+
+    with pytest.raises(ValueError, match="page_count"):
+        build_document_record(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("arm", []),
+        ("case_id", True),
+        ("input_bytes", True),
+        ("input_bytes", 10.0),
+        ("page_count", True),
+        ("page_count", 1.0),
+        ("diagnostic_code", []),
+    ],
+)
+def test_build_document_record_rejects_wrong_scalar_types(field, value):
+    kwargs = _valid_document_record_kwargs()
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        build_document_record(**kwargs)
 
 
 @pytest.mark.parametrize(
@@ -601,6 +701,12 @@ def test_aggregate_document_results_ratio_denominators():
         },
         {
             "arm": "real",
+            "case_id": "real-001",
+            "success": False,
+            "peak_python_traced_bytes": 400,
+        },
+        {
+            "arm": "real",
             "case_id": "real-002",
             "success": False,
             "peak_python_traced_bytes": 300,
@@ -661,10 +767,9 @@ def test_aggregate_document_results_ratio_denominators():
         "successful_case_count": 1,
         "max_peak_python_traced_bytes_per_case": {
             "real-001": 125,
-            "real-002": 300,
         },
         "max_peak_python_traced_bytes_over_successes": 125,
-        "max_peak_python_traced_bytes_over_all_attempts": 300,
+        "max_peak_python_traced_bytes_over_all_attempts": 400,
     }
     assert aggregate["failures"]["real"]["attempted_count"] == 2
     assert aggregate["failures"]["real"]["failed_count"] == 1

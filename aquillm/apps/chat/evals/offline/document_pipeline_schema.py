@@ -519,18 +519,22 @@ def build_document_record(
 ) -> dict[str, object]:
     """Build one exact static record using absolute, reproducible units."""
 
-    if arm not in _ARMS:
+    if type(arm) is not str or arm not in _ARMS:
         raise ValueError(f"invalid arm: {arm!r}")
-    if not isinstance(case_id, str) or not case_id:
+    if type(case_id) is not str or not case_id:
         raise ValueError("case_id must be a non-empty string")
     if type(input_bytes) is not int or input_bytes < 0:
         raise ValueError("input_bytes must be a nonnegative integer")
     if page_count is not None and (type(page_count) is not int or page_count <= 0):
         raise ValueError("page_count must be null or a positive integer")
-    if diagnostic_code not in _DIAGNOSTIC_CODES:
+    if type(success) is not bool:
+        raise ValueError("success must be a boolean")
+    if type(diagnostic_code) is not str or diagnostic_code not in _DIAGNOSTIC_CODES:
         raise ValueError("diagnostic_code is not an allowed safe diagnostic")
     if success != (diagnostic_code == "ok"):
         raise ValueError("success and diagnostic_code are inconsistent")
+    if success and page_count is None:
+        raise ValueError("successful records require a known page_count")
 
     record: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
@@ -623,23 +627,24 @@ def _memory_summary(
     memory_records: Sequence[Mapping[str, object]], arm: str
 ) -> dict[str, object]:
     rows = [row for row in memory_records if row.get("arm") == arm]
-    maxima: dict[str, int] = {}
+    successful_maxima: dict[str, int] = {}
     for row in rows:
+        if row.get("success") is not True:
+            continue
         case_id = str(row["case_id"])
         peak = int(row["peak_python_traced_bytes"])
-        maxima[case_id] = max(maxima.get(case_id, peak), peak)
-    successful_cases = {
-        str(row["case_id"]) for row in rows if row.get("success") is True
-    }
-    successful_maxima = [maxima[case_id] for case_id in successful_cases]
+        successful_maxima[case_id] = max(successful_maxima.get(case_id, peak), peak)
+    all_attempt_peaks = [int(row["peak_python_traced_bytes"]) for row in rows]
     return {
-        "successful_case_count": len(successful_cases),
-        "max_peak_python_traced_bytes_per_case": dict(sorted(maxima.items())),
+        "successful_case_count": len(successful_maxima),
+        "max_peak_python_traced_bytes_per_case": dict(
+            sorted(successful_maxima.items())
+        ),
         "max_peak_python_traced_bytes_over_successes": (
-            max(successful_maxima) if successful_maxima else None
+            max(successful_maxima.values()) if successful_maxima else None
         ),
         "max_peak_python_traced_bytes_over_all_attempts": (
-            max(maxima.values()) if maxima else None
+            max(all_attempt_peaks) if all_attempt_peaks else None
         ),
     }
 
