@@ -214,12 +214,15 @@ def _privacy_scan(value: object) -> None:
     inherited_secrets = {
         secret
         for name, secret in os.environ.items()
-        if len(secret) >= 8
+        if secret
         and re.search(
             r"credential|token|secret|password|(?:^|_)key(?:_|$)",
             name,
             re.IGNORECASE,
         )
+    }
+    long_inherited_secrets = {
+        secret for secret in inherited_secrets if len(secret) >= 8
     }
 
     def visit(item: object) -> None:
@@ -243,7 +246,9 @@ def _privacy_scan(value: object) -> None:
                 raise ValueError("privacy-prohibited path or credential value")
             if any(private in folded for private in private_values):
                 raise ValueError("privacy-prohibited username or hostname")
-            if any(secret in item for secret in inherited_secrets):
+            if item in inherited_secrets or any(
+                secret in item for secret in long_inherited_secrets
+            ):
                 raise ValueError("privacy-prohibited inherited credential value")
 
     visit(value)

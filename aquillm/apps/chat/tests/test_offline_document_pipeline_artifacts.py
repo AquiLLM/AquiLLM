@@ -497,6 +497,20 @@ def test_short_ambient_credential_values_do_not_false_positive(
     validate_document_artifacts(output)
 
 
+def test_short_ambient_credential_value_rejects_exact_scalar(
+    tmp_path: Path, monkeypatch
+):
+    from apps.chat.evals.offline.document_pipeline_artifacts import (
+        write_document_artifacts,
+    )
+
+    monkeypatch.setenv("BENCHMARK_SECRET_KEY", "test")
+    result = _canonical_result()
+    result["manifest"]["environment"]["machine"] = "test"
+    with pytest.raises(ValueError, match="credential"):
+        write_document_artifacts(result, tmp_path / "leak")
+
+
 def test_long_ambient_credential_sentinel_is_rejected(tmp_path: Path, monkeypatch):
     from apps.chat.evals.offline.document_pipeline_artifacts import (
         write_document_artifacts,
