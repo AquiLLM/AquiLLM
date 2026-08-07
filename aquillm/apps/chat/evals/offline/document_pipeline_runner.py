@@ -133,16 +133,35 @@ class _EmptyPrimaryTextError(ValueError):
     pass
 
 
+def _build_pipeline_execution(
+    *,
+    success: bool,
+    terminal_stage: str,
+    exception: Exception | None,
+    sanitized_text: str | None,
+    chunk_specs: object,
+) -> dict:
+    return {
+        "success": success,
+        "terminal_stage": terminal_stage,
+        "_exception": exception,
+        "_sanitized_text": sanitized_text,
+        "_chunk_specs": chunk_specs,
+    }
+
+
 def _execute_pipeline_core(
     case: dict,
     *,
     chunk_size: int,
     overlap: int,
     stage_runner: Callable[[str, Callable[[], object]], object] | None = None,
+    terminal_callback: Callable[[], None] | None = None,
 ) -> dict:
     """Execute the single production stage sequence and retain raw outcome state."""
 
     run_stage = stage_runner or (lambda _stage, operation: operation())
+    mark_terminal = terminal_callback or (lambda: None)
     terminal_stage = "detect"
     try:
         ingest_type = run_stage(
@@ -178,21 +197,23 @@ def _execute_pipeline_core(
                 sanitized_text, chunk_size=chunk_size, overlap=overlap
             ),
         )
-        return {
-            "success": True,
-            "terminal_stage": "complete",
-            "_exception": None,
-            "_sanitized_text": sanitized_text,
-            "_chunk_specs": chunk_specs,
-        }
     except Exception as exc:
-        return {
-            "success": False,
-            "terminal_stage": terminal_stage,
-            "_exception": exc,
-            "_sanitized_text": None,
-            "_chunk_specs": None,
-        }
+        mark_terminal()
+        return _build_pipeline_execution(
+            success=False,
+            terminal_stage=terminal_stage,
+            exception=exc,
+            sanitized_text=None,
+            chunk_specs=None,
+        )
+    mark_terminal()
+    return _build_pipeline_execution(
+        success=True,
+        terminal_stage="complete",
+        exception=None,
+        sanitized_text=sanitized_text,
+        chunk_specs=chunk_specs,
+    )
 
 
 def _finalize_pipeline_execution(execution: Mapping[str, object], case: dict) -> dict:
@@ -269,13 +290,20 @@ def _observe_pipeline(
             timings[f"{stage}_ns"] = clock() - stage_start
 
     combined_start = clock()
+    combined_end = None
+
+    def mark_terminal() -> None:
+        nonlocal combined_end
+        combined_end = clock()
+
     execution = _execute_pipeline_core(
         case,
         chunk_size=chunk_size,
         overlap=overlap,
         stage_runner=time_stage,
+        terminal_callback=mark_terminal,
     )
-    combined_ns = clock() - combined_start
+    combined_ns = combined_end - combined_start
     outcome = _finalize_pipeline_execution(execution, case)
 
     return {

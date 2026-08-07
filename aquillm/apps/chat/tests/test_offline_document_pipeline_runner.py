@@ -360,6 +360,81 @@ def test_combined_timer_closes_before_failure_diagnostic_mapping(monkeypatch):
     assert events == ["clock", "clock", "clock", "clock", "diagnostic"]
 
 
+@pytest.mark.parametrize("failure", [False, True])
+def test_combined_timer_closes_at_pipeline_terminal_boundary(monkeypatch, failure):
+    from apps.chat.evals.offline import document_pipeline_runner as runner
+
+    events = []
+    tick = iter(range(20))
+    real_core = runner._execute_pipeline_core
+    real_finalize = runner._finalize_pipeline_execution
+    real_plan = runner.plan_text_chunks
+
+    def clock():
+        events.append("clock")
+        return next(tick)
+
+    def build_execution(
+        *, success, terminal_stage, exception, sanitized_text, chunk_specs
+    ):
+        events.append("result")
+        return {
+            "success": success,
+            "terminal_stage": terminal_stage,
+            "_exception": exception,
+            "_sanitized_text": sanitized_text,
+            "_chunk_specs": chunk_specs,
+        }
+
+    def core(*args, **kwargs):
+        result = real_core(*args, **kwargs)
+        events.append("core_return")
+        return result
+
+    def finalize(execution, case):
+        events.append("finalize")
+        return real_finalize(execution, case)
+
+    if failure:
+        def fail_detect(*args, **kwargs):
+            events.append("detect")
+            raise RuntimeError("fail")
+
+        monkeypatch.setattr(runner.parsers, "detect_ingest_type", fail_detect)
+    else:
+        def plan(*args, **kwargs):
+            events.append("chunk")
+            return real_plan(*args, **kwargs)
+
+        monkeypatch.setattr(runner, "plan_text_chunks", plan)
+    monkeypatch.setattr(
+        runner, "_build_pipeline_execution", build_execution, raising=False
+    )
+    monkeypatch.setattr(runner, "_execute_pipeline_core", core)
+    monkeypatch.setattr(runner, "_finalize_pipeline_execution", finalize)
+    monkeypatch.setattr(
+        runner,
+        "_diagnostic_for",
+        lambda *args, **kwargs: events.append("diagnostic") or "parser_error",
+    )
+
+    runner._observe_pipeline(
+        _one_page_case(), chunk_size=2048, overlap=384, clock=clock
+    )
+
+    expected_terminal = [
+        "detect" if failure else "chunk",
+        "clock",
+        "clock",
+        "result",
+        "core_return",
+        "finalize",
+    ]
+    if failure:
+        expected_terminal.append("diagnostic")
+    assert events[-len(expected_terminal) :] == expected_terminal
+
+
 @pytest.mark.parametrize(
     ("stage", "exception", "diagnostic", "expected_timings"),
     [
