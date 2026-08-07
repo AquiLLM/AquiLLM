@@ -18,6 +18,12 @@ from aquillm.startup import offline_evaluation_startup
 
 # This module is a standalone CLI, so it must initialize Django before importing
 # the runner and its model-dependent production services.
+for _name, _value in {
+    "DJANGO_DEBUG": "1",
+    "OPENAI_API_KEY": "offline-evaluation-disabled",
+    "GEMINI_API_KEY": "offline-evaluation-disabled",
+}.items():
+    os.environ.setdefault(_name, _value)
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aquillm.settings")
 with offline_evaluation_startup():
     django.setup()

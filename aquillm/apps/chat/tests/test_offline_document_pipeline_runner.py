@@ -241,17 +241,17 @@ def test_timed_and_unmeasured_paths_share_one_execution_core(monkeypatch):
     monkeypatch.setattr(
         runner.parsers,
         "detect_ingest_type",
-        lambda *args, **kwargs: (stage_calls.append("detect") or "document"),
+        lambda *args, **kwargs: stage_calls.append("detect") or "document",
     )
     monkeypatch.setattr(
         runner.parsers,
         "extract_primary_text_payload",
-        lambda *args, **kwargs: (stage_calls.append("extract") or Payload()),
+        lambda *args, **kwargs: stage_calls.append("extract") or Payload(),
     )
     monkeypatch.setattr(
         runner,
         "sanitize_db_text",
-        lambda value: (stage_calls.append("sanitize") or "changed\x00output"),
+        lambda value: stage_calls.append("sanitize") or "changed\x00output",
     )
 
     def plan(text, *, chunk_size, overlap):
@@ -263,9 +263,7 @@ def test_timed_and_unmeasured_paths_share_one_execution_core(monkeypatch):
     timed = runner._observe_pipeline(
         case, chunk_size=2048, overlap=384, clock=_TickClock()
     )
-    execution = runner._run_pipeline_unmeasured(
-        case, chunk_size=2048, overlap=384
-    )
+    execution = runner._run_pipeline_unmeasured(case, chunk_size=2048, overlap=384)
     unmeasured = runner._finalize_pipeline_execution(execution, case)
 
     assert len(core_calls) == 2
@@ -396,12 +394,14 @@ def test_combined_timer_closes_at_pipeline_terminal_boundary(monkeypatch, failur
         return real_finalize(execution, case)
 
     if failure:
+
         def fail_detect(*args, **kwargs):
             events.append("detect")
             raise RuntimeError("fail")
 
         monkeypatch.setattr(runner.parsers, "detect_ingest_type", fail_detect)
     else:
+
         def plan(*args, **kwargs):
             events.append("chunk")
             return real_plan(*args, **kwargs)
@@ -707,6 +707,7 @@ def test_timing_sweep_fails_closed_when_successful_output_drifts(monkeypatch):
         "pdf_bytes": b"x" * static["input_bytes"],
         "page_count": static["page_count"],
     }
+
     def observe(*args, **kwargs):
         text = changed_text
         return {
@@ -1078,6 +1079,20 @@ def _zero_network_audit() -> dict:
         "scope": "fixture_generation_through_artifact_validation",
         "total_attempts": 0,
         "details": [],
+    }
+
+
+def test_source_hashes_cover_every_executed_document_benchmark_boundary():
+    from apps.chat.evals.offline import document_pipeline_runner as runner
+
+    assert set(runner._source_hashes()) == {
+        "document_pipeline_artifacts",
+        "document_pipeline_runner",
+        "document_pipeline_schema",
+        "ingestion_parsers",
+        "network_guard",
+        "run_offline_evidence",
+        "text_chunk_plan",
     }
 
 

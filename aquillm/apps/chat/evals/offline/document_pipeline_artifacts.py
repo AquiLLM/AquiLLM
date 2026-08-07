@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from apps.chat.evals.offline.document_pipeline_runner import _sweep_record
@@ -134,6 +135,21 @@ _TIMING_SWEEP_EXCLUSIONS = {
     "milliseconds_per_successful_document",
 }
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_SOURCE_HASH_KEYS = {
+    "document_pipeline_artifacts",
+    "document_pipeline_runner",
+    "document_pipeline_schema",
+    "ingestion_parsers",
+    "network_guard",
+    "run_offline_evidence",
+    "text_chunk_plan",
+}
+_DOCUMENT_EXTENSION_RE = re.compile(
+    r"(?i)(?:^|[/\\])[^/\\]+\.(?:pdf|docx?|rtf|odt|epub|txt|md|html?|"
+    r"csv|tsv|xlsx?|ods|pptx?|odp|jsonl?|xml|ya?ml|vtt|srt)\Z"
+)
+_SAFE_MACHINE_TEXT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _().,+-]{0,127}\Z")
+_VERSION_RE = re.compile(r"(?:unavailable|[0-9]+(?:\.[0-9]+)*(?:[A-Za-z0-9.+_-]*)?)\Z")
 _SENSITIVE_KEY_RE = re.compile(
     r"(?:filename|basename|content|text|(?:document_)?title|(?:raw_)?exception|"
     r"credential|"
@@ -215,7 +231,11 @@ def _privacy_scan(value: object) -> None:
                 visit(child)
         elif isinstance(item, str):
             folded = item.casefold()
-            if _is_absolute_or_private_path(item) or _SENSITIVE_VALUE_RE.search(item):
+            if (
+                _is_absolute_or_private_path(item)
+                or _DOCUMENT_EXTENSION_RE.search(item)
+                or _SENSITIVE_VALUE_RE.search(item)
+            ):
                 raise ValueError("privacy-prohibited path or credential value")
             if any(private in folded for private in private_values):
                 raise ValueError("privacy-prohibited username or hostname")
@@ -277,6 +297,13 @@ def _validate_manifest(manifest: object) -> None:
         raise ValueError("manifest keys do not match the required schema")
     if manifest["schema_version"] != SCHEMA_VERSION:
         raise ValueError("manifest schema_version must be 1.0")
+    timestamp = manifest["timestamp_utc"]
+    if type(timestamp) is not str or not timestamp.endswith("Z"):
+        raise ValueError("manifest timestamp_utc must be an ISO UTC string")
+    try:
+        datetime.fromisoformat(timestamp[:-1] + "+00:00")
+    except ValueError as exc:
+        raise ValueError("manifest timestamp_utc must be an ISO UTC string") from exc
     source = manifest["source"]
     if not isinstance(source, Mapping) or set(source) != {"commit", "dirty"}:
         raise ValueError("manifest source keys are invalid")
@@ -286,15 +313,116 @@ def _validate_manifest(manifest: object) -> None:
         raise ValueError("manifest source commit is invalid")
     if source["dirty"] is not False:
         raise ValueError("canonical document artifacts require a clean source")
-    execution = manifest["execution"]
+    hashes = manifest["hashes"]
+    if not isinstance(hashes, Mapping) or set(hashes) != {
+        "source_code",
+        "inventory_source",
+        "review_source",
+        "synthetic_protocol",
+    }:
+        raise ValueError("manifest hashes keys are invalid")
+    source_code = hashes["source_code"]
     if (
-        not isinstance(execution, Mapping)
-        or execution.get("timing_sweeps_per_arm") != 30
-        or execution.get("memory_repeats_per_case") != 3
+        not isinstance(source_code, Mapping)
+        or set(source_code) != {"algorithm", "values"}
+        or source_code["algorithm"] != "sha256-utf8-lf-v1"
+        or not isinstance(source_code["values"], Mapping)
+        or set(source_code["values"]) != _SOURCE_HASH_KEYS
     ):
-        raise ValueError(
-            "canonical document artifacts require 30 sweeps and 3 memory passes"
-        )
+        raise ValueError("manifest source code hashes are invalid")
+    if any(
+        type(digest) is not str or not _SHA256_RE.fullmatch(digest)
+        for digest in source_code["values"].values()
+    ):
+        raise ValueError("manifest source code digest is invalid")
+    for name in ("inventory_source", "review_source"):
+        entry = hashes[name]
+        if (
+            not isinstance(entry, Mapping)
+            or set(entry) != {"algorithm", "sha256"}
+            or entry["algorithm"] != "sha256-utf8-lf-v1"
+            or type(entry["sha256"]) is not str
+            or not _SHA256_RE.fullmatch(entry["sha256"])
+        ):
+            raise ValueError(f"manifest {name} hash is invalid")
+    protocol_hash = hashes["synthetic_protocol"]
+    if (
+        not isinstance(protocol_hash, Mapping)
+        or set(protocol_hash) != {"algorithm", "sha256"}
+        or protocol_hash["algorithm"] != "sha256-canonical-json-v1"
+        or type(protocol_hash["sha256"]) is not str
+        or not _SHA256_RE.fullmatch(protocol_hash["sha256"])
+    ):
+        raise ValueError("manifest synthetic protocol hash is invalid")
+    if manifest["chunk_configuration"] != {
+        "chunk_size_codepoints": 2048,
+        "overlap_codepoints": 384,
+        "pitch_codepoints": 1664,
+    }:
+        raise ValueError("manifest chunk configuration is not canonical")
+    if manifest["token_estimator"] != {
+        "name": "production_character_estimator",
+        "algorithm": "max(1, len(text) // 4)",
+    }:
+        raise ValueError("manifest token estimator is not canonical")
+    dependencies = manifest["dependencies"]
+    if not isinstance(dependencies, Mapping) or set(dependencies) != {
+        "django",
+        "pypdf",
+        "psutil",
+    }:
+        raise ValueError("manifest dependency keys are invalid")
+    if any(
+        type(version) is not str or not _VERSION_RE.fullmatch(version)
+        for version in dependencies.values()
+    ):
+        raise ValueError("manifest dependency version is invalid")
+    environment = manifest["environment"]
+    environment_keys = {
+        "os",
+        "os_release",
+        "machine",
+        "python_version",
+        "logical_cpu_count",
+        "cpu",
+        "total_system_ram_bytes",
+        "process_bits",
+        "timer",
+        "timer_resolution_seconds",
+    }
+    if not isinstance(environment, Mapping) or set(environment) != environment_keys:
+        raise ValueError("manifest environment keys are invalid")
+    for field in ("os", "os_release", "machine", "cpu"):
+        if type(environment[field]) is not str or not _SAFE_MACHINE_TEXT_RE.fullmatch(
+            environment[field]
+        ):
+            raise ValueError(f"manifest environment {field} is invalid")
+    if type(environment["python_version"]) is not str or not _VERSION_RE.fullmatch(
+        environment["python_version"]
+    ):
+        raise ValueError("manifest Python version is invalid")
+    for field in ("logical_cpu_count", "total_system_ram_bytes"):
+        if type(environment[field]) is not int or environment[field] <= 0:
+            raise ValueError(f"manifest environment {field} is invalid")
+    if (
+        environment["process_bits"] not in {32, 64}
+        or type(environment["process_bits"]) is not int
+    ):
+        raise ValueError("manifest process_bits is invalid")
+    if environment["timer"] != "time.perf_counter_ns":
+        raise ValueError("manifest timer is invalid")
+    resolution = environment["timer_resolution_seconds"]
+    if type(resolution) not in {int, float} or not (0 < resolution < float("inf")):
+        raise ValueError("manifest timer resolution is invalid")
+    execution = manifest["execution"]
+    if execution != {
+        "mode": "single_thread_sequential",
+        "warmups_per_arm": 1,
+        "warmup_role": "static_record_pass",
+        "timing_sweeps_per_arm": 30,
+        "memory_repeats_per_case": 3,
+    }:
+        raise ValueError("manifest execution configuration is not canonical")
     audit = manifest["network_audit"]
     expected_audit = {
         "guard": "deny_network",
@@ -324,7 +452,7 @@ def _validate_manifest(manifest: object) -> None:
         "expected_output_hash_algorithm",
         "page_count",
     }
-    for row in synthetic_inputs:
+    for index, row in enumerate(synthetic_inputs):
         if set(row) != synthetic_keys:
             raise ValueError("manifest synthetic input keys are invalid")
         if (
@@ -335,6 +463,17 @@ def _validate_manifest(manifest: object) -> None:
         for field in ("pdf_sha256", "expected_output_sha256"):
             if not isinstance(row[field], str) or not _SHA256_RE.fullmatch(row[field]):
                 raise ValueError("manifest synthetic input hash is invalid")
+        if (
+            type(row["page_count"]) is not int
+            or row["page_count"]
+            != (
+                1,
+                10,
+                50,
+                100,
+            )[index]
+        ):
+            raise ValueError("manifest synthetic input page count is invalid")
 
 
 def _validate_timing_case(
@@ -421,6 +560,14 @@ def _validate_result(result: Mapping[str, object]) -> None:
     for row in real:
         if row["input_bytes"] != inventory_by_id[row["case_id"]]["input_bytes"]:
             raise ValueError("real static input_bytes does not match corpus inventory")
+    for manifest_input, row in zip(
+        result["manifest"]["synthetic_inputs"], synthetic, strict=True
+    ):
+        if (
+            manifest_input["page_count"] != row["page_count"]
+            or manifest_input["expected_output_sha256"] != row["output_sha256"]
+        ):
+            raise ValueError("synthetic manifest lineage contradicts static record")
 
     static_by_identity = {(row["arm"], row["case_id"]): row for row in static}
     expected_timing_order = []
@@ -551,9 +698,12 @@ def _document_table_text(aggregate: Mapping[str, object]) -> str:
             "preprocessing. The run recorded zero connection attempts observed through "
             "the configured process-local socket guard.",
             "",
-            "Exclusions: these results are not measurements of full ingestion, "
-            "indexing, or retrieval; concurrency; end-to-end response latency; RSS; "
-            "or GPU memory.",
+            "Exclusions: these results are not measurements of full ingestion or "
+            "database writes; embeddings or vector indexing; retrieval; figure "
+            "processing or OCR processing; inference; concurrency; GPU utilization; "
+            "total process memory; cold-storage performance; end-to-end response "
+            "latency; RSS; or GPU memory. They make no population-representativeness "
+            "or cross-hardware generalization claim.",
             "",
         ]
     )
@@ -788,7 +938,9 @@ def write_document_provenance(
         raise ValueError("artifact commit must be a full hexadecimal SHA")
     relative_dir = artifact_dir.relative_to(repository).as_posix()
     complete = _read_json(artifact_dir / "COMPLETE")
-    for name, digest in complete["sha256"].items():
+    artifact_hashes = dict(complete["sha256"])
+    artifact_hashes["COMPLETE"] = _sha256(artifact_dir / "COMPLETE")
+    for name, digest in artifact_hashes.items():
         relative = f"{relative_dir}/{name}" if relative_dir else name
         blob = _git_bytes(git_repository, artifact_commit, relative)
         if (
@@ -797,11 +949,39 @@ def write_document_provenance(
         ):
             raise ValueError(f"artifact bytes do not match Git blob: {name}")
     manifest = _read_json(artifact_dir / "manifest.json")
+    evaluated_source = manifest["source"]["commit"]
+    source_exists = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(git_repository),
+            "cat-file",
+            "-e",
+            f"{evaluated_source}^{{commit}}",
+        ],
+        capture_output=True,
+    )
+    source_ancestor = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(git_repository),
+            "merge-base",
+            "--is-ancestor",
+            evaluated_source,
+            artifact_commit,
+        ],
+        capture_output=True,
+    )
+    if source_exists.returncode or source_ancestor.returncode:
+        raise ValueError(
+            "evaluated source commit is missing or not an artifact ancestor"
+        )
     payload = {
         "schema_version": SCHEMA_VERSION,
-        "evaluated_source_commit": manifest["source"]["commit"],
+        "evaluated_source_commit": evaluated_source,
         "artifact_commit": artifact_commit.lower(),
-        "artifact_hashes": dict(complete["sha256"]),
+        "artifact_hashes": artifact_hashes,
         "aggregate_sha256": complete["sha256"]["aggregate.json"],
         "corpus_inventory_hash": {
             "algorithm": "sha256-raw-bytes-v1",
@@ -859,14 +1039,60 @@ def validate_document_provenance(path: Path, repository: Path) -> None:
         raise ValueError("provenance keys do not match the required schema")
     repository = Path(repository).resolve()
     artifact_commit = payload["artifact_commit"]
-    _git_repository_for_commit(repository, artifact_commit)
+    git_repository = _git_repository_for_commit(repository, artifact_commit)
+    evaluated_source = payload["evaluated_source_commit"]
+    source_exists = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(git_repository),
+            "cat-file",
+            "-e",
+            f"{evaluated_source}^{{commit}}",
+        ],
+        capture_output=True,
+    )
+    source_ancestor = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(git_repository),
+            "merge-base",
+            "--is-ancestor",
+            evaluated_source,
+            artifact_commit,
+        ],
+        capture_output=True,
+    )
+    if source_exists.returncode or source_ancestor.returncode:
+        raise ValueError(
+            "evaluated source commit is missing or not an artifact ancestor"
+        )
+    artifact_hashes = payload["artifact_hashes"]
+    if (
+        not isinstance(artifact_hashes, Mapping)
+        or set(artifact_hashes) != DOCUMENT_ARTIFACTS
+        or any(
+            type(digest) is not str or not _SHA256_RE.fullmatch(digest)
+            for digest in artifact_hashes.values()
+        )
+    ):
+        raise ValueError("provenance artifact hash inventory is invalid")
     candidates = []
     for complete_path in repository.rglob("COMPLETE"):
         try:
             complete = _read_json(complete_path)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if complete.get("sha256") == payload["artifact_hashes"]:
+        expected_without_complete = {
+            name: digest
+            for name, digest in artifact_hashes.items()
+            if name != "COMPLETE"
+        }
+        if (
+            complete.get("sha256") == expected_without_complete
+            and _sha256(complete_path) == artifact_hashes["COMPLETE"]
+        ):
             candidates.append(complete_path.parent)
     if len(candidates) != 1:
         raise ValueError("provenance artifact directory is absent or ambiguous")

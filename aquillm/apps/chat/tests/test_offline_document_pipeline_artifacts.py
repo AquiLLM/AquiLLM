@@ -135,9 +135,12 @@ def _canonical_result() -> dict:
     source_hashes = {
         name: hashlib.sha256(name.encode()).hexdigest()
         for name in (
+            "document_pipeline_artifacts",
             "document_pipeline_runner",
             "document_pipeline_schema",
             "ingestion_parsers",
+            "network_guard",
+            "run_offline_evidence",
             "text_chunk_plan",
         )
     }
@@ -349,14 +352,90 @@ def test_table_contains_exact_scope_and_exclusions(tmp_path: Path):
     )
     for exclusion in (
         "full ingestion",
+        "database writes",
+        "embeddings",
         "indexing",
+        "vector indexing",
         "retrieval",
+        "figure processing",
+        "OCR processing",
+        "inference",
         "concurrency",
+        "GPU utilization",
+        "total process memory",
+        "cold-storage performance",
         "end-to-end response latency",
         "RSS",
         "GPU memory",
     ):
         assert exclusion in table
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("hashes",), {}),
+        (("hashes", "extra"), {}),
+        (("hashes", "source_code", "algorithm"), "sha256"),
+        (("chunk_configuration", "chunk_size_codepoints"), 2049),
+        (("chunk_configuration", "overlap_codepoints"), True),
+        (("token_estimator", "name"), "other"),
+        (("dependencies", "django"), True),
+        (("environment", "logical_cpu_count"), True),
+        (("environment", "timer"), "time.time_ns"),
+        (("execution", "warmups_per_arm"), 2),
+        (("source", "dirty"), 0),
+        (("synthetic_inputs", 0, "page_count"), 2),
+    ],
+)
+def test_manifest_exact_schema_and_canonical_values_fail_closed(
+    tmp_path: Path, path: tuple[object, ...], value: object
+):
+    from apps.chat.evals.offline.document_pipeline_artifacts import (
+        write_document_artifacts,
+    )
+
+    result = _canonical_result()
+    target = result["manifest"]
+    for segment in path[:-1]:
+        target = target[segment]
+    target[path[-1]] = value
+    with pytest.raises(ValueError):
+        write_document_artifacts(result, tmp_path / "invalid")
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("environment", "cpu", "private-paper.pdf"),
+        ("environment", "os_release", r"folder\paper.pdf"),
+        ("dependencies", "django", "notes.docx"),
+        ("environment", "machine", "document-title.txt"),
+    ],
+)
+def test_manifest_rejects_relative_paths_and_document_basenames(
+    tmp_path: Path, section: str, field: str, value: str
+):
+    from apps.chat.evals.offline.document_pipeline_artifacts import (
+        write_document_artifacts,
+    )
+
+    result = _canonical_result()
+    result["manifest"][section][field] = value
+    with pytest.raises(ValueError, match="privacy|manifest|version|environment"):
+        write_document_artifacts(result, tmp_path / "private")
+
+
+@pytest.mark.parametrize("field", ["content", "title", "text"])
+def test_manifest_rejects_content_sentinel_fields(tmp_path: Path, field: str):
+    from apps.chat.evals.offline.document_pipeline_artifacts import (
+        write_document_artifacts,
+    )
+
+    result = _canonical_result()
+    result["manifest"][field] = "sentinel private document material"
+    with pytest.raises(ValueError):
+        write_document_artifacts(result, tmp_path / field)
 
 
 def test_validator_rejects_corrupt_derived_and_private_payload(tmp_path: Path):
@@ -405,8 +484,22 @@ def test_provenance_binds_committed_artifact_blobs_and_lineage(
         cwd=repository,
         check=True,
     )
+    subprocess.run(
+        ["git", "commit", "-q", "--allow-empty", "-m", "source"],
+        cwd=repository,
+        check=True,
+    )
+    source_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     artifact_dir = repository / "evidence" / "canonical"
-    write_document_artifacts(_canonical_result(), artifact_dir)
+    result = _canonical_result()
+    result["manifest"]["source"]["commit"] = source_commit
+    write_document_artifacts(result, artifact_dir)
     subprocess.run(["git", "add", "evidence"], cwd=repository, check=True)
     subprocess.run(
         ["git", "commit", "-q", "-m", "add artifacts"], cwd=repository, check=True
@@ -429,9 +522,35 @@ def test_provenance_binds_committed_artifact_blobs_and_lineage(
     validate_document_provenance(output, repository)
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["artifact_commit"] == artifact_commit
-    assert payload["evaluated_source_commit"] == "a" * 40
+    assert payload["evaluated_source_commit"] == source_commit
     assert payload["aggregate_sha256"] == payload["artifact_hashes"]["aggregate.json"]
+    assert set(payload["artifact_hashes"]) == {
+        path.name for path in artifact_dir.iterdir()
+    }
+    assert (
+        payload["artifact_hashes"]["COMPLETE"]
+        == hashlib.sha256((artifact_dir / "COMPLETE").read_bytes()).hexdigest()
+    )
     assert "provenance_commit" not in payload
+
+    fake_source = copy.deepcopy(payload)
+    fake_source["evaluated_source_commit"] = "f" * 40
+    fake_path = repository / "FAKE-PROVENANCE.json"
+    fake_path.write_bytes(canonical_json_bytes(fake_source))
+    with pytest.raises(ValueError, match="source commit"):
+        validate_document_provenance(fake_path, repository)
+
+    complete_path = artifact_dir / "COMPLETE"
+    committed_complete = complete_path.read_bytes()
+    complete_path.write_bytes(committed_complete + b" ")
+    with pytest.raises(ValueError):
+        write_document_provenance(
+            artifact_dir / "aggregate.json",
+            artifact_commit,
+            repository / "MUTATED-COMPLETE-PROVENANCE.json",
+            repository,
+        )
+    complete_path.write_bytes(committed_complete)
 
     archive_path = tmp_path / "artifact.tar"
     extracted = tmp_path / "extracted"
@@ -528,13 +647,7 @@ def test_document_cli_fresh_subprocess_help_and_noncanonical_smoke(tmp_path: Pat
             r"credential|token|secret|password|api[_-]?key", name, re.IGNORECASE
         )
     }
-    env.update(
-        {
-            "DJANGO_DEBUG": "1",
-            "OPENAI_API_KEY": "dummy-offline-openai",
-            "GEMINI_API_KEY": "dummy-offline-gemini",
-        }
-    )
+    env.pop("DJANGO_DEBUG", None)
     help_result = subprocess.run(
         [sys.executable, "-m", "apps.chat.evals.run_offline_evidence", "--help"],
         capture_output=True,

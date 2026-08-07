@@ -282,6 +282,7 @@ def _observe_pipeline(
         "sanitize_ns": None,
         "chunk_plan_ns": None,
     }
+
     def time_stage(stage: str, operation: Callable[[], object]) -> object:
         stage_start = clock()
         try:
@@ -584,11 +585,17 @@ def _source_state() -> dict[str, object]:
 
 def _source_hashes() -> dict[str, str]:
     paths = {
+        "document_pipeline_artifacts": Path(__file__).with_name(
+            "document_pipeline_artifacts.py"
+        ),
         "document_pipeline_runner": Path(__file__),
         "document_pipeline_schema": Path(__file__).with_name(
             "document_pipeline_schema.py"
         ),
         "ingestion_parsers": Path(parsers.__file__),
+        "network_guard": Path(__file__).with_name("network.py"),
+        "run_offline_evidence": Path(__file__).parent.parent
+        / "run_offline_evidence.py",
         "text_chunk_plan": Path(sys.modules[plan_text_chunks.__module__].__file__),
     }
     return {name: sha256_canonical_text(path) for name, path in sorted(paths.items())}
