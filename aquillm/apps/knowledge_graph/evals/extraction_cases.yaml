@@ -13,7 +13,7 @@ cases:
           - chunk_id: rag-overview-001
             text: "Retrieval-augmented generation (RAG) grounds answers in retrieved evidence."
           - chunk_id: rag-overview-002
-            text: "RAG reduces unsupported claims when retrieval precedes generation."
+            text: "Retrieval-augmented generation (RAG) reduces unsupported claims when retrieval precedes generation."
     expected:
       entities:
         - id: entity-rag-acronym
@@ -23,7 +23,7 @@ cases:
         - id: entity-rag-full-name
           text: Retrieval-augmented generation
           type: method
-          chunk_id: rag-overview-001
+          chunk_id: rag-overview-002
       relations:
         - source: entity-rag-full-name
           target: entity-rag-acronym
@@ -130,9 +130,9 @@ cases:
         title: "Latency study"
         chunks:
           - chunk_id: latency-001
-            text: "The Atlas encoder supplies embeddings to the retrieval service. The retrieval"
+            text: "The Atlas encoder supplies embeddings to the retrieval service. The retrieval service ranks passages"
           - chunk_id: latency-002
-            text: "service uses Atlas embeddings to rank source passages before synthesis."
+            text: "The retrieval service ranks passages before synthesis using Atlas embeddings."
     expected:
       entities:
         - id: entity-atlas
