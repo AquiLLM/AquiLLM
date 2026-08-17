@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from math import isfinite
+from sys import float_info
 from uuid import UUID
 
 
@@ -57,14 +58,18 @@ class GraphExpansionDiagnostics:
     version_signature: str | None = None
 
     def __post_init__(self) -> None:
-        if self.status not in _GRAPH_EXPANSION_STATUSES:
+        if not isinstance(self.status, str) or self.status not in _GRAPH_EXPANSION_STATUSES:
             raise ValueError("status must be disabled, miss, hit, timeout, or error")
         if type(self.candidate_count) is not int or self.candidate_count < 0:
             raise ValueError("candidate_count must be a nonnegative integer")
         if self.elapsed_ms is not None:
-            if isinstance(self.elapsed_ms, bool) or not isinstance(self.elapsed_ms, (int, float)):
+            if type(self.elapsed_ms) not in (int, float):
                 raise ValueError("elapsed_ms must be a finite nonnegative number")
-            if not isfinite(self.elapsed_ms) or self.elapsed_ms < 0:
+            if type(self.elapsed_ms) is float and not isfinite(self.elapsed_ms):
+                raise ValueError("elapsed_ms must be a finite nonnegative number")
+            if self.elapsed_ms < 0 or (
+                type(self.elapsed_ms) is int and self.elapsed_ms > float_info.max
+            ):
                 raise ValueError("elapsed_ms must be a finite nonnegative number")
         if self.version_signature is not None:
             _require_nonempty_string(self.version_signature, "version_signature")

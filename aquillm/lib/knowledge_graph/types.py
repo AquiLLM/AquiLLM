@@ -26,9 +26,11 @@ def _require_nonempty_span(start: object, end: object, prefix: str = "") -> None
 
 
 def _require_confidence(value: object) -> None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in (int, float):
         raise ValueError("confidence must be a finite number in [0, 1]")
-    if not isfinite(value) or not 0 <= value <= 1:
+    if type(value) is float and not isfinite(value):
+        raise ValueError("confidence must be a finite number in [0, 1]")
+    if not 0 <= value <= 1:
         raise ValueError("confidence must be a finite number in [0, 1]")
 
 

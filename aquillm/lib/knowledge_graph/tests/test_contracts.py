@@ -133,19 +133,24 @@ import sys
 blocked_prefixes = (
     "django", "sqlalchemy", "tortoise", "peewee", "orm", "apps.documents",
     "aquillm.models", "gliner", "gliner2", "openai", "anthropic", "cohere",
-    "google", "providers",
+    "google", "providers", "lib.llm.providers", "vllm", "torch", "transformers",
+    "peft", "huggingface_hub",
 )
+blocked_attempts = []
 
 class BlockedImportFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname in blocked_prefixes or fullname.startswith(
             tuple(prefix + "." for prefix in blocked_prefixes)
         ):
+            blocked_attempts.append(fullname)
             raise ImportError("blocked import: " + fullname)
         return None
 
 sys.meta_path.insert(0, BlockedImportFinder())
 importlib.import_module(sys.argv[1])
+if blocked_attempts:
+    raise AssertionError("blocked import attempts: " + repr(blocked_attempts))
 """
 
     completed = subprocess.run(
@@ -155,6 +160,7 @@ importlib.import_module(sys.argv[1])
         check=False,
         capture_output=True,
         text=True,
+        timeout=10,
     )
 
     assert completed.returncode == 0, completed.stderr
@@ -168,6 +174,8 @@ importlib.import_module(sys.argv[1])
         ({"confidence": -0.01}, "confidence"),
         ({"confidence": 1.01}, "confidence"),
         ({"confidence": math.nan}, "confidence"),
+        ({"confidence": 10**1000}, "confidence"),
+        ({"confidence": -(10**1000)}, "confidence"),
         ({"entity_type": " "}, "entity_type"),
         ({"text": ""}, "text"),
     ],
@@ -328,3 +336,17 @@ def test_graph_expansion_contracts_reject_invalid_or_mutable_boundaries() -> Non
         GraphExpansionDiagnostics(status="hit", candidate_count=-1)
     with pytest.raises(ValueError, match="elapsed_ms"):
         GraphExpansionDiagnostics(status="hit", elapsed_ms=math.inf)
+
+
+@pytest.mark.parametrize(
+    "elapsed_ms",
+    [True, -1, math.nan, math.inf, -math.inf, 10**1000, -(10**1000)],
+)
+def test_graph_expansion_diagnostics_rejects_invalid_elapsed_ms(elapsed_ms: object) -> None:
+    with pytest.raises(ValueError, match="elapsed_ms"):
+        GraphExpansionDiagnostics(status="hit", elapsed_ms=elapsed_ms)  # type: ignore[arg-type]
+
+
+def test_graph_expansion_diagnostics_rejects_unhashable_status() -> None:
+    with pytest.raises(ValueError, match="status"):
+        GraphExpansionDiagnostics(status=[])  # type: ignore[arg-type]
