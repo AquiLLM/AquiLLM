@@ -1,0 +1,175 @@
+# Offline gold fixtures for entity, relation, identity-link, and suppression evaluation.
+# These records are deliberately model- and database-independent.
+schema_version: 1
+cases:
+  - id: acronym_definition_then_full_name
+    description: "A definition of RAG is linked to a later spelled-out mention."
+    privacy_intent: "public research text; identity resolution must remain document-scoped evidence."
+    documents:
+      - doc_id: doc-rag-overview
+        collection_id: collection-research-a
+        title: "Retrieval notes"
+        chunks:
+          - chunk_id: rag-overview-001
+            text: "Retrieval-augmented generation (RAG) grounds answers in retrieved evidence."
+          - chunk_id: rag-overview-002
+            text: "RAG reduces unsupported claims when retrieval precedes generation."
+    expected:
+      entities:
+        - id: entity-rag-acronym
+          text: RAG
+          type: method
+          chunk_id: rag-overview-001
+        - id: entity-rag-full-name
+          text: Retrieval-augmented generation
+          type: method
+          chunk_id: rag-overview-001
+      relations:
+        - source: entity-rag-full-name
+          target: entity-rag-acronym
+          type: abbreviation_of
+      auto_links:
+        - source: entity-rag-acronym
+          target: entity-rag-full-name
+          type: canonical_identity
+      suppressed_evidence: []
+
+  - id: ambiguous_acronym_two_meanings
+    description: "The same acronym denotes two distinct concepts and must not auto-link."
+    privacy_intent: "public technical material; avoid unsafe conflation of ambiguous acronyms."
+    documents:
+      - doc_id: doc-nlp-f1
+        collection_id: collection-research-a
+        title: "Classifier evaluation"
+        chunks:
+          - chunk_id: nlp-f1-001
+            text: "F1 is the harmonic mean of precision and recall for the classifier."
+      - doc_id: doc-racing-f1
+        collection_id: collection-research-a
+        title: "Race calendar"
+        chunks:
+          - chunk_id: racing-f1-001
+            text: "F1 teams test aerodynamic upgrades before the Monaco race."
+    expected:
+      entities:
+        - id: entity-f1-metric
+          text: F1
+          type: evaluation_metric
+          chunk_id: nlp-f1-001
+        - id: entity-f1-racing
+          text: F1
+          type: racing_series
+          chunk_id: racing-f1-001
+      relations: []
+      auto_links: []
+      suppressed_evidence: []
+
+  - id: shared_model_name_across_documents
+    description: "A model name repeated in two documents resolves to one canonical identity."
+    privacy_intent: "public product references; retain source-document provenance."
+    documents:
+      - doc_id: doc-orion-release
+        collection_id: collection-research-a
+        title: "Orion release"
+        chunks:
+          - chunk_id: orion-release-001
+            text: "Orion is the model used for the public benchmark release."
+      - doc_id: doc-orion-appendix
+        collection_id: collection-research-b
+        title: "Orion appendix"
+        chunks:
+          - chunk_id: orion-appendix-001
+            text: "The Orion model uses the same tokenizer described in the release."
+    expected:
+      entities:
+        - id: entity-orion-release
+          text: Orion
+          type: model
+          chunk_id: orion-release-001
+        - id: entity-orion-appendix
+          text: Orion
+          type: model
+          chunk_id: orion-appendix-001
+      relations: []
+      auto_links:
+        - source: entity-orion-release
+          target: entity-orion-appendix
+          type: canonical_identity
+      suppressed_evidence: []
+
+  - id: nearby_model_versions_remain_distinct
+    description: "Closely named versions are different models and must not auto-link."
+    privacy_intent: "public release notes; preserve version boundaries."
+    documents:
+      - doc_id: doc-orion-versions
+        collection_id: collection-research-a
+        title: "Version comparison"
+        chunks:
+          - chunk_id: orion-version-001
+            text: "Orion 2.1 supports a 32k context window. Orion 2.10 fixes a tokenizer bug."
+    expected:
+      entities:
+        - id: entity-orion-2-1
+          text: Orion 2.1
+          type: model_version
+          chunk_id: orion-version-001
+        - id: entity-orion-2-10
+          text: Orion 2.10
+          type: model_version
+          chunk_id: orion-version-001
+      relations: []
+      auto_links: []
+      suppressed_evidence: []
+
+  - id: overlap_boundary_relation
+    description: "A relation whose endpoints fall on adjacent overlapping chunks is retained."
+    privacy_intent: "public research text; chunk overlap is evidence, not duplicate identity."
+    documents:
+      - doc_id: doc-latency-study
+        collection_id: collection-research-a
+        title: "Latency study"
+        chunks:
+          - chunk_id: latency-001
+            text: "The Atlas encoder supplies embeddings to the retrieval service. The retrieval"
+          - chunk_id: latency-002
+            text: "service uses Atlas embeddings to rank source passages before synthesis."
+    expected:
+      entities:
+        - id: entity-atlas
+          text: Atlas encoder
+          type: model
+          chunk_id: latency-001
+        - id: entity-retrieval-service
+          text: retrieval service
+          type: service
+          chunk_id: latency-002
+      relations:
+        - source: entity-atlas
+          target: entity-retrieval-service
+          type: supplies_embeddings_to
+      auto_links: []
+      suppressed_evidence: []
+
+  - id: publisher_boilerplate_suppressed
+    description: "Publisher boilerplate is retained as suppressed evidence rather than a graph entity."
+    privacy_intent: "public material; suppression must remain auditable and must not erase evidence."
+    documents:
+      - doc_id: doc-paper-with-boilerplate
+        collection_id: collection-research-a
+        title: "Benchmark report"
+        chunks:
+          - chunk_id: boilerplate-001
+            text: "Published by Northstar Press. The Atlas model improves retrieval recall by 8 percent."
+    expected:
+      entities:
+        - id: entity-atlas-report
+          text: Atlas model
+          type: model
+          chunk_id: boilerplate-001
+      relations: []
+      auto_links: []
+      suppressed_evidence:
+        - entity: Northstar Press
+          type: publisher
+          chunk_id: boilerplate-001
+          reason: publisher_boilerplate

@@ -1,0 +1,63 @@
+# Offline gold fixtures for collection-aware graph retrieval evaluation.
+# Private/security intent is explicit so future evaluators cannot accidentally expose it.
+schema_version: 1
+cases:
+  - id: conflicting_claims_across_collections
+    description: "Both accessible collections supply conflicting evidence and neither is silently dropped."
+    privacy_intent: "two user-authorized collections; preserve conflict and collection provenance."
+    query: "What is the supported context window for Orion?"
+    accessible_collection_ids: [collection-policy-a, collection-policy-b]
+    documents:
+      - doc_id: doc-policy-a
+        collection_id: collection-policy-a
+        chunks:
+          - chunk_id: policy-a-context-001
+            text: "Policy A states that Orion supports a 32k context window."
+      - doc_id: doc-policy-b
+        collection_id: collection-policy-b
+        chunks:
+          - chunk_id: policy-b-context-001
+            text: "Policy B states that Orion supports a 64k context window."
+    expected_retrieval_chunk_ids: [policy-a-context-001, policy-b-context-001]
+    baseline_vector_result_ids: [policy-a-context-001, policy-b-context-001]
+
+  - id: inaccessible_collection_is_excluded
+    description: "A matching private security collection is excluded when it is not accessible."
+    privacy_intent: "security-sensitive: never return private collection evidence without authorization."
+    query: "Which rotation interval is documented for service tokens?"
+    accessible_collection_ids: [collection-public]
+    documents:
+      - doc_id: doc-public-token-guide
+        collection_id: collection-public
+        chunks:
+          - chunk_id: public-token-001
+            text: "Public guidance recommends rotating service tokens every 90 days."
+      - doc_id: doc-private-incident
+        collection_id: collection-security-private
+        chunks:
+          - chunk_id: private-incident-001
+            text: "Private incident notes require an immediate token rotation after compromise."
+    expected_retrieval_chunk_ids: [public-token-001]
+
+  - id: canonical_identity_expands_a_to_b
+    description: "A vector seed in collection A expands through canonical identity into accessible collection B."
+    privacy_intent: "cross-collection expansion is allowed only because both collections are authorized."
+    query: "How does the Orion model rank source passages?"
+    accessible_collection_ids: [collection-research-a, collection-research-b]
+    documents:
+      - doc_id: doc-orion-a
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: orion-a-seed-001
+            text: "Orion ranks source passages using dense vector similarity."
+      - doc_id: doc-orion-b
+        collection_id: collection-research-b
+        chunks:
+          - chunk_id: orion-b-identity-001
+            text: "The Orion model uses a cross-encoder reranker after vector retrieval."
+    canonical_identity_links:
+      - source_chunk_id: orion-a-seed-001
+        target_chunk_id: orion-b-identity-001
+        type: canonical_identity
+    expected_retrieval_chunk_ids: [orion-a-seed-001, orion-b-identity-001]
+    baseline_vector_result_ids: [orion-a-seed-001]
