@@ -163,6 +163,7 @@ INSTALLED_APPS = [
     "apps.core",
     "apps.integrations.zotero",
     "apps.bug_reports",
+    "apps.knowledge_graph",
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
