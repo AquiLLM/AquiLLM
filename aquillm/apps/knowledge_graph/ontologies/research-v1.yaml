@@ -1,0 +1,145 @@
+version: 1.0.0
+entity_types:
+  - name: paper
+    description: A scholarly research publication.
+    aliases: [publication, article]
+    default_retrieval_weight: 1.0
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.15
+  - name: author
+    description: A person credited with a research contribution.
+    aliases: [researcher]
+    default_retrieval_weight: 0.8
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.25
+  - name: institution
+    description: An organization associated with research authorship.
+    aliases: [organization]
+    default_retrieval_weight: 0.7
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.3
+  - name: method
+    description: A research procedure or algorithmic approach.
+    aliases: [approach]
+    default_retrieval_weight: 0.9
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.25
+  - name: model
+    description: A trained or specified computational model.
+    aliases: [architecture]
+    default_retrieval_weight: 1.0
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.2
+  - name: dataset
+    description: A collection of data used in research.
+    aliases: [benchmark]
+    default_retrieval_weight: 0.9
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.2
+  - name: metric
+    description: A quantitative evaluation measure.
+    aliases: [measure]
+    default_retrieval_weight: 0.8
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.25
+  - name: task
+    description: A problem or objective evaluated by research.
+    aliases: [objective]
+    default_retrieval_weight: 0.8
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.25
+  - name: claim
+    description: A stated proposition made by a research source.
+    aliases: [assertion]
+    default_retrieval_weight: 0.85
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.35
+  - name: finding
+    description: An observed or reported research result.
+    aliases: [result]
+    default_retrieval_weight: 0.9
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.3
+  - name: figure
+    description: A visual figure contained in a research source.
+    aliases: [chart]
+    default_retrieval_weight: 0.6
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.4
+  - name: software
+    description: A software implementation used or described by research.
+    aliases: [codebase]
+    default_retrieval_weight: 0.7
+    default_suppression_policy: below_confidence
+    default_suppression_threshold: 0.3
+relations:
+  - name: authored_by
+    description: Connects a paper to one of its authors.
+    direction: directed
+    allowed_head_types: [paper]
+    allowed_tail_types: [author]
+  - name: cites
+    description: Connects a paper to a cited paper.
+    direction: directed
+    allowed_head_types: [paper]
+    allowed_tail_types: [paper]
+  - name: uses_method
+    description: Connects a paper or model to a method.
+    direction: directed
+    allowed_head_types: [paper, model]
+    allowed_tail_types: [method]
+  - name: uses_model
+    description: Connects a paper or method to a model.
+    direction: directed
+    allowed_head_types: [paper, method]
+    allowed_tail_types: [model]
+  - name: uses_dataset
+    description: Connects research work to a dataset.
+    direction: directed
+    allowed_head_types: [paper, method, model]
+    allowed_tail_types: [dataset]
+  - name: evaluates_on
+    description: Connects a model or method to an evaluation task.
+    direction: directed
+    allowed_head_types: [model, method]
+    allowed_tail_types: [task]
+  - name: measures_with
+    description: Connects an evaluation task to a metric.
+    direction: directed
+    allowed_head_types: [task, finding]
+    allowed_tail_types: [metric]
+  - name: reports_metric
+    description: Connects a paper or finding to a metric.
+    direction: directed
+    allowed_head_types: [paper, finding]
+    allowed_tail_types: [metric]
+  - name: supports
+    description: Connects a finding or claim to a supported claim.
+    direction: directed
+    allowed_head_types: [finding, claim]
+    allowed_tail_types: [claim]
+  - name: contradicts
+    description: Connects a claim or finding to a contradicted claim.
+    direction: directed
+    allowed_head_types: [claim, finding]
+    allowed_tail_types: [claim, finding]
+  - name: compares_with
+    description: Connects comparable research methods or models.
+    direction: undirected
+    allowed_head_types: [method, model]
+    allowed_tail_types: [method, model]
+  - name: shown_in_figure
+    description: Connects a finding or metric to a figure.
+    direction: directed
+    allowed_head_types: [finding, metric]
+    allowed_tail_types: [figure]
+  - name: implemented_by
+    description: Connects a method or model to its software implementation.
+    direction: directed
+    allowed_head_types: [method, model]
+    allowed_tail_types: [software]
+  - name: affiliated_with
+    description: Connects an author to an institution.
+    direction: directed
+    allowed_head_types: [author]
+    allowed_tail_types: [institution]

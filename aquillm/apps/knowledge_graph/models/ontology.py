@@ -1,7 +1,7 @@
 from django.db import models
 from django.db.models import Q
 
-from .artifacts import ValidatedGraphModel
+from .artifacts import ImmutableGraphQuerySet, ValidatedGraphModel
 
 
 class OntologyVersion(ValidatedGraphModel):
@@ -27,6 +27,13 @@ class OntologyVersion(ValidatedGraphModel):
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     activated_at = models.DateTimeField(null=True, blank=True)
+
+    # Definitions are content-addressed audit records.  Lifecycle fields remain
+    # mutable so activation can atomically supersede a previous version.
+    _IMMUTABLE_FIELDS = ("kind", "version", "checksum", "metadata")
+    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
+
+    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"
