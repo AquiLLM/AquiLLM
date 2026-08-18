@@ -184,6 +184,23 @@ def test_loader_rejects_semver_prerelease_numeric_identifiers_with_leading_zero(
 
 @pytest.mark.parametrize(
     "version",
+    ["1١.0.0", "1.1١.0", "1.0.1١", "1.0.0-1١"],
+)
+def test_loader_rejects_semver_unicode_digits(tmp_path, version):
+    from apps.knowledge_graph.services.ontology import (
+        OntologyValidationError,
+        load_ontology,
+    )
+
+    document = _document()
+    document["version"] = version
+
+    with pytest.raises(OntologyValidationError, match="semantic version"):
+        load_ontology(_write(tmp_path, document))
+
+
+@pytest.mark.parametrize(
+    "version",
     ["1.0.0-0", "1.0.0-01a", "1.0.0-01a.0+build.01", "1.0.0+001"],
 )
 def test_loader_accepts_valid_semver_prerelease_and_build_identifiers(
