@@ -18,6 +18,7 @@ DEFAULT_GLINER2_MODEL = "fastino/gliner2-base-v1"
 DEFAULT_GLINER2_REVISION = "8437ba583a733d87f56ae902f3b197934eedd58e"
 DEFAULT_GLINER2_DEVICE = "cpu"
 DEFAULT_GLINER2_BATCH_SIZE = 8
+DEFAULT_GLINER2_MAX_BATCH_CHARACTERS = 64_000
 DEFAULT_GLINER2_CACHE_DIR = Path("/root/.cache/huggingface")
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -39,6 +40,7 @@ class ExtractionSettings:
     model_revision: str
     device: str
     batch_size: int
+    max_batch_characters: int
     cache_dir: Path
     local_files_only: bool
     fail_open: bool
@@ -111,6 +113,11 @@ def load_extraction_settings(
     batch_size = _parse_positive_int(
         values, "KG_GLINER2_BATCH_SIZE", default=DEFAULT_GLINER2_BATCH_SIZE
     )
+    max_batch_characters = _parse_positive_int(
+        values,
+        "KG_GLINER2_MAX_BATCH_CHARACTERS",
+        default=DEFAULT_GLINER2_MAX_BATCH_CHARACTERS,
+    )
     cache_dir = Path(
         _text_or_default(
             values,
@@ -128,6 +135,7 @@ def load_extraction_settings(
         model_revision=model_revision,
         device=device,
         batch_size=batch_size,
+        max_batch_characters=max_batch_characters,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
         fail_open=fail_open,
@@ -156,6 +164,12 @@ def get_extractor_device(source: Mapping[str, str] | None = None) -> str:
 
 def get_extractor_batch_size(source: Mapping[str, str] | None = None) -> int:
     return load_extraction_settings(source).batch_size
+
+
+def get_extractor_max_batch_characters(
+    source: Mapping[str, str] | None = None,
+) -> int:
+    return load_extraction_settings(source).max_batch_characters
 
 
 def get_extractor_cache_dir(source: Mapping[str, str] | None = None) -> Path:

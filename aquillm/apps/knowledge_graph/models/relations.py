@@ -1,4 +1,5 @@
 from math import isfinite
+from unicodedata import normalize as unicode_normalize
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -102,6 +103,43 @@ class RelationMention(ValidatedGraphModel):
             }
         return {}
 
+    def _endpoint_has_relation_chunk_observation(self, endpoint: EntityMention) -> bool:
+        if endpoint.chunk_id == self.chunk_id:
+            return True
+        if (
+            endpoint.position_basis != EntityMention.PositionBasis.DOCUMENT_GLOBAL
+            or self.chunk.modality != TextChunk.Modality.TEXT
+        ):
+            return False
+        observations = endpoint.metadata.get("observations", [])
+        if not isinstance(observations, list):
+            return False
+        for observation in observations:
+            if not isinstance(observation, dict):
+                continue
+            local_start = observation.get("local_start")
+            local_end = observation.get("local_end")
+            if (
+                observation.get("chunk_id") != self.chunk_id
+                or observation.get("modality") != TextChunk.Modality.TEXT
+                or observation.get("position_basis")
+                != EntityMention.PositionBasis.DOCUMENT_GLOBAL
+                or observation.get("start") != endpoint.start
+                or observation.get("end") != endpoint.end
+                or type(local_start) is not int
+                or type(local_end) is not int
+                or not 0 <= local_start < local_end <= len(self.chunk.content)
+                or self.chunk.start_position + local_start != endpoint.start
+                or self.chunk.start_position + local_end != endpoint.end
+            ):
+                continue
+            source_slice = self.chunk.content[local_start:local_end]
+            if unicode_normalize("NFC", source_slice) == unicode_normalize(
+                "NFC", endpoint.raw_text
+            ):
+                return True
+        return False
+
     def clean(self):
         super().clean()
         errors: dict[str, str] = {}
@@ -113,8 +151,11 @@ class RelationMention(ValidatedGraphModel):
                     errors[endpoint_name] = "Relation endpoint artifact must match."
                 elif endpoint.document_id != self.document_id:
                     errors[endpoint_name] = "Relation endpoint document must match."
-                elif endpoint.chunk_id != self.chunk_id:
-                    errors[endpoint_name] = "Relation endpoint chunk must match."
+                elif not self._endpoint_has_relation_chunk_observation(endpoint):
+                    errors[endpoint_name] = (
+                        "Relation endpoint requires same-chunk evidence or a "
+                        "compatible overlapping text observation."
+                    )
         if errors:
             raise ValidationError(errors)
 

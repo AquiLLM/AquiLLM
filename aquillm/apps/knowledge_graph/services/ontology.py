@@ -149,12 +149,19 @@ def _read_yaml(path: str | Path) -> tuple[Any, str]:
         raise OntologyValidationError(
             f"Unable to read ontology {source}: {exc}"
         ) from exc
+    return _parse_yaml(raw_yaml)
+
+
+def _parse_yaml(raw_yaml: str) -> tuple[Any, str]:
+    if not isinstance(raw_yaml, str) or not raw_yaml.strip():
+        raise OntologyValidationError("ontology YAML must be a nonempty string")
+    normalized_yaml = raw_yaml.replace("\r\n", "\n")
     try:
-        data = yaml.load(raw_yaml, Loader=_UniqueKeySafeLoader)
+        data = yaml.load(normalized_yaml, Loader=_UniqueKeySafeLoader)
     except (ValueError, yaml.YAMLError) as exc:
         raise OntologyValidationError(f"Unsupported or malformed YAML: {exc}") from exc
     _validate_yaml_value(data)
-    return data, raw_yaml
+    return data, normalized_yaml
 
 
 def _validate_yaml_value(value: Any, ancestors: set[int] | None = None) -> None:
@@ -341,9 +348,7 @@ def _build_definition(
     )
 
 
-def load_ontology(path: str | Path) -> OntologyDefinition:
-    """Load a complete ontology without importing Django or any LLM provider."""
-    document, raw_yaml = _read_yaml(path)
+def _load_ontology_document(document: Any, raw_yaml: str) -> OntologyDefinition:
     root = _mapping(document, "ontology")
     _require_fields(
         root, frozenset({"version", "entity_types", "relations"}), "ontology"
@@ -423,6 +428,20 @@ def load_ontology(path: str | Path) -> OntologyDefinition:
     if not relations:
         raise OntologyValidationError("relations must not be empty")
     return _build_definition(version, entity_types, relations, raw_yaml)
+
+
+def load_ontology(path: str | Path) -> OntologyDefinition:
+    """Load a complete ontology without importing Django or any LLM provider."""
+
+    document, raw_yaml = _read_yaml(path)
+    return _load_ontology_document(document, raw_yaml)
+
+
+def load_ontology_yaml(raw_yaml: str) -> OntologyDefinition:
+    """Revalidate persisted ontology YAML directly, without filesystem parsing."""
+
+    document, normalized_yaml = _parse_yaml(raw_yaml)
+    return _load_ontology_document(document, normalized_yaml)
 
 
 def load_ontology_extension(path: str | Path) -> OntologyExtensionDefinition:
