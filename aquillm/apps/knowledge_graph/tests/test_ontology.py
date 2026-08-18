@@ -163,6 +163,40 @@ def test_loader_rejects_invalid_ontology_semantics(tmp_path, mutate):
         load_ontology(_write(tmp_path, document))
 
 
+@pytest.mark.parametrize(
+    "version",
+    ["1.0.0-01", "1.0.0-alpha.01", "1.0.0-0.01+build.7"],
+)
+def test_loader_rejects_semver_prerelease_numeric_identifiers_with_leading_zero(
+    tmp_path, version
+):
+    from apps.knowledge_graph.services.ontology import (
+        OntologyValidationError,
+        load_ontology,
+    )
+
+    document = _document()
+    document["version"] = version
+
+    with pytest.raises(OntologyValidationError, match="semantic version"):
+        load_ontology(_write(tmp_path, document))
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["1.0.0-0", "1.0.0-01a", "1.0.0-01a.0+build.01", "1.0.0+001"],
+)
+def test_loader_accepts_valid_semver_prerelease_and_build_identifiers(
+    tmp_path, version
+):
+    from apps.knowledge_graph.services.ontology import load_ontology
+
+    document = _document()
+    document["version"] = version
+
+    assert load_ontology(_write(tmp_path, document)).version == version
+
+
 def test_loader_rejects_cycles_non_string_keys_and_unsupported_yaml(tmp_path):
     from apps.knowledge_graph.services.ontology import (
         OntologyValidationError,
