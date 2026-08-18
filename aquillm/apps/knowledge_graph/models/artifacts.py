@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from django.db.models import Q
 
@@ -16,24 +16,45 @@ class ValidatedGraphQuerySet(models.QuerySet):
 
 
 class ImmutableGraphQuerySet(ValidatedGraphQuerySet):
-    def _reject_immutable_fields(self, fields) -> None:
-        immutable = set(getattr(self.model, "_IMMUTABLE_FIELDS", ()))
+    def _reject_immutable_fields(self, fields, *, null_assignments=()) -> None:
+        immutable = set(
+            getattr(
+                self.model,
+                "_QUERYSET_IMMUTABLE_FIELDS",
+                self.model._IMMUTABLE_FIELDS,
+            )
+        )
         changed = immutable.intersection(fields)
+        nullable = set(getattr(self.model, "_NULLABLE_IMMUTABLE_UPDATE_FIELDS", ()))
+        changed -= nullable.intersection(null_assignments)
         if changed:
             raise ValidationError(
-                {
-                    field: "This graph build identity field is immutable."
-                    for field in sorted(changed)
-                }
+                {field: "This graph field is immutable." for field in sorted(changed)}
             )
 
     def update(self, **kwargs):
-        self._reject_immutable_fields(kwargs)
+        self._reject_immutable_fields(
+            kwargs,
+            null_assignments={
+                field for field, value in kwargs.items() if value is None
+            },
+        )
         return super().update(**kwargs)
 
     def bulk_update(self, objs, fields, batch_size=None):
-        self._reject_immutable_fields(fields)
-        return super().bulk_update(objs, fields, batch_size=batch_size)
+        objects = list(objs)
+        null_assignments = set()
+        for name in fields:
+            try:
+                field = self.model._meta.get_field(name)
+            except FieldDoesNotExist:
+                if not name.endswith("_id"):
+                    raise
+                field = self.model._meta.get_field(name.removesuffix("_id"))
+            if all(getattr(obj, field.attname) is None for obj in objects):
+                null_assignments.add(name)
+        self._reject_immutable_fields(fields, null_assignments=null_assignments)
+        return super().bulk_update(objects, fields, batch_size=batch_size)
 
 
 class ValidatedGraphModel(models.Model):
@@ -41,6 +62,8 @@ class ValidatedGraphModel(models.Model):
 
     objects = models.Manager.from_queryset(ValidatedGraphQuerySet)()
     _IMMUTABLE_FIELDS: tuple[str, ...] = ()
+    _QUERYSET_IMMUTABLE_FIELDS: tuple[str, ...] = ()
+    _NULLABLE_IMMUTABLE_UPDATE_FIELDS: tuple[str, ...] = ()
 
     class Meta:
         abstract = True
@@ -69,22 +92,27 @@ class ValidatedGraphModel(models.Model):
     def _validate_immutable_fields(self) -> None:
         if not self.pk or not self._IMMUTABLE_FIELDS:
             return
-        previous = (
-            type(self)
-            .objects.filter(pk=self.pk)
-            .values(*self._IMMUTABLE_FIELDS)
-            .first()
-        )
+        comparisons: dict[str, str] = {}
+        for name in self._IMMUTABLE_FIELDS:
+            try:
+                field = self._meta.get_field(name)
+            except FieldDoesNotExist:
+                if not name.endswith("_id"):
+                    raise
+                field = self._meta.get_field(name.removesuffix("_id"))
+            lookup = field.attname if field.is_relation else field.name
+            comparisons.setdefault(lookup, field.name)
+        previous = type(self).objects.filter(pk=self.pk).values(*comparisons).first()
         if previous is None:
             return
-        changed = [
-            field
-            for field in self._IMMUTABLE_FIELDS
-            if previous[field] != getattr(self, field)
-        ]
+        changed = {
+            error_field
+            for lookup, error_field in comparisons.items()
+            if previous[lookup] != getattr(self, lookup)
+        }
         if changed:
             raise ValidationError(
-                {field: "Graph build identity is immutable." for field in changed}
+                {field: "Graph field is immutable." for field in sorted(changed)}
             )
 
     def clean(self):
@@ -137,6 +165,7 @@ class GraphArtifact(ValidatedGraphModel):
         "resolver_version",
         "filter_policy_version",
     )
+    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
     objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
 
@@ -265,6 +294,8 @@ class GraphBuildRun(ValidatedGraphModel):
     finished_at = models.DateTimeField(null=True, blank=True)
 
     _IMMUTABLE_FIELDS = (
+        "artifact",
+        "artifact_id",
         "build_kind",
         "scope_type",
         "scope_id",
@@ -274,6 +305,8 @@ class GraphBuildRun(ValidatedGraphModel):
         "resolver_version",
         "filter_policy_version",
     )
+    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
+    _NULLABLE_IMMUTABLE_UPDATE_FIELDS = ("artifact", "artifact_id")
 
     objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
 
@@ -336,7 +369,7 @@ class GraphBuildRun(ValidatedGraphModel):
     def populate_artifact_snapshot(self) -> None:
         if not self.artifact_id:
             return
-        artifact = self.artifact
+        artifact = GraphArtifact.objects.get(pk=self.artifact_id)
         self.build_kind = artifact.scope_type
         for field in (
             "scope_type",
@@ -356,11 +389,11 @@ class GraphBuildRun(ValidatedGraphModel):
     def clean(self):
         super().clean()
         if self.artifact_id:
-            artifact = self.artifact
+            artifact = GraphArtifact.objects.get(pk=self.artifact_id)
             expected = {
                 field: getattr(artifact, field)
                 for field in self._IMMUTABLE_FIELDS
-                if field != "build_kind"
+                if field not in {"artifact", "artifact_id", "build_kind"}
             }
             expected["build_kind"] = artifact.scope_type
             mismatched = [

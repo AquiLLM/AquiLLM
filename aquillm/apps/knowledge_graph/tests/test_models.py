@@ -13,6 +13,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import CheckConstraint, UniqueConstraint
+from django.db.models.deletion import RestrictedError
 from pgvector.django import VectorField
 
 from apps.documents.models import TextChunk
@@ -189,6 +190,15 @@ def test_graph_artifact_bulk_mutation_rejects_build_identity_fields_before_datab
         GraphArtifact.objects.filter(pk=1).update(source_hash="b" * 64)
     with pytest.raises(ValidationError, match="immutable"):
         GraphArtifact.objects.bulk_update([artifact], ["filter_policy_version"])
+
+
+def test_graph_build_run_queryset_rejects_artifact_reassignment():
+    run = GraphBuildRun(pk=1, artifact_id=1)
+
+    with pytest.raises(ValidationError, match="immutable"):
+        GraphBuildRun.objects.filter(pk=1).update(artifact_id=2)
+    with pytest.raises(ValidationError, match="immutable"):
+        GraphBuildRun.objects.bulk_update([run], ["artifact"])
 
 
 @pytest.mark.django_db(transaction=True)
@@ -657,7 +667,7 @@ def test_relation_models_have_versioned_uniqueness_evidence_and_indexes():
         mapping_field = CollectionRelationEvidence._meta.get_field(field_name)
         assert mapping_field.null is False
         assert mapping_field.remote_field.model is CollectionEntityDocumentLink
-        assert mapping_field.remote_field.on_delete.__name__ == "PROTECT"
+        assert mapping_field.remote_field.on_delete.__name__ == "RESTRICT"
     assert {("artifact", "source", "target", "relation_type")} <= _index_fields(
         CollectionRelation
     )
@@ -789,9 +799,10 @@ def test_central_choice_and_build_identity_db_constraints_are_declared():
         assert names <= actual
 
 
-def test_graph_build_run_populates_and_freezes_artifact_identity_snapshot():
+def test_graph_build_run_populates_and_freezes_artifact_identity_snapshot(monkeypatch):
     artifact = _artifact(pk=10)
     run = GraphBuildRun(artifact=artifact)
+    monkeypatch.setattr(GraphArtifact.objects, "get", lambda **_kwargs: artifact)
 
     run.populate_artifact_snapshot()
 
@@ -802,6 +813,74 @@ def test_graph_build_run_populates_and_freezes_artifact_identity_snapshot():
     assert run.filter_policy_version == artifact.filter_policy_version
     assert "scope_id" in run._IMMUTABLE_FIELDS
     assert "filter_policy_version" in run._IMMUTABLE_FIELDS
+
+
+def test_graph_build_run_snapshot_ignores_mutated_cached_artifact(monkeypatch):
+    cached = _artifact(pk=10, source_hash="c" * 64)
+    fresh = _artifact(pk=10, source_hash="f" * 64)
+    run = GraphBuildRun(artifact=cached)
+    monkeypatch.setattr(GraphArtifact.objects, "get", lambda **_kwargs: fresh)
+
+    run.populate_artifact_snapshot()
+
+    assert run.source_hash == fresh.source_hash
+    assert run.source_hash != cached.source_hash
+
+
+@pytest.mark.parametrize("model", [EntityMention, RelationMention])
+def test_raw_evidence_querysets_reject_update_and_bulk_update(model):
+    instance = model(pk=1)
+    field = "raw_text" if model is EntityMention else "relation_type"
+
+    with pytest.raises(ValidationError, match="immutable"):
+        model.objects.filter(pk=1).update(**{field: "rewritten"})
+    with pytest.raises(ValidationError, match="immutable"):
+        model.objects.bulk_update([instance], [field])
+
+
+def test_raw_evidence_declares_complete_immutable_fields_and_aliases():
+    assert {
+        "artifact",
+        "artifact_id",
+        "document_id",
+        "chunk",
+        "chunk_id",
+        "start",
+        "end",
+        "position_basis",
+        "raw_text",
+        "normalized_text",
+        "entity_type",
+        "extraction_confidence",
+        "content_object_type",
+        "content_object_type_id",
+        "content_object_id",
+        "metadata",
+    } <= set(EntityMention._IMMUTABLE_FIELDS)
+    assert {
+        "artifact",
+        "artifact_id",
+        "document_id",
+        "chunk",
+        "chunk_id",
+        "head",
+        "head_id",
+        "tail",
+        "tail_id",
+        "relation_type",
+        "extraction_confidence",
+        "metadata",
+    } <= set(RelationMention._IMMUTABLE_FIELDS)
+
+
+@pytest.mark.parametrize("model", [DocumentEntity, CollectionEntity])
+def test_resolved_identity_querysets_reject_identity_rewrites(model):
+    instance = model(pk=1)
+
+    with pytest.raises(ValidationError, match="immutable"):
+        model.objects.filter(pk=1).update(identifier="replacement")
+    with pytest.raises(ValidationError, match="immutable"):
+        model.objects.bulk_update([instance], ["normalized_label"])
 
 
 def test_postgres_test_gate_can_be_made_required():
@@ -1071,6 +1150,165 @@ def test_deleting_resolution_entities_or_links_preserves_raw_mentions():
     replacement_link.delete()
 
     assert EntityMention.objects.filter(pk=mention.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_raw_evidence_instance_save_rejects_rewrites():
+    artifact = _artifact(status=GraphArtifact.Status.ACTIVE)
+    artifact.save()
+    chunk = _chunk()
+    head = _mention(artifact, chunk)
+    tail = _mention(
+        artifact,
+        chunk,
+        start=18,
+        end=22,
+        raw_text="MMLU",
+        normalized_text="mmlu",
+        entity_type="benchmark",
+    )
+    relation = RelationMention.objects.create(
+        artifact=artifact,
+        document_id=DOCUMENT_ID,
+        chunk=chunk,
+        head=head,
+        tail=tail,
+        relation_type="evaluates_on",
+        extraction_confidence=0.8,
+    )
+
+    head.raw_text = "rewritten"
+    with pytest.raises(ValidationError, match="immutable"):
+        head.save()
+    relation.relation_type = "rewritten"
+    with pytest.raises(ValidationError, match="immutable"):
+        relation.save()
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_graph_build_run_uses_fresh_snapshot_and_artifact_delete_sets_null():
+    artifact = _artifact()
+    artifact.save()
+    original_hash = artifact.source_hash
+    artifact.source_hash = "c" * 64
+
+    run = GraphBuildRun.objects.create(artifact=artifact)
+
+    assert run.source_hash == original_hash
+    artifact_id = artifact.pk
+    GraphArtifact.objects.get(pk=artifact_id).delete()
+    run.refresh_from_db()
+    assert run.artifact_id is None
+    assert run.source_hash == original_hash
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
+    collection_artifact = _artifact(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=COLLECTION_ID,
+        status=GraphArtifact.Status.ACTIVE,
+    )
+    collection_artifact.save()
+    document_artifact = _artifact(status=GraphArtifact.Status.ACTIVE)
+    document_artifact.save()
+    chunk = _chunk()
+    head = _mention(document_artifact, chunk)
+    tail = _mention(
+        document_artifact,
+        chunk,
+        start=18,
+        end=22,
+        raw_text="MMLU",
+        normalized_text="mmlu",
+        entity_type="benchmark",
+    )
+    relation_mention = RelationMention.objects.create(
+        artifact=document_artifact,
+        document_id=DOCUMENT_ID,
+        chunk=chunk,
+        head=head,
+        tail=tail,
+        relation_type="evaluates_on",
+        extraction_confidence=0.8,
+    )
+    head_document_entity = DocumentEntity.objects.create(
+        artifact=document_artifact,
+        document_id=DOCUMENT_ID,
+        label="Aquilla",
+        normalized_label="aquilla",
+        entity_type="model",
+    )
+    tail_document_entity = DocumentEntity.objects.create(
+        artifact=document_artifact,
+        document_id=DOCUMENT_ID,
+        label="MMLU",
+        normalized_label="mmlu",
+        entity_type="benchmark",
+    )
+    DocumentEntityMention.objects.create(
+        document_entity=head_document_entity,
+        mention=head,
+    )
+    DocumentEntityMention.objects.create(
+        document_entity=tail_document_entity,
+        mention=tail,
+    )
+    source = CollectionEntity.objects.create(
+        artifact=collection_artifact,
+        collection_id=COLLECTION_ID,
+        label="Aquilla",
+        normalized_label="aquilla",
+        entity_type="model",
+    )
+    target = CollectionEntity.objects.create(
+        artifact=collection_artifact,
+        collection_id=COLLECTION_ID,
+        label="MMLU",
+        normalized_label="mmlu",
+        entity_type="benchmark",
+    )
+    relation = CollectionRelation.objects.create(
+        artifact=collection_artifact,
+        source=source,
+        target=target,
+        relation_type="evaluates_on",
+        support_count=1,
+        confidence=0.8,
+    )
+    head_mapping = CollectionEntityDocumentLink.objects.create(
+        document_entity=head_document_entity,
+        collection_entity=source,
+        score=0.9,
+        method="exact",
+        resolver_version=collection_artifact.resolver_version,
+    )
+    tail_mapping = CollectionEntityDocumentLink.objects.create(
+        document_entity=tail_document_entity,
+        collection_entity=target,
+        score=0.9,
+        method="exact",
+        resolver_version=collection_artifact.resolver_version,
+    )
+    evidence = CollectionRelationEvidence.objects.create(
+        relation=relation,
+        relation_mention=relation_mention,
+        head_mapping=head_mapping,
+        tail_mapping=tail_mapping,
+    )
+    mapping_ids = (head_mapping.pk, tail_mapping.pk)
+
+    with pytest.raises(RestrictedError):
+        head_mapping.delete()
+    collection_artifact.delete()
+
+    assert not CollectionRelationEvidence.objects.filter(pk=evidence.pk).exists()
+    assert not CollectionEntityDocumentLink.objects.filter(pk__in=mapping_ids).exists()
+    assert not CollectionRelation.objects.filter(pk=relation.pk).exists()
+    assert RelationMention.objects.filter(pk=relation_mention.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)

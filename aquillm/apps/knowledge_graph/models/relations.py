@@ -6,7 +6,7 @@ from django.db.models import F, Q
 
 from apps.documents.models import TextChunk
 
-from .artifacts import GraphArtifact, ValidatedGraphModel
+from .artifacts import GraphArtifact, ImmutableGraphQuerySet, ValidatedGraphModel
 from .associations import CollectionEntityDocumentLink
 from .entities import (
     CollectionEntity,
@@ -44,6 +44,24 @@ class RelationMention(ValidatedGraphModel):
     extraction_confidence = models.FloatField()
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    _IMMUTABLE_FIELDS = (
+        "artifact",
+        "artifact_id",
+        "document_id",
+        "chunk",
+        "chunk_id",
+        "head",
+        "head_id",
+        "tail",
+        "tail_id",
+        "relation_type",
+        "extraction_confidence",
+        "metadata",
+    )
+    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
+
+    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"
@@ -202,12 +220,12 @@ class CollectionRelationEvidence(ValidatedGraphModel):
     )
     head_mapping = models.ForeignKey(
         CollectionEntityDocumentLink,
-        on_delete=models.PROTECT,
+        on_delete=models.RESTRICT,
         related_name="head_relation_evidence",
     )
     tail_mapping = models.ForeignKey(
         CollectionEntityDocumentLink,
-        on_delete=models.PROTECT,
+        on_delete=models.RESTRICT,
         related_name="tail_relation_evidence",
     )
     metadata = models.JSONField(default=dict, blank=True)

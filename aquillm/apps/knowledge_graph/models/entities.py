@@ -10,7 +10,7 @@ from pgvector.django import VectorField
 
 from apps.documents.models import TextChunk
 
-from .artifacts import GraphArtifact, ValidatedGraphModel
+from .artifacts import GraphArtifact, ImmutableGraphQuerySet, ValidatedGraphModel
 
 
 class ResolutionStatus(models.TextChoices):
@@ -63,6 +63,28 @@ class EntityMention(ValidatedGraphModel):
     content_object_id = models.UUIDField(null=True, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    _IMMUTABLE_FIELDS = (
+        "artifact",
+        "artifact_id",
+        "document_id",
+        "chunk",
+        "chunk_id",
+        "start",
+        "end",
+        "position_basis",
+        "raw_text",
+        "normalized_text",
+        "entity_type",
+        "extraction_confidence",
+        "content_object_type",
+        "content_object_type_id",
+        "content_object_id",
+        "metadata",
+    )
+    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
+
+    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"
@@ -224,6 +246,14 @@ class DocumentEntity(ValidatedGraphModel):
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    _QUERYSET_IMMUTABLE_FIELDS = (
+        "identifier",
+        "normalized_label",
+        "entity_type",
+    )
+
+    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
+
     class Meta:
         app_label = "apps_knowledge_graph"
         constraints = [
@@ -253,14 +283,20 @@ class DocumentEntity(ValidatedGraphModel):
             )
         ]
 
-    def clean(self):
-        super().clean()
+    def _normalize_identifier(self) -> None:
         original_identifier = self.identifier
         self.identifier = original_identifier.strip()
         if original_identifier and not self.identifier:
             raise ValidationError(
                 {"identifier": "Identifier cannot be whitespace-only."}
             )
+
+    def prepare_for_persistence(self) -> None:
+        self._normalize_identifier()
+
+    def clean(self):
+        super().clean()
+        self._normalize_identifier()
         if (
             self.artifact_id
             and self.artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT
@@ -346,6 +382,14 @@ class CollectionEntity(ValidatedGraphModel):
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    _QUERYSET_IMMUTABLE_FIELDS = (
+        "identifier",
+        "normalized_label",
+        "entity_type",
+    )
+
+    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
+
     class Meta:
         app_label = "apps_knowledge_graph"
         constraints = [
@@ -375,14 +419,20 @@ class CollectionEntity(ValidatedGraphModel):
             )
         ]
 
-    def clean(self):
-        super().clean()
+    def _normalize_identifier(self) -> None:
         original_identifier = self.identifier
         self.identifier = original_identifier.strip()
         if original_identifier and not self.identifier:
             raise ValidationError(
                 {"identifier": "Identifier cannot be whitespace-only."}
             )
+
+    def prepare_for_persistence(self) -> None:
+        self._normalize_identifier()
+
+    def clean(self):
+        super().clean()
+        self._normalize_identifier()
         if (
             self.artifact_id
             and self.artifact.scope_type != GraphArtifact.ScopeType.COLLECTION
