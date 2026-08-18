@@ -352,6 +352,7 @@ def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
             cluster.version_signature,
             cluster.entity_type,
             cluster.identifier,
+            cluster.confidence,
             {
                 "resolver_version": result.resolver_version,
                 "methods": _cluster_methods(cluster),
@@ -368,6 +369,7 @@ def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
             row.version_signature,
             row.entity_type,
             row.identifier,
+            row.resolution_confidence,
             row.metadata,
         )
         for row in active_entity_rows
@@ -461,6 +463,7 @@ def _write_resolution_rows(*, artifact, result, mentions_by_id):
             version_signature=cluster.version_signature,
             entity_type=cluster.entity_type,
             identifier=cluster.identifier,
+            resolution_confidence=cluster.confidence,
             status=DocumentEntity.Status.ACTIVE,
             metadata={
                 "resolver_version": result.resolver_version,

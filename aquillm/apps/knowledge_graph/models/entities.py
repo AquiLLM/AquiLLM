@@ -9,6 +9,7 @@ from django.db import models
 from django.db.models import F, Q
 from pgvector.django import VectorField
 
+from apps.collections.models import Collection
 from apps.documents.models import TextChunk
 
 from .artifacts import GraphArtifact, ImmutableGraphQuerySet, ValidatedGraphModel
@@ -169,7 +170,7 @@ class EntityMention(ValidatedGraphModel):
         artifact = self.artifact
         if artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT:
             errors["artifact"] = "Entity mentions require a document artifact."
-        elif artifact.scope_id != self.document_id:
+        elif artifact.scope_id != str(self.document_id):
             errors["artifact"] = "Entity mention document must match artifact scope."
         elif artifact.status not in {
             GraphArtifact.Status.BUILDING,
@@ -244,6 +245,7 @@ class DocumentEntity(ValidatedGraphModel):
     version_signature = models.CharField(
         max_length=128, blank=True, default="", editable=False
     )
+    resolution_confidence = models.FloatField(default=1.0)
     entity_type = models.CharField(max_length=128)
     identifier = models.CharField(max_length=255, blank=True, default="")
     status = models.CharField(
@@ -261,6 +263,7 @@ class DocumentEntity(ValidatedGraphModel):
         "identifier",
         "normalized_label",
         "version_signature",
+        "resolution_confidence",
         "entity_type",
         "metadata",
         "created_at",
@@ -303,6 +306,11 @@ class DocumentEntity(ValidatedGraphModel):
                 | Q(version_signature__regex=(r"^[a-z0-9][a-z0-9.+:/_-]*$")),
                 name="kg_document_version_signature_valid",
             ),
+            models.CheckConstraint(
+                condition=Q(resolution_confidence__gte=0)
+                & Q(resolution_confidence__lte=1),
+                name="kg_document_resolution_conf_range",
+            ),
         ]
         indexes = [
             models.Index(
@@ -318,6 +326,20 @@ class DocumentEntity(ValidatedGraphModel):
             raise ValidationError(
                 {"identifier": "Identifier cannot be whitespace-only."}
             )
+
+    def _raw_validation_errors(self) -> dict[str, str]:
+        value = self.resolution_confidence
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+        ):
+            return {
+                "resolution_confidence": (
+                    "Resolution confidence must be a finite non-boolean number."
+                )
+            }
+        return {}
 
     def prepare_for_persistence(self) -> None:
         self._normalize_identifier()
@@ -350,9 +372,13 @@ class DocumentEntity(ValidatedGraphModel):
             raise ValidationError(
                 {"artifact": "Document entities require a document artifact."}
             )
-        if self.artifact_id and self.document_id != self.artifact.scope_id:
+        if self.artifact_id and str(self.document_id) != self.artifact.scope_id:
             raise ValidationError(
                 {"document_id": "Document entity must match artifact scope."}
+            )
+        if not 0 <= self.resolution_confidence <= 1:
+            raise ValidationError(
+                {"resolution_confidence": "Resolution confidence must be in [0, 1]."}
             )
 
 
@@ -479,26 +505,61 @@ class CollectionEntity(ValidatedGraphModel):
         on_delete=models.CASCADE,
         related_name="collection_entities",
     )
-    collection_id = models.UUIDField()
+    collection = models.ForeignKey(
+        Collection,
+        on_delete=models.CASCADE,
+        related_name="knowledge_graph_entities",
+    )
+    cluster_key = models.CharField(max_length=64, editable=False)
     label = models.TextField()
     normalized_label = models.CharField(max_length=512)
+    version_signature = models.CharField(
+        max_length=128, blank=True, default="", editable=False
+    )
     entity_type = models.CharField(max_length=128)
     identifier = models.CharField(max_length=255, blank=True, default="")
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.ACTIVE
     )
+    extraction_confidence = models.FloatField()
+    resolution_confidence = models.FloatField()
+    retrieval_utility = models.FloatField()
+    promotion_confidence = models.FloatField(default=0.0)
+    filter_reason = models.CharField(max_length=128, blank=True, default="")
+    embedding_model_signature = models.CharField(
+        max_length=512, blank=True, default="", editable=False
+    )
+    embedding_input_hash = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
     embedding = VectorField(dimensions=1024, blank=True, null=True)
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    _QUERYSET_IMMUTABLE_FIELDS = (
+    _IMMUTABLE_FIELDS = (
         "artifact",
         "artifact_id",
+        "collection",
         "collection_id",
+        "cluster_key",
+        "label",
         "identifier",
         "normalized_label",
+        "version_signature",
         "entity_type",
+        "status",
+        "extraction_confidence",
+        "resolution_confidence",
+        "retrieval_utility",
+        "promotion_confidence",
+        "filter_reason",
+        "embedding_model_signature",
+        "embedding_input_hash",
+        "embedding",
+        "metadata",
+        "created_at",
     )
+    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
     objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
 
@@ -510,23 +571,69 @@ class CollectionEntity(ValidatedGraphModel):
                 name="kg_collection_entity_status_valid",
             ),
             models.UniqueConstraint(
-                fields=["artifact", "entity_type", "identifier"],
+                fields=[
+                    "artifact",
+                    "entity_type",
+                    "identifier",
+                    "version_signature",
+                ],
                 condition=~Q(identifier=""),
                 name="kg_collection_entity_identifier_unique",
             ),
             models.UniqueConstraint(
-                fields=["artifact", "entity_type", "normalized_label"],
-                condition=Q(identifier=""),
-                name="kg_collection_entity_label_fallback",
+                fields=["artifact", "cluster_key"],
+                name="kg_collection_entity_cluster_unique",
             ),
             models.CheckConstraint(
                 condition=Q(identifier="") | ~Q(identifier__regex=r"^\s+$"),
                 name="kg_collection_identifier_not_ws",
             ),
+            models.CheckConstraint(
+                condition=Q(cluster_key__regex=r"^[0-9a-f]{64}$"),
+                name="kg_collection_cluster_key_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(version_signature="")
+                | Q(version_signature__regex=r"^[a-z0-9][a-z0-9.+:/_-]*$"),
+                name="kg_collection_version_signature_valid",
+            ),
+            *(
+                models.CheckConstraint(
+                    condition=Q(**{f"{field_name}__gte": 0})
+                    & Q(**{f"{field_name}__lte": 1}),
+                    name=constraint_name,
+                )
+                for field_name, constraint_name in (
+                    ("extraction_confidence", "kg_collection_extract_conf_range"),
+                    ("resolution_confidence", "kg_collection_resolve_conf_range"),
+                    ("retrieval_utility", "kg_collection_utility_range"),
+                    ("promotion_confidence", "kg_collection_promotion_conf_range"),
+                )
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        embedding__isnull=True,
+                        embedding_model_signature="",
+                        embedding_input_hash="",
+                    )
+                    | (
+                        Q(embedding__isnull=False)
+                        & ~Q(embedding_model_signature="")
+                        & Q(embedding_input_hash__regex=r"^[0-9a-f]{64}$")
+                    )
+                ),
+                name="kg_collection_embedding_audit_complete",
+            ),
         ]
         indexes = [
             models.Index(
-                fields=["collection_id", "entity_type", "normalized_label"],
+                fields=[
+                    "artifact",
+                    "collection",
+                    "entity_type",
+                    "normalized_label",
+                ],
                 name="kg_collection_entity_lookup",
             )
         ]
@@ -542,20 +649,82 @@ class CollectionEntity(ValidatedGraphModel):
     def prepare_for_persistence(self) -> None:
         self._normalize_identifier()
 
+    def _raw_validation_errors(self) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        for field_name in (
+            "extraction_confidence",
+            "resolution_confidence",
+            "retrieval_utility",
+            "promotion_confidence",
+        ):
+            value = getattr(self, field_name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+            ):
+                errors[field_name] = "Score must be a finite non-boolean number."
+        return errors
+
     def clean(self):
         super().clean()
         self._normalize_identifier()
+        errors: dict[str, str] = {}
+        if not re.fullmatch(r"[0-9a-f]{64}", self.cluster_key or ""):
+            errors["cluster_key"] = "Cluster key must be a lowercase SHA-256 digest."
+        if self.version_signature and not re.fullmatch(
+            r"[a-z0-9][a-z0-9.+:/_-]*", self.version_signature
+        ):
+            errors["version_signature"] = "Version signature is not canonical."
+        for field_name in (
+            "extraction_confidence",
+            "resolution_confidence",
+            "retrieval_utility",
+            "promotion_confidence",
+        ):
+            value = getattr(self, field_name)
+            if not 0 <= value <= 1:
+                errors[field_name] = "Score must be in [0, 1]."
         if (
             self.artifact_id
             and self.artifact.scope_type != GraphArtifact.ScopeType.COLLECTION
         ):
-            raise ValidationError(
-                {"artifact": "Collection entities require a collection artifact."}
-            )
-        if self.artifact_id and self.collection_id != self.artifact.scope_id:
-            raise ValidationError(
-                {"collection_id": "Collection entity must match artifact scope."}
-            )
+            errors["artifact"] = "Collection entities require a collection artifact."
+        if self.artifact_id and str(self.collection_id) != self.artifact.scope_id:
+            errors["collection"] = "Collection entity must match artifact scope."
+        if (
+            self.artifact_id
+            and self.artifact.status != GraphArtifact.Status.BUILDING
+            and not self.pk
+        ):
+            errors["artifact"] = "Collection entities require a building artifact."
+        if self.embedding is None:
+            if self.embedding_model_signature or self.embedding_input_hash:
+                errors["embedding"] = "Missing embeddings cannot carry audit identity."
+        else:
+            try:
+                vector = tuple(float(value) for value in self.embedding)
+            except (TypeError, ValueError, OverflowError):
+                vector = ()
+            if len(vector) != 1024 or any(not isfinite(value) for value in vector):
+                errors["embedding"] = "Embedding must contain 1024 finite dimensions."
+            if (
+                self.embedding_model_signature
+                != self.artifact.embedding_model_signature
+            ):
+                errors["embedding_model_signature"] = (
+                    "Entity embedding signature must match its artifact."
+                )
+            if not re.fullmatch(r"[0-9a-f]{64}", self.embedding_input_hash or ""):
+                errors["embedding_input_hash"] = (
+                    "Embedding input hash must be a lowercase SHA-256 digest."
+                )
+        if self.status in {self.Status.SUPPRESSED, self.Status.REJECTED} and not (
+            self.filter_reason
+        ):
+            errors["filter_reason"] = "Filtered entities require a reason code."
+        if errors:
+            raise ValidationError(errors)
 
 
 class CanonicalEntity(ValidatedGraphModel):

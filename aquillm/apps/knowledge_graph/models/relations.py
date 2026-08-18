@@ -304,7 +304,7 @@ class CollectionRelationEvidence(ValidatedGraphModel):
         ):
             if endpoint.artifact_id != relation.artifact_id:
                 errors[field_name] = "Relation endpoint artifact must match."
-            elif endpoint.collection_id != artifact.scope_id:
+            elif str(endpoint.collection_id) != artifact.scope_id:
                 errors[field_name] = "Relation endpoint collection must match artifact."
 
         for field_name, endpoint in (("head", mention.head), ("tail", mention.tail)):
@@ -337,7 +337,7 @@ class CollectionRelationEvidence(ValidatedGraphModel):
                     errors[field_name] = (
                         "Evidence mapping artifact must match relation."
                     )
-                elif mapping.collection_entity.collection_id != artifact.scope_id:
+                elif str(mapping.collection_entity.collection_id) != artifact.scope_id:
                     errors[field_name] = (
                         "Evidence mapping collection must match relation."
                     )

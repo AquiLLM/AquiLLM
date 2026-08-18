@@ -679,6 +679,7 @@ def merge_ontology_extension(
             "base_version": base_version,
             "delta_checksum": delta.checksum,
             "delta_version": delta_version,
+            "enabled_entity_types": ",".join(sorted(delta.entity_types)),
         },
     )
 

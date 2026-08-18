@@ -1,8 +1,95 @@
 from __future__ import annotations
 
+import re
+import uuid
+
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from django.db.models import Q
+
+_DOCUMENT_SCOPE_PATTERN = (
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+_COLLECTION_SCOPE_PATTERN = r"^[1-9][0-9]*$"
+
+
+def canonical_graph_scope_id(scope_type: object, value: object) -> str:
+    """Return a canonical string for a document UUID or positive collection PK."""
+
+    if scope_type == "document":
+        if isinstance(value, bool):
+            raise ValidationError({"scope_id": "Document scope must be a UUID."})
+        try:
+            parsed = value if type(value) is uuid.UUID else uuid.UUID(str(value))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValidationError(
+                {"scope_id": "Document scope must be a canonical UUID."}
+            ) from exc
+        canonical = str(parsed)
+        if parsed.version is None or not re.fullmatch(
+            _DOCUMENT_SCOPE_PATTERN, canonical
+        ):
+            raise ValidationError(
+                {"scope_id": "Document scope must be a canonical RFC 4122 UUID."}
+            )
+        return canonical
+    if scope_type == "collection":
+        if isinstance(value, bool):
+            raise ValidationError(
+                {"scope_id": "Collection scope must be a positive decimal PK."}
+            )
+        if type(value) is int:
+            canonical = str(value)
+        elif type(value) is str:
+            canonical = value
+        else:
+            raise ValidationError(
+                {"scope_id": "Collection scope must be a positive decimal PK."}
+            )
+        if not re.fullmatch(_COLLECTION_SCOPE_PATTERN, canonical):
+            raise ValidationError(
+                {
+                    "scope_id": (
+                        "Collection scope must be a canonical positive decimal PK."
+                    )
+                }
+            )
+        return canonical
+    raise ValidationError({"scope_type": "Graph scope type is invalid."})
+
+
+def _validate_embedding_model_signature(scope_type: object, value: object) -> str:
+    if type(value) is not str:
+        raise ValidationError(
+            {"embedding_model_signature": "Embedding signature must be a string."}
+        )
+    if value != value.strip() or len(value) > 512 or "\x00" in value:
+        raise ValidationError(
+            {
+                "embedding_model_signature": (
+                    "Embedding signature must be trimmed, bounded, and safe."
+                )
+            }
+        )
+    if scope_type == "document" and value:
+        raise ValidationError(
+            {
+                "embedding_model_signature": (
+                    "Document artifacts must use an empty collection "
+                    "embedding signature."
+                )
+            }
+        )
+    if scope_type == "collection" and not value:
+        raise ValidationError(
+            {
+                "embedding_model_signature": (
+                    "Collection artifacts require a locked embedding signature."
+                )
+            }
+        )
+    return value
 
 
 class ValidatedGraphQuerySet(models.QuerySet):
@@ -141,7 +228,7 @@ class GraphArtifact(ValidatedGraphModel):
         SUPERSEDED = "superseded", "Superseded"
 
     scope_type = models.CharField(max_length=16, choices=ScopeType.choices)
-    scope_id = models.UUIDField()
+    scope_id = models.CharField(max_length=64)
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.BUILDING
     )
@@ -150,6 +237,7 @@ class GraphArtifact(ValidatedGraphModel):
     extractor_version = models.CharField(max_length=128)
     resolver_version = models.CharField(max_length=128)
     filter_policy_version = models.CharField(max_length=128)
+    embedding_model_signature = models.CharField(max_length=512, blank=True, default="")
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -164,6 +252,7 @@ class GraphArtifact(ValidatedGraphModel):
         "extractor_version",
         "resolver_version",
         "filter_policy_version",
+        "embedding_model_signature",
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
@@ -175,6 +264,23 @@ class GraphArtifact(ValidatedGraphModel):
             models.CheckConstraint(
                 condition=Q(scope_type__in=("document", "collection")),
                 name="kg_artifact_scope_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(scope_type="document", scope_id__regex=_DOCUMENT_SCOPE_PATTERN)
+                    | Q(
+                        scope_type="collection",
+                        scope_id__regex=_COLLECTION_SCOPE_PATTERN,
+                    )
+                ),
+                name="kg_artifact_typed_scope_id",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(scope_type="document", embedding_model_signature="")
+                    | (Q(scope_type="collection") & ~Q(embedding_model_signature=""))
+                ),
+                name="kg_artifact_embedding_signature_scope",
             ),
             models.CheckConstraint(
                 condition=Q(
@@ -224,6 +330,7 @@ class GraphArtifact(ValidatedGraphModel):
                     "extractor_version",
                     "resolver_version",
                     "filter_policy_version",
+                    "embedding_model_signature",
                 ],
                 name="kg_artifact_build_identity",
             ),
@@ -235,6 +342,19 @@ class GraphArtifact(ValidatedGraphModel):
             ),
             models.Index(fields=["source_hash"], name="kg_art_source_hash_idx"),
         ]
+
+    def prepare_for_persistence(self) -> None:
+        self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self.embedding_model_signature = _validate_embedding_model_signature(
+            self.scope_type, self.embedding_model_signature
+        )
+
+    def clean(self):
+        super().clean()
+        self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self.embedding_model_signature = _validate_embedding_model_signature(
+            self.scope_type, self.embedding_model_signature
+        )
 
 
 class GraphBuildRun(ValidatedGraphModel):
@@ -270,12 +390,13 @@ class GraphBuildRun(ValidatedGraphModel):
     scope_type = models.CharField(
         max_length=16, choices=GraphArtifact.ScopeType.choices
     )
-    scope_id = models.UUIDField()
+    scope_id = models.CharField(max_length=64)
     source_hash = models.CharField(max_length=64)
     ontology_version = models.CharField(max_length=128)
     extractor_version = models.CharField(max_length=128)
     resolver_version = models.CharField(max_length=128)
     filter_policy_version = models.CharField(max_length=128)
+    embedding_model_signature = models.CharField(max_length=512, blank=True, default="")
     stage = models.CharField(
         max_length=16, choices=Stage.choices, default=Stage.ONTOLOGY
     )
@@ -304,6 +425,7 @@ class GraphBuildRun(ValidatedGraphModel):
         "extractor_version",
         "resolver_version",
         "filter_policy_version",
+        "embedding_model_signature",
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
     _NULLABLE_IMMUTABLE_UPDATE_FIELDS = ("artifact", "artifact_id")
@@ -320,6 +442,23 @@ class GraphBuildRun(ValidatedGraphModel):
             models.CheckConstraint(
                 condition=Q(scope_type__in=GraphArtifact.ScopeType.values),
                 name="kg_build_scope_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(scope_type="document", scope_id__regex=_DOCUMENT_SCOPE_PATTERN)
+                    | Q(
+                        scope_type="collection",
+                        scope_id__regex=_COLLECTION_SCOPE_PATTERN,
+                    )
+                ),
+                name="kg_run_typed_scope_id",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(scope_type="document", embedding_model_signature="")
+                    | (Q(scope_type="collection") & ~Q(embedding_model_signature=""))
+                ),
+                name="kg_run_embedding_signature_scope",
             ),
             models.CheckConstraint(
                 condition=Q(
@@ -379,15 +518,24 @@ class GraphBuildRun(ValidatedGraphModel):
             "extractor_version",
             "resolver_version",
             "filter_policy_version",
+            "embedding_model_signature",
         ):
             setattr(self, field, getattr(artifact, field))
 
     def prepare_for_persistence(self) -> None:
         if not self.pk:
             self.populate_artifact_snapshot()
+        self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self.embedding_model_signature = _validate_embedding_model_signature(
+            self.scope_type, self.embedding_model_signature
+        )
 
     def clean(self):
         super().clean()
+        self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self.embedding_model_signature = _validate_embedding_model_signature(
+            self.scope_type, self.embedding_model_signature
+        )
         if self.artifact_id:
             artifact = GraphArtifact.objects.get(pk=self.artifact_id)
             expected = {

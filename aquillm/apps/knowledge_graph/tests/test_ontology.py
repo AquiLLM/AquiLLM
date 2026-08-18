@@ -341,6 +341,7 @@ def test_extension_merge_adds_alias_policy_and_new_relation_without_redefining_c
             _write(tmp_path, extension, "extension.yaml")
         ).checksum,
         "delta_version": "1.1.0",
+        "enabled_entity_types": "paper,venue",
     }
 
 

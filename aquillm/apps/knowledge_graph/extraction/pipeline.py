@@ -301,7 +301,7 @@ def validate_build_identity(
         raise ValueError("build run must be owned by the destination artifact")
     if artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT:
         raise ValueError("mention extraction requires a document artifact")
-    if artifact.scope_id != document_id:
+    if str(artifact.scope_id) != str(document_id):
         raise ValueError("destination artifact document does not match")
     if artifact.source_hash != expected_source_hash:
         raise ValueError("destination artifact source hash does not match")

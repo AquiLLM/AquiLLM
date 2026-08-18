@@ -9,6 +9,7 @@ from .entities import (
     DocumentEntityMention,
     EntityMention,
 )
+from .inputs import CollectionArtifactInput
 from .ontology import OntologyVersion
 from .relations import CollectionRelation, CollectionRelationEvidence, RelationMention
 
@@ -16,6 +17,7 @@ __all__ = [
     "CanonicalEntity",
     "CanonicalEntityLink",
     "CollectionEntity",
+    "CollectionArtifactInput",
     "CollectionEntityDocumentLink",
     "CollectionRelation",
     "CollectionRelationEvidence",

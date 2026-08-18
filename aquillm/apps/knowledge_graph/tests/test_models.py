@@ -22,6 +22,7 @@ from apps.documents.models import TextChunk
 from apps.knowledge_graph.models import (
     CanonicalEntity,
     CanonicalEntityLink,
+    CollectionArtifactInput,
     CollectionEntity,
     CollectionEntityDocumentLink,
     CollectionRelation,
@@ -36,7 +37,8 @@ from apps.knowledge_graph.models import (
 )
 
 DOCUMENT_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
-COLLECTION_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
+COLLECTION_ID = 22
+COLLECTION_EMBEDDING_SIGNATURE = "test-local:model@rev:dims=1024:prep=v1"
 
 
 def _database_is_reachable():
@@ -115,6 +117,13 @@ def _artifact(**overrides):
         "filter_policy_version": "filter-v1",
     }
     values.update(overrides)
+    values["scope_id"] = str(values["scope_id"])
+    if "embedding_model_signature" not in overrides:
+        values["embedding_model_signature"] = (
+            COLLECTION_EMBEDDING_SIGNATURE
+            if values["scope_type"] == GraphArtifact.ScopeType.COLLECTION
+            else ""
+        )
     return GraphArtifact(**values)
 
 
@@ -219,6 +228,10 @@ def test_graph_artifact_bulk_update_allows_lifecycle_status_changes():
 @database_required
 @pytest.mark.parametrize("model", [DocumentEntity, CollectionEntity])
 def test_identifier_first_database_uniqueness(model):
+    if model is CollectionEntity:
+        from apps.collections.models import Collection
+
+        Collection.objects.create(pk=COLLECTION_ID, name="KG uniqueness")
     artifact = _artifact(
         scope_type=(
             GraphArtifact.ScopeType.DOCUMENT
@@ -234,11 +247,14 @@ def test_identifier_first_database_uniqueness(model):
         else {"collection_id": COLLECTION_ID}
     )
     common = {"artifact": artifact, "entity_type": "model", **ownership}
-    document_fields = (
-        {"cluster_key": "1" * 64, "version_signature": "v1"}
-        if model is DocumentEntity
-        else {}
-    )
+    document_fields = {"cluster_key": "1" * 64, "version_signature": "v1"}
+    if model is CollectionEntity:
+        document_fields.update(
+            extraction_confidence=0.9,
+            resolution_confidence=0.9,
+            retrieval_utility=0.5,
+            promotion_confidence=0.0,
+        )
     model.objects.create(
         **common,
         **document_fields,
@@ -249,22 +265,20 @@ def test_identifier_first_database_uniqueness(model):
     with pytest.raises(ValidationError, match="identifier"):
         model.objects.create(
             **common,
-            **(
-                {"cluster_key": "2" * 64, "version_signature": "v1"}
-                if model is DocumentEntity
-                else {}
-            ),
+            **{
+                **document_fields,
+                "cluster_key": "2" * 64,
+            },
             label="Different label",
             normalized_label="different-label",
             identifier="stable-id",
         )
     model.objects.create(
         **common,
-        **(
-            {"cluster_key": "3" * 64, "version_signature": "v1"}
-            if model is DocumentEntity
-            else {}
-        ),
+        **{
+            **document_fields,
+            "cluster_key": "3" * 64,
+        },
         label="First",
         normalized_label="first",
         identifier="other-id",
@@ -289,7 +303,7 @@ def test_identifier_first_database_uniqueness(model):
 
 
 def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
-    assert GraphArtifact._meta.get_field("scope_id").get_internal_type() == "UUIDField"
+    assert GraphArtifact._meta.get_field("scope_id").get_internal_type() == "CharField"
     assert (
         GraphArtifact._meta.get_field("filter_policy_version").get_internal_type()
         == "CharField"
@@ -322,6 +336,7 @@ def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
         "extractor_version",
         "resolver_version",
         "filter_policy_version",
+        "embedding_model_signature",
     )
     assert {("scope_type", "scope_id", "status"), ("source_hash",)} <= _index_fields(
         GraphArtifact
@@ -652,9 +667,9 @@ def test_resolved_entities_are_explicitly_owned_and_only_resolved_nodes_have_vec
     assert not any(
         isinstance(field, VectorField) for field in DocumentEntity._meta.fields
     )
-    assert {("collection_id", "entity_type", "normalized_label")} <= _index_fields(
-        CollectionEntity
-    )
+    assert {
+        ("artifact", "collection", "entity_type", "normalized_label")
+    } <= _index_fields(CollectionEntity)
     assert {("entity_type", "normalized_label")} <= _index_fields(CanonicalEntity)
 
 
@@ -720,7 +735,7 @@ def test_collection_relation_rejects_cross_artifact_or_cross_collection_endpoint
     target = CollectionEntity(
         pk=11,
         artifact_id=2,
-        collection_id=uuid.uuid4(),
+        collection_id=COLLECTION_ID + 1,
         label="MMLU",
         normalized_label="mmlu",
         entity_type="benchmark",
@@ -775,13 +790,17 @@ def test_identifier_first_conditional_uniqueness_and_normalization():
         ).condition
         is not None
     )
+    assert not any(
+        constraint.name == "kg_collection_entity_label_fallback"
+        for constraint in CollectionEntity._meta.constraints
+    )
     assert (
         _constraint(
             CollectionEntity,
-            "kg_collection_entity_label_fallback",
+            "kg_collection_entity_cluster_unique",
             UniqueConstraint,
         ).condition
-        is not None
+        is None
     )
 
     entity = DocumentEntity(
@@ -1144,7 +1163,7 @@ def test_relation_evidence_rejects_endpoint_from_other_artifact_or_collection(
 ):
     evidence = _unsaved_relation_evidence()
     evidence.relation.target.artifact_id = 999
-    evidence.relation.target.collection_id = uuid.uuid4()
+    evidence.relation.target.collection_id = COLLECTION_ID + 1
     monkeypatch.setattr(
         evidence,
         "_endpoint_membership_is_active",
@@ -1360,15 +1379,44 @@ def test_graph_build_run_uses_fresh_snapshot_and_artifact_delete_sets_null():
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
+def _persist_collection_relation_fixture():
+    from django.contrib.auth.models import User
+
+    from apps.collections.models import Collection
+    from apps.documents.models import RawTextDocument
+
+    user = User.objects.create_user(
+        username=f"kg-model-{uuid.uuid4()}", password="unused"
+    )
+    collection = Collection.objects.create(
+        pk=COLLECTION_ID,
+        name=f"KG model fixture {uuid.uuid4()}",
+    )
+    document = RawTextDocument(
+        id=DOCUMENT_ID,
+        title="Aquilla",
+        full_text="Aquilla evaluates MMLU.",
+        collection=collection,
+        ingested_by=user,
+        full_text_hash=RawTextDocument.hash_fn("Aquilla evaluates MMLU."),
+    )
+    document.save(dont_rechunk=True)
     collection_artifact = _artifact(
         scope_type=GraphArtifact.ScopeType.COLLECTION,
         scope_id=COLLECTION_ID,
-        status=GraphArtifact.Status.ACTIVE,
+        status=GraphArtifact.Status.BUILDING,
     )
     collection_artifact.save()
     document_artifact = _artifact(status=GraphArtifact.Status.ACTIVE)
     document_artifact.save()
+    manifest = CollectionArtifactInput.objects.create(
+        artifact=collection_artifact,
+        collection=collection,
+        document_id=DOCUMENT_ID,
+        document_artifact=document_artifact,
+        source_signature="0" * 64,
+        build_signature="0" * 64,
+    )
     chunk = _chunk()
     head = _mention(document_artifact, chunk)
     tail = _mention(
@@ -1420,16 +1468,26 @@ def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
     source = CollectionEntity.objects.create(
         artifact=collection_artifact,
         collection_id=COLLECTION_ID,
+        cluster_key="3" * 64,
         label="Aquilla",
         normalized_label="aquilla",
         entity_type="model",
+        extraction_confidence=0.9,
+        resolution_confidence=0.9,
+        retrieval_utility=0.5,
+        promotion_confidence=0.0,
     )
     target = CollectionEntity.objects.create(
         artifact=collection_artifact,
         collection_id=COLLECTION_ID,
+        cluster_key="4" * 64,
         label="MMLU",
         normalized_label="mmlu",
         entity_type="benchmark",
+        extraction_confidence=0.9,
+        resolution_confidence=0.9,
+        retrieval_utility=0.5,
+        promotion_confidence=0.0,
     )
     relation = CollectionRelation.objects.create(
         artifact=collection_artifact,
@@ -1440,18 +1498,28 @@ def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
         confidence=0.8,
     )
     head_mapping = CollectionEntityDocumentLink.objects.create(
+        artifact=collection_artifact,
+        manifest_input=manifest,
         document_entity=head_document_entity,
         collection_entity=source,
         score=0.9,
         method="exact",
         resolver_version=collection_artifact.resolver_version,
+        outcome=CollectionEntityDocumentLink.Outcome.AUTOMATIC,
+        decision_checksum="5" * 64,
+        reason="exact",
     )
     tail_mapping = CollectionEntityDocumentLink.objects.create(
+        artifact=collection_artifact,
+        manifest_input=manifest,
         document_entity=tail_document_entity,
         collection_entity=target,
         score=0.9,
         method="exact",
         resolver_version=collection_artifact.resolver_version,
+        outcome=CollectionEntityDocumentLink.Outcome.AUTOMATIC,
+        decision_checksum="6" * 64,
+        reason="exact",
     )
     evidence = CollectionRelationEvidence.objects.create(
         relation=relation,
@@ -1459,16 +1527,35 @@ def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
         head_mapping=head_mapping,
         tail_mapping=tail_mapping,
     )
+    return SimpleNamespace(
+        collection_artifact=collection_artifact,
+        document_artifact=document_artifact,
+        relation_mention=relation_mention,
+        relation=relation,
+        head_mapping=head_mapping,
+        tail_mapping=tail_mapping,
+        evidence=evidence,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
+    fixture = _persist_collection_relation_fixture()
+    head_mapping = fixture.head_mapping
+    tail_mapping = fixture.tail_mapping
     mapping_ids = (head_mapping.pk, tail_mapping.pk)
 
     with pytest.raises(RestrictedError):
         head_mapping.delete()
-    collection_artifact.delete()
+    fixture.collection_artifact.delete()
 
-    assert not CollectionRelationEvidence.objects.filter(pk=evidence.pk).exists()
+    assert not CollectionRelationEvidence.objects.filter(
+        pk=fixture.evidence.pk
+    ).exists()
     assert not CollectionEntityDocumentLink.objects.filter(pk__in=mapping_ids).exists()
-    assert not CollectionRelation.objects.filter(pk=relation.pk).exists()
-    assert RelationMention.objects.filter(pk=relation_mention.pk).exists()
+    assert not CollectionRelation.objects.filter(pk=fixture.relation.pk).exists()
+    assert RelationMention.objects.filter(pk=fixture.relation_mention.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1476,111 +1563,19 @@ def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
 def test_relation_evidence_preserves_each_unique_support_and_cascades_with_mention(
     django_assert_num_queries,
 ):
-    collection_artifact = _artifact(
-        scope_type=GraphArtifact.ScopeType.COLLECTION,
-        scope_id=COLLECTION_ID,
-        status=GraphArtifact.Status.ACTIVE,
-    )
-    collection_artifact.save()
-    document_artifact = _artifact(status=GraphArtifact.Status.ACTIVE)
-    document_artifact.save()
-    chunk = _chunk()
-    head = _mention(document_artifact, chunk)
-    tail = _mention(
-        document_artifact,
-        chunk,
-        start=18,
-        end=22,
-        raw_text="MMLU",
-        normalized_text="mmlu",
-        entity_type="benchmark",
-    )
-    mention = RelationMention.objects.create(
-        artifact=document_artifact,
-        document_id=DOCUMENT_ID,
-        chunk=chunk,
-        head=head,
-        tail=tail,
-        relation_type="evaluates_on",
-        extraction_confidence=0.8,
-    )
-    head_document_entity = DocumentEntity.objects.create(
-        artifact=document_artifact,
-        document_id=DOCUMENT_ID,
-        cluster_key="1" * 64,
-        label="Aquilla",
-        normalized_label="aquilla",
-        entity_type="model",
-    )
-    tail_document_entity = DocumentEntity.objects.create(
-        artifact=document_artifact,
-        document_id=DOCUMENT_ID,
-        cluster_key="2" * 64,
-        label="MMLU",
-        normalized_label="mmlu",
-        entity_type="benchmark",
-    )
-    DocumentEntityMention.objects.create(
-        document_entity=head_document_entity,
-        mention=head,
-        method=DocumentEntityMention.Method.ROOT,
-        resolver_version=document_artifact.resolver_version,
-    )
-    DocumentEntityMention.objects.create(
-        document_entity=tail_document_entity,
-        mention=tail,
-        method=DocumentEntityMention.Method.ROOT,
-        resolver_version=document_artifact.resolver_version,
-    )
-    source = CollectionEntity.objects.create(
-        artifact=collection_artifact,
-        collection_id=COLLECTION_ID,
-        label="Aquilla",
-        normalized_label="aquilla",
-        entity_type="model",
-    )
-    target = CollectionEntity.objects.create(
-        artifact=collection_artifact,
-        collection_id=COLLECTION_ID,
-        label="MMLU",
-        normalized_label="mmlu",
-        entity_type="benchmark",
-    )
-    relation = CollectionRelation.objects.create(
-        artifact=collection_artifact,
-        source=source,
-        target=target,
-        relation_type="evaluates_on",
-        support_count=1,
-        confidence=0.8,
-    )
-    head_mapping = CollectionEntityDocumentLink.objects.create(
-        document_entity=head_document_entity,
-        collection_entity=source,
-        score=0.9,
-        method="exact",
-        resolver_version=collection_artifact.resolver_version,
-    )
-    tail_mapping = CollectionEntityDocumentLink.objects.create(
-        document_entity=tail_document_entity,
-        collection_entity=target,
-        score=0.9,
-        method="exact",
-        resolver_version=collection_artifact.resolver_version,
-    )
-    evidence = CollectionRelationEvidence(
-        relation=relation,
-        relation_mention=mention,
-        head_mapping=head_mapping,
-        tail_mapping=tail_mapping,
-    )
+    fixture = _persist_collection_relation_fixture()
+    mention = fixture.relation_mention
+    relation = fixture.relation
+    head_mapping = fixture.head_mapping
+    tail_mapping = fixture.tail_mapping
+    evidence = fixture.evidence
 
     head_mapping.status = CollectionEntityDocumentLink.Status.SUPPRESSED
-    head_mapping.save(update_fields=["status"])
+    with pytest.raises(ValidationError, match="immutable"):
+        head_mapping.save(update_fields=["status"])
     with pytest.raises(ValidationError, match="active"):
         evidence.clean()
-    head_mapping.status = CollectionEntityDocumentLink.Status.ACTIVE
-    head_mapping.save(update_fields=["status"])
+    head_mapping.refresh_from_db()
     with django_assert_num_queries(2):
         evidence.clean()
     evidence.save()

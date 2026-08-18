@@ -2062,6 +2062,7 @@ def test_committed_resolution_state_rejects_extra_inactive_rows():
         version_signature=cluster.version_signature,
         entity_type=cluster.entity_type,
         identifier=cluster.identifier,
+        resolution_confidence=cluster.confidence,
         metadata={
             "resolver_version": result.resolver_version,
             "methods": sorted(
@@ -2140,6 +2141,7 @@ def test_singleton_resolution_rows_match_exact_link_provenance_idempotently():
         version_signature=cluster.version_signature,
         entity_type=cluster.entity_type,
         identifier=cluster.identifier,
+        resolution_confidence=cluster.confidence,
         metadata={
             "resolver_version": result.resolver_version,
             "methods": ["singleton"],
