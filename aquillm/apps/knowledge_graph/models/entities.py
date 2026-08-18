@@ -298,6 +298,11 @@ class DocumentEntity(ValidatedGraphModel):
                 condition=Q(cluster_key__regex=r"^[0-9a-f]{64}$"),
                 name="kg_document_cluster_key_valid",
             ),
+            models.CheckConstraint(
+                condition=Q(version_signature="")
+                | Q(version_signature__regex=(r"^[a-z0-9][a-z0-9.+:/_-]*$")),
+                name="kg_document_version_signature_valid",
+            ),
         ]
         indexes = [
             models.Index(
@@ -323,6 +328,20 @@ class DocumentEntity(ValidatedGraphModel):
         if not re.fullmatch(r"[0-9a-f]{64}", self.cluster_key or ""):
             raise ValidationError(
                 {"cluster_key": "Cluster key must be a lowercase SHA-256 digest."}
+            )
+        if not isinstance(self.version_signature, str) or (
+            self.version_signature
+            and (
+                len(self.version_signature) > 128
+                or not re.fullmatch(r"[a-z0-9][a-z0-9.+:/_-]*", self.version_signature)
+            )
+        ):
+            raise ValidationError(
+                {
+                    "version_signature": (
+                        "Version signature must use canonical lower-ASCII tokens."
+                    )
+                }
             )
         if (
             self.artifact_id

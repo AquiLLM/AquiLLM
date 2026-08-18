@@ -53,7 +53,7 @@ def test_version_signature_preserves_compound_release_qualifiers():
     versionless = normalize_entity_label("Llama")
 
     assert normalized.base_key == "llama"
-    assert normalized.version_signature == "3.1 8b instruct"
+    assert normalized.version_signature == "3.1+8b+instruct"
     assert versionless.base_key == "llama"
     assert versionless.version_signature is None
 
@@ -66,7 +66,7 @@ def test_version_signature_preserves_compound_release_qualifiers():
         ("DeepSeek-R2", "deepseek", "r2"),
         ("Orion/rc2", "orion", "rc2"),
         ("Llama:8B", "llama", "8b"),
-        ("Llama-3.1-8B-Instruct", "llama", "3.1 8b instruct"),
+        ("Llama-3.1-8B-Instruct", "llama", "3.1+8b+instruct"),
     ],
 )
 def test_version_signatures_are_detected_across_preserved_separators(
@@ -163,6 +163,12 @@ def test_normalization_does_not_collapse_distinct_names_or_versions(left, right)
             "github.com/fastino-ai/gliner2",
             "repository:github.com/fastino-ai/gliner2",
         ),
+        (
+            "repository:github.com/fastino-ai/gliner2",
+            "repository",
+            "github.com/fastino-ai/gliner2",
+            "repository:github.com/fastino-ai/gliner2",
+        ),
     ],
 )
 def test_stable_identifiers_are_parsed_to_typed_canonical_values(
@@ -207,7 +213,7 @@ def test_normalization_rejects_non_text_or_empty_labels(raw):
         normalize_entity_label(raw)
 
 
-@pytest.mark.parametrize("raw", ["\x00Orion", "\x01", "\u200b"])
+@pytest.mark.parametrize("raw", ["\x00Orion", "\x01", "\u200b", "Orion\u202e"])
 def test_normalization_rejects_unpersistable_or_control_only_labels(raw):
     with pytest.raises(ValueError, match="control|meaningful"):
         normalize_entity_label(raw)

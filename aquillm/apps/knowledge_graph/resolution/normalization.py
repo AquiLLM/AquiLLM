@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlsplit
 _MAX_LABEL_CHARACTERS = 4_096
 _MAX_IDENTIFIER_CHARACTERS = 2_048
 _MAX_NORMALIZED_LABEL_CHARACTERS = 512
+_MAX_VERSION_SIGNATURE_CHARACTERS = 128
 _QUOTES = frozenset("'\"`\u00b4\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u201f")
 _SEMANTIC_SYMBOLS = frozenset("+/#:")
 _VERSION_TOKEN = re.compile(
@@ -30,6 +31,7 @@ _ARXIV_OLD = re.compile(
 _ORCID = re.compile(r"[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X]", re.I)
 _REPOSITORY_COMPONENT = re.compile(r"[A-Za-z0-9_.\-]+")
 _REPOSITORY_HOSTS = frozenset(("github.com", "gitlab.com", "bitbucket.org"))
+_VERSION_SIGNATURE = re.compile(r"[a-z0-9][a-z0-9.+:/_-]*")
 
 
 def _require_nonempty_bounded_text(
@@ -45,7 +47,7 @@ def _require_nonempty_bounded_text(
     if any(
         character == "\x00"
         or (
-            unicodedata.category(character) in {"Cc", "Cs"}
+            unicodedata.category(character) in {"Cc", "Cf", "Cs"}
             and character not in "\t\n\r"
         )
         for character in value
@@ -68,6 +70,11 @@ class NormalizedEntityLabel:
             raise ValueError("normalized labels must be nonempty")
         if len(self.key) > _MAX_NORMALIZED_LABEL_CHARACTERS:
             raise ValueError("normalized label exceeds persistence limit")
+        if self.version_signature is not None and (
+            len(self.version_signature) > _MAX_VERSION_SIGNATURE_CHARACTERS
+            or not _VERSION_SIGNATURE.fullmatch(self.version_signature)
+        ):
+            raise ValueError("version signature is not canonical lower ASCII")
 
     @property
     def version_suffix(self) -> str:
@@ -165,7 +172,7 @@ def _split_version_signature(key: str) -> tuple[str, str | None]:
             or token in _RELEASE_QUALIFIERS
             for token in suffix
         ):
-            return " ".join(tokens[:index]), " ".join(suffix)
+            return " ".join(tokens[:index]), "+".join(suffix)
     return key, None
 
 
@@ -249,12 +256,20 @@ def _orcid_identifier(raw: str) -> StableIdentifier | None:
 
 def _repository_identifier(raw: str) -> StableIdentifier | None:
     candidate = raw
+    canonical = re.fullmatch(
+        r"repository:(github\.com|gitlab\.com|bitbucket\.org)/(.+)",
+        candidate,
+        re.IGNORECASE,
+    )
     scp = re.fullmatch(
         r"git@(?P<host>github\.com|gitlab\.com|bitbucket\.org):(?P<path>[^\s]+)",
         candidate,
         re.IGNORECASE,
     )
-    if scp is not None:
+    if canonical is not None:
+        host = canonical.group(1).casefold()
+        path = canonical.group(2)
+    elif scp is not None:
         host = scp.group("host").casefold()
         path = scp.group("path")
     elif candidate.casefold().startswith("ssh://"):

@@ -11,17 +11,20 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from itertools import combinations, islice
 from math import isfinite
+from uuid import UUID
 
 from . import DOCUMENT_RESOLVER_VERSION
 from .normalization import normalize_entity_label, parse_stable_identifier
 
 MAX_DOCUMENT_MENTIONS = 512
 _MAX_SOURCE_TEXT_CHARACTERS = 1_000_000
+_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS = 2_000_000
 _MAX_IDENTIFIER_CHARACTERS = 2_048
 _MAX_SOURCE_KEY_CHARACTERS = 512
 _MAX_MENTION_ID_CHARACTERS = 128
 _MAX_ENTITY_TYPE_CHARACTERS = 128
 _HASH = re.compile(r"[0-9a-f]{64}")
+_VERSION_SIGNATURE = re.compile(r"[a-z0-9][a-z0-9.+:/_-]*")
 _MISSING = object()
 _ACRONYM = re.compile(r"[A-Z][A-Z0-9-]{1,11}")
 _WORD = re.compile(r"[A-Za-z0-9]+")
@@ -79,6 +82,22 @@ def _require_string(value: object, field_name: str) -> str:
     return value
 
 
+def _contains_unsafe_control(
+    value: str,
+    *,
+    allow_text_whitespace: bool,
+    allow_format_controls: bool = False,
+) -> bool:
+    allowed = {"\t", "\n", "\r"} if allow_text_whitespace else set()
+    for character in value:
+        category = unicodedata.category(character)
+        if character not in allowed and category in {"Cc", "Cs"}:
+            return True
+        if not allow_format_controls and category == "Cf":
+            return True
+    return False
+
+
 def _mention_key(value: object) -> str:
     if isinstance(value, bool) or value is None:
         raise ValueError("mention_id must be a stable nonempty scalar")
@@ -92,7 +111,7 @@ def _mention_key(value: object) -> str:
         raise ValueError(
             f"mention_id exceeds the {_MAX_MENTION_ID_CHARACTERS}-character limit"
         )
-    if "\x00" in key:
+    if _contains_unsafe_control(key, allow_text_whitespace=False):
         raise ValueError("mention_id contains an unsafe control character")
     return key
 
@@ -118,7 +137,11 @@ def _validated_source_text(value: object) -> str:
         raise ValueError(
             f"source text exceeds the {_MAX_SOURCE_TEXT_CHARACTERS}-character limit"
         )
-    if "\x00" in value:
+    if _contains_unsafe_control(
+        value,
+        allow_text_whitespace=True,
+        allow_format_controls=True,
+    ):
         raise ValueError("source text contains an unsafe control character")
     return value
 
@@ -130,19 +153,19 @@ def _validated_identifier(value: object) -> str:
         raise ValueError(
             f"identifier exceeds the {_MAX_IDENTIFIER_CHARACTERS}-character limit"
         )
-    if "\x00" in value:
+    if _contains_unsafe_control(value, allow_text_whitespace=False):
         raise ValueError("identifier contains an unsafe control character")
     return value
 
 
 def _validated_source_key(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError("source key must be a string")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("source key must be a nonempty string")
     if len(value) > _MAX_SOURCE_KEY_CHARACTERS:
         raise ValueError(
             f"source key exceeds the {_MAX_SOURCE_KEY_CHARACTERS}-character limit"
         )
-    if "\x00" in value:
+    if _contains_unsafe_control(value, allow_text_whitespace=False):
         raise ValueError("source key contains an unsafe control character")
     return value
 
@@ -153,9 +176,29 @@ def _validated_entity_type(value: object) -> str:
         raise ValueError(
             f"entity_type exceeds the {_MAX_ENTITY_TYPE_CHARACTERS}-character limit"
         )
-    if "\x00" in entity_type:
+    if _contains_unsafe_control(entity_type, allow_text_whitespace=False):
         raise ValueError("entity_type contains an unsafe control character")
     return entity_type
+
+
+def _canonical_uuid(value: object, field_name: str, *, optional: bool = False) -> str:
+    if optional and (value is None or (isinstance(value, str) and value == "")):
+        return ""
+    if not isinstance(value, (str, UUID)):
+        raise ValueError(f"{field_name} must be a UUID")
+    if isinstance(value, str) and len(value) > 64:
+        raise ValueError(f"{field_name} exceeds the 64-character UUID limit")
+    try:
+        parsed = value if isinstance(value, UUID) else UUID(str(value))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a UUID") from exc
+    return str(parsed)
+
+
+def _positive_chunk_id(value: object) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError("chunk_id must be a positive integer")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +232,11 @@ class DocumentMention:
         if type(self.source_offset) is not int or self.source_offset < 0:
             raise ValueError("source_offset must be a nonnegative integer")
         _validated_identifier(self.identifier)
-        _validated_source_key(self.source_key)
+        if self.source_key != "":
+            _validated_source_key(self.source_key)
+        _canonical_uuid(self.document_id, "document_id")
+        _positive_chunk_id(self.chunk_id)
+        _canonical_uuid(self.content_object_id, "content_object_id", optional=True)
         if self.position_basis not in {"document_global", "chunk_content"}:
             raise ValueError("position_basis must be document_global or chunk_content")
         _confidence(self.confidence)
@@ -275,14 +322,30 @@ class ResolvedCluster:
         if (
             not isinstance(self.version_signature, str)
             or len(self.version_signature) > 128
+            or (
+                self.version_signature
+                and not _VERSION_SIGNATURE.fullmatch(self.version_signature)
+            )
         ):
-            raise ValueError("version_signature must be a bounded string")
+            raise ValueError("version_signature must be blank or canonical lower ASCII")
         if not isinstance(self.identifier, str):
             raise ValueError("identifier must be a string")
+        if len(self.identifier) > 255:
+            raise ValueError("identifier exceeds the persistence limit")
+        if self.identifier:
+            parsed_identifier = parse_stable_identifier(self.identifier)
+            if (
+                parsed_identifier is None
+                or parsed_identifier.canonical != self.identifier
+            ):
+                raise ValueError(
+                    "identifier must be an exact canonical stable identifier"
+                )
         _confidence(self.confidence)
         membership_by_id = {item.mention_id: item for item in self.memberships}
         roots = [item for item in self.memberships if item.parent_mention_id is None]
-        if len(roots) != 1 or roots[0].method != "root":
+        expected_root_method = "singleton" if len(self.mention_ids) == 1 else "root"
+        if len(roots) != 1 or roots[0].method != expected_root_method:
             raise ValueError("cluster memberships require exactly one explicit root")
         root_id = roots[0].mention_id
         for membership in self.memberships:
@@ -290,7 +353,7 @@ class ResolvedCluster:
                 continue
             if (
                 membership.parent_mention_id not in membership_by_id
-                or membership.method == "root"
+                or membership.method in {"root", "singleton"}
             ):
                 raise ValueError("non-root membership requires a valid parent edge")
             seen: set[str] = set()
@@ -439,28 +502,28 @@ def _ontology_type_index(ontology: object) -> tuple[dict[str, str], str]:
     for map_name, definition in sorted(
         entity_types.items(), key=lambda item: str(item[0])
     ):
+        validated_map_name = _validated_ontology_type_text(
+            map_name, "ontology type map key"
+        )
         name = _value(definition, "name", map_name)
-        canonical = unicodedata.normalize("NFKC", _require_string(name, "type name"))
-        canonical = " ".join(canonical.casefold().split())
+        canonical = _validated_ontology_type_text(name, "ontology type name")
         aliases = _value(definition, "aliases", ())
         if not isinstance(aliases, (tuple, list)):
             raise ValueError("ontology type aliases must be a tuple or list")
-        for label in (map_name, name, *aliases):
-            alias = unicodedata.normalize("NFKC", _require_string(label, "type alias"))
-            alias = " ".join(alias.casefold().split())
+        validated_aliases = tuple(
+            _validated_ontology_type_text(alias, "ontology type alias")
+            for alias in aliases
+        )
+        for alias in (validated_map_name, canonical, *validated_aliases):
             previous = index.get(alias)
             if previous is not None and previous != canonical:
                 raise ValueError(f"ambiguous ontology type alias: {alias}")
             index[alias] = canonical
         checksum_records.append(
             {
+                "map_name": validated_map_name,
                 "name": canonical,
-                "aliases": sorted(
-                    " ".join(
-                        unicodedata.normalize("NFKC", str(alias)).casefold().split()
-                    )
-                    for alias in aliases
-                ),
+                "aliases": sorted(validated_aliases),
             }
         )
     persisted_checksum = _value(ontology, "checksum", "")
@@ -479,6 +542,24 @@ def _ontology_type_index(ontology: object) -> tuple[dict[str, str], str]:
         ).encode("utf-8")
         checksum = sha256(encoded).hexdigest()
     return index, checksum
+
+
+def _validated_ontology_type_text(value: object, field_name: str) -> str:
+    raw = _require_string(value, field_name)
+    if len(raw) > _MAX_ENTITY_TYPE_CHARACTERS:
+        raise ValueError(
+            f"{field_name} exceeds the {_MAX_ENTITY_TYPE_CHARACTERS}-character limit"
+        )
+    if _contains_unsafe_control(raw, allow_text_whitespace=False):
+        raise ValueError(f"{field_name} contains an unsafe control character")
+    normalized = " ".join(unicodedata.normalize("NFKC", raw).casefold().split())
+    if not normalized:
+        raise ValueError(f"{field_name} must be a nonempty string")
+    if len(normalized) > _MAX_ENTITY_TYPE_CHARACTERS:
+        raise ValueError(
+            f"{field_name} exceeds the {_MAX_ENTITY_TYPE_CHARACTERS}-character limit"
+        )
+    return normalized
 
 
 def _metadata_identifier(mention: object) -> object:
@@ -511,25 +592,29 @@ def _source_context(mention: object) -> tuple[str, int]:
 
 
 def _source_identity(mention: object) -> tuple[str, str, str, str, str]:
-    document_id = str(_value(mention, "document_id", "") or "")
-    chunk_id = str(_value(mention, "chunk_id", "") or "")
+    document_id = _canonical_uuid(_value(mention, "document_id"), "document_id")
+    chunk_id = _positive_chunk_id(_value(mention, "chunk_id"))
     position_basis = _value(mention, "position_basis", "document_global")
-    content_object_id = str(_value(mention, "content_object_id", "") or "")
-    explicit_source_key = _value(mention, "source_key", "")
+    content_object_id = _canonical_uuid(
+        _value(mention, "content_object_id"),
+        "content_object_id",
+        optional=True,
+    )
+    explicit_source_key = _value(mention, "source_key", _MISSING)
     if position_basis not in {"document_global", "chunk_content"}:
         raise ValueError("mention position_basis is invalid")
-    if explicit_source_key:
+    if explicit_source_key is not _MISSING and explicit_source_key != "":
         source_key = _validated_source_key(explicit_source_key)
     elif position_basis == "document_global":
-        source_key = f"document:{document_id or 'unknown'}"
+        source_key = f"document:{document_id}"
     elif content_object_id:
         source_key = f"content:{content_object_id}"
     else:
-        source_key = f"chunk:{chunk_id or 'unknown'}"
+        source_key = f"chunk:{chunk_id}"
     return (
         document_id,
         _validated_source_key(source_key),
-        chunk_id,
+        str(chunk_id),
         position_basis,
         content_object_id,
     )
@@ -644,6 +729,9 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
     if len(bounded) > MAX_DOCUMENT_MENTIONS:
         raise ValueError(f"document mention cap exceeded ({MAX_DOCUMENT_MENTIONS})")
     records: list[dict[str, object]] = []
+    source_contexts: dict[tuple[str, int, str], dict[str, object]] = {}
+    aggregate_source_characters = 0
+    document_id_seen: str | None = None
     for mention in bounded:
         mention_id = _value(mention, "mention_id")
         if mention_id is None:
@@ -660,8 +748,33 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
         validated_raw_text = _require_string(raw_text, "raw_text")
         normalize_entity_label(validated_raw_text)
         validated_entity_type = _validated_entity_type(entity_type)
-        source_text, source_offset = _source_context(mention)
         document_id, source_key, chunk_id, basis, content_id = _source_identity(mention)
+        if document_id_seen is None:
+            document_id_seen = document_id
+        elif document_id != document_id_seen:
+            raise ValueError("mentions must belong to a single document")
+        source_text, source_offset = _source_context(mention)
+        context_key = (source_key, source_offset, source_text)
+        context_record = source_contexts.get(context_key)
+        if context_record is None:
+            aggregate_source_characters += len(source_text)
+            if aggregate_source_characters > _MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS:
+                raise ValueError(
+                    "aggregate unique source context exceeds the "
+                    f"{_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS}-character limit"
+                )
+            context_digest = _source_context_digest(
+                source_key=source_key,
+                source_offset=source_offset,
+                source_text=source_text,
+            )
+            context_record = {
+                "digest": context_digest,
+                "source_key": source_key,
+                "source_offset": source_offset,
+                "character_count": len(source_text),
+            }
+            source_contexts[context_key] = context_record
         records.append(
             {
                 "mention_id": _mention_key(mention_id),
@@ -676,8 +789,7 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
                 "entity_type": validated_entity_type,
                 "identifier": str(_metadata_identifier(mention) or ""),
                 "confidence": _confidence(confidence),
-                "source_text": source_text,
-                "source_offset": source_offset,
+                "source_context_digest": context_record["digest"],
             }
         )
     records.sort(
@@ -691,13 +803,35 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
     mention_ids = [record["mention_id"] for record in records]
     if len(set(mention_ids)) != len(mention_ids):
         raise ValueError("mention IDs must be unique within a document")
+    payload = {
+        "source_contexts": sorted(
+            source_contexts.values(),
+            key=lambda item: (
+                item["source_key"],
+                item["source_offset"],
+                item["digest"],
+            ),
+        ),
+        "mentions": records,
+    }
     encoded = json.dumps(
-        records,
+        payload,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+def _source_context_digest(
+    *, source_key: str, source_offset: int, source_text: str
+) -> str:
+    digest = sha256()
+    for value in (source_key, str(source_offset), source_text):
+        encoded = value.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
 
 
 def _is_acronym(value: str) -> bool:
@@ -724,6 +858,7 @@ def _acronym_key(value: str) -> str:
 
 
 def _initialism(value: str) -> str:
+    value = unicodedata.normalize("NFKC", value)
     words = [
         word
         for word in _WORD.findall(value)
@@ -939,13 +1074,6 @@ def _decide_pair(
             "incompatible_entity_types",
             "ontology entity types are incompatible",
         )
-    if left.is_pronoun or right.is_pronoun:
-        return _rejected(
-            left,
-            right,
-            "pronoun_only",
-            "pronoun-only references are not resolved in version one",
-        )
     if left.identifier and right.identifier:
         if left.identifier != right.identifier:
             return _rejected(
@@ -968,6 +1096,13 @@ def _decide_pair(
     if left.identifier and left.identifier == right.identifier:
         return _accepted(
             left, right, "stable_identifier", "exact stable identifiers agree"
+        )
+    if left.is_pronoun or right.is_pronoun:
+        return _rejected(
+            left,
+            right,
+            "pronoun_only",
+            "pronoun-only references are not resolved in version one",
         )
     name_block = (left.entity_type, left.normalized_label)
     if (
@@ -1181,11 +1316,14 @@ def _build_clusters(
                     (decision.left_mention_id, decision)
                 )
         mention_by_id = {item.mention_id: item for item in ordered}
+        singleton = len(ordered) == 1
         membership_by_id = {
             representative.mention_id: ClusterMembership(
                 mention_id=representative.mention_id,
-                method="root",
-                reason="Deterministic cluster root.",
+                method="singleton" if singleton else "root",
+                reason=(
+                    "Singleton cluster." if singleton else "Deterministic cluster root."
+                ),
                 parent_mention_id=None,
             )
         }

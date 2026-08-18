@@ -27,7 +27,14 @@ from apps.knowledge_graph.resolution.persistence import (
 )
 
 DOCUMENT_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
+OTHER_DOCUMENT_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
+CONTENT_OBJECT_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
 RESOLVER_VERSION = DOCUMENT_RESOLVER_VERSION
+
+
+class _UUIDLikeObject:
+    def __str__(self):
+        return str(DOCUMENT_ID)
 
 
 def _ontology():
@@ -55,6 +62,8 @@ def _mention(mention_id, raw_text, entity_type="method", start=0, **overrides):
         "source_offset": 0,
         "identifier": "",
         "confidence": 0.9,
+        "document_id": DOCUMENT_ID,
+        "chunk_id": 1,
     }
     values.update(overrides)
     return DocumentMention(**values)
@@ -229,6 +238,57 @@ def test_exact_stable_identifier_clusters_differently_formatted_mentions():
     assert _cluster_ids(result) == {frozenset(("url", "prefixed"))}
     assert result.clusters[0].identifier == "doi:10.5555/12345678"
     assert _decision(result, "url", "prefixed").method == "stable_identifier"
+
+
+def test_exact_stable_identifier_precedes_pronoun_only_resolution_rejection():
+    identifier = "https://github.com/example/orion"
+    result = resolve_document_mentions(
+        (
+            _mention("pronoun-one", "it", "model", identifier=identifier),
+            _mention(
+                "named",
+                "Orion",
+                "model",
+                start=20,
+                identifier=identifier,
+            ),
+            _mention(
+                "pronoun-two",
+                "they",
+                "model",
+                start=40,
+                identifier=identifier,
+            ),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {frozenset(("pronoun-one", "named", "pronoun-two"))}
+    assert {decision.method for decision in result.decisions} == {"stable_identifier"}
+    assert all(decision.accepted for decision in result.decisions)
+    memberships = {
+        membership.mention_id: membership
+        for membership in result.clusters[0].memberships
+    }
+    assert memberships["named"].method == "root"
+    assert memberships["named"].parent_mention_id is None
+    assert memberships["pronoun-one"].method == "stable_identifier"
+    assert memberships["pronoun-one"].parent_mention_id == "named"
+    assert memberships["pronoun-two"].method == "stable_identifier"
+    assert memberships["pronoun-two"].parent_mention_id == "pronoun-one"
+
+
+def test_pronoun_only_mentions_without_an_authoritative_identifier_stay_separate():
+    result = resolve_document_mentions(
+        (
+            _mention("one", "it", "model"),
+            _mention("two", "they", "model", start=20),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {frozenset(("one",)), frozenset(("two",))}
+    assert _decision(result, "one", "two").method == "pronoun_only"
 
 
 @pytest.mark.parametrize(
@@ -420,6 +480,23 @@ def test_nfkc_acronym_definition_uses_the_same_shape_key_as_ascii():
     assert _cluster_ids(result) == {frozenset(("full", "definition", "later"))}
 
 
+def test_nfkc_full_form_words_define_an_ascii_acronym():
+    full = "Ｒｅｔｒｉｅｖａｌ Ａｕｇｍｅｎｔｅｄ Ｇｅｎｅｒａｔｉｏｎ"
+    text = f"{full} (RAG) is introduced. RAG is referenced later."
+    positions = [index for index in range(len(text)) if text.startswith("RAG", index)]
+
+    result = resolve_document_mentions(
+        (
+            _mention("full", full, start=0, source_text=text),
+            _mention("definition", "RAG", start=positions[0], source_text=text),
+            _mention("later", "RAG", start=positions[1], source_text=text),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {frozenset(("full", "definition", "later"))}
+
+
 def test_cluster_memberships_preserve_their_actual_parent_edge_provenance():
     repository = "https://github.com/example/orion"
     result = resolve_document_mentions(
@@ -457,6 +534,18 @@ def test_cluster_memberships_preserve_their_actual_parent_edge_provenance():
     assert all(membership.reason for membership in memberships.values())
 
 
+def test_singleton_cluster_membership_records_singleton_not_structural_root():
+    result = resolve_document_mentions(
+        (_mention("only", "Orion", "model"),), _ontology()
+    )
+
+    membership = result.clusters[0].memberships[0]
+    assert membership.mention_id == "only"
+    assert membership.method == "singleton"
+    assert membership.parent_mention_id is None
+    assert membership.reason == "Singleton cluster."
+
+
 def test_unknown_entity_types_are_rejected_instead_of_silently_accepted():
     with pytest.raises(ValueError, match="unknown ontology entity type"):
         resolve_document_mentions(
@@ -491,7 +580,7 @@ def test_acronym_definitions_do_not_propagate_to_another_source_coordinate_space
                 source_text="RAG",
                 source_key="figure:one",
                 position_basis="chunk_content",
-                content_object_id="figure-one",
+                content_object_id=CONTENT_OBJECT_ID,
             ),
         ),
         _ontology(),
@@ -576,6 +665,23 @@ def test_cluster_identity_uses_source_coordinates_not_database_ids_or_confidence
     assert first.input_fingerprint != reloaded.input_fingerprint
 
 
+def test_document_resolver_rejects_mentions_from_mixed_document_uuids():
+    with pytest.raises(ValueError, match="single document"):
+        resolve_document_mentions(
+            (
+                _mention("first", "Orion", "model", document_id=DOCUMENT_ID),
+                _mention(
+                    "second",
+                    "Orion",
+                    "model",
+                    start=20,
+                    document_id=OTHER_DOCUMENT_ID,
+                ),
+            ),
+            _ontology(),
+        )
+
+
 def test_resolution_input_fingerprint_binds_source_context():
     original = resolve_document_mentions(
         (
@@ -603,6 +709,66 @@ def test_resolution_input_fingerprint_binds_source_context():
     )
 
     assert original.input_fingerprint != changed.input_fingerprint
+
+
+def test_resolution_input_fingerprint_hashes_repeated_source_context_once(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    source_text = "Repeated source context. " * 128
+    mentions = tuple(
+        _mention(
+            f"mention-{index}",
+            f"Entity {index}",
+            "model",
+            start=index * 20,
+            source_text=source_text,
+        )
+        for index in range(MAX_DOCUMENT_MENTIONS)
+    )
+    original_dumps = coreference.json.dumps
+    original_context_digest = coreference._source_context_digest
+    occurrences: list[int] = []
+    digest_calls = 0
+
+    def recording_dumps(value, *args, **kwargs):
+        encoded = original_dumps(value, *args, **kwargs)
+        occurrences.append(encoded.count(source_text))
+        return encoded
+
+    def recording_context_digest(**kwargs):
+        nonlocal digest_calls
+        digest_calls += 1
+        return original_context_digest(**kwargs)
+
+    monkeypatch.setattr(coreference.json, "dumps", recording_dumps)
+    monkeypatch.setattr(
+        coreference,
+        "_source_context_digest",
+        recording_context_digest,
+    )
+
+    fingerprint = resolution_input_fingerprint(mentions)
+
+    assert len(fingerprint) == 64
+    assert max(occurrences, default=0) <= 1
+    assert digest_calls == 1
+
+
+def test_resolution_input_fingerprint_rejects_excess_unique_source_context():
+    mentions = tuple(
+        _mention(
+            f"mention-{index}",
+            f"Entity {index}",
+            "model",
+            start=index * 20,
+            source_text=(chr(ord("a") + index) * 700_001),
+            source_key=f"unique-context:{index}",
+        )
+        for index in range(3)
+    )
+
+    with pytest.raises(ValueError, match="aggregate.*source context"):
+        resolution_input_fingerprint(mentions)
 
 
 def test_invalid_confidence_duplicate_ids_and_unbounded_documents_are_rejected():
@@ -650,6 +816,8 @@ def test_mapping_inputs_cannot_bypass_source_bounds():
         "source_text": "x" * 1_000_001,
         "source_offset": 0,
         "confidence": 0.9,
+        "document_id": str(DOCUMENT_ID),
+        "chunk_id": 1,
     }
 
     with pytest.raises(ValueError, match="source text.*limit"):
@@ -671,6 +839,110 @@ def test_mapping_inputs_cannot_bypass_source_bounds():
     }
     with pytest.raises(ValueError, match="entity label.*limit"):
         resolution_input_fingerprint((oversized_label,))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"document_id": "not-a-uuid"}, "document_id.*UUID"),
+        ({"document_id": _UUIDLikeObject()}, "document_id.*UUID"),
+        ({"chunk_id": 0}, "chunk_id.*positive integer"),
+        ({"chunk_id": True}, "chunk_id.*positive integer"),
+        ({"chunk_id": "1"}, "chunk_id.*positive integer"),
+        ({"content_object_id": "not-a-uuid"}, "content_object_id.*UUID"),
+        ({"content_object_id": _UUIDLikeObject()}, "content_object_id.*UUID"),
+        ({"source_key": 0}, "source key.*string"),
+        ({"source_key": "   "}, "source key.*nonempty"),
+        ({"source_key": "bad\x01key"}, "source key.*control"),
+        ({"source_key": "bad\u202ekey"}, "source key.*control"),
+        ({"source_key": "x" * 513}, "source key.*limit"),
+    ],
+)
+def test_mapping_inputs_cannot_bypass_source_identity_scalar_validation(
+    overrides, message
+):
+    mention = {
+        "mention_id": "mapping",
+        "raw_text": "Orion",
+        "entity_type": "model",
+        "start": 0,
+        "end": 5,
+        "source_text": "Orion",
+        "source_offset": 0,
+        "confidence": 0.9,
+        "document_id": str(DOCUMENT_ID),
+        "chunk_id": 1,
+        "source_key": "provided-source-key",
+        **overrides,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        resolution_input_fingerprint((mention,))
+
+
+@pytest.mark.parametrize(
+    ("map_name", "name", "aliases", "message"),
+    [
+        ("x" * 129, "model", (), "ontology type map key.*128"),
+        ("model", "x" * 129, (), "ontology type name.*128"),
+        ("model", "model", ("x" * 129,), "ontology type alias.*128"),
+        ("bad\x01key", "model", (), "ontology type map key.*control"),
+        ("model", "bad\x00name", (), "ontology type name.*control"),
+        ("model", "model", ("bad\x01alias",), "ontology type alias.*control"),
+        ("model", "model", ("bad\u202ealias",), "ontology type alias.*control"),
+    ],
+)
+def test_ontology_type_names_keys_and_aliases_obey_persistence_bounds(
+    map_name, name, aliases, message
+):
+    ontology = SimpleNamespace(
+        checksum="b" * 64,
+        entity_types=MappingProxyType(
+            {map_name: SimpleNamespace(name=name, aliases=aliases)}
+        ),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        resolve_document_mentions((_mention("mention", "Orion", "model"),), ontology)
+
+
+def test_fallback_ontology_checksum_binds_type_map_keys_used_as_aliases():
+    canonical_key = SimpleNamespace(
+        checksum="",
+        entity_types=MappingProxyType(
+            {"model": SimpleNamespace(name="model", aliases=())}
+        ),
+    )
+    alias_key = SimpleNamespace(
+        checksum="",
+        entity_types=MappingProxyType(
+            {"architecture": SimpleNamespace(name="model", aliases=())}
+        ),
+    )
+    mention = _mention("mention", "Orion", "model")
+
+    canonical = resolve_document_mentions((mention,), canonical_key)
+    alias = resolve_document_mentions((mention,), alias_key)
+
+    assert canonical.ontology_checksum != alias.ontology_checksum
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    [
+        " repository:github.com/example/orion ",
+        "repository:github.com/example/orion/issues/1",
+        "DOI:10.5555/12345678",
+        "x" * 256,
+    ],
+)
+def test_resolved_clusters_reject_noncanonical_or_unpersistable_identifiers(identifier):
+    result = resolve_document_mentions(
+        (_mention("only", "Orion", "model"),), _ontology()
+    )
+
+    with pytest.raises(ValueError, match="identifier.*canonical|persistence"):
+        replace(result.clusters[0], identifier=identifier)
 
 
 def test_duplicate_source_coordinate_member_identities_are_rejected():
@@ -724,6 +996,9 @@ def test_document_entity_schema_supports_distinct_deterministic_singleton_cluste
     assert field.editable is False
     assert version_field.max_length == 128
     assert version_field.editable is False
+    assert "kg_document_version_signature_valid" in {
+        constraint.name for constraint in DocumentEntity._meta.constraints
+    }
     unique_fields = {
         tuple(constraint.fields)
         for constraint in DocumentEntity._meta.constraints
@@ -925,6 +1200,50 @@ def test_committed_resolution_state_rejects_extra_inactive_rows():
         }
     )
     assert not _resolution_rows_match(result, (tampered,), links)
+
+
+def test_singleton_resolution_rows_match_exact_link_provenance_idempotently():
+    result = resolve_document_mentions(
+        (_mention("only", "Orion", "model"),), _ontology()
+    )
+    cluster = result.clusters[0]
+    membership = cluster.memberships[0]
+    status = SimpleNamespace(ACTIVE="active")
+    entity = SimpleNamespace(
+        cluster_key=cluster.cluster_key,
+        label=cluster.label,
+        normalized_label=cluster.normalized_label,
+        version_signature=cluster.version_signature,
+        entity_type=cluster.entity_type,
+        identifier=cluster.identifier,
+        metadata={
+            "resolver_version": result.resolver_version,
+            "methods": ["singleton"],
+            "resolution_confidence": cluster.confidence,
+            "result_checksum": result.checksum,
+        },
+        status="active",
+        Status=status,
+    )
+    link = SimpleNamespace(
+        document_entity=entity,
+        mention_id="only",
+        method="singleton",
+        resolver_version=result.resolver_version,
+        parent_mention_id="",
+        reason="Singleton cluster.",
+        metadata={"result_checksum": result.checksum},
+        status="active",
+        Status=status,
+    )
+
+    assert membership.method == "singleton"
+    assert _resolution_rows_match(result, (entity,), (link,))
+    assert not _resolution_rows_match(
+        result,
+        (entity,),
+        (SimpleNamespace(**{**vars(link), "method": "root"}),),
+    )
 
 
 def _database_is_reachable():

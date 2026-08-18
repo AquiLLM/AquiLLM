@@ -802,6 +802,54 @@ def test_identifier_first_conditional_uniqueness_and_normalization():
 
 
 @pytest.mark.parametrize(
+    "version_signature",
+    [
+        None,
+        1,
+        True,
+        "V1",
+        " v1",
+        "v 1",
+        "v1\x00",
+        "v1\n",
+        "é1",
+        "_v1",
+        "x" * 129,
+    ],
+)
+def test_document_entity_rejects_noncanonical_version_signatures(version_signature):
+    entity = DocumentEntity(
+        artifact=_artifact(),
+        document_id=DOCUMENT_ID,
+        cluster_key="1" * 64,
+        label="Aquilla v1",
+        normalized_label="aquilla v1",
+        version_signature=version_signature,
+        entity_type="model",
+        identifier="repository:github.com/example/aquilla",
+    )
+
+    with pytest.raises(ValidationError, match="version_signature"):
+        entity.clean()
+
+
+@pytest.mark.parametrize("version_signature", ["", "v1", "3.1+8b+instruct", "rc2"])
+def test_document_entity_accepts_canonical_version_signatures(version_signature):
+    entity = DocumentEntity(
+        artifact=_artifact(),
+        document_id=DOCUMENT_ID,
+        cluster_key="1" * 64,
+        label="Aquilla v1",
+        normalized_label="aquilla v1",
+        version_signature=version_signature,
+        entity_type="model",
+        identifier="repository:github.com/example/aquilla",
+    )
+
+    entity.clean()
+
+
+@pytest.mark.parametrize(
     ("model", "field_name"),
     [
         (EntityMention, "normalized_text"),
@@ -840,6 +888,7 @@ def test_central_choice_and_build_identity_db_constraints_are_declared():
         DocumentEntity: {
             "kg_document_entity_status_valid",
             "kg_document_cluster_key_valid",
+            "kg_document_version_signature_valid",
         },
         DocumentEntityMention: {
             "kg_document_mention_status_valid",

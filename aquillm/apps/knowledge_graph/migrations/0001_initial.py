@@ -1102,6 +1102,17 @@ class Migration(migrations.Migration):
                 name="kg_document_cluster_key_valid",
             ),
         ),
+        migrations.AddConstraint(
+            model_name="documententity",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    ("version_signature", ""),
+                    ("version_signature__regex", "^[a-z0-9][a-z0-9.+:/_-]*$"),
+                    _connector="OR",
+                ),
+                name="kg_document_version_signature_valid",
+            ),
+        ),
         migrations.AddIndex(
             model_name="collectionrelation",
             index=models.Index(
