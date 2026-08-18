@@ -81,6 +81,7 @@ class EntityMention(ValidatedGraphModel):
         "content_object_type_id",
         "content_object_id",
         "metadata",
+        "created_at",
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
@@ -247,6 +248,9 @@ class DocumentEntity(ValidatedGraphModel):
     created_at = models.DateTimeField(auto_now_add=True)
 
     _QUERYSET_IMMUTABLE_FIELDS = (
+        "artifact",
+        "artifact_id",
+        "document_id",
         "identifier",
         "normalized_label",
         "entity_type",
@@ -383,6 +387,9 @@ class CollectionEntity(ValidatedGraphModel):
     created_at = models.DateTimeField(auto_now_add=True)
 
     _QUERYSET_IMMUTABLE_FIELDS = (
+        "artifact",
+        "artifact_id",
+        "collection_id",
         "identifier",
         "normalized_label",
         "entity_type",

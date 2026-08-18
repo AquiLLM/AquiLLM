@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import socket
 import uuid
+from datetime import timedelta
 from math import inf, nan
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import CheckConstraint, UniqueConstraint
 from django.db.models.deletion import RestrictedError
+from django.utils import timezone
 from pgvector.django import VectorField
 
 from apps.documents.models import TextChunk
@@ -829,13 +831,17 @@ def test_graph_build_run_snapshot_ignores_mutated_cached_artifact(monkeypatch):
 
 @pytest.mark.parametrize("model", [EntityMention, RelationMention])
 def test_raw_evidence_querysets_reject_update_and_bulk_update(model):
-    instance = model(pk=1)
+    instance = model(pk=1, created_at=timezone.now())
     field = "raw_text" if model is EntityMention else "relation_type"
 
     with pytest.raises(ValidationError, match="immutable"):
         model.objects.filter(pk=1).update(**{field: "rewritten"})
     with pytest.raises(ValidationError, match="immutable"):
         model.objects.bulk_update([instance], [field])
+    with pytest.raises(ValidationError, match="immutable"):
+        model.objects.filter(pk=1).update(created_at=timezone.now())
+    with pytest.raises(ValidationError, match="immutable"):
+        model.objects.bulk_update([instance], ["created_at"])
 
 
 def test_raw_evidence_declares_complete_immutable_fields_and_aliases():
@@ -856,6 +862,7 @@ def test_raw_evidence_declares_complete_immutable_fields_and_aliases():
         "content_object_type_id",
         "content_object_id",
         "metadata",
+        "created_at",
     } <= set(EntityMention._IMMUTABLE_FIELDS)
     assert {
         "artifact",
@@ -870,6 +877,7 @@ def test_raw_evidence_declares_complete_immutable_fields_and_aliases():
         "relation_type",
         "extraction_confidence",
         "metadata",
+        "created_at",
     } <= set(RelationMention._IMMUTABLE_FIELDS)
 
 
@@ -881,6 +889,28 @@ def test_resolved_identity_querysets_reject_identity_rewrites(model):
         model.objects.filter(pk=1).update(identifier="replacement")
     with pytest.raises(ValidationError, match="immutable"):
         model.objects.bulk_update([instance], ["normalized_label"])
+
+
+@pytest.mark.parametrize(
+    ("model", "scope_field"),
+    [
+        (DocumentEntity, "document_id"),
+        (CollectionEntity, "collection_id"),
+    ],
+)
+def test_resolved_entity_querysets_reject_cross_scope_ownership_rewrites(
+    model,
+    scope_field,
+):
+    instance = model(pk=1, artifact_id=2)
+
+    with pytest.raises(ValidationError, match="immutable"):
+        model.objects.filter(pk=1).update(**{scope_field: uuid.uuid4()})
+    with pytest.raises(ValidationError, match="immutable"):
+        model.objects.bulk_update([instance], ["artifact"])
+
+    immutable = set(model._QUERYSET_IMMUTABLE_FIELDS)
+    assert {"artifact", "artifact_id", scope_field} <= immutable
 
 
 def test_postgres_test_gate_can_be_made_required():
@@ -1181,7 +1211,15 @@ def test_raw_evidence_instance_save_rejects_rewrites():
     head.raw_text = "rewritten"
     with pytest.raises(ValidationError, match="immutable"):
         head.save()
+    head.refresh_from_db()
+    head.created_at += timedelta(seconds=1)
+    with pytest.raises(ValidationError, match="immutable"):
+        head.save()
     relation.relation_type = "rewritten"
+    with pytest.raises(ValidationError, match="immutable"):
+        relation.save()
+    relation.refresh_from_db()
+    relation.created_at += timedelta(seconds=1)
     with pytest.raises(ValidationError, match="immutable"):
         relation.save()
 

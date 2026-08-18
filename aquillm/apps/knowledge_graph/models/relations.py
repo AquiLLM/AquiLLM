@@ -58,6 +58,7 @@ class RelationMention(ValidatedGraphModel):
         "relation_type",
         "extraction_confidence",
         "metadata",
+        "created_at",
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
