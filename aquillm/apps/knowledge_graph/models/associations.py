@@ -1,6 +1,9 @@
+from math import isfinite
+
 from django.db import models
 from django.db.models import Q
 
+from .artifacts import ValidatedGraphModel
 from .entities import (
     CanonicalEntity,
     CollectionEntity,
@@ -9,7 +12,7 @@ from .entities import (
 )
 
 
-class CollectionEntityDocumentLink(models.Model):
+class CollectionEntityDocumentLink(ValidatedGraphModel):
     """Versioned resolver decision linking document and collection nodes."""
 
     Status = ResolutionStatus
@@ -38,6 +41,10 @@ class CollectionEntityDocumentLink(models.Model):
         app_label = "apps_knowledge_graph"
         constraints = [
             models.CheckConstraint(
+                condition=Q(status__in=ResolutionStatus.values),
+                name="kg_doc_collection_link_status_valid",
+            ),
+            models.CheckConstraint(
                 condition=Q(score__gte=0) & Q(score__lte=1),
                 name="kg_doc_collection_score_range",
             ),
@@ -57,7 +64,18 @@ class CollectionEntityDocumentLink(models.Model):
             ),
         ]
 
-class CanonicalEntityLink(models.Model):
+    def _raw_validation_errors(self) -> dict[str, str]:
+        value = self.score
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+        ):
+            return {"score": "Score must be a finite non-boolean number."}
+        return {}
+
+
+class CanonicalEntityLink(ValidatedGraphModel):
     """Explicit resolver decision from a collection node to internal identity."""
 
     Status = ResolutionStatus
@@ -86,6 +104,10 @@ class CanonicalEntityLink(models.Model):
         app_label = "apps_knowledge_graph"
         constraints = [
             models.CheckConstraint(
+                condition=Q(status__in=ResolutionStatus.values),
+                name="kg_canonical_link_status_valid",
+            ),
+            models.CheckConstraint(
                 condition=Q(score__gte=0) & Q(score__lte=1),
                 name="kg_collection_canonical_score_range",
             ),
@@ -104,3 +126,13 @@ class CanonicalEntityLink(models.Model):
                 name="kg_can_link_collection_idx",
             ),
         ]
+
+    def _raw_validation_errors(self) -> dict[str, str]:
+        value = self.score
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+        ):
+            return {"score": "Score must be a finite non-boolean number."}
+        return {}

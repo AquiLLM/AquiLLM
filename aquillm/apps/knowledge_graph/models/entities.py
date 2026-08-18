@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from django.contrib.contenttypes.fields import GenericForeignKey
+from math import isfinite
+
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models
 from django.db.models import F, Q
 from pgvector.django import VectorField
 
 from apps.documents.models import TextChunk
 
-from .artifacts import GraphArtifact
+from .artifacts import GraphArtifact, ValidatedGraphModel
 
 
 class ResolutionStatus(models.TextChoices):
@@ -19,7 +20,7 @@ class ResolutionStatus(models.TextChoices):
     SUPERSEDED = "superseded", "Superseded"
 
 
-class EntityMention(models.Model):
+class EntityMention(ValidatedGraphModel):
     """Exact entity evidence extracted from one persisted chunk."""
 
     class PositionBasis(models.TextChoices):
@@ -49,7 +50,7 @@ class EntityMention(models.Model):
     end = models.IntegerField()
     position_basis = models.CharField(max_length=24, choices=PositionBasis.choices)
     raw_text = models.TextField()
-    normalized_text = models.TextField()
+    normalized_text = models.CharField(max_length=512)
     entity_type = models.CharField(max_length=128)
     extraction_confidence = models.FloatField()
     content_object_type = models.ForeignKey(
@@ -60,7 +61,6 @@ class EntityMention(models.Model):
         related_name="+",
     )
     content_object_id = models.UUIDField(null=True, blank=True)
-    content_object = GenericForeignKey("content_object_type", "content_object_id")
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -77,14 +77,23 @@ class EntityMention(models.Model):
                 name="kg_mention_confidence_range",
             ),
             models.CheckConstraint(
+                condition=Q(position_basis__in=("document_global", "chunk_content")),
+                name="kg_mention_position_basis_valid",
+            ),
+            models.CheckConstraint(
                 condition=(
-                    Q(content_object_type__isnull=True, content_object_id__isnull=True)
+                    Q(
+                        position_basis="document_global",
+                        content_object_type__isnull=True,
+                        content_object_id__isnull=True,
+                    )
                     | Q(
+                        position_basis="chunk_content",
                         content_object_type__isnull=False,
                         content_object_id__isnull=False,
                     )
                 ),
-                name="kg_mention_content_object_pair",
+                name="kg_mention_basis_provenance",
             ),
         ]
         indexes = [
@@ -95,7 +104,35 @@ class EntityMention(models.Model):
                 fields=["normalized_text", "entity_type"],
                 name="kg_mention_norm_type_idx",
             ),
+            models.Index(
+                fields=["content_object_type", "content_object_id"],
+                name="kg_mention_content_obj_idx",
+            ),
         ]
+
+    def _raw_validation_errors(self) -> dict[str, str]:
+        value = self.extraction_confidence
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+        ):
+            return {
+                "extraction_confidence": (
+                    "Confidence must be a finite non-boolean number."
+                )
+            }
+        return {}
+
+    def _resolve_image_content_object(self):
+        try:
+            target = self.content_object_type.get_object_for_this_type(
+                id=self.content_object_id
+            )
+            document = self.chunk.document
+        except (ObjectDoesNotExist, ValidationError):
+            return None, None
+        return target, document
 
     def clean(self):
         super().clean()
@@ -105,6 +142,16 @@ class EntityMention(models.Model):
         if not 0 <= self.extraction_confidence <= 1:
             errors["extraction_confidence"] = "Confidence must be in [0, 1]."
         chunk = self.chunk
+        artifact = self.artifact
+        if artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT:
+            errors["artifact"] = "Entity mentions require a document artifact."
+        elif artifact.scope_id != self.document_id:
+            errors["artifact"] = "Entity mention document must match artifact scope."
+        elif artifact.status not in {
+            GraphArtifact.Status.BUILDING,
+            GraphArtifact.Status.ACTIVE,
+        }:
+            errors["artifact"] = "Entity mention artifact must be building or active."
         if self.document_id and chunk.doc_id and self.document_id != chunk.doc_id:
             errors["document_id"] = "Mention document_id must match its chunk."
         if chunk.modality == TextChunk.Modality.TEXT:
@@ -136,11 +183,27 @@ class EntityMention(models.Model):
                 errors["content_object_id"] = (
                     "Image content object must match the chunk document."
                 )
+            elif self.position_basis == self.PositionBasis.CHUNK_CONTENT:
+                target, document = self._resolve_image_content_object()
+                if target is None or document is None:
+                    errors["content_object_id"] = (
+                        "Image provenance must resolve an existing document object."
+                    )
+                elif (
+                    target._meta.app_label,
+                    target._meta.model_name,
+                ) != (
+                    document._meta.app_label,
+                    document._meta.model_name,
+                ):
+                    errors["content_object_type"] = (
+                        "Image provenance must use the exact document subtype."
+                    )
         if errors:
             raise ValidationError(errors)
 
 
-class DocumentEntity(models.Model):
+class DocumentEntity(ValidatedGraphModel):
     """Entity resolved within a document artifact."""
 
     Status = ResolutionStatus
@@ -152,7 +215,7 @@ class DocumentEntity(models.Model):
     )
     document_id = models.UUIDField()
     label = models.TextField()
-    normalized_label = models.TextField()
+    normalized_label = models.CharField(max_length=512)
     entity_type = models.CharField(max_length=128)
     identifier = models.CharField(max_length=255, blank=True, default="")
     status = models.CharField(
@@ -164,10 +227,24 @@ class DocumentEntity(models.Model):
     class Meta:
         app_label = "apps_knowledge_graph"
         constraints = [
+            models.CheckConstraint(
+                condition=Q(status__in=ResolutionStatus.values),
+                name="kg_document_entity_status_valid",
+            ),
+            models.UniqueConstraint(
+                fields=["artifact", "entity_type", "identifier"],
+                condition=~Q(identifier=""),
+                name="kg_document_entity_identifier_unique",
+            ),
             models.UniqueConstraint(
                 fields=["artifact", "document_id", "entity_type", "normalized_label"],
-                name="kg_document_entity_unique",
-            )
+                condition=Q(identifier=""),
+                name="kg_document_entity_label_fallback",
+            ),
+            models.CheckConstraint(
+                condition=Q(identifier="") | ~Q(identifier__regex=r"^\s+$"),
+                name="kg_document_identifier_not_ws",
+            ),
         ]
         indexes = [
             models.Index(
@@ -178,6 +255,12 @@ class DocumentEntity(models.Model):
 
     def clean(self):
         super().clean()
+        original_identifier = self.identifier
+        self.identifier = original_identifier.strip()
+        if original_identifier and not self.identifier:
+            raise ValidationError(
+                {"identifier": "Identifier cannot be whitespace-only."}
+            )
         if (
             self.artifact_id
             and self.artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT
@@ -191,7 +274,7 @@ class DocumentEntity(models.Model):
             )
 
 
-class DocumentEntityMention(models.Model):
+class DocumentEntityMention(ValidatedGraphModel):
     """Auditable assignment of one mention to one document entity."""
 
     Status = ResolutionStatus
@@ -215,6 +298,12 @@ class DocumentEntityMention(models.Model):
 
     class Meta:
         app_label = "apps_knowledge_graph"
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(status__in=ResolutionStatus.values),
+                name="kg_document_mention_status_valid",
+            )
+        ]
         indexes = [
             models.Index(
                 fields=["status", "document_entity"],
@@ -235,7 +324,7 @@ class DocumentEntityMention(models.Model):
                 )
 
 
-class CollectionEntity(models.Model):
+class CollectionEntity(ValidatedGraphModel):
     """Collection-scoped resolved entity with optional retrieval embedding."""
 
     Status = ResolutionStatus
@@ -247,7 +336,7 @@ class CollectionEntity(models.Model):
     )
     collection_id = models.UUIDField()
     label = models.TextField()
-    normalized_label = models.TextField()
+    normalized_label = models.CharField(max_length=512)
     entity_type = models.CharField(max_length=128)
     identifier = models.CharField(max_length=255, blank=True, default="")
     status = models.CharField(
@@ -260,10 +349,24 @@ class CollectionEntity(models.Model):
     class Meta:
         app_label = "apps_knowledge_graph"
         constraints = [
+            models.CheckConstraint(
+                condition=Q(status__in=ResolutionStatus.values),
+                name="kg_collection_entity_status_valid",
+            ),
             models.UniqueConstraint(
-                fields=["artifact", "entity_type", "normalized_label", "identifier"],
-                name="kg_collection_entity_unique",
-            )
+                fields=["artifact", "entity_type", "identifier"],
+                condition=~Q(identifier=""),
+                name="kg_collection_entity_identifier_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["artifact", "entity_type", "normalized_label"],
+                condition=Q(identifier=""),
+                name="kg_collection_entity_label_fallback",
+            ),
+            models.CheckConstraint(
+                condition=Q(identifier="") | ~Q(identifier__regex=r"^\s+$"),
+                name="kg_collection_identifier_not_ws",
+            ),
         ]
         indexes = [
             models.Index(
@@ -274,6 +377,12 @@ class CollectionEntity(models.Model):
 
     def clean(self):
         super().clean()
+        original_identifier = self.identifier
+        self.identifier = original_identifier.strip()
+        if original_identifier and not self.identifier:
+            raise ValidationError(
+                {"identifier": "Identifier cannot be whitespace-only."}
+            )
         if (
             self.artifact_id
             and self.artifact.scope_type != GraphArtifact.ScopeType.COLLECTION
@@ -287,13 +396,13 @@ class CollectionEntity(models.Model):
             )
 
 
-class CanonicalEntity(models.Model):
+class CanonicalEntity(ValidatedGraphModel):
     """Internal cross-collection identity without evidence or access grants."""
 
     Status = ResolutionStatus
 
     label = models.TextField()
-    normalized_label = models.TextField()
+    normalized_label = models.CharField(max_length=512)
     entity_type = models.CharField(max_length=128)
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.ACTIVE
@@ -305,6 +414,12 @@ class CanonicalEntity(models.Model):
 
     class Meta:
         app_label = "apps_knowledge_graph"
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(status__in=ResolutionStatus.values),
+                name="kg_canonical_entity_status_valid",
+            )
+        ]
         indexes = [
             models.Index(
                 fields=["entity_type", "normalized_label"],

@@ -1,7 +1,10 @@
 from django.db import models
+from django.db.models import Q
+
+from .artifacts import ValidatedGraphModel
 
 
-class OntologyVersion(models.Model):
+class OntologyVersion(ValidatedGraphModel):
     """Checksummed ontology definition with explicit activation lifecycle."""
 
     class Kind(models.TextChoices):
@@ -28,10 +31,26 @@ class OntologyVersion(models.Model):
     class Meta:
         app_label = "apps_knowledge_graph"
         constraints = [
+            models.CheckConstraint(
+                condition=Q(kind__in=("entity", "relation", "graph")),
+                name="kg_ontology_kind_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(status__in=("draft", "active", "superseded", "rejected")),
+                name="kg_ontology_status_valid",
+            ),
+            models.CheckConstraint(
+                condition=~Q(version=""),
+                name="kg_ontology_version_nonempty",
+            ),
+            models.CheckConstraint(
+                condition=~Q(checksum=""),
+                name="kg_ontology_checksum_nonempty",
+            ),
             models.UniqueConstraint(
                 fields=["kind", "version"],
                 name="kg_ontology_kind_version_unique",
-            )
+            ),
         ]
         indexes = [
             models.Index(fields=["kind", "status"], name="kg_ontology_kind_status_idx"),

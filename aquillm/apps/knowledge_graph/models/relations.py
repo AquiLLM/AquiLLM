@@ -1,15 +1,22 @@
+from math import isfinite
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
 
 from apps.documents.models import TextChunk
 
-from .artifacts import GraphArtifact
+from .artifacts import GraphArtifact, ValidatedGraphModel
 from .associations import CollectionEntityDocumentLink
-from .entities import CollectionEntity, EntityMention, ResolutionStatus
+from .entities import (
+    CollectionEntity,
+    DocumentEntityMention,
+    EntityMention,
+    ResolutionStatus,
+)
 
 
-class RelationMention(models.Model):
+class RelationMention(ValidatedGraphModel):
     """Extracted relation evidence whose endpoint spans remain first-class mentions."""
 
     artifact = models.ForeignKey(
@@ -62,6 +69,20 @@ class RelationMention(models.Model):
             ),
         ]
 
+    def _raw_validation_errors(self) -> dict[str, str]:
+        value = self.extraction_confidence
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+        ):
+            return {
+                "extraction_confidence": (
+                    "Confidence must be a finite non-boolean number."
+                )
+            }
+        return {}
+
     def clean(self):
         super().clean()
         errors: dict[str, str] = {}
@@ -79,7 +100,7 @@ class RelationMention(models.Model):
             raise ValidationError(errors)
 
 
-class CollectionRelation(models.Model):
+class CollectionRelation(ValidatedGraphModel):
     """Aggregated, status-preserving edge inside one collection artifact."""
 
     Status = ResolutionStatus
@@ -112,6 +133,10 @@ class CollectionRelation(models.Model):
     class Meta:
         app_label = "apps_knowledge_graph"
         constraints = [
+            models.CheckConstraint(
+                condition=Q(status__in=ResolutionStatus.values),
+                name="kg_collection_relation_status_valid",
+            ),
             models.UniqueConstraint(
                 fields=["artifact", "source", "relation_type", "target"],
                 name="kg_collection_relation_unique",
@@ -136,6 +161,16 @@ class CollectionRelation(models.Model):
             ),
         ]
 
+    def _raw_validation_errors(self) -> dict[str, str]:
+        value = self.confidence
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+        ):
+            return {"confidence": "Confidence must be a finite non-boolean number."}
+        return {}
+
     def clean(self):
         super().clean()
         errors: dict[str, str] = {}
@@ -152,7 +187,7 @@ class CollectionRelation(models.Model):
             raise ValidationError(errors)
 
 
-class CollectionRelationEvidence(models.Model):
+class CollectionRelationEvidence(ValidatedGraphModel):
     """One retained supporting extraction for a collection relation."""
 
     relation = models.ForeignKey(
@@ -164,6 +199,16 @@ class CollectionRelationEvidence(models.Model):
         RelationMention,
         on_delete=models.CASCADE,
         related_name="collection_evidence_links",
+    )
+    head_mapping = models.ForeignKey(
+        CollectionEntityDocumentLink,
+        on_delete=models.PROTECT,
+        related_name="head_relation_evidence",
+    )
+    tail_mapping = models.ForeignKey(
+        CollectionEntityDocumentLink,
+        on_delete=models.PROTECT,
+        related_name="tail_relation_evidence",
     )
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -211,36 +256,55 @@ class CollectionRelationEvidence(models.Model):
                 errors[field_name] = (
                     "Raw endpoint document must match relation mention."
                 )
+        if (
+            mention.artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT
+            or mention.artifact.status != GraphArtifact.Status.ACTIVE
+        ):
+            errors["relation_mention"] = (
+                "Evidence must come from an active document artifact."
+            )
 
         if not errors:
-            if not self._endpoint_has_active_mapping(
-                mention.head_id, relation.source_id
+            for field_name, mapping, raw_mention, collection_endpoint in (
+                ("head_mapping", self.head_mapping, mention.head, relation.source),
+                ("tail_mapping", self.tail_mapping, mention.tail, relation.target),
             ):
-                errors["head"] = (
-                    "Head mention is not actively mapped to relation source."
-                )
-            if not self._endpoint_has_active_mapping(
-                mention.tail_id, relation.target_id
-            ):
-                errors["tail"] = (
-                    "Tail mention is not actively mapped to relation target."
-                )
+                if mapping.status != ResolutionStatus.ACTIVE:
+                    errors[field_name] = "Evidence mapping must be active."
+                elif mapping.collection_entity_id != collection_endpoint.pk:
+                    errors[field_name] = "Evidence mapping direction is incorrect."
+                elif mapping.collection_entity.artifact_id != relation.artifact_id:
+                    errors[field_name] = (
+                        "Evidence mapping artifact must match relation."
+                    )
+                elif mapping.collection_entity.collection_id != artifact.scope_id:
+                    errors[field_name] = (
+                        "Evidence mapping collection must match relation."
+                    )
+                elif mapping.resolver_version != artifact.resolver_version:
+                    errors[field_name] = "Evidence mapping resolver version must match."
+                elif mapping.document_entity.artifact_id != mention.artifact_id:
+                    errors[field_name] = "Mapped document artifact must match evidence."
+                elif mapping.document_entity.document_id != mention.document_id:
+                    errors[field_name] = "Mapped document must match evidence."
+                elif mapping.document_entity.status != ResolutionStatus.ACTIVE:
+                    errors[field_name] = "Mapped document entity must be active."
+                elif collection_endpoint.status != ResolutionStatus.ACTIVE:
+                    errors[field_name] = "Mapped collection entity must be active."
+                elif not self._endpoint_membership_is_active(mapping, raw_mention):
+                    errors[field_name] = (
+                        "Raw endpoint is not actively assigned to mapping."
+                    )
         if errors:
             raise ValidationError(errors)
 
-    def _endpoint_has_active_mapping(self, mention_id: int, entity_id: int) -> bool:
-        relation = self.relation
-        mention = self.relation_mention
-        return CollectionEntityDocumentLink.objects.filter(
-            collection_entity_id=entity_id,
-            collection_entity__artifact_id=relation.artifact_id,
-            collection_entity__collection_id=relation.artifact.scope_id,
-            collection_entity__status=ResolutionStatus.ACTIVE,
-            document_entity__artifact_id=mention.artifact_id,
-            document_entity__document_id=mention.document_id,
-            document_entity__status=ResolutionStatus.ACTIVE,
-            document_entity__mention_links__mention_id=mention_id,
-            document_entity__mention_links__status=ResolutionStatus.ACTIVE,
-            resolver_version=relation.artifact.resolver_version,
+    def _endpoint_membership_is_active(
+        self,
+        mapping: CollectionEntityDocumentLink,
+        mention: EntityMention,
+    ) -> bool:
+        return DocumentEntityMention.objects.filter(
+            document_entity_id=mapping.document_entity_id,
+            mention_id=mention.pk,
             status=ResolutionStatus.ACTIVE,
         ).exists()

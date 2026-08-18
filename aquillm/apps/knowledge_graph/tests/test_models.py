@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import os
 import socket
 import uuid
+from math import inf, nan
+from types import SimpleNamespace
 
 import pytest
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import transaction
 from django.db.models import CheckConstraint, UniqueConstraint
 from pgvector.django import VectorField
 
@@ -44,8 +47,43 @@ def _database_is_reachable():
         return False
 
 
+def _postgres_test_action(*, available: bool, required: bool) -> str:
+    if available:
+        return "run"
+    return "fail" if required else "skip"
+
+
+_POSTGRES_AVAILABLE = _database_is_reachable()
+_POSTGRES_REQUIRED = os.environ.get(
+    "KG_REQUIRE_POSTGRES_TESTS", ""
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _enforce_required_postgres():
+    if (
+        _postgres_test_action(
+            available=_POSTGRES_AVAILABLE,
+            required=_POSTGRES_REQUIRED,
+        )
+        == "fail"
+    ):
+        pytest.fail(
+            "KG_REQUIRE_POSTGRES_TESTS=1 but configured PostgreSQL is unavailable"
+        )
+
+
 database_required = pytest.mark.skipif(
-    not _database_is_reachable(),
+    _postgres_test_action(
+        available=_POSTGRES_AVAILABLE,
+        required=_POSTGRES_REQUIRED,
+    )
+    == "skip",
     reason="configured PostgreSQL database is not reachable",
 )
 
@@ -111,6 +149,98 @@ def test_app_is_registered_with_domain_app_label():
 
     assert config.name == "apps.knowledge_graph"
     assert "apps.knowledge_graph" in settings.INSTALLED_APPS
+
+
+def test_graph_models_expose_validated_persistence_path():
+    for model in (
+        GraphArtifact,
+        GraphBuildRun,
+        EntityMention,
+        DocumentEntity,
+        CollectionEntity,
+        CollectionRelationEvidence,
+    ):
+        assert callable(getattr(model(), "validate_for_persistence"))
+
+
+def test_invalid_normal_save_create_and_bulk_create_fail_before_database_access():
+    invalid = _artifact(status="not-a-status")
+    with pytest.raises(ValidationError, match="status"):
+        invalid.save()
+    with pytest.raises(ValidationError, match="status"):
+        GraphArtifact.objects.create(
+            scope_type=GraphArtifact.ScopeType.DOCUMENT,
+            scope_id=DOCUMENT_ID,
+            status="not-a-status",
+            source_hash="a" * 64,
+            ontology_version="ontology-v1",
+            extractor_version="extractor-v1",
+            resolver_version="resolver-v1",
+            filter_policy_version="filter-v1",
+        )
+    with pytest.raises(ValidationError, match="status"):
+        GraphArtifact.objects.bulk_create([invalid])
+
+
+def test_graph_artifact_bulk_mutation_rejects_build_identity_fields_before_database():
+    artifact = _artifact(pk=1)
+
+    with pytest.raises(ValidationError, match="immutable"):
+        GraphArtifact.objects.filter(pk=1).update(source_hash="b" * 64)
+    with pytest.raises(ValidationError, match="immutable"):
+        GraphArtifact.objects.bulk_update([artifact], ["filter_policy_version"])
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_graph_artifact_bulk_update_allows_lifecycle_status_changes():
+    artifact = _artifact()
+    artifact.save()
+    GraphArtifact.objects.filter(pk=artifact.pk).update(
+        status=GraphArtifact.Status.FAILED
+    )
+    artifact.refresh_from_db()
+    assert artifact.status == GraphArtifact.Status.FAILED
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+@pytest.mark.parametrize("model", [DocumentEntity, CollectionEntity])
+def test_identifier_first_database_uniqueness(model):
+    artifact = _artifact(
+        scope_type=(
+            GraphArtifact.ScopeType.DOCUMENT
+            if model is DocumentEntity
+            else GraphArtifact.ScopeType.COLLECTION
+        ),
+        scope_id=DOCUMENT_ID if model is DocumentEntity else COLLECTION_ID,
+    )
+    artifact.save()
+    ownership = (
+        {"document_id": DOCUMENT_ID}
+        if model is DocumentEntity
+        else {"collection_id": COLLECTION_ID}
+    )
+    common = {"artifact": artifact, "entity_type": "model", **ownership}
+    model.objects.create(
+        **common,
+        label="First",
+        normalized_label="first",
+        identifier="stable-id",
+    )
+    with pytest.raises(ValidationError, match="identifier"):
+        model.objects.create(
+            **common,
+            label="Different label",
+            normalized_label="different-label",
+            identifier="stable-id",
+        )
+    model.objects.create(
+        **common,
+        label="First",
+        normalized_label="first",
+        identifier="other-id",
+    )
 
 
 def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
@@ -327,6 +457,126 @@ def test_entity_mention_rejects_unrelated_image_content_object_types():
         mention.clean()
 
 
+@pytest.mark.parametrize(
+    ("scope_type", "status"),
+    [
+        (GraphArtifact.ScopeType.COLLECTION, GraphArtifact.Status.BUILDING),
+        (GraphArtifact.ScopeType.DOCUMENT, GraphArtifact.Status.FAILED),
+        (GraphArtifact.ScopeType.DOCUMENT, GraphArtifact.Status.STALE),
+        (GraphArtifact.ScopeType.DOCUMENT, GraphArtifact.Status.SUPERSEDED),
+    ],
+)
+def test_entity_mention_rejects_ineligible_source_artifact(scope_type, status):
+    mention = EntityMention(
+        artifact=_artifact(scope_type=scope_type, status=status),
+        document_id=DOCUMENT_ID,
+        chunk=TextChunk(modality=TextChunk.Modality.TEXT, doc_id=DOCUMENT_ID),
+        start=0,
+        end=7,
+        position_basis=EntityMention.PositionBasis.DOCUMENT_GLOBAL,
+        raw_text="Aquilla",
+        normalized_text="aquilla",
+        entity_type="model",
+        extraction_confidence=0.9,
+    )
+
+    with pytest.raises(ValidationError, match="artifact"):
+        mention.clean()
+
+
+def test_image_entity_mention_requires_existing_exact_document_subtype(monkeypatch):
+    expected_document = SimpleNamespace(
+        id=DOCUMENT_ID,
+        _meta=SimpleNamespace(
+            app_label="apps_documents",
+            model_name="documentfigure",
+        ),
+    )
+    wrong_document = SimpleNamespace(
+        id=DOCUMENT_ID,
+        _meta=SimpleNamespace(
+            app_label="apps_documents",
+            model_name="imageuploaddocument",
+        ),
+    )
+    content_type = ContentType(
+        pk=1,
+        app_label="apps_documents",
+        model="documentfigure",
+    )
+    mention = EntityMention(
+        artifact=_artifact(),
+        document_id=DOCUMENT_ID,
+        chunk=TextChunk(modality=TextChunk.Modality.IMAGE, doc_id=DOCUMENT_ID),
+        start=0,
+        end=7,
+        position_basis=EntityMention.PositionBasis.CHUNK_CONTENT,
+        raw_text="Aquilla",
+        normalized_text="aquilla",
+        entity_type="model",
+        extraction_confidence=0.9,
+        content_object_type=content_type,
+        content_object_id=DOCUMENT_ID,
+    )
+    monkeypatch.setattr(
+        mention,
+        "_resolve_image_content_object",
+        lambda: (wrong_document, expected_document),
+        raising=False,
+    )
+
+    with pytest.raises(ValidationError, match="exact|subtype"):
+        mention.clean()
+
+
+def test_image_entity_mention_resolves_document_by_public_uuid(monkeypatch):
+    expected_document = SimpleNamespace(id=DOCUMENT_ID)
+    calls = {}
+    content_type = ContentType(
+        pk=1,
+        app_label="apps_documents",
+        model="documentfigure",
+    )
+    monkeypatch.setattr(
+        content_type,
+        "get_object_for_this_type",
+        lambda **kwargs: calls.update(kwargs) or expected_document,
+    )
+    monkeypatch.setattr(
+        TextChunk,
+        "document",
+        property(lambda _chunk: expected_document),
+    )
+    mention = EntityMention(
+        chunk=TextChunk(doc_id=DOCUMENT_ID),
+        content_object_type=content_type,
+        content_object_id=DOCUMENT_ID,
+    )
+
+    target, document = mention._resolve_image_content_object()
+
+    assert target is document is expected_document
+    assert calls == {"id": DOCUMENT_ID}
+
+
+@pytest.mark.parametrize("invalid", [True, False, nan, inf, -inf])
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda value: EntityMention(extraction_confidence=value),
+        lambda value: RelationMention(extraction_confidence=value),
+        lambda value: CollectionRelation(confidence=value),
+        lambda value: CollectionEntityDocumentLink(score=value),
+        lambda value: CanonicalEntityLink(score=value),
+    ],
+)
+def test_confidence_and_scores_reject_bool_and_nonfinite_values(factory, invalid):
+    instance = factory(invalid)
+
+    with pytest.raises(ValidationError, match="confidence|score"):
+        instance.validate_for_persistence()
+
+
 def test_resolved_entities_are_explicitly_owned_and_only_resolved_nodes_have_vectors():
     assert (
         DocumentEntity._meta.get_field("artifact").remote_field.model is GraphArtifact
@@ -403,6 +653,11 @@ def test_relation_models_have_versioned_uniqueness_evidence_and_indexes():
     assert _constraint(
         CollectionRelationEvidence, "kg_relation_evidence_unique", UniqueConstraint
     )
+    for field_name in ("head_mapping", "tail_mapping"):
+        mapping_field = CollectionRelationEvidence._meta.get_field(field_name)
+        assert mapping_field.null is False
+        assert mapping_field.remote_field.model is CollectionEntityDocumentLink
+        assert mapping_field.remote_field.on_delete.__name__ == "PROTECT"
     assert {("artifact", "source", "target", "relation_type")} <= _index_fields(
         CollectionRelation
     )
@@ -450,13 +705,122 @@ def test_relation_evidence_rejects_a_different_relation_type():
         evidence.clean()
 
 
+def test_identifier_first_conditional_uniqueness_and_normalization():
+    for model, id_constraint, fallback_constraint in (
+        (
+            DocumentEntity,
+            "kg_document_entity_identifier_unique",
+            "kg_document_entity_label_fallback",
+        ),
+        (
+            CollectionEntity,
+            "kg_collection_entity_identifier_unique",
+            "kg_collection_entity_label_fallback",
+        ),
+    ):
+        assert _constraint(model, id_constraint, UniqueConstraint).condition is not None
+        assert (
+            _constraint(model, fallback_constraint, UniqueConstraint).condition
+            is not None
+        )
+
+    entity = DocumentEntity(
+        artifact=_artifact(),
+        document_id=DOCUMENT_ID,
+        label="Aquilla",
+        normalized_label="aquilla",
+        entity_type="model",
+        identifier=" model:1 ",
+    )
+    entity.clean()
+    assert entity.identifier == "model:1"
+
+    entity.identifier = "   "
+    with pytest.raises(ValidationError, match="identifier"):
+        entity.clean()
+
+
+@pytest.mark.parametrize(
+    ("model", "field_name"),
+    [
+        (EntityMention, "normalized_text"),
+        (DocumentEntity, "normalized_label"),
+        (CollectionEntity, "normalized_label"),
+        (CanonicalEntity, "normalized_label"),
+    ],
+)
+def test_indexed_normalized_values_reject_oversize_input(model, field_name):
+    field = model._meta.get_field(field_name)
+    assert field.max_length == 512
+    with pytest.raises(ValidationError, match="512"):
+        field.clean("x" * 513, model())
+
+
+def test_central_choice_and_build_identity_db_constraints_are_declared():
+    expected = {
+        GraphArtifact: {
+            "kg_artifact_scope_valid",
+            "kg_artifact_status_valid",
+            "kg_artifact_source_hash_nonempty",
+            "kg_artifact_ontology_ver_nonempty",
+            "kg_artifact_extractor_ver_nonempty",
+            "kg_artifact_resolver_ver_nonempty",
+            "kg_artifact_filter_ver_nonempty",
+        },
+        GraphBuildRun: {
+            "kg_build_kind_valid",
+            "kg_build_scope_valid",
+            "kg_build_stage_valid",
+            "kg_build_status_valid",
+            "kg_build_snapshot_nonempty",
+        },
+        OntologyVersion: {"kg_ontology_kind_valid", "kg_ontology_status_valid"},
+        EntityMention: {"kg_mention_position_basis_valid"},
+        DocumentEntity: {"kg_document_entity_status_valid"},
+        DocumentEntityMention: {"kg_document_mention_status_valid"},
+        CollectionEntity: {"kg_collection_entity_status_valid"},
+        CanonicalEntity: {"kg_canonical_entity_status_valid"},
+        CollectionEntityDocumentLink: {"kg_doc_collection_link_status_valid"},
+        CanonicalEntityLink: {"kg_canonical_link_status_valid"},
+        CollectionRelation: {"kg_collection_relation_status_valid"},
+    }
+    for model, names in expected.items():
+        actual = {constraint.name for constraint in model._meta.constraints}
+        assert names <= actual
+
+
+def test_graph_build_run_populates_and_freezes_artifact_identity_snapshot():
+    artifact = _artifact(pk=10)
+    run = GraphBuildRun(artifact=artifact)
+
+    run.populate_artifact_snapshot()
+
+    assert run.build_kind == GraphBuildRun.BuildKind.DOCUMENT
+    assert run.scope_type == artifact.scope_type
+    assert run.scope_id == artifact.scope_id
+    assert run.source_hash == artifact.source_hash
+    assert run.filter_policy_version == artifact.filter_policy_version
+    assert "scope_id" in run._IMMUTABLE_FIELDS
+    assert "filter_policy_version" in run._IMMUTABLE_FIELDS
+
+
+def test_postgres_test_gate_can_be_made_required():
+    assert _postgres_test_action(available=False, required=False) == "skip"
+    assert _postgres_test_action(available=False, required=True) == "fail"
+    assert _postgres_test_action(available=True, required=True) == "run"
+
+
 def _unsaved_relation_evidence():
     collection_artifact = _artifact(
         pk=1,
         scope_type=GraphArtifact.ScopeType.COLLECTION,
         scope_id=COLLECTION_ID,
     )
-    document_artifact = _artifact(pk=2, source_hash="b" * 64)
+    document_artifact = _artifact(
+        pk=2,
+        source_hash="b" * 64,
+        status=GraphArtifact.Status.ACTIVE,
+    )
     source = CollectionEntity(
         pk=10,
         artifact=collection_artifact,
@@ -490,22 +854,56 @@ def _unsaved_relation_evidence():
         target=target,
         relation_type="evaluates_on",
     )
+    head_document_entity = DocumentEntity(
+        pk=50,
+        artifact=document_artifact,
+        document_id=DOCUMENT_ID,
+        label="Aquilla",
+        normalized_label="aquilla",
+        entity_type="model",
+    )
+    tail_document_entity = DocumentEntity(
+        pk=51,
+        artifact=document_artifact,
+        document_id=DOCUMENT_ID,
+        label="MMLU",
+        normalized_label="mmlu",
+        entity_type="benchmark",
+    )
+    head_mapping = CollectionEntityDocumentLink(
+        pk=60,
+        document_entity=head_document_entity,
+        collection_entity=source,
+        score=0.9,
+        method="exact",
+        resolver_version=collection_artifact.resolver_version,
+    )
+    tail_mapping = CollectionEntityDocumentLink(
+        pk=61,
+        document_entity=tail_document_entity,
+        collection_entity=target,
+        score=0.9,
+        method="exact",
+        resolver_version=collection_artifact.resolver_version,
+    )
     return CollectionRelationEvidence(
         relation=relation,
         relation_mention=relation_mention,
+        head_mapping=head_mapping,
+        tail_mapping=tail_mapping,
     )
 
 
 def test_relation_evidence_rejects_swapped_endpoint_mappings(monkeypatch):
     evidence = _unsaved_relation_evidence()
-    mapped_pairs = {
-        (evidence.relation_mention.head_id, evidence.relation.target_id),
-        (evidence.relation_mention.tail_id, evidence.relation.source_id),
-    }
+    evidence.head_mapping, evidence.tail_mapping = (
+        evidence.tail_mapping,
+        evidence.head_mapping,
+    )
     monkeypatch.setattr(
         evidence,
-        "_endpoint_has_active_mapping",
-        lambda mention_id, entity_id: (mention_id, entity_id) in mapped_pairs,
+        "_endpoint_membership_is_active",
+        lambda _mapping, _mention: True,
         raising=False,
     )
 
@@ -517,8 +915,8 @@ def test_relation_evidence_rejects_unmapped_endpoint(monkeypatch):
     evidence = _unsaved_relation_evidence()
     monkeypatch.setattr(
         evidence,
-        "_endpoint_has_active_mapping",
-        lambda _mention_id, _entity_id: False,
+        "_endpoint_membership_is_active",
+        lambda _mapping, _mention: False,
     )
 
     with pytest.raises(ValidationError, match="head|tail|mapped"):
@@ -533,8 +931,8 @@ def test_relation_evidence_rejects_endpoint_from_other_artifact_or_collection(
     evidence.relation.target.collection_id = uuid.uuid4()
     monkeypatch.setattr(
         evidence,
-        "_endpoint_has_active_mapping",
-        lambda _mention_id, _entity_id: True,
+        "_endpoint_membership_is_active",
+        lambda _mapping, _mention: True,
         raising=False,
     )
 
@@ -548,8 +946,8 @@ def test_relation_evidence_accepts_separate_document_artifact_when_actively_mapp
     evidence = _unsaved_relation_evidence()
     monkeypatch.setattr(
         evidence,
-        "_endpoint_has_active_mapping",
-        lambda _mention_id, _entity_id: True,
+        "_endpoint_membership_is_active",
+        lambda _mapping, _mention: True,
         raising=False,
     )
 
@@ -562,9 +960,9 @@ def test_database_enforces_one_active_artifact_and_version_identity():
     first = _artifact(status=GraphArtifact.Status.ACTIVE)
     first.save()
 
-    with pytest.raises(IntegrityError), transaction.atomic():
+    with pytest.raises(ValidationError), transaction.atomic():
         _artifact(status=GraphArtifact.Status.ACTIVE, source_hash="b" * 64).save()
-    with pytest.raises(IntegrityError), transaction.atomic():
+    with pytest.raises(ValidationError), transaction.atomic():
         _artifact(status=GraphArtifact.Status.FAILED).save()
 
 
@@ -759,7 +1157,7 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
         method="exact",
         resolver_version=collection_artifact.resolver_version,
     )
-    CollectionEntityDocumentLink.objects.create(
+    tail_mapping = CollectionEntityDocumentLink.objects.create(
         document_entity=tail_document_entity,
         collection_entity=target,
         score=0.9,
@@ -769,11 +1167,13 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
     evidence = CollectionRelationEvidence(
         relation=relation,
         relation_mention=mention,
+        head_mapping=head_mapping,
+        tail_mapping=tail_mapping,
     )
 
     head_mapping.status = CollectionEntityDocumentLink.Status.SUPPRESSED
     head_mapping.save(update_fields=["status"])
-    with pytest.raises(ValidationError, match="Head mention"):
+    with pytest.raises(ValidationError, match="active"):
         evidence.clean()
     head_mapping.status = CollectionEntityDocumentLink.Status.ACTIVE
     head_mapping.save(update_fields=["status"])
@@ -781,10 +1181,12 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
         evidence.clean()
     evidence.save()
 
-    with pytest.raises(IntegrityError), transaction.atomic():
+    with pytest.raises(ValidationError), transaction.atomic():
         CollectionRelationEvidence.objects.create(
             relation=relation,
             relation_mention=mention,
+            head_mapping=head_mapping,
+            tail_mapping=tail_mapping,
         )
 
     mention.delete()
