@@ -15,7 +15,7 @@ _SEMANTIC_SYMBOLS = frozenset("+/#:")
 _VERSION_TOKEN = re.compile(
     r"(?:v[0-9]+(?:\.[0-9]+)*(?:[a-z][a-z0-9]*)?|"
     r"[0-9]+(?:\.[0-9]+)*(?:[bm])?|"
-    r"rc[0-9]+|alpha[0-9]*|beta[0-9]*)"
+    r"r[0-9]+|rc[0-9]+|alpha[0-9]*|beta[0-9]*)"
 )
 _RELEASE_QUALIFIERS = frozenset(("base", "chat", "instruct"))
 _DOI = re.compile(r"10\.[0-9]{4,9}/[A-Za-z0-9][A-Za-z0-9._;()/:+\-]*")
@@ -42,6 +42,15 @@ def _require_nonempty_bounded_text(
         raise ValueError(f"{label} must be a nonempty string")
     if len(value) > maximum:
         raise ValueError(f"{label} exceeds the {maximum}-character limit")
+    if any(
+        character == "\x00"
+        or (
+            unicodedata.category(character) in {"Cc", "Cs"}
+            and character not in "\t\n\r"
+        )
+        for character in value
+    ):
+        raise ValueError(f"{label} contains unsafe control characters")
     return value.strip()
 
 
@@ -119,7 +128,9 @@ def normalize_entity_label(value: object) -> NormalizedEntityLabel:
     )
     display_label = " ".join(unicodedata.normalize("NFC", raw).split())
     key = _comparison_key(unicodedata.normalize("NFKC", display_label))
-    if not key:
+    if not key or not any(
+        unicodedata.category(character)[0] in {"L", "N", "S"} for character in key
+    ):
         raise ValueError("entity label must contain meaningful characters")
     base_key, version_signature = _split_version_signature(key)
     return NormalizedEntityLabel(
@@ -131,7 +142,8 @@ def normalize_entity_label(value: object) -> NormalizedEntityLabel:
 
 
 def _split_version_signature(key: str) -> tuple[str, str | None]:
-    tokens = key.split()
+    parse_key = re.sub(r"(?<=\S)[/:](?=\S)", " ", key)
+    tokens = parse_key.split()
     if len(tokens) < 2:
         return key, None
     for index in range(1, len(tokens)):
@@ -260,6 +272,8 @@ def _repository_identifier(raw: str) -> StableIdentifier | None:
             or parts.fragment
         ):
             return None
+        if "%" in parts.path:
+            return None
         host = (parts.hostname or "").casefold()
         path = unquote(parts.path).strip("/")
     elif "://" not in raw:
@@ -276,11 +290,13 @@ def _repository_identifier(raw: str) -> StableIdentifier | None:
         parts = _url_parts(raw)
         if parts is None or parts.scheme.casefold() != "https":
             return None
+        if "%" in parts.path:
+            return None
         host = (parts.hostname or "").casefold()
         path = unquote(parts.path).strip("/")
     if host not in _REPOSITORY_HOSTS:
         return None
-    if path.endswith(".git"):
+    if path.casefold().endswith(".git"):
         path = path[:-4]
     components = path.split("/")
     expected_length = 2 if host != "gitlab.com" else len(components)
@@ -288,6 +304,7 @@ def _repository_identifier(raw: str) -> StableIdentifier | None:
         len(components) < 2
         or len(components) != expected_length
         or "-" in components
+        or any(item in {".", ".."} for item in components)
         or any(not _REPOSITORY_COMPONENT.fullmatch(item) for item in components)
     ):
         return None

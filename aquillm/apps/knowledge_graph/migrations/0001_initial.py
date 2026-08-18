@@ -73,6 +73,12 @@ class Migration(migrations.Migration):
                 ("cluster_key", models.CharField(editable=False, max_length=64)),
                 ("label", models.TextField()),
                 ("normalized_label", models.CharField(max_length=512)),
+                (
+                    "version_signature",
+                    models.CharField(
+                        blank=True, default="", editable=False, max_length=128
+                    ),
+                ),
                 ("entity_type", models.CharField(max_length=128)),
                 (
                     "identifier",
@@ -283,6 +289,7 @@ class Migration(migrations.Migration):
                     "method",
                     models.CharField(
                         choices=[
+                            ("root", "Cluster root"),
                             ("stable_identifier", "Stable identifier"),
                             ("defined_acronym", "Defined acronym"),
                             ("ontology_alias", "Ontology alias"),
@@ -293,6 +300,12 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 ("resolver_version", models.CharField(max_length=128)),
+                (
+                    "parent_mention_id",
+                    models.CharField(
+                        blank=True, default="", editable=False, max_length=128
+                    ),
+                ),
                 ("reason", models.TextField(blank=True, default="")),
                 ("metadata", models.JSONField(blank=True, default=dict)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
@@ -935,6 +948,7 @@ class Migration(migrations.Migration):
                     (
                         "method__in",
                         (
+                            "root",
                             "stable_identifier",
                             "defined_acronym",
                             "ontology_alias",
@@ -951,6 +965,23 @@ class Migration(migrations.Migration):
             constraint=models.CheckConstraint(
                 condition=models.Q(("resolver_version", ""), _negated=True),
                 name="kg_document_mention_resolver_nonempty",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="documententitymention",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    models.Q(
+                        ("method__in", ("root", "singleton")),
+                        ("parent_mention_id", ""),
+                    ),
+                    models.Q(
+                        models.Q(("method__in", ("root", "singleton")), _negated=True),
+                        models.Q(("parent_mention_id", ""), _negated=True),
+                    ),
+                    _connector="OR",
+                ),
+                name="kg_document_mention_parent_valid",
             ),
         ),
         migrations.AddIndex(
@@ -1037,7 +1068,12 @@ class Migration(migrations.Migration):
             model_name="documententity",
             constraint=models.UniqueConstraint(
                 condition=models.Q(("identifier", ""), _negated=True),
-                fields=("artifact", "entity_type", "identifier"),
+                fields=(
+                    "artifact",
+                    "entity_type",
+                    "identifier",
+                    "version_signature",
+                ),
                 name="kg_document_entity_identifier_unique",
             ),
         ),

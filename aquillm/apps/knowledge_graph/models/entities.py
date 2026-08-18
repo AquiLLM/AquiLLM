@@ -241,6 +241,9 @@ class DocumentEntity(ValidatedGraphModel):
     cluster_key = models.CharField(max_length=64, editable=False)
     label = models.TextField()
     normalized_label = models.CharField(max_length=512)
+    version_signature = models.CharField(
+        max_length=128, blank=True, default="", editable=False
+    )
     entity_type = models.CharField(max_length=128)
     identifier = models.CharField(max_length=255, blank=True, default="")
     status = models.CharField(
@@ -257,6 +260,7 @@ class DocumentEntity(ValidatedGraphModel):
         "label",
         "identifier",
         "normalized_label",
+        "version_signature",
         "entity_type",
         "metadata",
         "created_at",
@@ -273,7 +277,12 @@ class DocumentEntity(ValidatedGraphModel):
                 name="kg_document_entity_status_valid",
             ),
             models.UniqueConstraint(
-                fields=["artifact", "entity_type", "identifier"],
+                fields=[
+                    "artifact",
+                    "entity_type",
+                    "identifier",
+                    "version_signature",
+                ],
                 condition=~Q(identifier=""),
                 name="kg_document_entity_identifier_unique",
             ),
@@ -334,6 +343,7 @@ class DocumentEntityMention(ValidatedGraphModel):
     Status = ResolutionStatus
 
     class Method(models.TextChoices):
+        ROOT = "root", "Cluster root"
         STABLE_IDENTIFIER = "stable_identifier", "Stable identifier"
         DEFINED_ACRONYM = "defined_acronym", "Defined acronym"
         ONTOLOGY_ALIAS = "ontology_alias", "Ontology alias"
@@ -355,6 +365,9 @@ class DocumentEntityMention(ValidatedGraphModel):
     )
     method = models.CharField(max_length=64, choices=Method.choices)
     resolver_version = models.CharField(max_length=128)
+    parent_mention_id = models.CharField(
+        max_length=128, blank=True, default="", editable=False
+    )
     reason = models.TextField(blank=True, default="")
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -366,6 +379,7 @@ class DocumentEntityMention(ValidatedGraphModel):
         "mention_id",
         "method",
         "resolver_version",
+        "parent_mention_id",
         "reason",
         "metadata",
         "created_at",
@@ -384,6 +398,7 @@ class DocumentEntityMention(ValidatedGraphModel):
             models.CheckConstraint(
                 condition=Q(
                     method__in=(
+                        "root",
                         "stable_identifier",
                         "defined_acronym",
                         "ontology_alias",
@@ -396,6 +411,11 @@ class DocumentEntityMention(ValidatedGraphModel):
             models.CheckConstraint(
                 condition=~Q(resolver_version=""),
                 name="kg_document_mention_resolver_nonempty",
+            ),
+            models.CheckConstraint(
+                condition=(Q(method__in=("root", "singleton"), parent_mention_id=""))
+                | (~Q(method__in=("root", "singleton")) & ~Q(parent_mention_id="")),
+                name="kg_document_mention_parent_valid",
             ),
         ]
         indexes = [
@@ -423,6 +443,10 @@ class DocumentEntityMention(ValidatedGraphModel):
                             "Mention link resolver version must match its artifact."
                         )
                     }
+                )
+            if self.parent_mention_id == str(self.mention_id):
+                raise ValidationError(
+                    {"parent_mention_id": "A mention link cannot parent itself."}
                 )
 
 

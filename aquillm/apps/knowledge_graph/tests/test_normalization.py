@@ -59,6 +59,34 @@ def test_version_signature_preserves_compound_release_qualifiers():
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected_base", "expected_signature"),
+    [
+        ("Orion/v1", "orion", "v1"),
+        ("T5:base", "t5", "base"),
+        ("DeepSeek-R2", "deepseek", "r2"),
+        ("Orion/rc2", "orion", "rc2"),
+        ("Llama:8B", "llama", "8b"),
+        ("Llama-3.1-8B-Instruct", "llama", "3.1 8b instruct"),
+    ],
+)
+def test_version_signatures_are_detected_across_preserved_separators(
+    raw, expected_base, expected_signature
+):
+    normalized = normalize_entity_label(raw)
+
+    assert normalized.base_key == expected_base
+    assert normalized.version_signature == expected_signature
+
+
+@pytest.mark.parametrize("raw", ["R2D2", "Basecamp", "Instructor", "Model:release"])
+def test_version_detection_does_not_treat_ordinary_words_as_release_signatures(raw):
+    normalized = normalize_entity_label(raw)
+
+    assert normalized.base_key == normalized.key
+    assert normalized.version_signature is None
+
+
+@pytest.mark.parametrize(
     ("left", "right"),
     [
         ("Orion v1", "Orion v2"),
@@ -129,6 +157,12 @@ def test_normalization_does_not_collapse_distinct_names_or_versions(left, right)
             "gitlab.com/fastino-ai/gliner2",
             "repository:gitlab.com/fastino-ai/gliner2",
         ),
+        (
+            "https://github.com/Fastino-AI/GLiNER2.GIT",
+            "repository",
+            "github.com/fastino-ai/gliner2",
+            "repository:github.com/fastino-ai/gliner2",
+        ),
     ],
 )
 def test_stable_identifiers_are_parsed_to_typed_canonical_values(
@@ -154,6 +188,10 @@ def test_stable_identifiers_are_parsed_to_typed_canonical_values(
         "https://github.com/Fastino-AI/GLiNER2/issues/1",
         "https://example.com/Fastino-AI/GLiNER2",
         "https://gitlab.com/group/repo/-/tree/main",
+        "https://github.com/../etc",
+        "https://github.com/%2e%2e/etc",
+        "https://gitlab.com/group/%2e%2e/repo",
+        "https://github.com/owner%2frepository",
         "github:owner-only",
         "owner/repository",
         "A paper with DOI 10.1000/xyz in prose",
@@ -166,4 +204,10 @@ def test_invalid_or_embedded_identifier_like_text_is_rejected(raw):
 @pytest.mark.parametrize("raw", ["", "   ", None, 42])
 def test_normalization_rejects_non_text_or_empty_labels(raw):
     with pytest.raises(ValueError, match="nonempty string"):
+        normalize_entity_label(raw)
+
+
+@pytest.mark.parametrize("raw", ["\x00Orion", "\x01", "\u200b"])
+def test_normalization_rejects_unpersistable_or_control_only_labels(raw):
+    with pytest.raises(ValueError, match="control|meaningful"):
         normalize_entity_label(raw)

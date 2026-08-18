@@ -214,6 +214,15 @@ def _validate_source_snapshot(artifact, result, mention_records) -> str:
     return source_mention_fingerprint(mention_records)
 
 
+def _cluster_methods(cluster) -> list[str]:
+    methods = {
+        membership.method
+        for membership in cluster.memberships
+        if membership.method != "root"
+    }
+    return sorted(methods or {"root"})
+
+
 def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
     if len(entity_rows) != len(result.clusters) or len(link_rows) != len(
         result.mention_ids
@@ -224,11 +233,12 @@ def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
         cluster.cluster_key: (
             cluster.label,
             cluster.normalized_label,
+            cluster.version_signature,
             cluster.entity_type,
             cluster.identifier,
             {
                 "resolver_version": result.resolver_version,
-                "methods": [cluster.method],
+                "methods": _cluster_methods(cluster),
                 "resolution_confidence": cluster.confidence,
                 "result_checksum": result.checksum,
             },
@@ -239,6 +249,7 @@ def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
         row.cluster_key: (
             row.label,
             row.normalized_label,
+            row.version_signature,
             row.entity_type,
             row.identifier,
             row.metadata,
@@ -249,14 +260,15 @@ def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
     expected_links = {
         (
             cluster.cluster_key,
-            mention_id,
-            cluster.method,
+            membership.mention_id,
+            membership.method,
             result.resolver_version,
-            f"Resolved by {cluster.method}.",
+            membership.parent_mention_id or "",
+            membership.reason,
             result.checksum,
         )
         for cluster in result.clusters
-        for mention_id in cluster.mention_ids
+        for membership in cluster.memberships
     }
     actual_links = {
         (
@@ -264,6 +276,7 @@ def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
             str(row.mention_id),
             row.method,
             row.resolver_version,
+            row.parent_mention_id,
             row.reason,
             (
                 row.metadata.get("result_checksum")
@@ -331,32 +344,36 @@ def _write_resolution_rows(*, artifact, result, mentions_by_id):
             cluster_key=cluster.cluster_key,
             label=cluster.label,
             normalized_label=cluster.normalized_label,
+            version_signature=cluster.version_signature,
             entity_type=cluster.entity_type,
             identifier=cluster.identifier,
             status=DocumentEntity.Status.ACTIVE,
             metadata={
                 "resolver_version": result.resolver_version,
-                "methods": [cluster.method],
+                "methods": _cluster_methods(cluster),
                 "resolution_confidence": cluster.confidence,
                 "result_checksum": result.checksum,
             },
         )
         for cluster in result.clusters
     ]
-    DocumentEntity.objects.bulk_create(entity_rows)
     entities_by_key = {row.cluster_key: row for row in entity_rows}
+    if len(entities_by_key) != len(entity_rows):
+        raise ResolutionPersistenceError("resolution cluster keys are not unique")
+    DocumentEntity.objects.bulk_create(entity_rows)
     link_rows = [
         DocumentEntityMention(
             document_entity=entities_by_key[cluster.cluster_key],
-            mention=mentions_by_id[mention_id],
+            mention=mentions_by_id[membership.mention_id],
             status=DocumentEntityMention.Status.ACTIVE,
-            method=cluster.method,
+            method=membership.method,
             resolver_version=result.resolver_version,
-            reason=f"Resolved by {cluster.method}.",
+            parent_mention_id=membership.parent_mention_id or "",
+            reason=membership.reason,
             metadata={"result_checksum": result.checksum},
         )
         for cluster in result.clusters
-        for mention_id in cluster.mention_ids
+        for membership in cluster.memberships
     ]
     DocumentEntityMention.objects.bulk_create(link_rows)
     return tuple(sorted(entity_rows, key=lambda row: row.cluster_key)), len(link_rows)

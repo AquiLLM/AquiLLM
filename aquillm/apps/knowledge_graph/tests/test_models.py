@@ -234,8 +234,14 @@ def test_identifier_first_database_uniqueness(model):
         else {"collection_id": COLLECTION_ID}
     )
     common = {"artifact": artifact, "entity_type": "model", **ownership}
+    document_fields = (
+        {"cluster_key": "1" * 64, "version_signature": "v1"}
+        if model is DocumentEntity
+        else {}
+    )
     model.objects.create(
         **common,
+        **document_fields,
         label="First",
         normalized_label="first",
         identifier="stable-id",
@@ -243,16 +249,43 @@ def test_identifier_first_database_uniqueness(model):
     with pytest.raises(ValidationError, match="identifier"):
         model.objects.create(
             **common,
+            **(
+                {"cluster_key": "2" * 64, "version_signature": "v1"}
+                if model is DocumentEntity
+                else {}
+            ),
             label="Different label",
             normalized_label="different-label",
             identifier="stable-id",
         )
     model.objects.create(
         **common,
+        **(
+            {"cluster_key": "3" * 64, "version_signature": "v1"}
+            if model is DocumentEntity
+            else {}
+        ),
         label="First",
         normalized_label="first",
         identifier="other-id",
     )
+    if model is DocumentEntity:
+        model.objects.create(
+            **common,
+            cluster_key="4" * 64,
+            version_signature="v2",
+            label="First v2",
+            normalized_label="first v2",
+            identifier="stable-id",
+        )
+        model.objects.create(
+            **common,
+            cluster_key="5" * 64,
+            version_signature="",
+            label="First versionless",
+            normalized_label="first-versionless",
+            identifier="stable-id",
+        )
 
 
 def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
@@ -1155,7 +1188,7 @@ def test_deleting_chunk_cascades_evidence_but_retains_completed_build_audit():
     mention_link = DocumentEntityMention.objects.create(
         document_entity=document_entity,
         mention=head,
-        method=DocumentEntityMention.Method.SINGLETON,
+        method=DocumentEntityMention.Method.ROOT,
         resolver_version=artifact.resolver_version,
     )
 
@@ -1187,7 +1220,7 @@ def test_deleting_resolution_entities_or_links_preserves_raw_mentions():
     link = DocumentEntityMention.objects.create(
         document_entity=document_entity,
         mention=mention,
-        method=DocumentEntityMention.Method.SINGLETON,
+        method=DocumentEntityMention.Method.ROOT,
         resolver_version=artifact.resolver_version,
     )
 
@@ -1207,7 +1240,7 @@ def test_deleting_resolution_entities_or_links_preserves_raw_mentions():
     replacement_link = DocumentEntityMention.objects.create(
         document_entity=replacement_entity,
         mention=mention,
-        method=DocumentEntityMention.Method.SINGLETON,
+        method=DocumentEntityMention.Method.ROOT,
         resolver_version=artifact.resolver_version,
     )
 
@@ -1326,13 +1359,13 @@ def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
     DocumentEntityMention.objects.create(
         document_entity=head_document_entity,
         mention=head,
-        method=DocumentEntityMention.Method.SINGLETON,
+        method=DocumentEntityMention.Method.ROOT,
         resolver_version=document_artifact.resolver_version,
     )
     DocumentEntityMention.objects.create(
         document_entity=tail_document_entity,
         mention=tail,
-        method=DocumentEntityMention.Method.SINGLETON,
+        method=DocumentEntityMention.Method.ROOT,
         resolver_version=document_artifact.resolver_version,
     )
     source = CollectionEntity.objects.create(
@@ -1441,13 +1474,13 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
     DocumentEntityMention.objects.create(
         document_entity=head_document_entity,
         mention=head,
-        method=DocumentEntityMention.Method.SINGLETON,
+        method=DocumentEntityMention.Method.ROOT,
         resolver_version=document_artifact.resolver_version,
     )
     DocumentEntityMention.objects.create(
         document_entity=tail_document_entity,
         mention=tail,
-        method=DocumentEntityMention.Method.SINGLETON,
+        method=DocumentEntityMention.Method.ROOT,
         resolver_version=document_artifact.resolver_version,
     )
     source = CollectionEntity.objects.create(

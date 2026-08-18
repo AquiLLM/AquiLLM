@@ -16,7 +16,13 @@ from . import DOCUMENT_RESOLVER_VERSION
 from .normalization import normalize_entity_label, parse_stable_identifier
 
 MAX_DOCUMENT_MENTIONS = 512
+_MAX_SOURCE_TEXT_CHARACTERS = 1_000_000
+_MAX_IDENTIFIER_CHARACTERS = 2_048
+_MAX_SOURCE_KEY_CHARACTERS = 512
+_MAX_MENTION_ID_CHARACTERS = 128
+_MAX_ENTITY_TYPE_CHARACTERS = 128
 _HASH = re.compile(r"[0-9a-f]{64}")
+_MISSING = object()
 _ACRONYM = re.compile(r"[A-Z][A-Z0-9-]{1,11}")
 _WORD = re.compile(r"[A-Za-z0-9]+")
 _INITIALISM_STOPWORDS = frozenset(
@@ -51,6 +57,20 @@ _METHOD_PRECEDENCE = {
     "normalized_name": 3,
     "singleton": 4,
 }
+_HARD_CANNOT_LINK_METHODS = frozenset(
+    (
+        "ambiguous_acronym",
+        "component_conflict",
+        "conflicting_stable_identifiers",
+        "incompatible_entity_types",
+        "lowercase_acronym",
+        "pre_definition_acronym",
+        "pronoun_only",
+        "source_mismatch",
+        "undefined_acronym",
+        "version_mismatch",
+    )
+)
 
 
 def _require_string(value: object, field_name: str) -> str:
@@ -62,21 +82,80 @@ def _require_string(value: object, field_name: str) -> str:
 def _mention_key(value: object) -> str:
     if isinstance(value, bool) or value is None:
         raise ValueError("mention_id must be a stable nonempty scalar")
-    key = str(value).strip()
+    try:
+        key = str(value).strip()
+    except (OverflowError, ValueError) as exc:
+        raise ValueError("mention_id must be a stable nonempty scalar") from exc
     if not key:
         raise ValueError("mention_id must be a stable nonempty scalar")
+    if len(key) > _MAX_MENTION_ID_CHARACTERS:
+        raise ValueError(
+            f"mention_id exceeds the {_MAX_MENTION_ID_CHARACTERS}-character limit"
+        )
+    if "\x00" in key:
+        raise ValueError("mention_id contains an unsafe control character")
     return key
 
 
 def _confidence(value: object) -> float:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not isfinite(value)
-        or not 0 <= value <= 1
-    ):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("mention confidence must be a finite confidence in [0, 1]")
-    return float(value)
+    try:
+        converted = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError(
+            "mention confidence must be a finite confidence in [0, 1]"
+        ) from exc
+    if not isfinite(converted) or not 0 <= converted <= 1:
+        raise ValueError("mention confidence must be a finite confidence in [0, 1]")
+    return converted
+
+
+def _validated_source_text(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("source text must be a string")
+    if len(value) > _MAX_SOURCE_TEXT_CHARACTERS:
+        raise ValueError(
+            f"source text exceeds the {_MAX_SOURCE_TEXT_CHARACTERS}-character limit"
+        )
+    if "\x00" in value:
+        raise ValueError("source text contains an unsafe control character")
+    return value
+
+
+def _validated_identifier(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("identifier must be a string")
+    if len(value) > _MAX_IDENTIFIER_CHARACTERS:
+        raise ValueError(
+            f"identifier exceeds the {_MAX_IDENTIFIER_CHARACTERS}-character limit"
+        )
+    if "\x00" in value:
+        raise ValueError("identifier contains an unsafe control character")
+    return value
+
+
+def _validated_source_key(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("source key must be a string")
+    if len(value) > _MAX_SOURCE_KEY_CHARACTERS:
+        raise ValueError(
+            f"source key exceeds the {_MAX_SOURCE_KEY_CHARACTERS}-character limit"
+        )
+    if "\x00" in value:
+        raise ValueError("source key contains an unsafe control character")
+    return value
+
+
+def _validated_entity_type(value: object) -> str:
+    entity_type = _require_string(value, "entity_type")
+    if len(entity_type) > _MAX_ENTITY_TYPE_CHARACTERS:
+        raise ValueError(
+            f"entity_type exceeds the {_MAX_ENTITY_TYPE_CHARACTERS}-character limit"
+        )
+    if "\x00" in entity_type:
+        raise ValueError("entity_type contains an unsafe control character")
+    return entity_type
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,19 +180,16 @@ class DocumentMention:
     def __post_init__(self) -> None:
         _mention_key(self.mention_id)
         _require_string(self.raw_text, "raw_text")
-        _require_string(self.entity_type, "entity_type")
+        _validated_entity_type(self.entity_type)
         if type(self.start) is not int or self.start < 0:
             raise ValueError("start must be a nonnegative integer")
         if type(self.end) is not int or self.end <= self.start:
             raise ValueError("end must be greater than start")
-        if not isinstance(self.source_text, str):
-            raise ValueError("source_text must be a string")
+        _validated_source_text(self.source_text)
         if type(self.source_offset) is not int or self.source_offset < 0:
             raise ValueError("source_offset must be a nonnegative integer")
-        if not isinstance(self.identifier, str):
-            raise ValueError("identifier must be a string")
-        if not isinstance(self.source_key, str):
-            raise ValueError("source_key must be a string")
+        _validated_identifier(self.identifier)
+        _validated_source_key(self.source_key)
         if self.position_basis not in {"document_global", "chunk_content"}:
             raise ValueError("position_basis must be document_global or chunk_content")
         _confidence(self.confidence)
@@ -143,13 +219,34 @@ class PairDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class ClusterMembership:
+    """One mention's deterministic parent edge inside a resolved cluster."""
+
+    mention_id: str
+    method: str
+    reason: str
+    parent_mention_id: str | None
+
+    def __post_init__(self) -> None:
+        _require_string(self.mention_id, "mention_id")
+        _require_string(self.method, "method")
+        _require_string(self.reason, "reason")
+        if self.parent_mention_id is not None:
+            _require_string(self.parent_mention_id, "parent_mention_id")
+            if self.parent_mention_id == self.mention_id:
+                raise ValueError("membership cannot parent itself")
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedCluster:
     """One immutable document entity candidate and its mention membership."""
 
     cluster_key: str
     mention_ids: tuple[str, ...]
+    memberships: tuple[ClusterMembership, ...]
     label: str
     normalized_label: str
+    version_signature: str
     entity_type: str
     identifier: str
     method: str
@@ -162,11 +259,49 @@ class ResolvedCluster:
             raise ValueError("mention_ids must be a nonempty tuple")
         if len(set(self.mention_ids)) != len(self.mention_ids):
             raise ValueError("cluster mention IDs must be unique")
+        if not isinstance(self.memberships, tuple) or not all(
+            isinstance(membership, ClusterMembership) for membership in self.memberships
+        ):
+            raise ValueError("memberships must contain ClusterMembership values")
+        membership_ids = tuple(item.mention_id for item in self.memberships)
+        if len(set(membership_ids)) != len(membership_ids) or set(
+            membership_ids
+        ) != set(self.mention_ids):
+            raise ValueError(
+                "memberships must describe every cluster mention exactly once"
+            )
         for field_name in ("label", "normalized_label", "entity_type", "method"):
             _require_string(getattr(self, field_name), field_name)
+        if (
+            not isinstance(self.version_signature, str)
+            or len(self.version_signature) > 128
+        ):
+            raise ValueError("version_signature must be a bounded string")
         if not isinstance(self.identifier, str):
             raise ValueError("identifier must be a string")
         _confidence(self.confidence)
+        membership_by_id = {item.mention_id: item for item in self.memberships}
+        roots = [item for item in self.memberships if item.parent_mention_id is None]
+        if len(roots) != 1 or roots[0].method != "root":
+            raise ValueError("cluster memberships require exactly one explicit root")
+        root_id = roots[0].mention_id
+        for membership in self.memberships:
+            if membership.mention_id == root_id:
+                continue
+            if (
+                membership.parent_mention_id not in membership_by_id
+                or membership.method == "root"
+            ):
+                raise ValueError("non-root membership requires a valid parent edge")
+            seen: set[str] = set()
+            cursor = membership
+            while cursor.parent_mention_id is not None:
+                if cursor.mention_id in seen:
+                    raise ValueError("cluster membership parents must be acyclic")
+                seen.add(cursor.mention_id)
+                cursor = membership_by_id[cursor.parent_mention_id]
+            if cursor.mention_id != root_id:
+                raise ValueError("every membership parent path must reach the root")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +330,9 @@ class ResolutionResult:
             isinstance(cluster, ResolvedCluster) for cluster in self.clusters
         ):
             raise ValueError("clusters must contain ResolvedCluster values")
+        cluster_keys = tuple(cluster.cluster_key for cluster in self.clusters)
+        if len(set(cluster_keys)) != len(cluster_keys):
+            raise ValueError("cluster keys must be unique")
         if not isinstance(self.decisions, tuple) or not all(
             isinstance(decision, PairDecision) for decision in self.decisions
         ):
@@ -276,13 +414,14 @@ class _DisjointSet:
         self._parents[item] = parent
         return parent
 
-    def union(self, left: int, right: int) -> None:
+    def union(self, left: int, right: int) -> int:
         left_root = self.find(left)
         right_root = self.find(right)
         if left_root == right_root:
-            return
+            return left_root
         smaller, larger = sorted((left_root, right_root))
         self._parents[larger] = smaller
+        return smaller
 
 
 def _value(source: object, name: str, default: object = None) -> object:
@@ -344,30 +483,31 @@ def _ontology_type_index(ontology: object) -> tuple[dict[str, str], str]:
 
 def _metadata_identifier(mention: object) -> object:
     direct = _value(mention, "identifier", "")
-    if direct:
-        return direct
+    if direct != "":
+        return _validated_identifier(direct)
     metadata = _value(mention, "metadata", {})
     if not isinstance(metadata, Mapping):
         return ""
-    return metadata.get("stable_identifier") or metadata.get("identifier") or ""
+    candidate = metadata.get("stable_identifier") or metadata.get("identifier") or ""
+    return _validated_identifier(candidate)
 
 
 def _source_context(mention: object) -> tuple[str, int]:
-    explicit_text = _value(mention, "source_text", "")
+    explicit_text = _value(mention, "source_text", _MISSING)
     explicit_offset = _value(mention, "source_offset", 0)
-    if explicit_text:
-        if not isinstance(explicit_text, str) or type(explicit_offset) is not int:
+    if explicit_text is not _MISSING:
+        if type(explicit_offset) is not int or explicit_offset < 0:
             raise ValueError("mention source context is invalid")
-        return explicit_text, explicit_offset
+        return _validated_source_text(explicit_text), explicit_offset
     chunk = _value(mention, "chunk")
     if chunk is None:
         return "", 0
     content = _value(chunk, "content", "")
     basis = _value(mention, "position_basis", "document_global")
     offset = _value(chunk, "start_position", 0) if basis == "document_global" else 0
-    if not isinstance(content, str) or type(offset) is not int:
+    if type(offset) is not int or offset < 0:
         raise ValueError("mention chunk context is invalid")
-    return content, offset
+    return _validated_source_text(content), offset
 
 
 def _source_identity(mention: object) -> tuple[str, str, str, str, str]:
@@ -379,16 +519,20 @@ def _source_identity(mention: object) -> tuple[str, str, str, str, str]:
     if position_basis not in {"document_global", "chunk_content"}:
         raise ValueError("mention position_basis is invalid")
     if explicit_source_key:
-        if not isinstance(explicit_source_key, str):
-            raise ValueError("mention source_key must be a string")
-        source_key = explicit_source_key
+        source_key = _validated_source_key(explicit_source_key)
     elif position_basis == "document_global":
         source_key = f"document:{document_id or 'unknown'}"
     elif content_object_id:
         source_key = f"content:{content_object_id}"
     else:
         source_key = f"chunk:{chunk_id or 'unknown'}"
-    return document_id, source_key, chunk_id, position_basis, content_object_id
+    return (
+        document_id,
+        _validated_source_key(source_key),
+        chunk_id,
+        position_basis,
+        content_object_id,
+    )
 
 
 def _member_key(
@@ -434,9 +578,7 @@ def _adapt_mention(mention: object, type_index: Mapping[str, str]) -> _MentionVi
         _value(mention, "extraction_confidence", 1.0),
     )
     normalized = normalize_entity_label(raw_text)
-    raw_type = unicodedata.normalize(
-        "NFKC", _require_string(raw_entity_type, "entity_type")
-    )
+    raw_type = unicodedata.normalize("NFKC", _validated_entity_type(raw_entity_type))
     raw_type = " ".join(raw_type.casefold().split())
     canonical_type = type_index.get(raw_type)
     if canonical_type is None:
@@ -515,6 +657,9 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
             "confidence",
             _value(mention, "extraction_confidence", 1.0),
         )
+        validated_raw_text = _require_string(raw_text, "raw_text")
+        normalize_entity_label(validated_raw_text)
+        validated_entity_type = _validated_entity_type(entity_type)
         source_text, source_offset = _source_context(mention)
         document_id, source_key, chunk_id, basis, content_id = _source_identity(mention)
         records.append(
@@ -527,8 +672,8 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
                 "content_object_id": content_id,
                 "start": start,
                 "end": end,
-                "raw_text": _require_string(raw_text, "raw_text"),
-                "entity_type": _require_string(entity_type, "entity_type"),
+                "raw_text": validated_raw_text,
+                "entity_type": validated_entity_type,
                 "identifier": str(_metadata_identifier(mention) or ""),
                 "confidence": _confidence(confidence),
                 "source_text": source_text,
@@ -556,7 +701,7 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
 
 
 def _is_acronym(value: str) -> bool:
-    compact = value.strip()
+    compact = unicodedata.normalize("NFKC", value).strip()
     return bool(
         _ACRONYM.fullmatch(compact)
         and sum(character.isalpha() for character in compact) >= 2
@@ -565,7 +710,7 @@ def _is_acronym(value: str) -> bool:
 
 
 def _acronym_shape_key(value: str) -> str:
-    compact = value.strip()
+    compact = unicodedata.normalize("NFKC", value).strip()
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{1,11}", compact):
         return ""
     if sum(character.isalpha() for character in compact) < 2:
@@ -574,7 +719,8 @@ def _acronym_shape_key(value: str) -> str:
 
 
 def _acronym_key(value: str) -> str:
-    return "".join(character for character in value.upper() if character.isalnum())
+    normalized = unicodedata.normalize("NFKC", value)
+    return "".join(character for character in normalized.upper() if character.isalnum())
 
 
 def _initialism(value: str) -> str:
@@ -808,9 +954,10 @@ def _decide_pair(
                 "conflicting_stable_identifiers",
                 "stable identifiers conflict",
             )
-    if (
+    version_signatures_differ = left.version_signature != right.version_signature
+    if version_signatures_differ and (
         left.base_key == right.base_key
-        and left.version_signature != right.version_signature
+        or bool(left.identifier and left.identifier == right.identifier)
     ):
         return _rejected(
             left,
@@ -855,12 +1002,107 @@ def _decide_pair(
     )
 
 
+def _constrain_component_merges(
+    mentions: tuple[_MentionView, ...],
+    decisions: tuple[PairDecision, ...],
+) -> tuple[tuple[PairDecision, ...], tuple[PairDecision, ...]]:
+    """Accept candidate edges only when their complete components are compatible."""
+
+    indexes = {mention.mention_id: index for index, mention in enumerate(mentions)}
+    decision_indexes = {
+        frozenset((decision.left_mention_id, decision.right_mention_id)): index
+        for index, decision in enumerate(decisions)
+    }
+    hard_conflicts: dict[int, dict[int, PairDecision]] = defaultdict(dict)
+    for decision in decisions:
+        if decision.accepted or decision.method not in _HARD_CANNOT_LINK_METHODS:
+            continue
+        left_index = indexes[decision.left_mention_id]
+        right_index = indexes[decision.right_mention_id]
+        hard_conflicts[left_index][right_index] = decision
+        hard_conflicts[right_index][left_index] = decision
+
+    candidates = sorted(
+        (decision for decision in decisions if decision.accepted),
+        key=lambda decision: (
+            _METHOD_PRECEDENCE[decision.method],
+            min(
+                indexes[decision.left_mention_id],
+                indexes[decision.right_mention_id],
+            ),
+            max(
+                indexes[decision.left_mention_id],
+                indexes[decision.right_mention_id],
+            ),
+        ),
+    )
+    constrained = list(decisions)
+    disjoint_set = _DisjointSet(len(mentions))
+    component_members: dict[int, set[int]] = {
+        index: {index} for index in range(len(mentions))
+    }
+    merge_edges: list[PairDecision] = []
+    for candidate in candidates:
+        left_root = disjoint_set.find(indexes[candidate.left_mention_id])
+        right_root = disjoint_set.find(indexes[candidate.right_mention_id])
+        if left_root == right_root:
+            continue
+        left_members = component_members[left_root]
+        right_members = component_members[right_root]
+        blockers = [
+            hard_conflicts[left_index][right_index]
+            for left_index in sorted(left_members)
+            for right_index in sorted(right_members)
+            if right_index in hard_conflicts[left_index]
+        ]
+        if blockers:
+            blocker = min(
+                blockers,
+                key=lambda decision: (
+                    decision.method,
+                    min(
+                        indexes[decision.left_mention_id],
+                        indexes[decision.right_mention_id],
+                    ),
+                    max(
+                        indexes[decision.left_mention_id],
+                        indexes[decision.right_mention_id],
+                    ),
+                ),
+            )
+            suppressed = PairDecision(
+                left_mention_id=candidate.left_mention_id,
+                right_mention_id=candidate.right_mention_id,
+                accepted=False,
+                method="component_conflict",
+                confidence=0.0,
+                explanation=(
+                    "Rejected: component merge would violate "
+                    f"{blocker.method} between {blocker.left_mention_id} and "
+                    f"{blocker.right_mention_id}."
+                ),
+            )
+            pair_key = frozenset(
+                (candidate.left_mention_id, candidate.right_mention_id)
+            )
+            constrained[decision_indexes[pair_key]] = suppressed
+            continue
+        combined = left_members | right_members
+        new_root = disjoint_set.union(left_root, right_root)
+        component_members.pop(left_root)
+        component_members.pop(right_root)
+        component_members[new_root] = combined
+        merge_edges.append(candidate)
+    return tuple(constrained), tuple(merge_edges)
+
+
 def _cluster_key(
     *,
     mentions: tuple[_MentionView, ...],
     ontology_checksum: str,
     entity_type: str,
     normalized_label: str,
+    version_signature: str,
     identifier: str,
 ) -> str:
     value = {
@@ -870,6 +1112,7 @@ def _cluster_key(
         "member_keys": sorted(mention.member_key for mention in mentions),
         "entity_type": entity_type,
         "normalized_label": normalized_label,
+        "version_signature": version_signature,
         "identifier": identifier,
     }
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -878,17 +1121,16 @@ def _cluster_key(
 
 def _build_clusters(
     mentions: tuple[_MentionView, ...],
-    decisions: tuple[PairDecision, ...],
+    merge_edges: tuple[PairDecision, ...],
     *,
     ontology_checksum: str,
 ) -> tuple[ResolvedCluster, ...]:
     disjoint_set = _DisjointSet(len(mentions))
     indexes = {mention.mention_id: index for index, mention in enumerate(mentions)}
-    for decision in decisions:
-        if decision.accepted:
-            disjoint_set.union(
-                indexes[decision.left_mention_id], indexes[decision.right_mention_id]
-            )
+    for decision in merge_edges:
+        disjoint_set.union(
+            indexes[decision.left_mention_id], indexes[decision.right_mention_id]
+        )
     groups: dict[int, list[_MentionView]] = defaultdict(list)
     for index, mention in enumerate(mentions):
         groups[disjoint_set.find(index)].append(mention)
@@ -908,16 +1150,64 @@ def _build_clusters(
         identifiers = sorted({item.identifier for item in ordered if item.identifier})
         if len(identifiers) > 1:
             raise ValueError("resolved cluster contains conflicting stable identifiers")
+        version_signatures = sorted(
+            {
+                item.version_signature
+                for item in ordered
+                if item.version_signature is not None
+            }
+        )
+        if len(version_signatures) > 1:
+            raise ValueError("resolved cluster contains conflicting version signatures")
         member_set = set(member_ids)
         methods = {
             decision.method
-            for decision in decisions
-            if decision.accepted
-            and decision.left_mention_id in member_set
+            for decision in merge_edges
+            if decision.left_mention_id in member_set
             and decision.right_mention_id in member_set
         }
         method = min(methods or {"singleton"}, key=_METHOD_PRECEDENCE.__getitem__)
         confidence = min(item.confidence for item in ordered)
+        adjacency: dict[str, list[tuple[str, PairDecision]]] = defaultdict(list)
+        for decision in merge_edges:
+            if (
+                decision.left_mention_id in member_set
+                and decision.right_mention_id in member_set
+            ):
+                adjacency[decision.left_mention_id].append(
+                    (decision.right_mention_id, decision)
+                )
+                adjacency[decision.right_mention_id].append(
+                    (decision.left_mention_id, decision)
+                )
+        mention_by_id = {item.mention_id: item for item in ordered}
+        membership_by_id = {
+            representative.mention_id: ClusterMembership(
+                mention_id=representative.mention_id,
+                method="root",
+                reason="Deterministic cluster root.",
+                parent_mention_id=None,
+            )
+        }
+        queue = [representative.mention_id]
+        for parent_id in queue:
+            for child_id, edge in sorted(
+                adjacency[parent_id],
+                key=lambda item: mention_by_id[item[0]].sort_key,
+            ):
+                if child_id in membership_by_id:
+                    continue
+                membership_by_id[child_id] = ClusterMembership(
+                    mention_id=child_id,
+                    method=edge.method,
+                    reason=edge.explanation,
+                    parent_mention_id=parent_id,
+                )
+                queue.append(child_id)
+        if set(membership_by_id) != member_set:
+            raise ValueError("cluster merge edges do not form a spanning tree")
+        memberships = tuple(membership_by_id[mention.mention_id] for mention in ordered)
+        version_signature = version_signatures[0] if version_signatures else ""
         clusters.append(
             ResolvedCluster(
                 cluster_key=_cluster_key(
@@ -925,11 +1215,14 @@ def _build_clusters(
                     ontology_checksum=ontology_checksum,
                     entity_type=representative.entity_type,
                     normalized_label=representative.normalized_label,
+                    version_signature=version_signature,
                     identifier=identifiers[0] if identifiers else "",
                 ),
                 mention_ids=member_ids,
+                memberships=memberships,
                 label=representative.display_label,
                 normalized_label=representative.normalized_label,
+                version_signature=version_signature,
                 entity_type=representative.entity_type,
                 identifier=identifiers[0] if identifiers else "",
                 method=method,
@@ -1005,9 +1298,12 @@ def resolve_document_mentions(
     mention_ids = tuple(item.mention_id for item in adapted)
     if len(set(mention_ids)) != len(mention_ids):
         raise ValueError("mention IDs must be unique within a document")
+    member_keys = tuple(item.member_key for item in adapted)
+    if len(set(member_keys)) != len(member_keys):
+        raise ValueError("source-coordinate member identities must be unique")
     expansions = _acronym_expansions(adapted)
     conflict_blocks = _name_identifier_conflicts(adapted)
-    decisions = tuple(
+    candidate_decisions = tuple(
         _decide_pair(
             left,
             right,
@@ -1016,9 +1312,10 @@ def resolve_document_mentions(
         )
         for left, right in combinations(adapted, 2)
     )
+    decisions, merge_edges = _constrain_component_merges(adapted, candidate_decisions)
     clusters = _build_clusters(
         adapted,
-        decisions,
+        merge_edges,
         ontology_checksum=ontology_checksum,
     )
     payload = _result_payload(
@@ -1042,6 +1339,7 @@ def resolve_document_mentions(
 
 __all__ = [
     "MAX_DOCUMENT_MENTIONS",
+    "ClusterMembership",
     "DocumentMention",
     "PairDecision",
     "ResolutionResult",

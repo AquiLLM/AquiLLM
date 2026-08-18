@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import socket
 import uuid
+from dataclasses import replace
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
@@ -13,6 +14,9 @@ from apps.knowledge_graph.resolution import DOCUMENT_RESOLVER_VERSION
 from apps.knowledge_graph.resolution.coreference import (
     MAX_DOCUMENT_MENTIONS,
     DocumentMention,
+    PairDecision,
+    ResolutionResult,
+    resolution_input_fingerprint,
     resolve_document_mentions,
 )
 from apps.knowledge_graph.resolution.persistence import (
@@ -304,6 +308,155 @@ def test_version_signature_difference_blocks_even_an_equal_stable_identifier():
     assert _decision(result, "base", "v2").method == "version_mismatch"
 
 
+def test_identifier_conflict_cannot_be_bridged_by_a_defined_acronym():
+    text = (
+        "Retrieval-Augmented Generation (RAG) is introduced. RAG is referenced later."
+    )
+    full = "Retrieval-Augmented Generation"
+    acronym_positions = [
+        index for index in range(len(text)) if text.startswith("RAG", index)
+    ]
+    result = resolve_document_mentions(
+        (
+            _mention(
+                "identifier-x",
+                full,
+                start=0,
+                source_text=text,
+                identifier="https://github.com/example/identity-x",
+            ),
+            _mention(
+                "definition",
+                "RAG",
+                start=acronym_positions[0],
+                source_text=text,
+            ),
+            _mention(
+                "identifier-y",
+                "RAG",
+                start=acronym_positions[1],
+                source_text=text,
+                identifier="https://github.com/example/identity-y",
+            ),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {
+        frozenset(("identifier-x", "definition")),
+        frozenset(("identifier-y",)),
+    }
+    suppressed = _decision(result, "definition", "identifier-y")
+    assert suppressed.accepted is False
+    assert suppressed.method == "component_conflict"
+    assert "conflicting_stable_identifiers" in suppressed.explanation
+
+
+def test_shared_identifier_does_not_bridge_versioned_or_versionless_aliases():
+    repository = "https://github.com/example/orion"
+    result = resolve_document_mentions(
+        (
+            _mention("v1", "Orion/v1", "model", start=0, identifier=repository),
+            _mention(
+                "alias",
+                "Project Orion",
+                "model",
+                start=20,
+                identifier=repository,
+            ),
+            _mention("v2", "Orion/v2", "model", start=40, identifier=repository),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {
+        frozenset(("v1",)),
+        frozenset(("alias",)),
+        frozenset(("v2",)),
+    }
+    assert {_decision(result, "v1", "alias").method} == {"version_mismatch"}
+    assert {_decision(result, "alias", "v2").method} == {"version_mismatch"}
+    assert _decision(result, "v1", "v2").method == "version_mismatch"
+
+
+def test_nfkc_equivalent_undefined_acronyms_cannot_form_a_name_bridge():
+    result = resolve_document_mentions(
+        (
+            _mention("ascii-one", "RAG", start=0),
+            _mention("fullwidth", "ＲＡＧ", start=20),
+            _mention("ascii-two", "RAG", start=40),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {
+        frozenset(("ascii-one",)),
+        frozenset(("fullwidth",)),
+        frozenset(("ascii-two",)),
+    }
+    assert all(not decision.accepted for decision in result.decisions)
+    assert {decision.method for decision in result.decisions} == {"undefined_acronym"}
+
+
+def test_nfkc_acronym_definition_uses_the_same_shape_key_as_ascii():
+    text = (
+        "Retrieval-Augmented Generation (ＲＡＧ) is introduced. "
+        "ＲＡＧ is referenced later."
+    )
+    full = "Retrieval-Augmented Generation"
+    positions = [
+        index for index in range(len(text)) if text.startswith("ＲＡＧ", index)
+    ]
+
+    result = resolve_document_mentions(
+        (
+            _mention("full", full, start=0, source_text=text),
+            _mention("definition", "ＲＡＧ", start=positions[0], source_text=text),
+            _mention("later", "ＲＡＧ", start=positions[1], source_text=text),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {frozenset(("full", "definition", "later"))}
+
+
+def test_cluster_memberships_preserve_their_actual_parent_edge_provenance():
+    repository = "https://github.com/example/orion"
+    result = resolve_document_mentions(
+        (
+            _mention(
+                "identifier-label",
+                "Project Orion",
+                "model",
+                start=0,
+                identifier=repository,
+            ),
+            _mention(
+                "identifier-name",
+                "Orion",
+                "model",
+                start=20,
+                identifier=repository,
+            ),
+            _mention("name-only", "Orion", "model", start=40),
+        ),
+        _ontology(),
+    )
+
+    assert len(result.clusters) == 1
+    memberships = {
+        membership.mention_id: membership
+        for membership in result.clusters[0].memberships
+    }
+    assert memberships["identifier-label"].method == "root"
+    assert memberships["identifier-label"].parent_mention_id is None
+    assert memberships["identifier-name"].method == "stable_identifier"
+    assert memberships["identifier-name"].parent_mention_id == "identifier-label"
+    assert memberships["name-only"].method == "normalized_name"
+    assert memberships["name-only"].parent_mention_id == "identifier-name"
+    assert all(membership.reason for membership in memberships.values())
+
+
 def test_unknown_entity_types_are_rejected_instead_of_silently_accepted():
     with pytest.raises(ValueError, match="unknown ontology entity type"):
         resolve_document_mentions(
@@ -470,12 +623,107 @@ def test_invalid_confidence_duplicate_ids_and_unbounded_documents_are_rejected()
         resolve_document_mentions(over_cap, _ontology())
 
 
+def test_adversarial_scalars_are_rejected_as_bounded_validation_errors():
+    with pytest.raises(ValueError, match="finite confidence"):
+        _mention("huge-confidence", "Orion", confidence=10**10_000)
+    with pytest.raises(ValueError, match="source text.*limit"):
+        _mention("huge-source", "Orion", source_text="x" * 1_000_001)
+    with pytest.raises(ValueError, match="identifier.*limit"):
+        _mention("huge-identifier", "Orion", identifier="x" * 2_049)
+    with pytest.raises(ValueError, match="source text.*control"):
+        _mention("nul-source", "Orion", source_text="Orion\x00")
+    with pytest.raises(ValueError, match="source key.*limit"):
+        _mention("huge-source-key", "Orion", source_key="x" * 513)
+    with pytest.raises(ValueError, match="mention_id.*limit"):
+        _mention("x" * 129, "Orion")
+    with pytest.raises(ValueError, match="entity_type.*128"):
+        _mention("huge-type", "Orion", entity_type="x" * 129)
+
+
+def test_mapping_inputs_cannot_bypass_source_bounds():
+    mention = {
+        "mention_id": "mapping",
+        "raw_text": "Orion",
+        "entity_type": "model",
+        "start": 0,
+        "end": 5,
+        "source_text": "x" * 1_000_001,
+        "source_offset": 0,
+        "confidence": 0.9,
+    }
+
+    with pytest.raises(ValueError, match="source text.*limit"):
+        resolve_document_mentions((mention,), _ontology())
+
+    invalid_empty_source = {
+        **mention,
+        "source_text": "",
+        "source_offset": -1,
+    }
+    with pytest.raises(ValueError, match="source context"):
+        resolve_document_mentions((invalid_empty_source,), _ontology())
+
+    oversized_label = {
+        **mention,
+        "raw_text": "x" * 4_097,
+        "end": 4_097,
+        "source_text": "",
+    }
+    with pytest.raises(ValueError, match="entity label.*limit"):
+        resolution_input_fingerprint((oversized_label,))
+
+
+def test_duplicate_source_coordinate_member_identities_are_rejected():
+    with pytest.raises(ValueError, match="source-coordinate member identities"):
+        resolve_document_mentions(
+            (
+                _mention("first-row", "Orion", "model", start=0),
+                _mention("duplicate-row", "Orion", "model", start=0),
+            ),
+            _ontology(),
+        )
+
+
+def test_resolution_result_rejects_duplicate_cluster_keys():
+    result = resolve_document_mentions(
+        (_mention("one", "Orion", "model", start=0),), _ontology()
+    )
+    first = result.clusters[0]
+    second = replace(
+        first,
+        mention_ids=("two",),
+        memberships=(replace(first.memberships[0], mention_id="two"),),
+    )
+    decision = PairDecision(
+        left_mention_id="one",
+        right_mention_id="two",
+        accepted=False,
+        method="normalized_name_mismatch",
+        confidence=0.0,
+        explanation="Rejected: no conservative identity rule matched.",
+    )
+
+    with pytest.raises(ValueError, match="cluster keys must be unique"):
+        ResolutionResult(
+            resolver_version=result.resolver_version,
+            ontology_checksum=result.ontology_checksum,
+            input_fingerprint=result.input_fingerprint,
+            mention_ids=("one", "two"),
+            clusters=(first, second),
+            decisions=(decision,),
+            checksum="a" * 64,
+        )
+
+
 def test_document_entity_schema_supports_distinct_deterministic_singleton_clusters():
     from apps.knowledge_graph.models import DocumentEntity
 
     field = DocumentEntity._meta.get_field("cluster_key")
+    version_field = DocumentEntity._meta.get_field("version_signature")
     assert field.max_length == 64
     assert field.editable is False
+    assert version_field.max_length == 128
+    assert version_field.editable is False
     unique_fields = {
         tuple(constraint.fields)
         for constraint in DocumentEntity._meta.constraints
@@ -488,10 +736,20 @@ def test_document_entity_schema_supports_distinct_deterministic_singleton_cluste
         "entity_type",
         "normalized_label",
     ) not in unique_fields
-    assert ("artifact", "entity_type", "identifier") in unique_fields
-    assert {"cluster_key", "label", "metadata", "created_at"}.issubset(
-        DocumentEntity._IMMUTABLE_FIELDS
-    )
+    assert (
+        "artifact",
+        "entity_type",
+        "identifier",
+        "version_signature",
+    ) in unique_fields
+    assert ("artifact", "entity_type", "identifier") not in unique_fields
+    assert {
+        "cluster_key",
+        "label",
+        "version_signature",
+        "metadata",
+        "created_at",
+    }.issubset(DocumentEntity._IMMUTABLE_FIELDS)
 
 
 def test_document_mention_links_store_immutable_typed_resolution_audit_fields():
@@ -499,10 +757,17 @@ def test_document_mention_links_store_immutable_typed_resolution_audit_fields():
 
     method = DocumentEntityMention._meta.get_field("method")
     resolver_version = DocumentEntityMention._meta.get_field("resolver_version")
+    parent_mention_id = DocumentEntityMention._meta.get_field("parent_mention_id")
     assert method.max_length == 64
     assert resolver_version.max_length == 128
+    assert parent_mention_id.max_length == 128
+    assert "root" in DocumentEntityMention.Method.values
+    assert "kg_document_mention_parent_valid" in {
+        constraint.name for constraint in DocumentEntityMention._meta.constraints
+    }
     assert "method" in DocumentEntityMention._IMMUTABLE_FIELDS
     assert "resolver_version" in DocumentEntityMention._IMMUTABLE_FIELDS
+    assert "parent_mention_id" in DocumentEntityMention._IMMUTABLE_FIELDS
 
 
 def test_task7_artifact_identity_uses_the_shared_concrete_resolver_version():
@@ -610,11 +875,19 @@ def test_committed_resolution_state_rejects_extra_inactive_rows():
         cluster_key=cluster.cluster_key,
         label=cluster.label,
         normalized_label=cluster.normalized_label,
+        version_signature=cluster.version_signature,
         entity_type=cluster.entity_type,
         identifier=cluster.identifier,
         metadata={
             "resolver_version": result.resolver_version,
-            "methods": [cluster.method],
+            "methods": sorted(
+                {
+                    membership.method
+                    for membership in cluster.memberships
+                    if membership.method != "root"
+                }
+                or {"root"}
+            ),
             "resolution_confidence": cluster.confidence,
             "result_checksum": result.checksum,
         },
@@ -624,15 +897,16 @@ def test_committed_resolution_state_rejects_extra_inactive_rows():
     links = tuple(
         SimpleNamespace(
             document_entity=entity,
-            mention_id=mention_id,
-            method=cluster.method,
+            mention_id=membership.mention_id,
+            method=membership.method,
             resolver_version=result.resolver_version,
-            reason=f"Resolved by {cluster.method}.",
+            parent_mention_id=membership.parent_mention_id or "",
+            reason=membership.reason,
             metadata={"result_checksum": result.checksum},
             status="active",
             Status=status,
         )
-        for mention_id in cluster.mention_ids
+        for membership in cluster.memberships
     )
     extra = SimpleNamespace(
         **{
@@ -749,13 +1023,18 @@ def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
     assert len(persisted) == 1
     entity = DocumentEntity.objects.get(artifact=artifact)
     assert entity.label == "Orion"
+    assert entity.version_signature == ""
     assert entity.cluster_key == result.clusters[0].cluster_key
     assert entity.metadata["resolver_version"] == RESOLVER_VERSION
     assert entity.metadata["methods"] == ["normalized_name"]
     links = list(DocumentEntityMention.objects.filter(document_entity=entity))
     assert {link.mention_id for link in links} == {mention.pk for mention in mentions}
     assert {link.resolver_version for link in links} == {RESOLVER_VERSION}
-    assert {link.method for link in links} == {"normalized_name"}
+    links_by_mention = {link.mention_id: link for link in links}
+    assert links_by_mention[mentions[0].pk].method == "root"
+    assert links_by_mention[mentions[0].pk].parent_mention_id == ""
+    assert links_by_mention[mentions[1].pk].method == "normalized_name"
+    assert links_by_mention[mentions[1].pk].parent_mention_id == str(mentions[0].pk)
     assert EntityMention.objects.filter(artifact=artifact).count() == 2
     run.refresh_from_db()
     artifact.refresh_from_db()
