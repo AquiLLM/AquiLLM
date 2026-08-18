@@ -30,6 +30,7 @@ DOCUMENT_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 OTHER_DOCUMENT_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 CONTENT_OBJECT_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
 RESOLVER_VERSION = DOCUMENT_RESOLVER_VERSION
+MAX_DB_INTEGER = 2**63 - 1
 
 
 class _UUIDLikeObject:
@@ -67,6 +68,25 @@ def _mention(mention_id, raw_text, entity_type="method", start=0, **overrides):
     }
     values.update(overrides)
     return DocumentMention(**values)
+
+
+def _mapping_mention(**overrides):
+    values = {
+        "mention_id": "mapping",
+        "raw_text": "Orion",
+        "entity_type": "model",
+        "start": 0,
+        "end": 5,
+        "source_text": "Orion",
+        "source_offset": 0,
+        "confidence": 0.9,
+        "document_id": str(DOCUMENT_ID),
+        "chunk_id": 1,
+        "position_basis": "document_global",
+        "content_object_id": None,
+    }
+    values.update(overrides)
+    return values
 
 
 def _cluster_ids(result):
@@ -593,6 +613,56 @@ def test_acronym_definitions_do_not_propagate_to_another_source_coordinate_space
     assert _decision(result, "definition", "figure").method == "source_mismatch"
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"position_basis": "document_global", "content_object_id": CONTENT_OBJECT_ID},
+        {"position_basis": "chunk_content", "content_object_id": None},
+        {"position_basis": "chunk_content", "content_object_id": ""},
+    ],
+)
+def test_document_mentions_require_coordinate_basis_provenance_pairing(overrides):
+    with pytest.raises(ValueError, match="content_object_id|coordinate basis"):
+        _mention("bad-basis", "Orion", "model", **overrides)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"position_basis": "document_global", "content_object_id": CONTENT_OBJECT_ID},
+        {"position_basis": "chunk_content", "content_object_id": None},
+    ],
+)
+def test_mapping_inputs_cannot_bypass_coordinate_basis_pairing(overrides):
+    with pytest.raises(ValueError, match="content_object_id|coordinate basis"):
+        resolution_input_fingerprint((_mapping_mention(**overrides),))
+
+
+@pytest.mark.parametrize("position_basis", [None, False, 0, [], {}])
+def test_coordinate_basis_rejects_non_string_scalars(position_basis):
+    with pytest.raises(ValueError, match="position_basis"):
+        resolution_input_fingerprint((_mapping_mention(position_basis=position_basis),))
+
+
+def test_chunk_content_cluster_identity_never_depends_on_chunk_database_pk():
+    common = {
+        "position_basis": "chunk_content",
+        "content_object_id": CONTENT_OBJECT_ID,
+        "source_text": "Orion",
+    }
+    first = resolve_document_mentions(
+        (_mention("mention", "Orion", "model", chunk_id=1, **common),),
+        _ontology(),
+    )
+    reloaded = resolve_document_mentions(
+        (_mention("mention", "Orion", "model", chunk_id=999, **common),),
+        _ontology(),
+    )
+
+    assert first.clusters[0].cluster_key == reloaded.clusters[0].cluster_key
+    assert first.input_fingerprint != reloaded.input_fingerprint
+
+
 def test_result_is_deterministic_immutable_and_audits_every_pair():
     mentions = (
         _mention("c", "Orion v2", "model", start=40),
@@ -771,6 +841,86 @@ def test_resolution_input_fingerprint_rejects_excess_unique_source_context():
         resolution_input_fingerprint(mentions)
 
 
+def test_same_source_key_and_coordinate_rejects_mismatched_source_text():
+    first = _mapping_mention(
+        mention_id="first",
+        source_key="shared-source",
+        source_text="Orion first context.",
+    )
+    second = _mapping_mention(
+        mention_id="second",
+        start=20,
+        end=25,
+        source_key="shared-source",
+        source_text="Orion changed context.",
+    )
+
+    with pytest.raises(
+        ValueError, match="source key.*mismatched|source context.*mismatch"
+    ):
+        resolution_input_fingerprint((first, second))
+
+
+def test_repeated_source_context_cannot_bypass_string_validation_with_equality():
+    class PretendsToBeCachedText:
+        def __eq__(self, other):
+            return other == "Orion"
+
+    first = _mapping_mention(
+        mention_id="first",
+        source_key="shared-source",
+        source_text="Orion",
+    )
+    second = _mapping_mention(
+        mention_id="second",
+        source_key="shared-source",
+        source_text=PretendsToBeCachedText(),
+    )
+
+    with pytest.raises(ValueError, match="source text.*string"):
+        resolution_input_fingerprint((first, second))
+
+
+def test_resolver_validates_and_hashes_one_shared_large_context_once(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    source_text = "x" * 1_000_000
+    mentions = tuple(
+        _mapping_mention(
+            mention_id=f"mention-{index}",
+            raw_text=f"Entity {index}",
+            start=index * 10,
+            end=index * 10 + len(f"Entity {index}"),
+            source_text=source_text,
+            source_key="shared-large-context",
+        )
+        for index in range(MAX_DOCUMENT_MENTIONS)
+    )
+    original_validate = coreference._validated_source_text
+    original_digest = coreference._source_context_digest
+    validation_calls = 0
+    digest_calls = 0
+
+    def recording_validate(value):
+        nonlocal validation_calls
+        validation_calls += 1
+        return original_validate(value) if validation_calls == 1 else value
+
+    def recording_digest(**kwargs):
+        nonlocal digest_calls
+        digest_calls += 1
+        return original_digest(**kwargs)
+
+    monkeypatch.setattr(coreference, "_validated_source_text", recording_validate)
+    monkeypatch.setattr(coreference, "_source_context_digest", recording_digest)
+
+    result = resolve_document_mentions(mentions, _ontology())
+
+    assert len(result.mention_ids) == MAX_DOCUMENT_MENTIONS
+    assert validation_calls == 1
+    assert digest_calls == 1
+
+
 def test_invalid_confidence_duplicate_ids_and_unbounded_documents_are_rejected():
     with pytest.raises(ValueError, match="finite confidence"):
         resolve_document_mentions(
@@ -828,7 +978,7 @@ def test_mapping_inputs_cannot_bypass_source_bounds():
         "source_text": "",
         "source_offset": -1,
     }
-    with pytest.raises(ValueError, match="source context"):
+    with pytest.raises(ValueError, match="source_offset"):
         resolve_document_mentions((invalid_empty_source,), _ontology())
 
     oversized_label = {
@@ -842,15 +992,93 @@ def test_mapping_inputs_cannot_bypass_source_bounds():
 
 
 @pytest.mark.parametrize(
+    ("overrides", "field_name"),
+    [
+        ({"chunk_id": MAX_DB_INTEGER + 1}, "chunk_id"),
+        ({"start": MAX_DB_INTEGER + 1, "end": MAX_DB_INTEGER + 2}, "start"),
+        ({"end": MAX_DB_INTEGER + 1}, "end"),
+        ({"source_offset": MAX_DB_INTEGER + 1}, "source_offset"),
+    ],
+)
+def test_document_mention_database_integers_are_bounded(overrides, field_name):
+    with pytest.raises(ValueError, match=field_name):
+        _mention("bad-range", "Orion", "model", **overrides)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field_name"),
+    [
+        ({"chunk_id": MAX_DB_INTEGER + 1}, "chunk_id"),
+        ({"chunk_id": 1.0}, "chunk_id"),
+        ({"start": True}, "start"),
+        ({"start": -1}, "start"),
+        ({"start": MAX_DB_INTEGER + 1}, "start"),
+        ({"end": "5"}, "end"),
+        ({"end": 0}, "end"),
+        ({"end": MAX_DB_INTEGER + 1}, "end"),
+        ({"source_offset": False}, "source_offset"),
+        ({"source_offset": MAX_DB_INTEGER + 1}, "source_offset"),
+    ],
+)
+def test_public_fingerprint_strictly_validates_database_integer_ranges(
+    overrides, field_name
+):
+    with pytest.raises(ValueError, match=field_name):
+        resolution_input_fingerprint((_mapping_mention(**overrides),))
+
+
+@pytest.mark.parametrize("source_offset", [True, "0", -1, MAX_DB_INTEGER + 1])
+@pytest.mark.parametrize(
+    "chunk",
+    [None, SimpleNamespace(content="Orion", start_position=40)],
+    ids=["without-chunk", "with-chunk"],
+)
+def test_public_fingerprint_validates_source_offset_without_source_text(
+    source_offset,
+    chunk,
+):
+    mention = _mapping_mention(source_offset=source_offset)
+    mention.pop("source_text")
+    if chunk is not None:
+        mention["chunk"] = chunk
+
+    with pytest.raises(ValueError, match="source_offset"):
+        resolution_input_fingerprint((mention,))
+
+
+def test_public_fingerprint_binds_source_offset_without_source_text():
+    first = _mapping_mention(source_offset=3)
+    second = _mapping_mention(source_offset=4)
+    first.pop("source_text")
+    second.pop("source_text")
+
+    assert resolution_input_fingerprint((first,)) != resolution_input_fingerprint(
+        (second,)
+    )
+
+
+@pytest.mark.parametrize(
     ("overrides", "message"),
     [
         ({"document_id": "not-a-uuid"}, "document_id.*UUID"),
         ({"document_id": _UUIDLikeObject()}, "document_id.*UUID"),
-        ({"chunk_id": 0}, "chunk_id.*positive integer"),
-        ({"chunk_id": True}, "chunk_id.*positive integer"),
-        ({"chunk_id": "1"}, "chunk_id.*positive integer"),
-        ({"content_object_id": "not-a-uuid"}, "content_object_id.*UUID"),
-        ({"content_object_id": _UUIDLikeObject()}, "content_object_id.*UUID"),
+        ({"chunk_id": 0}, "chunk_id"),
+        ({"chunk_id": True}, "chunk_id"),
+        ({"chunk_id": "1"}, "chunk_id"),
+        (
+            {
+                "position_basis": "chunk_content",
+                "content_object_id": "not-a-uuid",
+            },
+            "content_object_id.*UUID",
+        ),
+        (
+            {
+                "position_basis": "chunk_content",
+                "content_object_id": _UUIDLikeObject(),
+            },
+            "content_object_id.*UUID",
+        ),
         ({"source_key": 0}, "source key.*string"),
         ({"source_key": "   "}, "source key.*nonempty"),
         ({"source_key": "bad\x01key"}, "source key.*control"),
@@ -878,6 +1106,42 @@ def test_mapping_inputs_cannot_bypass_source_identity_scalar_validation(
 
     with pytest.raises(ValueError, match=message):
         resolution_input_fingerprint((mention,))
+
+
+def test_explicit_identifier_and_source_key_cannot_masquerade_as_empty_strings():
+    class PretendsToBeEmpty:
+        def __eq__(self, other):
+            return other == ""
+
+    with pytest.raises(ValueError, match="identifier.*string"):
+        resolution_input_fingerprint(
+            (_mapping_mention(identifier=PretendsToBeEmpty()),)
+        )
+    with pytest.raises(ValueError, match="source key.*string"):
+        resolution_input_fingerprint(
+            (_mapping_mention(source_key=PretendsToBeEmpty()),)
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"stable_identifier": False},
+        {"stable_identifier": 0},
+        {"stable_identifier": ""},
+        {"stable_identifier": "   "},
+        {"stable_identifier": None},
+        {"identifier": False},
+        {"identifier": ""},
+        {
+            "stable_identifier": "doi:10.5555/12345678",
+            "identifier": "doi:10.5555/87654321",
+        },
+    ],
+)
+def test_metadata_identifier_keys_are_validated_fail_closed(metadata):
+    with pytest.raises(ValueError, match="identifier"):
+        resolution_input_fingerprint((_mapping_mention(metadata=metadata),))
 
 
 @pytest.mark.parametrize(
@@ -925,6 +1189,31 @@ def test_fallback_ontology_checksum_binds_type_map_keys_used_as_aliases():
     alias = resolve_document_mentions((mention,), alias_key)
 
     assert canonical.ontology_checksum != alias.ontology_checksum
+
+
+@pytest.mark.parametrize("checksum", [None, False, 0, (), []])
+def test_ontology_checksum_fallback_requires_an_exact_empty_string(checksum):
+    ontology = SimpleNamespace(
+        checksum=checksum,
+        entity_types=_ontology().entity_types,
+    )
+
+    with pytest.raises(ValueError, match="ontology checksum"):
+        resolve_document_mentions((_mention("mention", "Orion", "model"),), ontology)
+
+
+def test_ontology_checksum_cannot_masquerade_as_the_empty_string():
+    class PretendsToBeEmpty:
+        def __eq__(self, other):
+            return other == ""
+
+    ontology = SimpleNamespace(
+        checksum=PretendsToBeEmpty(),
+        entity_types=_ontology().entity_types,
+    )
+
+    with pytest.raises(ValueError, match="ontology checksum"):
+        resolve_document_mentions((_mention("mention", "Orion", "model"),), ontology)
 
 
 @pytest.mark.parametrize(

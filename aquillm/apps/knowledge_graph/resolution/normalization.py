@@ -179,8 +179,10 @@ def _split_version_signature(key: str) -> tuple[str, str | None]:
 def _url_parts(raw: str):
     try:
         parts = urlsplit(raw)
-        _ = parts.port
+        port = parts.port
     except ValueError:
+        return None
+    if port is not None or ":" in parts.netloc:
         return None
     if parts.username or parts.password or parts.query or parts.fragment:
         return None
@@ -283,6 +285,7 @@ def _repository_identifier(raw: str) -> StableIdentifier | None:
             or parts.username != "git"
             or parts.password
             or port is not None
+            or ":" in parts.netloc
             or parts.query
             or parts.fragment
         ):

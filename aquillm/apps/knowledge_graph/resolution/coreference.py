@@ -23,6 +23,7 @@ _MAX_IDENTIFIER_CHARACTERS = 2_048
 _MAX_SOURCE_KEY_CHARACTERS = 512
 _MAX_MENTION_ID_CHARACTERS = 128
 _MAX_ENTITY_TYPE_CHARACTERS = 128
+_MAX_DB_INTEGER = 2**63 - 1
 _HASH = re.compile(r"[0-9a-f]{64}")
 _VERSION_SIGNATURE = re.compile(r"[a-z0-9][a-z0-9.+:/_-]*")
 _MISSING = object()
@@ -181,9 +182,7 @@ def _validated_entity_type(value: object) -> str:
     return entity_type
 
 
-def _canonical_uuid(value: object, field_name: str, *, optional: bool = False) -> str:
-    if optional and (value is None or (isinstance(value, str) and value == "")):
-        return ""
+def _canonical_uuid(value: object, field_name: str) -> str:
     if not isinstance(value, (str, UUID)):
         raise ValueError(f"{field_name} must be a UUID")
     if isinstance(value, str) and len(value) > 64:
@@ -195,10 +194,49 @@ def _canonical_uuid(value: object, field_name: str, *, optional: bool = False) -
     return str(parsed)
 
 
-def _positive_chunk_id(value: object) -> int:
-    if type(value) is not int or value <= 0:
-        raise ValueError("chunk_id must be a positive integer")
+def _validated_db_integer(
+    value: object,
+    field_name: str,
+    *,
+    minimum: int,
+) -> int:
+    if type(value) is not int:
+        raise ValueError(f"{field_name} must be an exact integer")
+    if not minimum <= value <= _MAX_DB_INTEGER:
+        raise ValueError(
+            f"{field_name} must be between {minimum} and {_MAX_DB_INTEGER}"
+        )
     return value
+
+
+def _validated_span(start: object, end: object) -> tuple[int, int]:
+    validated_start = _validated_db_integer(start, "start", minimum=0)
+    validated_end = _validated_db_integer(end, "end", minimum=1)
+    if validated_end <= validated_start:
+        raise ValueError("end must be greater than start")
+    return validated_start, validated_end
+
+
+def _validated_coordinate_basis(
+    position_basis: object,
+    content_object_id: object,
+) -> tuple[str, str]:
+    if not isinstance(position_basis, str) or position_basis not in {
+        "document_global",
+        "chunk_content",
+    }:
+        raise ValueError("position_basis must be document_global or chunk_content")
+    if position_basis == "document_global":
+        if content_object_id is not None:
+            raise ValueError(
+                "document_global coordinate basis requires content_object_id=None"
+            )
+        return position_basis, ""
+    if content_object_id is None:
+        raise ValueError(
+            "chunk_content coordinate basis requires a UUID content_object_id"
+        )
+    return position_basis, _canonical_uuid(content_object_id, "content_object_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,21 +262,15 @@ class DocumentMention:
         _mention_key(self.mention_id)
         _require_string(self.raw_text, "raw_text")
         _validated_entity_type(self.entity_type)
-        if type(self.start) is not int or self.start < 0:
-            raise ValueError("start must be a nonnegative integer")
-        if type(self.end) is not int or self.end <= self.start:
-            raise ValueError("end must be greater than start")
+        _validated_span(self.start, self.end)
         _validated_source_text(self.source_text)
-        if type(self.source_offset) is not int or self.source_offset < 0:
-            raise ValueError("source_offset must be a nonnegative integer")
+        _validated_db_integer(self.source_offset, "source_offset", minimum=0)
         _validated_identifier(self.identifier)
         if self.source_key != "":
             _validated_source_key(self.source_key)
         _canonical_uuid(self.document_id, "document_id")
-        _positive_chunk_id(self.chunk_id)
-        _canonical_uuid(self.content_object_id, "content_object_id", optional=True)
-        if self.position_basis not in {"document_global", "chunk_content"}:
-            raise ValueError("position_basis must be document_global or chunk_content")
+        _validated_db_integer(self.chunk_id, "chunk_id", minimum=1)
+        _validated_coordinate_basis(self.position_basis, self.content_object_id)
         _confidence(self.confidence)
 
 
@@ -457,6 +489,18 @@ class _MentionView:
 
 
 @dataclass(frozen=True, slots=True)
+class _PreparedSource:
+    document_id: str
+    source_key: str
+    chunk_id: str
+    position_basis: str
+    content_object_id: str
+    source_text: str
+    source_offset: int
+    context_digest: str
+
+
+@dataclass(frozen=True, slots=True)
 class _AcronymDefinition:
     expansion: str
     source_key: str
@@ -527,10 +571,10 @@ def _ontology_type_index(ontology: object) -> tuple[dict[str, str], str]:
             }
         )
     persisted_checksum = _value(ontology, "checksum", "")
-    if persisted_checksum:
-        if not isinstance(persisted_checksum, str) or not _HASH.fullmatch(
-            persisted_checksum
-        ):
+    if not isinstance(persisted_checksum, str):
+        raise ValueError("ontology checksum must be a lowercase SHA-256 digest")
+    if persisted_checksum != "":
+        if not _HASH.fullmatch(persisted_checksum):
             raise ValueError("ontology checksum must be a lowercase SHA-256 digest")
         checksum = persisted_checksum
     else:
@@ -562,55 +606,84 @@ def _validated_ontology_type_text(value: object, field_name: str) -> str:
     return normalized
 
 
-def _metadata_identifier(mention: object) -> object:
+def _metadata_identifier(mention: object) -> str:
     direct = _value(mention, "identifier", "")
+    candidates: list[tuple[str, str, str]] = []
+    if not isinstance(direct, str):
+        raise ValueError("identifier must be a string")
     if direct != "":
-        return _validated_identifier(direct)
+        validated = _validated_identifier(direct)
+        parsed = parse_stable_identifier(validated)
+        if parsed is None:
+            raise ValueError("explicit identifier must be a valid stable identifier")
+        candidates.append(("identifier", validated, parsed.canonical))
     metadata = _value(mention, "metadata", {})
-    if not isinstance(metadata, Mapping):
-        return ""
-    candidate = metadata.get("stable_identifier") or metadata.get("identifier") or ""
-    return _validated_identifier(candidate)
+    if isinstance(metadata, Mapping):
+        for key in ("stable_identifier", "identifier"):
+            if key not in metadata:
+                continue
+            value = metadata[key]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"metadata {key} identifier must be nonempty text")
+            validated = _validated_identifier(value)
+            parsed = parse_stable_identifier(validated)
+            if parsed is None:
+                raise ValueError(
+                    f"metadata {key} identifier must be a valid stable identifier"
+                )
+            candidates.append((key, validated, parsed.canonical))
+    canonical_values = {canonical for _, _, canonical in candidates}
+    if len(canonical_values) > 1:
+        raise ValueError("identifier fields contain conflicting stable identifiers")
+    return candidates[0][1] if candidates else ""
 
 
-def _source_context(mention: object) -> tuple[str, int]:
+def _raw_source_context(mention: object) -> tuple[object, int]:
     explicit_text = _value(mention, "source_text", _MISSING)
-    explicit_offset = _value(mention, "source_offset", 0)
+    explicit_offset = _value(mention, "source_offset", _MISSING)
+    validated_explicit_offset = (
+        0
+        if explicit_offset is _MISSING
+        else _validated_db_integer(
+            explicit_offset,
+            "source_offset",
+            minimum=0,
+        )
+    )
     if explicit_text is not _MISSING:
-        if type(explicit_offset) is not int or explicit_offset < 0:
-            raise ValueError("mention source context is invalid")
-        return _validated_source_text(explicit_text), explicit_offset
+        return explicit_text, validated_explicit_offset
     chunk = _value(mention, "chunk")
     if chunk is None:
-        return "", 0
+        return "", validated_explicit_offset
     content = _value(chunk, "content", "")
     basis = _value(mention, "position_basis", "document_global")
+    if explicit_offset is not _MISSING:
+        return content, validated_explicit_offset
     offset = _value(chunk, "start_position", 0) if basis == "document_global" else 0
-    if type(offset) is not int or offset < 0:
-        raise ValueError("mention chunk context is invalid")
-    return _validated_source_text(content), offset
+    validated_offset = _validated_db_integer(offset, "source_offset", minimum=0)
+    return content, validated_offset
 
 
-def _source_identity(mention: object) -> tuple[str, str, str, str, str]:
+def _source_identity(
+    mention: object,
+    *,
+    source_offset: int,
+) -> tuple[str, str, str, str, str]:
     document_id = _canonical_uuid(_value(mention, "document_id"), "document_id")
-    chunk_id = _positive_chunk_id(_value(mention, "chunk_id"))
-    position_basis = _value(mention, "position_basis", "document_global")
-    content_object_id = _canonical_uuid(
+    chunk_id = _validated_db_integer(_value(mention, "chunk_id"), "chunk_id", minimum=1)
+    position_basis, content_object_id = _validated_coordinate_basis(
+        _value(mention, "position_basis", "document_global"),
         _value(mention, "content_object_id"),
-        "content_object_id",
-        optional=True,
     )
     explicit_source_key = _value(mention, "source_key", _MISSING)
-    if position_basis not in {"document_global", "chunk_content"}:
-        raise ValueError("mention position_basis is invalid")
+    if explicit_source_key is not _MISSING and not isinstance(explicit_source_key, str):
+        raise ValueError("source key must be a nonempty string")
     if explicit_source_key is not _MISSING and explicit_source_key != "":
         source_key = _validated_source_key(explicit_source_key)
     elif position_basis == "document_global":
-        source_key = f"document:{document_id}"
+        source_key = f"document:{document_id}:offset:{source_offset}"
     elif content_object_id:
         source_key = f"content:{content_object_id}"
-    else:
-        source_key = f"chunk:{chunk_id}"
     return (
         document_id,
         _validated_source_key(source_key),
@@ -618,6 +691,61 @@ def _source_identity(mention: object) -> tuple[str, str, str, str, str]:
         position_basis,
         content_object_id,
     )
+
+
+def _prepare_source_contexts(
+    mentions: tuple[object, ...],
+) -> tuple[_PreparedSource, ...]:
+    cached_contexts: dict[str, tuple[str, str]] = {}
+    prepared: list[_PreparedSource] = []
+    aggregate_source_characters = 0
+    document_id_seen: str | None = None
+    for mention in mentions:
+        raw_source_text, source_offset = _raw_source_context(mention)
+        (
+            document_id,
+            source_key,
+            chunk_id,
+            position_basis,
+            content_object_id,
+        ) = _source_identity(mention, source_offset=source_offset)
+        if document_id_seen is None:
+            document_id_seen = document_id
+        elif document_id != document_id_seen:
+            raise ValueError("mentions must belong to a single document")
+        cached = cached_contexts.get(source_key)
+        if cached is not None:
+            source_text, context_digest = cached
+            if not isinstance(raw_source_text, str):
+                raise ValueError("source text must be a string")
+            if raw_source_text != source_text:
+                raise ValueError("source key has mismatched source context text")
+        else:
+            source_text = _validated_source_text(raw_source_text)
+            aggregate_source_characters += len(source_text)
+            if aggregate_source_characters > _MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS:
+                raise ValueError(
+                    "aggregate unique source context exceeds the "
+                    f"{_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS}-character limit"
+                )
+            context_digest = _source_context_digest(
+                source_key=source_key,
+                source_text=source_text,
+            )
+            cached_contexts[source_key] = (source_text, context_digest)
+        prepared.append(
+            _PreparedSource(
+                document_id=document_id,
+                source_key=source_key,
+                chunk_id=chunk_id,
+                position_basis=position_basis,
+                content_object_id=content_object_id,
+                source_text=source_text,
+                source_offset=source_offset,
+                context_digest=context_digest,
+            )
+        )
+    return tuple(prepared)
 
 
 def _member_key(
@@ -649,7 +777,11 @@ def _member_key(
     )
 
 
-def _adapt_mention(mention: object, type_index: Mapping[str, str]) -> _MentionView:
+def _adapt_mention(
+    mention: object,
+    type_index: Mapping[str, str],
+    source: _PreparedSource,
+) -> _MentionView:
     mention_id = _value(mention, "mention_id")
     if mention_id is None:
         mention_id = _value(mention, "pk", _value(mention, "id"))
@@ -668,16 +800,7 @@ def _adapt_mention(mention: object, type_index: Mapping[str, str]) -> _MentionVi
     canonical_type = type_index.get(raw_type)
     if canonical_type is None:
         raise ValueError(f"unknown ontology entity type: {raw_type}")
-    if type(start) is not int or start < 0 or type(end) is not int or end <= start:
-        raise ValueError("mention span must be nonnegative and nonempty")
-    source_text, source_offset = _source_context(mention)
-    (
-        document_id,
-        source_key,
-        chunk_id,
-        position_basis,
-        content_object_id,
-    ) = _source_identity(mention)
+    start, end = _validated_span(start, end)
     explicit_identifier = _metadata_identifier(mention)
     if explicit_identifier:
         parsed_identifier = parse_stable_identifier(explicit_identifier)
@@ -697,18 +820,18 @@ def _adapt_mention(mention: object, type_index: Mapping[str, str]) -> _MentionVi
         entity_type=canonical_type,
         start=start,
         end=end,
-        source_text=source_text,
-        source_offset=source_offset,
-        document_id=document_id,
-        source_key=source_key,
-        chunk_id=chunk_id,
-        position_basis=position_basis,
-        content_object_id=content_object_id,
+        source_text=source.source_text,
+        source_offset=source.source_offset,
+        document_id=source.document_id,
+        source_key=source.source_key,
+        chunk_id=source.chunk_id,
+        position_basis=source.position_basis,
+        content_object_id=source.content_object_id,
         member_key=_member_key(
-            document_id=document_id,
-            source_key=source_key,
-            position_basis=position_basis,
-            content_object_id=content_object_id,
+            document_id=source.document_id,
+            source_key=source.source_key,
+            position_basis=source.position_basis,
+            content_object_id=source.content_object_id,
             start=start,
             end=end,
             entity_type=canonical_type,
@@ -722,17 +845,13 @@ def _adapt_mention(mention: object, type_index: Mapping[str, str]) -> _MentionVi
     )
 
 
-def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
-    """Bind a result to exact mention fields and local source context."""
-
-    bounded = tuple(islice(iter(mentions), MAX_DOCUMENT_MENTIONS + 1))
-    if len(bounded) > MAX_DOCUMENT_MENTIONS:
-        raise ValueError(f"document mention cap exceeded ({MAX_DOCUMENT_MENTIONS})")
+def _resolution_input_fingerprint(
+    mentions: tuple[object, ...],
+    sources: tuple[_PreparedSource, ...],
+) -> str:
     records: list[dict[str, object]] = []
-    source_contexts: dict[tuple[str, int, str], dict[str, object]] = {}
-    aggregate_source_characters = 0
-    document_id_seen: str | None = None
-    for mention in bounded:
+    source_contexts: dict[tuple[str, str], dict[str, object]] = {}
+    for mention, source in zip(mentions, sources, strict=True):
         mention_id = _value(mention, "mention_id")
         if mention_id is None:
             mention_id = _value(mention, "pk", _value(mention, "id"))
@@ -748,48 +867,32 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
         validated_raw_text = _require_string(raw_text, "raw_text")
         normalize_entity_label(validated_raw_text)
         validated_entity_type = _validated_entity_type(entity_type)
-        document_id, source_key, chunk_id, basis, content_id = _source_identity(mention)
-        if document_id_seen is None:
-            document_id_seen = document_id
-        elif document_id != document_id_seen:
-            raise ValueError("mentions must belong to a single document")
-        source_text, source_offset = _source_context(mention)
-        context_key = (source_key, source_offset, source_text)
-        context_record = source_contexts.get(context_key)
-        if context_record is None:
-            aggregate_source_characters += len(source_text)
-            if aggregate_source_characters > _MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS:
-                raise ValueError(
-                    "aggregate unique source context exceeds the "
-                    f"{_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS}-character limit"
-                )
-            context_digest = _source_context_digest(
-                source_key=source_key,
-                source_offset=source_offset,
-                source_text=source_text,
-            )
-            context_record = {
-                "digest": context_digest,
-                "source_key": source_key,
-                "source_offset": source_offset,
-                "character_count": len(source_text),
-            }
-            source_contexts[context_key] = context_record
+        start, end = _validated_span(start, end)
+        context_key = (source.source_key, source.context_digest)
+        source_contexts.setdefault(
+            context_key,
+            {
+                "digest": source.context_digest,
+                "source_key": source.source_key,
+                "character_count": len(source.source_text),
+            },
+        )
         records.append(
             {
                 "mention_id": _mention_key(mention_id),
-                "document_id": document_id,
-                "source_key": source_key,
-                "chunk_id": chunk_id,
-                "position_basis": basis,
-                "content_object_id": content_id,
+                "document_id": source.document_id,
+                "source_key": source.source_key,
+                "chunk_id": source.chunk_id,
+                "position_basis": source.position_basis,
+                "content_object_id": source.content_object_id,
                 "start": start,
                 "end": end,
                 "raw_text": validated_raw_text,
                 "entity_type": validated_entity_type,
                 "identifier": str(_metadata_identifier(mention) or ""),
                 "confidence": _confidence(confidence),
-                "source_context_digest": context_record["digest"],
+                "source_offset": source.source_offset,
+                "source_context_digest": source.context_digest,
             }
         )
     records.sort(
@@ -808,7 +911,6 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
             source_contexts.values(),
             key=lambda item: (
                 item["source_key"],
-                item["source_offset"],
                 item["digest"],
             ),
         ),
@@ -823,11 +925,19 @@ def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
     return sha256(encoded).hexdigest()
 
 
-def _source_context_digest(
-    *, source_key: str, source_offset: int, source_text: str
-) -> str:
+def resolution_input_fingerprint(mentions: Iterable[object]) -> str:
+    """Bind a result to exact mention fields and local source context."""
+
+    bounded = tuple(islice(iter(mentions), MAX_DOCUMENT_MENTIONS + 1))
+    if len(bounded) > MAX_DOCUMENT_MENTIONS:
+        raise ValueError(f"document mention cap exceeded ({MAX_DOCUMENT_MENTIONS})")
+    sources = _prepare_source_contexts(bounded)
+    return _resolution_input_fingerprint(bounded, sources)
+
+
+def _source_context_digest(*, source_key: str, source_text: str) -> str:
     digest = sha256()
-    for value in (source_key, str(source_offset), source_text):
+    for value in (source_key, source_text):
         encoded = value.encode("utf-8")
         digest.update(len(encoded).to_bytes(8, "big"))
         digest.update(encoded)
@@ -1425,11 +1535,15 @@ def resolve_document_mentions(
         raise ValueError("mentions must be iterable") from exc
     if len(bounded) > MAX_DOCUMENT_MENTIONS:
         raise ValueError(f"document mention cap exceeded ({MAX_DOCUMENT_MENTIONS})")
-    input_fingerprint = resolution_input_fingerprint(bounded)
+    sources = _prepare_source_contexts(bounded)
+    input_fingerprint = _resolution_input_fingerprint(bounded, sources)
     type_index, ontology_checksum = _ontology_type_index(ontology)
     adapted = tuple(
         sorted(
-            (_adapt_mention(item, type_index) for item in bounded),
+            (
+                _adapt_mention(item, type_index, source)
+                for item, source in zip(bounded, sources, strict=True)
+            ),
             key=lambda item: item.sort_key,
         )
     )
