@@ -1364,7 +1364,7 @@ git commit -m "feat(kg): add graph operations and retention"
 
 **Files:**
 - Modify: `.env.example`
-- Create: `docs/documents/operations/knowledge-graph-overlay-runbook.md`
+- Modify: `docs/documents/operations/knowledge-graph-overlay-runbook.md`
 - Modify: `docs/documents/README.md`
 - Modify: `docs/documents/architecture/2026-04-09-knowledge-graph-index-overlay-design.md`
 - Create: `aquillm/apps/knowledge_graph/tests/test_config.py`
@@ -1612,4 +1612,3 @@ Do not create any additional verification commit when no fixes were required. If
 ## Execution Handoff
 
 Implementation must use `superpowers:subagent-driven-development` with one fresh subagent per task and two-stage review. Start at Chunk 0; do not parallelize tasks that share files even if the dependency table permits conceptual concurrency. Keep `KG_BUILD_ENABLED=0` and `KG_OVERLAY_ENABLED=0` through final verification. Enabling either flag in a real environment is an operator rollout action, not an implementation-plan step.
-
