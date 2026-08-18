@@ -427,6 +427,7 @@ class GraphArtifact(ValidatedGraphModel):
     updated_at = models.DateTimeField(auto_now=True)
     activated_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    superseded_at = models.DateTimeField(null=True, blank=True)
 
     _IMMUTABLE_FIELDS = (
         "scope_type",
@@ -443,7 +444,11 @@ class GraphArtifact(ValidatedGraphModel):
         "assembly_version",
         "assembly_config_checksum",
     )
-    _QUERYSET_IMMUTABLE_FIELDS = (*_IMMUTABLE_FIELDS, "activated_at")
+    _QUERYSET_IMMUTABLE_FIELDS = (
+        *_IMMUTABLE_FIELDS,
+        "activated_at",
+        "superseded_at",
+    )
 
     objects = models.Manager.from_queryset(GraphArtifactQuerySet)()
 
@@ -605,22 +610,24 @@ class GraphArtifact(ValidatedGraphModel):
     def clean(self):
         super().clean()
         if self.pk:
-            previous_activation = (
+            previous_lifecycle = (
                 type(self).objects.filter(pk=self.pk)
-                .values_list("activated_at", flat=True)
+                .values("activated_at", "superseded_at")
                 .first()
             )
-            if (
-                previous_activation is not None
-                and self.activated_at != previous_activation
-            ):
-                raise ValidationError(
-                    {
-                        "activated_at": (
+            if previous_lifecycle is not None:
+                lifecycle_errors = {}
+                for field in ("activated_at", "superseded_at"):
+                    previous_value = previous_lifecycle[field]
+                    if (
+                        previous_value is not None
+                        and getattr(self, field) != previous_value
+                    ):
+                        lifecycle_errors[field] = (
                             "Collection activation history is immutable once set."
                         )
-                    }
-                )
+                if lifecycle_errors:
+                    raise ValidationError(lifecycle_errors)
         self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
         self.source_hash = _validate_source_hash(self.source_hash)
         self.embedding_model_signature = _validate_embedding_model_signature(

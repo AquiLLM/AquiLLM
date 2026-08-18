@@ -16,6 +16,7 @@ from django.db.models import CheckConstraint, UniqueConstraint
 from apps.knowledge_graph.graph.assembly import (
     ASSEMBLY_V1_MAX_ENTITIES,
     ASSEMBLY_V1_MAX_EVIDENCE,
+    ASSEMBLY_V1_MAX_LINKS,
     ASSEMBLY_V1_MAX_ORPHAN_ENTITIES,
     ASSEMBLY_V1_MAX_RELATIONS,
     AssemblyConfig,
@@ -220,6 +221,7 @@ def test_assembly_config_checksum_covers_caps_and_generic_relations():
     ("field_name", "upper_bound"),
     (
         ("max_entities", ASSEMBLY_V1_MAX_ENTITIES),
+        ("max_links", ASSEMBLY_V1_MAX_LINKS),
         ("max_relations", ASSEMBLY_V1_MAX_RELATIONS),
         ("max_evidence", ASSEMBLY_V1_MAX_EVIDENCE),
         ("max_orphan_entities", ASSEMBLY_V1_MAX_ORPHAN_ENTITIES),

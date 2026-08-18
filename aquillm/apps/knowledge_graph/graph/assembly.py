@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from hashlib import sha256
@@ -21,10 +22,12 @@ if TYPE_CHECKING:
 
 ASSEMBLY_VERSION = "collection-assembly-v1"
 ASSEMBLY_V1_MAX_ENTITIES = 50_000
+ASSEMBLY_V1_MAX_LINKS = 250_000
 ASSEMBLY_V1_MAX_RELATIONS = 50_000
 ASSEMBLY_V1_MAX_EVIDENCE = 200_000
 ASSEMBLY_V1_MAX_ORPHAN_ENTITIES = ASSEMBLY_V1_MAX_ENTITIES
 _ASSEMBLY_INSERT_BATCH_SIZE = 1_000
+_ENDPOINT_ID_BATCH_SIZE = 5_000
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_TOKEN_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 _ACTIVE = "active"
@@ -46,6 +49,7 @@ class AssemblyConfig:
 
     version: str = ASSEMBLY_VERSION
     max_entities: int = ASSEMBLY_V1_MAX_ENTITIES
+    max_links: int = ASSEMBLY_V1_MAX_LINKS
     # V1 materializes its deterministic projection before batched persistence.
     # Keep a hard operational envelope until a streaming planner lands.
     max_relations: int = ASSEMBLY_V1_MAX_RELATIONS
@@ -81,6 +85,7 @@ class AssemblyConfig:
             raise ValueError("assembly version must be a safe nonempty string")
         upper_bounds = {
             "max_entities": ASSEMBLY_V1_MAX_ENTITIES,
+            "max_links": ASSEMBLY_V1_MAX_LINKS,
             "max_relations": ASSEMBLY_V1_MAX_RELATIONS,
             "max_evidence": ASSEMBLY_V1_MAX_EVIDENCE,
             "max_orphan_entities": ASSEMBLY_V1_MAX_ORPHAN_ENTITIES,
@@ -120,6 +125,7 @@ def assembly_config_checksum(config: AssemblyConfig) -> str:
     payload = {
         "version": config.version,
         "max_entities": config.max_entities,
+        "max_links": config.max_links,
         "max_relations": config.max_relations,
         "max_evidence": config.max_evidence,
         "max_orphan_entities": config.max_orphan_entities,
@@ -532,10 +538,21 @@ def _source_hash(value: object) -> str:
     return value
 
 
+def _id_batches(values: Iterable[int]) -> Iterator[tuple[int, ...]]:
+    """Yield stable endpoint-ID batches small enough for PostgreSQL predicates."""
+
+    ordered = tuple(sorted(set(values)))
+    if any(type(value) is not int or value < 1 for value in ordered):
+        raise CollectionGraphAssemblyError("endpoint IDs must be positive integers")
+    for offset in range(0, len(ordered), _ENDPOINT_ID_BATCH_SIZE):
+        yield ordered[offset : offset + _ENDPOINT_ID_BATCH_SIZE]
+
+
 def _config_payload(config: AssemblyConfig) -> dict[str, object]:
     return {
         "version": config.version,
         "max_entities": config.max_entities,
+        "max_links": config.max_links,
         "max_relations": config.max_relations,
         "max_evidence": config.max_evidence,
         "max_orphan_entities": config.max_orphan_entities,
@@ -553,6 +570,7 @@ def _config_from_marker(marker: object) -> AssemblyConfig:
         if set(payload) != {
             "version",
             "max_entities",
+            "max_links",
             "max_relations",
             "max_evidence",
             "max_orphan_entities",
@@ -568,6 +586,7 @@ def _config_from_marker(marker: object) -> AssemblyConfig:
         return AssemblyConfig(
             version=payload["version"],
             max_entities=payload["max_entities"],
+            max_links=payload["max_links"],
             max_relations=payload["max_relations"],
             max_evidence=payload["max_evidence"],
             max_orphan_entities=payload["max_orphan_entities"],
@@ -1236,7 +1255,7 @@ def _load_locked_task9_rows(artifact: object, config: AssemblyConfig):
     )
     if len(entities) > config.max_entities:
         raise CollectionGraphAssemblyError("assembly entity cap exceeded")
-    links = tuple(
+    link_query = (
         CollectionEntityDocumentLink.objects.select_for_update()
         .select_related(
             "collection_entity",
@@ -1246,6 +1265,9 @@ def _load_locked_task9_rows(artifact: object, config: AssemblyConfig):
         .filter(artifact=artifact)
         .order_by("pk")
     )
+    if link_query.count() > config.max_links:
+        raise CollectionGraphAssemblyError("assembly link cap exceeded")
+    links = tuple(link_query)
     return entities, links
 
 
@@ -1280,15 +1302,18 @@ def _load_assembly_evidence(
         for row in relation_mentions
         for endpoint_id in (row.head_id, row.tail_id)
     }
-    memberships = tuple(
-        DocumentEntityMention.objects.select_for_update()
-        .select_related("document_entity", "mention")
-        .filter(
-            mention_id__in=endpoint_ids,
-            status=DocumentEntityMention.Status.ACTIVE,
+    membership_rows = []
+    for endpoint_batch in _id_batches(endpoint_ids):
+        membership_rows.extend(
+            DocumentEntityMention.objects.select_for_update()
+            .select_related("document_entity", "mention")
+            .filter(
+                mention_id__in=endpoint_batch,
+                status=DocumentEntityMention.Status.ACTIVE,
+            )
+            .order_by("mention_id")
         )
-        .order_by("mention_id")
-    )
+    memberships = tuple(membership_rows)
     membership_by_mention = {row.mention_id: row for row in memberships}
     if len(membership_by_mention) != len(memberships):
         raise CollectionGraphAssemblyError(
@@ -1446,23 +1471,25 @@ def _active_entity_provenance(
             "active collection entity provenance mapping is invalid"
         )
     document_entity_ids = {row.document_entity_id for row in automatic}
-    memberships = tuple(
-        DocumentEntityMention.objects.select_for_update()
-        .select_related("mention")
-        .filter(
-            document_entity_id__in=document_entity_ids,
-            status=DocumentEntityMention.Status.ACTIVE,
+    provenanced_documents = set()
+    for document_entity_batch in _id_batches(document_entity_ids):
+        memberships = (
+            DocumentEntityMention.objects.select_for_update()
+            .select_related("mention", "document_entity")
+            .filter(
+                document_entity_id__in=document_entity_batch,
+                status=DocumentEntityMention.Status.ACTIVE,
+            )
+            .order_by("pk")
         )
-        .order_by("pk")
-    )
-    provenanced_documents = {
-        row.document_entity_id
-        for row in memberships
-        if row.mention_id
-        and row.mention.chunk_id
-        and row.mention.artifact_id == row.document_entity.artifact_id
-        and row.mention.document_id == row.document_entity.document_id
-    }
+        for row in memberships.iterator(chunk_size=_ASSEMBLY_INSERT_BATCH_SIZE):
+            if (
+                row.mention_id
+                and row.mention.chunk_id
+                and row.mention.artifact_id == row.document_entity.artifact_id
+                and row.mention.document_id == row.document_entity.document_id
+            ):
+                provenanced_documents.add(row.document_entity_id)
     provenanced_entities = frozenset(
         row.collection_entity_id
         for row in automatic
@@ -2177,10 +2204,6 @@ def activate_collection_graph(
     """Atomically expose a validated shadow while enforcing monotonic newer-wins."""
 
     from django.db import transaction
-    from django.utils import timezone
-
-    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
-
     collection_id = _positive_int(collection_id, "collection id")
     build_run_id = _positive_int(build_run_id, "build run id")
     aggregate_source_signature = _source_hash(aggregate_source_signature)
@@ -2200,53 +2223,76 @@ def activate_collection_graph(
             ontology=ontology,
             config=config,
         )
-        active = tuple(
-            row
-            for row in scope_artifacts
-            if row.status == GraphArtifact.Status.ACTIVE
+        _swap_active_collection_artifact(
+            artifact=artifact,
+            run=run,
+            scope_artifacts=scope_artifacts,
         )
-        if _newer_activation_exists(artifact.pk, scope_artifacts):
-            raise CollectionGraphAssemblyError(
-                "a newer collection artifact already won activation"
-            )
-        if artifact.status == GraphArtifact.Status.ACTIVE:
-            if tuple(row.pk for row in active) != (artifact.pk,):
-                raise CollectionGraphAssemblyError(
-                    "active candidate is not the unique current collection artifact"
-                )
-            if (
-                run.stage != GraphBuildRun.Stage.COMPLETE
-                or run.status != GraphBuildRun.Status.SUCCEEDED
-            ):
-                run.stage = GraphBuildRun.Stage.COMPLETE
-                run.status = GraphBuildRun.Status.SUCCEEDED
-                run.finished_at = timezone.now()
-                run.save(update_fields=["stage", "status", "finished_at"])
-            return result
-        if len(active) > 1:
-            raise CollectionGraphAssemblyError(
-                "collection has multiple active artifacts before activation"
-            )
-        for previous in active:
-            previous.status = GraphArtifact.Status.SUPERSEDED
-            previous.completed_at = timezone.now()
-            previous.save(update_fields=["status", "completed_at"])
-        activated_at = timezone.now()
-        artifact.status = GraphArtifact.Status.ACTIVE
-        artifact.activated_at = activated_at
-        artifact.completed_at = activated_at
-        artifact.save(update_fields=["status", "activated_at", "completed_at"])
-        run.stage = GraphBuildRun.Stage.COMPLETE
-        run.status = GraphBuildRun.Status.SUCCEEDED
-        run.finished_at = activated_at
-        run.save(update_fields=["stage", "status", "finished_at"])
         return result
+
+
+def _swap_active_collection_artifact(
+    *,
+    artifact: object,
+    run: object,
+    scope_artifacts: tuple[object, ...],
+) -> None:
+    """Swap a locked, validated candidate without rewriting prior completion."""
+
+    from django.utils import timezone
+
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    active = tuple(
+        row for row in scope_artifacts if row.status == GraphArtifact.Status.ACTIVE
+    )
+    if _newer_activation_exists(artifact.pk, scope_artifacts):
+        raise CollectionGraphAssemblyError(
+            "a newer collection artifact already won activation"
+        )
+    if artifact.status == GraphArtifact.Status.ACTIVE:
+        if tuple(row.pk for row in active) != (artifact.pk,):
+            raise CollectionGraphAssemblyError(
+                "active candidate is not the unique current collection artifact"
+            )
+        if (
+            run.stage != GraphBuildRun.Stage.COMPLETE
+            or run.status != GraphBuildRun.Status.SUCCEEDED
+        ):
+            run.stage = GraphBuildRun.Stage.COMPLETE
+            run.status = GraphBuildRun.Status.SUCCEEDED
+            run.finished_at = timezone.now()
+            run.save(update_fields=["stage", "status", "finished_at"])
+        return
+    if len(active) > 1:
+        raise CollectionGraphAssemblyError(
+            "collection has multiple active artifacts before activation"
+        )
+    superseded_at = timezone.now()
+    for previous in active:
+        if previous.superseded_at is not None:
+            raise CollectionGraphAssemblyError(
+                "active artifact already has a supersession timestamp"
+            )
+        previous.status = GraphArtifact.Status.SUPERSEDED
+        previous.superseded_at = superseded_at
+        previous.save(update_fields=["status", "superseded_at"])
+    activated_at = timezone.now()
+    artifact.status = GraphArtifact.Status.ACTIVE
+    artifact.activated_at = activated_at
+    artifact.completed_at = activated_at
+    artifact.save(update_fields=["status", "activated_at", "completed_at"])
+    run.stage = GraphBuildRun.Stage.COMPLETE
+    run.status = GraphBuildRun.Status.SUCCEEDED
+    run.finished_at = activated_at
+    run.save(update_fields=["stage", "status", "finished_at"])
 
 
 __all__ = [
     "ASSEMBLY_VERSION",
     "ASSEMBLY_V1_MAX_ENTITIES",
     "ASSEMBLY_V1_MAX_EVIDENCE",
+    "ASSEMBLY_V1_MAX_LINKS",
     "ASSEMBLY_V1_MAX_ORPHAN_ENTITIES",
     "ASSEMBLY_V1_MAX_RELATIONS",
     "AssemblyConfig",

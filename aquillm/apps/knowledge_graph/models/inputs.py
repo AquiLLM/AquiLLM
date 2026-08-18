@@ -55,6 +55,9 @@ def collection_input_source_signature(
             "extractor_version": document_artifact.extractor_version,
             "resolver_version": document_artifact.resolver_version,
             "filter_policy_version": document_artifact.filter_policy_version,
+            "embedding_model_signature": (
+                document_artifact.embedding_model_signature
+            ),
             "ontology_checksum": document_artifact.ontology_checksum,
             "filter_policy_checksum": document_artifact.filter_policy_checksum,
             "resolution_config_checksum": (

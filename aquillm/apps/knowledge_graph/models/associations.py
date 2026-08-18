@@ -19,6 +19,27 @@ from .entities import (
 from .inputs import CollectionArtifactInput
 
 
+def _current_link_filters(prefix: str = "") -> dict[str, object]:
+    """Return one fail-closed automatic mapping path for current-state reads."""
+
+    path = f"{prefix}__" if prefix else ""
+    return {
+        f"{path}artifact__status": GraphArtifact.Status.ACTIVE,
+        f"{path}status": ResolutionStatus.ACTIVE,
+        f"{path}outcome": "automatic",
+        f"{path}document_entity__status": ResolutionStatus.ACTIVE,
+        f"{path}document_entity__artifact__status": GraphArtifact.Status.ACTIVE,
+        f"{path}collection_entity__status": ResolutionStatus.ACTIVE,
+    }
+
+
+class CollectionEntityDocumentLinkQuerySet(CollectionArtifactChildQuerySet):
+    """Expose automatic links whose complete graph path remains current."""
+
+    def current(self):
+        return self.filter(**_current_link_filters())
+
+
 class CollectionEntityDocumentLink(
     CollectionArtifactChildModelMixin, ValidatedGraphModel
 ):
@@ -95,7 +116,7 @@ class CollectionEntityDocumentLink(
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
-    objects = models.Manager.from_queryset(CollectionArtifactChildQuerySet)()
+    objects = models.Manager.from_queryset(CollectionEntityDocumentLinkQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"

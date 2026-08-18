@@ -501,6 +501,16 @@ class DocumentEntityMention(ValidatedGraphModel):
                 )
 
 
+class CollectionEntityQuerySet(CollectionArtifactChildQuerySet):
+    """Expose only entities belonging to the active collection graph."""
+
+    def current(self):
+        return self.filter(
+            artifact__status=GraphArtifact.Status.ACTIVE,
+            status=ResolutionStatus.ACTIVE,
+        )
+
+
 class CollectionEntity(CollectionArtifactChildModelMixin, ValidatedGraphModel):
     """Collection-scoped resolved entity with optional retrieval embedding."""
 
@@ -567,7 +577,7 @@ class CollectionEntity(CollectionArtifactChildModelMixin, ValidatedGraphModel):
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
-    objects = models.Manager.from_queryset(CollectionArtifactChildQuerySet)()
+    objects = models.Manager.from_queryset(CollectionEntityQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"

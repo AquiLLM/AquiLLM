@@ -267,6 +267,7 @@ class Migration(migrations.Migration):
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("activated_at", models.DateTimeField(blank=True, null=True)),
                 ("completed_at", models.DateTimeField(blank=True, null=True)),
+                ("superseded_at", models.DateTimeField(blank=True, null=True)),
             ],
             options={
                 "indexes": [

@@ -15,7 +15,7 @@ from .artifacts import (
     ImmutableGraphQuerySet,
     ValidatedGraphModel,
 )
-from .associations import CollectionEntityDocumentLink
+from .associations import CollectionEntityDocumentLink, _current_link_filters
 from .entities import (
     CollectionEntity,
     DocumentEntityMention,
@@ -185,13 +185,16 @@ class CollectionRelationQuerySet(CollectionArtifactChildQuerySet):
         active_evidence = CollectionRelationEvidence.objects.filter(
             relation_id=OuterRef("pk"),
             status=CollectionRelationEvidence.Status.ACTIVE,
+            relation_mention__artifact__status=GraphArtifact.Status.ACTIVE,
+            **_current_link_filters("head_mapping"),
+            **_current_link_filters("tail_mapping"),
         )
-        return self.annotate(_has_active_evidence=Exists(active_evidence)).filter(
+        return self.filter(
+            Exists(active_evidence),
             artifact__status=GraphArtifact.Status.ACTIVE,
             status=ResolutionStatus.ACTIVE,
             source__status=ResolutionStatus.ACTIVE,
             target__status=ResolutionStatus.ACTIVE,
-            _has_active_evidence=True,
         )
 
 
@@ -323,6 +326,23 @@ class CollectionRelation(CollectionArtifactChildModelMixin, ValidatedGraphModel)
         if errors:
             raise ValidationError(errors)
 
+
+class CollectionRelationEvidenceQuerySet(CollectionArtifactChildQuerySet):
+    """Expose promoted evidence only while its assembled relation is current."""
+
+    def current(self):
+        current_relation = CollectionRelation.objects.current().filter(
+            pk=OuterRef("relation_id")
+        )
+        return self.filter(
+            Exists(current_relation),
+            status="active",
+            relation_mention__artifact__status=GraphArtifact.Status.ACTIVE,
+            **_current_link_filters("head_mapping"),
+            **_current_link_filters("tail_mapping"),
+        )
+
+
 class CollectionRelationEvidence(
     CollectionArtifactChildModelMixin, ValidatedGraphModel
 ):
@@ -406,7 +426,7 @@ class CollectionRelationEvidence(
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
-    objects = models.Manager.from_queryset(CollectionArtifactChildQuerySet)()
+    objects = models.Manager.from_queryset(CollectionRelationEvidenceQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"
