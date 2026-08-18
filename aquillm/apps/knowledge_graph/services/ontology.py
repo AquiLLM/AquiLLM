@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 from math import isfinite
 from pathlib import Path
@@ -48,6 +48,36 @@ _RELATION_FIELDS = frozenset(
 )
 
 
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that preserves duplicate-key errors instead of overwriting."""
+
+
+def _construct_unique_mapping(
+    loader: yaml.SafeLoader, node: yaml.nodes.MappingNode, deep: bool = False
+) -> dict[str, Any]:
+    mapping: dict[str, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if not isinstance(key, str):
+            raise yaml.constructor.ConstructorError(
+                None, None, "YAML mapping keys must be strings", key_node.start_mark
+            )
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                None,
+                None,
+                f"duplicate YAML mapping key: {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
+)
+
+
 class OntologyValidationError(ValueError):
     """Raised when an ontology document violates the stable schema."""
 
@@ -79,6 +109,7 @@ class OntologyDefinition:
     checksum: str
     canonical_yaml: str
     raw_yaml: str
+    provenance: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,8 +150,8 @@ def _read_yaml(path: str | Path) -> tuple[Any, str]:
             f"Unable to read ontology {source}: {exc}"
         ) from exc
     try:
-        data = yaml.safe_load(raw_yaml)
-    except yaml.YAMLError as exc:
+        data = yaml.load(raw_yaml, Loader=_UniqueKeySafeLoader)
+    except (ValueError, yaml.YAMLError) as exc:
         raise OntologyValidationError(f"Unsupported or malformed YAML: {exc}") from exc
     _validate_yaml_value(data)
     return data, raw_yaml
@@ -174,9 +205,42 @@ def _nonempty_string(value: Any, label: str) -> str:
 
 def _semantic_version(value: Any) -> str:
     version = _nonempty_string(value, "version")
+    if len(version) > 128:
+        raise OntologyValidationError("version must be at most 128 characters")
     if not _SEMVER.fullmatch(version):
         raise OntologyValidationError("version must be a semantic version")
     return version
+
+
+def _compare_semver_precedence(left: str, right: str) -> int:
+    """Compare validated SemVer values, intentionally ignoring build metadata."""
+    left_core, _, left_prerelease = left.split("+", 1)[0].partition("-")
+    right_core, _, right_prerelease = right.split("+", 1)[0].partition("-")
+    left_numbers = tuple(int(part) for part in left_core.split("."))
+    right_numbers = tuple(int(part) for part in right_core.split("."))
+    if left_numbers != right_numbers:
+        return 1 if left_numbers > right_numbers else -1
+    if not left_prerelease or not right_prerelease:
+        if left_prerelease == right_prerelease:
+            return 0
+        return -1 if left_prerelease else 1
+    left_identifiers = left_prerelease.split(".")
+    right_identifiers = right_prerelease.split(".")
+    for left_identifier, right_identifier in zip(
+        left_identifiers, right_identifiers, strict=False
+    ):
+        if left_identifier == right_identifier:
+            continue
+        left_numeric = left_identifier.isascii() and left_identifier.isdigit()
+        right_numeric = right_identifier.isascii() and right_identifier.isdigit()
+        if left_numeric and right_numeric:
+            return 1 if int(left_identifier) > int(right_identifier) else -1
+        if left_numeric != right_numeric:
+            return -1 if left_numeric else 1
+        return 1 if left_identifier > right_identifier else -1
+    if len(left_identifiers) == len(right_identifiers):
+        return 0
+    return 1 if len(left_identifiers) > len(right_identifiers) else -1
 
 
 def _names(value: Any, label: str) -> tuple[str, ...]:
@@ -200,7 +264,10 @@ def _aliases(value: Any, label: str) -> tuple[str, ...]:
 def _unit_number(value: Any, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise OntologyValidationError(f"{label} must be a finite number")
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise OntologyValidationError(f"{label} must be between 0 and 1") from exc
     if not isfinite(number) or not 0.0 <= number <= 1.0:
         raise OntologyValidationError(f"{label} must be between 0 and 1")
     return number
@@ -258,7 +325,8 @@ def _build_definition(
     version: str,
     entity_types: Mapping[str, EntityTypeDefinition],
     relations: Mapping[str, RelationDefinition],
-    raw_yaml: str,
+    raw_yaml: str | None,
+    provenance: Mapping[str, str] | None = None,
 ) -> OntologyDefinition:
     content = _definition_content(version, entity_types, relations)
     canonical_yaml = _canonical_yaml(content)
@@ -268,7 +336,8 @@ def _build_definition(
         relations=MappingProxyType(dict(sorted(relations.items()))),
         checksum=_checksum(content),
         canonical_yaml=canonical_yaml,
-        raw_yaml=raw_yaml,
+        raw_yaml=canonical_yaml if raw_yaml is None else raw_yaml,
+        provenance=MappingProxyType(dict(sorted((provenance or {}).items()))),
     )
 
 
@@ -463,6 +532,12 @@ def merge_ontology_extension(
     base: OntologyDefinition, delta: OntologyExtensionDefinition
 ) -> OntologyDefinition:
     """Return a new immutable ontology after a core-preserving extension merge."""
+    base_version = _semantic_version(base.version)
+    delta_version = _semantic_version(delta.version)
+    if _compare_semver_precedence(delta_version, base_version) <= 0:
+        raise OntologyValidationError(
+            "extension version must be strictly newer than the base version"
+        )
     entity_types = dict(base.entity_types)
     relations = dict(base.relations)
     for name, extension in delta.entity_types.items():
@@ -575,7 +650,18 @@ def merge_ontology_extension(
                 f"unknown endpoint types for {name}: {sorted(unknown)}"
             )
         relations[name] = relation
-    return _build_definition(delta.version, entity_types, relations, raw_yaml="")
+    return _build_definition(
+        delta_version,
+        entity_types,
+        relations,
+        raw_yaml=None,
+        provenance={
+            "base_checksum": base.checksum,
+            "base_version": base_version,
+            "delta_checksum": delta.checksum,
+            "delta_version": delta_version,
+        },
+    )
 
 
 def _lock_graph_ontology_activation(cursor: Any) -> None:
@@ -592,9 +678,13 @@ def activate_ontology(definition: OntologyDefinition):
 
     from apps.knowledge_graph.models import OntologyVersion
 
+    yaml_text = definition.raw_yaml or definition.canonical_yaml
+    if not yaml_text:
+        raise OntologyValidationError("ontology activation requires nonempty YAML")
     metadata = {
-        "yaml": definition.raw_yaml,
+        "yaml": yaml_text,
         "canonical_yaml": definition.canonical_yaml,
+        "provenance": dict(definition.provenance),
         "checksum_algorithm": "sha256-canonical-json-v1",
     }
     with transaction.atomic():

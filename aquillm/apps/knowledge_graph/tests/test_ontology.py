@@ -163,6 +163,55 @@ def test_loader_rejects_invalid_ontology_semantics(tmp_path, mutate):
         load_ontology(_write(tmp_path, document))
 
 
+def test_loader_rejects_unit_number_overflow_as_ontology_validation_error(tmp_path):
+    from apps.knowledge_graph.services.ontology import (
+        OntologyValidationError,
+        load_ontology,
+    )
+
+    document = _document()
+    document["entity_types"][0]["default_retrieval_weight"] = 10**1_000
+
+    with pytest.raises(OntologyValidationError, match="between 0 and 1"):
+        load_ontology(_write(tmp_path, document))
+
+
+def test_loader_rejects_duplicate_yaml_mapping_keys_recursively(tmp_path):
+    from apps.knowledge_graph.services.ontology import (
+        OntologyValidationError,
+        load_ontology,
+    )
+
+    duplicate_root = tmp_path / "duplicate-root.yaml"
+    duplicate_root.write_text("version: 1.0.0\nversion: 1.0.1\n", encoding="utf-8")
+    duplicate_nested = tmp_path / "duplicate-nested.yaml"
+    duplicate_nested.write_text(
+        "version: 1.0.0\nentity_types:\n  - name: paper\n    name: article\n",
+        encoding="utf-8",
+    )
+
+    for path in (duplicate_root, duplicate_nested):
+        with pytest.raises(OntologyValidationError, match="duplicate YAML mapping key"):
+            load_ontology(path)
+
+
+def test_loader_rejects_semver_longer_than_ontology_version_storage(tmp_path):
+    from apps.knowledge_graph.services.ontology import (
+        OntologyValidationError,
+        load_ontology,
+        load_ontology_extension,
+    )
+
+    version = "1.0.0+" + "a" * 123
+    document = _document()
+    document["version"] = version
+
+    with pytest.raises(OntologyValidationError, match="128"):
+        load_ontology(_write(tmp_path, document, "ontology.yaml"))
+    with pytest.raises(OntologyValidationError, match="128"):
+        load_ontology_extension(_write(tmp_path, document, "extension.yaml"))
+
+
 @pytest.mark.parametrize(
     "version",
     ["1.0.0-01", "1.0.0-alpha.01", "1.0.0-0.01+build.7"],
@@ -281,6 +330,78 @@ def test_extension_merge_adds_alias_policy_and_new_relation_without_redefining_c
     assert merged.entity_types["paper"].default_retrieval_weight == 0.9
     assert "venue" in merged.entity_types
     assert "published_in" in merged.relations
+    assert merged.raw_yaml == merged.canonical_yaml
+    assert merged.raw_yaml
+    assert merged.provenance == {
+        "base_checksum": load_ontology(
+            _write(tmp_path, _document(), "base.yaml")
+        ).checksum,
+        "base_version": "1.0.0",
+        "delta_checksum": load_ontology_extension(
+            _write(tmp_path, extension, "extension.yaml")
+        ).checksum,
+        "delta_version": "1.1.0",
+    }
+
+
+@pytest.mark.parametrize(
+    "base_version,delta_version",
+    [
+        ("1.0.0", "1.0.0"),
+        ("1.0.0", "0.9.9"),
+        ("1.0.0", "1.0.0+other-build"),
+        ("1.0.0-rc.1", "1.0.0-alpha.9"),
+    ],
+)
+def test_extension_merge_requires_a_strictly_newer_semver(
+    tmp_path, base_version, delta_version
+):
+    from apps.knowledge_graph.services.ontology import (
+        OntologyValidationError,
+        load_ontology,
+        load_ontology_extension,
+        merge_ontology_extension,
+    )
+
+    base = _document()
+    base["version"] = base_version
+    delta = {"version": delta_version, "entity_types": [], "relations": []}
+
+    with pytest.raises(OntologyValidationError, match="strictly newer"):
+        merge_ontology_extension(
+            load_ontology(_write(tmp_path, base, "base.yaml")),
+            load_ontology_extension(_write(tmp_path, delta, "delta.yaml")),
+        )
+
+
+@pytest.mark.parametrize(
+    "base_version,delta_version",
+    [
+        ("1.0.0-alpha.1", "1.0.0-alpha.2"),
+        ("1.0.0-rc.1+build.5", "1.0.0"),
+        ("1.0.0+base", "1.0.1+delta"),
+    ],
+)
+def test_extension_merge_accepts_strictly_newer_semver_ignoring_build_metadata(
+    tmp_path, base_version, delta_version
+):
+    from apps.knowledge_graph.services.ontology import (
+        load_ontology,
+        load_ontology_extension,
+        merge_ontology_extension,
+    )
+
+    base = _document()
+    base["version"] = base_version
+    delta = {"version": delta_version, "entity_types": [], "relations": []}
+
+    assert (
+        merge_ontology_extension(
+            load_ontology(_write(tmp_path, base, "base.yaml")),
+            load_ontology_extension(_write(tmp_path, delta, "delta.yaml")),
+        ).version
+        == delta_version
+    )
 
 
 def test_extension_merge_rejects_core_redefinition(tmp_path):
