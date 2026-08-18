@@ -143,13 +143,31 @@ def _validate_expected(
     for index, raw_entity in enumerate(expected["entities"]):
         entity_context = f"{context}.expected.entities[{index}]"
         entity = _require_mapping(raw_entity, entity_context)
-        _require_fields(entity, ("id", "text", "type", "chunk_id"), entity_context)
+        _require_fields(
+            entity,
+            ("id", "text", "type", "chunk_id", "start", "end"),
+            entity_context,
+        )
         entity_id = _require_nonempty_string(entity["id"], f"{entity_context}.id")
         text = _require_nonempty_string(entity["text"], f"{entity_context}.text")
         _require_nonempty_string(entity["type"], f"{entity_context}.type")
         chunk_id = _require_nonempty_string(
             entity["chunk_id"], f"{entity_context}.chunk_id"
         )
+        start = entity["start"]
+        end = entity["end"]
+        if type(start) is not int:
+            raise FixtureValidationError(f"{entity_context}.start must be an integer")
+        if type(end) is not int:
+            raise FixtureValidationError(f"{entity_context}.end must be an integer")
+        if start < 0:
+            raise FixtureValidationError(
+                f"{entity_context}.start must be non-negative"
+            )
+        if end <= start:
+            raise FixtureValidationError(
+                f"{entity_context}.end must be greater than start"
+            )
         if entity_id in entity_ids:
             raise FixtureValidationError(
                 f"{entity_context} has duplicate entity id {entity_id!r}"
@@ -158,9 +176,18 @@ def _validate_expected(
             raise FixtureValidationError(
                 f"{entity_context} references unknown chunk {chunk_id!r}"
             )
-        if text.lower() not in chunks[chunk_id][0].lower():
+        chunk_text = chunks[chunk_id][0]
+        if start >= len(chunk_text):
             raise FixtureValidationError(
-                f"{entity_context}.text is not anchored in chunk {chunk_id!r}"
+                f"{entity_context}.start is outside referenced chunk {chunk_id!r}"
+            )
+        if end > len(chunk_text):
+            raise FixtureValidationError(
+                f"{entity_context}.end is outside referenced chunk {chunk_id!r}"
+            )
+        if chunk_text[start:end] != text:
+            raise FixtureValidationError(
+                f"{entity_context} span does not exactly match text"
             )
         entity_ids.add(entity_id)
 
@@ -397,7 +424,7 @@ def _structural_set(records: Any) -> set[str]:
 
 
 def _entity_key(record: Mapping[str, Any]) -> tuple[Any, ...]:
-    """Prediction entity contract: type, text, chunk_id, optional span_start/end.
+    """Prediction entity contract: type, text, chunk_id, start, and end.
 
     IDs and confidence are intentionally ignored; ``id`` is only a legacy fallback
     for old hand-written unit predictions that omit all semantic fields.
@@ -407,8 +434,8 @@ def _entity_key(record: Mapping[str, Any]) -> tuple[Any, ...]:
             record["type"],
             str(record["text"]).casefold(),
             record["chunk_id"],
-            record.get("span_start"),
-            record.get("span_end"),
+            record.get("start"),
+            record.get("end"),
         )
     return ("legacy-id", record.get("id"))
 
@@ -462,13 +489,15 @@ def score_extraction(
     )
     report["relation_precision"] = _precision(gold_relations, predicted_relations)
     report["relation_recall"] = _recall(gold_relations, predicted_relations)
-    for metric_name, key in (
-        ("auto_link_precision", "auto_links"),
-        ("suppression_precision", "suppressed_evidence"),
-    ):
-        report[metric_name] = _precision(
-            _structural_set(expected.get(key)), _structural_set(predictions.get(key))
-        )
+    gold_links = _relation_set(expected.get("auto_links"), expected.get("entities"))
+    predicted_links = _relation_set(
+        predictions.get("auto_links"), predictions.get("entities")
+    )
+    report["auto_link_precision"] = _precision(gold_links, predicted_links)
+    report["suppression_precision"] = _precision(
+        _structural_set(expected.get("suppressed_evidence")),
+        _structural_set(predictions.get("suppressed_evidence")),
+    )
     return MappingProxyType(report)
 
 

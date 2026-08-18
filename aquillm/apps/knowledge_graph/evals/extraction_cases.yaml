@@ -16,21 +16,46 @@ cases:
             text: "Retrieval-augmented generation (RAG) reduces unsupported claims when retrieval precedes generation."
     expected:
       entities:
-        - id: entity-rag-acronym
+        - id: entity-rag-full-name-001
+          text: Retrieval-augmented generation
+          type: method
+          chunk_id: rag-overview-001
+          start: 0
+          end: 30
+        - id: entity-rag-acronym-001
           text: RAG
           type: method
           chunk_id: rag-overview-001
-        - id: entity-rag-full-name
+          start: 32
+          end: 35
+        - id: entity-rag-full-name-002
           text: Retrieval-augmented generation
           type: method
           chunk_id: rag-overview-002
+          start: 0
+          end: 30
+        - id: entity-rag-acronym-002
+          text: RAG
+          type: method
+          chunk_id: rag-overview-002
+          start: 32
+          end: 35
       relations:
-        - source: entity-rag-full-name
-          target: entity-rag-acronym
+        - source: entity-rag-full-name-001
+          target: entity-rag-acronym-001
+          type: abbreviation_of
+        - source: entity-rag-full-name-002
+          target: entity-rag-acronym-002
           type: abbreviation_of
       auto_links:
-        - source: entity-rag-acronym
-          target: entity-rag-full-name
+        - source: entity-rag-full-name-001
+          target: entity-rag-acronym-001
+          type: canonical_identity
+        - source: entity-rag-acronym-001
+          target: entity-rag-full-name-002
+          type: canonical_identity
+        - source: entity-rag-full-name-002
+          target: entity-rag-acronym-002
           type: canonical_identity
       suppressed_evidence: []
 
@@ -56,10 +81,14 @@ cases:
           text: F1
           type: evaluation_metric
           chunk_id: nlp-f1-001
+          start: 0
+          end: 2
         - id: entity-f1-racing
           text: F1
           type: racing_series
           chunk_id: racing-f1-001
+          start: 0
+          end: 2
       relations: []
       auto_links: []
       suppressed_evidence: []
@@ -86,10 +115,14 @@ cases:
           text: Orion
           type: model
           chunk_id: orion-release-001
+          start: 0
+          end: 5
         - id: entity-orion-appendix
           text: Orion
           type: model
           chunk_id: orion-appendix-001
+          start: 4
+          end: 9
       relations: []
       auto_links:
         - source: entity-orion-release
@@ -113,10 +146,14 @@ cases:
           text: Orion 2.1
           type: model_version
           chunk_id: orion-version-001
+          start: 0
+          end: 9
         - id: entity-orion-2-10
           text: Orion 2.10
           type: model_version
           chunk_id: orion-version-001
+          start: 41
+          end: 51
       relations: []
       auto_links: []
       suppressed_evidence: []
@@ -139,15 +176,37 @@ cases:
           text: Atlas encoder
           type: model
           chunk_id: latency-001
-        - id: entity-retrieval-service
+          start: 4
+          end: 17
+        - id: entity-retrieval-service-001a
+          text: retrieval service
+          type: service
+          chunk_id: latency-001
+          start: 45
+          end: 62
+        - id: entity-retrieval-service-001b
+          text: retrieval service
+          type: service
+          chunk_id: latency-001
+          start: 68
+          end: 85
+        - id: entity-retrieval-service-002
           text: retrieval service
           type: service
           chunk_id: latency-002
+          start: 4
+          end: 21
       relations:
         - source: entity-atlas
-          target: entity-retrieval-service
+          target: entity-retrieval-service-002
           type: supplies_embeddings_to
-      auto_links: []
+      auto_links:
+        - source: entity-retrieval-service-001a
+          target: entity-retrieval-service-001b
+          type: canonical_identity
+        - source: entity-retrieval-service-001b
+          target: entity-retrieval-service-002
+          type: canonical_identity
       suppressed_evidence: []
 
   - id: publisher_boilerplate_suppressed
@@ -166,6 +225,8 @@ cases:
           text: Atlas model
           type: model
           chunk_id: boilerplate-001
+          start: 34
+          end: 45
       relations: []
       auto_links: []
       suppressed_evidence:

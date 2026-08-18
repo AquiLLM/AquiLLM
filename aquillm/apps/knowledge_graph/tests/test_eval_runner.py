@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -12,6 +15,7 @@ import yaml
 from apps.knowledge_graph.evals import run_kg_eval
 
 EVALS_DIR = Path(__file__).resolve().parent.parent / "evals"
+AQUILLM_DIR = EVALS_DIR.parents[2]
 
 
 def test_loaders_return_immutable_fixture_cases_from_module_paths():
@@ -90,7 +94,7 @@ def test_extraction_metrics_are_set_based_with_empty_sets_scoring_one():
         "entity_recall": 0.5,
         "relation_precision": 1.0,
         "relation_recall": 0.0,
-        "auto_link_precision": 1.0,
+        "auto_link_precision": 0.0,
         "suppression_precision": 1.0,
     }
 
@@ -136,13 +140,26 @@ def test_semantic_matching_ignores_ids_but_keeps_span_and_direction():
                     "text": "Atlas",
                     "type": "model",
                     "chunk_id": "c",
-                    "span_start": 1,
-                    "span_end": 6,
+                    "start": 1,
+                    "end": 6,
                 },
-                {"id": "gold-b", "text": "Service", "type": "service", "chunk_id": "c"},
+                {
+                    "id": "gold-b",
+                    "text": "Service",
+                    "type": "service",
+                    "chunk_id": "c",
+                    "start": 7,
+                    "end": 14,
+                },
             ],
             "relations": [{"source": "gold-a", "target": "gold-b", "type": "uses"}],
-            "auto_links": [],
+            "auto_links": [
+                {
+                    "source": "gold-a",
+                    "target": "gold-b",
+                    "type": "canonical_identity",
+                }
+            ],
             "suppressed_evidence": [],
         }
     }
@@ -153,8 +170,8 @@ def test_semantic_matching_ignores_ids_but_keeps_span_and_direction():
                 "text": "atlas",
                 "type": "model",
                 "chunk_id": "c",
-                "span_start": 1,
-                "span_end": 6,
+                "start": 1,
+                "end": 6,
                 "confidence": 0.9,
             },
             {
@@ -162,6 +179,8 @@ def test_semantic_matching_ignores_ids_but_keeps_span_and_direction():
                 "text": "Service",
                 "type": "service",
                 "chunk_id": "c",
+                "start": 7,
+                "end": 14,
                 "confidence": 0.2,
             },
         ],
@@ -173,10 +192,23 @@ def test_semantic_matching_ignores_ids_but_keeps_span_and_direction():
                 "confidence": 0.1,
             }
         ],
+        "auto_links": [
+            {
+                "source": "runtime-7",
+                "target": "runtime-8",
+                "type": "canonical_identity",
+                "confidence": 0.8,
+            }
+        ],
     }
     assert run_kg_eval.score_extraction(case, prediction)["relation_recall"] == 1.0
-    prediction["entities"][0]["span_start"] = 2
+    assert run_kg_eval.score_extraction(case, prediction)["auto_link_precision"] == 1.0
+    prediction["entities"][0]["start"] = 2
     assert run_kg_eval.score_extraction(case, prediction)["entity_recall"] == 0.5
+    prediction["entities"][0]["start"] = 1
+    prediction["entities"][0]["chunk_id"] = "different-chunk"
+    assert run_kg_eval.score_extraction(case, prediction)["entity_recall"] == 0.5
+    assert run_kg_eval.score_extraction(case, prediction)["auto_link_precision"] == 0.0
 
 
 def test_baseline_accepts_deduplicated_positive_integer_ids():
@@ -289,6 +321,48 @@ def test_extraction_loader_rejects_duplicate_and_dangling_records(
     ("mutate", "message"),
     [
         (
+            lambda entity: entity.pop("start", None),
+            "missing required field 'start'",
+        ),
+        (
+            lambda entity: entity.pop("end", None),
+            "missing required field 'end'",
+        ),
+        (lambda entity: entity.update(start="0"), "start must be an integer"),
+        (lambda entity: entity.update(start=True), "start must be an integer"),
+        (lambda entity: entity.update(end=False), "end must be an integer"),
+        (lambda entity: entity.update(start=-1), "start must be non-negative"),
+        (
+            lambda entity: entity.update(start=10_000, end=10_001),
+            "start is outside referenced chunk",
+        ),
+        (lambda entity: entity.update(end=0), "end must be greater than start"),
+        (
+            lambda entity: entity.update(end=10_000),
+            "end is outside referenced chunk",
+        ),
+        (
+            lambda entity: entity.update(start=1, end=31),
+            "span does not exactly match text",
+        ),
+    ],
+)
+def test_extraction_loader_rejects_missing_or_invalid_entity_spans(
+    tmp_path, mutate, message
+):
+    payload = _fixture_payload("extraction_cases.yaml")
+    mutate(payload["cases"][0]["expected"]["entities"][0])
+
+    with pytest.raises(run_kg_eval.FixtureValidationError, match=message):
+        run_kg_eval.load_extraction_cases(
+            _write_payload(tmp_path, "invalid-span.yaml", payload)
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
             lambda payload: payload["cases"][0]["documents"].append(
                 deepcopy(payload["cases"][0]["documents"][0])
             ),
@@ -348,7 +422,10 @@ def test_all_fixture_records_have_valid_text_anchors_and_references():
         }
         entities = {entity["id"]: entity for entity in case["expected"]["entities"]}
         for entity in entities.values():
-            assert entity["text"].lower() in chunks[entity["chunk_id"]].lower()
+            assert type(entity["start"]) is int
+            assert type(entity["end"]) is int
+            chunk_text = chunks[entity["chunk_id"]]
+            assert chunk_text[entity["start"] : entity["end"]] == entity["text"]
         for relation in case["expected"]["relations"]:
             assert relation["source"] in entities
             assert relation["target"] in entities
@@ -374,30 +451,79 @@ def test_all_fixture_records_have_valid_text_anchors_and_references():
         for case in extraction_cases
         if case["id"] == "acronym_definition_then_full_name"
     )
-    acronym_entities = {
-        entity["id"]: entity for entity in acronym_case["expected"]["entities"]
+    acronym_mentions = {
+        (
+            entity["id"],
+            entity["chunk_id"],
+            entity["text"],
+            entity["type"],
+            entity["start"],
+            entity["end"],
+        )
+        for entity in acronym_case["expected"]["entities"]
     }
-    acronym_chunks = {
-        chunk["chunk_id"]: chunk["text"]
-        for document in acronym_case["documents"]
-        for chunk in document["chunks"]
+    assert acronym_mentions == {
+        (
+            "entity-rag-full-name-001",
+            "rag-overview-001",
+            "Retrieval-augmented generation",
+            "method",
+            0,
+            30,
+        ),
+        ("entity-rag-acronym-001", "rag-overview-001", "RAG", "method", 32, 35),
+        (
+            "entity-rag-full-name-002",
+            "rag-overview-002",
+            "Retrieval-augmented generation",
+            "method",
+            0,
+            30,
+        ),
+        ("entity-rag-acronym-002", "rag-overview-002", "RAG", "method", 32, 35),
     }
-    assert acronym_entities["entity-rag-full-name"]["chunk_id"] == "rag-overview-002"
-    assert (
-        acronym_entities["entity-rag-full-name"]["text"]
-        in acronym_chunks["rag-overview-002"]
-    )
 
     overlap_case = next(
         case for case in extraction_cases if case["id"] == "overlap_boundary_relation"
     )
-    overlap_chunks = {
-        chunk["chunk_id"]: chunk["text"]
-        for document in overlap_case["documents"]
-        for chunk in document["chunks"]
+    service_mentions = {
+        (
+            entity["id"],
+            entity["chunk_id"],
+            entity["text"],
+            entity["type"],
+            entity["start"],
+            entity["end"],
+        )
+        for entity in overlap_case["expected"]["entities"]
+        if entity["text"] == "retrieval service"
     }
-    assert "The retrieval service ranks passages" in overlap_chunks["latency-001"]
-    assert "The retrieval service ranks passages" in overlap_chunks["latency-002"]
+    assert service_mentions == {
+        (
+            "entity-retrieval-service-001a",
+            "latency-001",
+            "retrieval service",
+            "service",
+            45,
+            62,
+        ),
+        (
+            "entity-retrieval-service-001b",
+            "latency-001",
+            "retrieval service",
+            "service",
+            68,
+            85,
+        ),
+        (
+            "entity-retrieval-service-002",
+            "latency-002",
+            "retrieval service",
+            "service",
+            4,
+            21,
+        ),
+    }
 
 
 def test_baseline_records_only_fixture_backed_results_and_marks_missing_as_skip():
@@ -448,3 +574,85 @@ def test_cli_returns_two_for_invalid_fixture_input(tmp_path, capsys):
 
     assert exit_code == 2
     assert json.loads(capsys.readouterr().out)["status"] == "INVALID_FIXTURE"
+
+
+def _run_cli(tmp_path, *args):
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        value
+        for value in (str(AQUILLM_DIR), env.get("PYTHONPATH"))
+        if value
+    )
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "apps.knowledge_graph.evals.run_kg_eval",
+            *map(str, args),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+
+def test_subprocess_cli_baseline_accepts_integer_ids_deterministically(tmp_path):
+    results = tmp_path / "results.json"
+    results.write_text(
+        json.dumps({"canonical_identity_expands_a_to_b": [101, 202]}),
+        encoding="utf-8",
+    )
+
+    first = _run_cli(tmp_path, "--baseline-only", "--retrieval-results", results)
+    second = _run_cli(tmp_path, "--baseline-only", "--retrieval-results", results)
+
+    assert first.returncode == second.returncode == 0
+    assert first.stdout == second.stdout
+    assert first.stderr == second.stderr == b""
+    payload = json.loads(first.stdout)
+    record = next(
+        record
+        for record in payload["records"]
+        if record["id"] == "canonical_identity_expands_a_to_b"
+    )
+    assert record["result_ids"] == [101, 202]
+
+
+@pytest.mark.parametrize(
+    ("kind", "contents", "extra_args"),
+    [
+        ("fixture", "[unterminated", ("--extraction-cases",)),
+        ("results", "[]", ("--retrieval-results",)),
+        ("results", '{"unknown-case": [1]}', ("--retrieval-results",)),
+        (
+            "results",
+            '{"canonical_identity_expands_a_to_b": [true]}',
+            ("--retrieval-results",),
+        ),
+        (
+            "results",
+            '{"canonical_identity_expands_a_to_b": [0]}',
+            ("--retrieval-results",),
+        ),
+        (
+            "results",
+            '{"canonical_identity_expands_a_to_b": [-1]}',
+            ("--retrieval-results",),
+        ),
+    ],
+)
+def test_subprocess_cli_reports_invalid_inputs_without_tracebacks(
+    tmp_path, kind, contents, extra_args
+):
+    invalid = tmp_path / f"invalid-{kind}.txt"
+    invalid.write_text(contents, encoding="utf-8")
+
+    completed = _run_cli(tmp_path, "--baseline-only", *extra_args, invalid)
+
+    assert completed.returncode == 2
+    lines = completed.stdout.splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["status"] == "INVALID_FIXTURE"
+    assert completed.stderr == b""
