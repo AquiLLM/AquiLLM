@@ -61,6 +61,11 @@ def test_loaders_return_immutable_fixture_cases_from_module_paths():
             "schema_version: 1\ncases:\n  - id: only-id\n",
             "missing required",
         ),
+        (
+            "recursive.yaml",
+            "schema_version: 1\ncases: &cases\n  - *cases\n",
+            "recursive",
+        ),
     ],
 )
 def test_loader_rejects_malformed_fixture_data(tmp_path, filename, contents, message):
@@ -69,6 +74,19 @@ def test_loader_rejects_malformed_fixture_data(tmp_path, filename, contents, mes
 
     with pytest.raises(run_kg_eval.FixtureValidationError, match=message):
         run_kg_eval.load_extraction_cases(path)
+
+
+@pytest.mark.parametrize("schema_version", [True, 1.0])
+def test_loader_requires_schema_version_to_be_exact_integer(tmp_path, schema_version):
+    payload = _fixture_payload("extraction_cases.yaml")
+    payload["schema_version"] = schema_version
+
+    with pytest.raises(
+        run_kg_eval.FixtureValidationError, match="schema_version must be integer 1"
+    ):
+        run_kg_eval.load_extraction_cases(
+            _write_payload(tmp_path, "invalid-schema-version.yaml", payload)
+        )
 
 
 def test_extraction_metrics_are_set_based_with_empty_sets_scoring_one():
@@ -211,10 +229,50 @@ def test_semantic_matching_ignores_ids_but_keeps_span_and_direction():
     assert run_kg_eval.score_extraction(case, prediction)["auto_link_precision"] == 0.0
 
 
+def test_overlap_relation_scores_the_visible_same_chunk_mentions():
+    case = next(
+        case
+        for case in run_kg_eval.load_extraction_cases()
+        if case["id"] == "overlap_boundary_relation"
+    )
+    prediction = {
+        "entities": [
+            {
+                **dict(case["expected"]["entities"][0]),
+                "id": "runtime-atlas",
+                "confidence": 0.9,
+            },
+            {
+                **dict(case["expected"]["entities"][1]),
+                "id": "runtime-service",
+                "confidence": 0.8,
+            },
+        ],
+        "relations": [
+            {
+                "source": "runtime-atlas",
+                "target": "runtime-service",
+                "type": "supplies_embeddings_to",
+                "confidence": 0.7,
+            }
+        ],
+    }
+
+    report = run_kg_eval.score_extraction(case, prediction)
+
+    assert report["relation_precision"] == 1.0
+    assert report["relation_recall"] == 1.0
+
+
 def test_baseline_accepts_deduplicated_positive_integer_ids():
-    assert run_kg_eval.build_baseline_records(
+    record = run_kg_eval.build_baseline_records(
         ({"id": "case"},), {"case": [2, 2, "alias"]}
-    )[0]["result_ids"] == [2, "alias"]
+    )[0]
+
+    assert record["result_ids"] == (2, "alias")
+    assert record["unresolved_result_ids"] == (2, "alias")
+    assert record["unresolved_result_count"] == 2
+    assert record["security_status"] == "UNKNOWN"
 
 
 def test_retrieval_recall_is_limited_to_first_ten_unique_output_ids():
@@ -239,9 +297,61 @@ def test_baseline_reports_inaccessible_observed_results_without_counting_them():
         "baseline_vector_result_ids": ["public-1", "private-1"],
     }
     record = run_kg_eval.build_baseline_records((case,))[0]
-    assert record["inaccessible_result_ids"] == ["private-1"]
+    assert record["result_ids"] == ("public-1", "private-1")
+    assert record["inaccessible_result_ids"] == ("private-1",)
     assert record["inaccessible_result_count"] == 1
+    assert record["unresolved_result_ids"] == ()
+    assert record["unresolved_result_count"] == 0
     assert record["security_status"] == "LEAKAGE"
+
+
+@pytest.mark.parametrize(
+    ("result_ids", "status", "inaccessible", "unresolved"),
+    [
+        ([101], "UNKNOWN", (), (101,)),
+        (["unknown-result"], "UNKNOWN", (), ("unknown-result",)),
+        (["private-1"], "LEAKAGE", ("private-1",), ()),
+        (["private-1", 101], "LEAKAGE", ("private-1",), (101,)),
+        (["public-1"], "OK", (), ()),
+    ],
+)
+def test_baseline_security_status_requires_accessibility_evidence(
+    result_ids, status, inaccessible, unresolved
+):
+    case = {
+        "id": "case",
+        "accessible_collection_ids": ("public",),
+        "documents": (
+            {"collection_id": "public", "chunks": ({"chunk_id": "public-1"},)},
+            {
+                "collection_id": "private",
+                "chunks": ({"chunk_id": "private-1"},),
+            },
+        ),
+    }
+
+    record = run_kg_eval.build_baseline_records((case,), {"case": result_ids})[0]
+
+    assert record["security_status"] == status
+    assert record["inaccessible_result_ids"] == inaccessible
+    assert record["unresolved_result_ids"] == unresolved
+
+
+def test_structured_baseline_results_map_native_ids_to_collections():
+    case = {"id": "case", "accessible_collection_ids": ("public",)}
+    injected = {
+        "case": {
+            "result_ids": [101, 101],
+            "id_collections": {"101": "public"},
+        }
+    }
+
+    record = run_kg_eval.build_baseline_records((case,), injected)[0]
+
+    assert record["result_ids"] == (101,)
+    assert record["inaccessible_result_ids"] == ()
+    assert record["unresolved_result_ids"] == ()
+    assert record["security_status"] == "OK"
 
 
 def test_zero_gold_retrieval_recall_is_one():
@@ -381,18 +491,6 @@ def test_extraction_loader_rejects_missing_or_invalid_entity_spans(
             "unknown chunk",
         ),
         (
-            lambda payload: payload["cases"][1]["baseline_vector_result_ids"].append(
-                "unknown-chunk"
-            ),
-            "unknown chunk",
-        ),
-        (
-            lambda payload: payload["cases"][2].update(
-                baseline_vector_result_ids=["private-incident-001"]
-            ),
-            "not in an accessible collection",
-        ),
-        (
             lambda payload: payload["cases"][-1]["canonical_identity_links"][0].update(
                 target_chunk_id="unknown-chunk"
             ),
@@ -410,6 +508,30 @@ def test_retrieval_loader_rejects_duplicate_and_dangling_records(
         run_kg_eval.load_retrieval_cases(
             _write_payload(tmp_path, "invalid-retrieval.yaml", payload)
         )
+
+
+def test_retrieval_fixture_allows_observed_private_and_unresolved_baseline_ids(
+    tmp_path,
+):
+    payload = _fixture_payload("retrieval_cases.yaml")
+    payload["cases"][2]["baseline_vector_result_ids"] = [
+        "public-token-001",
+        "private-incident-001",
+        "native-unresolved",
+    ]
+
+    cases = run_kg_eval.load_retrieval_cases(
+        _write_payload(tmp_path, "observed-leakage.yaml", payload)
+    )
+    record = next(
+        record
+        for record in run_kg_eval.build_baseline_records(cases)
+        if record["id"] == "inaccessible_collection_is_excluded"
+    )
+
+    assert record["security_status"] == "LEAKAGE"
+    assert record["inaccessible_result_ids"] == ("private-incident-001",)
+    assert record["unresolved_result_ids"] == ("native-unresolved",)
 
 
 def test_all_fixture_records_have_valid_text_anchors_and_references():
@@ -528,7 +650,17 @@ def test_all_fixture_records_have_valid_text_anchors_and_references():
 
 def test_baseline_records_only_fixture_backed_results_and_marks_missing_as_skip():
     cases = (
-        {"id": "available", "baseline_vector_result_ids": ["chunk-a", "chunk-b"]},
+        {
+            "id": "available",
+            "accessible_collection_ids": ("public",),
+            "documents": (
+                {
+                    "collection_id": "public",
+                    "chunks": ({"chunk_id": "chunk-a"}, {"chunk_id": "chunk-b"}),
+                },
+            ),
+            "baseline_vector_result_ids": ("chunk-a", "chunk-b"),
+        },
         {"id": "unavailable"},
     )
 
@@ -537,9 +669,11 @@ def test_baseline_records_only_fixture_backed_results_and_marks_missing_as_skip(
     assert records == (
         {
             "id": "available",
-            "result_ids": ["chunk-a", "chunk-b"],
-            "inaccessible_result_ids": [],
+            "result_ids": ("chunk-a", "chunk-b"),
+            "inaccessible_result_ids": (),
             "inaccessible_result_count": 0,
+            "unresolved_result_ids": (),
+            "unresolved_result_count": 0,
             "security_status": "OK",
             "status": "RECORDED",
         },
@@ -601,7 +735,17 @@ def _run_cli(tmp_path, *args):
 def test_subprocess_cli_baseline_accepts_integer_ids_deterministically(tmp_path):
     results = tmp_path / "results.json"
     results.write_text(
-        json.dumps({"canonical_identity_expands_a_to_b": [101, 202]}),
+        json.dumps(
+            {
+                "canonical_identity_expands_a_to_b": {
+                    "result_ids": [101, 202],
+                    "id_collections": {
+                        "101": "collection-research-a",
+                        "202": "collection-research-b",
+                    },
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -618,13 +762,26 @@ def test_subprocess_cli_baseline_accepts_integer_ids_deterministically(tmp_path)
         if record["id"] == "canonical_identity_expands_a_to_b"
     )
     assert record["result_ids"] == [101, 202]
+    assert record["security_status"] == "OK"
+    assert record["unresolved_result_ids"] == []
 
 
 @pytest.mark.parametrize(
     ("kind", "contents", "extra_args"),
     [
         ("fixture", "[unterminated", ("--extraction-cases",)),
+        (
+            "recursive-fixture",
+            "schema_version: 1\ncases: &cases\n  - *cases\n",
+            ("--extraction-cases",),
+        ),
         ("results", "[]", ("--retrieval-results",)),
+        (
+            "results",
+            '{"canonical_identity_expands_a_to_b": {"result_ids": [1], '
+            '"id_collections": []}}',
+            ("--retrieval-results",),
+        ),
         ("results", '{"unknown-case": [1]}', ("--retrieval-results",)),
         (
             "results",

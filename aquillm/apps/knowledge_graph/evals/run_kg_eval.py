@@ -16,6 +16,11 @@ Usage from ``aquillm/``::
 ``--baseline-only`` prints compact, key-sorted JSON.  It records vector result
 IDs only when injected by ``--retrieval-results`` or supplied by a fixture; a
 case with neither emits ``SKIP`` and never fabricates IDs or scores.
+
+Retrieval-result JSON maps each case ID either to a simple result-ID list or to
+``{"result_ids": [...], "id_collections": {"<id>": "<collection_id>"}}``.
+Native integer IDs need this optional collection evidence to receive a resolved
+security status; JSON object keys use the string form of each result ID.
 """
 
 from __future__ import annotations
@@ -23,7 +28,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -39,20 +45,32 @@ class FixtureValidationError(ValueError):
     """Raised when an offline gold fixture cannot be evaluated deterministically."""
 
 
-def _freeze(value: Any) -> Any:
+def _freeze(value: Any, active_ids: set[int] | None = None) -> Any:
     """Deep-freeze JSON-like fixture data without coercing YAML key types."""
-    if isinstance(value, Mapping):
-        if not all(isinstance(key, str) for key in value):
-            raise FixtureValidationError("mapping keys must be strings")
-        return MappingProxyType({key: _freeze(value[key]) for key in sorted(value)})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item) for item in value)
+    active_ids = active_ids if active_ids is not None else set()
+    if isinstance(value, (Mapping, list, tuple)):
+        identity = id(value)
+        if identity in active_ids:
+            raise FixtureValidationError("recursive fixture aliases are not supported")
+        active_ids.add(identity)
+        try:
+            if isinstance(value, Mapping):
+                if not all(isinstance(key, str) for key in value):
+                    raise FixtureValidationError("mapping keys must be strings")
+                return MappingProxyType(
+                    {
+                        key: _freeze(value[key], active_ids)
+                        for key in sorted(value)
+                    }
+                )
+            return tuple(_freeze(item, active_ids) for item in value)
+        finally:
+            active_ids.remove(identity)
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     raise FixtureValidationError(
         f"unsupported fixture value type {type(value).__name__}"
     )
-    return value
 
 
 def _require_mapping(value: Any, context: str) -> Mapping[str, Any]:
@@ -323,29 +341,27 @@ def _validate_retrieval_case(case: Mapping[str, Any], index: int) -> None:
             )
         expected_ids.add(chunk_id)
     if "baseline_vector_result_ids" in case:
-        baseline_ids: set[str] = set()
+        baseline_ids: set[str | int] = set()
         for item_index, item in enumerate(
             _require_sequence(
                 case["baseline_vector_result_ids"],
                 f"{context}.baseline_vector_result_ids",
             )
         ):
-            chunk_id = _require_nonempty_string(
-                item, f"{context}.baseline_vector_result_ids[{item_index}]"
-            )
-            if chunk_id not in chunks:
+            item_context = f"{context}.baseline_vector_result_ids[{item_index}]"
+            if isinstance(item, str):
+                result_id: str | int = _require_nonempty_string(item, item_context)
+            elif type(item) is int and item > 0:
+                result_id = item
+            else:
                 raise FixtureValidationError(
-                    f"{context} references unknown chunk {chunk_id!r}"
+                    f"{item_context} must be a positive integer or non-empty string"
                 )
-            if chunks[chunk_id][1] not in accessible_collections:
+            if result_id in baseline_ids:
                 raise FixtureValidationError(
-                    f"{context} baseline evidence is not in an accessible collection"
+                    f"{context} has duplicate baseline result id {result_id!r}"
                 )
-            if chunk_id in baseline_ids:
-                raise FixtureValidationError(
-                    f"{context} has duplicate baseline chunk id {chunk_id!r}"
-                )
-            baseline_ids.add(chunk_id)
+            baseline_ids.add(result_id)
     if "canonical_identity_links" in case:
         seen_links: set[tuple[str, str, str]] = set()
         for link_index, raw_link in enumerate(
@@ -383,8 +399,9 @@ def _load_cases(path: Path, validator: Any) -> tuple[Mapping[str, Any], ...]:
     except (OSError, yaml.YAMLError) as exc:
         raise FixtureValidationError(f"could not read fixture {path}: {exc}") from exc
     payload = _require_mapping(_freeze(payload), "top level")
-    if payload.get("schema_version") != 1:
-        raise FixtureValidationError("top level schema_version must be 1")
+    schema_version = payload.get("schema_version")
+    if type(schema_version) is not int or schema_version != 1:
+        raise FixtureValidationError("top level schema_version must be integer 1")
     if "cases" not in payload:
         raise FixtureValidationError("top level missing required field 'cases'")
     cases = _require_sequence(payload["cases"], "top level cases", nonempty=True)
@@ -465,11 +482,11 @@ def _relation_set(records: Any, entities: Any) -> set[tuple[Any, ...]]:
     return result
 
 
-def _precision(gold: set[str], predicted: set[str]) -> float:
+def _precision(gold: AbstractSet[Hashable], predicted: AbstractSet[Hashable]) -> float:
     return 1.0 if not predicted else len(gold & predicted) / len(predicted)
 
 
-def _recall(gold: set[str], predicted: set[str]) -> float:
+def _recall(gold: AbstractSet[Hashable], predicted: AbstractSet[Hashable]) -> float:
     return 1.0 if not gold else len(gold & predicted) / len(gold)
 
 
@@ -519,23 +536,45 @@ def score_retrieval(
 
 def build_baseline_records(
     cases: Sequence[Mapping[str, Any]],
-    injected_results: Mapping[str, Sequence[str | int]] | None = None,
+    injected_results: Mapping[str, Any] | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
-    """Record actual vector IDs, returning explicit ``SKIP`` if none are available."""
+    """Record vector IDs and classify security only from collection evidence."""
     injected_results = injected_results or {}
     records: list[Mapping[str, Any]] = []
     for case in sorted(cases, key=lambda item: str(item["id"])):
         case_id = str(case["id"])
-        result_ids = injected_results.get(
+        raw_results = injected_results.get(
             case_id, case.get("baseline_vector_result_ids")
         )
-        if result_ids is None:
+        if raw_results is None:
             record: dict[str, Any] = {
                 "id": case_id,
                 "reason": "no fixture-backed or injected vector results",
                 "status": "SKIP",
             }
         else:
+            id_collections: Mapping[str, Any] = MappingProxyType({})
+            if isinstance(raw_results, Mapping):
+                _require_fields(
+                    raw_results, ("result_ids",), f"results for {case_id!r}"
+                )
+                result_ids = raw_results["result_ids"]
+                if "id_collections" in raw_results:
+                    id_collections = _require_mapping(
+                        raw_results["id_collections"],
+                        f"id_collections for {case_id!r}",
+                    )
+                    for result_key, collection_id in id_collections.items():
+                        _require_nonempty_string(
+                            result_key,
+                            f"id_collections key for {case_id!r}",
+                        )
+                        _require_nonempty_string(
+                            collection_id,
+                            f"collection for result {result_key!r}",
+                        )
+            else:
+                result_ids = raw_results
             if isinstance(result_ids, (str, bytes)) or not isinstance(
                 result_ids, Sequence
             ):
@@ -563,26 +602,39 @@ def build_baseline_records(
                 for chunk in document.get("chunks", ())
             }
             accessible = set(case.get("accessible_collection_ids", ()))
-            inaccessible = [
-                item
-                for item in deduped
-                if isinstance(item, str)
-                and item in chunk_collections
-                and chunk_collections[item] not in accessible
-            ]
+            inaccessible: list[str | int] = []
+            unresolved: list[str | int] = []
+            for item in deduped:
+                collection_id = (
+                    chunk_collections.get(item)
+                    if isinstance(item, str) and item in chunk_collections
+                    else id_collections.get(str(item))
+                )
+                if collection_id is None:
+                    unresolved.append(item)
+                elif collection_id not in accessible:
+                    inaccessible.append(item)
+            if inaccessible:
+                security_status = "LEAKAGE"
+            elif unresolved:
+                security_status = "UNKNOWN"
+            else:
+                security_status = "OK"
             record = {
                 "id": case_id,
-                "result_ids": deduped,
-                "inaccessible_result_ids": inaccessible,
+                "result_ids": tuple(deduped),
+                "inaccessible_result_ids": tuple(inaccessible),
                 "inaccessible_result_count": len(inaccessible),
-                "security_status": "LEAKAGE" if inaccessible else "OK",
+                "unresolved_result_ids": tuple(unresolved),
+                "unresolved_result_count": len(unresolved),
+                "security_status": security_status,
                 "status": "RECORDED",
             }
         records.append(MappingProxyType(record))
     return tuple(records)
 
 
-def _load_injected_results(path: Path | None) -> Mapping[str, Sequence[str | int]]:
+def _load_injected_results(path: Path | None) -> Mapping[str, Any]:
     if path is None:
         return MappingProxyType({})
     try:
@@ -616,7 +668,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--retrieval-results",
         type=Path,
-        help="JSON mapping of case ID to existing vector result IDs",
+        help=(
+            "JSON mapping of case ID to result IDs, optionally with ID-to-collection "
+            "evidence"
+        ),
     )
     parser.add_argument(
         "--baseline-only",

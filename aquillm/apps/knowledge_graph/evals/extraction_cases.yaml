@@ -198,7 +198,7 @@ cases:
           end: 21
       relations:
         - source: entity-atlas
-          target: entity-retrieval-service-002
+          target: entity-retrieval-service-001a
           type: supplies_embeddings_to
       auto_links:
         - source: entity-retrieval-service-001a
