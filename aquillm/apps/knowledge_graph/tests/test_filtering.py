@@ -654,6 +654,16 @@ def test_filter_rerun_creates_new_building_artifact_and_never_mutates_active():
     active.status = GraphArtifact.Status.ACTIVE
     active.save(update_fields=["status"])
 
+    # A newer retry that never committed successfully must not become the
+    # durable lineage source merely because its audit row was inserted later.
+    failed_retry = GraphBuildRun.objects.create(
+        artifact=active,
+        stage=GraphBuildRun.Stage.COMPLETE,
+        status=GraphBuildRun.Status.FAILED,
+        attempt=2,
+        stats=resolution_run.stats,
+    )
+
     rerun_policy = FilterPolicy(version="filter-v2", utility_activation_threshold=1.0)
     shadow = create_filter_rerun_artifact(
         active.pk,
@@ -669,6 +679,11 @@ def test_filter_rerun_creates_new_building_artifact_and_never_mutates_active():
     assert shadow.resolver_version == active.resolver_version
     assert shadow.embedding_model_signature == active.embedding_model_signature
     assert shadow.filter_policy_version == "filter-v2"
+    shadow_commit = GraphBuildRun.objects.get(artifact=shadow).stats["filter_commit"]
+    assert shadow_commit["source_build_run_id"] == resolution_run.pk
+    assert shadow_commit["source_build_run_id"] != failed_retry.pk
+    assert len(shadow_commit["source_task9_marker_checksum"]) == 64
+    assert shadow_commit["source_assembly_marker_checksum"] is None
     source_entity = CollectionEntity.objects.get(artifact=active)
     shadow_entity = CollectionEntity.objects.get(artifact=shadow)
     assert shadow_entity.label == source_entity.label

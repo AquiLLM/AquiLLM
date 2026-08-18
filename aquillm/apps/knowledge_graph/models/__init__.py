@@ -1,6 +1,12 @@
 """Public model exports for knowledge-graph persistence."""
 
-from .artifacts import GraphArtifact, GraphBuildRun, graph_identity_checksum
+from .artifacts import (
+    ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
+    ASSEMBLY_NOT_APPLICABLE_VERSION,
+    GraphArtifact,
+    GraphBuildRun,
+    graph_identity_checksum,
+)
 from .associations import CanonicalEntityLink, CollectionEntityDocumentLink
 from .entities import (
     CanonicalEntity,
@@ -30,6 +36,8 @@ __all__ = [
     "collection_manifest_source_hash",
     "CollectionRelation",
     "CollectionRelationEvidence",
+    "ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM",
+    "ASSEMBLY_NOT_APPLICABLE_VERSION",
     "DocumentEntity",
     "DocumentEntityMention",
     "EntityMention",

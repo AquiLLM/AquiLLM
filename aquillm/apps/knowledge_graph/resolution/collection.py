@@ -1423,6 +1423,54 @@ def _source_relation_fingerprint(relations: Sequence[SupportedRelation]) -> str:
     )
 
 
+def _raw_relation_snapshot(
+    manifest: Sequence[object], *, for_update: bool
+) -> tuple[int, str]:
+    """Fingerprint every raw relation, including rejected/unassigned evidence."""
+
+    from apps.knowledge_graph.graph.assembly import ASSEMBLY_V1_MAX_EVIDENCE
+    from apps.knowledge_graph.models import RelationMention
+
+    artifact_ids = tuple(sorted(row.document_artifact_id for row in manifest))
+    query = RelationMention.objects.filter(artifact_id__in=artifact_ids).order_by("pk")
+    if for_update:
+        query = query.select_for_update()
+    rows = query.values(
+        "pk",
+        "artifact_id",
+        "document_id",
+        "chunk_id",
+        "head_id",
+        "tail_id",
+        "relation_type",
+        "extraction_confidence",
+        "metadata",
+    ).iterator(chunk_size=1_000)
+    digest = sha256(b"task9-raw-relation-snapshot-v1\0")
+    count = 0
+    for row in rows:
+        count += 1
+        if count > ASSEMBLY_V1_MAX_EVIDENCE:
+            raise CollectionResolutionPersistenceError(
+                "raw relation evidence exceeds the assembly v1 operational cap"
+            )
+        payload = {
+            "id": row["pk"],
+            "artifact_id": row["artifact_id"],
+            "document_id": str(row["document_id"]),
+            "chunk_id": row["chunk_id"],
+            "head_id": row["head_id"],
+            "tail_id": row["tail_id"],
+            "relation_type": row["relation_type"],
+            "extraction_confidence": row["extraction_confidence"],
+            "metadata": row["metadata"],
+        }
+        digest.update(bytes.fromhex(_hash(payload)))
+    digest.update(b"\0count\0")
+    digest.update(str(count).encode())
+    return count, digest.hexdigest()
+
+
 def _input_fingerprint(
     snapshot: CollectionBuildSnapshot,
     entities: Sequence[DocumentEntityInput],
@@ -2285,6 +2333,7 @@ def build_collection_snapshot(
     filter_policy_version: str | None = None,
     filter_policy: object,
     resolution_config: CollectionResolutionConfig | None = None,
+    assembly_config: object | None = None,
     embedding_model_signature: str,
 ):
     """Create a building collection artifact and its immutable source manifest."""
@@ -2293,6 +2342,11 @@ def build_collection_snapshot(
 
     from apps.collections.models import Collection
     from apps.documents.models import Document
+    from apps.knowledge_graph.graph.assembly import (
+        AssemblyConfig,
+        assembly_config_checksum,
+        lock_collection_graph_scope,
+    )
     from apps.knowledge_graph.graph.filtering import (
         FilterPolicy,
         filter_policy_checksum,
@@ -2300,6 +2354,7 @@ def build_collection_snapshot(
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
         GraphArtifact,
+        GraphBuildRun,
     )
     from apps.knowledge_graph.models.inputs import (
         collection_input_source_signature,
@@ -2340,6 +2395,12 @@ def build_collection_snapshot(
             "collection snapshot requires exact resolution config"
         )
     resolution_config.__post_init__()
+    assembly_config = AssemblyConfig() if assembly_config is None else assembly_config
+    if type(assembly_config) is not AssemblyConfig:
+        raise CollectionResolutionPersistenceError(
+            "collection snapshot requires an exact assembly config"
+        )
+    assembly_config.__post_init__()
     policy_checksum = filter_policy_checksum(filter_policy)
     resolver_checksum = resolution_config_checksum(resolution_config)
     expected_signature = _bounded_text(
@@ -2376,6 +2437,26 @@ def build_collection_snapshot(
             "document artifact snapshot contains duplicates"
         )
     with transaction.atomic():
+        collection = lock_collection_graph_scope(collection.pk)
+        scope_artifacts = tuple(
+            GraphArtifact.objects.select_for_update()
+            .filter(
+                scope_type=GraphArtifact.ScopeType.COLLECTION,
+                scope_id=str(collection.pk),
+            )
+            .order_by("pk")
+        )
+        scope_artifact_ids = tuple(row.pk for row in scope_artifacts)
+        _scope_runs = tuple(
+            GraphBuildRun.objects.select_for_update()
+            .filter(artifact_id__in=scope_artifact_ids)
+            .order_by("pk")
+        )
+        _scope_manifests = tuple(
+            CollectionArtifactInput.objects.select_for_update()
+            .filter(artifact_id__in=scope_artifact_ids)
+            .order_by("artifact_id", "document_artifact_id")
+        )
         sources = tuple(
             GraphArtifact.objects.select_for_update()
             .filter(pk__in=source_ids)
@@ -2448,6 +2529,8 @@ def build_collection_snapshot(
             ontology_checksum=ontology_checksum,
             filter_policy_checksum=policy_checksum,
             resolution_config_checksum=resolver_checksum,
+            assembly_version=assembly_config.version,
+            assembly_config_checksum=assembly_config_checksum(assembly_config),
             metadata={"manifest_version": 2},
         )
         rows = [
@@ -2504,6 +2587,8 @@ def _validate_collection_destination(artifact, run) -> None:
         "ontology_checksum",
         "filter_policy_checksum",
         "resolution_config_checksum",
+        "assembly_version",
+        "assembly_config_checksum",
     ):
         if getattr(run, field) != getattr(artifact, field):
             raise CollectionResolutionPersistenceError(
@@ -3184,6 +3269,8 @@ def _collection_resolution_marker_is_valid(
     entity_count: int,
     automatic_assignment_count: int,
     link_count: int,
+    raw_relation_count: int,
+    raw_relation_fingerprint: str,
 ) -> bool:
     expected_keys = {
         "version",
@@ -3196,6 +3283,10 @@ def _collection_resolution_marker_is_valid(
         "ontology_checksum",
         "resolution_config_checksum",
         "embedding_model_signature",
+        "assembly_version",
+        "assembly_config_checksum",
+        "raw_relation_count",
+        "raw_relation_fingerprint",
         "collection_entity_count",
         "automatic_assignment_count",
         "link_count",
@@ -3217,6 +3308,14 @@ def _collection_resolution_marker_is_valid(
         == artifact.resolution_config_checksum
         and marker.get("embedding_model_signature")
         == artifact.embedding_model_signature
+        and marker.get("assembly_version") == artifact.assembly_version
+        and marker.get("assembly_config_checksum")
+        == artifact.assembly_config_checksum
+        and type(marker.get("raw_relation_count")) is int
+        and marker.get("raw_relation_count") == raw_relation_count
+        and type(marker.get("raw_relation_fingerprint")) is str
+        and _HASH_PATTERN.fullmatch(marker.get("raw_relation_fingerprint")) is not None
+        and marker.get("raw_relation_fingerprint") == raw_relation_fingerprint
         and type(marker.get("collection_entity_count")) is int
         and marker.get("collection_entity_count") == entity_count
         and type(marker.get("automatic_assignment_count")) is int
@@ -3277,7 +3376,14 @@ def _build_collection_entity_rows(artifact, result, filter_result):
 
 
 def _existing_collection_resolution(
-    artifact, run, manifest, source_entities, result, filter_result
+    artifact,
+    run,
+    manifest,
+    source_entities,
+    result,
+    filter_result,
+    raw_relation_count,
+    raw_relation_fingerprint,
 ):
     from apps.knowledge_graph.models import (
         CollectionEntity,
@@ -3309,6 +3415,8 @@ def _existing_collection_resolution(
         entity_count=len(result.clusters),
         automatic_assignment_count=len(result.source_entity_ids),
         link_count=expected_link_count,
+        raw_relation_count=raw_relation_count,
+        raw_relation_fingerprint=raw_relation_fingerprint,
     ):
         raise CollectionResolutionPersistenceError(
             "existing collection resolution marker is invalid"
@@ -3599,6 +3707,7 @@ def persist_collection_resolution(
 
     from django.db import transaction
 
+    from apps.knowledge_graph.graph.assembly import lock_collection_graph_scope
     from apps.knowledge_graph.graph.filtering import (
         CollectionFilterResult,
         FilterPolicy,
@@ -3629,9 +3738,44 @@ def persist_collection_resolution(
         raise CollectionResolutionPersistenceError(
             "filter result or policy failed recursive validation"
         ) from exc
+    artifact_reference = GraphArtifact.objects.only("scope_type", "scope_id").get(
+        pk=artifact_id
+    )
+    if artifact_reference.scope_type != GraphArtifact.ScopeType.COLLECTION:
+        raise CollectionResolutionPersistenceError(
+            "collection resolution requires a collection artifact"
+        )
+    try:
+        collection_id = int(artifact_reference.scope_id)
+    except (TypeError, ValueError) as exc:
+        raise CollectionResolutionPersistenceError(
+            "collection artifact scope identity is invalid"
+        ) from exc
     with transaction.atomic():
-        artifact = GraphArtifact.objects.select_for_update().get(pk=artifact_id)
-        run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
+        lock_collection_graph_scope(collection_id)
+        scope_artifacts = tuple(
+            GraphArtifact.objects.select_for_update()
+            .filter(
+                scope_type=GraphArtifact.ScopeType.COLLECTION,
+                scope_id=str(collection_id),
+            )
+            .order_by("pk")
+        )
+        artifact = next((row for row in scope_artifacts if row.pk == artifact_id), None)
+        if artifact is None:
+            raise CollectionResolutionPersistenceError(
+                "collection artifact changed before scope locking"
+            )
+        scope_runs = tuple(
+            GraphBuildRun.objects.select_for_update()
+            .filter(artifact_id__in=(row.pk for row in scope_artifacts))
+            .order_by("pk")
+        )
+        run = next((row for row in scope_runs if row.pk == build_run_id), None)
+        if run is None:
+            raise CollectionResolutionPersistenceError(
+                "collection build run changed before scope locking"
+            )
         _validate_collection_destination(artifact, run)
         manifest = tuple(
             CollectionArtifactInput.objects.select_for_update()
@@ -3650,6 +3794,9 @@ def persist_collection_resolution(
         )
         projected, source_relations = _load_resolution_source_rows(
             artifact, manifest, for_update=True
+        )
+        raw_relation_count, raw_relation_fingerprint = _raw_relation_snapshot(
+            manifest, for_update=True
         )
         _validate_result_against_source(
             result,
@@ -3689,6 +3836,8 @@ def persist_collection_resolution(
             source_entities,
             result,
             filter_result,
+            raw_relation_count,
+            raw_relation_fingerprint,
         )
         if existing is not None:
             return existing
@@ -3711,6 +3860,10 @@ def persist_collection_resolution(
             "ontology_checksum": artifact.ontology_checksum,
             "resolution_config_checksum": artifact.resolution_config_checksum,
             "embedding_model_signature": artifact.embedding_model_signature,
+            "assembly_version": artifact.assembly_version,
+            "assembly_config_checksum": artifact.assembly_config_checksum,
+            "raw_relation_count": raw_relation_count,
+            "raw_relation_fingerprint": raw_relation_fingerprint,
             "collection_entity_count": len(entity_rows),
             "automatic_assignment_count": len(result.source_entity_ids),
             "link_count": expected_link_count,

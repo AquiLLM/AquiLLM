@@ -246,6 +246,22 @@ class Migration(migrations.Migration):
                         blank=True, default="", editable=False, max_length=64
                     ),
                 ),
+                (
+                    "assembly_version",
+                    models.CharField(
+                        default="not-applicable", editable=False, max_length=128
+                    ),
+                ),
+                (
+                    "assembly_config_checksum",
+                    models.CharField(
+                        default=(
+                            "01de537f35946e5c9d07452b6699e913678f662c4ceb0b86a64b88c9cd1934ec"
+                        ),
+                        editable=False,
+                        max_length=64,
+                    ),
+                ),
                 ("metadata", models.JSONField(blank=True, default=dict)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
@@ -305,8 +321,37 @@ class Migration(migrations.Migration):
                             ("ontology_checksum__regex", "^[0-9a-f]{64}$"),
                             ("filter_policy_checksum__regex", "^[0-9a-f]{64}$"),
                             ("resolution_config_checksum__regex", "^[0-9a-f]{64}$"),
+                            ("assembly_config_checksum__regex", "^[0-9a-f]{64}$"),
                         ),
                         name="kg_artifact_identity_checksums_valid",
+                    ),
+                    models.CheckConstraint(
+                        condition=models.Q(
+                            models.Q(
+                                (
+                                    "assembly_config_checksum",
+                                    "01de537f35946e5c9d07452b6699e913678f662c4ceb0b86a64b88c9cd1934ec",
+                                ),
+                                ("assembly_version", "not-applicable"),
+                                ("scope_type", "document"),
+                            ),
+                            models.Q(
+                                ("scope_type", "collection"),
+                                models.Q(
+                                    ("assembly_version", "not-applicable"),
+                                    _negated=True,
+                                ),
+                                models.Q(
+                                    (
+                                        "assembly_config_checksum",
+                                        "01de537f35946e5c9d07452b6699e913678f662c4ceb0b86a64b88c9cd1934ec",
+                                    ),
+                                    _negated=True,
+                                ),
+                            ),
+                            _connector="OR",
+                        ),
+                        name="kg_artifact_assembly_identity_scope",
                     ),
                     models.CheckConstraint(
                         condition=models.Q(
@@ -328,6 +373,12 @@ class Migration(migrations.Migration):
                     models.CheckConstraint(
                         condition=models.Q(("source_hash", ""), _negated=True),
                         name="kg_artifact_source_hash_nonempty",
+                    ),
+                    models.CheckConstraint(
+                        condition=models.Q(
+                            ("source_hash__regex", "^[0-9a-f]{64}$")
+                        ),
+                        name="kg_artifact_source_hash_valid",
                     ),
                     models.CheckConstraint(
                         condition=models.Q(("ontology_version", ""), _negated=True),
@@ -365,6 +416,8 @@ class Migration(migrations.Migration):
                             "ontology_checksum",
                             "filter_policy_checksum",
                             "resolution_config_checksum",
+                            "assembly_version",
+                            "assembly_config_checksum",
                         ),
                         name="kg_artifact_build_identity",
                     ),
@@ -510,11 +563,10 @@ class Migration(migrations.Migration):
                         max_length=16,
                     ),
                 ),
-                ("support_count", models.PositiveIntegerField(default=0)),
+                ("support_count", models.PositiveIntegerField(default=1)),
                 ("confidence", models.FloatField()),
                 ("metadata", models.JSONField(blank=True, default=dict)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
-                ("updated_at", models.DateTimeField(auto_now=True)),
                 (
                     "source",
                     models.ForeignKey(
@@ -708,6 +760,22 @@ class Migration(migrations.Migration):
                     "resolution_config_checksum",
                     models.CharField(
                         blank=True, default="", editable=False, max_length=64
+                    ),
+                ),
+                (
+                    "assembly_version",
+                    models.CharField(
+                        default="not-applicable", editable=False, max_length=128
+                    ),
+                ),
+                (
+                    "assembly_config_checksum",
+                    models.CharField(
+                        default=(
+                            "01de537f35946e5c9d07452b6699e913678f662c4ceb0b86a64b88c9cd1934ec"
+                        ),
+                        editable=False,
+                        max_length=64,
                     ),
                 ),
                 (
@@ -907,11 +975,58 @@ class Migration(migrations.Migration):
                         verbose_name="ID",
                     ),
                 ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("active", "Promoted"),
+                            ("suppressed", "Suppressed"),
+                            ("rejected", "Rejected"),
+                        ],
+                        default="active",
+                        max_length=16,
+                    ),
+                ),
+                (
+                    "reason",
+                    models.CharField(
+                        default="ontology_valid_supported_evidence", max_length=128
+                    ),
+                ),
+                (
+                    "orientation",
+                    models.CharField(
+                        choices=[
+                            ("head_to_tail", "Raw head maps to relation source"),
+                            ("tail_to_head", "Raw tail maps to relation source"),
+                        ],
+                        default="head_to_tail",
+                        max_length=16,
+                    ),
+                ),
+                (
+                    "ontology_checksum",
+                    models.CharField(editable=False, max_length=64),
+                ),
+                (
+                    "assembly_config_checksum",
+                    models.CharField(editable=False, max_length=64),
+                ),
                 ("metadata", models.JSONField(blank=True, default=dict)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 (
+                    "artifact",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="collection_relation_evidence",
+                        to="apps_knowledge_graph.graphartifact",
+                    ),
+                ),
+                (
                     "head_mapping",
                     models.ForeignKey(
+                        blank=True,
+                        null=True,
                         on_delete=django.db.models.deletion.RESTRICT,
                         related_name="head_relation_evidence",
                         to="apps_knowledge_graph.collectionentitydocumentlink",
@@ -920,7 +1035,9 @@ class Migration(migrations.Migration):
                 (
                     "relation",
                     models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE,
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.RESTRICT,
                         related_name="evidence",
                         to="apps_knowledge_graph.collectionrelation",
                     ),
@@ -928,6 +1045,8 @@ class Migration(migrations.Migration):
                 (
                     "tail_mapping",
                     models.ForeignKey(
+                        blank=True,
+                        null=True,
                         on_delete=django.db.models.deletion.RESTRICT,
                         related_name="tail_relation_evidence",
                         to="apps_knowledge_graph.collectionentitydocumentlink",
@@ -936,7 +1055,7 @@ class Migration(migrations.Migration):
                 (
                     "relation_mention",
                     models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE,
+                        on_delete=django.db.models.deletion.PROTECT,
                         related_name="collection_evidence_links",
                         to="apps_knowledge_graph.relationmention",
                     ),
@@ -1289,6 +1408,13 @@ class Migration(migrations.Migration):
                 name="kg_collection_relation_idx",
             ),
         ),
+        migrations.AddIndex(
+            model_name="collectionrelation",
+            index=models.Index(
+                fields=["artifact", "target", "source", "relation_type"],
+                name="kg_collection_relation_rev",
+            ),
+        ),
         migrations.AddConstraint(
             model_name="collectionrelation",
             constraint=models.CheckConstraint(
@@ -1308,8 +1434,19 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="collectionrelation",
             constraint=models.CheckConstraint(
-                condition=models.Q(("support_count__gte", 0)),
+                condition=models.Q(("support_count__gte", 1)),
                 name="kg_collection_relation_support",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="collectionrelation",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    models.Q(("status", "active"), _negated=True),
+                    ("support_count__gte", 1),
+                    _connector="OR",
+                ),
+                name="kg_active_collection_relation_supported",
             ),
         ),
         migrations.AddConstraint(
@@ -1709,8 +1846,39 @@ class Migration(migrations.Migration):
                     ("ontology_checksum__regex", "^[0-9a-f]{64}$"),
                     ("filter_policy_checksum__regex", "^[0-9a-f]{64}$"),
                     ("resolution_config_checksum__regex", "^[0-9a-f]{64}$"),
+                    ("assembly_config_checksum__regex", "^[0-9a-f]{64}$"),
                 ),
                 name="kg_run_identity_checksums_valid",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="graphbuildrun",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    models.Q(
+                        (
+                            "assembly_config_checksum",
+                            "01de537f35946e5c9d07452b6699e913678f662c4ceb0b86a64b88c9cd1934ec",
+                        ),
+                        ("assembly_version", "not-applicable"),
+                        ("scope_type", "document"),
+                    ),
+                    models.Q(
+                        ("scope_type", "collection"),
+                        models.Q(
+                            ("assembly_version", "not-applicable"), _negated=True
+                        ),
+                        models.Q(
+                            (
+                                "assembly_config_checksum",
+                                "01de537f35946e5c9d07452b6699e913678f662c4ceb0b86a64b88c9cd1934ec",
+                            ),
+                            _negated=True,
+                        ),
+                    ),
+                    _connector="OR",
+                ),
+                name="kg_run_assembly_identity_scope",
             ),
         ),
         migrations.AddConstraint(
@@ -1760,6 +1928,13 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="graphbuildrun",
             constraint=models.CheckConstraint(
+                condition=models.Q(("source_hash__regex", "^[0-9a-f]{64}$")),
+                name="kg_build_source_hash_valid",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="graphbuildrun",
+            constraint=models.CheckConstraint(
                 condition=models.Q(("attempt__gte", 1)),
                 name="kg_build_run_attempt_positive",
             ),
@@ -1796,8 +1971,45 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="collectionrelationevidence",
             constraint=models.UniqueConstraint(
-                fields=("relation", "relation_mention"),
+                fields=("artifact", "relation_mention"),
                 name="kg_relation_evidence_unique",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="collectionrelationevidence",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    models.Q(
+                        ("head_mapping__isnull", False),
+                        ("relation__isnull", False),
+                        ("status", "active"),
+                        ("tail_mapping__isnull", False),
+                    ),
+                    models.Q(
+                        ("relation__isnull", True),
+                        ("status__in", ("suppressed", "rejected")),
+                    ),
+                    _connector="OR",
+                ),
+                name="kg_relation_evidence_decision_valid",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="collectionrelationevidence",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    ("ontology_checksum__regex", "^[0-9a-f]{64}$")
+                ),
+                name="kg_relation_evidence_ontology_hash",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="collectionrelationevidence",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    ("assembly_config_checksum__regex", "^[0-9a-f]{64}$")
+                ),
+                name="kg_relation_evidence_config_hash",
             ),
         ),
     ]

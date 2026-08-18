@@ -1719,7 +1719,11 @@ def test_source_snapshot_rejects_forged_string_subclass_fingerprint():
 
 def _destination_objects(result):
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
-    from apps.knowledge_graph.models.artifacts import graph_identity_checksum
+    from apps.knowledge_graph.models.artifacts import (
+        ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
+        ASSEMBLY_NOT_APPLICABLE_VERSION,
+        graph_identity_checksum,
+    )
 
     identity = {
         "scope_type": GraphArtifact.ScopeType.DOCUMENT,
@@ -1736,6 +1740,8 @@ def _destination_objects(result):
         "resolution_config_checksum": graph_identity_checksum(
             "document-resolver", result.resolver_version
         ),
+        "assembly_version": ASSEMBLY_NOT_APPLICABLE_VERSION,
+        "assembly_config_checksum": ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
     }
     artifact = SimpleNamespace(
         pk=7,
@@ -1962,6 +1968,8 @@ def test_resolution_commit_validator_requires_exact_typed_counts_and_hashes():
         "version": 1,
         "resolver_version": DOCUMENT_RESOLVER_VERSION,
         "ontology_checksum": "a" * 64,
+        "assembly_version": "not-applicable",
+        "assembly_config_checksum": "d" * 64,
         "source_mention_count": 2,
         "source_mention_fingerprint": "b" * 64,
         "document_entity_count": 1,
@@ -1973,6 +1981,8 @@ def test_resolution_commit_validator_requires_exact_typed_counts_and_hashes():
         values,
         resolver_version=DOCUMENT_RESOLVER_VERSION,
         ontology_checksum="a" * 64,
+        assembly_version="not-applicable",
+        assembly_config_checksum="d" * 64,
         source_mention_count=2,
         source_mention_fingerprint="b" * 64,
         document_entity_count=1,
@@ -1983,6 +1993,8 @@ def test_resolution_commit_validator_requires_exact_typed_counts_and_hashes():
         ("version", True),
         ("resolver_version", "other"),
         ("ontology_checksum", "A" * 64),
+        ("assembly_version", "other"),
+        ("assembly_config_checksum", "D" * 64),
         ("source_mention_count", 2.0),
         ("source_mention_fingerprint", "short"),
         ("document_entity_count", -1),
@@ -1994,6 +2006,8 @@ def test_resolution_commit_validator_requires_exact_typed_counts_and_hashes():
             changed,
             resolver_version=DOCUMENT_RESOLVER_VERSION,
             ontology_checksum="a" * 64,
+            assembly_version="not-applicable",
+            assembly_config_checksum="d" * 64,
             source_mention_count=2,
             source_mention_fingerprint="b" * 64,
             document_entity_count=1,
@@ -2009,6 +2023,8 @@ def test_resolution_commit_validator_requires_exact_typed_counts_and_hashes():
         subclass_marker,
         resolver_version=DOCUMENT_RESOLVER_VERSION,
         ontology_checksum="a" * 64,
+        assembly_version="not-applicable",
+        assembly_config_checksum="d" * 64,
         source_mention_count=2,
         source_mention_fingerprint="b" * 64,
         document_entity_count=1,
@@ -2019,6 +2035,8 @@ def test_resolution_commit_validator_requires_exact_typed_counts_and_hashes():
         values,
         resolver_version=DOCUMENT_RESOLVER_VERSION,
         ontology_checksum=_MasqueradingString("f" * 64),
+        assembly_version="not-applicable",
+        assembly_config_checksum="d" * 64,
         source_mention_count=2,
         source_mention_fingerprint="b" * 64,
         document_entity_count=1,
@@ -2276,6 +2294,8 @@ def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
         "ontology_checksum": "b" * 64,
         "extraction_commit": {
             "version": 1,
+            "assembly_version": artifact.assembly_version,
+            "assembly_config_checksum": artifact.assembly_config_checksum,
             "entity_mention_count": 2,
             "relation_mention_count": 0,
         },

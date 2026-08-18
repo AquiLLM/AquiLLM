@@ -32,9 +32,83 @@ def graph_identity_checksum(namespace: object, value: object) -> str:
     return sha256(payload).hexdigest()
 
 
+ASSEMBLY_NOT_APPLICABLE_VERSION = "not-applicable"
+ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM = graph_identity_checksum(
+    "assembly-config", ASSEMBLY_NOT_APPLICABLE_VERSION
+)
+
+
 def _validate_identity_checksum(value: object, field: str) -> str:
     if type(value) is not str or not re.fullmatch(_CHECKSUM_PATTERN, value):
         raise ValidationError({field: "Graph identity must be a SHA-256 checksum."})
+    return value
+
+
+def _prepare_assembly_identity(instance: object) -> None:
+    """Canonicalize the typed assembly identity for document/collection scope."""
+
+    scope_type = getattr(instance, "scope_type", None)
+    version = getattr(instance, "assembly_version", None)
+    checksum = getattr(instance, "assembly_config_checksum", None)
+    if (
+        scope_type == "collection"
+        and version == ASSEMBLY_NOT_APPLICABLE_VERSION
+        and checksum == ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
+    ):
+        # Runtime-only import keeps the persistence model independent of the
+        # pure planner at module import time while giving omitted collection
+        # fields the exact v1 policy address.
+        from apps.knowledge_graph.graph.assembly import (
+            AssemblyConfig,
+            assembly_config_checksum,
+        )
+
+        config = AssemblyConfig()
+        version = config.version
+        checksum = assembly_config_checksum(config)
+        instance.assembly_version = version
+        instance.assembly_config_checksum = checksum
+    if (
+        type(version) is not str
+        or not version
+        or version != version.strip()
+        or len(version) > 128
+        or "\x00" in version
+    ):
+        raise ValidationError(
+            {"assembly_version": "Assembly version must be a safe nonempty string."}
+        )
+    checksum = _validate_identity_checksum(checksum, "assembly_config_checksum")
+    if scope_type == "document" and (
+        version != ASSEMBLY_NOT_APPLICABLE_VERSION
+        or checksum != ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
+    ):
+        raise ValidationError(
+            {
+                "assembly_version": (
+                    "Document artifacts require the canonical not-applicable "
+                    "assembly identity."
+                )
+            }
+        )
+    if scope_type == "collection" and (
+        version == ASSEMBLY_NOT_APPLICABLE_VERSION
+        or checksum == ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
+    ):
+        raise ValidationError(
+            {
+                "assembly_version": (
+                    "Collection artifacts require a concrete assembly policy identity."
+                )
+            }
+        )
+
+
+def _validate_source_hash(value: object) -> str:
+    if type(value) is not str or not re.fullmatch(_CHECKSUM_PATTERN, value):
+        raise ValidationError(
+            {"source_hash": "Graph source identity must be a SHA-256 checksum."}
+        )
     return value
 
 
@@ -193,6 +267,48 @@ class ImmutableGraphQuerySet(ValidatedGraphQuerySet):
         return super().bulk_update(objects, fields, batch_size=batch_size)
 
 
+class CollectionArtifactChildQuerySet(ImmutableGraphQuerySet):
+    """Require collection child cleanup through the owning artifact."""
+
+    def delete(self):
+        raise ValidationError(
+            {"artifact": "Graph child rows cannot be deleted directly."}
+        )
+
+
+class CollectionArtifactChildModelMixin:
+    """Keep Task 9/10 rows append-closed outside owning-artifact deletion."""
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(
+            {"artifact": "Graph child rows cannot be deleted directly."}
+        )
+
+
+class GraphArtifactQuerySet(ImmutableGraphQuerySet):
+    """Explicit current-state boundary; shadow artifacts are opt-in only."""
+
+    def current(self):
+        return self.filter(status="active")
+
+    def current_collection(self, collection_id: object):
+        scope_id = canonical_graph_scope_id("collection", collection_id)
+        return self.current().filter(scope_type="collection", scope_id=scope_id)
+
+    def delete(self):
+        if self.filter(scope_type="collection").exists():
+            raise ValidationError(
+                {
+                    "activated_at": (
+                        "Collection activation lifecycle requires dedicated locked "
+                        "cleanup."
+                    )
+                }
+            )
+        document_rows = self.filter(scope_type="document")
+        return super(GraphArtifactQuerySet, document_rows).delete()
+
+
 class ValidatedGraphModel(models.Model):
     """Explicit validation path used by save(), create(), and bulk_create()."""
 
@@ -296,6 +412,16 @@ class GraphArtifact(ValidatedGraphModel):
     resolution_config_checksum = models.CharField(
         max_length=64, blank=True, default="", editable=False
     )
+    assembly_version = models.CharField(
+        max_length=128,
+        default=ASSEMBLY_NOT_APPLICABLE_VERSION,
+        editable=False,
+    )
+    assembly_config_checksum = models.CharField(
+        max_length=64,
+        default=ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
+        editable=False,
+    )
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -314,10 +440,12 @@ class GraphArtifact(ValidatedGraphModel):
         "ontology_checksum",
         "filter_policy_checksum",
         "resolution_config_checksum",
+        "assembly_version",
+        "assembly_config_checksum",
     )
-    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
+    _QUERYSET_IMMUTABLE_FIELDS = (*_IMMUTABLE_FIELDS, "activated_at")
 
-    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
+    objects = models.Manager.from_queryset(GraphArtifactQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"
@@ -348,8 +476,30 @@ class GraphArtifact(ValidatedGraphModel):
                     Q(ontology_checksum__regex=_CHECKSUM_PATTERN)
                     & Q(filter_policy_checksum__regex=_CHECKSUM_PATTERN)
                     & Q(resolution_config_checksum__regex=_CHECKSUM_PATTERN)
+                    & Q(assembly_config_checksum__regex=_CHECKSUM_PATTERN)
                 ),
                 name="kg_artifact_identity_checksums_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        scope_type="document",
+                        assembly_version=ASSEMBLY_NOT_APPLICABLE_VERSION,
+                        assembly_config_checksum=(
+                            ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
+                        ),
+                    )
+                    | (
+                        Q(scope_type="collection")
+                        & ~Q(assembly_version=ASSEMBLY_NOT_APPLICABLE_VERSION)
+                        & ~Q(
+                            assembly_config_checksum=(
+                                ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
+                            )
+                        )
+                    )
+                ),
+                name="kg_artifact_assembly_identity_scope",
             ),
             models.CheckConstraint(
                 condition=Q(
@@ -368,6 +518,10 @@ class GraphArtifact(ValidatedGraphModel):
             models.CheckConstraint(
                 condition=~Q(source_hash=""),
                 name="kg_artifact_source_hash_nonempty",
+            ),
+            models.CheckConstraint(
+                condition=Q(source_hash__regex=_CHECKSUM_PATTERN),
+                name="kg_artifact_source_hash_valid",
             ),
             models.CheckConstraint(
                 condition=~Q(ontology_version=""),
@@ -403,6 +557,8 @@ class GraphArtifact(ValidatedGraphModel):
                     "ontology_checksum",
                     "filter_policy_checksum",
                     "resolution_config_checksum",
+                    "assembly_version",
+                    "assembly_config_checksum",
                 ],
                 name="kg_artifact_build_identity",
             ),
@@ -417,6 +573,7 @@ class GraphArtifact(ValidatedGraphModel):
 
     def prepare_for_persistence(self) -> None:
         self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self.source_hash = _validate_source_hash(self.source_hash)
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
         )
@@ -443,14 +600,52 @@ class GraphArtifact(ValidatedGraphModel):
             setattr(
                 self, field, _validate_identity_checksum(getattr(self, field), field)
             )
+        _prepare_assembly_identity(self)
 
     def clean(self):
         super().clean()
+        if self.pk:
+            previous_activation = (
+                type(self).objects.filter(pk=self.pk)
+                .values_list("activated_at", flat=True)
+                .first()
+            )
+            if (
+                previous_activation is not None
+                and self.activated_at != previous_activation
+            ):
+                raise ValidationError(
+                    {
+                        "activated_at": (
+                            "Collection activation history is immutable once set."
+                        )
+                    }
+                )
         self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self.source_hash = _validate_source_hash(self.source_hash)
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
         )
         self._prepare_identity_checksums()
+
+    def delete(self, *args, **kwargs):
+        persisted_scope = None
+        if self.pk:
+            persisted_scope = (
+                type(self)._base_manager.filter(pk=self.pk)
+                .values_list("scope_type", flat=True)
+                .first()
+            )
+        if (persisted_scope or self.scope_type) == self.ScopeType.COLLECTION:
+            raise ValidationError(
+                {
+                    "activated_at": (
+                        "Collection activation lifecycle requires dedicated locked "
+                        "cleanup."
+                    )
+                }
+            )
+        return super().delete(*args, **kwargs)
 
 
 class GraphBuildRun(ValidatedGraphModel):
@@ -502,6 +697,16 @@ class GraphBuildRun(ValidatedGraphModel):
     resolution_config_checksum = models.CharField(
         max_length=64, blank=True, default="", editable=False
     )
+    assembly_version = models.CharField(
+        max_length=128,
+        default=ASSEMBLY_NOT_APPLICABLE_VERSION,
+        editable=False,
+    )
+    assembly_config_checksum = models.CharField(
+        max_length=64,
+        default=ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
+        editable=False,
+    )
     stage = models.CharField(
         max_length=16, choices=Stage.choices, default=Stage.ONTOLOGY
     )
@@ -534,6 +739,8 @@ class GraphBuildRun(ValidatedGraphModel):
         "ontology_checksum",
         "filter_policy_checksum",
         "resolution_config_checksum",
+        "assembly_version",
+        "assembly_config_checksum",
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
     _NULLABLE_IMMUTABLE_UPDATE_FIELDS = ("artifact", "artifact_id")
@@ -573,8 +780,30 @@ class GraphBuildRun(ValidatedGraphModel):
                     Q(ontology_checksum__regex=_CHECKSUM_PATTERN)
                     & Q(filter_policy_checksum__regex=_CHECKSUM_PATTERN)
                     & Q(resolution_config_checksum__regex=_CHECKSUM_PATTERN)
+                    & Q(assembly_config_checksum__regex=_CHECKSUM_PATTERN)
                 ),
                 name="kg_run_identity_checksums_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        scope_type="document",
+                        assembly_version=ASSEMBLY_NOT_APPLICABLE_VERSION,
+                        assembly_config_checksum=(
+                            ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
+                        ),
+                    )
+                    | (
+                        Q(scope_type="collection")
+                        & ~Q(assembly_version=ASSEMBLY_NOT_APPLICABLE_VERSION)
+                        & ~Q(
+                            assembly_config_checksum=(
+                                ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
+                            )
+                        )
+                    )
+                ),
+                name="kg_run_assembly_identity_scope",
             ),
             models.CheckConstraint(
                 condition=Q(
@@ -612,6 +841,10 @@ class GraphBuildRun(ValidatedGraphModel):
                 name="kg_build_snapshot_nonempty",
             ),
             models.CheckConstraint(
+                condition=Q(source_hash__regex=_CHECKSUM_PATTERN),
+                name="kg_build_source_hash_valid",
+            ),
+            models.CheckConstraint(
                 condition=Q(attempt__gte=1),
                 name="kg_build_run_attempt_positive",
             ),
@@ -638,6 +871,8 @@ class GraphBuildRun(ValidatedGraphModel):
             "ontology_checksum",
             "filter_policy_checksum",
             "resolution_config_checksum",
+            "assembly_version",
+            "assembly_config_checksum",
         ):
             setattr(self, field, getattr(artifact, field))
 
@@ -645,6 +880,7 @@ class GraphBuildRun(ValidatedGraphModel):
         if not self.pk:
             self.populate_artifact_snapshot()
         self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self.source_hash = _validate_source_hash(self.source_hash)
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
         )
@@ -671,10 +907,12 @@ class GraphBuildRun(ValidatedGraphModel):
             setattr(
                 self, field, _validate_identity_checksum(getattr(self, field), field)
             )
+        _prepare_assembly_identity(self)
 
     def clean(self):
         super().clean()
         self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self.source_hash = _validate_source_hash(self.source_hash)
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
         )

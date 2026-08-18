@@ -12,7 +12,13 @@ from pgvector.django import VectorField
 from apps.collections.models import Collection
 from apps.documents.models import TextChunk
 
-from .artifacts import GraphArtifact, ImmutableGraphQuerySet, ValidatedGraphModel
+from .artifacts import (
+    CollectionArtifactChildModelMixin,
+    CollectionArtifactChildQuerySet,
+    GraphArtifact,
+    ImmutableGraphQuerySet,
+    ValidatedGraphModel,
+)
 
 
 class ResolutionStatus(models.TextChoices):
@@ -495,7 +501,7 @@ class DocumentEntityMention(ValidatedGraphModel):
                 )
 
 
-class CollectionEntity(ValidatedGraphModel):
+class CollectionEntity(CollectionArtifactChildModelMixin, ValidatedGraphModel):
     """Collection-scoped resolved entity with optional retrieval embedding."""
 
     Status = ResolutionStatus
@@ -561,7 +567,7 @@ class CollectionEntity(ValidatedGraphModel):
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
-    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
+    objects = models.Manager.from_queryset(CollectionArtifactChildQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"
@@ -703,7 +709,7 @@ class CollectionEntity(ValidatedGraphModel):
         if (
             self.artifact_id
             and self.artifact.status != GraphArtifact.Status.BUILDING
-            and not self.pk
+            and self._state.adding
         ):
             errors["artifact"] = "Collection entities require a building artifact."
         if self.embedding is None:

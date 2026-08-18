@@ -25,6 +25,8 @@ _COMMIT_FIELDS = frozenset(
         "version",
         "resolver_version",
         "ontology_checksum",
+        "assembly_version",
+        "assembly_config_checksum",
         "source_mention_count",
         "source_mention_fingerprint",
         "document_entity_count",
@@ -67,6 +69,8 @@ def resolution_commit_is_valid(
     *,
     resolver_version: str,
     ontology_checksum: str,
+    assembly_version: str,
+    assembly_config_checksum: str,
     source_mention_count: int,
     source_mention_fingerprint: str,
     document_entity_count: int,
@@ -80,6 +84,9 @@ def resolution_commit_is_valid(
         and frozenset(marker) == _COMMIT_FIELDS
         and type(resolver_version) is str
         and _is_hash(ontology_checksum)
+        and type(assembly_version) is str
+        and assembly_version
+        and _is_hash(assembly_config_checksum)
         and _is_count(source_mention_count)
         and _is_hash(source_mention_fingerprint)
         and _is_count(document_entity_count)
@@ -91,6 +98,10 @@ def resolution_commit_is_valid(
         and marker.get("resolver_version") == resolver_version
         and _is_hash(marker.get("ontology_checksum"))
         and marker.get("ontology_checksum") == ontology_checksum
+        and type(marker.get("assembly_version")) is str
+        and marker.get("assembly_version") == assembly_version
+        and _is_hash(marker.get("assembly_config_checksum"))
+        and marker.get("assembly_config_checksum") == assembly_config_checksum
         and _is_count(marker.get("source_mention_count"))
         and marker.get("source_mention_count") == source_mention_count
         and _is_hash(marker.get("source_mention_fingerprint"))
@@ -231,6 +242,8 @@ def _validate_destination(artifact, run, result: ResolutionResult) -> None:
         "ontology_checksum",
         "filter_policy_checksum",
         "resolution_config_checksum",
+        "assembly_version",
+        "assembly_config_checksum",
     ):
         if getattr(run, field) != getattr(artifact, field):
             raise ResolutionPersistenceError(
@@ -443,6 +456,8 @@ def _existing_resolution(
         marker,
         resolver_version=result.resolver_version,
         ontology_checksum=ontology_checksum,
+        assembly_version=artifact.assembly_version,
+        assembly_config_checksum=artifact.assembly_config_checksum,
         source_mention_count=source_count,
         source_mention_fingerprint=source_fingerprint,
         document_entity_count=len(result.clusters),
@@ -563,6 +578,8 @@ def persist_document_resolution(artifact_id, build_run_id, result):
             "version": 1,
             "resolver_version": result.resolver_version,
             "ontology_checksum": ontology_checksum,
+            "assembly_version": artifact.assembly_version,
+            "assembly_config_checksum": artifact.assembly_config_checksum,
             "source_mention_count": source_count,
             "source_mention_fingerprint": source_fingerprint,
             "document_entity_count": len(entity_rows),
@@ -573,6 +590,8 @@ def persist_document_resolution(artifact_id, build_run_id, result):
             marker,
             resolver_version=result.resolver_version,
             ontology_checksum=ontology_checksum,
+            assembly_version=artifact.assembly_version,
+            assembly_config_checksum=artifact.assembly_config_checksum,
             source_mention_count=source_count,
             source_mention_fingerprint=source_fingerprint,
             document_entity_count=len(entity_rows),

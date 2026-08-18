@@ -307,6 +307,11 @@ def validate_build_identity(
         raise ValueError("destination artifact source hash does not match")
     if artifact.ontology_version != ontology_version:
         raise ValueError("destination artifact ontology does not match")
+    if (
+        run.assembly_version != artifact.assembly_version
+        or run.assembly_config_checksum != artifact.assembly_config_checksum
+    ):
+        raise ValueError("build run assembly identity does not match destination")
 
 
 def validate_build_lifecycle(artifact, run) -> None:
@@ -351,11 +356,20 @@ def extraction_commit_is_valid(
     stats = run.stats if isinstance(run.stats, dict) else {}
     marker = stats.get("extraction_commit")
     ontology_checksum = getattr(run, "ontology_checksum", None)
+    assembly_version = getattr(run, "assembly_version", None)
+    assembly_config_checksum = getattr(run, "assembly_config_checksum", None)
     artifact_id = getattr(run, "artifact_id", None)
     artifact = getattr(run, "artifact", None) if artifact_id else None
     return (
         isinstance(marker, dict)
-        and set(marker) == {"version", "entity_mention_count", "relation_mention_count"}
+        and set(marker)
+        == {
+            "version",
+            "assembly_version",
+            "assembly_config_checksum",
+            "entity_mention_count",
+            "relation_mention_count",
+        }
         and type(ontology_checksum) is str
         and len(ontology_checksum) == 64
         and all(character in "0123456789abcdef" for character in ontology_checksum)
@@ -364,10 +378,22 @@ def extraction_commit_is_valid(
             or (
                 artifact is not None
                 and ontology_checksum == getattr(artifact, "ontology_checksum", None)
+                and assembly_version == getattr(artifact, "assembly_version", None)
+                and assembly_config_checksum
+                == getattr(artifact, "assembly_config_checksum", None)
             )
         )
         and type(marker.get("version")) is int
         and marker.get("version") == 1
+        and type(marker.get("assembly_version")) is str
+        and marker.get("assembly_version") == assembly_version
+        and type(marker.get("assembly_config_checksum")) is str
+        and len(marker.get("assembly_config_checksum")) == 64
+        and all(
+            character in "0123456789abcdef"
+            for character in marker.get("assembly_config_checksum")
+        )
+        and marker.get("assembly_config_checksum") == assembly_config_checksum
         and type(marker.get("entity_mention_count")) is int
         and marker.get("entity_mention_count") == entity_count
         and type(marker.get("relation_mention_count")) is int
@@ -582,7 +608,11 @@ def _artifact_identity_values(
     *,
     settings,
 ) -> dict[str, object]:
-    from apps.knowledge_graph.models import GraphArtifact
+    from apps.knowledge_graph.models import (
+        ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
+        ASSEMBLY_NOT_APPLICABLE_VERSION,
+        GraphArtifact,
+    )
     from apps.knowledge_graph.models.artifacts import graph_identity_checksum
 
     return {
@@ -600,6 +630,8 @@ def _artifact_identity_values(
         "resolution_config_checksum": graph_identity_checksum(
             "document-resolver", DOCUMENT_RESOLVER_VERSION
         ),
+        "assembly_version": ASSEMBLY_NOT_APPLICABLE_VERSION,
+        "assembly_config_checksum": ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
     }
 
 
@@ -892,6 +924,10 @@ def extract_into_build(
                 "ontology_checksum": ontology.checksum,
                 "extraction_commit": {
                     "version": 1,
+                    "assembly_version": locked_artifact.assembly_version,
+                    "assembly_config_checksum": (
+                        locked_artifact.assembly_config_checksum
+                    ),
                     "entity_mention_count": entity_count,
                     "relation_mention_count": relation_count,
                 },

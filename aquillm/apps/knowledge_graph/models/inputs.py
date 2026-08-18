@@ -15,7 +15,12 @@ from django.db.models import Q
 from apps.collections.models import Collection
 from apps.documents.models import Document
 
-from .artifacts import GraphArtifact, ImmutableGraphQuerySet, ValidatedGraphModel
+from .artifacts import (
+    CollectionArtifactChildModelMixin,
+    CollectionArtifactChildQuerySet,
+    GraphArtifact,
+    ValidatedGraphModel,
+)
 
 _HASH_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -55,6 +60,10 @@ def collection_input_source_signature(
             "resolution_config_checksum": (
                 document_artifact.resolution_config_checksum
             ),
+            "assembly_version": document_artifact.assembly_version,
+            "assembly_config_checksum": (
+                document_artifact.assembly_config_checksum
+            ),
         }
     )
 
@@ -82,6 +91,10 @@ def collection_input_build_signature(
             "filter_policy_checksum": destination_artifact.filter_policy_checksum,
             "resolution_config_checksum": (
                 destination_artifact.resolution_config_checksum
+            ),
+            "assembly_version": destination_artifact.assembly_version,
+            "assembly_config_checksum": (
+                destination_artifact.assembly_config_checksum
             ),
         }
     )
@@ -122,7 +135,7 @@ def collection_manifest_source_hash(source_signatures: Iterable[str]) -> str:
     return _hash_payload({"source_signatures": list(signatures)})
 
 
-class CollectionArtifactInput(ValidatedGraphModel):
+class CollectionArtifactInput(CollectionArtifactChildModelMixin, ValidatedGraphModel):
     """One exact active document artifact used by a shadow collection build."""
 
     artifact = models.ForeignKey(
@@ -161,7 +174,7 @@ class CollectionArtifactInput(ValidatedGraphModel):
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
-    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
+    objects = models.Manager.from_queryset(CollectionArtifactChildQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"
@@ -230,7 +243,10 @@ class CollectionArtifactInput(ValidatedGraphModel):
             errors["artifact"] = "Manifest destination must be a collection artifact."
         elif destination.scope_id != str(self.collection_id):
             errors["collection"] = "Manifest collection must match destination scope."
-        elif destination.status != GraphArtifact.Status.BUILDING and not self.pk:
+        elif (
+            destination.status != GraphArtifact.Status.BUILDING
+            and self._state.adding
+        ):
             errors["artifact"] = (
                 "Manifest rows can only be added to a building artifact."
             )

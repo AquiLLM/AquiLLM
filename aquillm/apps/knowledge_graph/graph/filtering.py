@@ -880,6 +880,109 @@ def _filter_rerun_link_matches(
     )
 
 
+def _canonical_marker_checksum(marker: object) -> str:
+    return sha256(
+        json.dumps(
+            marker,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _lock_filter_source_commit(
+    *,
+    source,
+    source_manifest,
+    source_entities,
+    source_links,
+    source_runs,
+    preferred_run_id: int | None = None,
+):
+    """Bind a fully authenticated source run, preserving an existing binding."""
+
+    from apps.knowledge_graph.graph.assembly import (
+        CollectionGraphAssemblyError,
+        _validate_task9_lineage,
+    )
+    def validate(run):
+        stats = run.stats if type(run.stats) is dict else {}
+        resolution = stats.get("collection_resolution_commit")
+        filter_commit = stats.get("filter_commit")
+        if (resolution is None) == (filter_commit is None):
+            return None
+        marker = resolution if resolution is not None else filter_commit
+        if type(marker) is not dict or any(
+            getattr(run, field) != getattr(source, field)
+            for field in (
+                "scope_type",
+                "scope_id",
+                "source_hash",
+                "ontology_version",
+                "extractor_version",
+                "resolver_version",
+                "filter_policy_version",
+                "embedding_model_signature",
+                "ontology_checksum",
+                "filter_policy_checksum",
+                "resolution_config_checksum",
+                "assembly_version",
+                "assembly_config_checksum",
+            )
+        ):
+            return None
+        try:
+            _validate_task9_lineage(
+                source,
+                run,
+                source_manifest,
+                source_entities,
+                source_links,
+            )
+        except CollectionGraphAssemblyError:
+            return None
+        assembly_marker = stats.get("collection_assembly_commit")
+        if assembly_marker is not None:
+            if type(assembly_marker) is not dict:
+                return None
+            expected_assembly_checksum = _canonical_marker_checksum(
+                {
+                    key: value
+                    for key, value in assembly_marker.items()
+                    if key != "marker_checksum"
+                }
+            )
+            if (
+                type(assembly_marker.get("marker_checksum")) is not str
+                or assembly_marker["marker_checksum"]
+                != expected_assembly_checksum
+            ):
+                return None
+        return (
+            run,
+            _canonical_marker_checksum(marker),
+            None if assembly_marker is None else assembly_marker["marker_checksum"],
+        )
+
+    runs = tuple(source_runs)
+    if preferred_run_id is not None:
+        if type(preferred_run_id) is not int or preferred_run_id < 1:
+            raise ValueError("existing filter source build run identity is invalid")
+        preferred = next((row for row in runs if row.pk == preferred_run_id), None)
+        result = None if preferred is None else validate(preferred)
+        if result is None:
+            raise ValueError("existing filter source build run is no longer valid")
+        return result
+    for run in sorted(runs, key=lambda row: (row.attempt, row.pk), reverse=True):
+        result = validate(run)
+        if result is not None:
+            return result
+    if not runs:
+        raise ValueError("filter rerun source has no valid committed build run")
+    raise ValueError("filter rerun source has no valid committed build run")
+
+
 def _validate_existing_filter_rerun(
     *,
     destination,
@@ -891,6 +994,9 @@ def _validate_existing_filter_rerun(
     policy_checksum,
     ontology_checksum,
     projection_checksum,
+    source_build_run_id,
+    source_task9_marker_checksum,
+    source_assembly_marker_checksum,
 ):
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
@@ -907,6 +1013,9 @@ def _validate_existing_filter_rerun(
         raise ValueError("existing filter rerun is not a building artifact")
     if destination.metadata != {
         "filter_source_artifact_id": source.pk,
+        "filter_source_build_run_id": source_build_run_id,
+        "filter_source_task9_marker_checksum": source_task9_marker_checksum,
+        "filter_source_assembly_marker_checksum": source_assembly_marker_checksum,
         "filter_result_checksum": projection_checksum,
     }:
         raise ValueError("existing filter rerun artifact audit is corrupt")
@@ -967,6 +1076,8 @@ def _validate_existing_filter_rerun(
                 "ontology_checksum",
                 "filter_policy_checksum",
                 "resolution_config_checksum",
+                "assembly_version",
+                "assembly_config_checksum",
             )
         )
     ):
@@ -979,7 +1090,12 @@ def _validate_existing_filter_rerun(
         "resolution_config_checksum": source.resolution_config_checksum,
         "filter_result_checksum": projection_checksum,
         "source_artifact_id": source.pk,
+        "source_build_run_id": source_build_run_id,
+        "source_task9_marker_checksum": source_task9_marker_checksum,
+        "source_assembly_marker_checksum": source_assembly_marker_checksum,
         "source_hash": source.source_hash,
+        "assembly_version": destination.assembly_version,
+        "assembly_config_checksum": destination.assembly_config_checksum,
         "manifest_count": len(source_manifest),
         "entity_count": len(source_entities),
         "link_count": len(source_links),
@@ -1077,6 +1193,7 @@ def create_filter_rerun_artifact(
 
     from django.db import transaction
 
+    from apps.knowledge_graph.graph.assembly import lock_collection_graph_scope
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
         CollectionEntity,
@@ -1099,15 +1216,37 @@ def create_filter_rerun_artifact(
 
     validate_ontology_definition(ontology)
     ontology_checksum = ontology.checksum
+    source_reference = GraphArtifact.objects.only("scope_type", "scope_id").get(
+        pk=source_artifact_id
+    )
+    if source_reference.scope_type != GraphArtifact.ScopeType.COLLECTION:
+        raise ValueError("filter rerun source must be a collection artifact")
+    try:
+        collection_id = int(source_reference.scope_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("filter rerun source collection identity is invalid") from exc
     with transaction.atomic():
-        source = GraphArtifact.objects.select_for_update().get(pk=source_artifact_id)
-        if (
-            source.scope_type != GraphArtifact.ScopeType.COLLECTION
-            or source.status != GraphArtifact.Status.ACTIVE
-        ):
+        lock_collection_graph_scope(collection_id)
+        scope_artifacts = tuple(
+            GraphArtifact.objects.select_for_update()
+            .filter(
+                scope_type=GraphArtifact.ScopeType.COLLECTION,
+                scope_id=str(collection_id),
+            )
+            .order_by("pk")
+        )
+        source = next(
+            (row for row in scope_artifacts if row.pk == source_artifact_id), None
+        )
+        if source is None or source.status != GraphArtifact.Status.ACTIVE:
             raise ValueError(
                 "filter rerun source must be an active collection artifact"
             )
+        scope_runs = tuple(
+            GraphBuildRun.objects.select_for_update()
+            .filter(artifact_id__in=(row.pk for row in scope_artifacts))
+            .order_by("pk")
+        )
         if source.ontology_checksum != ontology_checksum:
             raise ValueError("filter ontology does not match source artifact")
         validate_ontology_definition(
@@ -1150,8 +1289,37 @@ def create_filter_rerun_artifact(
             "ontology_checksum": source.ontology_checksum,
             "filter_policy_checksum": checksum,
             "resolution_config_checksum": source.resolution_config_checksum,
+            "assembly_version": source.assembly_version,
+            "assembly_config_checksum": source.assembly_config_checksum,
         }
-        existing = GraphArtifact.objects.select_for_update().filter(**identity).first()
+        existing = next(
+            (
+                row
+                for row in scope_artifacts
+                if all(getattr(row, key) == value for key, value in identity.items())
+            ),
+            None,
+        )
+        preferred_run_id = None
+        if existing is not None:
+            existing_metadata = (
+                existing.metadata if type(existing.metadata) is dict else {}
+            )
+            preferred_run_id = existing_metadata.get("filter_source_build_run_id")
+        (
+            source_build_run,
+            source_task9_marker_checksum,
+            source_assembly_marker_checksum,
+        ) = _lock_filter_source_commit(
+            source=source,
+            source_manifest=source_manifest,
+            source_entities=source_entities,
+            source_links=source_links,
+            source_runs=tuple(
+                run for run in scope_runs if run.artifact_id == source.pk
+            ),
+            preferred_run_id=preferred_run_id,
+        )
         if existing is not None:
             return _validate_existing_filter_rerun(
                 destination=existing,
@@ -1163,11 +1331,21 @@ def create_filter_rerun_artifact(
                 policy_checksum=checksum,
                 ontology_checksum=ontology_checksum,
                 projection_checksum=projection_checksum,
+                source_build_run_id=source_build_run.pk,
+                source_task9_marker_checksum=source_task9_marker_checksum,
+                source_assembly_marker_checksum=source_assembly_marker_checksum,
             )
         destination = GraphArtifact.objects.create(
             status=GraphArtifact.Status.BUILDING,
             metadata={
                 "filter_source_artifact_id": source.pk,
+                "filter_source_build_run_id": source_build_run.pk,
+                "filter_source_task9_marker_checksum": (
+                    source_task9_marker_checksum
+                ),
+                "filter_source_assembly_marker_checksum": (
+                    source_assembly_marker_checksum
+                ),
                 "filter_result_checksum": projection_checksum,
             },
             **identity,
@@ -1291,7 +1469,18 @@ def create_filter_rerun_artifact(
                     "resolution_config_checksum": source.resolution_config_checksum,
                     "filter_result_checksum": projection_checksum,
                     "source_artifact_id": source.pk,
+                    "source_build_run_id": source_build_run.pk,
+                    "source_task9_marker_checksum": (
+                        source_task9_marker_checksum
+                    ),
+                    "source_assembly_marker_checksum": (
+                        source_assembly_marker_checksum
+                    ),
                     "source_hash": source.source_hash,
+                    "assembly_version": destination.assembly_version,
+                    "assembly_config_checksum": (
+                        destination.assembly_config_checksum
+                    ),
                     "manifest_count": len(source_manifest),
                     "entity_count": len(new_entities),
                     "link_count": len(cloned_links),

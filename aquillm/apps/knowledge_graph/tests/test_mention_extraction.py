@@ -297,9 +297,13 @@ def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
     committed = SimpleNamespace(
         artifact_id=None,
         ontology_checksum="a" * 64,
+        assembly_version="not-applicable",
+        assembly_config_checksum="b" * 64,
         stats={
             "extraction_commit": {
                 "version": 1,
+                "assembly_version": "not-applicable",
+                "assembly_config_checksum": "b" * 64,
                 "entity_mention_count": 2,
                 "relation_mention_count": 1,
             },
@@ -316,6 +320,8 @@ def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
     subclass_checksum = SimpleNamespace(
         artifact_id=None,
         ontology_checksum=ChecksumSubclass("a" * 64),
+        assembly_version="not-applicable",
+        assembly_config_checksum="b" * 64,
         stats=committed.stats,
     )
 
@@ -823,6 +829,8 @@ def test_public_extraction_persists_deduped_mentions_exact_relation_endpoints_an
     assert run.stats["ontology_checksum"] == _ontology().checksum
     assert run.stats["extraction_commit"] == {
         "version": 1,
+        "assembly_version": run.artifact.assembly_version,
+        "assembly_config_checksum": run.artifact.assembly_config_checksum,
         "entity_mention_count": 2,
         "relation_mention_count": 1,
     }
@@ -1129,7 +1137,18 @@ def test_committed_fast_path_validates_identity_before_bypassing_lifecycle(
 
 def test_relation_model_accepts_an_endpoint_represented_by_an_overlapping_observation():
     from apps.documents.models import TextChunk
-    from apps.knowledge_graph.models import EntityMention, RelationMention
+    from apps.knowledge_graph.models import (
+        EntityMention,
+        GraphArtifact,
+        RelationMention,
+    )
+
+    artifact = GraphArtifact(
+        pk=1,
+        scope_type=GraphArtifact.ScopeType.DOCUMENT,
+        scope_id=DOCUMENT_ID,
+        status=GraphArtifact.Status.BUILDING,
+    )
 
     representative_chunk = TextChunk(pk=10, doc_id=DOCUMENT_ID, modality="text")
     relation_chunk = TextChunk(
@@ -1150,7 +1169,7 @@ def test_relation_model_accepts_an_endpoint_represented_by_an_overlapping_observ
     }
     head = EntityMention(
         pk=20,
-        artifact_id=1,
+        artifact=artifact,
         document_id=DOCUMENT_ID,
         chunk=representative_chunk,
         start=0,
@@ -1161,7 +1180,7 @@ def test_relation_model_accepts_an_endpoint_represented_by_an_overlapping_observ
     )
     tail = EntityMention(
         pk=21,
-        artifact_id=1,
+        artifact=artifact,
         document_id=DOCUMENT_ID,
         chunk=representative_chunk,
         start=11,
@@ -1181,7 +1200,7 @@ def test_relation_model_accepts_an_endpoint_represented_by_an_overlapping_observ
         },
     )
     relation = RelationMention(
-        artifact_id=1,
+        artifact=artifact,
         document_id=DOCUMENT_ID,
         chunk=relation_chunk,
         head=head,
@@ -1195,13 +1214,24 @@ def test_relation_model_accepts_an_endpoint_represented_by_an_overlapping_observ
 
 def test_relation_model_rejects_unrelated_or_image_endpoint_provenance():
     from apps.documents.models import TextChunk
-    from apps.knowledge_graph.models import EntityMention, RelationMention
+    from apps.knowledge_graph.models import (
+        EntityMention,
+        GraphArtifact,
+        RelationMention,
+    )
+
+    artifact = GraphArtifact(
+        pk=1,
+        scope_type=GraphArtifact.ScopeType.DOCUMENT,
+        scope_id=DOCUMENT_ID,
+        status=GraphArtifact.Status.BUILDING,
+    )
 
     representative_chunk = TextChunk(pk=10, doc_id=DOCUMENT_ID, modality="text")
     relation_chunk = TextChunk(pk=99, doc_id=DOCUMENT_ID, modality="text")
     endpoint = EntityMention(
         pk=20,
-        artifact_id=1,
+        artifact=artifact,
         document_id=DOCUMENT_ID,
         chunk=representative_chunk,
         start=0,
@@ -1220,13 +1250,13 @@ def test_relation_model_rejects_unrelated_or_image_endpoint_provenance():
         },
     )
     relation = RelationMention(
-        artifact_id=1,
+        artifact=artifact,
         document_id=DOCUMENT_ID,
         chunk=relation_chunk,
         head=endpoint,
         tail=EntityMention(
             pk=21,
-            artifact_id=1,
+            artifact=artifact,
             document_id=DOCUMENT_ID,
             chunk=representative_chunk,
             start=11,
@@ -1246,7 +1276,18 @@ def test_relation_model_rejects_spoofed_overlap_offsets_for_an_unrelated_chunk()
     from django.core.exceptions import ValidationError
 
     from apps.documents.models import TextChunk
-    from apps.knowledge_graph.models import EntityMention, RelationMention
+    from apps.knowledge_graph.models import (
+        EntityMention,
+        GraphArtifact,
+        RelationMention,
+    )
+
+    artifact = GraphArtifact(
+        pk=1,
+        scope_type=GraphArtifact.ScopeType.DOCUMENT,
+        scope_id=DOCUMENT_ID,
+        status=GraphArtifact.Status.BUILDING,
+    )
 
     primary = TextChunk(pk=10, doc_id=DOCUMENT_ID, modality="text")
     unrelated = TextChunk(
@@ -1271,7 +1312,7 @@ def test_relation_model_rejects_spoofed_overlap_offsets_for_an_unrelated_chunk()
     }
     head = EntityMention(
         pk=20,
-        artifact_id=1,
+        artifact=artifact,
         document_id=DOCUMENT_ID,
         chunk=primary,
         start=0,
@@ -1282,7 +1323,7 @@ def test_relation_model_rejects_spoofed_overlap_offsets_for_an_unrelated_chunk()
     )
     tail = EntityMention(
         pk=21,
-        artifact_id=1,
+        artifact=artifact,
         document_id=DOCUMENT_ID,
         chunk=primary,
         start=6,
@@ -1302,7 +1343,7 @@ def test_relation_model_rejects_spoofed_overlap_offsets_for_an_unrelated_chunk()
         },
     )
     relation = RelationMention(
-        artifact_id=1,
+        artifact=artifact,
         document_id=DOCUMENT_ID,
         chunk=unrelated,
         head=head,

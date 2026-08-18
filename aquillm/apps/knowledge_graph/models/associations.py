@@ -4,7 +4,12 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
-from .artifacts import GraphArtifact, ImmutableGraphQuerySet, ValidatedGraphModel
+from .artifacts import (
+    CollectionArtifactChildModelMixin,
+    CollectionArtifactChildQuerySet,
+    GraphArtifact,
+    ValidatedGraphModel,
+)
 from .entities import (
     CanonicalEntity,
     CollectionEntity,
@@ -14,7 +19,9 @@ from .entities import (
 from .inputs import CollectionArtifactInput
 
 
-class CollectionEntityDocumentLink(ValidatedGraphModel):
+class CollectionEntityDocumentLink(
+    CollectionArtifactChildModelMixin, ValidatedGraphModel
+):
     """Versioned resolver decision linking document and collection nodes."""
 
     Status = ResolutionStatus
@@ -88,7 +95,7 @@ class CollectionEntityDocumentLink(ValidatedGraphModel):
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
-    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
+    objects = models.Manager.from_queryset(CollectionArtifactChildQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"
@@ -230,7 +237,10 @@ class CollectionEntityDocumentLink(ValidatedGraphModel):
                     "Collection entity must match the manifest collection."
                 )
         if self.artifact_id:
-            if self.artifact.status != GraphArtifact.Status.BUILDING and not self.pk:
+            if (
+                self.artifact.status != GraphArtifact.Status.BUILDING
+                and self._state.adding
+            ):
                 errors["artifact"] = "Resolution links require a building artifact."
             if self.resolver_version != self.artifact.resolver_version:
                 errors["resolver_version"] = (

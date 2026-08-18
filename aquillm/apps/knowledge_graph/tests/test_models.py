@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import socket
 import uuid
@@ -14,7 +15,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import CheckConstraint, UniqueConstraint
-from django.db.models.deletion import RestrictedError
+from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from pgvector.django import VectorField
 
@@ -206,6 +207,52 @@ def test_graph_artifact_bulk_mutation_rejects_build_identity_fields_before_datab
         GraphArtifact.objects.bulk_update([artifact], ["filter_policy_version"])
 
 
+def test_activated_collection_artifact_history_cannot_be_rewritten_or_deleted():
+    artifact = _artifact(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=COLLECTION_ID,
+        activated_at=timezone.now(),
+    )
+
+    with pytest.raises(ValidationError, match="immutable|activation"):
+        GraphArtifact.objects.filter(pk=artifact.pk).update(activated_at=None)
+    with pytest.raises(ValidationError, match="activation"):
+        artifact.delete()
+
+    building = _artifact(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=COLLECTION_ID,
+    )
+    with pytest.raises(ValidationError, match="activation"):
+        building.delete()
+    assert "if self.pk:" in inspect.getsource(GraphArtifact.clean)
+    assert "self.pk and not self._state.adding" not in inspect.getsource(
+        GraphArtifact.clean
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_explicit_pk_instance_cannot_clear_persisted_activation_history():
+    artifact = _artifact(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=COLLECTION_ID,
+        status=GraphArtifact.Status.SUPERSEDED,
+        activated_at=timezone.now(),
+    )
+    artifact.save()
+    values = GraphArtifact._base_manager.filter(pk=artifact.pk).values().get()
+    values["activated_at"] = None
+    replacement = GraphArtifact(**values)
+
+    assert replacement._state.adding
+    with pytest.raises(ValidationError, match="activation"):
+        replacement.save()
+
+    artifact.refresh_from_db()
+    assert artifact.activated_at is not None
+
+
 def test_graph_build_run_queryset_rejects_artifact_reassignment():
     run = GraphBuildRun(pk=1, artifact_id=1)
 
@@ -356,10 +403,50 @@ def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
         "ontology_checksum",
         "filter_policy_checksum",
         "resolution_config_checksum",
+        "assembly_version",
+        "assembly_config_checksum",
+    )
+    assert _constraint(
+        GraphArtifact, "kg_artifact_assembly_identity_scope", CheckConstraint
     )
     assert {("scope_type", "scope_id", "status"), ("source_hash",)} <= _index_fields(
         GraphArtifact
     )
+
+
+def test_artifact_assembly_identity_is_typed_by_scope_and_policy_addressed():
+    from apps.knowledge_graph.graph.assembly import (
+        AssemblyConfig,
+        assembly_config_checksum,
+    )
+    from apps.knowledge_graph.models import (
+        ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
+        ASSEMBLY_NOT_APPLICABLE_VERSION,
+    )
+
+    document = _artifact()
+    document.prepare_for_persistence()
+    assert document.assembly_version == ASSEMBLY_NOT_APPLICABLE_VERSION
+    assert (
+        document.assembly_config_checksum
+        == ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
+    )
+
+    collection = _artifact(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=1,
+    )
+    collection.prepare_for_persistence()
+    config = AssemblyConfig()
+    assert collection.assembly_version == config.version
+    assert collection.assembly_config_checksum == assembly_config_checksum(config)
+
+    forged_document = _artifact(
+        assembly_version=config.version,
+        assembly_config_checksum=assembly_config_checksum(config),
+    )
+    with pytest.raises(ValidationError, match="not-applicable"):
+        forged_document.prepare_for_persistence()
 
 
 def test_graph_build_run_and_ontology_are_typed_and_audit_safe():
@@ -374,6 +461,9 @@ def test_graph_build_run_and_ontology_are_typed_and_audit_safe():
     }
     assert GraphBuildRun._meta.get_field("stats").get_internal_type() == "JSONField"
     assert GraphBuildRun._meta.get_field("timings").get_internal_type() == "JSONField"
+    assert _constraint(
+        GraphBuildRun, "kg_run_assembly_identity_scope", CheckConstraint
+    )
     assert _constraint(GraphBuildRun, "kg_build_run_attempt_positive", CheckConstraint)
 
     assert {"draft", "active", "superseded", "rejected"} == {
@@ -734,15 +824,21 @@ def test_relation_models_have_versioned_uniqueness_evidence_and_indexes():
     )
     for field_name in ("head_mapping", "tail_mapping"):
         mapping_field = CollectionRelationEvidence._meta.get_field(field_name)
-        assert mapping_field.null is False
+        assert mapping_field.null is True
         assert mapping_field.remote_field.model is CollectionEntityDocumentLink
         assert mapping_field.remote_field.on_delete.__name__ == "RESTRICT"
-    assert {("artifact", "source", "target", "relation_type")} <= _index_fields(
-        CollectionRelation
-    )
+    assert {
+        ("artifact", "source", "target", "relation_type"),
+        ("artifact", "target", "source", "relation_type"),
+    } <= _index_fields(CollectionRelation)
 
 
 def test_collection_relation_rejects_cross_artifact_or_cross_collection_endpoints():
+    artifact = _artifact(
+        pk=1,
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=COLLECTION_ID,
+    )
     source = CollectionEntity(
         pk=10,
         artifact_id=1,
@@ -760,7 +856,7 @@ def test_collection_relation_rejects_cross_artifact_or_cross_collection_endpoint
         entity_type="benchmark",
     )
     relation = CollectionRelation(
-        artifact_id=1,
+        artifact=artifact,
         source=source,
         target=target,
         relation_type="evaluates_on",
@@ -782,6 +878,14 @@ def test_relation_evidence_rejects_a_different_relation_type():
 
     with pytest.raises(ValidationError, match="relation type"):
         evidence.clean()
+
+
+def test_relation_mentions_cannot_be_appended_to_active_document_artifacts():
+    relation_mention = _unsaved_relation_evidence().relation_mention
+    relation_mention.pk = None
+
+    with pytest.raises(ValidationError, match="building"):
+        relation_mention.clean()
 
 
 def test_identifier_first_conditional_uniqueness_and_normalization():
@@ -1067,7 +1171,9 @@ def _unsaved_relation_evidence():
         pk=1,
         scope_type=GraphArtifact.ScopeType.COLLECTION,
         scope_id=COLLECTION_ID,
+        ontology_checksum="7" * 64,
     )
+    collection_artifact.prepare_for_persistence()
     document_artifact = _artifact(
         pk=2,
         source_hash="b" * 64,
@@ -1124,27 +1230,46 @@ def _unsaved_relation_evidence():
         normalized_label="mmlu",
         entity_type="benchmark",
     )
+    manifest = CollectionArtifactInput(
+        pk=55,
+        artifact=collection_artifact,
+        collection_id=COLLECTION_ID,
+        document_id=DOCUMENT_ID,
+        document_artifact=document_artifact,
+        source_signature="5" * 64,
+        membership_signature="6" * 64,
+        build_signature="7" * 64,
+    )
     head_mapping = CollectionEntityDocumentLink(
         pk=60,
+        artifact=collection_artifact,
+        manifest_input=manifest,
         document_entity=head_document_entity,
         collection_entity=source,
         score=0.9,
         method="exact",
         resolver_version=collection_artifact.resolver_version,
+        outcome=CollectionEntityDocumentLink.Outcome.AUTOMATIC,
     )
     tail_mapping = CollectionEntityDocumentLink(
         pk=61,
+        artifact=collection_artifact,
+        manifest_input=manifest,
         document_entity=tail_document_entity,
         collection_entity=target,
         score=0.9,
         method="exact",
         resolver_version=collection_artifact.resolver_version,
+        outcome=CollectionEntityDocumentLink.Outcome.AUTOMATIC,
     )
     return CollectionRelationEvidence(
+        artifact=collection_artifact,
         relation=relation,
         relation_mention=relation_mention,
         head_mapping=head_mapping,
         tail_mapping=tail_mapping,
+        ontology_checksum=collection_artifact.ontology_checksum,
+        assembly_config_checksum=collection_artifact.assembly_config_checksum,
     )
 
 
@@ -1163,6 +1288,29 @@ def test_relation_evidence_rejects_swapped_endpoint_mappings(monkeypatch):
 
     with pytest.raises(ValidationError, match="head|tail|mapped"):
         evidence.clean()
+
+
+def test_relation_evidence_rejects_mismatched_assembly_identity():
+    evidence = _unsaved_relation_evidence()
+    evidence.assembly_config_checksum = "f" * 64
+
+    with pytest.raises(ValidationError, match="assembly checksum"):
+        evidence.clean()
+
+
+def test_collection_artifact_children_cannot_be_deleted_directly():
+    evidence = _unsaved_relation_evidence()
+    rows = (
+        evidence.head_mapping.manifest_input,
+        evidence.relation.source,
+        evidence.head_mapping,
+        evidence.relation,
+        evidence,
+    )
+
+    for row in rows:
+        with pytest.raises(ValidationError, match="deleted directly"):
+            row.delete()
 
 
 def test_relation_evidence_rejects_unmapped_endpoint(monkeypatch):
@@ -1192,6 +1340,71 @@ def test_relation_evidence_rejects_endpoint_from_other_artifact_or_collection(
 
     with pytest.raises(ValidationError, match="artifact|collection"):
         evidence.clean()
+
+
+def test_relation_evidence_rejects_mapping_row_from_other_collection_artifact(
+    monkeypatch,
+):
+    evidence = _unsaved_relation_evidence()
+    evidence.head_mapping.artifact_id = 999
+    monkeypatch.setattr(
+        evidence,
+        "_endpoint_membership_is_active",
+        lambda _mapping, _mention: True,
+        raising=False,
+    )
+
+    with pytest.raises(ValidationError, match="artifact"):
+        evidence.clean()
+
+
+def test_relation_evidence_rejects_nonautomatic_or_wrong_manifest_mapping(
+    monkeypatch,
+):
+    evidence = _unsaved_relation_evidence()
+    evidence.head_mapping.outcome = CollectionEntityDocumentLink.Outcome.CANDIDATE
+    evidence.tail_mapping.manifest_input.artifact_id = 999
+    monkeypatch.setattr(
+        evidence,
+        "_endpoint_membership_is_active",
+        lambda _mapping, _mention: True,
+        raising=False,
+    )
+
+    with pytest.raises(ValidationError, match="automatic|manifest"):
+        evidence.clean()
+
+
+def test_rejected_relation_evidence_can_retain_raw_mention_without_mappings():
+    evidence = _unsaved_relation_evidence()
+    evidence.relation = None
+    evidence.head_mapping = None
+    evidence.tail_mapping = None
+    evidence.status = CollectionRelationEvidence.Status.REJECTED
+    evidence.reason = "missing_active_mapping"
+
+    evidence.clean()
+
+
+def test_collection_relation_requires_at_least_one_real_support():
+    relation = _unsaved_relation_evidence().relation
+    relation.pk = None
+    relation.status = CollectionRelation.Status.SUPPRESSED
+    relation.support_count = 0
+    relation.confidence = 0.5
+
+    with pytest.raises(ValidationError, match="support"):
+        relation.clean()
+
+
+def test_new_relation_building_checks_use_adding_state_not_primary_key_presence():
+    relation_source = inspect.getsource(CollectionRelation.clean)
+    evidence_source = inspect.getsource(CollectionRelationEvidence.clean)
+
+    assert "self._state.adding" in relation_source
+    assert "self._state.adding" in evidence_source
+    assert "and not self.pk" not in relation_source
+    assert "and not self.pk" not in evidence_source
 
 
 def test_relation_evidence_accepts_separate_document_artifact_when_actively_mapped(
@@ -1234,7 +1447,7 @@ def test_artifact_build_identity_is_immutable_after_creation():
 @pytest.mark.django_db(transaction=True)
 @database_required
 def test_deleting_chunk_cascades_evidence_but_retains_completed_build_audit():
-    artifact = _artifact(status=GraphArtifact.Status.ACTIVE)
+    artifact = _artifact(status=GraphArtifact.Status.BUILDING)
     artifact.save()
     run = GraphBuildRun.objects.create(
         artifact=artifact,
@@ -1278,6 +1491,8 @@ def test_deleting_chunk_cascades_evidence_but_retains_completed_build_audit():
         method=DocumentEntityMention.Method.ROOT,
         resolver_version=artifact.resolver_version,
     )
+    artifact.status = GraphArtifact.Status.ACTIVE
+    artifact.save(update_fields=["status"])
 
     chunk.delete()
 
@@ -1339,7 +1554,7 @@ def test_deleting_resolution_entities_or_links_preserves_raw_mentions():
 @pytest.mark.django_db(transaction=True)
 @database_required
 def test_raw_evidence_instance_save_rejects_rewrites():
-    artifact = _artifact(status=GraphArtifact.Status.ACTIVE)
+    artifact = _artifact(status=GraphArtifact.Status.BUILDING)
     artifact.save()
     chunk = _chunk()
     head = _mention(artifact, chunk)
@@ -1361,6 +1576,8 @@ def test_raw_evidence_instance_save_rejects_rewrites():
         relation_type="evaluates_on",
         extraction_confidence=0.8,
     )
+    artifact.status = GraphArtifact.Status.ACTIVE
+    artifact.save(update_fields=["status"])
 
     head.raw_text = "rewritten"
     with pytest.raises(ValidationError, match="immutable"):
@@ -1424,18 +1641,11 @@ def _persist_collection_relation_fixture():
         scope_type=GraphArtifact.ScopeType.COLLECTION,
         scope_id=COLLECTION_ID,
         status=GraphArtifact.Status.BUILDING,
+        ontology_checksum="7" * 64,
     )
     collection_artifact.save()
-    document_artifact = _artifact(status=GraphArtifact.Status.ACTIVE)
+    document_artifact = _artifact(status=GraphArtifact.Status.BUILDING)
     document_artifact.save()
-    manifest = CollectionArtifactInput.objects.create(
-        artifact=collection_artifact,
-        collection=collection,
-        document_id=DOCUMENT_ID,
-        document_artifact=document_artifact,
-        source_signature="0" * 64,
-        build_signature="0" * 64,
-    )
     chunk = _chunk()
     head = _mention(document_artifact, chunk)
     tail = _mention(
@@ -1483,6 +1693,16 @@ def _persist_collection_relation_fixture():
         mention=tail,
         method=DocumentEntityMention.Method.ROOT,
         resolver_version=document_artifact.resolver_version,
+    )
+    document_artifact.status = GraphArtifact.Status.ACTIVE
+    document_artifact.save(update_fields=["status"])
+    manifest = CollectionArtifactInput.objects.create(
+        artifact=collection_artifact,
+        collection=collection,
+        document_id=DOCUMENT_ID,
+        document_artifact=document_artifact,
+        source_signature="0" * 64,
+        build_signature="0" * 64,
     )
     source = CollectionEntity.objects.create(
         artifact=collection_artifact,
@@ -1541,10 +1761,13 @@ def _persist_collection_relation_fixture():
         reason="exact",
     )
     evidence = CollectionRelationEvidence.objects.create(
+        artifact=collection_artifact,
         relation=relation,
         relation_mention=relation_mention,
         head_mapping=head_mapping,
         tail_mapping=tail_mapping,
+        ontology_checksum=collection_artifact.ontology_checksum,
+        assembly_config_checksum=collection_artifact.assembly_config_checksum,
     )
     return SimpleNamespace(
         collection_artifact=collection_artifact,
@@ -1559,27 +1782,26 @@ def _persist_collection_relation_fixture():
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
+def test_collection_artifact_and_child_direct_deletion_is_refused():
     fixture = _persist_collection_relation_fixture()
-    head_mapping = fixture.head_mapping
-    tail_mapping = fixture.tail_mapping
-    mapping_ids = (head_mapping.pk, tail_mapping.pk)
 
-    with pytest.raises(RestrictedError):
-        head_mapping.delete()
-    fixture.collection_artifact.delete()
+    with pytest.raises(ValidationError, match="deleted directly"):
+        fixture.head_mapping.delete()
+    fixture.collection_artifact.scope_type = GraphArtifact.ScopeType.DOCUMENT
+    with pytest.raises(ValidationError, match="activation"):
+        fixture.collection_artifact.delete()
 
-    assert not CollectionRelationEvidence.objects.filter(
-        pk=fixture.evidence.pk
-    ).exists()
-    assert not CollectionEntityDocumentLink.objects.filter(pk__in=mapping_ids).exists()
-    assert not CollectionRelation.objects.filter(pk=fixture.relation.pk).exists()
+    assert CollectionRelationEvidence.objects.filter(pk=fixture.evidence.pk).exists()
+    assert CollectionEntityDocumentLink.objects.filter(
+        pk__in=(fixture.head_mapping.pk, fixture.tail_mapping.pk)
+    ).count() == 2
+    assert CollectionRelation.objects.filter(pk=fixture.relation.pk).exists()
     assert RelationMention.objects.filter(pk=fixture.relation_mention.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_relation_evidence_preserves_each_unique_support_and_cascades_with_mention(
+def test_relation_evidence_preserves_each_unique_support_and_protects_raw_mention(
     django_assert_num_queries,
 ):
     fixture = _persist_collection_relation_fixture()
@@ -1601,13 +1823,19 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
 
     with pytest.raises(ValidationError), transaction.atomic():
         CollectionRelationEvidence.objects.create(
+            artifact=fixture.collection_artifact,
             relation=relation,
             relation_mention=mention,
             head_mapping=head_mapping,
             tail_mapping=tail_mapping,
+            ontology_checksum=fixture.collection_artifact.ontology_checksum,
+            assembly_config_checksum=(
+                fixture.collection_artifact.assembly_config_checksum
+            ),
         )
 
-    mention.delete()
+    with pytest.raises(ProtectedError):
+        mention.delete()
 
-    assert not CollectionRelationEvidence.objects.filter(pk=evidence.pk).exists()
+    assert CollectionRelationEvidence.objects.filter(pk=evidence.pk).exists()
     assert CollectionRelation.objects.filter(pk=relation.pk).exists()
