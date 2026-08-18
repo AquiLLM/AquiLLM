@@ -18,7 +18,10 @@ The local extractor is an optional, worker-only runtime. Its v1 identity is:
 The resolved dependency set retains `torch==2.11.0`,
 `transformers==5.3.0`, and `tokenizers==0.22.2`, and adds `peft==0.20.0`.
 Dependency resolution succeeds, but that does not prove runtime API or model
-compatibility. Task 6's fake-provider and pinned-runtime smoke checks must pass
+compatibility. Task 6 uses fake modules without network access and verifies only
+the provider API contract. Task 18 implements the
+`check_knowledge_graph_extractor` command; Task 21 runs the real pinned package
+and checkpoint smoke check in the optional worker. That Task 21 smoke must pass
 before this identity is treated as an operationally validated extractor.
 
 ### Optional installation and dependency verification
@@ -37,8 +40,9 @@ uv run --extra knowledge-graph-local python -c "from importlib.metadata import v
 ```
 
 The expected output from the Python check is `1.3.2 0.20.0`. Model checkpoint
-download and inference verification are intentionally deferred to the Task 6
-smoke check, which must use the exact model and revision above.
+download and inference verification are intentionally deferred: Task 18 adds
+`check_knowledge_graph_extractor`, and Task 21 executes it in the optional
+worker using the exact model and revision above.
 
 ### Default web installation exclusion
 
