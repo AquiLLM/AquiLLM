@@ -276,7 +276,7 @@ def _validate_retrieval_case(case: Mapping[str, Any], index: int) -> None:
         _require_sequence(
             case["expected_retrieval_chunk_ids"],
             f"{context}.expected_retrieval_chunk_ids",
-            nonempty=True,
+            nonempty=False,
         )
     ):
         chunk_id = _require_nonempty_string(
@@ -524,13 +524,29 @@ def build_baseline_records(
                     )
                 ):
                     raise FixtureValidationError(
-                    f"baseline IDs for {case_id!r} must be valid IDs"
+                        f"baseline IDs for {case_id!r} must be valid IDs"
                     )
                 if item not in deduped:
                     deduped.append(item)
+            chunk_collections = {
+                chunk["chunk_id"]: document["collection_id"]
+                for document in case.get("documents", ())
+                for chunk in document.get("chunks", ())
+            }
+            accessible = set(case.get("accessible_collection_ids", ()))
+            inaccessible = [
+                item
+                for item in deduped
+                if isinstance(item, str)
+                and item in chunk_collections
+                and chunk_collections[item] not in accessible
+            ]
             record = {
                 "id": case_id,
                 "result_ids": deduped,
+                "inaccessible_result_ids": inaccessible,
+                "inaccessible_result_count": len(inaccessible),
+                "security_status": "LEAKAGE" if inaccessible else "OK",
                 "status": "RECORDED",
             }
         records.append(MappingProxyType(record))

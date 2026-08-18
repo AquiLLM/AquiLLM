@@ -192,10 +192,24 @@ def test_retrieval_recall_is_limited_to_first_ten_unique_output_ids():
         + [f"chunk-{i:02}" for i in range(3, 12)]
         + ["chunk-11"]
     )
-
     report = run_kg_eval.score_retrieval(case, retrieved)
-
     assert report == {"retrieval_recall_at_10": 0.5}
+
+
+def test_baseline_reports_inaccessible_observed_results_without_counting_them():
+    case = {
+        "id": "mixed",
+        "accessible_collection_ids": ["public"],
+        "documents": (
+            {"collection_id": "public", "chunks": ({"chunk_id": "public-1"},)},
+            {"collection_id": "private", "chunks": ({"chunk_id": "private-1"},)},
+        ),
+        "baseline_vector_result_ids": ["public-1", "private-1"],
+    }
+    record = run_kg_eval.build_baseline_records((case,))[0]
+    assert record["inaccessible_result_ids"] == ["private-1"]
+    assert record["inaccessible_result_count"] == 1
+    assert record["security_status"] == "LEAKAGE"
 
 
 def test_zero_gold_retrieval_recall_is_one():
@@ -293,13 +307,13 @@ def test_extraction_loader_rejects_duplicate_and_dangling_records(
             "unknown chunk",
         ),
         (
-            lambda payload: payload["cases"][0]["baseline_vector_result_ids"].append(
+            lambda payload: payload["cases"][1]["baseline_vector_result_ids"].append(
                 "unknown-chunk"
             ),
             "unknown chunk",
         ),
         (
-            lambda payload: payload["cases"][1].update(
+            lambda payload: payload["cases"][2].update(
                 baseline_vector_result_ids=["private-incident-001"]
             ),
             "not in an accessible collection",
@@ -395,7 +409,14 @@ def test_baseline_records_only_fixture_backed_results_and_marks_missing_as_skip(
     records = run_kg_eval.build_baseline_records(cases)
 
     assert records == (
-        {"id": "available", "result_ids": ["chunk-a", "chunk-b"], "status": "RECORDED"},
+        {
+            "id": "available",
+            "result_ids": ["chunk-a", "chunk-b"],
+            "inaccessible_result_ids": [],
+            "inaccessible_result_count": 0,
+            "security_status": "OK",
+            "status": "RECORDED",
+        },
         {
             "id": "unavailable",
             "reason": "no fixture-backed or injected vector results",

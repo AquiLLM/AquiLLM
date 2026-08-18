@@ -2,6 +2,19 @@
 # Private/security intent is explicit so future evaluators cannot accidentally expose it.
 schema_version: 1
 cases:
+  - id: no_accessible_evidence
+    description: "No accessible evidence exists for the query."
+    privacy_intent: "security-sensitive: private evidence must remain excluded."
+    query: "What did the private incident conclude?"
+    accessible_collection_ids: [collection-public]
+    documents:
+      - doc_id: doc-private-only
+        collection_id: collection-security-private
+        chunks:
+          - chunk_id: private-only-001
+            text: "Private incident analysis is restricted."
+    expected_retrieval_chunk_ids: []
+
   - id: conflicting_claims_across_collections
     description: "Both accessible collections supply conflicting evidence and neither is silently dropped."
     privacy_intent: "two user-authorized collections; preserve conflict and collection provenance."
