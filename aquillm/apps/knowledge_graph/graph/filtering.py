@@ -906,6 +906,7 @@ def _lock_filter_source_commit(
         CollectionGraphAssemblyError,
         _validate_task9_lineage,
     )
+
     def validate(run):
         stats = run.stats if type(run.stats) is dict else {}
         resolution = stats.get("collection_resolution_commit")
@@ -955,8 +956,7 @@ def _lock_filter_source_commit(
             )
             if (
                 type(assembly_marker.get("marker_checksum")) is not str
-                or assembly_marker["marker_checksum"]
-                != expected_assembly_checksum
+                or assembly_marker["marker_checksum"] != expected_assembly_checksum
             ):
                 return None
         return (
@@ -1222,23 +1222,53 @@ def create_filter_rerun_artifact(
 
     validate_ontology_definition(ontology)
     ontology_checksum = ontology.checksum
-    source_reference = GraphArtifact.objects.only("scope_type", "scope_id").get(
-        pk=source_artifact_id
-    )
+    source_reference = GraphArtifact.objects.get(pk=source_artifact_id)
     if source_reference.scope_type != GraphArtifact.ScopeType.COLLECTION:
         raise ValueError("filter rerun source must be a collection artifact")
     try:
         collection_id = int(source_reference.scope_id)
     except (TypeError, ValueError) as exc:
         raise ValueError("filter rerun source collection identity is invalid") from exc
+    identity = {
+        "scope_type": source_reference.scope_type,
+        "scope_id": source_reference.scope_id,
+        "source_hash": source_reference.source_hash,
+        "ontology_version": source_reference.ontology_version,
+        "extractor_version": source_reference.extractor_version,
+        "resolver_version": source_reference.resolver_version,
+        "filter_policy_version": policy.version,
+        "embedding_model_signature": source_reference.embedding_model_signature,
+        "ontology_checksum": source_reference.ontology_checksum,
+        "filter_policy_checksum": checksum,
+        "resolution_config_checksum": source_reference.resolution_config_checksum,
+        "assembly_version": source_reference.assembly_version,
+        "assembly_config_checksum": source_reference.assembly_config_checksum,
+    }
     with transaction.atomic():
         lock_collection_graph_scope(collection_id)
+        scope_query = GraphArtifact.objects.filter(
+            scope_type=GraphArtifact.ScopeType.COLLECTION,
+            scope_id=str(collection_id),
+        )
+        artifact_ids = {source_artifact_id}
+        artifact_ids.update(
+            scope_query.order_by("-build_generation", "-pk").values_list(
+                "pk", flat=True
+            )[:1]
+        )
+        artifact_ids.update(
+            scope_query.filter(status=GraphArtifact.Status.ACTIVE)
+            .order_by("pk")
+            .values_list("pk", flat=True)[:2]
+        )
+        artifact_ids.update(
+            scope_query.filter(status=GraphArtifact.Status.BUILDING, **identity)
+            .order_by("-build_generation", "-pk")
+            .values_list("pk", flat=True)[:2]
+        )
         scope_artifacts = tuple(
             GraphArtifact.objects.select_for_update()
-            .filter(
-                scope_type=GraphArtifact.ScopeType.COLLECTION,
-                scope_id=str(collection_id),
-            )
+            .filter(pk__in=tuple(sorted(artifact_ids)))
             .order_by("pk")
         )
         source = next(
@@ -1248,12 +1278,52 @@ def create_filter_rerun_artifact(
             raise ValueError(
                 "filter rerun source must be an active collection artifact"
             )
+        existing = next(
+            (
+                row
+                for row in scope_artifacts
+                if row.status == GraphArtifact.Status.BUILDING
+                and all(getattr(row, key) == value for key, value in identity.items())
+            ),
+            None,
+        )
+        preferred_run_id = None
+        if existing is not None:
+            existing_metadata = (
+                existing.metadata if type(existing.metadata) is dict else {}
+            )
+            preferred_run_id = existing_metadata.get("filter_source_build_run_id")
+        source_run_query = GraphBuildRun.objects.filter(
+            artifact_id=source.pk,
+            artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+            artifact__scope_id=str(collection_id),
+        )
+        run_ids = set(source_run_query.order_by("-pk").values_list("pk", flat=True)[:1])
+        run_ids.update(
+            source_run_query.filter(stats__has_key="collection_resolution_commit")
+            .order_by("-pk")
+            .values_list("pk", flat=True)[:2]
+        )
+        run_ids.update(
+            source_run_query.filter(stats__has_key="filter_commit")
+            .order_by("-pk")
+            .values_list("pk", flat=True)[:2]
+        )
+        if type(preferred_run_id) is int and preferred_run_id > 0:
+            run_ids.add(preferred_run_id)
+        if existing is not None:
+            run_ids.update(
+                GraphBuildRun.objects.filter(
+                    artifact=existing,
+                    artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+                    artifact__scope_id=str(collection_id),
+                )
+                .order_by("pk")
+                .values_list("pk", flat=True)[:2]
+            )
         scope_runs = tuple(
             GraphBuildRun.objects.select_for_update()
-            .filter(
-                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
-                artifact__scope_id=str(collection_id),
-            )
+            .filter(pk__in=tuple(sorted(run_ids)))
             .order_by("pk")
         )
         if source.ontology_checksum != ontology_checksum:
@@ -1289,35 +1359,6 @@ def create_filter_rerun_artifact(
             evidence=evidence,
             decisions=decisions,
         )
-        identity = {
-            "scope_type": source.scope_type,
-            "scope_id": source.scope_id,
-            "source_hash": source.source_hash,
-            "ontology_version": source.ontology_version,
-            "extractor_version": source.extractor_version,
-            "resolver_version": source.resolver_version,
-            "filter_policy_version": policy.version,
-            "embedding_model_signature": source.embedding_model_signature,
-            "ontology_checksum": source.ontology_checksum,
-            "filter_policy_checksum": checksum,
-            "resolution_config_checksum": source.resolution_config_checksum,
-            "assembly_version": source.assembly_version,
-            "assembly_config_checksum": source.assembly_config_checksum,
-        }
-        existing = next(
-            (
-                row
-                for row in scope_artifacts
-                if all(getattr(row, key) == value for key, value in identity.items())
-            ),
-            None,
-        )
-        preferred_run_id = None
-        if existing is not None:
-            existing_metadata = (
-                existing.metadata if type(existing.metadata) is dict else {}
-            )
-            preferred_run_id = existing_metadata.get("filter_source_build_run_id")
         (
             source_build_run,
             source_task9_marker_checksum,
@@ -1333,9 +1374,7 @@ def create_filter_rerun_artifact(
             preferred_run_id=preferred_run_id,
         )
         source_stats = (
-            source_build_run.stats
-            if type(source_build_run.stats) is dict
-            else {}
+            source_build_run.stats if type(source_build_run.stats) is dict else {}
         )
         source_marker = source_stats.get("collection_resolution_commit")
         if source_marker is None:
@@ -1367,14 +1406,20 @@ def create_filter_rerun_artifact(
                 source_assembly_marker_checksum=source_assembly_marker_checksum,
                 max_document_inputs=manifest_cap,
             )
+        build_generation = (
+            max(
+                (row.build_generation for row in scope_artifacts),
+                default=0,
+            )
+            + 1
+        )
         destination = GraphArtifact.objects.create(
             status=GraphArtifact.Status.BUILDING,
+            build_generation=build_generation,
             metadata={
                 "filter_source_artifact_id": source.pk,
                 "filter_source_build_run_id": source_build_run.pk,
-                "filter_source_task9_marker_checksum": (
-                    source_task9_marker_checksum
-                ),
+                "filter_source_task9_marker_checksum": (source_task9_marker_checksum),
                 "filter_source_assembly_marker_checksum": (
                     source_assembly_marker_checksum
                 ),
@@ -1503,17 +1548,13 @@ def create_filter_rerun_artifact(
                     "filter_result_checksum": projection_checksum,
                     "source_artifact_id": source.pk,
                     "source_build_run_id": source_build_run.pk,
-                    "source_task9_marker_checksum": (
-                        source_task9_marker_checksum
-                    ),
+                    "source_task9_marker_checksum": (source_task9_marker_checksum),
                     "source_assembly_marker_checksum": (
                         source_assembly_marker_checksum
                     ),
                     "source_hash": source.source_hash,
                     "assembly_version": destination.assembly_version,
-                    "assembly_config_checksum": (
-                        destination.assembly_config_checksum
-                    ),
+                    "assembly_config_checksum": (destination.assembly_config_checksum),
                     "manifest_count": len(source_manifest),
                     "entity_count": len(new_entities),
                     "link_count": len(cloned_links),

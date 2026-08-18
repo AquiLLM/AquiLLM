@@ -2389,6 +2389,8 @@ def build_collection_snapshot(
     assembly_config: object | None = None,
     embedding_model_signature: str,
     build_key: str | None = None,
+    build_generation: int | None = None,
+    orchestration_version: int = 0,
 ):
     """Create a building collection artifact and its immutable source manifest."""
 
@@ -2431,6 +2433,16 @@ def build_collection_snapshot(
     ontology_checksum = ontology.checksum
     if build_key is not None:
         build_key = _require_hash(build_key, "collection build key")
+    if build_generation is not None and (
+        type(build_generation) is not int or build_generation < 1
+    ):
+        raise CollectionResolutionPersistenceError(
+            "collection build generation must be a positive integer"
+        )
+    if orchestration_version not in GraphArtifact.OrchestrationVersion.values:
+        raise CollectionResolutionPersistenceError(
+            "collection orchestration version is invalid"
+        )
     if type(filter_policy) is not FilterPolicy:
         raise CollectionResolutionPersistenceError(
             "collection snapshot requires an exact immutable FilterPolicy"
@@ -2501,30 +2513,54 @@ def build_collection_snapshot(
         )
     with transaction.atomic():
         collection = lock_collection_graph_scope(collection.pk)
-        _scope_artifacts = tuple(
+        scope_query = GraphArtifact.objects.filter(
+            scope_type=GraphArtifact.ScopeType.COLLECTION,
+            scope_id=str(collection.pk),
+        )
+        scope_artifact_ids = set(
+            scope_query.order_by("-build_generation", "-pk").values_list(
+                "pk", flat=True
+            )[:1]
+        )
+        scope_artifact_ids.update(
+            scope_query.filter(status=GraphArtifact.Status.ACTIVE)
+            .order_by("pk")
+            .values_list("pk", flat=True)[:2]
+        )
+        scope_artifacts = tuple(
             GraphArtifact.objects.select_for_update()
-            .filter(
-                scope_type=GraphArtifact.ScopeType.COLLECTION,
-                scope_id=str(collection.pk),
-            )
+            .filter(pk__in=tuple(sorted(scope_artifact_ids)))
             .order_by("pk")
         )
+        scope_run_ids: set[int] = set()
+        for scope_artifact_id in sorted(scope_artifact_ids):
+            latest_run_id = (
+                GraphBuildRun.objects.filter(
+                    artifact_id=scope_artifact_id,
+                    artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+                    artifact__scope_id=str(collection.pk),
+                )
+                .order_by("-pk")
+                .values_list("pk", flat=True)
+                .first()
+            )
+            if latest_run_id is not None:
+                scope_run_ids.add(latest_run_id)
         _scope_runs = tuple(
             GraphBuildRun.objects.select_for_update()
-            .filter(
-                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
-                artifact__scope_id=str(collection.pk),
-            )
+            .filter(pk__in=tuple(sorted(scope_run_ids)))
             .order_by("pk")
         )
-        _scope_manifests = tuple(
-            CollectionArtifactInput.objects.select_for_update()
-            .filter(
-                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
-                artifact__scope_id=str(collection.pk),
-            )
-            .order_by("artifact_id", "document_artifact_id")
+        latest_generation = max(
+            (row.build_generation for row in scope_artifacts),
+            default=0,
         )
+        expected_generation = (latest_generation or 0) + 1
+        if build_generation is not None and build_generation != expected_generation:
+            raise CollectionResolutionPersistenceError(
+                "collection build generation changed before snapshot"
+            )
+        build_generation = expected_generation
         sources = tuple(
             GraphArtifact.objects.select_for_update()
             .filter(pk__in=source_ids)
@@ -2583,6 +2619,8 @@ def build_collection_snapshot(
             scope_id=collection.pk,
             status=GraphArtifact.Status.BUILDING,
             build_key=build_key or "",
+            build_generation=build_generation,
+            orchestration_version=orchestration_version,
             source_hash=source_hash,
             ontology_version=_bounded_text(
                 ontology_version, "ontology version", maximum=128
@@ -2658,6 +2696,8 @@ def _validate_collection_destination(
         )
     for field in (
         "build_key",
+        "build_generation",
+        "orchestration_version",
         "scope_type",
         "scope_id",
         "source_hash",
@@ -3814,6 +3854,80 @@ def _write_collection_resolution(
     return tuple(entity_rows), tuple(links)
 
 
+def _lock_collection_destination_occurrence(
+    collection_id: int,
+    candidate_artifact_id: int,
+    build_run_id: int,
+):
+    """Lock only the candidate/current collection occurrences for Task 9 writes."""
+
+    from apps.knowledge_graph.graph.assembly import lock_collection_graph_scope
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    collection = lock_collection_graph_scope(collection_id)
+    scope_query = GraphArtifact.objects.filter(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=str(collection_id),
+    )
+    candidate_reference = (
+        scope_query.filter(pk=candidate_artifact_id)
+        .values("pk", "build_generation")
+        .first()
+    )
+    if candidate_reference is None:
+        raise CollectionResolutionPersistenceError(
+            "collection artifact changed before scope locking"
+        )
+    artifact_ids = {candidate_artifact_id}
+    artifact_ids.update(
+        scope_query.filter(status=GraphArtifact.Status.ACTIVE)
+        .order_by("pk")
+        .values_list("pk", flat=True)[:2]
+    )
+    artifact_ids.update(
+        scope_query.filter(
+            build_generation__gt=candidate_reference["build_generation"],
+            status__in=(
+                GraphArtifact.Status.BUILDING,
+                GraphArtifact.Status.ACTIVE,
+            ),
+        )
+        .order_by("build_generation", "pk")
+        .values_list("pk", flat=True)[:2]
+    )
+    artifacts = tuple(
+        GraphArtifact.objects.select_for_update()
+        .filter(pk__in=tuple(sorted(artifact_ids)))
+        .order_by("pk")
+    )
+    artifact = next(
+        (row for row in artifacts if row.pk == candidate_artifact_id),
+        None,
+    )
+    if artifact is None:
+        raise CollectionResolutionPersistenceError(
+            "collection artifact changed before scope locking"
+        )
+    if any(
+        row.build_generation > artifact.build_generation
+        and row.status in {GraphArtifact.Status.BUILDING, GraphArtifact.Status.ACTIVE}
+        for row in artifacts
+    ):
+        raise CollectionResolutionPersistenceError(
+            "a newer collection occurrence superseded Task 9 persistence"
+        )
+    run = (
+        GraphBuildRun.objects.select_for_update()
+        .filter(pk=build_run_id, artifact_id=candidate_artifact_id)
+        .first()
+    )
+    if run is None:
+        raise CollectionResolutionPersistenceError(
+            "collection build run changed before scope locking"
+        )
+    return collection, artifact, run
+
+
 def persist_collection_resolution(
     artifact_id: int,
     build_run_id: int,
@@ -3829,7 +3943,6 @@ def persist_collection_resolution(
 
     from django.db import transaction
 
-    from apps.knowledge_graph.graph.assembly import lock_collection_graph_scope
     from apps.knowledge_graph.graph.filtering import (
         CollectionFilterResult,
         FilterPolicy,
@@ -3860,61 +3973,50 @@ def persist_collection_resolution(
         raise CollectionResolutionPersistenceError(
             "filter result or policy failed recursive validation"
         ) from exc
-    artifact_reference = GraphArtifact.objects.only("scope_type", "scope_id").get(
-        pk=artifact_id
+    run_reference = (
+        GraphBuildRun.objects.filter(
+            pk=build_run_id,
+            artifact_id=artifact_id,
+            artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+        )
+        .values("artifact__scope_id")
+        .first()
     )
-    if artifact_reference.scope_type != GraphArtifact.ScopeType.COLLECTION:
+    if run_reference is None:
         raise CollectionResolutionPersistenceError(
-            "collection resolution requires a collection artifact"
+            "collection resolution requires a matching collection build run"
         )
     try:
-        collection_id = int(artifact_reference.scope_id)
+        collection_id = int(run_reference["artifact__scope_id"])
     except (TypeError, ValueError) as exc:
         raise CollectionResolutionPersistenceError(
             "collection artifact scope identity is invalid"
         ) from exc
     with transaction.atomic():
-        lock_collection_graph_scope(collection_id)
-        scope_artifacts = tuple(
-            GraphArtifact.objects.select_for_update()
-            .filter(
-                scope_type=GraphArtifact.ScopeType.COLLECTION,
-                scope_id=str(collection_id),
-            )
-            .order_by("pk")
+        _collection, artifact, run = _lock_collection_destination_occurrence(
+            collection_id,
+            artifact_id,
+            build_run_id,
         )
-        artifact = next((row for row in scope_artifacts if row.pk == artifact_id), None)
-        if artifact is None:
-            raise CollectionResolutionPersistenceError(
-                "collection artifact changed before scope locking"
-            )
-        scope_runs = tuple(
-            GraphBuildRun.objects.select_for_update()
-            .filter(
-                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
-                artifact__scope_id=str(collection_id),
-            )
-            .order_by("pk")
-        )
-        run = next((row for row in scope_runs if row.pk == build_run_id), None)
-        if run is None:
-            raise CollectionResolutionPersistenceError(
-                "collection build run changed before scope locking"
-            )
         _validate_collection_destination(
             artifact,
             run,
             lease_owner=lease_owner,
             lease_generation=lease_generation,
         )
-        manifest = tuple(
+        manifest_query = (
             CollectionArtifactInput.objects.select_for_update()
             .select_related("document_artifact", "collection")
             .filter(artifact=artifact)
             .order_by("document_artifact_id")
         )
+        if manifest_query.count() > result.config.max_document_inputs:
+            raise CollectionResolutionPersistenceError(
+                "collection manifest exceeds the resolution input cap"
+            )
+        manifest = tuple(manifest_query)
         snapshot = _snapshot_from_locked_manifest(artifact, manifest)
-        source_entities = tuple(
+        source_entity_query = (
             DocumentEntity.objects.select_for_update()
             .filter(
                 artifact_id__in=snapshot.document_artifact_ids,
@@ -3922,6 +4024,11 @@ def persist_collection_resolution(
             )
             .order_by("pk")
         )
+        if source_entity_query.count() > result.config.max_entities:
+            raise CollectionResolutionPersistenceError(
+                "collection source entity cap exceeded before persistence"
+            )
+        source_entities = tuple(source_entity_query)
         projected, source_relations = _load_resolution_source_rows(
             artifact, manifest, for_update=True
         )

@@ -30,6 +30,14 @@ def test_task9_links_are_counted_before_they_are_materialized():
     assert source.index("link_query.count()") < source.index("tuple(link_query)")
 
 
+def test_task9_entities_are_counted_before_they_are_materialized():
+    source = inspect.getsource(assembly._load_locked_task9_rows)
+
+    assert "entity_query.count()" in source
+    assert "config.max_entities" in source
+    assert source.index("entity_query.count()") < source.index("tuple(entity_query)")
+
+
 def test_endpoint_ids_are_split_into_bounded_deterministic_query_batches():
     batcher = getattr(assembly, "_id_batches", None)
     batch_size = getattr(assembly, "_ENDPOINT_ID_BATCH_SIZE", None)

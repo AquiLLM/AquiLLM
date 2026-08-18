@@ -27,6 +27,7 @@ from apps.knowledge_graph.resolution.persistence import (
     _validate_source_snapshot,
     persist_document_resolution,
     resolution_commit_is_valid,
+    resolution_rows_fingerprint,
     source_mention_fingerprint,
 )
 
@@ -2070,6 +2071,47 @@ def test_source_mention_fingerprint_is_order_independent_and_evidence_sensitive(
     assert forward == reverse
     assert len(forward) == 64
     assert changed != forward
+
+
+def test_resolution_rows_fingerprint_binds_entity_and_membership_projection():
+    entity = {
+        "id": 7,
+        "artifact_id": 3,
+        "document_id": DOCUMENT_ID,
+        "cluster_key": "a" * 64,
+        "label": "Orion",
+        "identifier": "",
+        "normalized_label": "orion",
+        "version_signature": "",
+        "resolution_confidence": 0.9,
+        "entity_type": "model",
+        "status": "active",
+        "metadata": {"result_checksum": "b" * 64},
+    }
+    link = {
+        "id": 11,
+        "document_entity_id": 7,
+        "mention_id": 5,
+        "status": "active",
+        "method": "root",
+        "resolver_version": RESOLVER_VERSION,
+        "parent_mention_id": "",
+        "reason": "cluster root",
+        "metadata": {"result_checksum": "b" * 64},
+    }
+
+    fingerprint = resolution_rows_fingerprint((entity,), (link,))
+
+    assert len(fingerprint) == 64
+    assert fingerprint == resolution_rows_fingerprint((entity,), (link,))
+    assert fingerprint != resolution_rows_fingerprint(
+        ({**entity, "label": "Atlas"},),
+        (link,),
+    )
+    assert fingerprint != resolution_rows_fingerprint(
+        (entity,),
+        ({**link, "method": "singleton"},),
+    )
 
 
 def test_committed_resolution_state_rejects_extra_inactive_rows():

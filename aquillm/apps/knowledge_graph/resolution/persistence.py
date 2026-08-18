@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from datetime import date, datetime
 from hashlib import sha256
 from math import isfinite
 from uuid import UUID
@@ -49,6 +50,33 @@ _SOURCE_FIELDS = (
     "content_object_type_id",
     "content_object_id",
     "metadata",
+)
+_RESOLUTION_ENTITY_FIELDS = (
+    "id",
+    "artifact_id",
+    "document_id",
+    "cluster_key",
+    "label",
+    "identifier",
+    "normalized_label",
+    "version_signature",
+    "resolution_confidence",
+    "entity_type",
+    "status",
+    "metadata",
+    "created_at",
+)
+_RESOLUTION_LINK_FIELDS = (
+    "id",
+    "document_entity_id",
+    "mention_id",
+    "status",
+    "method",
+    "resolver_version",
+    "parent_mention_id",
+    "reason",
+    "metadata",
+    "created_at",
 )
 
 
@@ -127,6 +155,8 @@ def _json_value(value: object) -> object:
         return value
     if isinstance(value, UUID):
         return str(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
     if isinstance(value, float):
         if not isfinite(value):
             raise ValueError("mention fingerprint values must be finite")
@@ -166,6 +196,51 @@ def source_mention_fingerprint(mentions) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+def resolution_rows_fingerprint(entities, links) -> str:
+    """Hash the complete persisted document-resolution projection."""
+
+    entity_records = tuple(entities)
+    link_records = tuple(links)
+    if len(entity_records) > MAX_DOCUMENT_MENTIONS:
+        raise ValueError("document resolution entity cap exceeded")
+    if len(link_records) > MAX_DOCUMENT_MENTIONS:
+        raise ValueError("document resolution membership cap exceeded")
+
+    def normalized(records, fields, label):
+        rows = [
+            {field: _json_value(_record_value(record, field)) for field in fields}
+            for record in records
+        ]
+        rows.sort(key=lambda row: (str(type(row["id"])), str(row["id"])))
+        identifiers = tuple(str(row["id"]) for row in rows)
+        if any(identifier in {"", "None"} for identifier in identifiers):
+            raise ValueError(f"{label} rows require stable primary keys")
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError(f"{label} row primary keys must be unique")
+        return rows
+
+    payload = {
+        "entities": normalized(
+            entity_records,
+            _RESOLUTION_ENTITY_FIELDS,
+            "document entity",
+        ),
+        "links": normalized(
+            link_records,
+            _RESOLUTION_LINK_FIELDS,
+            "document membership",
+        ),
+    }
+    return sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _revalidate_immutable_result(result: object) -> ResolutionResult:
@@ -245,6 +320,8 @@ def _validate_destination(
         )
     for field in (
         "build_key",
+        "build_generation",
+        "orchestration_version",
         "scope_type",
         "scope_id",
         "source_hash",
@@ -482,6 +559,14 @@ def _existing_resolution(
         raise ResolutionPersistenceError(
             "persisted resolution rows do not match their commit marker"
         )
+    rows_fingerprint = resolution_rows_fingerprint(entity_rows, link_rows)
+    stored_rows_fingerprint = stats.get("resolution_rows_fingerprint")
+    if (
+        artifact.orchestration_version == 1 or stored_rows_fingerprint is not None
+    ) and stored_rows_fingerprint != rows_fingerprint:
+        raise ResolutionPersistenceError(
+            "persisted resolution row fingerprint does not match its commit"
+        )
     return entity_rows
 
 
@@ -528,7 +613,10 @@ def _write_resolution_rows(*, artifact, result, mentions_by_id):
         for membership in cluster.memberships
     ]
     DocumentEntityMention.objects.bulk_create(link_rows)
-    return tuple(sorted(entity_rows, key=lambda row: row.cluster_key)), len(link_rows)
+    return (
+        tuple(sorted(entity_rows, key=lambda row: row.cluster_key)),
+        tuple(sorted(link_rows, key=lambda row: row.mention_id)),
+    )
 
 
 def persist_document_resolution(
@@ -543,7 +631,10 @@ def persist_document_resolution(
 
     from django.db import transaction
 
-    from apps.knowledge_graph.extraction.pipeline import extraction_commit_is_valid
+    from apps.knowledge_graph.extraction.pipeline import (
+        extraction_commit_is_valid,
+        extraction_evidence_fingerprint,
+    )
     from apps.knowledge_graph.models import (
         EntityMention,
         GraphArtifact,
@@ -568,12 +659,28 @@ def persist_document_resolution(
             .order_by("pk")
         )
         source_count = len(mentions)
-        relation_count = RelationMention.objects.filter(artifact=artifact).count()
+        relations = tuple(
+            RelationMention.objects.select_for_update()
+            .filter(artifact=artifact)
+            .order_by("pk")
+        )
+        relation_count = len(relations)
+        evidence_fingerprint = None
+        if (
+            artifact.orchestration_version
+            == GraphArtifact.OrchestrationVersion.SCOPED_V1
+            or run.orchestration_version == GraphArtifact.OrchestrationVersion.SCOPED_V1
+        ):
+            evidence_fingerprint = extraction_evidence_fingerprint(
+                mentions,
+                relations,
+            )
         stats = dict(run.stats) if isinstance(run.stats, dict) else {}
         if not extraction_commit_is_valid(
             run,
             entity_count=source_count,
             relation_count=relation_count,
+            evidence_fingerprint=evidence_fingerprint,
         ):
             raise ResolutionPersistenceError(
                 "document resolution requires a valid extraction commit"
@@ -595,11 +702,13 @@ def persist_document_resolution(
         if existing is not None:
             return existing
         mentions_by_id = {str(mention.pk): mention for mention in mentions}
-        entity_rows, membership_count = _write_resolution_rows(
+        entity_rows, link_rows = _write_resolution_rows(
             artifact=artifact,
             result=result,
             mentions_by_id=mentions_by_id,
         )
+        membership_count = len(link_rows)
+        rows_fingerprint = resolution_rows_fingerprint(entity_rows, link_rows)
         marker = {
             "version": 1,
             "resolver_version": result.resolver_version,
@@ -625,7 +734,11 @@ def persist_document_resolution(
             result_checksum=result.checksum,
         ):
             raise ResolutionPersistenceError("generated resolution marker is invalid")
-        run.stats = {**stats, "resolution_commit": marker}
+        run.stats = {
+            **stats,
+            "resolution_rows_fingerprint": rows_fingerprint,
+            "resolution_commit": marker,
+        }
         run.save(update_fields=["stats"])
         return entity_rows
 
@@ -634,5 +747,6 @@ __all__ = [
     "ResolutionPersistenceError",
     "persist_document_resolution",
     "resolution_commit_is_valid",
+    "resolution_rows_fingerprint",
     "source_mention_fingerprint",
 ]

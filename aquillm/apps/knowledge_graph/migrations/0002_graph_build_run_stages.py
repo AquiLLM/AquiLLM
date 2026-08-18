@@ -31,9 +31,18 @@ def _digest(payload):
 def populate_build_keys(apps, schema_editor):
     GraphArtifact = apps.get_model("apps_knowledge_graph", "GraphArtifact")
     GraphBuildRun = apps.get_model("apps_knowledge_graph", "GraphBuildRun")
-    artifact_keys = {}
-    for artifact in GraphArtifact.objects.order_by("pk").iterator():
-        build_key = _digest(
+    batch_size = 1_000
+    artifact_batch = []
+    previous_scope = None
+    build_generation = 0
+    artifacts = GraphArtifact.objects.order_by("scope_type", "scope_id", "pk")
+    for artifact in artifacts.iterator(chunk_size=batch_size):
+        scope = (artifact.scope_type, artifact.scope_id)
+        if scope != previous_scope:
+            previous_scope = scope
+            build_generation = 0
+        build_generation += 1
+        artifact.build_key = _digest(
             {
                 "namespace": "legacy-graph-artifact-v1",
                 "identity": {
@@ -42,20 +51,64 @@ def populate_build_keys(apps, schema_editor):
                 },
             }
         )
-        GraphArtifact.objects.filter(pk=artifact.pk).update(build_key=build_key)
-        artifact_keys[artifact.pk] = build_key
-    for run in GraphBuildRun.objects.order_by("pk").iterator():
-        build_key = artifact_keys.get(run.artifact_id)
-        if build_key is None:
-            build_key = _digest(
+        artifact.build_generation = build_generation
+        metadata = artifact.metadata if type(artifact.metadata) is dict else {}
+        artifact.orchestration_version = int(metadata.get("orchestration_version") == 1)
+        artifact_batch.append(artifact)
+        if len(artifact_batch) >= batch_size:
+            GraphArtifact.objects.bulk_update(
+                artifact_batch,
+                ["build_key", "build_generation", "orchestration_version"],
+                batch_size=batch_size,
+            )
+            artifact_batch.clear()
+    if artifact_batch:
+        GraphArtifact.objects.bulk_update(
+            artifact_batch,
+            ["build_key", "build_generation", "orchestration_version"],
+            batch_size=batch_size,
+        )
+
+    run_batch = []
+    runs = GraphBuildRun.objects.select_related("artifact").order_by("pk")
+    for run in runs.iterator(chunk_size=batch_size):
+        if run.artifact_id is None:
+            run.build_key = _digest(
                 {
                     "namespace": "legacy-detached-graph-run-v1",
                     "run_id": run.pk,
                 }
             )
-        GraphBuildRun.objects.filter(pk=run.pk).update(
-            build_key=build_key,
-            build_kind=run.scope_type,
+            run.build_generation = 1
+            run.orchestration_version = 0
+        else:
+            run.build_key = run.artifact.build_key
+            run.build_generation = run.artifact.build_generation
+            run.orchestration_version = run.artifact.orchestration_version
+        run.build_kind = run.scope_type
+        run_batch.append(run)
+        if len(run_batch) >= batch_size:
+            GraphBuildRun.objects.bulk_update(
+                run_batch,
+                [
+                    "build_key",
+                    "build_generation",
+                    "orchestration_version",
+                    "build_kind",
+                ],
+                batch_size=batch_size,
+            )
+            run_batch.clear()
+    if run_batch:
+        GraphBuildRun.objects.bulk_update(
+            run_batch,
+            [
+                "build_key",
+                "build_generation",
+                "orchestration_version",
+                "build_kind",
+            ],
+            batch_size=batch_size,
         )
 
 
@@ -79,9 +132,37 @@ class Migration(migrations.Migration):
             field=models.CharField(default="", editable=False, max_length=64),
         ),
         migrations.AddField(
+            model_name="graphartifact",
+            name="build_generation",
+            field=models.PositiveBigIntegerField(default=1, editable=False),
+        ),
+        migrations.AddField(
+            model_name="graphartifact",
+            name="orchestration_version",
+            field=models.PositiveSmallIntegerField(
+                choices=[(0, "Legacy"), (1, "Scoped v1")],
+                default=0,
+                editable=False,
+            ),
+        ),
+        migrations.AddField(
             model_name="graphbuildrun",
             name="build_key",
             field=models.CharField(default="", editable=False, max_length=64),
+        ),
+        migrations.AddField(
+            model_name="graphbuildrun",
+            name="build_generation",
+            field=models.PositiveBigIntegerField(default=1, editable=False),
+        ),
+        migrations.AddField(
+            model_name="graphbuildrun",
+            name="orchestration_version",
+            field=models.PositiveSmallIntegerField(
+                choices=[(0, "Legacy"), (1, "Scoped v1")],
+                default=0,
+                editable=False,
+            ),
         ),
         migrations.AddField(
             model_name="graphbuildrun",
@@ -152,24 +233,28 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name="graphartifact",
+            constraint=models.CheckConstraint(
+                condition=models.Q(build_generation__gte=1),
+                name="kg_artifact_generation_positive",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="graphartifact",
+            constraint=models.CheckConstraint(
+                condition=models.Q(orchestration_version__in=(0, 1)),
+                name="kg_artifact_orchestration_version_valid",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="graphartifact",
             constraint=models.UniqueConstraint(
                 fields=(
                     "scope_type",
                     "scope_id",
                     "build_key",
-                    "source_hash",
-                    "ontology_version",
-                    "extractor_version",
-                    "resolver_version",
-                    "filter_policy_version",
-                    "embedding_model_signature",
-                    "ontology_checksum",
-                    "filter_policy_checksum",
-                    "resolution_config_checksum",
-                    "assembly_version",
-                    "assembly_config_checksum",
+                    "build_generation",
                 ),
-                name="kg_artifact_build_identity",
+                name="kg_artifact_build_occurrence",
             ),
         ),
         migrations.AddConstraint(
@@ -211,6 +296,20 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="graphbuildrun",
             constraint=models.CheckConstraint(
+                condition=models.Q(build_generation__gte=1),
+                name="kg_build_generation_positive",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="graphbuildrun",
+            constraint=models.CheckConstraint(
+                condition=models.Q(orchestration_version__in=(0, 1)),
+                name="kg_build_orchestration_version_valid",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="graphbuildrun",
+            constraint=models.CheckConstraint(
                 condition=models.Q(("build_kind", models.F("scope_type"))),
                 name="kg_build_kind_matches_scope",
             ),
@@ -218,52 +317,37 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="graphbuildrun",
             constraint=models.CheckConstraint(
-                condition=models.Q(
-                    (
-                        "stage__in",
-                        (
-                            "ontology",
-                            "extraction",
-                            "resolution",
-                            "filtering",
-                            "persistence",
-                            "complete",
+                condition=(
+                    models.Q(orchestration_version=0)
+                    | models.Q(
+                        orchestration_version=1,
+                        build_kind="document",
+                        stage__in=(
+                            "queued",
+                            "extracting",
+                            "resolving",
+                            "validating",
+                            "active",
+                            "failed",
+                            "superseded",
+                            "stale",
                         ),
-                    ),
-                    models.Q(
-                        ("build_kind", "document"),
-                        (
-                            "stage__in",
-                            (
-                                "queued",
-                                "extracting",
-                                "resolving",
-                                "validating",
-                                "active",
-                                "failed",
-                                "superseded",
-                                "stale",
-                            ),
+                    )
+                    | models.Q(
+                        orchestration_version=1,
+                        build_kind="collection",
+                        stage__in=(
+                            "queued",
+                            "snapshotting",
+                            "resolving",
+                            "assembling",
+                            "validating",
+                            "active",
+                            "failed",
+                            "superseded",
+                            "stale",
                         ),
-                    ),
-                    models.Q(
-                        ("build_kind", "collection"),
-                        (
-                            "stage__in",
-                            (
-                                "queued",
-                                "snapshotting",
-                                "resolving",
-                                "assembling",
-                                "validating",
-                                "active",
-                                "failed",
-                                "superseded",
-                                "stale",
-                            ),
-                        ),
-                    ),
-                    _connector="OR",
+                    )
                 ),
                 name="kg_build_stage_matches_kind",
             ),
@@ -271,39 +355,39 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="graphbuildrun",
             constraint=models.CheckConstraint(
-                condition=models.Q(
-                    (
-                        "stage__in",
-                        (
-                            "ontology",
-                            "extraction",
-                            "resolution",
-                            "filtering",
-                            "persistence",
-                            "complete",
+                condition=(
+                    models.Q(orchestration_version=0)
+                    | models.Q(
+                        orchestration_version=1,
+                        stage="queued",
+                        status="pending",
+                    )
+                    | models.Q(
+                        orchestration_version=1,
+                        stage__in=(
+                            "extracting",
+                            "snapshotting",
+                            "resolving",
+                            "assembling",
+                            "validating",
                         ),
-                    ),
-                    models.Q(("stage", "queued"), ("status", "pending")),
-                    models.Q(
-                        (
-                            "stage__in",
-                            (
-                                "extracting",
-                                "snapshotting",
-                                "resolving",
-                                "assembling",
-                                "validating",
-                            ),
-                        ),
-                        ("status", "running"),
-                    ),
-                    models.Q(("stage", "active"), ("status", "succeeded")),
-                    models.Q(("stage", "failed"), ("status", "failed")),
-                    models.Q(
-                        ("stage__in", ("superseded", "stale")),
-                        ("status", "cancelled"),
-                    ),
-                    _connector="OR",
+                        status="running",
+                    )
+                    | models.Q(
+                        orchestration_version=1,
+                        stage="active",
+                        status="succeeded",
+                    )
+                    | models.Q(
+                        orchestration_version=1,
+                        stage="failed",
+                        status="failed",
+                    )
+                    | models.Q(
+                        orchestration_version=1,
+                        stage__in=("superseded", "stale"),
+                        status="cancelled",
+                    )
                 ),
                 name="kg_build_stage_status_valid",
             ),
@@ -318,14 +402,15 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="graphbuildrun",
             constraint=models.CheckConstraint(
-                condition=models.Q(
-                    models.Q(("lease_expires_at__isnull", True), ("lease_owner", "")),
-                    models.Q(
-                        models.Q(("lease_owner", ""), _negated=True),
-                        ("lease_expires_at__isnull", False),
-                        ("lease_generation__gte", 1),
-                    ),
-                    _connector="OR",
+                condition=(
+                    models.Q(orchestration_version=0)
+                    | models.Q(lease_expires_at__isnull=True, lease_owner="")
+                    | (
+                        models.Q(orchestration_version=1)
+                        & ~models.Q(lease_owner="")
+                        & models.Q(lease_expires_at__isnull=False)
+                        & models.Q(lease_generation__gte=1)
+                    )
                 ),
                 name="kg_build_lease_complete",
             ),
@@ -333,19 +418,10 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="graphbuildrun",
             constraint=models.CheckConstraint(
-                condition=models.Q(
-                    models.Q(
-                        (
-                            "stage__in",
-                            ("active", "failed", "superseded", "stale"),
-                        ),
-                        _negated=True,
-                    ),
-                    models.Q(
-                        ("lease_expires_at__isnull", True),
-                        ("lease_owner", ""),
-                    ),
-                    _connector="OR",
+                condition=(
+                    models.Q(orchestration_version=0)
+                    | ~models.Q(stage__in=("active", "failed", "superseded", "stale"))
+                    | models.Q(lease_expires_at__isnull=True, lease_owner="")
                 ),
                 name="kg_build_terminal_lease_clear",
             ),
@@ -353,25 +429,23 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="graphbuildrun",
             constraint=models.UniqueConstraint(
-                condition=models.Q(
-                    (
-                        "stage__in",
-                        (
-                            "queued",
-                            "extracting",
-                            "snapshotting",
-                            "resolving",
-                            "assembling",
-                            "validating",
-                            "active",
-                            "failed",
-                            "superseded",
-                            "stale",
-                        ),
-                    )
+                condition=models.Q(orchestration_version=1),
+                fields=(
+                    "build_kind",
+                    "scope_type",
+                    "scope_id",
+                    "build_key",
+                    "build_generation",
                 ),
-                fields=("build_kind", "scope_type", "scope_id", "build_key"),
-                name="kg_build_identity_unique",
+                name="kg_build_occurrence_unique",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="graphbuildrun",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(orchestration_version=1),
+                fields=("artifact",),
+                name="kg_run_artifact_occurrence_unique",
             ),
         ),
     ]

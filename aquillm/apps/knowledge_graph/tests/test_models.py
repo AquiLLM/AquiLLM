@@ -386,26 +386,16 @@ def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
     active = _constraint(
         GraphArtifact, "kg_one_active_artifact_per_scope", UniqueConstraint
     )
-    identity = _constraint(
-        GraphArtifact, "kg_artifact_build_identity", UniqueConstraint
+    occurrence = _constraint(
+        GraphArtifact, "kg_artifact_build_occurrence", UniqueConstraint
     )
     assert tuple(active.fields) == ("scope_type", "scope_id")
     assert active.condition is not None
-    assert tuple(identity.fields) == (
+    assert tuple(occurrence.fields) == (
         "scope_type",
         "scope_id",
         "build_key",
-        "source_hash",
-        "ontology_version",
-        "extractor_version",
-        "resolver_version",
-        "filter_policy_version",
-        "embedding_model_signature",
-        "ontology_checksum",
-        "filter_policy_checksum",
-        "resolution_config_checksum",
-        "assembly_version",
-        "assembly_config_checksum",
+        "build_generation",
     )
     assert _constraint(
         GraphArtifact, "kg_artifact_assembly_identity_scope", CheckConstraint

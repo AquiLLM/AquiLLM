@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import inspect
 import os
 import socket
 import uuid
+from contextlib import nullcontext
 from dataclasses import fields, replace
 from datetime import timedelta
 from types import SimpleNamespace
@@ -206,7 +208,7 @@ def test_document_and_collection_transitions_are_separate_and_cannot_skip():
 
 
 def test_graph_build_run_has_typed_orchestration_and_durable_lease_fields():
-    from apps.knowledge_graph.models import GraphBuildRun
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
     stages = {value for value, _label in GraphBuildRun.Stage.choices}
     assert {
@@ -222,6 +224,14 @@ def test_graph_build_run_has_typed_orchestration_and_durable_lease_fields():
         "stale",
     } <= stages
     assert GraphBuildRun._meta.get_field("build_key").max_length == 64
+    assert GraphArtifact._meta.get_field("build_generation").default == 1
+    assert GraphBuildRun._meta.get_field("build_generation").default == 1
+    assert GraphArtifact._meta.get_field("orchestration_version").default == 0
+    assert GraphBuildRun._meta.get_field("orchestration_version").default == 0
+    assert "build_generation" in GraphArtifact._IMMUTABLE_FIELDS
+    assert "orchestration_version" in GraphArtifact._IMMUTABLE_FIELDS
+    assert "build_generation" in GraphBuildRun._IMMUTABLE_FIELDS
+    assert "orchestration_version" in GraphBuildRun._IMMUTABLE_FIELDS
     assert GraphBuildRun._meta.get_field("lease_generation").default == 0
     assert GraphBuildRun._meta.get_field("lease_owner").max_length == 128
     assert GraphBuildRun._meta.get_field("lease_expires_at").null is True
@@ -230,15 +240,54 @@ def test_graph_build_run_has_typed_orchestration_and_durable_lease_fields():
     )
     constraint_names = {item.name for item in GraphBuildRun._meta.constraints}
     assert {
-        "kg_build_identity_unique",
+        "kg_run_artifact_occurrence_unique",
+        "kg_build_occurrence_unique",
         "kg_build_kind_matches_scope",
+        "kg_build_generation_positive",
+        "kg_build_orchestration_version_valid",
         "kg_build_stage_matches_kind",
         "kg_build_stage_status_valid",
         "kg_build_lease_complete",
         "kg_build_terminal_lease_clear",
     } <= constraint_names
+    artifact_constraint_names = {item.name for item in GraphArtifact._meta.constraints}
+    assert {
+        "kg_artifact_build_occurrence",
+        "kg_artifact_generation_positive",
+        "kg_artifact_orchestration_version_valid",
+    } <= artifact_constraint_names
     index_names = {item.name for item in GraphBuildRun._meta.indexes}
     assert "kg_run_status_lease_idx" in index_names
+
+
+def test_task7_and_task8_use_the_shared_artifact_orchestration_discriminator():
+    from apps.knowledge_graph.extraction import pipeline
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.resolution import persistence
+    from apps.knowledge_graph.services import builds
+
+    assert hasattr(GraphArtifact, "OrchestrationVersion")
+    assert not hasattr(GraphBuildRun, "OrchestrationVersion")
+    for function in (
+        pipeline._find_committed_extraction_run,
+        persistence.persist_document_resolution,
+        builds._document_extraction_commit_state,
+    ):
+        assert "GraphBuildRun.OrchestrationVersion" not in inspect.getsource(function)
+
+
+def test_task11_migration_streams_occurrence_backfill_without_an_all_row_map():
+    migration = importlib.import_module(
+        "apps.knowledge_graph.migrations.0002_graph_build_run_stages"
+    )
+    source = inspect.getsource(migration.populate_build_keys)
+
+    assert ".iterator(" in source
+    assert "bulk_update" in source
+    assert "artifact_keys" not in source
+    operation_text = "\n".join(map(repr, migration.Migration.operations))
+    assert "build_generation" in operation_text
+    assert "orchestration_version" in operation_text
 
 
 def test_every_orchestrated_mutation_requires_the_exact_live_lease_generation():
@@ -247,23 +296,458 @@ def test_every_orchestrated_mutation_requires_the_exact_live_lease_generation():
         validate_build_lease,
     )
 
-    now = timezone.now()
     run = SimpleNamespace(
-        metadata={"orchestration_version": 1},
+        orchestration_version=1,
         lease_owner="worker-a",
         lease_generation=4,
-        lease_expires_at=now + timedelta(minutes=2),
     )
-    validate_build_lease(run, "worker-a", 4, now=now)
     with pytest.raises(BuildLeaseLostError, match="owner"):
-        validate_build_lease(run, "worker-b", 4, now=now)
+        validate_build_lease(run, "worker-b", 4)
     with pytest.raises(BuildLeaseLostError, match="generation"):
-        validate_build_lease(run, "worker-a", 3, now=now)
-    with pytest.raises(BuildLeaseLostError, match="expired"):
-        validate_build_lease(run, "worker-a", 4, now=now + timedelta(minutes=3))
+        validate_build_lease(run, "worker-a", 3)
+    with pytest.raises(BuildLeaseLostError, match="persisted"):
+        validate_build_lease(run, "worker-a", 4)
 
-    legacy = SimpleNamespace(metadata={}, lease_owner="", lease_generation=0)
-    validate_build_lease(legacy, None, None, now=now)
+    legacy = SimpleNamespace(
+        orchestration_version=0,
+        lease_owner="",
+        lease_generation=0,
+    )
+    validate_build_lease(legacy, None, None)
+
+
+def test_lease_claim_validation_and_renewal_use_the_database_clock():
+    from apps.knowledge_graph.services.builds import (
+        _claim_locked_run,
+        renew_build_lease,
+        validate_build_lease,
+    )
+
+    for function in (validate_build_lease, _claim_locked_run, renew_build_lease):
+        source = inspect.getsource(function)
+        assert "Now()" in source
+        assert "timezone.now()" not in source
+    renewal_source = inspect.getsource(renew_build_lease)
+    assert "lease_generation=lease_generation" in renewal_source
+    assert "lease_expires_at__gt=Now()" in renewal_source
+
+
+def test_lease_heartbeat_renews_immediately_and_surfaces_token_loss(monkeypatch):
+    from apps.knowledge_graph.services import builds
+
+    calls = []
+    monkeypatch.setattr(
+        builds,
+        "renew_build_lease",
+        lambda run_id, owner, generation: calls.append((run_id, owner, generation)),
+    )
+    with builds.LeaseHeartbeat(7, "owner", 3, interval_seconds=60) as heartbeat:
+        heartbeat.pulse()
+    assert calls == [(7, "owner", 3), (7, "owner", 3)]
+
+    def lost(*_args):
+        raise builds.BuildLeaseLostError("rotated")
+
+    monkeypatch.setattr(builds, "renew_build_lease", lost)
+    with pytest.raises(builds.BuildLeaseLostError, match="rotated"):
+        with builds.LeaseHeartbeat(7, "owner", 3, interval_seconds=60):
+            pass
+
+
+def test_expensive_document_and_collection_stages_run_under_lease_heartbeat():
+    from apps.knowledge_graph.services.builds import (
+        build_document_graph,
+        refresh_collection_graph,
+    )
+
+    document_source = inspect.getsource(build_document_graph)
+    collection_source = inspect.getsource(refresh_collection_graph)
+    assert document_source.count("LeaseHeartbeat(") >= 2
+    assert collection_source.count("LeaseHeartbeat(") >= 2
+
+
+def test_commit_markers_are_classified_as_absent_valid_or_corrupt():
+    from apps.knowledge_graph.services.builds import (
+        CommitMarkerState,
+        _commit_marker_state,
+    )
+
+    assert (
+        _commit_marker_state({}, "stage_commit", rows_present=False, valid=False)
+        is CommitMarkerState.ABSENT
+    )
+    assert (
+        _commit_marker_state({}, "stage_commit", rows_present=True, valid=False)
+        is CommitMarkerState.CORRUPT
+    )
+    assert (
+        _commit_marker_state(
+            {"stage_commit": {}},
+            "stage_commit",
+            rows_present=False,
+            valid=False,
+        )
+        is CommitMarkerState.CORRUPT
+    )
+    assert (
+        _commit_marker_state(
+            {"stage_commit": {"version": 1}},
+            "stage_commit",
+            rows_present=True,
+            valid=True,
+        )
+        is CommitMarkerState.VALID
+    )
+
+
+def test_corrupt_commit_failure_is_permanent_for_the_exact_occurrence():
+    from apps.knowledge_graph.services import builds
+
+    with pytest.raises(builds.CorruptBuildError, match="permanently"):
+        builds._validate_retryable_run(
+            SimpleNamespace(error_code="corrupt_build_state")
+        )
+    builds._validate_retryable_run(SimpleNamespace(error_code="provider_unavailable"))
+    assert "_validate_retryable_run(run)" in inspect.getsource(
+        builds._bootstrap_document_build
+    )
+    assert "_validate_retryable_run(run)" in inspect.getsource(
+        builds._bootstrap_collection_build
+    )
+
+
+def test_coordinators_fail_closed_on_stage_specific_commit_inspection():
+    from apps.knowledge_graph.services import builds
+
+    document_source = inspect.getsource(builds.build_document_graph)
+    collection_source = inspect.getsource(builds.refresh_collection_graph)
+    assert "_document_extraction_commit_state" in document_source
+    assert "_document_resolution_commit_state" in document_source
+    assert "_collection_resolution_commit_state" in collection_source
+    assert "_collection_assembly_commit_state" in collection_source
+    assert "_commit_marker_present" not in document_source
+    assert "_commit_marker_present" not in collection_source
+    assert "CommitMarkerState.CORRUPT" in document_source
+    assert "CommitMarkerState.CORRUPT" in collection_source
+
+
+def test_terminalization_uses_logical_scope_locks_without_requiring_sources():
+    from apps.knowledge_graph.graph.assembly import (
+        lock_collection_graph_advisory_scope,
+        lock_collection_graph_scope,
+    )
+    from apps.knowledge_graph.services import builds
+
+    document_source = inspect.getsource(builds._terminal_document_build)
+    collection_source = inspect.getsource(builds._terminal_collection_build)
+    assert "_lock_terminal_document_rows" in document_source
+    assert "_lock_document_build_rows" not in document_source
+    assert "_lock_terminal_collection_rows" in collection_source
+    assert "_lock_collection_build_rows" not in collection_source
+    assert "Collection.objects.select_for_update().filter" in inspect.getsource(
+        builds._lock_terminal_collection_rows
+    )
+    assert "_lock_collection_scope" in inspect.getsource(lock_collection_graph_scope)
+    assert "Collection.objects" not in inspect.getsource(
+        lock_collection_graph_advisory_scope
+    )
+
+
+def test_terminal_bookkeeping_failure_never_masks_the_original_stage_error(monkeypatch):
+    from apps.knowledge_graph.extraction import pipeline
+    from apps.knowledge_graph.models import GraphBuildRun
+    from apps.knowledge_graph.services import builds
+
+    identity = _document_identity()
+    context = builds._DocumentContext(
+        identity=identity,
+        collection_id=17,
+        ontology=SimpleNamespace(),
+        settings=SimpleNamespace(),
+    )
+    artifact = SimpleNamespace(pk=401)
+    run = SimpleNamespace(
+        pk=501,
+        stage=GraphBuildRun.Stage.QUEUED,
+        attempt=1,
+        stats={},
+    )
+    monkeypatch.setattr(builds, "_document_context", lambda *_args: context)
+    monkeypatch.setattr(
+        builds,
+        "_bootstrap_document_build",
+        lambda *_args: (artifact, run, "owner", 3, False),
+    )
+    monkeypatch.setattr(builds, "_transition_run", _stage_transition_stub(run))
+    monkeypatch.setattr(
+        builds,
+        "_document_extraction_commit_state",
+        lambda *_args: builds.CommitMarkerState.ABSENT,
+    )
+    monkeypatch.setattr(
+        builds, "LeaseHeartbeat", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "extract_into_build",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("original provider failure")
+        ),
+    )
+    monkeypatch.setattr(
+        builds,
+        "_terminal_document_build",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("source row was deleted")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="original provider failure"):
+        builds.build_document_graph(
+            identity.document_id,
+            identity.source_hash,
+            builds.derive_document_build_key(identity),
+        )
+
+
+def test_collection_context_caps_documents_entities_chunks_and_characters_first():
+    from apps.knowledge_graph.services import builds
+
+    resolution_config = SimpleNamespace(max_document_inputs=2, max_entities=3)
+    assembly_config = SimpleNamespace(
+        max_document_inputs=2,
+        max_entities=4,
+        max_evidence=5,
+    )
+    builds._validate_collection_context_caps(
+        document_count=2,
+        entity_count=3,
+        chunk_count=5,
+        character_count=24,
+        resolution_config=resolution_config,
+        assembly_config=assembly_config,
+        max_text_characters=8,
+    )
+    for changed, message in (
+        ({"document_count": 3}, "document"),
+        ({"entity_count": 4}, "entity"),
+        ({"chunk_count": 6}, "chunk"),
+        ({"character_count": 25}, "character"),
+    ):
+        values = {
+            "document_count": 2,
+            "entity_count": 3,
+            "chunk_count": 5,
+            "character_count": 24,
+            **changed,
+        }
+        with pytest.raises(builds.CorruptBuildError, match=message):
+            builds._validate_collection_context_caps(
+                **values,
+                resolution_config=resolution_config,
+                assembly_config=assembly_config,
+                max_text_characters=8,
+            )
+
+    source = inspect.getsource(builds._collection_context)
+    assert "Document.filter(" not in source
+    assert "_validate_collection_context_caps(" in source
+    assert source.index("_validate_collection_context_caps(") < source.index(
+        "current_chunks = tuple("
+    )
+    assert source.index('Sum(Length("full_text"))') < source.index("documents = tuple(")
+    assert "contributing_rows" not in source
+    assert "collection awaits fresh document graph artifacts" in source
+
+
+def test_tasks7_and_9_bound_occurrence_history_and_keep_monotonic_generation():
+    from apps.knowledge_graph.extraction.pipeline import (
+        _create_build_destination,
+        _find_committed_extraction_run,
+    )
+    from apps.knowledge_graph.resolution.collection import (
+        _lock_collection_destination_occurrence,
+        persist_collection_resolution,
+    )
+
+    task7_create = inspect.getsource(_create_build_destination)
+    assert "_lock_document_scope" in task7_create
+    assert task7_create.index("_lock_document_scope(document_id)") < task7_create.index(
+        "existing ="
+    )
+    assert "_find_committed_extraction_run(" in task7_create
+    assert "for_update=True" in task7_create
+    assert "legacy extraction identity is already in progress" in task7_create
+    assert 'order_by("-build_generation", "-pk")' in task7_create
+    assert "build_generation=build_generation" in task7_create
+
+    task7_resume = inspect.getsource(_find_committed_extraction_run)
+    assert "candidate_ids" in task7_resume
+    assert "[:2]" in task7_resume
+
+    task9_lock = inspect.getsource(_lock_collection_destination_occurrence)
+    assert "candidate_artifact_id" in task9_lock
+    assert "[:2]" in task9_lock
+    task9_persist = inspect.getsource(persist_collection_resolution)
+    assert "_lock_collection_destination_occurrence" in task9_persist
+    assert "scope_artifacts = tuple(" not in task9_persist
+    assert "scope_runs = tuple(" not in task9_persist
+
+
+def test_recurrent_build_identity_creates_a_new_occurrence_after_an_intervening_key():
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import (
+        OccurrenceAction,
+        _occurrence_action,
+    )
+
+    key_a = "a" * 64
+    key_b = "b" * 64
+    first_a = SimpleNamespace(
+        pk=1,
+        build_key=key_a,
+        build_generation=1,
+        status=GraphArtifact.Status.SUPERSEDED,
+    )
+    active_b = SimpleNamespace(
+        pk=2,
+        build_key=key_b,
+        build_generation=2,
+        status=GraphArtifact.Status.ACTIVE,
+    )
+    runs = (
+        SimpleNamespace(
+            artifact_id=1,
+            build_key=key_a,
+            build_generation=1,
+            stage=GraphBuildRun.Stage.SUPERSEDED,
+            status=GraphBuildRun.Status.CANCELLED,
+        ),
+        SimpleNamespace(
+            artifact_id=2,
+            build_key=key_b,
+            build_generation=2,
+            stage=GraphBuildRun.Stage.ACTIVE,
+            status=GraphBuildRun.Status.SUCCEEDED,
+        ),
+    )
+
+    assert (
+        _occurrence_action((first_a, active_b), runs, key_a) is OccurrenceAction.CREATE
+    )
+
+
+def test_duplicate_delivery_joins_the_newest_current_occurrence():
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import (
+        OccurrenceAction,
+        _occurrence_action,
+    )
+
+    key = "a" * 64
+    historical = SimpleNamespace(
+        pk=1,
+        build_key=key,
+        build_generation=1,
+        status=GraphArtifact.Status.SUPERSEDED,
+    )
+    current = SimpleNamespace(
+        pk=3,
+        build_key=key,
+        build_generation=3,
+        status=GraphArtifact.Status.BUILDING,
+    )
+    runs = (
+        SimpleNamespace(
+            artifact_id=1,
+            build_key=key,
+            build_generation=1,
+            stage=GraphBuildRun.Stage.SUPERSEDED,
+            status=GraphBuildRun.Status.CANCELLED,
+        ),
+        SimpleNamespace(
+            artifact_id=3,
+            build_key=key,
+            build_generation=3,
+            stage=GraphBuildRun.Stage.RESOLVING,
+            status=GraphBuildRun.Status.RUNNING,
+        ),
+    )
+
+    assert (
+        _occurrence_action((historical, current), runs, key) is OccurrenceAction.RESUME
+    )
+
+
+def test_active_exact_key_wins_even_if_a_newer_stale_occurrence_exists():
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import (
+        OccurrenceAction,
+        _occurrence_action,
+    )
+
+    key = "a" * 64
+    active = SimpleNamespace(
+        pk=4,
+        build_key=key,
+        build_generation=4,
+        status=GraphArtifact.Status.ACTIVE,
+    )
+    stale = SimpleNamespace(
+        pk=5,
+        build_key="b" * 64,
+        build_generation=5,
+        status=GraphArtifact.Status.STALE,
+    )
+    runs = (
+        SimpleNamespace(
+            artifact_id=4,
+            build_key=key,
+            build_generation=4,
+            stage=GraphBuildRun.Stage.ACTIVE,
+            status=GraphBuildRun.Status.SUCCEEDED,
+        ),
+        SimpleNamespace(
+            artifact_id=5,
+            build_key="b" * 64,
+            build_generation=5,
+            stage=GraphBuildRun.Stage.STALE,
+            status=GraphBuildRun.Status.CANCELLED,
+        ),
+    )
+
+    assert (
+        _occurrence_action((active, stale), runs, key) is OccurrenceAction.RETURN_ACTIVE
+    )
+
+
+def test_next_build_generation_is_monotonic_for_a_scope_occurrence():
+    from apps.knowledge_graph.services.builds import _next_build_generation
+
+    artifacts = (
+        SimpleNamespace(build_generation=1),
+        SimpleNamespace(build_generation=7),
+        SimpleNamespace(build_generation=3),
+    )
+
+    assert _next_build_generation(()) == 1
+    assert _next_build_generation(artifacts) == 8
+
+
+def test_scope_lockers_select_only_current_candidate_and_active_occurrences():
+    from apps.knowledge_graph.graph.assembly import _locked_candidate
+    from apps.knowledge_graph.services import builds
+
+    document_source = inspect.getsource(builds._lock_document_build_rows)
+    collection_source = inspect.getsource(builds._lock_collection_build_rows)
+    assembly_source = inspect.getsource(_locked_candidate)
+
+    assert "_bounded_scope_artifact_ids" in document_source
+    assert "_bounded_scope_artifact_ids" in collection_source
+    assert "pk__in=artifact_ids" in document_source
+    assert "pk__in=artifact_ids" in collection_source
+    assert "[:2]" in assembly_source
+    assert ".filter(pk__in=artifact_ids)" in assembly_source
 
 
 def test_mutating_task_seams_accept_owner_and_generation_fences():
@@ -295,6 +779,51 @@ def test_mutating_task_seams_accept_owner_and_generation_fences():
         parameters = inspect.signature(function).parameters
         assert "lease_owner" in parameters, function.__name__
         assert "lease_generation" in parameters, function.__name__
+
+
+def test_task9_snapshot_accepts_the_serialized_artifact_occurrence():
+    from apps.knowledge_graph.resolution.collection import build_collection_snapshot
+
+    parameters = inspect.signature(build_collection_snapshot).parameters
+    assert "build_generation" in parameters
+    assert "orchestration_version" in parameters
+
+
+def test_tasks7_to_10_propagate_typed_occurrence_identity_not_json_metadata():
+    from apps.knowledge_graph.extraction.pipeline import (
+        _mark_terminal,
+        validate_build_identity,
+    )
+    from apps.knowledge_graph.graph.assembly import (
+        _candidate_identity,
+        _resolve_ontology,
+        _swap_active_collection_artifact,
+        _write_assembly,
+    )
+    from apps.knowledge_graph.resolution.collection import (
+        _validate_collection_destination,
+    )
+    from apps.knowledge_graph.resolution.persistence import _validate_destination
+
+    for function in (
+        validate_build_identity,
+        _validate_destination,
+        _validate_collection_destination,
+        _candidate_identity,
+    ):
+        source = inspect.getsource(function)
+        assert '"build_generation"' in source
+        assert '"orchestration_version"' in source
+
+    for function in (
+        _mark_terminal,
+        _resolve_ontology,
+        _write_assembly,
+        _swap_active_collection_artifact,
+    ):
+        source = inspect.getsource(function)
+        assert "orchestration_version" in source
+        assert 'metadata.get("orchestration_version")' not in source
 
 
 def test_build_identity_rejects_noncanonical_or_unbounded_values():
@@ -389,7 +918,13 @@ def test_document_move_registers_both_collection_refreshes_on_commit(monkeypatch
         settings=SimpleNamespace(),
     )
     run = SimpleNamespace(metadata={"initial_collection_id": 17})
-    monkeypatch.setattr(builds.transaction, "on_commit", callbacks.append)
+    robust_flags = []
+
+    def capture_callback(callback, *, robust=False):
+        callbacks.append(callback)
+        robust_flags.append(robust)
+
+    monkeypatch.setattr(builds.transaction, "on_commit", capture_callback)
     monkeypatch.setattr(
         builds,
         "_enqueue_current_collection_refresh",
@@ -400,6 +935,7 @@ def test_document_move_registers_both_collection_refreshes_on_commit(monkeypatch
 
     assert refreshed == []
     assert len(callbacks) == 2
+    assert robust_flags == [True, True]
     for callback in callbacks:
         callback()
     assert refreshed == [17, 18]
@@ -412,6 +948,8 @@ def _orchestration_artifact(*, build_key: str = "7" * 64):
         scope_type=GraphArtifact.ScopeType.DOCUMENT,
         scope_id=DOCUMENT_ID,
         build_key=build_key,
+        build_generation=1,
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
         status=GraphArtifact.Status.BUILDING,
         source_hash="a" * 64,
         ontology_version="research-v1",
@@ -430,6 +968,8 @@ def _orchestration_run(artifact):
         stage=GraphBuildRun.Stage.QUEUED,
         status=GraphBuildRun.Status.PENDING,
         attempt=1,
+        build_generation=artifact.build_generation,
+        orchestration_version=artifact.orchestration_version,
         metadata={"orchestration_version": 1, "attempt_history": []},
     )
 
@@ -588,6 +1128,14 @@ def test_provider_failure_terminals_only_the_candidate_document_build(monkeypatc
     )
     monkeypatch.setattr(builds, "_transition_run", _stage_transition_stub(run))
     monkeypatch.setattr(
+        builds,
+        "_document_extraction_commit_state",
+        lambda *_args: builds.CommitMarkerState.ABSENT,
+    )
+    monkeypatch.setattr(
+        builds, "LeaseHeartbeat", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
         pipeline,
         "extract_into_build",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -640,6 +1188,14 @@ def test_midflight_hash_change_is_a_stale_document_terminal(monkeypatch):
     )
     monkeypatch.setattr(builds, "_transition_run", _stage_transition_stub(run))
     monkeypatch.setattr(
+        builds,
+        "_document_extraction_commit_state",
+        lambda *_args: builds.CommitMarkerState.ABSENT,
+    )
+    monkeypatch.setattr(
+        builds, "LeaseHeartbeat", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
         pipeline,
         "extract_into_build",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -684,7 +1240,7 @@ def test_document_retry_uses_commit_markers_without_repeating_provider_work(
         pk=53,
         stage=GraphBuildRun.Stage.QUEUED,
         attempt=2,
-        stats={"extraction_commit": {}, "resolution_commit": {}},
+        stats={"fixture_commit_state": "validated_by_inspector"},
     )
     activated = SimpleNamespace(pk=43)
     monkeypatch.setattr(builds, "_document_context", lambda *_args: context)
@@ -694,6 +1250,16 @@ def test_document_retry_uses_commit_markers_without_repeating_provider_work(
         lambda *_args: (artifact, run, "owner", 3, False),
     )
     monkeypatch.setattr(builds, "_transition_run", _stage_transition_stub(run))
+    monkeypatch.setattr(
+        builds,
+        "_document_extraction_commit_state",
+        lambda *_args: builds.CommitMarkerState.VALID,
+    )
+    monkeypatch.setattr(
+        builds,
+        "_document_resolution_commit_state",
+        lambda *_args: builds.CommitMarkerState.VALID,
+    )
     monkeypatch.setattr(
         pipeline,
         "extract_into_build",
@@ -747,10 +1313,7 @@ def test_collection_retry_after_assembly_skips_embedding_and_validates(monkeypat
         pk=71,
         stage=GraphBuildRun.Stage.QUEUED,
         attempt=2,
-        stats={
-            "collection_resolution_commit": {},
-            "collection_assembly_commit": {},
-        },
+        stats={"fixture_commit_state": "validated_by_inspector"},
     )
     calls = []
     monkeypatch.setattr(builds, "_collection_context", lambda *_args: context)
@@ -760,6 +1323,16 @@ def test_collection_retry_after_assembly_skips_embedding_and_validates(monkeypat
         lambda *_args: (artifact, run, "owner", 3, False),
     )
     monkeypatch.setattr(builds, "_transition_run", _stage_transition_stub(run))
+    monkeypatch.setattr(
+        builds,
+        "_collection_resolution_commit_state",
+        lambda *_args, **_kwargs: builds.CommitMarkerState.VALID,
+    )
+    monkeypatch.setattr(
+        builds,
+        "_collection_assembly_commit_state",
+        lambda *_args, **_kwargs: builds.CommitMarkerState.VALID,
+    )
     monkeypatch.setattr(
         resolution,
         "resolve_collection_entities",
@@ -790,7 +1363,7 @@ def test_collection_retry_after_assembly_skips_embedding_and_validates(monkeypat
     )
 
     assert result is artifact
-    assert calls == ["assemble", "validate", "activate"]
+    assert calls == ["validate", "activate"]
 
 
 def test_collection_policy_drift_with_same_manifest_is_stale_and_rescheduled(
@@ -816,7 +1389,7 @@ def test_collection_policy_drift_with_same_manifest_is_stale_and_rescheduled(
         pk=72,
         stage=GraphBuildRun.Stage.VALIDATING,
         attempt=1,
-        stats={"collection_resolution_commit": {}},
+        stats={"fixture_commit_state": "validated_by_inspector"},
         refresh_from_db=lambda: None,
     )
     terminal_calls = []
@@ -862,7 +1435,7 @@ def test_stale_same_key_collection_prerequisite_does_not_reschedule_itself(
         pk=73,
         stage=GraphBuildRun.Stage.ASSEMBLING,
         attempt=1,
-        stats={"collection_resolution_commit": {}},
+        stats={"fixture_commit_state": "validated_by_inspector"},
     )
     terminal_calls = []
     monkeypatch.setattr(builds, "_collection_context", lambda *_args: context)
@@ -870,6 +1443,14 @@ def test_stale_same_key_collection_prerequisite_does_not_reschedule_itself(
         builds,
         "_bootstrap_collection_build",
         lambda *_args: (artifact, run, "owner", 3, False),
+    )
+    monkeypatch.setattr(
+        builds,
+        "_collection_assembly_commit_state",
+        lambda *_args, **_kwargs: builds.CommitMarkerState.ABSENT,
+    )
+    monkeypatch.setattr(
+        builds, "LeaseHeartbeat", lambda *_args, **_kwargs: nullcontext()
     )
     monkeypatch.setattr(
         assembly,

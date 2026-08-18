@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from time import perf_counter
 from typing import TYPE_CHECKING
 
@@ -301,6 +303,9 @@ def validate_build_identity(
         raise ValueError("build run must be owned by the destination artifact")
     if getattr(run, "build_key", None) != getattr(artifact, "build_key", None):
         raise ValueError("build run key does not match destination artifact")
+    for field in ("build_generation", "orchestration_version"):
+        if getattr(run, field, None) != getattr(artifact, field, None):
+            raise ValueError(f"build run {field} does not match destination artifact")
     if artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT:
         raise ValueError("mention extraction requires a document artifact")
     if str(artifact.scope_id) != str(document_id):
@@ -366,6 +371,7 @@ def extraction_commit_is_valid(
     *,
     entity_count: int,
     relation_count: int,
+    evidence_fingerprint: str | None = None,
 ) -> bool:
     stats = run.stats if isinstance(run.stats, dict) else {}
     marker = stats.get("extraction_commit")
@@ -374,7 +380,7 @@ def extraction_commit_is_valid(
     assembly_config_checksum = getattr(run, "assembly_config_checksum", None)
     artifact_id = getattr(run, "artifact_id", None)
     artifact = getattr(run, "artifact", None) if artifact_id else None
-    return (
+    marker_valid = (
         isinstance(marker, dict)
         and set(marker)
         == {
@@ -413,20 +419,103 @@ def extraction_commit_is_valid(
         and type(marker.get("relation_mention_count")) is int
         and marker.get("relation_mention_count") == relation_count
     )
+    if not marker_valid:
+        return False
+    if evidence_fingerprint is None:
+        return True
+    return bool(
+        type(evidence_fingerprint) is str
+        and len(evidence_fingerprint) == 64
+        and all(character in "0123456789abcdef" for character in evidence_fingerprint)
+        and stats.get("extraction_evidence_fingerprint") == evidence_fingerprint
+    )
+
+
+def extraction_evidence_fingerprint(entities, relations) -> str:
+    """Hash every immutable persisted Task 7 evidence field in PK order."""
+
+    entity_rows = tuple(sorted(entities, key=lambda row: row.pk))
+    relation_rows = tuple(sorted(relations, key=lambda row: row.pk))
+    payload = {
+        "entities": [
+            {
+                "id": row.pk,
+                "artifact_id": row.artifact_id,
+                "document_id": str(row.document_id),
+                "chunk_id": row.chunk_id,
+                "start": row.start,
+                "end": row.end,
+                "position_basis": row.position_basis,
+                "raw_text": row.raw_text,
+                "normalized_text": row.normalized_text,
+                "entity_type": row.entity_type,
+                "extraction_confidence": row.extraction_confidence,
+                "content_object_type_id": row.content_object_type_id,
+                "content_object_id": (
+                    str(row.content_object_id) if row.content_object_id else None
+                ),
+                "metadata": row.metadata,
+            }
+            for row in entity_rows
+        ],
+        "relations": [
+            {
+                "id": row.pk,
+                "artifact_id": row.artifact_id,
+                "document_id": str(row.document_id),
+                "chunk_id": row.chunk_id,
+                "head_id": row.head_id,
+                "tail_id": row.tail_id,
+                "relation_type": row.relation_type,
+                "extraction_confidence": row.extraction_confidence,
+                "metadata": row.metadata,
+            }
+            for row in relation_rows
+        ],
+    }
+    return sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _find_committed_extraction_run(artifact, *, for_update: bool = False):
     from apps.knowledge_graph.models import (
         EntityMention,
+        GraphArtifact,
         GraphBuildRun,
         RelationMention,
     )
 
-    runs = GraphBuildRun.objects.filter(artifact=artifact).order_by("-pk")
+    run_query = GraphBuildRun.objects.filter(artifact=artifact)
+    candidate_ids = set(run_query.order_by("-pk").values_list("pk", flat=True)[:1])
+    candidate_ids.update(
+        run_query.filter(stats__has_key="extraction_commit")
+        .order_by("-pk")
+        .values_list("pk", flat=True)[:2]
+    )
+    runs = GraphBuildRun.objects.filter(pk__in=tuple(sorted(candidate_ids))).order_by(
+        "-pk"
+    )
     if for_update:
         runs = runs.select_for_update()
-    entity_count = EntityMention.objects.filter(artifact=artifact).count()
-    relation_count = RelationMention.objects.filter(artifact=artifact).count()
+    entity_query = EntityMention.objects.filter(artifact=artifact).order_by("pk")
+    relation_query = RelationMention.objects.filter(artifact=artifact).order_by("pk")
+    entity_count = entity_query.count()
+    relation_count = relation_query.count()
+    evidence_fingerprint = None
+    if (
+        getattr(artifact, "orchestration_version", None)
+        == GraphArtifact.OrchestrationVersion.SCOPED_V1
+    ):
+        evidence_fingerprint = extraction_evidence_fingerprint(
+            tuple(entity_query),
+            tuple(relation_query),
+        )
     return next(
         (
             run
@@ -435,6 +524,7 @@ def _find_committed_extraction_run(artifact, *, for_update: bool = False):
                 run,
                 entity_count=entity_count,
                 relation_count=relation_count,
+                evidence_fingerprint=evidence_fingerprint,
             )
         ),
         None,
@@ -674,6 +764,7 @@ def _create_build_destination(
     from django.utils import timezone
 
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import _lock_document_scope
 
     identity = _artifact_identity_values(
         document_id,
@@ -683,8 +774,36 @@ def _create_build_destination(
         settings=settings,
     )
     with transaction.atomic():
+        _lock_document_scope(document_id)
+        existing = (
+            GraphArtifact.objects.select_for_update()
+            .filter(**identity)
+            .order_by("-build_generation", "-pk")
+            .first()
+        )
+        if existing is not None:
+            committed_run = _find_committed_extraction_run(
+                existing,
+                for_update=True,
+            )
+            if committed_run is not None:
+                return existing, committed_run
+            raise ExtractionInProgressError(
+                "legacy extraction identity is already in progress"
+            )
+        latest_generation = (
+            GraphArtifact.objects.filter(
+                scope_type=GraphArtifact.ScopeType.DOCUMENT,
+                scope_id=str(document_id),
+            )
+            .order_by("-build_generation", "-pk")
+            .values_list("build_generation", flat=True)
+            .first()
+        )
+        build_generation = (latest_generation or 0) + 1
         artifact = GraphArtifact.objects.create(
             status=GraphArtifact.Status.BUILDING,
+            build_generation=build_generation,
             metadata={"stage": "raw_extraction"},
             **identity,
         )
@@ -759,7 +878,11 @@ def _persist_evidence(
         for relation in evidence.relations
     ]
     RelationMention.objects.bulk_create(relation_rows)
-    return len(mention_rows), len(relation_rows)
+    return (
+        len(mention_rows),
+        len(relation_rows),
+        extraction_evidence_fingerprint(mention_rows, relation_rows),
+    )
 
 
 def _mark_terminal(
@@ -784,9 +907,14 @@ def _mark_terminal(
         if run.artifact_id != artifact.pk:
             return
         validate_build_lease(run, lease_owner, lease_generation)
-        run_metadata = getattr(run, "metadata", None)
-        metadata = run_metadata if type(run_metadata) is dict else {}
-        if metadata.get("orchestration_version") == 1:
+        if (
+            getattr(
+                run,
+                "orchestration_version",
+                GraphArtifact.OrchestrationVersion.LEGACY,
+            )
+            == GraphArtifact.OrchestrationVersion.SCOPED_V1
+        ):
             # The coordinator owns the typed scoped terminal transition.  A
             # stage primitive must never leave an extracting orchestration run
             # in a partially terminal status if the process dies between two
@@ -963,7 +1091,7 @@ def extract_into_build(
                 raise MidflightSourceChangedError(
                     "destination artifact ontology identity changed"
                 )
-            entity_count, relation_count = _persist_evidence(
+            entity_count, relation_count, evidence_fingerprint = _persist_evidence(
                 artifact=locked_artifact,
                 document=locked_document,
                 chunks=locked_chunks,
@@ -981,6 +1109,7 @@ def extract_into_build(
                 "model_id": settings.model_id,
                 "model_revision": settings.model_revision,
                 "ontology_checksum": ontology.checksum,
+                "extraction_evidence_fingerprint": evidence_fingerprint,
                 "extraction_commit": {
                     "version": 1,
                     "assembly_version": locked_artifact.assembly_version,
@@ -1050,7 +1179,11 @@ def extract_document_mentions(
         ontology.checksum,
         settings=settings,
     )
-    artifact = GraphArtifact.objects.filter(**identity).first()
+    artifact = (
+        GraphArtifact.objects.filter(**identity)
+        .order_by("-build_generation", "-pk")
+        .first()
+    )
     if artifact is not None:
         committed_run = _find_committed_extraction_run(artifact)
         if committed_run is not None:
@@ -1095,6 +1228,7 @@ __all__ = [
     "collect_document_evidence",
     "document_artifact_identity_values",
     "extraction_commit_is_valid",
+    "extraction_evidence_fingerprint",
     "resolve_ontology_definition",
     "extract_document_mentions",
     "extract_into_build",

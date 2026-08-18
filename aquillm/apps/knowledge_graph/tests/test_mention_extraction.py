@@ -302,6 +302,7 @@ def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
         assembly_version="not-applicable",
         assembly_config_checksum="b" * 64,
         stats={
+            "extraction_evidence_fingerprint": "c" * 64,
             "extraction_commit": {
                 "version": 1,
                 "assembly_version": "not-applicable",
@@ -328,6 +329,18 @@ def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
     )
 
     assert extraction_commit_is_valid(committed, entity_count=2, relation_count=1)
+    assert extraction_commit_is_valid(
+        committed,
+        entity_count=2,
+        relation_count=1,
+        evidence_fingerprint="c" * 64,
+    )
+    assert not extraction_commit_is_valid(
+        committed,
+        entity_count=2,
+        relation_count=1,
+        evidence_fingerprint="d" * 64,
+    )
     assert not extraction_commit_is_valid(committed, entity_count=1, relation_count=1)
     assert not extraction_commit_is_valid(partial, entity_count=2, relation_count=1)
     assert not extraction_commit_is_valid(
@@ -363,7 +376,10 @@ def test_sequential_duplicate_returns_committed_summary_without_creating_destina
     from lib.knowledge_graph import config
 
     artifact = SimpleNamespace(pk=3)
-    committed_run = SimpleNamespace(pk=7, stats={"extraction_commit": {"version": 1}})
+    committed_run = SimpleNamespace(
+        pk=7,
+        stats={"fixture_commit_state": "returned_by_injected_commit_lookup"},
+    )
     document = SimpleNamespace(
         id=DOCUMENT_ID,
         full_text="Orion",
@@ -373,6 +389,9 @@ def test_sequential_duplicate_returns_committed_summary_without_creating_destina
 
     class Query:
         def filter(self, **_kwargs):
+            return self
+
+        def order_by(self, *_fields):
             return self
 
         def first(self):

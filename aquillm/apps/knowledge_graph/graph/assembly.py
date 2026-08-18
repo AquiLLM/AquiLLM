@@ -640,14 +640,16 @@ def _resolve_config(run: object, config: AssemblyConfig | None) -> AssemblyConfi
 
 
 def _resolve_ontology(artifact: object, ontology: object | None):
-    from apps.knowledge_graph.models import OntologyVersion
+    from apps.knowledge_graph.models import GraphArtifact, OntologyVersion
     from apps.knowledge_graph.services.ontology import (
         load_ontology_yaml,
         validate_ontology_definition,
     )
 
     artifact_metadata = artifact.metadata if type(artifact.metadata) is dict else {}
-    orchestration = artifact_metadata.get("orchestration_version") == 1
+    orchestration = (
+        artifact.orchestration_version == GraphArtifact.OrchestrationVersion.SCOPED_V1
+    )
     persisted_ontology = None
     if ontology is None or orchestration:
         record = (
@@ -1303,7 +1305,7 @@ def _lock_current_contributors(collection: object, config: AssemblyConfig):
         # artifacts created before orchestration remain readable until their
         # normal document rebuild upgrades them.
         chunks_changed = (
-            metadata.get("orchestration_version") == 1
+            source.orchestration_version == GraphArtifact.OrchestrationVersion.SCOPED_V1
             and metadata.get("ordered_chunk_signature") != current_chunk_signature
         )
         if source_changed or chunks_changed:
@@ -1405,13 +1407,14 @@ def _load_locked_task9_rows(artifact: object, config: AssemblyConfig):
         CollectionEntityDocumentLink,
     )
 
-    entities = tuple(
+    entity_query = (
         CollectionEntity.objects.select_for_update()
         .filter(artifact=artifact)
         .order_by("pk")
     )
-    if len(entities) > config.max_entities:
+    if entity_query.count() > config.max_entities:
         raise CollectionGraphAssemblyError("assembly entity cap exceeded")
+    entities = tuple(entity_query)
     link_query = (
         CollectionEntityDocumentLink.objects.select_for_update()
         .select_related(
@@ -1995,10 +1998,9 @@ def _write_assembly(
     )
     stats = run.stats if type(run.stats) is dict else {}
     run.stats = {**stats, "collection_assembly_commit": marker}
-    metadata = run.metadata if type(run.metadata) is dict else {}
     run.stage = (
         run.Stage.ASSEMBLING
-        if metadata.get("orchestration_version") == 1
+        if run.orchestration_version == 1
         else run.Stage.PERSISTENCE
     )
     run.status = run.Status.RUNNING
@@ -2105,6 +2107,8 @@ def _candidate_identity(
         )
     for field_name in (
         "build_key",
+        "build_generation",
+        "orchestration_version",
         "source_hash",
         "ontology_version",
         "extractor_version",
@@ -2141,13 +2145,45 @@ def _locked_candidate(
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
     collection = lock_collection_graph_scope(collection_id)
-    run_reference = GraphBuildRun.objects.only("artifact_id").get(pk=build_run_id)
+    run_reference = GraphBuildRun.objects.only("artifact_id").get(
+        pk=build_run_id,
+        artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+        artifact__scope_id=str(collection_id),
+    )
+    scope_query = GraphArtifact.objects.filter(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=str(collection_id),
+    )
+    candidate_reference = (
+        scope_query.filter(pk=run_reference.artifact_id)
+        .values("pk", "build_generation")
+        .first()
+    )
+    if candidate_reference is None:
+        raise CollectionGraphAssemblyError(
+            "build run artifact is outside the locked collection scope"
+        )
+    artifact_ids = {candidate_reference["pk"]}
+    artifact_ids.update(
+        scope_query.filter(status=GraphArtifact.Status.ACTIVE)
+        .order_by("pk")
+        .values_list("pk", flat=True)[:2]
+    )
+    artifact_ids.update(
+        scope_query.filter(
+            build_generation__gt=candidate_reference["build_generation"],
+            status__in=(
+                GraphArtifact.Status.BUILDING,
+                GraphArtifact.Status.ACTIVE,
+            ),
+        )
+        .order_by("build_generation", "pk")
+        .values_list("pk", flat=True)[:2]
+    )
+    artifact_ids = tuple(sorted(artifact_ids))
     scope_artifacts = tuple(
         GraphArtifact.objects.select_for_update()
-        .filter(
-            scope_type=GraphArtifact.ScopeType.COLLECTION,
-            scope_id=str(collection_id),
-        )
+        .filter(pk__in=artifact_ids)
         .order_by("pk")
     )
     artifact_by_id = {row.pk: row for row in scope_artifacts}
@@ -2157,12 +2193,23 @@ def _locked_candidate(
             "build run artifact is outside the locked collection scope"
         )
     if lock_competing_runs:
+        run_ids = {build_run_id}
+        for artifact_id in artifact_ids:
+            latest_run_id = (
+                GraphBuildRun.objects.filter(artifact_id=artifact_id)
+                .filter(
+                    artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+                    artifact__scope_id=str(collection_id),
+                )
+                .order_by("-pk")
+                .values_list("pk", flat=True)
+                .first()
+            )
+            if latest_run_id is not None:
+                run_ids.add(latest_run_id)
         locked_runs = tuple(
             GraphBuildRun.objects.select_for_update()
-            .filter(
-                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
-                artifact__scope_id=str(collection_id),
-            )
+            .filter(pk__in=tuple(sorted(run_ids)))
             .order_by("pk")
         )
         run = next((row for row in locked_runs if row.pk == build_run_id), None)
@@ -2268,6 +2315,49 @@ def assemble_collection_graph(
         )
 
 
+def validate_collection_resolution_commit(
+    collection_id: int,
+    build_run_id: int,
+    aggregate_source_signature: str,
+    *,
+    config: AssemblyConfig | None = None,
+    lease_owner=None,
+    lease_generation=None,
+) -> str:
+    """Provider-free validation of the exact persisted Task 9 projection."""
+
+    from django.db import transaction
+
+    collection_id = _positive_int(collection_id, "collection id")
+    build_run_id = _positive_int(build_run_id, "build run id")
+    aggregate_source_signature = _source_hash(aggregate_source_signature)
+    with transaction.atomic():
+        collection, artifact, run, _scope_artifacts = _locked_candidate(
+            collection_id,
+            build_run_id,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
+        )
+        config = _resolve_config(run, config)
+        manifest = _load_locked_manifest(artifact, config)
+        _validate_locked_manifest(
+            collection,
+            artifact,
+            manifest,
+            aggregate_source_signature,
+            config,
+        )
+        entities, links = _load_locked_task9_rows(artifact, config)
+        return _validate_task9_lineage(
+            artifact,
+            run,
+            manifest,
+            entities,
+            links,
+            config=config,
+        )
+
+
 _COLLECTION_ACTIVATION_LOCK_BASE = 5_497_230_000_000_000_000
 
 
@@ -2278,6 +2368,17 @@ def _lock_collection_scope(cursor: object, collection_id: int) -> None:
         "SELECT pg_advisory_xact_lock(%s)",
         [_COLLECTION_ACTIVATION_LOCK_BASE + collection_id],
     )
+
+
+def lock_collection_graph_advisory_scope(collection_id: int) -> int:
+    """Serialize a logical collection scope even after its source row is deleted."""
+
+    from django.db import connection
+
+    collection_id = _positive_int(collection_id, "collection id")
+    with connection.cursor() as cursor:
+        _lock_collection_scope(cursor, collection_id)
+    return collection_id
 
 
 def lock_collection_graph_scope(collection_id: int):
@@ -2294,14 +2395,19 @@ def lock_collection_graph_scope(collection_id: int):
 
 
 def _newer_activation_exists(
-    candidate_artifact_id: int,
+    candidate_artifact: object,
     scope_artifacts: tuple[object, ...],
 ) -> bool:
-    """Use the durable activation timestamp as the monotonic version fence."""
+    """Fence activation on the immutable scope occurrence generation."""
 
+    if type(candidate_artifact) is int:
+        return any(
+            row.pk > candidate_artifact and row.activated_at is not None
+            for row in scope_artifacts
+        )
     return any(
-        row.pk > candidate_artifact_id
-        and (row.activated_at is not None or row.status == "active")
+        row.build_generation > candidate_artifact.build_generation
+        and row.status in {"building", "active"}
         for row in scope_artifacts
     )
 
@@ -2458,7 +2564,7 @@ def _swap_active_collection_artifact(
     active = tuple(
         row for row in scope_artifacts if row.status == GraphArtifact.Status.ACTIVE
     )
-    if _newer_activation_exists(artifact.pk, scope_artifacts):
+    if _newer_activation_exists(artifact, scope_artifacts):
         raise CollectionGraphAssemblyError(
             "a newer collection artifact already won activation"
         )
@@ -2467,17 +2573,19 @@ def _swap_active_collection_artifact(
             raise CollectionGraphAssemblyError(
                 "active candidate is not the unique current collection artifact"
             )
-        metadata = run.metadata if type(run.metadata) is dict else {}
         active_stage = (
             GraphBuildRun.Stage.ACTIVE
-            if metadata.get("orchestration_version") == 1
+            if run.orchestration_version == GraphArtifact.OrchestrationVersion.SCOPED_V1
             else GraphBuildRun.Stage.COMPLETE
         )
         if run.stage != active_stage or run.status != GraphBuildRun.Status.SUCCEEDED:
             run.stage = active_stage
             run.status = GraphBuildRun.Status.SUCCEEDED
             run.finished_at = timezone.now()
-            if metadata.get("orchestration_version") == 1:
+            if (
+                run.orchestration_version
+                == GraphArtifact.OrchestrationVersion.SCOPED_V1
+            ):
                 run.lease_owner = ""
                 run.lease_expires_at = None
             run.save(
@@ -2521,15 +2629,14 @@ def _swap_active_collection_artifact(
     artifact.activated_at = activated_at
     artifact.completed_at = activated_at
     artifact.save(update_fields=["status", "activated_at", "completed_at"])
-    metadata = run.metadata if type(run.metadata) is dict else {}
     run.stage = (
         GraphBuildRun.Stage.ACTIVE
-        if metadata.get("orchestration_version") == 1
+        if run.orchestration_version == GraphArtifact.OrchestrationVersion.SCOPED_V1
         else GraphBuildRun.Stage.COMPLETE
     )
     run.status = GraphBuildRun.Status.SUCCEEDED
     run.finished_at = activated_at
-    if metadata.get("orchestration_version") == 1:
+    if run.orchestration_version == GraphArtifact.OrchestrationVersion.SCOPED_V1:
         run.lease_owner = ""
         run.lease_expires_at = None
     run.save(
@@ -2563,8 +2670,10 @@ __all__ = [
     "activate_collection_graph",
     "assemble_collection_graph",
     "assembly_config_checksum",
+    "lock_collection_graph_advisory_scope",
     "lock_collection_graph_scope",
     "plan_collection_relations",
     "validate_assembly_projection",
     "validate_collection_graph_artifact",
+    "validate_collection_resolution_commit",
 ]

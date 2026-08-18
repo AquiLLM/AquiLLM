@@ -12,12 +12,16 @@ import re
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import timedelta
+from enum import StrEnum
 from hashlib import sha256
+from threading import Event, Thread
 from time import perf_counter
 
 import structlog
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import close_old_connections, connection, transaction
+from django.db.models import Count, DateTimeField, ExpressionWrapper, F, Q, Sum, Value
+from django.db.models.functions import Length, Now
 from django.utils import timezone
 
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -44,17 +48,22 @@ class CorruptBuildError(RuntimeError):
     """Persisted rows cannot be tied to a complete commit marker."""
 
 
+class CommitMarkerState(StrEnum):
+    """Durable stage commit state derived from both marker and persisted rows."""
+
+    ABSENT = "absent"
+    VALID = "valid"
+    CORRUPT = "corrupt"
+
+
 def validate_build_lease(
     run: object,
     lease_owner: str | None,
     lease_generation: int | None,
-    *,
-    now=None,
 ) -> None:
     """Fence every mutating stage against stale or duplicate workers."""
 
-    metadata = getattr(run, "metadata", None)
-    if type(metadata) is not dict or metadata.get("orchestration_version") != 1:
+    if getattr(run, "orchestration_version", 0) != 1:
         return
     if type(lease_owner) is not str or not lease_owner:
         raise BuildLeaseLostError("build lease owner is required")
@@ -64,16 +73,198 @@ def validate_build_lease(
         raise BuildLeaseLostError("build lease generation is required")
     if getattr(run, "lease_generation", None) != lease_generation:
         raise BuildLeaseLostError("build lease generation no longer matches")
-    expires_at = getattr(run, "lease_expires_at", None)
-    checked_at = timezone.now() if now is None else now
-    if expires_at is None or expires_at <= checked_at:
-        raise BuildLeaseLostError("build lease expired")
+    run_id = getattr(run, "pk", None)
+    if type(run_id) is not int or run_id <= 0:
+        raise BuildLeaseLostError("persisted build lease row is required")
+    from apps.knowledge_graph.models import GraphBuildRun
+
+    live = GraphBuildRun.objects.filter(
+        pk=run_id,
+        orchestration_version=1,
+        lease_owner=lease_owner,
+        lease_generation=lease_generation,
+        lease_expires_at__gt=Now(),
+        status__in=(GraphBuildRun.Status.PENDING, GraphBuildRun.Status.RUNNING),
+    ).exists()
+    if not live:
+        raise BuildLeaseLostError("build lease expired or no longer live")
+
+
+def _lease_expiry_expression():
+    return ExpressionWrapper(
+        Now() + Value(_LEASE_DURATION),
+        output_field=DateTimeField(),
+    )
+
+
+def renew_build_lease(run_id: int, lease_owner: str, lease_generation: int) -> None:
+    """Renew one exact live token using the database clock."""
+
+    from apps.knowledge_graph.models import GraphBuildRun
+
+    if type(run_id) is not int or run_id <= 0:
+        raise BuildLeaseLostError("persisted build lease row is required")
+    if type(lease_owner) is not str or not lease_owner:
+        raise BuildLeaseLostError("build lease owner is required")
+    if type(lease_generation) is not int or isinstance(lease_generation, bool):
+        raise BuildLeaseLostError("build lease generation is required")
+    updated = GraphBuildRun.objects.filter(
+        pk=run_id,
+        orchestration_version=1,
+        lease_owner=lease_owner,
+        lease_generation=lease_generation,
+        lease_expires_at__gt=Now(),
+        status__in=(GraphBuildRun.Status.PENDING, GraphBuildRun.Status.RUNNING),
+    ).update(lease_expires_at=_lease_expiry_expression())
+    if updated != 1:
+        raise BuildLeaseLostError("build lease expired or token was rotated")
+
+
+class LeaseHeartbeat:
+    """Periodically renew an exact lease while provider work is in flight."""
+
+    def __init__(
+        self,
+        run_id: int,
+        lease_owner: str,
+        lease_generation: int,
+        *,
+        interval_seconds: float | None = None,
+    ) -> None:
+        self.run_id = run_id
+        self.lease_owner = lease_owner
+        self.lease_generation = lease_generation
+        self.interval_seconds = (
+            _LEASE_DURATION.total_seconds() / 4
+            if interval_seconds is None
+            else interval_seconds
+        )
+        if not 0 < self.interval_seconds < _LEASE_DURATION.total_seconds() / 3:
+            raise ValueError("heartbeat interval must be below one-third of the lease")
+        self._stop = Event()
+        self._thread: Thread | None = None
+        self._failure: BaseException | None = None
+
+    def pulse(self) -> None:
+        renew_build_lease(self.run_id, self.lease_owner, self.lease_generation)
+
+    def _run(self) -> None:
+        close_old_connections()
+        try:
+            while not self._stop.wait(self.interval_seconds):
+                try:
+                    self.pulse()
+                except BaseException as exc:
+                    self._failure = exc
+                    self._stop.set()
+                    return
+        finally:
+            close_old_connections()
+
+    def __enter__(self):
+        self.pulse()
+        self._thread = Thread(
+            target=self._run,
+            name=f"kg-lease-{self.run_id}",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+        if exc_type is None and self._failure is not None:
+            raise self._failure
+        return False
 
 
 def _hash(value: object, label: str) -> str:
     if type(value) is not str or not _HASH_PATTERN.fullmatch(value):
         raise ValueError(f"{label} must be a lowercase SHA-256 digest")
     return value
+
+
+class OccurrenceAction(StrEnum):
+    """Bootstrap action for the newest serialized scope occurrence."""
+
+    RETURN_ACTIVE = "return_active"
+    RESUME = "resume"
+    RETRY = "retry"
+    CREATE = "create"
+
+
+def _next_build_generation(artifacts) -> int:
+    generations = tuple(getattr(row, "build_generation", None) for row in artifacts)
+    if any(type(value) is not int or value < 1 for value in generations):
+        raise CorruptBuildError("build occurrence generation is invalid")
+    if len(generations) != len(set(generations)):
+        raise CorruptBuildError("scope owns duplicate build generations")
+    return max(generations, default=0) + 1
+
+
+def _occurrence_action(artifacts, runs, build_key: str) -> OccurrenceAction:
+    """Classify a bounded scope snapshot without collapsing A→B→A."""
+
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    key = _hash(build_key, "build key")
+    artifact_rows = tuple(artifacts)
+    run_rows = tuple(runs)
+    generations = [getattr(row, "build_generation", None) for row in artifact_rows]
+    if any(type(value) is not int or value < 1 for value in generations):
+        raise CorruptBuildError("build occurrence generation is invalid")
+    if len(generations) != len(set(generations)):
+        raise CorruptBuildError("scope owns duplicate build generations")
+    run_by_artifact: dict[int, object] = {}
+    for run in run_rows:
+        artifact_id = getattr(run, "artifact_id", None)
+        if type(artifact_id) is not int or artifact_id in run_by_artifact:
+            raise CorruptBuildError("artifact occurrence owns multiple build runs")
+        run_by_artifact[artifact_id] = run
+    exact_active = tuple(
+        row
+        for row in artifact_rows
+        if row.build_key == key
+        and row.status == GraphArtifact.Status.ACTIVE
+        and getattr(row, "orchestration_version", 1) == 1
+    )
+    if len(exact_active) > 1:
+        raise CorruptBuildError("scope owns multiple active exact-key artifacts")
+    if exact_active:
+        run = run_by_artifact.get(exact_active[0].pk)
+        if (
+            run is None
+            or run.build_key != key
+            or run.build_generation != exact_active[0].build_generation
+            or run.stage != GraphBuildRun.Stage.ACTIVE
+            or run.status != GraphBuildRun.Status.SUCCEEDED
+        ):
+            raise CorruptBuildError("active build occurrence is inconsistent")
+        return OccurrenceAction.RETURN_ACTIVE
+    if not artifact_rows:
+        return OccurrenceAction.CREATE
+    newest = max(artifact_rows, key=lambda row: (row.build_generation, row.pk))
+    if newest.build_key != key or getattr(newest, "orchestration_version", 1) != 1:
+        return OccurrenceAction.CREATE
+    run = run_by_artifact.get(newest.pk)
+    if (
+        run is None
+        or run.build_key != key
+        or run.build_generation != newest.build_generation
+    ):
+        raise CorruptBuildError("newest build occurrence is inconsistent")
+    if newest.status == GraphArtifact.Status.BUILDING and run.status in {
+        GraphBuildRun.Status.PENDING,
+        GraphBuildRun.Status.RUNNING,
+        GraphBuildRun.Status.FAILED,
+        GraphBuildRun.Status.CANCELLED,
+    }:
+        return OccurrenceAction.RESUME
+    if newest.status in {GraphArtifact.Status.FAILED, GraphArtifact.Status.STALE}:
+        return OccurrenceAction.RETRY
+    return OccurrenceAction.CREATE
 
 
 def _text(value: object, label: str, *, maximum: int = 512) -> str:
@@ -434,7 +625,70 @@ def _lock_document_scope(document_id: uuid.UUID) -> None:
         )
 
 
-def _lock_document_build_rows(document_id: uuid.UUID):
+def _bounded_scope_artifact_ids(
+    queryset,
+    *,
+    build_key: str,
+    candidate_artifact_id: int | None = None,
+) -> tuple[int, ...]:
+    """Select only the current/exact/candidate occurrence ids under a scope lock."""
+
+    from apps.knowledge_graph.models import GraphArtifact
+
+    key = _hash(build_key, "build key")
+    ids = set(
+        queryset.order_by("-build_generation", "-pk").values_list("pk", flat=True)[:1]
+    )
+    ids.update(
+        queryset.filter(status=GraphArtifact.Status.ACTIVE)
+        .order_by("pk")
+        .values_list("pk", flat=True)[:2]
+    )
+    ids.update(
+        queryset.filter(
+            build_key=key,
+            orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
+        )
+        .order_by("-build_generation", "-pk")
+        .values_list("pk", flat=True)[:1]
+    )
+    ids.update(
+        queryset.filter(
+            build_key=key,
+            status=GraphArtifact.Status.ACTIVE,
+            orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
+        )
+        .order_by("pk")
+        .values_list("pk", flat=True)[:2]
+    )
+    if candidate_artifact_id is not None:
+        candidate = (
+            queryset.filter(pk=candidate_artifact_id)
+            .values_list("pk", "build_generation")
+            .first()
+        )
+        if candidate is not None:
+            ids.add(candidate[0])
+            ids.update(
+                queryset.filter(
+                    build_generation__gt=candidate[1],
+                    status__in=(
+                        GraphArtifact.Status.BUILDING,
+                        GraphArtifact.Status.ACTIVE,
+                    ),
+                )
+                .order_by("build_generation", "pk")
+                .values_list("pk", flat=True)[:2]
+            )
+    return tuple(sorted(ids))
+
+
+def _lock_document_build_rows(
+    document_id: uuid.UUID,
+    *,
+    build_key: str,
+    candidate_artifact_id: int | None = None,
+):
     """Apply the global document lock order and return its locked rows."""
 
     from apps.knowledge_graph.extraction.pipeline import (
@@ -444,40 +698,351 @@ def _lock_document_build_rows(document_id: uuid.UUID):
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
     _lock_document_scope(document_id)
+    scope_query = GraphArtifact.objects.filter(
+        scope_type=GraphArtifact.ScopeType.DOCUMENT,
+        scope_id=str(document_id),
+    )
+    artifact_ids = _bounded_scope_artifact_ids(
+        scope_query,
+        build_key=build_key,
+        candidate_artifact_id=candidate_artifact_id,
+    )
     artifacts = tuple(
         GraphArtifact.objects.select_for_update()
-        .filter(
-            scope_type=GraphArtifact.ScopeType.DOCUMENT,
-            scope_id=str(document_id),
-        )
+        .filter(pk__in=artifact_ids)
         .order_by("pk")
     )
-    runs = tuple(
-        GraphBuildRun.objects.select_for_update()
-        .filter(
-            scope_type=GraphArtifact.ScopeType.DOCUMENT,
-            scope_id=str(document_id),
+    run_ids = tuple(
+        GraphBuildRun.objects.filter(
+            artifact_id__in=artifact_ids,
+            orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
         )
         .order_by("pk")
+        .values_list("pk", flat=True)[: len(artifact_ids) + 1]
+    )
+    runs = tuple(
+        GraphBuildRun.objects.select_for_update().filter(pk__in=run_ids).order_by("pk")
     )
     document = _get_concrete_document(document_id, for_update=True)
     chunks = _ordered_chunks(document_id, for_update=True)
     return artifacts, runs, document, chunks
 
 
+def _lock_terminal_document_rows(
+    document_id: uuid.UUID,
+    artifact_id: int,
+    run_id: int,
+):
+    """Lock only durable orchestration rows for deletion-safe terminalization."""
+
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    _lock_document_scope(document_id)
+    artifact = (
+        GraphArtifact.objects.select_for_update()
+        .filter(
+            pk=artifact_id,
+            scope_type=GraphArtifact.ScopeType.DOCUMENT,
+            scope_id=str(document_id),
+        )
+        .first()
+    )
+    run = (
+        GraphBuildRun.objects.select_for_update()
+        .filter(
+            pk=run_id,
+            artifact_id=artifact_id,
+            orchestration_version=(GraphArtifact.OrchestrationVersion.SCOPED_V1),
+        )
+        .first()
+    )
+    return artifact, run
+
+
+def _lock_terminal_collection_rows(
+    collection_id: int,
+    artifact_id: int,
+    run_id: int,
+):
+    """Lock a logical collection occurrence without requiring a live source row."""
+
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.graph.assembly import (
+        lock_collection_graph_advisory_scope,
+    )
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    lock_collection_graph_advisory_scope(collection_id)
+    Collection.objects.select_for_update().filter(pk=collection_id).first()
+    artifact = (
+        GraphArtifact.objects.select_for_update()
+        .filter(
+            pk=artifact_id,
+            scope_type=GraphArtifact.ScopeType.COLLECTION,
+            scope_id=str(collection_id),
+        )
+        .first()
+    )
+    run = (
+        GraphBuildRun.objects.select_for_update()
+        .filter(
+            pk=run_id,
+            artifact_id=artifact_id,
+            orchestration_version=(GraphArtifact.OrchestrationVersion.SCOPED_V1),
+        )
+        .first()
+    )
+    return artifact, run
+
+
 def _safe_marker(value: object) -> dict[str, object]:
     return dict(value) if type(value) is dict else {}
 
 
-def _commit_marker_present(run: object, name: str) -> bool:
-    stats = run.stats if type(getattr(run, "stats", None)) is dict else {}
-    return stats.get(name) is not None
+def _commit_marker_state(
+    stats: object,
+    name: str,
+    *,
+    rows_present: bool,
+    valid: bool,
+) -> CommitMarkerState:
+    """Classify a marker without treating falsey or empty JSON as committed."""
+
+    marker_present = type(stats) is dict and name in stats
+    if not marker_present:
+        return CommitMarkerState.CORRUPT if rows_present else CommitMarkerState.ABSENT
+    return CommitMarkerState.VALID if valid else CommitMarkerState.CORRUPT
+
+
+def _document_extraction_commit_state(
+    artifact: object,
+    run: object,
+) -> CommitMarkerState:
+    from apps.knowledge_graph.extraction.pipeline import (
+        extraction_commit_is_valid,
+        extraction_evidence_fingerprint,
+    )
+    from apps.knowledge_graph.models import (
+        EntityMention,
+        GraphArtifact,
+        RelationMention,
+    )
+
+    entity_query = EntityMention.objects.filter(artifact=artifact).order_by("pk")
+    relation_query = RelationMention.objects.filter(artifact=artifact).order_by("pk")
+    entity_count = entity_query.count()
+    relation_count = relation_query.count()
+    evidence_fingerprint = None
+    if (
+        getattr(artifact, "orchestration_version", None)
+        == GraphArtifact.OrchestrationVersion.SCOPED_V1
+        or getattr(run, "orchestration_version", None)
+        == GraphArtifact.OrchestrationVersion.SCOPED_V1
+    ):
+        evidence_fingerprint = extraction_evidence_fingerprint(
+            tuple(entity_query),
+            tuple(relation_query),
+        )
+    return _commit_marker_state(
+        getattr(run, "stats", None),
+        "extraction_commit",
+        rows_present=bool(entity_count or relation_count),
+        valid=extraction_commit_is_valid(
+            run,
+            entity_count=entity_count,
+            relation_count=relation_count,
+            evidence_fingerprint=evidence_fingerprint,
+        ),
+    )
+
+
+def _document_resolution_commit_state(
+    artifact: object,
+    run: object,
+) -> CommitMarkerState:
+    from apps.knowledge_graph.models import (
+        DocumentEntity,
+        DocumentEntityMention,
+        EntityMention,
+    )
+    from apps.knowledge_graph.resolution.persistence import (
+        resolution_commit_is_valid,
+        resolution_rows_fingerprint,
+        source_mention_fingerprint,
+    )
+
+    stats = getattr(run, "stats", None)
+    marker = stats.get("resolution_commit") if type(stats) is dict else None
+    entity_query = DocumentEntity.objects.filter(artifact=artifact)
+    link_query = DocumentEntityMention.objects.select_related(
+        "document_entity", "mention"
+    ).filter(document_entity__artifact=artifact)
+    entity_count = entity_query.count()
+    membership_count = link_query.count()
+    rows_present = bool(entity_count or membership_count)
+    if type(stats) is not dict or "resolution_commit" not in stats:
+        return _commit_marker_state(
+            stats,
+            "resolution_commit",
+            rows_present=rows_present,
+            valid=False,
+        )
+    if type(marker) is not dict:
+        return CommitMarkerState.CORRUPT
+    mentions = tuple(EntityMention.objects.filter(artifact=artifact).order_by("pk"))
+    entities = tuple(entity_query.order_by("pk"))
+    links = tuple(link_query.order_by("mention_id"))
+    try:
+        source_fingerprint = source_mention_fingerprint(mentions)
+        rows_fingerprint = resolution_rows_fingerprint(entities, links)
+    except (TypeError, ValueError):
+        return CommitMarkerState.CORRUPT
+    result_checksum = marker.get("result_checksum")
+    valid_marker = resolution_commit_is_valid(
+        marker,
+        resolver_version=artifact.resolver_version,
+        ontology_checksum=artifact.ontology_checksum,
+        assembly_version=artifact.assembly_version,
+        assembly_config_checksum=artifact.assembly_config_checksum,
+        source_mention_count=len(mentions),
+        source_mention_fingerprint=source_fingerprint,
+        document_entity_count=entity_count,
+        membership_count=membership_count,
+        result_checksum=result_checksum,
+    )
+    entity_ids = {row.pk for row in entities}
+    mention_ids = {row.pk for row in mentions}
+    row_audits_valid = (
+        len(entity_ids) == len(entities)
+        and type(stats.get("resolution_rows_fingerprint")) is str
+        and _HASH_PATTERN.fullmatch(stats["resolution_rows_fingerprint"]) is not None
+        and stats["resolution_rows_fingerprint"] == rows_fingerprint
+        and all(
+            row.status == row.Status.ACTIVE
+            and type(row.metadata) is dict
+            and row.metadata.get("result_checksum") == result_checksum
+            for row in entities
+        )
+        and {row.mention_id for row in links} == mention_ids
+        and all(
+            row.status == row.Status.ACTIVE
+            and row.document_entity_id in entity_ids
+            and row.mention.artifact_id == artifact.pk
+            and row.resolver_version == artifact.resolver_version
+            and type(row.metadata) is dict
+            and row.metadata.get("result_checksum") == result_checksum
+            for row in links
+        )
+    )
+    return _commit_marker_state(
+        stats,
+        "resolution_commit",
+        rows_present=rows_present,
+        valid=bool(valid_marker and row_audits_valid),
+    )
+
+
+def _collection_resolution_commit_state(
+    context: object,
+    artifact: object,
+    run: object,
+    *,
+    lease_owner: str,
+    lease_generation: int,
+) -> CommitMarkerState:
+    from apps.knowledge_graph.graph.assembly import (
+        CollectionGraphAssemblyError,
+        CollectionGraphSourceStaleError,
+        validate_collection_resolution_commit,
+    )
+    from apps.knowledge_graph.models import (
+        CollectionEntity,
+        CollectionEntityDocumentLink,
+    )
+
+    stats = getattr(run, "stats", None)
+    marker_names = (
+        "collection_resolution_commit",
+        "filter_commit",
+    )
+    present = tuple(
+        name for name in marker_names if type(stats) is dict and name in stats
+    )
+    rows_present = (
+        CollectionEntity.objects.filter(artifact=artifact).exists()
+        or CollectionEntityDocumentLink.objects.filter(artifact=artifact).exists()
+    )
+    if not present:
+        return CommitMarkerState.CORRUPT if rows_present else CommitMarkerState.ABSENT
+    if len(present) != 1:
+        return CommitMarkerState.CORRUPT
+    try:
+        validate_collection_resolution_commit(
+            context.identity.collection_id,
+            run.pk,
+            context.identity.aggregate_source_signature,
+            config=context.assembly_config,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
+        )
+    except (BuildLeaseLostError, CollectionGraphSourceStaleError):
+        raise
+    except CollectionGraphAssemblyError:
+        return CommitMarkerState.CORRUPT
+    return CommitMarkerState.VALID
+
+
+def _collection_assembly_commit_state(
+    context: object,
+    artifact: object,
+    run: object,
+    *,
+    lease_owner: str,
+    lease_generation: int,
+) -> CommitMarkerState:
+    from apps.knowledge_graph.graph.assembly import (
+        CollectionGraphAssemblyError,
+        CollectionGraphSourceStaleError,
+        validate_collection_graph_artifact,
+    )
+    from apps.knowledge_graph.models import (
+        CollectionRelation,
+        CollectionRelationEvidence,
+    )
+
+    stats = getattr(run, "stats", None)
+    rows_present = (
+        CollectionRelation.objects.filter(artifact=artifact).exists()
+        or CollectionRelationEvidence.objects.filter(artifact=artifact).exists()
+    )
+    if type(stats) is not dict or "collection_assembly_commit" not in stats:
+        return _commit_marker_state(
+            stats,
+            "collection_assembly_commit",
+            rows_present=rows_present,
+            valid=False,
+        )
+    try:
+        validate_collection_graph_artifact(
+            context.identity.collection_id,
+            run.pk,
+            context.identity.aggregate_source_signature,
+            ontology=context.ontology,
+            config=context.assembly_config,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
+        )
+    except (BuildLeaseLostError, CollectionGraphSourceStaleError):
+        raise
+    except CollectionGraphAssemblyError:
+        return CommitMarkerState.CORRUPT
+    return CommitMarkerState.VALID
 
 
 def _attempt_history(run: object) -> list[dict[str, object]]:
     metadata = _safe_marker(getattr(run, "metadata", None))
     raw = metadata.get("attempt_history", [])
-    history = list(raw) if type(raw) is list else []
+    history = list(raw[-31:]) if type(raw) is list else []
     history.append(
         {
             "attempt": int(getattr(run, "attempt", 1)),
@@ -490,24 +1055,50 @@ def _attempt_history(run: object) -> list[dict[str, object]]:
 
 
 def _claim_locked_run(run: object, owner: str) -> tuple[str, int]:
+    from apps.knowledge_graph.models import GraphBuildRun
 
-    now = timezone.now()
-    if (
-        run.lease_owner
-        and run.lease_expires_at is not None
-        and run.lease_expires_at > now
-    ):
+    if type(owner) is not str or not owner:
+        raise ValueError("lease owner must be a nonempty string")
+    updated = (
+        GraphBuildRun.objects.filter(
+            pk=run.pk,
+            orchestration_version=1,
+            status__in=(GraphBuildRun.Status.PENDING, GraphBuildRun.Status.RUNNING),
+        )
+        .filter(Q(lease_owner="") | Q(lease_expires_at__lte=Now()))
+        .update(
+            lease_owner=owner,
+            lease_generation=F("lease_generation") + 1,
+            lease_expires_at=_lease_expiry_expression(),
+        )
+    )
+    if updated != 1:
         raise BuildInProgressError("exact graph build already has a live lease")
-    run.lease_owner = owner
-    run.lease_generation += 1
-    run.lease_expires_at = now + _LEASE_DURATION
-    run.save(update_fields=["lease_owner", "lease_generation", "lease_expires_at"])
+    run.refresh_from_db(fields=["lease_owner", "lease_generation", "lease_expires_at"])
     return owner, run.lease_generation
+
+
+def _run_has_live_lease(run: object) -> bool:
+    from apps.knowledge_graph.models import GraphBuildRun
+
+    return GraphBuildRun.objects.filter(
+        pk=run.pk,
+        orchestration_version=1,
+        lease_owner__gt="",
+        lease_expires_at__gt=Now(),
+        status__in=(GraphBuildRun.Status.PENDING, GraphBuildRun.Status.RUNNING),
+    ).exists()
 
 
 def _restart_locked_run(run: object) -> None:
     from apps.knowledge_graph.models import GraphBuildRun
 
+    if getattr(run, "orchestration_version", None) != 1:
+        raise CorruptBuildError("only a typed scoped run can be restarted")
+    try:
+        validate_orchestration_stage(run.build_kind, run.stage, run.status)
+    except ValidationError as exc:
+        raise CorruptBuildError("build restart state is invalid") from exc
     if run.status not in {
         GraphBuildRun.Status.FAILED,
         GraphBuildRun.Status.CANCELLED,
@@ -531,6 +1122,13 @@ def _restart_locked_run(run: object) -> None:
         lease_expires_at=None,
     )
     run.refresh_from_db()
+
+
+def _validate_retryable_run(run: object) -> None:
+    if getattr(run, "error_code", "") == "corrupt_build_state":
+        raise CorruptBuildError(
+            "corrupt build occurrence is permanently failed and cannot be retried"
+        )
 
 
 def _transition_run(
@@ -565,19 +1163,18 @@ def _transition_run(
         run.status = status
         if run.started_at is None and status == GraphBuildRun.Status.RUNNING:
             run.started_at = now
-        if status in {
+        terminal = status in {
             GraphBuildRun.Status.SUCCEEDED,
             GraphBuildRun.Status.FAILED,
             GraphBuildRun.Status.CANCELLED,
-        }:
+        }
+        if terminal:
             run.finished_at = now
             run.lease_owner = ""
             run.lease_expires_at = None
-        else:
-            run.lease_expires_at = now + _LEASE_DURATION
         stage_marker = _safe_marker(run.stage_marker)
         sequence = stage_marker.get("stage_sequence", [])
-        sequence = list(sequence) if type(sequence) is list else []
+        sequence = list(sequence[-31:]) if type(sequence) is list else []
         sequence.append(target)
         stage_marker["stage_sequence"] = sequence[-32:]
         stage_marker["last_stage"] = target
@@ -595,6 +1192,9 @@ def _transition_run(
                 "stage_marker",
             ]
         )
+        if not terminal:
+            renew_build_lease(run.pk, lease_owner, lease_generation)
+            run.refresh_from_db(fields=["lease_expires_at"])
     logger.info(
         "obs.kg.build_stage",
         build_kind=run.build_kind,
@@ -759,7 +1359,8 @@ def _register_document_refresh_callbacks(
         transaction.on_commit(
             lambda collection_id=collection_id: _enqueue_current_collection_refresh(
                 collection_id
-            )
+            ),
+            robust=True,
         )
 
 
@@ -777,7 +1378,8 @@ def _bootstrap_document_build(
     owner = uuid.uuid4().hex
     with transaction.atomic():
         artifacts, runs, document, chunks = _lock_document_build_rows(
-            context.identity.document_id
+            context.identity.document_id,
+            build_key=build_key,
         )
         try:
             _validate_source(document, context.identity.source_hash)
@@ -799,53 +1401,38 @@ def _bootstrap_document_build(
         if derive_document_build_key(locked_context.identity) != build_key:
             raise StaleBuildError("document build key changed before bootstrap")
 
-        matching_artifacts = tuple(
-            row for row in artifacts if row.build_key == build_key
-        )
-        if len(matching_artifacts) > 1:
-            raise CorruptBuildError("document build key owns multiple artifacts")
-        matching_runs = tuple(row for row in runs if row.build_key == build_key)
-        if len(matching_runs) > 1:
-            raise CorruptBuildError("document build key owns multiple logical runs")
-        artifact = matching_artifacts[0] if matching_artifacts else None
-        run = matching_runs[0] if matching_runs else None
-        if (artifact is None) != (run is None):
-            raise CorruptBuildError("document artifact/run ownership is incomplete")
-
-        if run is not None:
-            if run.artifact_id != artifact.pk or artifact.build_key != run.build_key:
-                raise CorruptBuildError("document build ownership is inconsistent")
-            if run.stage == GraphBuildRun.Stage.ACTIVE:
-                if (
-                    run.status != GraphBuildRun.Status.SUCCEEDED
-                    or artifact.status != GraphArtifact.Status.ACTIVE
-                    or run.lease_owner
-                    or run.lease_expires_at is not None
-                ):
-                    raise CorruptBuildError(
-                        "active document terminal state is inconsistent"
-                    )
-                _register_document_refresh_callbacks(context, run)
-                return artifact, run, None, None, True
-            if run.stage == GraphBuildRun.Stage.SUPERSEDED:
-                if (
-                    run.status != GraphBuildRun.Status.CANCELLED
-                    or artifact.status != GraphArtifact.Status.SUPERSEDED
-                    or run.lease_owner
-                    or run.lease_expires_at is not None
-                ):
-                    raise CorruptBuildError(
-                        "superseded document terminal state is inconsistent"
-                    )
-                return artifact, run, None, None, True
-            if run.status == GraphBuildRun.Status.SUCCEEDED:
-                raise CorruptBuildError("successful document run is not terminal")
-            live_lease = (
-                run.lease_owner
-                and run.lease_expires_at is not None
-                and run.lease_expires_at > timezone.now()
+        action = _occurrence_action(artifacts, runs, build_key)
+        run_by_artifact = {row.artifact_id: row for row in runs}
+        artifact = None
+        run = None
+        if action is OccurrenceAction.RETURN_ACTIVE:
+            artifact = next(
+                row
+                for row in artifacts
+                if row.build_key == build_key
+                and row.status == GraphArtifact.Status.ACTIVE
+                and row.orchestration_version
+                == GraphArtifact.OrchestrationVersion.SCOPED_V1
             )
-            if live_lease:
+            run = run_by_artifact[artifact.pk]
+            if run.lease_owner or run.lease_expires_at is not None:
+                raise CorruptBuildError("active document owns a build lease")
+            _register_document_refresh_callbacks(context, run)
+            return artifact, run, None, None, True
+        if action in {OccurrenceAction.RESUME, OccurrenceAction.RETRY}:
+            artifact = max(
+                (
+                    row
+                    for row in artifacts
+                    if row.build_key == build_key
+                    and row.orchestration_version
+                    == GraphArtifact.OrchestrationVersion.SCOPED_V1
+                ),
+                key=lambda row: (row.build_generation, row.pk),
+            )
+            run = run_by_artifact[artifact.pk]
+            _validate_retryable_run(run)
+            if _run_has_live_lease(run):
                 raise BuildInProgressError(
                     "exact document graph build already has a live lease"
                 )
@@ -859,8 +1446,11 @@ def _bootstrap_document_build(
             elif artifact.status != GraphArtifact.Status.BUILDING:
                 raise CorruptBuildError("document retry artifact is not reusable")
         else:
+            build_generation = _next_build_generation(artifacts)
             artifact = GraphArtifact.objects.create(
                 status=GraphArtifact.Status.BUILDING,
+                build_generation=build_generation,
+                orchestration_version=(GraphArtifact.OrchestrationVersion.SCOPED_V1),
                 metadata={
                     "orchestration_version": 1,
                     "ordered_chunk_signature": (
@@ -874,6 +1464,8 @@ def _bootstrap_document_build(
             )
             run = GraphBuildRun.objects.create(
                 artifact=artifact,
+                build_generation=build_generation,
+                orchestration_version=(GraphArtifact.OrchestrationVersion.SCOPED_V1),
                 stage=GraphBuildRun.Stage.QUEUED,
                 status=GraphBuildRun.Status.PENDING,
                 attempt=1,
@@ -897,50 +1489,25 @@ def _bootstrap_document_build(
 
 
 def _document_commit_counts(artifact: object, run: object) -> dict[str, int]:
-    from apps.knowledge_graph.extraction.pipeline import extraction_commit_is_valid
     from apps.knowledge_graph.models import (
         DocumentEntity,
         DocumentEntityMention,
         EntityMention,
         RelationMention,
     )
-    from apps.knowledge_graph.resolution.persistence import (
-        resolution_commit_is_valid,
-        source_mention_fingerprint,
-    )
 
-    mentions = tuple(EntityMention.objects.filter(artifact=artifact).order_by("pk"))
+    mention_count = EntityMention.objects.filter(artifact=artifact).count()
     relation_count = RelationMention.objects.filter(artifact=artifact).count()
-    if not extraction_commit_is_valid(
-        run,
-        entity_count=len(mentions),
-        relation_count=relation_count,
-    ):
+    if _document_extraction_commit_state(artifact, run) is not CommitMarkerState.VALID:
         raise CorruptBuildError("document extraction commit is incomplete")
     entity_count = DocumentEntity.objects.filter(artifact=artifact).count()
     membership_count = DocumentEntityMention.objects.filter(
         document_entity__artifact=artifact
     ).count()
-    stats = _safe_marker(run.stats)
-    marker = stats.get("resolution_commit")
-    marker_map = marker if type(marker) is dict else {}
-    fingerprint = source_mention_fingerprint(mentions)
-    result_checksum = marker_map.get("result_checksum")
-    if not resolution_commit_is_valid(
-        marker,
-        resolver_version=artifact.resolver_version,
-        ontology_checksum=artifact.ontology_checksum,
-        assembly_version=artifact.assembly_version,
-        assembly_config_checksum=artifact.assembly_config_checksum,
-        source_mention_count=len(mentions),
-        source_mention_fingerprint=fingerprint,
-        document_entity_count=entity_count,
-        membership_count=membership_count,
-        result_checksum=result_checksum,
-    ):
+    if _document_resolution_commit_state(artifact, run) is not CommitMarkerState.VALID:
         raise CorruptBuildError("document resolution commit is incomplete")
     return {
-        "entity_mention_count": len(mentions),
+        "entity_mention_count": mention_count,
         "relation_mention_count": relation_count,
         "document_entity_count": entity_count,
         "membership_count": membership_count,
@@ -970,7 +1537,7 @@ def _apply_locked_terminal(
     run.lease_expires_at = None
     marker = _safe_marker(run.stage_marker)
     sequence = marker.get("stage_sequence", [])
-    sequence = list(sequence) if type(sequence) is list else []
+    sequence = list(sequence[-31:]) if type(sequence) is list else []
     sequence.append(target)
     marker["stage_sequence"] = sequence[-32:]
     marker["last_stage"] = target
@@ -1006,7 +1573,9 @@ def _activate_document_build(
 
     with transaction.atomic():
         artifacts, runs, document, chunks = _lock_document_build_rows(
-            context.identity.document_id
+            context.identity.document_id,
+            build_key=derive_document_build_key(context.identity),
+            candidate_artifact_id=artifact_id,
         )
         artifact = next((row for row in artifacts if row.pk == artifact_id), None)
         run = next((row for row in runs if row.pk == run_id), None)
@@ -1043,9 +1612,13 @@ def _activate_document_build(
             raise StaleBuildError("document chunks changed before activation")
         if (
             run.build_key != artifact.build_key
+            or run.build_generation != artifact.build_generation
+            or run.orchestration_version != artifact.orchestration_version
             or run.stage != GraphBuildRun.Stage.VALIDATING
         ):
-            raise CorruptBuildError("document candidate is not validating exact key")
+            raise CorruptBuildError(
+                "document candidate is not validating its exact occurrence"
+            )
         counts = _document_commit_counts(artifact, run)
         active = tuple(
             row
@@ -1054,7 +1627,14 @@ def _activate_document_build(
         )
         if len(active) > 1:
             raise CorruptBuildError("document scope has multiple active artifacts")
-        if active and active[0].pk > artifact.pk:
+        higher_current = tuple(
+            row
+            for row in artifacts
+            if row.build_generation > artifact.build_generation
+            and row.status
+            in {GraphArtifact.Status.BUILDING, GraphArtifact.Status.ACTIVE}
+        )
+        if higher_current:
             artifact.status = GraphArtifact.Status.STALE
             artifact.completed_at = timezone.now()
             artifact.save(update_fields=["status", "completed_at"])
@@ -1068,7 +1648,10 @@ def _activate_document_build(
                 )
 
             transaction.on_commit(report_newer_winner)
-            return active[0], counts
+            return max(
+                higher_current,
+                key=lambda row: (row.build_generation, row.pk),
+            ), counts
         now = timezone.now()
         for previous in active:
             previous.status = GraphArtifact.Status.SUPERSEDED
@@ -1108,11 +1691,11 @@ def _terminal_document_build(
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
     with transaction.atomic():
-        artifacts, runs, _document, _chunks = _lock_document_build_rows(
-            context.identity.document_id
+        artifact, run = _lock_terminal_document_rows(
+            context.identity.document_id,
+            artifact_id,
+            run_id,
         )
-        artifact = next((row for row in artifacts if row.pk == artifact_id), None)
-        run = next((row for row in runs if row.pk == run_id), None)
         if artifact is None or run is None:
             return
         validate_build_lease(run, lease_owner, lease_generation)
@@ -1167,16 +1750,20 @@ def build_document_graph(document_id, expected_source_hash, document_build_key):
                 lease_generation=lease_generation,
             )
         if run.stage == GraphBuildRun.Stage.EXTRACTING:
-            if not _commit_marker_present(run, "extraction_commit"):
-                extract_into_build(
-                    artifact.pk,
-                    run.pk,
-                    context.identity.document_id,
-                    context.identity.source_hash,
-                    context.identity.ontology_version,
-                    lease_owner=lease_owner,
-                    lease_generation=lease_generation,
-                )
+            extraction_state = _document_extraction_commit_state(artifact, run)
+            if extraction_state is CommitMarkerState.CORRUPT:
+                raise CorruptBuildError("document extraction commit is corrupt")
+            if extraction_state is CommitMarkerState.ABSENT:
+                with LeaseHeartbeat(run.pk, lease_owner, lease_generation):
+                    extract_into_build(
+                        artifact.pk,
+                        run.pk,
+                        context.identity.document_id,
+                        context.identity.source_hash,
+                        context.identity.ontology_version,
+                        lease_owner=lease_owner,
+                        lease_generation=lease_generation,
+                    )
             run = _transition_run(
                 run.pk,
                 GraphBuildRun.Stage.RESOLVING,
@@ -1184,18 +1771,22 @@ def build_document_graph(document_id, expected_source_hash, document_build_key):
                 lease_generation=lease_generation,
             )
         if run.stage == GraphBuildRun.Stage.RESOLVING:
-            if not _commit_marker_present(run, "resolution_commit"):
-                mentions = tuple(
-                    EntityMention.objects.filter(artifact=artifact).order_by("pk")
-                )
-                result = resolve_document_mentions(mentions, context.ontology)
-                persist_document_resolution(
-                    artifact.pk,
-                    run.pk,
-                    result,
-                    lease_owner=lease_owner,
-                    lease_generation=lease_generation,
-                )
+            resolution_state = _document_resolution_commit_state(artifact, run)
+            if resolution_state is CommitMarkerState.CORRUPT:
+                raise CorruptBuildError("document resolution commit is corrupt")
+            if resolution_state is CommitMarkerState.ABSENT:
+                with LeaseHeartbeat(run.pk, lease_owner, lease_generation):
+                    mentions = tuple(
+                        EntityMention.objects.filter(artifact=artifact).order_by("pk")
+                    )
+                    result = resolve_document_mentions(mentions, context.ontology)
+                    persist_document_resolution(
+                        artifact.pk,
+                        run.pk,
+                        result,
+                        lease_owner=lease_owner,
+                        lease_generation=lease_generation,
+                    )
             run = _transition_run(
                 run.pk,
                 GraphBuildRun.Stage.VALIDATING,
@@ -1223,7 +1814,15 @@ def build_document_graph(document_id, expected_source_hash, document_build_key):
         return activated
     except Exception as exc:
         stale = isinstance(exc, (StaleBuildError, StaleSourceError))
-        error_code = "source_or_config_stale" if stale else "document_build_failed"
+        error_code = (
+            "source_or_config_stale"
+            if stale
+            else (
+                "corrupt_build_state"
+                if isinstance(exc, CorruptBuildError)
+                else "document_build_failed"
+            )
+        )
         try:
             _terminal_document_build(
                 context,
@@ -1234,8 +1833,17 @@ def build_document_graph(document_id, expected_source_hash, document_build_key):
                 stale=stale,
                 error_code=error_code,
             )
-        except BuildLeaseLostError:
-            pass
+        except Exception:
+            logger.error(
+                "obs.kg.build_terminal_failed",
+                build_kind="document",
+                scope_id=str(context.identity.document_id),
+                build_key=requested_key,
+                artifact_id=artifact.pk,
+                build_run_id=run.pk,
+                attempt=run.attempt,
+                error_code="terminal_bookkeeping_failed",
+            )
         logger.error(
             "obs.kg.build_failed",
             build_kind="document",
@@ -1275,6 +1883,45 @@ def _collection_extractor_version(artifacts: tuple[object, ...]) -> str:
     return f"manifest-extractors-v1:{_identity_key('extractors-v1', versions)}"
 
 
+def _validate_collection_context_caps(
+    *,
+    document_count: int,
+    entity_count: int,
+    chunk_count: int,
+    character_count: int,
+    resolution_config: object,
+    assembly_config: object,
+    max_text_characters: int,
+) -> None:
+    """Reject oversized collection inputs before loading any source content."""
+
+    counts = {
+        "document": document_count,
+        "entity": entity_count,
+        "chunk": chunk_count,
+        "character": character_count,
+    }
+    if any(type(value) is not int or value < 0 for value in counts.values()):
+        raise CorruptBuildError(
+            "collection context counts must be nonnegative integers"
+        )
+    document_cap = min(
+        resolution_config.max_document_inputs,
+        assembly_config.max_document_inputs,
+    )
+    entity_cap = min(resolution_config.max_entities, assembly_config.max_entities)
+    chunk_cap = assembly_config.max_evidence
+    character_cap = resolution_config.max_entities * max_text_characters
+    for name, value, cap in (
+        ("document", document_count, document_cap),
+        ("entity", entity_count, entity_cap),
+        ("chunk", chunk_count, chunk_cap),
+        ("character", character_count, character_cap),
+    ):
+        if value > cap:
+            raise CorruptBuildError(f"collection context {name} cap exceeded")
+
+
 def _collection_context(
     collection_id: object,
     *,
@@ -1285,7 +1932,7 @@ def _collection_context(
     embedding_model_signature: str | None = None,
 ) -> _CollectionContext:
     from apps.collections.models import Collection
-    from apps.documents.models import Document
+    from apps.documents.models import DESCENDED_FROM_DOCUMENT, TextChunk
     from apps.knowledge_graph.extraction.pipeline import (
         StaleSourceError,
         _validate_source,
@@ -1298,7 +1945,7 @@ def _collection_context(
         FilterPolicy,
         filter_policy_checksum,
     )
-    from apps.knowledge_graph.models import GraphArtifact
+    from apps.knowledge_graph.models import DocumentEntity, GraphArtifact
     from apps.knowledge_graph.models.inputs import (
         collection_input_source_signature,
         collection_manifest_source_hash,
@@ -1306,6 +1953,7 @@ def _collection_context(
     )
     from apps.knowledge_graph.resolution import COLLECTION_RESOLVER_VERSION
     from apps.knowledge_graph.resolution.collection import (
+        MAX_TEXT_CHARACTERS,
         CollectionResolutionConfig,
         resolution_config_checksum,
     )
@@ -1328,21 +1976,85 @@ def _collection_context(
         if embedding_model_signature is None
         else embedding_model_signature
     )
-    documents = tuple(Document.filter(collection_id=collection_id))
-    document_ids = tuple(document.id for document in documents)
+    document_models = tuple(
+        sorted(DESCENDED_FROM_DOCUMENT, key=lambda value: value._meta.label)
+    )
+    document_count = sum(
+        model.objects.filter(collection_id=collection_id).count()
+        for model in document_models
+    )
+    document_character_count = sum(
+        model.objects.filter(collection_id=collection_id).aggregate(
+            character_count=Sum(Length("full_text"))
+        )["character_count"]
+        or 0
+        for model in document_models
+    )
+    _validate_collection_context_caps(
+        document_count=document_count,
+        entity_count=0,
+        chunk_count=0,
+        character_count=document_character_count,
+        resolution_config=resolution_config,
+        assembly_config=assembly_config,
+        max_text_characters=MAX_TEXT_CHARACTERS,
+    )
+    document_ids = tuple(
+        document_id
+        for model in document_models
+        for document_id in model.objects.filter(
+            collection_id=collection_id
+        ).values_list("id", flat=True)
+    )
     if len(document_ids) != len(set(document_ids)):
         raise CorruptBuildError("collection contains duplicate concrete document UUIDs")
-    documents_by_id = {str(document.id): document for document in documents}
     artifacts = tuple(
         GraphArtifact.objects.filter(
             scope_type=GraphArtifact.ScopeType.DOCUMENT,
-            scope_id__in=tuple(documents_by_id),
+            scope_id__in=tuple(map(str, document_ids)),
             status=GraphArtifact.Status.ACTIVE,
-            ontology_version=ontology.version,
-            ontology_checksum=ontology.checksum,
         ).order_by("pk")
     )
-    contributing_rows = []
+    artifact_document_ids = tuple(artifact.scope_id for artifact in artifacts)
+    if len(artifact_document_ids) != len(set(artifact_document_ids)):
+        raise CorruptBuildError("collection has duplicate active document artifacts")
+    if any(
+        artifact.ontology_version != ontology.version
+        or artifact.ontology_checksum != ontology.checksum
+        for artifact in artifacts
+    ):
+        raise StaleBuildError("collection awaits fresh document graph artifacts")
+    entity_count = DocumentEntity.objects.filter(
+        artifact_id__in=tuple(artifact.pk for artifact in artifacts),
+        status=DocumentEntity.Status.ACTIVE,
+    ).count()
+    chunk_totals = TextChunk.objects.filter(doc_id__in=artifact_document_ids).aggregate(
+        row_count=Count("pk"),
+        character_count=Sum(Length("content")),
+    )
+    chunk_count = chunk_totals["row_count"] or 0
+    character_count = document_character_count + (chunk_totals["character_count"] or 0)
+    _validate_collection_context_caps(
+        document_count=document_count,
+        entity_count=entity_count,
+        chunk_count=chunk_count,
+        character_count=character_count,
+        resolution_config=resolution_config,
+        assembly_config=assembly_config,
+        max_text_characters=MAX_TEXT_CHARACTERS,
+    )
+    artifact_document_uuid_set = {uuid.UUID(value) for value in artifact_document_ids}
+    documents = tuple(
+        document
+        for model in document_models
+        for document in model.objects.filter(
+            id__in=artifact_document_uuid_set,
+            collection_id=collection_id,
+        ).order_by("pk")
+    )
+    documents_by_id = {str(document.id): document for document in documents}
+    if set(documents_by_id) != set(artifact_document_ids):
+        raise StaleBuildError("active document artifact escaped collection membership")
     for artifact in artifacts:
         document = documents_by_id[artifact.scope_id]
         metadata = artifact.metadata if type(artifact.metadata) is dict else {}
@@ -1363,19 +2075,21 @@ def _collection_context(
         )
         try:
             _validate_source(document, artifact.source_hash)
-            source_matches = True
-        except StaleSourceError:
-            source_matches = False
-        if source_matches and (
-            metadata.get("orchestration_version") != 1
+        except StaleSourceError as exc:
+            raise StaleBuildError(
+                "collection awaits fresh document graph artifacts"
+            ) from exc
+        if not (
+            artifact.orchestration_version
+            != GraphArtifact.OrchestrationVersion.SCOPED_V1
             or (
                 metadata.get("ordered_chunk_signature") == current_chunk_signature
                 and metadata.get("ontology_activation_signature")
                 == ontology_activation_signature
             )
         ):
-            contributing_rows.append(artifact)
-    contributing = tuple(contributing_rows)
+            raise StaleBuildError("collection awaits fresh document graph artifacts")
+    contributing = artifacts
     source_signatures = []
     for artifact in contributing:
         document = documents_by_id[artifact.scope_id]
@@ -1416,40 +2130,42 @@ def _collection_context(
     )
 
 
-def _lock_collection_build_rows(collection_id: int):
+def _lock_collection_build_rows(
+    collection_id: int,
+    *,
+    build_key: str,
+    candidate_artifact_id: int | None = None,
+):
     from apps.knowledge_graph.graph.assembly import lock_collection_graph_scope
-    from apps.knowledge_graph.models import (
-        CollectionArtifactInput,
-        GraphArtifact,
-        GraphBuildRun,
-    )
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
     collection = lock_collection_graph_scope(collection_id)
+    scope_query = GraphArtifact.objects.filter(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=str(collection_id),
+    )
+    artifact_ids = _bounded_scope_artifact_ids(
+        scope_query,
+        build_key=build_key,
+        candidate_artifact_id=candidate_artifact_id,
+    )
     artifacts = tuple(
         GraphArtifact.objects.select_for_update()
-        .filter(
-            scope_type=GraphArtifact.ScopeType.COLLECTION,
-            scope_id=str(collection_id),
+        .filter(pk__in=artifact_ids)
+        .order_by("pk")
+    )
+    run_ids = tuple(
+        GraphBuildRun.objects.filter(
+            artifact_id__in=artifact_ids,
+            orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
         )
         .order_by("pk")
+        .values_list("pk", flat=True)[: len(artifact_ids) + 1]
     )
     runs = tuple(
-        GraphBuildRun.objects.select_for_update()
-        .filter(
-            scope_type=GraphArtifact.ScopeType.COLLECTION,
-            scope_id=str(collection_id),
-        )
-        .order_by("pk")
+        GraphBuildRun.objects.select_for_update().filter(pk__in=run_ids).order_by("pk")
     )
-    manifests = tuple(
-        CollectionArtifactInput.objects.select_for_update()
-        .filter(
-            artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
-            artifact__scope_id=str(collection_id),
-        )
-        .order_by("artifact_id", "document_artifact_id")
-    )
-    return collection, artifacts, runs, manifests
+    return collection, artifacts, runs
 
 
 def _bootstrap_collection_build(
@@ -1461,50 +2177,41 @@ def _bootstrap_collection_build(
 
     owner = uuid.uuid4().hex
     with transaction.atomic():
-        _collection, artifacts, runs, _manifests = _lock_collection_build_rows(
-            context.identity.collection_id
+        _collection, artifacts, runs = _lock_collection_build_rows(
+            context.identity.collection_id,
+            build_key=build_key,
         )
-        matching_artifacts = tuple(
-            row for row in artifacts if row.build_key == build_key
-        )
-        matching_runs = tuple(row for row in runs if row.build_key == build_key)
-        if len(matching_artifacts) > 1 or len(matching_runs) > 1:
-            raise CorruptBuildError("collection build key is not unique")
-        artifact = matching_artifacts[0] if matching_artifacts else None
-        run = matching_runs[0] if matching_runs else None
-        if (artifact is None) != (run is None):
-            raise CorruptBuildError("collection artifact/run ownership is incomplete")
-        if run is not None:
-            if run.artifact_id != artifact.pk or run.build_key != artifact.build_key:
-                raise CorruptBuildError("collection build ownership is inconsistent")
-            if run.stage == GraphBuildRun.Stage.ACTIVE:
-                if (
-                    run.status != GraphBuildRun.Status.SUCCEEDED
-                    or artifact.status != GraphArtifact.Status.ACTIVE
-                    or run.lease_owner
-                    or run.lease_expires_at is not None
-                ):
-                    raise CorruptBuildError(
-                        "active collection terminal state is inconsistent"
-                    )
-                return artifact, run, None, None, True
-            if run.stage == GraphBuildRun.Stage.SUPERSEDED:
-                if (
-                    run.status != GraphBuildRun.Status.CANCELLED
-                    or artifact.status != GraphArtifact.Status.SUPERSEDED
-                    or run.lease_owner
-                    or run.lease_expires_at is not None
-                ):
-                    raise CorruptBuildError(
-                        "superseded collection terminal state is inconsistent"
-                    )
-                return artifact, run, None, None, True
-            live_lease = (
-                run.lease_owner
-                and run.lease_expires_at is not None
-                and run.lease_expires_at > timezone.now()
+        action = _occurrence_action(artifacts, runs, build_key)
+        run_by_artifact = {row.artifact_id: row for row in runs}
+        artifact = None
+        run = None
+        if action is OccurrenceAction.RETURN_ACTIVE:
+            artifact = next(
+                row
+                for row in artifacts
+                if row.build_key == build_key
+                and row.status == GraphArtifact.Status.ACTIVE
+                and row.orchestration_version
+                == GraphArtifact.OrchestrationVersion.SCOPED_V1
             )
-            if live_lease:
+            run = run_by_artifact[artifact.pk]
+            if run.lease_owner or run.lease_expires_at is not None:
+                raise CorruptBuildError("active collection owns a build lease")
+            return artifact, run, None, None, True
+        if action in {OccurrenceAction.RESUME, OccurrenceAction.RETRY}:
+            artifact = max(
+                (
+                    row
+                    for row in artifacts
+                    if row.build_key == build_key
+                    and row.orchestration_version
+                    == GraphArtifact.OrchestrationVersion.SCOPED_V1
+                ),
+                key=lambda row: (row.build_generation, row.pk),
+            )
+            run = run_by_artifact[artifact.pk]
+            _validate_retryable_run(run)
+            if _run_has_live_lease(run):
                 raise BuildInProgressError(
                     "exact collection graph build already has a live lease"
                 )
@@ -1518,6 +2225,7 @@ def _bootstrap_collection_build(
             elif artifact.status != GraphArtifact.Status.BUILDING:
                 raise CorruptBuildError("collection retry artifact is not reusable")
         else:
+            build_generation = _next_build_generation(artifacts)
             artifact, _manifest = build_collection_snapshot(
                 collection=context.collection,
                 document_artifacts=context.document_artifacts,
@@ -1529,6 +2237,8 @@ def _bootstrap_collection_build(
                 assembly_config=context.assembly_config,
                 embedding_model_signature=(context.identity.embedding_model_signature),
                 build_key=build_key,
+                build_generation=build_generation,
+                orchestration_version=(GraphArtifact.OrchestrationVersion.SCOPED_V1),
             )
             artifact.metadata = {
                 **(artifact.metadata if type(artifact.metadata) is dict else {}),
@@ -1543,6 +2253,8 @@ def _bootstrap_collection_build(
                 raise StaleBuildError("collection manifest changed during snapshot")
             run = GraphBuildRun.objects.create(
                 artifact=artifact,
+                build_generation=artifact.build_generation,
+                orchestration_version=artifact.orchestration_version,
                 stage=GraphBuildRun.Stage.QUEUED,
                 status=GraphBuildRun.Status.PENDING,
                 attempt=1,
@@ -1578,11 +2290,11 @@ def _terminal_collection_build(
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
     with transaction.atomic():
-        _collection, artifacts, runs, _manifests = _lock_collection_build_rows(
-            context.identity.collection_id
+        artifact, run = _lock_terminal_collection_rows(
+            context.identity.collection_id,
+            artifact_id,
+            run_id,
         )
-        artifact = next((row for row in artifacts if row.pk == artifact_id), None)
-        run = next((row for row in runs if row.pk == run_id), None)
         if artifact is None or run is None:
             return
         validate_build_lease(run, lease_owner, lease_generation)
@@ -1597,7 +2309,8 @@ def _terminal_collection_build(
             transaction.on_commit(
                 lambda: _enqueue_current_collection_refresh(
                     context.identity.collection_id
-                )
+                ),
+                robust=True,
             )
 
 
@@ -1678,46 +2391,56 @@ def refresh_collection_graph(
                 lease_generation=lease_generation,
             )
         if run.stage == GraphBuildRun.Stage.RESOLVING:
-            if not _commit_marker_present(run, "collection_resolution_commit"):
-                snapshot, entities, relations = load_collection_resolution_inputs(
-                    artifact.pk,
-                    run.pk,
-                    lease_owner=lease_owner,
-                    lease_generation=lease_generation,
-                )
-                resolution = resolve_collection_entities(
-                    snapshot,
-                    entities,
-                    context.ontology,
-                    relations=relations,
-                    config=context.resolution_config,
-                    embedding_session=default_collection_embedding_session(
-                        context.identity.embedding_model_signature
-                    ),
-                )
-                filter_inputs = load_collection_filter_inputs(
-                    artifact.pk,
-                    run.pk,
-                    resolution,
-                    lease_owner=lease_owner,
-                    lease_generation=lease_generation,
-                )
-                filter_result = filter_collection_resolution(
-                    resolution,
-                    filter_inputs,
-                    context.ontology,
-                    context.filter_policy,
-                )
-                persist_collection_resolution(
-                    artifact.pk,
-                    run.pk,
-                    resolution,
-                    filter_result,
-                    filter_policy=context.filter_policy,
-                    ontology=context.ontology,
-                    lease_owner=lease_owner,
-                    lease_generation=lease_generation,
-                )
+            resolution_state = _collection_resolution_commit_state(
+                context,
+                artifact,
+                run,
+                lease_owner=lease_owner,
+                lease_generation=lease_generation,
+            )
+            if resolution_state is CommitMarkerState.CORRUPT:
+                raise CorruptBuildError("collection resolution commit is corrupt")
+            if resolution_state is CommitMarkerState.ABSENT:
+                with LeaseHeartbeat(run.pk, lease_owner, lease_generation):
+                    snapshot, entities, relations = load_collection_resolution_inputs(
+                        artifact.pk,
+                        run.pk,
+                        lease_owner=lease_owner,
+                        lease_generation=lease_generation,
+                    )
+                    resolution = resolve_collection_entities(
+                        snapshot,
+                        entities,
+                        context.ontology,
+                        relations=relations,
+                        config=context.resolution_config,
+                        embedding_session=default_collection_embedding_session(
+                            context.identity.embedding_model_signature
+                        ),
+                    )
+                    filter_inputs = load_collection_filter_inputs(
+                        artifact.pk,
+                        run.pk,
+                        resolution,
+                        lease_owner=lease_owner,
+                        lease_generation=lease_generation,
+                    )
+                    filter_result = filter_collection_resolution(
+                        resolution,
+                        filter_inputs,
+                        context.ontology,
+                        context.filter_policy,
+                    )
+                    persist_collection_resolution(
+                        artifact.pk,
+                        run.pk,
+                        resolution,
+                        filter_result,
+                        filter_policy=context.filter_policy,
+                        ontology=context.ontology,
+                        lease_owner=lease_owner,
+                        lease_generation=lease_generation,
+                    )
             run = _transition_run(
                 run.pk,
                 GraphBuildRun.Stage.ASSEMBLING,
@@ -1725,15 +2448,26 @@ def refresh_collection_graph(
                 lease_generation=lease_generation,
             )
         if run.stage == GraphBuildRun.Stage.ASSEMBLING:
-            assemble_collection_graph(
-                collection_id,
-                run.pk,
-                expected_aggregate,
-                ontology=context.ontology,
-                config=context.assembly_config,
+            assembly_state = _collection_assembly_commit_state(
+                context,
+                artifact,
+                run,
                 lease_owner=lease_owner,
                 lease_generation=lease_generation,
             )
+            if assembly_state is CommitMarkerState.CORRUPT:
+                raise CorruptBuildError("collection assembly commit is corrupt")
+            if assembly_state is CommitMarkerState.ABSENT:
+                with LeaseHeartbeat(run.pk, lease_owner, lease_generation):
+                    assemble_collection_graph(
+                        collection_id,
+                        run.pk,
+                        expected_aggregate,
+                        ontology=context.ontology,
+                        config=context.assembly_config,
+                        lease_owner=lease_owner,
+                        lease_generation=lease_generation,
+                    )
             run = _transition_run(
                 run.pk,
                 GraphBuildRun.Stage.VALIDATING,
@@ -1753,16 +2487,28 @@ def refresh_collection_graph(
         current = _collection_context(collection_id)
         current_key = derive_collection_build_key(current.identity)
         if current.identity != context.identity or current_key != requested_key:
-            _terminal_collection_build(
-                context,
-                artifact.pk,
-                run.pk,
-                lease_owner=lease_owner,
-                lease_generation=lease_generation,
-                stale=True,
-                error_code="collection_identity_changed",
-                reschedule=True,
-            )
+            try:
+                _terminal_collection_build(
+                    context,
+                    artifact.pk,
+                    run.pk,
+                    lease_owner=lease_owner,
+                    lease_generation=lease_generation,
+                    stale=True,
+                    error_code="collection_identity_changed",
+                    reschedule=True,
+                )
+            except Exception:
+                logger.error(
+                    "obs.kg.build_terminal_failed",
+                    build_kind="collection",
+                    scope_id=str(collection_id),
+                    build_key=requested_key,
+                    artifact_id=artifact.pk,
+                    build_run_id=run.pk,
+                    attempt=run.attempt,
+                    error_code="terminal_bookkeeping_failed",
+                )
             raise StaleBuildError("collection manifest changed before activation")
         activate_collection_graph(
             collection_id,
@@ -1791,7 +2537,10 @@ def refresh_collection_graph(
         if isinstance(exc, StaleBuildError):
             # The explicit drift branch already committed stale state and its
             # exact replacement callback. Other stale errors are fenced here.
-            run.refresh_from_db()
+            try:
+                run.refresh_from_db()
+            except Exception:
+                pass
             if run.stage == GraphBuildRun.Stage.STALE:
                 raise
         replacement = None
@@ -1807,7 +2556,13 @@ def refresh_collection_graph(
         except Exception:
             replacement = None
         error_code = (
-            "collection_identity_changed" if stale else "collection_build_failed"
+            "collection_identity_changed"
+            if stale
+            else (
+                "corrupt_build_state"
+                if isinstance(exc, CorruptBuildError)
+                else "collection_build_failed"
+            )
         )
         try:
             _terminal_collection_build(
@@ -1824,8 +2579,17 @@ def refresh_collection_graph(
                     and replacement_key != requested_key
                 ),
             )
-        except BuildLeaseLostError:
-            pass
+        except Exception:
+            logger.error(
+                "obs.kg.build_terminal_failed",
+                build_kind="collection",
+                scope_id=str(collection_id),
+                build_key=requested_key,
+                artifact_id=artifact.pk,
+                build_run_id=run.pk,
+                attempt=run.attempt,
+                error_code="terminal_bookkeeping_failed",
+            )
         logger.error(
             "obs.kg.build_failed",
             build_kind="collection",
