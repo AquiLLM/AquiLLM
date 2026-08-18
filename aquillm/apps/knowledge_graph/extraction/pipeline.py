@@ -11,6 +11,7 @@ import structlog
 
 from lib.knowledge_graph.types import RelationCandidate
 
+from ..resolution import DOCUMENT_RESOLVER_VERSION
 from .windows import (
     ExtractionWindow,
     MappedEntityEvidence,
@@ -341,7 +342,7 @@ def validate_build_destination(
     validate_build_lifecycle(artifact, run)
 
 
-def _extraction_commit_is_valid(
+def extraction_commit_is_valid(
     run,
     *,
     entity_count: int,
@@ -352,6 +353,7 @@ def _extraction_commit_is_valid(
     ontology_checksum = stats.get("ontology_checksum")
     return (
         isinstance(marker, dict)
+        and set(marker) == {"version", "entity_mention_count", "relation_mention_count"}
         and isinstance(ontology_checksum, str)
         and len(ontology_checksum) == 64
         and all(character in "0123456789abcdef" for character in ontology_checksum)
@@ -380,7 +382,7 @@ def _find_committed_extraction_run(artifact, *, for_update: bool = False):
         (
             run
             for run in runs
-            if _extraction_commit_is_valid(
+            if extraction_commit_is_valid(
                 run,
                 entity_count=entity_count,
                 relation_count=relation_count,
@@ -578,7 +580,7 @@ def _artifact_identity_values(
         "source_hash": expected_source_hash,
         "ontology_version": ontology_version,
         "extractor_version": _extractor_identity(settings),
-        "resolver_version": "pending-v1",
+        "resolver_version": DOCUMENT_RESOLVER_VERSION,
         "filter_policy_version": "pending-v1",
     }
 
@@ -962,6 +964,7 @@ __all__ = [
     "StaleSourceError",
     "StructuralExtractionError",
     "collect_document_evidence",
+    "extraction_commit_is_valid",
     "extract_document_mentions",
     "extract_into_build",
     "serialize_entity_observations",

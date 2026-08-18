@@ -718,27 +718,43 @@ def test_relation_evidence_rejects_a_different_relation_type():
 
 
 def test_identifier_first_conditional_uniqueness_and_normalization():
-    for model, id_constraint, fallback_constraint in (
-        (
+    assert (
+        _constraint(
             DocumentEntity,
             "kg_document_entity_identifier_unique",
-            "kg_document_entity_label_fallback",
-        ),
-        (
+            UniqueConstraint,
+        ).condition
+        is not None
+    )
+    assert (
+        _constraint(
+            DocumentEntity,
+            "kg_document_entity_cluster_unique",
+            UniqueConstraint,
+        ).condition
+        is None
+    )
+    assert (
+        _constraint(
             CollectionEntity,
             "kg_collection_entity_identifier_unique",
+            UniqueConstraint,
+        ).condition
+        is not None
+    )
+    assert (
+        _constraint(
+            CollectionEntity,
             "kg_collection_entity_label_fallback",
-        ),
-    ):
-        assert _constraint(model, id_constraint, UniqueConstraint).condition is not None
-        assert (
-            _constraint(model, fallback_constraint, UniqueConstraint).condition
-            is not None
-        )
+            UniqueConstraint,
+        ).condition
+        is not None
+    )
 
     entity = DocumentEntity(
         artifact=_artifact(),
         document_id=DOCUMENT_ID,
+        cluster_key="1" * 64,
         label="Aquilla",
         normalized_label="aquilla",
         entity_type="model",
@@ -788,8 +804,15 @@ def test_central_choice_and_build_identity_db_constraints_are_declared():
         },
         OntologyVersion: {"kg_ontology_kind_valid", "kg_ontology_status_valid"},
         EntityMention: {"kg_mention_position_basis_valid"},
-        DocumentEntity: {"kg_document_entity_status_valid"},
-        DocumentEntityMention: {"kg_document_mention_status_valid"},
+        DocumentEntity: {
+            "kg_document_entity_status_valid",
+            "kg_document_cluster_key_valid",
+        },
+        DocumentEntityMention: {
+            "kg_document_mention_status_valid",
+            "kg_document_mention_method_valid",
+            "kg_document_mention_resolver_nonempty",
+        },
         CollectionEntity: {"kg_collection_entity_status_valid"},
         CanonicalEntity: {"kg_canonical_entity_status_valid"},
         CollectionEntityDocumentLink: {"kg_doc_collection_link_status_valid"},
@@ -967,6 +990,7 @@ def _unsaved_relation_evidence():
         pk=50,
         artifact=document_artifact,
         document_id=DOCUMENT_ID,
+        cluster_key="1" * 64,
         label="Aquilla",
         normalized_label="aquilla",
         entity_type="model",
@@ -975,6 +999,7 @@ def _unsaved_relation_evidence():
         pk=51,
         artifact=document_artifact,
         document_id=DOCUMENT_ID,
+        cluster_key="2" * 64,
         label="MMLU",
         normalized_label="mmlu",
         entity_type="benchmark",
@@ -1122,6 +1147,7 @@ def test_deleting_chunk_cascades_evidence_but_retains_completed_build_audit():
     document_entity = DocumentEntity.objects.create(
         artifact=artifact,
         document_id=DOCUMENT_ID,
+        cluster_key="1" * 64,
         label="Aquilla",
         normalized_label="aquilla",
         entity_type="model",
@@ -1129,6 +1155,8 @@ def test_deleting_chunk_cascades_evidence_but_retains_completed_build_audit():
     mention_link = DocumentEntityMention.objects.create(
         document_entity=document_entity,
         mention=head,
+        method=DocumentEntityMention.Method.SINGLETON,
+        resolver_version=artifact.resolver_version,
     )
 
     chunk.delete()
@@ -1151,6 +1179,7 @@ def test_deleting_resolution_entities_or_links_preserves_raw_mentions():
     document_entity = DocumentEntity.objects.create(
         artifact=artifact,
         document_id=DOCUMENT_ID,
+        cluster_key="1" * 64,
         label="Aquilla",
         normalized_label="aquilla",
         entity_type="model",
@@ -1158,6 +1187,8 @@ def test_deleting_resolution_entities_or_links_preserves_raw_mentions():
     link = DocumentEntityMention.objects.create(
         document_entity=document_entity,
         mention=mention,
+        method=DocumentEntityMention.Method.SINGLETON,
+        resolver_version=artifact.resolver_version,
     )
 
     document_entity.delete()
@@ -1168,6 +1199,7 @@ def test_deleting_resolution_entities_or_links_preserves_raw_mentions():
     replacement_entity = DocumentEntity.objects.create(
         artifact=artifact,
         document_id=DOCUMENT_ID,
+        cluster_key="2" * 64,
         label="Aquilla replacement",
         normalized_label="aquilla-replacement",
         entity_type="model",
@@ -1175,6 +1207,8 @@ def test_deleting_resolution_entities_or_links_preserves_raw_mentions():
     replacement_link = DocumentEntityMention.objects.create(
         document_entity=replacement_entity,
         mention=mention,
+        method=DocumentEntityMention.Method.SINGLETON,
+        resolver_version=artifact.resolver_version,
     )
 
     replacement_link.delete()
@@ -1276,6 +1310,7 @@ def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
     head_document_entity = DocumentEntity.objects.create(
         artifact=document_artifact,
         document_id=DOCUMENT_ID,
+        cluster_key="1" * 64,
         label="Aquilla",
         normalized_label="aquilla",
         entity_type="model",
@@ -1283,6 +1318,7 @@ def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
     tail_document_entity = DocumentEntity.objects.create(
         artifact=document_artifact,
         document_id=DOCUMENT_ID,
+        cluster_key="2" * 64,
         label="MMLU",
         normalized_label="mmlu",
         entity_type="benchmark",
@@ -1290,10 +1326,14 @@ def test_collection_artifact_delete_collects_restricted_mappings_and_evidence():
     DocumentEntityMention.objects.create(
         document_entity=head_document_entity,
         mention=head,
+        method=DocumentEntityMention.Method.SINGLETON,
+        resolver_version=document_artifact.resolver_version,
     )
     DocumentEntityMention.objects.create(
         document_entity=tail_document_entity,
         mention=tail,
+        method=DocumentEntityMention.Method.SINGLETON,
+        resolver_version=document_artifact.resolver_version,
     )
     source = CollectionEntity.objects.create(
         artifact=collection_artifact,
@@ -1385,6 +1425,7 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
     head_document_entity = DocumentEntity.objects.create(
         artifact=document_artifact,
         document_id=DOCUMENT_ID,
+        cluster_key="1" * 64,
         label="Aquilla",
         normalized_label="aquilla",
         entity_type="model",
@@ -1392,6 +1433,7 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
     tail_document_entity = DocumentEntity.objects.create(
         artifact=document_artifact,
         document_id=DOCUMENT_ID,
+        cluster_key="2" * 64,
         label="MMLU",
         normalized_label="mmlu",
         entity_type="benchmark",
@@ -1399,10 +1441,14 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
     DocumentEntityMention.objects.create(
         document_entity=head_document_entity,
         mention=head,
+        method=DocumentEntityMention.Method.SINGLETON,
+        resolver_version=document_artifact.resolver_version,
     )
     DocumentEntityMention.objects.create(
         document_entity=tail_document_entity,
         mention=tail,
+        method=DocumentEntityMention.Method.SINGLETON,
+        resolver_version=document_artifact.resolver_version,
     )
     source = CollectionEntity.objects.create(
         artifact=collection_artifact,

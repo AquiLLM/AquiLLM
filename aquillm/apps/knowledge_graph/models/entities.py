@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from math import isfinite
 
 from django.contrib.contenttypes.models import ContentType
@@ -237,6 +238,7 @@ class DocumentEntity(ValidatedGraphModel):
         related_name="document_entities",
     )
     document_id = models.UUIDField()
+    cluster_key = models.CharField(max_length=64, editable=False)
     label = models.TextField()
     normalized_label = models.CharField(max_length=512)
     entity_type = models.CharField(max_length=128)
@@ -247,14 +249,19 @@ class DocumentEntity(ValidatedGraphModel):
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    _QUERYSET_IMMUTABLE_FIELDS = (
+    _IMMUTABLE_FIELDS = (
         "artifact",
         "artifact_id",
         "document_id",
+        "cluster_key",
+        "label",
         "identifier",
         "normalized_label",
         "entity_type",
+        "metadata",
+        "created_at",
     )
+    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
     objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
 
@@ -271,13 +278,16 @@ class DocumentEntity(ValidatedGraphModel):
                 name="kg_document_entity_identifier_unique",
             ),
             models.UniqueConstraint(
-                fields=["artifact", "document_id", "entity_type", "normalized_label"],
-                condition=Q(identifier=""),
-                name="kg_document_entity_label_fallback",
+                fields=["artifact", "cluster_key"],
+                name="kg_document_entity_cluster_unique",
             ),
             models.CheckConstraint(
                 condition=Q(identifier="") | ~Q(identifier__regex=r"^\s+$"),
                 name="kg_document_identifier_not_ws",
+            ),
+            models.CheckConstraint(
+                condition=Q(cluster_key__regex=r"^[0-9a-f]{64}$"),
+                name="kg_document_cluster_key_valid",
             ),
         ]
         indexes = [
@@ -301,6 +311,10 @@ class DocumentEntity(ValidatedGraphModel):
     def clean(self):
         super().clean()
         self._normalize_identifier()
+        if not re.fullmatch(r"[0-9a-f]{64}", self.cluster_key or ""):
+            raise ValidationError(
+                {"cluster_key": "Cluster key must be a lowercase SHA-256 digest."}
+            )
         if (
             self.artifact_id
             and self.artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT
@@ -319,6 +333,13 @@ class DocumentEntityMention(ValidatedGraphModel):
 
     Status = ResolutionStatus
 
+    class Method(models.TextChoices):
+        STABLE_IDENTIFIER = "stable_identifier", "Stable identifier"
+        DEFINED_ACRONYM = "defined_acronym", "Defined acronym"
+        ONTOLOGY_ALIAS = "ontology_alias", "Ontology alias"
+        NORMALIZED_NAME = "normalized_name", "Normalized name"
+        SINGLETON = "singleton", "Singleton"
+
     document_entity = models.ForeignKey(
         DocumentEntity,
         on_delete=models.CASCADE,
@@ -332,9 +353,26 @@ class DocumentEntityMention(ValidatedGraphModel):
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.ACTIVE
     )
+    method = models.CharField(max_length=64, choices=Method.choices)
+    resolver_version = models.CharField(max_length=128)
     reason = models.TextField(blank=True, default="")
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    _IMMUTABLE_FIELDS = (
+        "document_entity",
+        "document_entity_id",
+        "mention",
+        "mention_id",
+        "method",
+        "resolver_version",
+        "reason",
+        "metadata",
+        "created_at",
+    )
+    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
+
+    objects = models.Manager.from_queryset(ImmutableGraphQuerySet)()
 
     class Meta:
         app_label = "apps_knowledge_graph"
@@ -342,7 +380,23 @@ class DocumentEntityMention(ValidatedGraphModel):
             models.CheckConstraint(
                 condition=Q(status__in=ResolutionStatus.values),
                 name="kg_document_mention_status_valid",
-            )
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    method__in=(
+                        "stable_identifier",
+                        "defined_acronym",
+                        "ontology_alias",
+                        "normalized_name",
+                        "singleton",
+                    )
+                ),
+                name="kg_document_mention_method_valid",
+            ),
+            models.CheckConstraint(
+                condition=~Q(resolver_version=""),
+                name="kg_document_mention_resolver_nonempty",
+            ),
         ]
         indexes = [
             models.Index(
@@ -361,6 +415,14 @@ class DocumentEntityMention(ValidatedGraphModel):
             if self.document_entity.document_id != self.mention.document_id:
                 raise ValidationError(
                     {"mention": "Mention and document entity documents must match."}
+                )
+            if self.resolver_version != self.document_entity.artifact.resolver_version:
+                raise ValidationError(
+                    {
+                        "resolver_version": (
+                            "Mention link resolver version must match its artifact."
+                        )
+                    }
                 )
 
 

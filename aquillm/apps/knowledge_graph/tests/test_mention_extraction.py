@@ -268,11 +268,13 @@ def test_batch_character_guard_is_positive_and_environment_configured():
 
 
 def test_public_wrapper_and_explicit_destination_core_have_narrow_signatures():
+    from apps.knowledge_graph.extraction import pipeline
     from apps.knowledge_graph.extraction.pipeline import (
         extract_document_mentions,
         extract_into_build,
     )
 
+    assert "extraction_commit_is_valid" in pipeline.__all__
     assert tuple(inspect.signature(extract_document_mentions).parameters) == (
         "document_id",
         "expected_source_hash",
@@ -289,7 +291,7 @@ def test_public_wrapper_and_explicit_destination_core_have_narrow_signatures():
 
 def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
     from apps.knowledge_graph.extraction.pipeline import (
-        _extraction_commit_is_valid,
+        extraction_commit_is_valid,
     )
 
     committed = SimpleNamespace(
@@ -307,10 +309,10 @@ def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
         stats={"extraction_commit": committed.stats["extraction_commit"]}
     )
 
-    assert _extraction_commit_is_valid(committed, entity_count=2, relation_count=1)
-    assert not _extraction_commit_is_valid(committed, entity_count=1, relation_count=1)
-    assert not _extraction_commit_is_valid(partial, entity_count=2, relation_count=1)
-    assert not _extraction_commit_is_valid(
+    assert extraction_commit_is_valid(committed, entity_count=2, relation_count=1)
+    assert not extraction_commit_is_valid(committed, entity_count=1, relation_count=1)
+    assert not extraction_commit_is_valid(partial, entity_count=2, relation_count=1)
+    assert not extraction_commit_is_valid(
         missing_checksum, entity_count=2, relation_count=1
     )
 

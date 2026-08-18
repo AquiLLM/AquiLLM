@@ -70,6 +70,7 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 ("document_id", models.UUIDField()),
+                ("cluster_key", models.CharField(editable=False, max_length=64)),
                 ("label", models.TextField()),
                 ("normalized_label", models.CharField(max_length=512)),
                 ("entity_type", models.CharField(max_length=128)),
@@ -278,6 +279,20 @@ class Migration(migrations.Migration):
                         max_length=16,
                     ),
                 ),
+                (
+                    "method",
+                    models.CharField(
+                        choices=[
+                            ("stable_identifier", "Stable identifier"),
+                            ("defined_acronym", "Defined acronym"),
+                            ("ontology_alias", "Ontology alias"),
+                            ("normalized_name", "Normalized name"),
+                            ("singleton", "Singleton"),
+                        ],
+                        max_length=64,
+                    ),
+                ),
+                ("resolver_version", models.CharField(max_length=128)),
                 ("reason", models.TextField(blank=True, default="")),
                 ("metadata", models.JSONField(blank=True, default=dict)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
@@ -913,6 +928,31 @@ class Migration(migrations.Migration):
                 name="kg_document_mention_status_valid",
             ),
         ),
+        migrations.AddConstraint(
+            model_name="documententitymention",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    (
+                        "method__in",
+                        (
+                            "stable_identifier",
+                            "defined_acronym",
+                            "ontology_alias",
+                            "normalized_name",
+                            "singleton",
+                        ),
+                    )
+                ),
+                name="kg_document_mention_method_valid",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="documententitymention",
+            constraint=models.CheckConstraint(
+                condition=models.Q(("resolver_version", ""), _negated=True),
+                name="kg_document_mention_resolver_nonempty",
+            ),
+        ),
         migrations.AddIndex(
             model_name="entitymention",
             index=models.Index(
@@ -1004,9 +1044,8 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="documententity",
             constraint=models.UniqueConstraint(
-                condition=models.Q(("identifier", "")),
-                fields=("artifact", "document_id", "entity_type", "normalized_label"),
-                name="kg_document_entity_label_fallback",
+                fields=("artifact", "cluster_key"),
+                name="kg_document_entity_cluster_unique",
             ),
         ),
         migrations.AddConstraint(
@@ -1018,6 +1057,13 @@ class Migration(migrations.Migration):
                     _connector="OR",
                 ),
                 name="kg_document_identifier_not_ws",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="documententity",
+            constraint=models.CheckConstraint(
+                condition=models.Q(("cluster_key__regex", "^[0-9a-f]{64}$")),
+                name="kg_document_cluster_key_valid",
             ),
         ),
         migrations.AddIndex(
