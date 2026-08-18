@@ -350,13 +350,22 @@ def extraction_commit_is_valid(
 ) -> bool:
     stats = run.stats if isinstance(run.stats, dict) else {}
     marker = stats.get("extraction_commit")
-    ontology_checksum = stats.get("ontology_checksum")
+    ontology_checksum = getattr(run, "ontology_checksum", None)
+    artifact_id = getattr(run, "artifact_id", None)
+    artifact = getattr(run, "artifact", None) if artifact_id else None
     return (
         isinstance(marker, dict)
         and set(marker) == {"version", "entity_mention_count", "relation_mention_count"}
         and type(ontology_checksum) is str
         and len(ontology_checksum) == 64
         and all(character in "0123456789abcdef" for character in ontology_checksum)
+        and (
+            not artifact_id
+            or (
+                artifact is not None
+                and ontology_checksum == getattr(artifact, "ontology_checksum", None)
+            )
+        )
         and type(marker.get("version")) is int
         and marker.get("version") == 1
         and type(marker.get("entity_mention_count")) is int
@@ -569,10 +578,12 @@ def _artifact_identity_values(
     document_id,
     expected_source_hash: str,
     ontology_version: str,
+    ontology_checksum: str,
     *,
     settings,
 ) -> dict[str, object]:
     from apps.knowledge_graph.models import GraphArtifact
+    from apps.knowledge_graph.models.artifacts import graph_identity_checksum
 
     return {
         "scope_type": GraphArtifact.ScopeType.DOCUMENT,
@@ -582,6 +593,13 @@ def _artifact_identity_values(
         "extractor_version": _extractor_identity(settings),
         "resolver_version": DOCUMENT_RESOLVER_VERSION,
         "filter_policy_version": "pending-v1",
+        "ontology_checksum": ontology_checksum,
+        "filter_policy_checksum": graph_identity_checksum(
+            "document-filter-policy", "pending-v1"
+        ),
+        "resolution_config_checksum": graph_identity_checksum(
+            "document-resolver", DOCUMENT_RESOLVER_VERSION
+        ),
     }
 
 
@@ -589,6 +607,7 @@ def _create_build_destination(
     document_id,
     expected_source_hash: str,
     ontology_version: str,
+    ontology_checksum: str,
     *,
     settings,
 ):
@@ -601,6 +620,7 @@ def _create_build_destination(
         document_id,
         expected_source_hash,
         ontology_version,
+        ontology_checksum,
         settings=settings,
     )
     with transaction.atomic():
@@ -787,6 +807,10 @@ def extract_into_build(
         document = _get_concrete_document(document_id)
         _validate_source(document, expected_source_hash)
         ontology = _resolve_ontology_definition(ontology_version)
+        if artifact.ontology_checksum != ontology.checksum:
+            raise OntologySnapshotChangedError(
+                "destination artifact ontology checksum does not match"
+            )
         chunks = _ordered_chunks(document_id)
         initial_chunk_snapshot = _chunk_snapshot(chunks)
         windows = _windows_for_document(document, chunks)
@@ -843,6 +867,10 @@ def extract_into_build(
             if locked_ontology.checksum != ontology.checksum:
                 raise MidflightSourceChangedError(
                     "ontology snapshot changed during extraction"
+                )
+            if locked_artifact.ontology_checksum != locked_ontology.checksum:
+                raise MidflightSourceChangedError(
+                    "destination artifact ontology identity changed"
                 )
             entity_count, relation_count = _persist_evidence(
                 artifact=locked_artifact,
@@ -915,10 +943,12 @@ def extract_document_mentions(
     document = _get_concrete_document(document_id)
     _validate_source(document, expected_source_hash)
     settings = load_extraction_settings()
+    ontology = _resolve_ontology_definition(ontology_version)
     identity = _artifact_identity_values(
         document_id,
         expected_source_hash,
         ontology_version,
+        ontology.checksum,
         settings=settings,
     )
     artifact = GraphArtifact.objects.filter(**identity).first()
@@ -929,12 +959,12 @@ def extract_document_mentions(
         raise ExtractionInProgressError(
             "the immutable document extraction identity is already in progress"
         )
-    _resolve_ontology_definition(ontology_version)
     try:
         artifact, run = _create_build_destination(
             document_id,
             expected_source_hash,
             ontology_version,
+            ontology.checksum,
             settings=settings,
         )
     except IntegrityError:

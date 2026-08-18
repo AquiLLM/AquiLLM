@@ -228,6 +228,9 @@ def _validate_destination(artifact, run, result: ResolutionResult) -> None:
         "extractor_version",
         "resolver_version",
         "filter_policy_version",
+        "ontology_checksum",
+        "filter_policy_checksum",
+        "resolution_config_checksum",
     ):
         if getattr(run, field) != getattr(artifact, field):
             raise ResolutionPersistenceError(
@@ -237,6 +240,10 @@ def _validate_destination(artifact, run, result: ResolutionResult) -> None:
     if result.resolver_version != artifact.resolver_version:
         raise ResolutionPersistenceError(
             "result resolver version does not match destination artifact"
+        )
+    if result.ontology_checksum != artifact.ontology_checksum:
+        raise ResolutionPersistenceError(
+            "result ontology checksum does not match destination artifact"
         )
     if resolution_result_checksum(result) != result.checksum:
         raise ResolutionPersistenceError("resolution result checksum is invalid")
@@ -530,12 +537,12 @@ def persist_document_resolution(artifact_id, build_run_id, result):
             raise ResolutionPersistenceError(
                 "document resolution requires a valid extraction commit"
             )
-        if result.ontology_checksum != stats["ontology_checksum"]:
+        if result.ontology_checksum != artifact.ontology_checksum:
             raise ResolutionPersistenceError(
                 "result ontology checksum does not match extraction snapshot"
             )
         source_fingerprint = _validate_source_snapshot(artifact, result, mentions)
-        ontology_checksum = stats["ontology_checksum"]
+        ontology_checksum = artifact.ontology_checksum
         existing = _existing_resolution(
             artifact=artifact,
             result=result,

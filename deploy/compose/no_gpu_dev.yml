@@ -36,7 +36,10 @@ x-common-env: &common-env
   APP_EMBED_BASE_URL: https://api.openai.com/v1
   APP_EMBED_API_KEY: ${OPENAI_API_KEY}
   APP_EMBED_MODEL: text-embedding-3-small
+  # Empty by default: OpenAI's mutable alias is not sufficient durable KG provenance.
+  APP_EMBED_MODEL_REVISION: ${APP_EMBED_MODEL_REVISION:-}
   APP_EMBED_DIMS: 1024
+  APP_EMBED_ALLOW_DIMENSIONS_OVERRIDE: 1
   # Reranking — Cohere fallback (no OpenAI equivalent)
   APP_RERANK_PROVIDER: cohere
   # Memory — Mem0 with Qdrant, LLM/embeddings via OpenAI

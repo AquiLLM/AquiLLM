@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from math import isfinite, log1p
+
+_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 class FilterStatus(StrEnum):
@@ -176,6 +179,109 @@ class EntityFilterDecision:
     retrieval_utility: float
     promotion_confidence: float | None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "entity_id", _text(self.entity_id, "entity id"))
+        if type(self.status) is not FilterStatus:
+            raise ValueError("filter status must be exact FilterStatus")
+        if type(self.reason_codes) is not tuple or not self.reason_codes:
+            raise ValueError("filter reasons must be a nonempty exact tuple")
+        reasons = tuple(
+            sorted(_text(value, "filter reason", 128) for value in self.reason_codes)
+        )
+        if len(reasons) != len(set(reasons)):
+            raise ValueError("filter reasons must be unique")
+        object.__setattr__(self, "reason_codes", reasons)
+        object.__setattr__(
+            self, "policy_version", _text(self.policy_version, "policy version", 128)
+        )
+        for name in ("policy_checksum", "ontology_checksum"):
+            value = getattr(self, name)
+            if type(value) is not str or _HASH_PATTERN.fullmatch(value) is None:
+                raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+        if (
+            type(self.retained_mention_ids) is not tuple
+            or not self.retained_mention_ids
+        ):
+            raise ValueError("retained mention IDs must be a nonempty exact tuple")
+        retained = tuple(
+            _text(value, "retained mention id") for value in self.retained_mention_ids
+        )
+        if len(retained) != len(set(retained)):
+            raise ValueError("retained mention IDs must be unique")
+        object.__setattr__(self, "retained_mention_ids", retained)
+        for name in (
+            "extraction_confidence",
+            "resolution_confidence",
+            "retrieval_utility",
+        ):
+            object.__setattr__(self, name, _unit_float(getattr(self, name), name))
+        if self.promotion_confidence is not None:
+            object.__setattr__(
+                self,
+                "promotion_confidence",
+                _unit_float(self.promotion_confidence, "promotion confidence"),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class CollectionFilterResult:
+    """Checksummed status projection bound to one immutable resolution result."""
+
+    resolution_checksum: str
+    policy_version: str
+    policy_checksum: str
+    ontology_checksum: str
+    inputs: tuple[EntityFilterInput, ...]
+    decisions: tuple[EntityFilterDecision, ...]
+    checksum: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "resolution_checksum",
+            "policy_checksum",
+            "ontology_checksum",
+        ):
+            value = getattr(self, name)
+            if type(value) is not str or _HASH_PATTERN.fullmatch(value) is None:
+                raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+        object.__setattr__(
+            self, "policy_version", _text(self.policy_version, "policy version", 128)
+        )
+        if type(self.inputs) is not tuple or any(
+            type(value) is not EntityFilterInput for value in self.inputs
+        ):
+            raise ValueError("filter inputs must be an exact typed tuple")
+        if type(self.decisions) is not tuple or any(
+            type(value) is not EntityFilterDecision for value in self.decisions
+        ):
+            raise ValueError("filter decisions must be an exact typed tuple")
+        for value in self.inputs:
+            value.__post_init__()
+        for value in self.decisions:
+            value.__post_init__()
+        input_ids = tuple(value.entity_id for value in self.inputs)
+        decision_ids = tuple(value.entity_id for value in self.decisions)
+        if input_ids != tuple(sorted(set(input_ids))):
+            raise ValueError("filter inputs must use unique stable entity order")
+        if decision_ids != input_ids:
+            raise ValueError("filter decisions must cover every input exactly once")
+        for evidence, decision in zip(self.inputs, self.decisions, strict=True):
+            if (
+                decision.policy_version != self.policy_version
+                or decision.policy_checksum != self.policy_checksum
+                or decision.ontology_checksum != self.ontology_checksum
+                or decision.retained_mention_ids != evidence.mention_ids
+                or decision.extraction_confidence != evidence.extraction_confidence
+                or decision.resolution_confidence != evidence.resolution_confidence
+                or decision.promotion_confidence != evidence.promotion_confidence
+            ):
+                raise ValueError("filter decision audit does not match immutable input")
+        if self.checksum:
+            if _HASH_PATTERN.fullmatch(self.checksum) is None:
+                raise ValueError("filter result checksum must be SHA-256")
+            if collection_filter_result_checksum(self) != self.checksum:
+                raise ValueError("filter result checksum is invalid")
+
 
 def _bounded_log(value: int, cap: int) -> float:
     return log1p(min(value, cap)) / log1p(cap)
@@ -202,6 +308,121 @@ def filter_policy_checksum(policy: FilterPolicy) -> str:
     return sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def _filter_result_content(result: CollectionFilterResult) -> dict[str, object]:
+    return {
+        "resolution_checksum": result.resolution_checksum,
+        "policy_version": result.policy_version,
+        "policy_checksum": result.policy_checksum,
+        "ontology_checksum": result.ontology_checksum,
+        "inputs": [
+            {
+                "entity_id": item.entity_id,
+                "entity_type": item.entity_type,
+                "mention_ids": list(item.mention_ids),
+                "document_ids": list(item.document_ids),
+                "extraction_confidence": item.extraction_confidence,
+                "resolution_confidence": item.resolution_confidence,
+                "promotion_confidence": item.promotion_confidence,
+                "relation_participation": item.relation_participation,
+                "positions": [position.value for position in item.positions],
+            }
+            for item in result.inputs
+        ],
+        "decisions": [
+            {
+                "entity_id": item.entity_id,
+                "status": item.status.value,
+                "reason_codes": list(item.reason_codes),
+                "policy_version": item.policy_version,
+                "policy_checksum": item.policy_checksum,
+                "ontology_checksum": item.ontology_checksum,
+                "retained_mention_ids": list(item.retained_mention_ids),
+                "extraction_confidence": item.extraction_confidence,
+                "resolution_confidence": item.resolution_confidence,
+                "retrieval_utility": item.retrieval_utility,
+                "promotion_confidence": item.promotion_confidence,
+            }
+            for item in result.decisions
+        ],
+    }
+
+
+def collection_filter_result_checksum(result: CollectionFilterResult) -> str:
+    if type(result) is not CollectionFilterResult:
+        raise ValueError("filter result must be exact CollectionFilterResult")
+    return sha256(
+        json.dumps(
+            _filter_result_content(result),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def filter_collection_resolution(
+    resolution: object,
+    entities: Iterable[EntityFilterInput],
+    ontology: object,
+    policy: FilterPolicy,
+) -> CollectionFilterResult:
+    """Filter one resolution result without mutating identity or raw mentions."""
+
+    from apps.knowledge_graph.resolution.collection import CollectionResolutionResult
+
+    if type(resolution) is not CollectionResolutionResult:
+        raise ValueError("resolution must be exact CollectionResolutionResult")
+    resolution.__post_init__()
+    if type(policy) is not FilterPolicy:
+        raise ValueError("policy must be exact FilterPolicy")
+    policy.__post_init__()
+    policy_checksum = filter_policy_checksum(policy)
+    if policy_checksum != resolution.snapshot.filter_policy_checksum:
+        raise ValueError("filter policy checksum does not match resolution snapshot")
+    from apps.knowledge_graph.services.ontology import validate_ontology_definition
+
+    validate_ontology_definition(
+        ontology,
+        expected_version=resolution.snapshot.ontology_version,
+        expected_checksum=resolution.snapshot.ontology_checksum,
+    )
+    ontology_checksum = ontology.checksum
+    ordered = tuple(sorted(tuple(entities), key=lambda item: item.entity_id))
+    if any(type(item) is not EntityFilterInput for item in ordered):
+        raise ValueError("filter entities must contain exact EntityFilterInput values")
+    clusters = {cluster.cluster_key: cluster for cluster in resolution.clusters}
+    if tuple(item.entity_id for item in ordered) != tuple(sorted(clusters)):
+        raise ValueError("filter evidence must cover every resolution cluster")
+    for evidence in ordered:
+        evidence.__post_init__()
+        cluster = clusters[evidence.entity_id]
+        if (
+            evidence.entity_type != cluster.entity_type
+            or evidence.extraction_confidence != cluster.extraction_confidence
+            or evidence.resolution_confidence != cluster.resolution_confidence
+        ):
+            raise ValueError("filter evidence confidence/type differs from resolution")
+    decisions = filter_collection_entities(ordered, ontology, policy)
+    provisional = CollectionFilterResult(
+        resolution_checksum=resolution.checksum,
+        policy_version=policy.version,
+        policy_checksum=policy_checksum,
+        ontology_checksum=ontology_checksum,
+        inputs=ordered,
+        decisions=decisions,
+        checksum="",
+    )
+    return CollectionFilterResult(
+        resolution_checksum=provisional.resolution_checksum,
+        policy_version=provisional.policy_version,
+        policy_checksum=provisional.policy_checksum,
+        ontology_checksum=provisional.ontology_checksum,
+        inputs=provisional.inputs,
+        decisions=provisional.decisions,
+        checksum=collection_filter_result_checksum(provisional),
+    )
 
 
 def score_retrieval_utility(
@@ -267,6 +488,19 @@ def decide_entity_filter(
     ontology: object,
     policy: FilterPolicy,
 ) -> EntityFilterDecision:
+    """Validate ontology semantics and return one deterministic filter decision."""
+
+    from apps.knowledge_graph.services.ontology import validate_ontology_definition
+
+    validate_ontology_definition(ontology)
+    return _decide_entity_filter_validated(evidence, ontology, policy)
+
+
+def _decide_entity_filter_validated(
+    evidence: EntityFilterInput,
+    ontology: object,
+    policy: FilterPolicy,
+) -> EntityFilterDecision:
     """Return a status-only policy decision while retaining raw evidence IDs."""
 
     if type(evidence) is not EntityFilterInput:
@@ -290,21 +524,10 @@ def decide_entity_filter(
     )
     utility = base_utility * ontology_weight
 
-    provenance = getattr(ontology, "provenance", {})
-    provenance_extension_types = frozenset(
-        value
-        for value in str(
-            provenance.get("enabled_entity_types", "")
-            if isinstance(provenance, Mapping)
-            else ""
-        ).split(",")
-        if value
-    )
-    enabled_extension_types = provenance_extension_types
     publisher_enabled = (
         evidence.entity_type == "publisher"
         and definition is not None
-        and "publisher" in enabled_extension_types
+        and getattr(definition, "extension_enabled", False) is True
     )
     if evidence.entity_type in policy.rejected_entity_types:
         status = FilterStatus.REJECTED
@@ -370,6 +593,9 @@ def filter_collection_entities(
         raise ValueError("filter input exceeds the configured entity limit")
     if any(type(entity) is not EntityFilterInput for entity in bounded):
         raise ValueError("filter input must contain exact EntityFilterInput values")
+    from apps.knowledge_graph.services.ontology import validate_ontology_definition
+
+    validate_ontology_definition(ontology)
     ordered = tuple(sorted(bounded, key=lambda entity: entity.entity_id))
     entity_ids = tuple(entity.entity_id for entity in ordered)
     if len(entity_ids) != len(set(entity_ids)):
@@ -379,7 +605,9 @@ def filter_collection_entities(
     )
     if len(mention_ids) != len(set(mention_ids)):
         raise ValueError("duplicate mention id across filter entities")
-    return tuple(decide_entity_filter(entity, ontology, policy) for entity in ordered)
+    return tuple(
+        _decide_entity_filter_validated(entity, ontology, policy) for entity in ordered
+    )
 
 
 def _explicit_position(metadata: object) -> PositionKind:
@@ -485,6 +713,357 @@ def _filter_inputs_from_artifact(artifact):
     return entities, tuple(projected)
 
 
+def _filter_rerun_projection_checksum(
+    *,
+    source_artifact,
+    policy_checksum: str,
+    ontology_checksum: str,
+    evidence: tuple[EntityFilterInput, ...],
+    decisions: tuple[EntityFilterDecision, ...],
+) -> str:
+    payload = {
+        "source_artifact_id": source_artifact.pk,
+        "source_hash": source_artifact.source_hash,
+        "resolution_config_checksum": source_artifact.resolution_config_checksum,
+        "policy_checksum": policy_checksum,
+        "ontology_checksum": ontology_checksum,
+        "evidence": [
+            {
+                "entity_id": item.entity_id,
+                "entity_type": item.entity_type,
+                "mention_ids": list(item.mention_ids),
+                "document_ids": list(item.document_ids),
+                "extraction_confidence": item.extraction_confidence,
+                "resolution_confidence": item.resolution_confidence,
+                "promotion_confidence": item.promotion_confidence,
+                "relation_participation": item.relation_participation,
+                "positions": [position.value for position in item.positions],
+            }
+            for item in evidence
+        ],
+        "decisions": [
+            {
+                "entity_id": item.entity_id,
+                "status": item.status.value,
+                "reason_codes": list(item.reason_codes),
+                "retrieval_utility": item.retrieval_utility,
+                "promotion_confidence": item.promotion_confidence,
+            }
+            for item in decisions
+        ],
+    }
+    return sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _filter_rerun_entity_matches(
+    row,
+    *,
+    source,
+    destination,
+    decision: EntityFilterDecision,
+    policy_checksum: str,
+    projection_checksum: str,
+) -> bool:
+    """Compare every cloned entity field with its deterministic projection."""
+
+    from apps.knowledge_graph.resolution.collection import (
+        _collection_entity_row_audit,
+    )
+    from apps.knowledge_graph.resolution.scoring import validate_embedding
+
+    def embedding(value):
+        if value is None:
+            return None
+        try:
+            return validate_embedding(tuple(float(component) for component in value))
+        except (TypeError, ValueError):
+            return object()
+
+    source_metadata = source.metadata if type(source.metadata) is dict else {}
+    expected_metadata = {
+        **{
+            key: value
+            for key, value in source_metadata.items()
+            if key != "row_audit_checksum"
+        },
+        "filter_policy_checksum": policy_checksum,
+        "filter_result_checksum": projection_checksum,
+        "filter_reason_codes": list(decision.reason_codes),
+        "filter_source_entity_id": source.pk,
+    }
+    metadata = row.metadata if type(row.metadata) is dict else {}
+    metadata_without_audit = {
+        key: value for key, value in metadata.items() if key != "row_audit_checksum"
+    }
+    return bool(
+        row.artifact_id == destination.pk
+        and row.collection_id == source.collection_id
+        and row.cluster_key == source.cluster_key
+        and row.label == source.label
+        and row.normalized_label == source.normalized_label
+        and row.version_signature == source.version_signature
+        and row.entity_type == source.entity_type
+        and row.identifier == source.identifier
+        and row.status == decision.status.value
+        and row.extraction_confidence == decision.extraction_confidence
+        and row.resolution_confidence == decision.resolution_confidence
+        and row.retrieval_utility == decision.retrieval_utility
+        and row.promotion_confidence == decision.promotion_confidence
+        and row.filter_reason == decision.reason_codes[0]
+        and row.embedding_model_signature == source.embedding_model_signature
+        and row.embedding_input_hash == source.embedding_input_hash
+        and embedding(row.embedding) == embedding(source.embedding)
+        and metadata_without_audit == expected_metadata
+        and metadata.get("row_audit_checksum") == _collection_entity_row_audit(row)
+    )
+
+
+def _filter_rerun_link_matches(
+    row,
+    *,
+    source,
+    destination,
+    expected_manifest,
+    expected_collection_entity,
+    policy_checksum: str,
+    projection_checksum: str,
+) -> bool:
+    """Compare every cloned link field with its immutable source resolution link."""
+
+    from apps.knowledge_graph.resolution.collection import (
+        _collection_link_row_audit,
+    )
+
+    source_metadata = source.metadata if type(source.metadata) is dict else {}
+    expected_metadata = {
+        **{
+            key: value
+            for key, value in source_metadata.items()
+            if key != "row_audit_checksum"
+        },
+        "filter_source_link_id": source.pk,
+        "filter_result_checksum": projection_checksum,
+    }
+    metadata = row.metadata if type(row.metadata) is dict else {}
+    metadata_without_audit = {
+        key: value for key, value in metadata.items() if key != "row_audit_checksum"
+    }
+    expected_decision_checksum = sha256(
+        f"{source.decision_checksum}:{destination.pk}:{policy_checksum}".encode()
+    ).hexdigest()
+    return bool(
+        row.artifact_id == destination.pk
+        and row.manifest_input_id == expected_manifest.pk
+        and row.document_entity_id == source.document_entity_id
+        and row.collection_entity_id == expected_collection_entity.pk
+        and row.score == source.score
+        and row.identifier_score == source.identifier_score
+        and row.alias_score == source.alias_score
+        and row.embedding_similarity == source.embedding_similarity
+        and row.neighborhood_agreement == source.neighborhood_agreement
+        and row.method == source.method
+        and row.resolver_version == source.resolver_version
+        and row.outcome == source.outcome
+        and row.candidate_rank == source.candidate_rank
+        and row.decision_checksum == expected_decision_checksum
+        and row.status == source.status
+        and row.reason == source.reason
+        and metadata_without_audit == expected_metadata
+        and metadata.get("row_audit_checksum") == _collection_link_row_audit(row)
+    )
+
+
+def _validate_existing_filter_rerun(
+    *,
+    destination,
+    source,
+    source_manifest,
+    source_entities,
+    source_links,
+    decisions,
+    policy_checksum,
+    ontology_checksum,
+    projection_checksum,
+):
+    from apps.knowledge_graph.models import (
+        CollectionArtifactInput,
+        CollectionEntity,
+        CollectionEntityDocumentLink,
+        GraphArtifact,
+        GraphBuildRun,
+    )
+    from apps.knowledge_graph.resolution.collection import (
+        _snapshot_from_locked_manifest,
+    )
+
+    if destination.status != GraphArtifact.Status.BUILDING:
+        raise ValueError("existing filter rerun is not a building artifact")
+    if destination.metadata != {
+        "filter_source_artifact_id": source.pk,
+        "filter_result_checksum": projection_checksum,
+    }:
+        raise ValueError("existing filter rerun artifact audit is corrupt")
+    manifest = tuple(
+        CollectionArtifactInput.objects.select_for_update()
+        .select_related("document_artifact", "collection")
+        .filter(artifact=destination)
+        .order_by("document_artifact_id")
+    )
+    if len(manifest) != len(source_manifest):
+        raise ValueError("existing filter rerun is partial or corrupt")
+    _snapshot_from_locked_manifest(destination, manifest)
+    source_manifest_identity = tuple(
+        (
+            row.collection_id,
+            row.document_id,
+            row.document_artifact_id,
+            row.membership_signature,
+            row.source_signature,
+        )
+        for row in source_manifest
+    )
+    destination_manifest_identity = tuple(
+        (
+            row.collection_id,
+            row.document_id,
+            row.document_artifact_id,
+            row.membership_signature,
+            row.source_signature,
+        )
+        for row in manifest
+    )
+    if destination_manifest_identity != source_manifest_identity:
+        raise ValueError("existing filter rerun manifest differs from source")
+    runs = tuple(
+        GraphBuildRun.objects.select_for_update()
+        .filter(artifact=destination)
+        .order_by("pk")
+    )
+    if len(runs) != 1:
+        raise ValueError("existing filter rerun marker is missing or ambiguous")
+    run = runs[0]
+    if (
+        run.artifact_id != destination.pk
+        or run.stage != GraphBuildRun.Stage.FILTERING
+        or run.status != GraphBuildRun.Status.SUCCEEDED
+        or any(
+            getattr(run, field) != getattr(destination, field)
+            for field in (
+                "scope_type",
+                "scope_id",
+                "source_hash",
+                "ontology_version",
+                "extractor_version",
+                "resolver_version",
+                "filter_policy_version",
+                "embedding_model_signature",
+                "ontology_checksum",
+                "filter_policy_checksum",
+                "resolution_config_checksum",
+            )
+        )
+    ):
+        raise ValueError("existing filter rerun build snapshot is corrupt")
+    marker = run.stats.get("filter_commit") if type(run.stats) is dict else None
+    expected_marker = {
+        "version": 1,
+        "policy_checksum": policy_checksum,
+        "ontology_checksum": ontology_checksum,
+        "resolution_config_checksum": source.resolution_config_checksum,
+        "filter_result_checksum": projection_checksum,
+        "source_artifact_id": source.pk,
+        "source_hash": source.source_hash,
+        "manifest_count": len(source_manifest),
+        "entity_count": len(source_entities),
+        "link_count": len(source_links),
+    }
+    if marker != expected_marker:
+        raise ValueError("existing filter rerun commit marker is corrupt")
+    entities = tuple(
+        CollectionEntity.objects.select_for_update()
+        .filter(artifact=destination)
+        .order_by("cluster_key")
+    )
+    links = tuple(
+        CollectionEntityDocumentLink.objects.select_for_update()
+        .select_related("collection_entity")
+        .filter(artifact=destination)
+        .order_by("pk")
+    )
+    if len(entities) != len(source_entities) or len(links) != len(source_links):
+        raise ValueError("existing filter rerun rows are partial or corrupt")
+    decisions_by_source = {int(item.entity_id): item for item in decisions}
+    source_entities_by_id = {row.pk: row for row in source_entities}
+    destination_entities_by_source_id = {}
+    for row in entities:
+        metadata = row.metadata if type(row.metadata) is dict else {}
+        source_id = metadata.get("filter_source_entity_id")
+        decision = decisions_by_source.get(source_id)
+        source_entity = source_entities_by_id.get(source_id)
+        if (
+            decision is None
+            or source_entity is None
+            or not _filter_rerun_entity_matches(
+                row,
+                source=source_entity,
+                destination=destination,
+                decision=decision,
+                policy_checksum=policy_checksum,
+                projection_checksum=projection_checksum,
+            )
+        ):
+            raise ValueError("existing filter rerun entity audit is corrupt")
+        destination_entities_by_source_id[source_id] = row
+    if set(destination_entities_by_source_id) != set(source_entities_by_id):
+        raise ValueError("existing filter rerun entity source mapping is corrupt")
+    expected_source_link_ids = {row.pk for row in source_links}
+    actual_source_link_ids = set()
+    source_links_by_id = {row.pk: row for row in source_links}
+    manifest_by_source_artifact = {row.document_artifact_id: row for row in manifest}
+    for row in links:
+        metadata = row.metadata if type(row.metadata) is dict else {}
+        source_link_id = metadata.get("filter_source_link_id")
+        actual_source_link_ids.add(source_link_id)
+        source_link = source_links_by_id.get(source_link_id)
+        expected_manifest = (
+            None
+            if source_link is None
+            else manifest_by_source_artifact.get(
+                source_link.document_entity.artifact_id
+            )
+        )
+        expected_collection_entity = (
+            None
+            if source_link is None
+            else destination_entities_by_source_id.get(source_link.collection_entity_id)
+        )
+        if (
+            source_link is None
+            or expected_manifest is None
+            or expected_collection_entity is None
+            or not _filter_rerun_link_matches(
+                row,
+                source=source_link,
+                destination=destination,
+                expected_manifest=expected_manifest,
+                expected_collection_entity=expected_collection_entity,
+                policy_checksum=policy_checksum,
+                projection_checksum=projection_checksum,
+            )
+        ):
+            raise ValueError("existing filter rerun link audit is corrupt")
+    if actual_source_link_ids != expected_source_link_ids:
+        raise ValueError("existing filter rerun links do not match source")
+    return destination
+
+
 def create_filter_rerun_artifact(
     source_artifact_id: int,
     policy: FilterPolicy,
@@ -516,9 +1095,10 @@ def create_filter_rerun_artifact(
     if type(policy) is not FilterPolicy:
         raise ValueError("policy must be an exact FilterPolicy value")
     checksum = filter_policy_checksum(policy)
-    ontology_checksum = getattr(ontology, "checksum", None)
-    if type(ontology_checksum) is not str or len(ontology_checksum) != 64:
-        raise ValueError("ontology must expose a SHA-256 checksum")
+    from apps.knowledge_graph.services.ontology import validate_ontology_definition
+
+    validate_ontology_definition(ontology)
+    ontology_checksum = ontology.checksum
     with transaction.atomic():
         source = GraphArtifact.objects.select_for_update().get(pk=source_artifact_id)
         if (
@@ -528,9 +1108,13 @@ def create_filter_rerun_artifact(
             raise ValueError(
                 "filter rerun source must be an active collection artifact"
             )
-        source_metadata = source.metadata if type(source.metadata) is dict else {}
-        if source_metadata.get("ontology_checksum") != ontology_checksum:
+        if source.ontology_checksum != ontology_checksum:
             raise ValueError("filter ontology does not match source artifact")
+        validate_ontology_definition(
+            ontology,
+            expected_version=source.ontology_version,
+            expected_checksum=source.ontology_checksum,
+        )
         source_manifest = tuple(
             CollectionArtifactInput.objects.select_for_update()
             .select_related("document_artifact", "collection")
@@ -541,21 +1125,52 @@ def create_filter_rerun_artifact(
         source_entities, evidence = _filter_inputs_from_artifact(source)
         decisions = filter_collection_entities(evidence, ontology, policy)
         decisions_by_id = {int(item.entity_id): item for item in decisions}
+        source_links = tuple(
+            CollectionEntityDocumentLink.objects.select_for_update()
+            .select_related("document_entity", "manifest_input")
+            .filter(artifact=source)
+            .order_by("pk")
+        )
+        projection_checksum = _filter_rerun_projection_checksum(
+            source_artifact=source,
+            policy_checksum=checksum,
+            ontology_checksum=ontology_checksum,
+            evidence=evidence,
+            decisions=decisions,
+        )
+        identity = {
+            "scope_type": source.scope_type,
+            "scope_id": source.scope_id,
+            "source_hash": source.source_hash,
+            "ontology_version": source.ontology_version,
+            "extractor_version": source.extractor_version,
+            "resolver_version": source.resolver_version,
+            "filter_policy_version": policy.version,
+            "embedding_model_signature": source.embedding_model_signature,
+            "ontology_checksum": source.ontology_checksum,
+            "filter_policy_checksum": checksum,
+            "resolution_config_checksum": source.resolution_config_checksum,
+        }
+        existing = GraphArtifact.objects.select_for_update().filter(**identity).first()
+        if existing is not None:
+            return _validate_existing_filter_rerun(
+                destination=existing,
+                source=source,
+                source_manifest=source_manifest,
+                source_entities=source_entities,
+                source_links=source_links,
+                decisions=decisions,
+                policy_checksum=checksum,
+                ontology_checksum=ontology_checksum,
+                projection_checksum=projection_checksum,
+            )
         destination = GraphArtifact.objects.create(
-            scope_type=source.scope_type,
-            scope_id=source.scope_id,
             status=GraphArtifact.Status.BUILDING,
-            source_hash=source.source_hash,
-            ontology_version=source.ontology_version,
-            extractor_version=source.extractor_version,
-            resolver_version=source.resolver_version,
-            filter_policy_version=policy.version,
-            embedding_model_signature=source.embedding_model_signature,
             metadata={
-                **source_metadata,
-                "filter_policy_checksum": checksum,
                 "filter_source_artifact_id": source.pk,
+                "filter_result_checksum": projection_checksum,
             },
+            **identity,
         )
         manifest_rows = [
             CollectionArtifactInput(
@@ -563,6 +1178,7 @@ def create_filter_rerun_artifact(
                 collection=row.collection,
                 document_id=row.document_id,
                 document_artifact=row.document_artifact,
+                membership_signature=row.membership_signature,
                 source_signature=row.source_signature,
                 build_signature="0" * 64,
             )
@@ -586,7 +1202,7 @@ def create_filter_rerun_artifact(
                     extraction_confidence=decision.extraction_confidence,
                     resolution_confidence=decision.resolution_confidence,
                     retrieval_utility=decision.retrieval_utility,
-                    promotion_confidence=decision.promotion_confidence or 0.0,
+                    promotion_confidence=decision.promotion_confidence,
                     filter_reason=decision.reason_codes[0],
                     embedding_model_signature=row.embedding_model_signature,
                     embedding_input_hash=row.embedding_input_hash,
@@ -602,6 +1218,7 @@ def create_filter_rerun_artifact(
                             if key != "row_audit_checksum"
                         },
                         "filter_policy_checksum": checksum,
+                        "filter_result_checksum": projection_checksum,
                         "filter_reason_codes": list(decision.reason_codes),
                         "filter_source_entity_id": row.pk,
                     },
@@ -619,12 +1236,6 @@ def create_filter_rerun_artifact(
         manifest_by_source_artifact = {
             row.document_artifact_id: row for row in manifest_rows
         }
-        source_links = tuple(
-            CollectionEntityDocumentLink.objects.select_for_update()
-            .select_related("document_entity", "manifest_input")
-            .filter(artifact=source)
-            .order_by("pk")
-        )
         cloned_links = [
             CollectionEntityDocumentLink(
                 artifact=destination,
@@ -656,6 +1267,7 @@ def create_filter_rerun_artifact(
                         if key != "row_audit_checksum"
                     },
                     "filter_source_link_id": row.pk,
+                    "filter_result_checksum": projection_checksum,
                 },
             )
             for row in source_links
@@ -675,7 +1287,12 @@ def create_filter_rerun_artifact(
                 "filter_commit": {
                     "version": 1,
                     "policy_checksum": checksum,
+                    "ontology_checksum": ontology_checksum,
+                    "resolution_config_checksum": source.resolution_config_checksum,
+                    "filter_result_checksum": projection_checksum,
                     "source_artifact_id": source.pk,
+                    "source_hash": source.source_hash,
+                    "manifest_count": len(source_manifest),
                     "entity_count": len(new_entities),
                     "link_count": len(cloned_links),
                 }
@@ -685,6 +1302,7 @@ def create_filter_rerun_artifact(
 
 
 __all__ = [
+    "CollectionFilterResult",
     "EntityFilterDecision",
     "EntityFilterInput",
     "FilterPolicy",
@@ -693,7 +1311,9 @@ __all__ = [
     "UtilityWeights",
     "decide_entity_filter",
     "filter_collection_entities",
+    "filter_collection_resolution",
     "filter_policy_checksum",
+    "collection_filter_result_checksum",
     "create_filter_rerun_artifact",
     "score_retrieval_utility",
 ]

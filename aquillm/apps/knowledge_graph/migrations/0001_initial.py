@@ -87,6 +87,10 @@ class Migration(migrations.Migration):
                 ),
                 ("document_id", models.UUIDField()),
                 ("source_signature", models.CharField(editable=False, max_length=64)),
+                (
+                    "membership_signature",
+                    models.CharField(editable=False, max_length=64),
+                ),
                 ("build_signature", models.CharField(editable=False, max_length=64)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 (
@@ -141,7 +145,7 @@ class Migration(migrations.Migration):
                 ("extraction_confidence", models.FloatField()),
                 ("resolution_confidence", models.FloatField()),
                 ("retrieval_utility", models.FloatField()),
-                ("promotion_confidence", models.FloatField(default=0.0)),
+                ("promotion_confidence", models.FloatField(blank=True, null=True)),
                 (
                     "filter_reason",
                     models.CharField(blank=True, default="", max_length=128),
@@ -224,6 +228,24 @@ class Migration(migrations.Migration):
                     "embedding_model_signature",
                     models.CharField(blank=True, default="", max_length=512),
                 ),
+                (
+                    "ontology_checksum",
+                    models.CharField(
+                        blank=True, default="", editable=False, max_length=64
+                    ),
+                ),
+                (
+                    "filter_policy_checksum",
+                    models.CharField(
+                        blank=True, default="", editable=False, max_length=64
+                    ),
+                ),
+                (
+                    "resolution_config_checksum",
+                    models.CharField(
+                        blank=True, default="", editable=False, max_length=64
+                    ),
+                ),
                 ("metadata", models.JSONField(blank=True, default=dict)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
@@ -280,6 +302,14 @@ class Migration(migrations.Migration):
                     ),
                     models.CheckConstraint(
                         condition=models.Q(
+                            ("ontology_checksum__regex", "^[0-9a-f]{64}$"),
+                            ("filter_policy_checksum__regex", "^[0-9a-f]{64}$"),
+                            ("resolution_config_checksum__regex", "^[0-9a-f]{64}$"),
+                        ),
+                        name="kg_artifact_identity_checksums_valid",
+                    ),
+                    models.CheckConstraint(
+                        condition=models.Q(
                             (
                                 "status__in",
                                 (
@@ -332,6 +362,9 @@ class Migration(migrations.Migration):
                             "resolver_version",
                             "filter_policy_version",
                             "embedding_model_signature",
+                            "ontology_checksum",
+                            "filter_policy_checksum",
+                            "resolution_config_checksum",
                         ),
                         name="kg_artifact_build_identity",
                     ),
@@ -658,6 +691,24 @@ class Migration(migrations.Migration):
                 (
                     "embedding_model_signature",
                     models.CharField(blank=True, default="", max_length=512),
+                ),
+                (
+                    "ontology_checksum",
+                    models.CharField(
+                        blank=True, default="", editable=False, max_length=64
+                    ),
+                ),
+                (
+                    "filter_policy_checksum",
+                    models.CharField(
+                        blank=True, default="", editable=False, max_length=64
+                    ),
+                ),
+                (
+                    "resolution_config_checksum",
+                    models.CharField(
+                        blank=True, default="", editable=False, max_length=64
+                    ),
                 ),
                 (
                     "stage",
@@ -1518,7 +1569,12 @@ class Migration(migrations.Migration):
             model_name="collectionentity",
             constraint=models.CheckConstraint(
                 condition=models.Q(
-                    ("promotion_confidence__gte", 0), ("promotion_confidence__lte", 1)
+                    ("promotion_confidence__isnull", True),
+                    models.Q(
+                        ("promotion_confidence__gte", 0),
+                        ("promotion_confidence__lte", 1),
+                    ),
+                    _connector="OR",
                 ),
                 name="kg_collection_promotion_conf_range",
             ),
@@ -1568,6 +1624,13 @@ class Migration(migrations.Migration):
             constraint=models.CheckConstraint(
                 condition=models.Q(("source_signature__regex", "^[0-9a-f]{64}$")),
                 name="kg_collection_input_source_sig_valid",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="collectionartifactinput",
+            constraint=models.CheckConstraint(
+                condition=models.Q(("membership_signature__regex", "^[0-9a-f]{64}$")),
+                name="kg_collection_input_membership_sig_valid",
             ),
         ),
         migrations.AddConstraint(
@@ -1637,6 +1700,17 @@ class Migration(migrations.Migration):
                     _connector="OR",
                 ),
                 name="kg_run_embedding_signature_scope",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="graphbuildrun",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    ("ontology_checksum__regex", "^[0-9a-f]{64}$"),
+                    ("filter_policy_checksum__regex", "^[0-9a-f]{64}$"),
+                    ("resolution_config_checksum__regex", "^[0-9a-f]{64}$"),
+                ),
+                name="kg_run_identity_checksums_valid",
             ),
         ),
         migrations.AddConstraint(

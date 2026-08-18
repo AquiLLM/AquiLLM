@@ -2,18 +2,18 @@
 
 from types import SimpleNamespace
 
-import pytest
-
-from lib.embeddings import get_embedding_via_local_openai, get_embeddings_via_local_openai
-
+from lib.embeddings import (
+    get_embedding_via_local_openai,
+    get_embeddings_via_local_openai,
+)
 
 CONTEXT_LIMIT_ERROR = (
     "Error code: 400 - {'error': {'message': "
-    "\"You passed 2049 input tokens and requested 0 output tokens. "
+    '"You passed 2049 input tokens and requested 0 output tokens. '
     "However, the model's context length is only 2048 tokens, "
     "resulting in a maximum input length of 2048 tokens. "
     "Please reduce the length of the input prompt. "
-    "(parameter=input_tokens, value=2049)\", "
+    '(parameter=input_tokens, value=2049)", '
     "'type': 'BadRequestError', 'param': None, 'code': 400}}"
 )
 
@@ -22,7 +22,8 @@ class _FakeEmbeddingsApi:
     def __init__(self):
         self.calls = []
 
-    def create(self, model, input):
+    def create(self, model, input, **kwargs):
+        assert kwargs == {"dimensions": 1024}
         self.calls.append(input)
         if isinstance(input, list):
             if any(isinstance(item, str) and len(item) > 2047 for item in input):

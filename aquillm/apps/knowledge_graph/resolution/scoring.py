@@ -6,6 +6,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite, sqrt
+from struct import error as struct_error
+from struct import pack, unpack
 
 EMBEDDING_DIMENSIONS = 1024
 
@@ -117,7 +119,13 @@ def validate_embedding(
         number = float(component)
         if not isfinite(number):
             raise ValueError("embedding components must be finite numbers")
-        vector.append(number)
+        try:
+            quantized = unpack("!f", pack("!f", number))[0]
+        except (OverflowError, struct_error) as exc:
+            raise ValueError("embedding components must fit finite float32") from exc
+        if not isfinite(quantized):
+            raise ValueError("embedding components must remain finite as float32")
+        vector.append(quantized)
     return tuple(vector)
 
 

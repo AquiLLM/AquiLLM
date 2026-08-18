@@ -295,14 +295,15 @@ def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
     )
 
     committed = SimpleNamespace(
+        artifact_id=None,
+        ontology_checksum="a" * 64,
         stats={
-            "ontology_checksum": "a" * 64,
             "extraction_commit": {
                 "version": 1,
                 "entity_mention_count": 2,
                 "relation_mention_count": 1,
             },
-        }
+        },
     )
     partial = SimpleNamespace(stats={"entity_mention_count": 2})
     missing_checksum = SimpleNamespace(
@@ -313,10 +314,9 @@ def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
         pass
 
     subclass_checksum = SimpleNamespace(
-        stats={
-            **committed.stats,
-            "ontology_checksum": ChecksumSubclass("a" * 64),
-        }
+        artifact_id=None,
+        ontology_checksum=ChecksumSubclass("a" * 64),
+        stats=committed.stats,
     )
 
     assert extraction_commit_is_valid(committed, entity_count=2, relation_count=1)
@@ -374,7 +374,9 @@ def test_sequential_duplicate_returns_committed_summary_without_creating_destina
     monkeypatch.setattr(pipeline, "_get_concrete_document", lambda _id: document)
     monkeypatch.setattr(pipeline, "_validate_source", lambda *_args: None)
     monkeypatch.setattr(
-        pipeline, "_resolve_ontology_definition", lambda *_args, **_kwargs: object()
+        pipeline,
+        "_resolve_ontology_definition",
+        lambda *_args, **_kwargs: SimpleNamespace(checksum="b" * 64),
     )
     monkeypatch.setattr(config, "load_extraction_settings", lambda: object())
     monkeypatch.setattr(

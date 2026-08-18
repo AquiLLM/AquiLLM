@@ -5,9 +5,11 @@ This module provides the main embedding interface for the application,
 integrating lib/embeddings with Django app configuration for Cohere fallback.
 """
 
+from hashlib import sha256
 from math import isfinite
 from os import getenv
 from typing import Any
+from urllib.parse import urlsplit
 
 import structlog
 from django.apps import apps
@@ -20,10 +22,50 @@ from lib.embeddings import (
     get_embeddings_via_cohere,
     get_embeddings_via_local_openai,
     get_multimodal_embedding_via_vllm_pooling,
+    get_strict_indexed_embeddings_via_local_openai,
 )
 from lib.embeddings.config import get_local_embed_config, get_target_dims
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+def _strict_embedding_endpoint_digest(base_url: str) -> str:
+    """Hash a canonical, credential-free endpoint identity for build audits."""
+
+    if (
+        type(base_url) is not str
+        or base_url != base_url.strip()
+        or not base_url
+        or len(base_url) > 2_048
+        or any(character in base_url for character in "\x00\r\n")
+    ):
+        raise RuntimeError("Configured embedding endpoint must be a safe URL")
+    try:
+        parsed = urlsplit(base_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError("Configured embedding endpoint must be a valid URL") from exc
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower()
+    if (
+        scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(
+            "Configured embedding endpoint must be credential-free HTTP(S) URL"
+        )
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None and not (
+        (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    ):
+        host = f"{host}:{port}"
+    path = parsed.path.rstrip("/")
+    canonical = f"{scheme}://{host}{path}"
+    return sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def get_multimodal_embedding(
@@ -148,11 +190,15 @@ def get_embeddings(
 def strict_index_embedding_signature() -> str:
     """Return the auditable local-only signature used by durable KG builds."""
 
-    _base_url, _api_key, model = get_local_embed_config()
+    base_url, _api_key, model = get_local_embed_config()
     dimensions = get_target_dims()
     if dimensions != 1024:
         raise RuntimeError("Durable KG entity embeddings require APP_EMBED_DIMS=1024")
-    revision = getenv("APP_EMBED_MODEL_REVISION") or "runtime-config"
+    revision = getenv("APP_EMBED_MODEL_REVISION")
+    if not revision:
+        raise RuntimeError(
+            "APP_EMBED_MODEL_REVISION must name an immutable model revision or digest"
+        )
     for value, label in ((model, "embedding model"), (revision, "model revision")):
         if (
             type(value) is not str
@@ -162,14 +208,19 @@ def strict_index_embedding_signature() -> str:
             or any(character in value for character in "\x00\r\n")
         ):
             raise RuntimeError(f"Configured {label} must be a safe nonempty token")
-    return f"local-openai:{model}@{revision}:dims={dimensions}:prep=kg-entity-v1"
+    endpoint_digest = _strict_embedding_endpoint_digest(base_url)
+    return (
+        f"local-openai:{model}@{revision}:endpoint={endpoint_digest}:"
+        f"dims={dimensions}:prep=kg-entity-v1:"
+        "max_chars=8192:batch=64"
+    )
 
 
 def get_strict_index_embeddings(
     queries: list[str],
     *,
     expected_model_signature: str,
-) -> tuple[list[list[float]], str]:
+) -> tuple[list[tuple[int, list[float]]], str]:
     """Embed one durable index batch locally with no cross-provider fallback.
 
     The ordinary query interface intentionally falls back to Cohere for
@@ -188,11 +239,18 @@ def get_strict_index_embeddings(
         )
     if not queries:
         return [], actual_signature
-    raw_vectors = get_embeddings_via_local_openai(queries)
-    if not isinstance(raw_vectors, (list, tuple)) or len(raw_vectors) != len(queries):
+    if any(len(query) > 8_192 for query in queries):
+        raise ValueError("strict index embedding input exceeds max_chars=8192")
+    indexed_vectors = get_strict_indexed_embeddings_via_local_openai(queries)
+    if not isinstance(indexed_vectors, (list, tuple)) or len(indexed_vectors) != len(
+        queries
+    ):
         raise RuntimeError("Local embedding endpoint returned an invalid batch count")
-    vectors: list[list[float]] = []
-    for raw_vector in raw_vectors:
+    indices = tuple(item[0] for item in indexed_vectors)
+    if len(set(indices)) != len(indices) or set(indices) != set(range(len(queries))):
+        raise RuntimeError("Local embedding endpoint returned invalid provider indices")
+    vectors: list[tuple[int, list[float]]] = []
+    for index, raw_vector in indexed_vectors:
         if not isinstance(raw_vector, (list, tuple)) or len(raw_vector) != 1024:
             raise RuntimeError(
                 "Local embedding endpoint returned an invalid 1024-d vector"
@@ -204,7 +262,7 @@ def get_strict_index_embeddings(
             for value in raw_vector
         ):
             raise RuntimeError("Local embedding endpoint returned an invalid vector")
-        vectors.append([float(value) for value in raw_vector])
+        vectors.append((index, [float(value) for value in raw_vector]))
     return vectors, actual_signature
 
 

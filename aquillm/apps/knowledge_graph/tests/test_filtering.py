@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import socket
+from dataclasses import replace
+from functools import cache
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
+import yaml
 from django.conf import settings
 
 from apps.knowledge_graph.graph.filtering import (
@@ -23,42 +27,62 @@ from apps.knowledge_graph.graph.filtering import (
 from apps.knowledge_graph.graph.filtering import (
     _filter_inputs_from_artifact as _orm_filter_inputs,
 )
+from apps.knowledge_graph.graph.filtering import (
+    _filter_rerun_entity_matches as _rerun_entity_matches,
+)
 
 
-def _type_definition(
-    name: str,
-    *,
-    weight: float = 1.0,
-    suppression_policy: str = "below_confidence",
-    suppression_threshold: float = 0.15,
-):
-    return SimpleNamespace(
-        name=name,
-        aliases=(),
-        default_retrieval_weight=weight,
-        default_suppression_policy=suppression_policy,
-        default_suppression_threshold=suppression_threshold,
-    )
-
-
+@cache
 def _ontology(*extra_types: str):
-    types = {
-        "model": _type_definition("model"),
-        "method": _type_definition("method", weight=0.9),
-    }
-    types.update({name: _type_definition(name) for name in extra_types})
-    return SimpleNamespace(
-        checksum="b" * 64,
-        entity_types=MappingProxyType(types),
-        provenance=MappingProxyType(
-            {
-                "delta_checksum": "c" * 64,
-                "enabled_entity_types": ",".join(extra_types),
-            }
-            if extra_types
-            else {}
-        ),
+    from apps.knowledge_graph.services.ontology import (
+        load_ontology,
+        load_ontology_yaml,
     )
+
+    path = Path(__file__).resolve().parents[1] / "ontologies" / "research-v1.yaml"
+    base = load_ontology(path)
+    if not extra_types:
+        return base
+    document = yaml.safe_load(base.canonical_yaml)
+    document["version"] = "1.1.0"
+    for name in sorted(extra_types):
+        document["entity_types"].append(
+            {
+                "name": name,
+                "description": f"Enabled extension entity type {name}.",
+                "aliases": [],
+                "default_retrieval_weight": 1.0,
+                "default_suppression_policy": "below_confidence",
+                "default_suppression_threshold": 0.15,
+                "extension_enabled": True,
+            }
+        )
+    return load_ontology_yaml(yaml.safe_dump(document, sort_keys=True))
+
+
+def _ontology_with_entity_fields(name: str, **changes):
+    from apps.knowledge_graph.services.ontology import load_ontology_yaml
+
+    document = yaml.safe_load(_ontology().canonical_yaml)
+    document["version"] = "1.1.0"
+    matching = [item for item in document["entity_types"] if item["name"] == name]
+    if matching:
+        matching[0].update(changes)
+    else:
+        matching.append(
+            {
+                "name": name,
+                "description": f"Entity type {name}.",
+                "aliases": [],
+                "default_retrieval_weight": 1.0,
+                "default_suppression_policy": "below_confidence",
+                "default_suppression_threshold": 0.15,
+                "extension_enabled": False,
+                **changes,
+            }
+        )
+        document["entity_types"].extend(matching)
+    return load_ontology_yaml(yaml.safe_dump(document, sort_keys=True))
 
 
 def _database_is_reachable() -> bool:
@@ -73,7 +97,7 @@ def _database_is_reachable() -> bool:
 
 
 database_required = pytest.mark.skipif(
-    not _database_is_reachable(),
+    not _database_is_reachable() and os.environ.get("KG_REQUIRE_POSTGRES_TESTS") != "1",
     reason="configured PostgreSQL database is not reachable",
 )
 
@@ -229,11 +253,9 @@ def test_activated_ontology_extension_can_enable_publishers():
 
 
 def test_base_ontology_publisher_definition_does_not_implicitly_enable_it():
-    ontology = _ontology("publisher")
-    ontology = SimpleNamespace(
-        checksum=ontology.checksum,
-        entity_types=ontology.entity_types,
-        provenance=MappingProxyType({}),
+    ontology = replace(
+        _ontology_with_entity_fields("publisher", extension_enabled=False),
+        provenance=MappingProxyType({"enabled_entity_types": "publisher"}),
     )
 
     decision = decide_entity_filter(
@@ -244,13 +266,45 @@ def test_base_ontology_publisher_definition_does_not_implicitly_enable_it():
     assert "publisher_suppressed_by_default" in decision.reason_codes
 
 
-def test_ontology_suppression_threshold_is_status_only():
-    ontology = SimpleNamespace(
-        checksum="b" * 64,
-        entity_types=MappingProxyType(
-            {"model": _type_definition("model", suppression_threshold=0.99)}
-        ),
+def test_publisher_status_cannot_change_from_unchecksummed_provenance():
+    definition = _ontology_with_entity_fields("publisher", extension_enabled=False)
+    without_provenance = replace(
+        definition,
+        provenance=MappingProxyType({}),
     )
+    forged_provenance = replace(
+        definition,
+        provenance=MappingProxyType({"enabled_entity_types": "publisher"}),
+    )
+
+    first = decide_entity_filter(
+        _input(entity_type="publisher"), without_provenance, FilterPolicy()
+    )
+    second = decide_entity_filter(
+        _input(entity_type="publisher"), forged_provenance, FilterPolicy()
+    )
+
+    assert first.status is second.status is FilterStatus.SUPPRESSED
+    assert first.reason_codes == second.reason_codes
+
+
+def test_filtering_rejects_changed_ontology_semantics_under_same_checksum():
+    ontology = _ontology()
+    forged_types = dict(ontology.entity_types)
+    forged_types["model"] = replace(
+        forged_types["model"], default_suppression_threshold=0.99
+    )
+    forged = replace(
+        ontology,
+        entity_types=MappingProxyType(forged_types),
+    )
+
+    with pytest.raises(ValueError, match="semantic|checksum"):
+        filter_collection_entities((_input(),), forged, FilterPolicy())
+
+
+def test_ontology_suppression_threshold_is_status_only():
+    ontology = _ontology_with_entity_fields("model", default_suppression_threshold=0.99)
     evidence = _input(mention_ids=("m1",), document_ids=("d1",))
 
     decision = decide_entity_filter(evidence, ontology, FilterPolicy())
@@ -337,6 +391,85 @@ def test_filter_rerun_locks_child_evidence_before_cloning():
     assert implementation.count("select_for_update") >= 4
 
 
+def test_filter_rerun_rejects_mutation_even_when_row_audit_is_recomputed():
+    from apps.knowledge_graph.resolution.collection import (
+        _collection_entity_row_audit,
+    )
+
+    policy = FilterPolicy(utility_activation_threshold=0.0)
+    policy_checksum = filter_policy_checksum(policy)
+    projection_checksum = "d" * 64
+    decision = decide_entity_filter(
+        _input(entity_id="11", promotion_confidence=None),
+        _ontology(),
+        policy,
+    )
+    source = SimpleNamespace(
+        pk=11,
+        collection_id=7,
+        cluster_key="a" * 64,
+        label="Atlas",
+        normalized_label="atlas",
+        version_signature="",
+        entity_type="model",
+        identifier="",
+        embedding_model_signature="",
+        embedding_input_hash="",
+        embedding=None,
+        metadata={"aliases": ["Atlas"], "row_audit_checksum": "old"},
+    )
+    destination = SimpleNamespace(pk=22)
+    metadata = {
+        "aliases": ["Atlas"],
+        "filter_policy_checksum": policy_checksum,
+        "filter_result_checksum": projection_checksum,
+        "filter_reason_codes": list(decision.reason_codes),
+        "filter_source_entity_id": source.pk,
+    }
+    row_fields = {
+        "artifact_id": destination.pk,
+        "collection_id": source.collection_id,
+        "cluster_key": source.cluster_key,
+        "label": source.label,
+        "normalized_label": source.normalized_label,
+        "version_signature": source.version_signature,
+        "entity_type": source.entity_type,
+        "identifier": source.identifier,
+        "status": decision.status.value,
+        "extraction_confidence": decision.extraction_confidence,
+        "resolution_confidence": decision.resolution_confidence,
+        "retrieval_utility": decision.retrieval_utility,
+        "promotion_confidence": decision.promotion_confidence,
+        "filter_reason": decision.reason_codes[0],
+        "embedding_model_signature": source.embedding_model_signature,
+        "embedding_input_hash": source.embedding_input_hash,
+        "embedding": source.embedding,
+    }
+    row = SimpleNamespace(metadata=metadata, **row_fields)
+    row.metadata["row_audit_checksum"] = _collection_entity_row_audit(row)
+
+    assert _rerun_entity_matches(
+        row,
+        source=source,
+        destination=destination,
+        decision=decision,
+        policy_checksum=policy_checksum,
+        projection_checksum=projection_checksum,
+    )
+
+    forged = SimpleNamespace(metadata=dict(row.metadata), **row_fields)
+    forged.label = "Forged Atlas"
+    forged.metadata["row_audit_checksum"] = _collection_entity_row_audit(forged)
+    assert not _rerun_entity_matches(
+        forged,
+        source=source,
+        destination=destination,
+        decision=decision,
+        policy_checksum=policy_checksum,
+        projection_checksum=projection_checksum,
+    )
+
+
 def test_filter_policy_is_immutable_and_checksum_covers_semantics():
     first = FilterPolicy(version="filter-v1", utility_activation_threshold=0.2)
     same = FilterPolicy(version="filter-v1", utility_activation_threshold=0.2)
@@ -377,30 +510,154 @@ def test_collection_entity_status_and_filter_scores_are_immutable():
 @pytest.mark.django_db(transaction=True)
 @database_required
 def test_filter_rerun_creates_new_building_artifact_and_never_mutates_active():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from django.contrib.auth.models import User
+    from django.db import close_old_connections
+
     from apps.collections.models import Collection
-    from apps.knowledge_graph.graph.filtering import create_filter_rerun_artifact
+    from apps.documents.models import RawTextDocument, TextChunk
+    from apps.knowledge_graph.graph.filtering import (
+        create_filter_rerun_artifact,
+        filter_collection_resolution,
+    )
     from apps.knowledge_graph.models import (
+        CollectionEntity,
+        CollectionEntityDocumentLink,
+        DocumentEntity,
+        DocumentEntityMention,
+        EntityMention,
         GraphArtifact,
-        collection_manifest_source_hash,
+        GraphBuildRun,
+    )
+    from apps.knowledge_graph.resolution.collection import (
+        CollectionEmbeddingSession,
+        CollectionResolutionConfig,
+        build_collection_snapshot,
+        load_collection_filter_inputs,
+        load_collection_resolution_inputs,
+        persist_collection_resolution,
+        resolve_collection_entities,
     )
 
+    embedding_signature = (
+        f"test-local:model@rev:endpoint={'e' * 64}:dims=1024:"
+        "prep=kg-entity-v1:max_chars=8192:batch=64"
+    )
+    user = User.objects.create_user(username="kg-filter-rerun", password="unused")
     collection = Collection.objects.create(name="Filter rerun")
-    active = GraphArtifact.objects.create(
-        scope_type=GraphArtifact.ScopeType.COLLECTION,
-        scope_id=collection.pk,
+    document = RawTextDocument(
+        title="Atlas",
+        full_text="Atlas is a model.",
+        collection=collection,
+        ingested_by=user,
+        full_text_hash=RawTextDocument.hash_fn("Atlas is a model."),
+    )
+    document.save(dont_rechunk=True)
+    document_artifact = GraphArtifact.objects.create(
+        scope_type=GraphArtifact.ScopeType.DOCUMENT,
+        scope_id=document.id,
         status=GraphArtifact.Status.ACTIVE,
-        source_hash=collection_manifest_source_hash(()),
-        ontology_version="ontology-v1",
+        source_hash="d" * 64,
+        ontology_version=_ontology().version,
+        extractor_version="extractor-v1",
+        resolver_version="document-coreference-v1",
+        filter_policy_version="document-filter-v1",
+        ontology_checksum=_ontology().checksum,
+    )
+    chunk = TextChunk.objects.create(
+        content=document.full_text,
+        start_position=0,
+        end_position=len(document.full_text),
+        chunk_number=0,
+        modality=TextChunk.Modality.TEXT,
+        doc_id=document.id,
+        embedding=[0.0] * 1024,
+    )
+    mention = EntityMention.objects.create(
+        artifact=document_artifact,
+        document_id=document.id,
+        chunk=chunk,
+        start=0,
+        end=5,
+        position_basis=EntityMention.PositionBasis.DOCUMENT_GLOBAL,
+        raw_text="Atlas",
+        normalized_text="Atlas",
+        entity_type="model",
+        extraction_confidence=0.9,
+    )
+    document_entity = DocumentEntity.objects.create(
+        artifact=document_artifact,
+        document_id=document.id,
+        cluster_key="e" * 64,
+        label="Atlas",
+        normalized_label="atlas",
+        entity_type="model",
+        resolution_confidence=0.95,
+    )
+    DocumentEntityMention.objects.create(
+        document_entity=document_entity,
+        mention=mention,
+        method=DocumentEntityMention.Method.ROOT,
+        resolver_version=document_artifact.resolver_version,
+    )
+    source_policy = FilterPolicy(version="filter-v1", utility_activation_threshold=0.0)
+    config = CollectionResolutionConfig()
+    active, _manifest = build_collection_snapshot(
+        collection=collection,
+        document_artifacts=(document_artifact,),
+        ontology=_ontology(),
         extractor_version="extractor-v1",
         resolver_version="collection-resolution-v1",
-        filter_policy_version="filter-v1",
-        embedding_model_signature="test-local:model@rev:dims=1024:prep=v1",
-        metadata={"ontology_checksum": "b" * 64},
+        filter_policy=source_policy,
+        resolution_config=config,
+        embedding_model_signature=embedding_signature,
+    )
+    resolution_run = GraphBuildRun.objects.create(
+        artifact=active,
+        stage=GraphBuildRun.Stage.RESOLUTION,
+        status=GraphBuildRun.Status.RUNNING,
+        attempt=1,
+    )
+    snapshot, entities, relations = load_collection_resolution_inputs(
+        active.pk, resolution_run.pk
     )
 
+    def unexpected_embedding_call(_texts):
+        raise AssertionError("singleton resolution must not call embeddings")
+
+    session = CollectionEmbeddingSession(
+        expected_model_signature=embedding_signature,
+        backend=unexpected_embedding_call,
+    )
+    resolution = resolve_collection_entities(
+        snapshot,
+        entities,
+        _ontology(),
+        relations=relations,
+        config=config,
+        embedding_session=session,
+    )
+    evidence = load_collection_filter_inputs(active.pk, resolution_run.pk, resolution)
+    source_filter = filter_collection_resolution(
+        resolution, evidence, _ontology(), source_policy
+    )
+    persist_collection_resolution(
+        active.pk,
+        resolution_run.pk,
+        resolution,
+        source_filter,
+        filter_policy=source_policy,
+        ontology=_ontology(),
+    )
+    active.status = GraphArtifact.Status.ACTIVE
+    active.save(update_fields=["status"])
+
+    rerun_policy = FilterPolicy(version="filter-v2", utility_activation_threshold=1.0)
     shadow = create_filter_rerun_artifact(
         active.pk,
-        FilterPolicy(version="filter-v2"),
+        rerun_policy,
         _ontology(),
     )
 
@@ -412,3 +669,56 @@ def test_filter_rerun_creates_new_building_artifact_and_never_mutates_active():
     assert shadow.resolver_version == active.resolver_version
     assert shadow.embedding_model_signature == active.embedding_model_signature
     assert shadow.filter_policy_version == "filter-v2"
+    source_entity = CollectionEntity.objects.get(artifact=active)
+    shadow_entity = CollectionEntity.objects.get(artifact=shadow)
+    assert shadow_entity.label == source_entity.label
+    assert shadow_entity.cluster_key == source_entity.cluster_key
+    assert shadow_entity.status == shadow_entity.Status.SUPPRESSED
+    assert shadow_entity.promotion_confidence is None
+    source_link = CollectionEntityDocumentLink.objects.get(artifact=active)
+    shadow_link = CollectionEntityDocumentLink.objects.get(artifact=shadow)
+    assert shadow_link.document_entity_id == source_link.document_entity_id
+    assert shadow_link.score == source_link.score
+    assert shadow_link.method == source_link.method
+    assert shadow_link.outcome == source_link.outcome
+
+    duplicate = create_filter_rerun_artifact(
+        active.pk,
+        rerun_policy,
+        _ontology(),
+    )
+    assert duplicate.pk == shadow.pk
+
+    race_policy = FilterPolicy(version="filter-v3", utility_activation_threshold=0.5)
+    barrier = Barrier(2)
+
+    def concurrent_rerun() -> int:
+        close_old_connections()
+        try:
+            barrier.wait(timeout=10)
+            return create_filter_rerun_artifact(active.pk, race_policy, _ontology()).pk
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(concurrent_rerun) for _ in range(2)]
+        raced_ids = {future.result(timeout=30) for future in futures}
+    assert len(raced_ids) == 1
+    raced_id = next(iter(raced_ids))
+    assert (
+        GraphBuildRun.objects.filter(
+            artifact_id=raced_id,
+            stage=GraphBuildRun.Stage.FILTERING,
+        ).count()
+        == 1
+    )
+
+    run = GraphBuildRun.objects.get(artifact=shadow)
+    run.stats["filter_commit"]["entity_count"] = 99
+    run.save(update_fields=["stats"])
+    with pytest.raises(ValueError, match="partial|corrupt|marker"):
+        create_filter_rerun_artifact(
+            active.pk,
+            rerun_policy,
+            _ontology(),
+        )

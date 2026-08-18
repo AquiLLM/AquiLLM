@@ -35,6 +35,7 @@ def collection_input_source_signature(
     collection_id: int,
     document_id: uuid.UUID,
     document_artifact: GraphArtifact,
+    membership_signature: str,
 ) -> str:
     """Bind one manifest row to the complete immutable document artifact identity."""
 
@@ -43,11 +44,17 @@ def collection_input_source_signature(
             "collection_id": collection_id,
             "document_id": str(document_id),
             "document_artifact_id": document_artifact.pk,
+            "membership_signature": membership_signature,
             "document_source_hash": document_artifact.source_hash,
             "ontology_version": document_artifact.ontology_version,
             "extractor_version": document_artifact.extractor_version,
             "resolver_version": document_artifact.resolver_version,
             "filter_policy_version": document_artifact.filter_policy_version,
+            "ontology_checksum": document_artifact.ontology_checksum,
+            "filter_policy_checksum": document_artifact.filter_policy_checksum,
+            "resolution_config_checksum": (
+                document_artifact.resolution_config_checksum
+            ),
         }
     )
 
@@ -71,6 +78,35 @@ def collection_input_build_signature(
             "embedding_model_signature": (
                 destination_artifact.embedding_model_signature
             ),
+            "ontology_checksum": destination_artifact.ontology_checksum,
+            "filter_policy_checksum": destination_artifact.filter_policy_checksum,
+            "resolution_config_checksum": (
+                destination_artifact.resolution_config_checksum
+            ),
+        }
+    )
+
+
+def document_membership_signature(document: object) -> str:
+    """Bind a manifest row to one concrete document row and collection."""
+
+    if not isinstance(document, Document):
+        raise ValueError("document membership requires a concrete Document")
+    if document.pk is None or type(document.id) is not uuid.UUID:
+        raise ValueError("document membership requires a persisted document")
+    if type(document.collection_id) is not int or document.collection_id <= 0:
+        raise ValueError("document membership requires a real collection")
+    if type(document.full_text_hash) is not str or not re.fullmatch(
+        _HASH_PATTERN, document.full_text_hash
+    ):
+        raise ValueError("document membership requires a source hash")
+    return _hash_payload(
+        {
+            "document_model": document._meta.label_lower,
+            "document_pk": document.pk,
+            "document_id": str(document.id),
+            "collection_id": document.collection_id,
+            "full_text_hash": document.full_text_hash,
         }
     )
 
@@ -106,6 +142,7 @@ class CollectionArtifactInput(ValidatedGraphModel):
         related_name="collection_build_uses",
     )
     source_signature = models.CharField(max_length=64, editable=False)
+    membership_signature = models.CharField(max_length=64, editable=False)
     build_signature = models.CharField(max_length=64, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -118,6 +155,7 @@ class CollectionArtifactInput(ValidatedGraphModel):
         "document_artifact",
         "document_artifact_id",
         "source_signature",
+        "membership_signature",
         "build_signature",
         "created_at",
     )
@@ -141,6 +179,10 @@ class CollectionArtifactInput(ValidatedGraphModel):
                 name="kg_collection_input_source_sig_valid",
             ),
             models.CheckConstraint(
+                condition=Q(membership_signature__regex=_HASH_PATTERN),
+                name="kg_collection_input_membership_sig_valid",
+            ),
+            models.CheckConstraint(
                 condition=Q(build_signature__regex=_HASH_PATTERN),
                 name="kg_collection_input_build_sig_valid",
             ),
@@ -152,21 +194,30 @@ class CollectionArtifactInput(ValidatedGraphModel):
             )
         ]
 
-    def _expected_signatures(self) -> tuple[str, str]:
+    def _expected_signatures(self) -> tuple[str, str, str]:
+        document = Document.get_by_id(self.document_id)
+        if document is None:
+            raise ValidationError({"document_id": "Manifest document must exist."})
+        membership = document_membership_signature(document)
         source = collection_input_source_signature(
             collection_id=self.collection_id,
             document_id=self.document_id,
             document_artifact=self.document_artifact,
+            membership_signature=membership,
         )
         build = collection_input_build_signature(
             source_signature=source,
             destination_artifact=self.artifact,
         )
-        return source, build
+        return membership, source, build
 
     def prepare_for_persistence(self) -> None:
         if self.artifact_id and self.collection_id and self.document_artifact_id:
-            self.source_signature, self.build_signature = self._expected_signatures()
+            (
+                self.membership_signature,
+                self.source_signature,
+                self.build_signature,
+            ) = self._expected_signatures()
 
     def clean(self):
         super().clean()
@@ -201,7 +252,13 @@ class CollectionArtifactInput(ValidatedGraphModel):
         elif document.collection_id != self.collection_id:
             errors["collection"] = "Manifest document must belong to the collection."
         if not errors:
-            expected_source, expected_build = self._expected_signatures()
+            expected_membership, expected_source, expected_build = (
+                self._expected_signatures()
+            )
+            if self.membership_signature != expected_membership:
+                errors["membership_signature"] = (
+                    "Manifest document membership signature is invalid."
+                )
             if self.source_signature != expected_source:
                 errors["source_signature"] = "Manifest source signature is invalid."
             if self.build_signature != expected_build:
@@ -215,4 +272,5 @@ __all__ = [
     "collection_input_build_signature",
     "collection_input_source_signature",
     "collection_manifest_source_hash",
+    "document_membership_signature",
 ]

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 import uuid
+from hashlib import sha256
 
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
@@ -12,6 +14,28 @@ _DOCUMENT_SCOPE_PATTERN = (
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 _COLLECTION_SCOPE_PATTERN = r"^[1-9][0-9]*$"
+_CHECKSUM_PATTERN = r"^[0-9a-f]{64}$"
+
+
+def graph_identity_checksum(namespace: object, value: object) -> str:
+    """Hash a version-only identity when no richer immutable policy exists."""
+
+    if type(namespace) is not str or not namespace or "\x00" in namespace:
+        raise ValidationError("Graph identity checksum namespace is invalid.")
+    if type(value) is not str or not value or "\x00" in value:
+        raise ValidationError("Graph identity checksum value is invalid.")
+    payload = json.dumps(
+        {"namespace": namespace, "value": value},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(payload).hexdigest()
+
+
+def _validate_identity_checksum(value: object, field: str) -> str:
+    if type(value) is not str or not re.fullmatch(_CHECKSUM_PATTERN, value):
+        raise ValidationError({field: "Graph identity must be a SHA-256 checksum."})
+    return value
 
 
 def canonical_graph_scope_id(scope_type: object, value: object) -> str:
@@ -89,6 +113,31 @@ def _validate_embedding_model_signature(scope_type: object, value: object) -> st
                 )
             }
         )
+    if scope_type == "collection" and value:
+        tokens = value.split(":")
+        endpoint_tokens = [
+            token.removeprefix("endpoint=")
+            for token in tokens
+            if token.startswith("endpoint=")
+        ]
+        if (
+            len(endpoint_tokens) != 1
+            or not re.fullmatch(_CHECKSUM_PATTERN, endpoint_tokens[0])
+            or not {
+                "dims=1024",
+                "prep=kg-entity-v1",
+                "max_chars=8192",
+                "batch=64",
+            }.issubset(tokens)
+        ):
+            raise ValidationError(
+                {
+                    "embedding_model_signature": (
+                        "Collection embedding signature must lock the provider "
+                        "endpoint and durable embedding contract."
+                    )
+                }
+            )
     return value
 
 
@@ -238,6 +287,15 @@ class GraphArtifact(ValidatedGraphModel):
     resolver_version = models.CharField(max_length=128)
     filter_policy_version = models.CharField(max_length=128)
     embedding_model_signature = models.CharField(max_length=512, blank=True, default="")
+    ontology_checksum = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
+    filter_policy_checksum = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
+    resolution_config_checksum = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -253,6 +311,9 @@ class GraphArtifact(ValidatedGraphModel):
         "resolver_version",
         "filter_policy_version",
         "embedding_model_signature",
+        "ontology_checksum",
+        "filter_policy_checksum",
+        "resolution_config_checksum",
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
 
@@ -281,6 +342,14 @@ class GraphArtifact(ValidatedGraphModel):
                     | (Q(scope_type="collection") & ~Q(embedding_model_signature=""))
                 ),
                 name="kg_artifact_embedding_signature_scope",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(ontology_checksum__regex=_CHECKSUM_PATTERN)
+                    & Q(filter_policy_checksum__regex=_CHECKSUM_PATTERN)
+                    & Q(resolution_config_checksum__regex=_CHECKSUM_PATTERN)
+                ),
+                name="kg_artifact_identity_checksums_valid",
             ),
             models.CheckConstraint(
                 condition=Q(
@@ -331,6 +400,9 @@ class GraphArtifact(ValidatedGraphModel):
                     "resolver_version",
                     "filter_policy_version",
                     "embedding_model_signature",
+                    "ontology_checksum",
+                    "filter_policy_checksum",
+                    "resolution_config_checksum",
                 ],
                 name="kg_artifact_build_identity",
             ),
@@ -348,6 +420,29 @@ class GraphArtifact(ValidatedGraphModel):
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
         )
+        self._prepare_identity_checksums()
+
+    def _prepare_identity_checksums(self) -> None:
+        if not self.ontology_checksum:
+            self.ontology_checksum = graph_identity_checksum(
+                "ontology-version", self.ontology_version
+            )
+        if not self.filter_policy_checksum:
+            self.filter_policy_checksum = graph_identity_checksum(
+                "filter-policy-version", self.filter_policy_version
+            )
+        if not self.resolution_config_checksum:
+            self.resolution_config_checksum = graph_identity_checksum(
+                "resolver-version", self.resolver_version
+            )
+        for field in (
+            "ontology_checksum",
+            "filter_policy_checksum",
+            "resolution_config_checksum",
+        ):
+            setattr(
+                self, field, _validate_identity_checksum(getattr(self, field), field)
+            )
 
     def clean(self):
         super().clean()
@@ -355,6 +450,7 @@ class GraphArtifact(ValidatedGraphModel):
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
         )
+        self._prepare_identity_checksums()
 
 
 class GraphBuildRun(ValidatedGraphModel):
@@ -397,6 +493,15 @@ class GraphBuildRun(ValidatedGraphModel):
     resolver_version = models.CharField(max_length=128)
     filter_policy_version = models.CharField(max_length=128)
     embedding_model_signature = models.CharField(max_length=512, blank=True, default="")
+    ontology_checksum = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
+    filter_policy_checksum = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
+    resolution_config_checksum = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
     stage = models.CharField(
         max_length=16, choices=Stage.choices, default=Stage.ONTOLOGY
     )
@@ -426,6 +531,9 @@ class GraphBuildRun(ValidatedGraphModel):
         "resolver_version",
         "filter_policy_version",
         "embedding_model_signature",
+        "ontology_checksum",
+        "filter_policy_checksum",
+        "resolution_config_checksum",
     )
     _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
     _NULLABLE_IMMUTABLE_UPDATE_FIELDS = ("artifact", "artifact_id")
@@ -459,6 +567,14 @@ class GraphBuildRun(ValidatedGraphModel):
                     | (Q(scope_type="collection") & ~Q(embedding_model_signature=""))
                 ),
                 name="kg_run_embedding_signature_scope",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(ontology_checksum__regex=_CHECKSUM_PATTERN)
+                    & Q(filter_policy_checksum__regex=_CHECKSUM_PATTERN)
+                    & Q(resolution_config_checksum__regex=_CHECKSUM_PATTERN)
+                ),
+                name="kg_run_identity_checksums_valid",
             ),
             models.CheckConstraint(
                 condition=Q(
@@ -519,6 +635,9 @@ class GraphBuildRun(ValidatedGraphModel):
             "resolver_version",
             "filter_policy_version",
             "embedding_model_signature",
+            "ontology_checksum",
+            "filter_policy_checksum",
+            "resolution_config_checksum",
         ):
             setattr(self, field, getattr(artifact, field))
 
@@ -529,6 +648,29 @@ class GraphBuildRun(ValidatedGraphModel):
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
         )
+        self._prepare_identity_checksums()
+
+    def _prepare_identity_checksums(self) -> None:
+        if not self.ontology_checksum:
+            self.ontology_checksum = graph_identity_checksum(
+                "ontology-version", self.ontology_version
+            )
+        if not self.filter_policy_checksum:
+            self.filter_policy_checksum = graph_identity_checksum(
+                "filter-policy-version", self.filter_policy_version
+            )
+        if not self.resolution_config_checksum:
+            self.resolution_config_checksum = graph_identity_checksum(
+                "resolver-version", self.resolver_version
+            )
+        for field in (
+            "ontology_checksum",
+            "filter_policy_checksum",
+            "resolution_config_checksum",
+        ):
+            setattr(
+                self, field, _validate_identity_checksum(getattr(self, field), field)
+            )
 
     def clean(self):
         super().clean()
@@ -536,6 +678,7 @@ class GraphBuildRun(ValidatedGraphModel):
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
         )
+        self._prepare_identity_checksums()
         if self.artifact_id:
             artifact = GraphArtifact.objects.get(pk=self.artifact_id)
             expected = {

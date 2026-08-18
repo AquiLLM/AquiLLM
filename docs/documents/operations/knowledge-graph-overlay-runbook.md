@@ -5,6 +5,31 @@ extend this document with configuration, rollout, rollback, retention, and
 ownership procedures. Knowledge-graph builds and retrieval remain disabled by
 default.
 
+### Durable embedding model identity
+
+Collection graph builds require `APP_EMBED_MODEL_REVISION` to identify the
+exact embedding checkpoint or a provider-attested immutable model snapshot.
+The value is part of every collection artifact and embedding audit signature,
+alongside a non-secret digest of the normalized provider endpoint, the
+provider/model name, 1024 dimensions, preprocessing version, maximum input
+length, and batch size. An endpoint change therefore also fails an in-flight
+build closed. An empty revision value fails durable graph builds closed. This
+is intentional: do not invent a revision for a mutable remote alias such as
+`text-embedding-3-small`. The no-GPU OpenAI profile explicitly requests 1024
+dimensions; ordinary non-KG query embeddings keep their existing
+availability-oriented behavior.
+
+For the self-hosted profile, compose uses `APP_EMBED_MODEL` as both the actual
+vLLM checkpoint and served model name, and passes
+`APP_EMBED_MODEL_REVISION` to vLLM's `--revision` option. Qwen3-VL-Embedding-2B
+documents MRL output dimensions from 64 through 2048, so the strict KG adapter
+always sends `dimensions=1024` independently of the ordinary app compatibility
+flag; it rejects any response that is not exactly 1024 values or reports a
+different served model. Compose also pins the tokenizer to the same APP model
+identity. Keep the Mem0 model setting aligned with this shared endpoint. See the
+[model card](https://huggingface.co/Qwen/Qwen3-VL-Embedding-2B) and vLLM's
+[embedding request protocol](https://docs.vllm.ai/en/v0.9.1/api/vllm/entrypoints/openai/protocol.html#vllm.entrypoints.openai.protocol.EmbeddingCompletionRequest).
+
 ## Runtime identity (v1)
 
 The local extractor is an optional, worker-only runtime. Its v1 identity is:

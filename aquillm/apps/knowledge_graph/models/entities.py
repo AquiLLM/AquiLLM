@@ -524,7 +524,7 @@ class CollectionEntity(ValidatedGraphModel):
     extraction_confidence = models.FloatField()
     resolution_confidence = models.FloatField()
     retrieval_utility = models.FloatField()
-    promotion_confidence = models.FloatField(default=0.0)
+    promotion_confidence = models.FloatField(null=True, blank=True)
     filter_reason = models.CharField(max_length=128, blank=True, default="")
     embedding_model_signature = models.CharField(
         max_length=512, blank=True, default="", editable=False
@@ -607,8 +607,12 @@ class CollectionEntity(ValidatedGraphModel):
                     ("extraction_confidence", "kg_collection_extract_conf_range"),
                     ("resolution_confidence", "kg_collection_resolve_conf_range"),
                     ("retrieval_utility", "kg_collection_utility_range"),
-                    ("promotion_confidence", "kg_collection_promotion_conf_range"),
                 )
+            ),
+            models.CheckConstraint(
+                condition=Q(promotion_confidence__isnull=True)
+                | (Q(promotion_confidence__gte=0) & Q(promotion_confidence__lte=1)),
+                name="kg_collection_promotion_conf_range",
             ),
             models.CheckConstraint(
                 condition=(
@@ -658,6 +662,8 @@ class CollectionEntity(ValidatedGraphModel):
             "promotion_confidence",
         ):
             value = getattr(self, field_name)
+            if field_name == "promotion_confidence" and value is None:
+                continue
             if (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
@@ -683,6 +689,8 @@ class CollectionEntity(ValidatedGraphModel):
             "promotion_confidence",
         ):
             value = getattr(self, field_name)
+            if field_name == "promotion_confidence" and value is None:
+                continue
             if not 0 <= value <= 1:
                 errors[field_name] = "Score must be in [0, 1]."
         if (

@@ -90,6 +90,7 @@ class EntityTypeDefinition:
     default_retrieval_weight: float
     default_suppression_policy: str
     default_suppression_threshold: float
+    extension_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +313,7 @@ def _definition_content(
                 "default_retrieval_weight": entity.default_retrieval_weight,
                 "default_suppression_policy": entity.default_suppression_policy,
                 "default_suppression_threshold": entity.default_suppression_threshold,
+                "extension_enabled": entity.extension_enabled,
             }
             for entity in (entity_types[name] for name in sorted(entity_types))
         ],
@@ -358,7 +360,9 @@ def _load_ontology_document(document: Any, raw_yaml: str) -> OntologyDefinition:
     entity_types: dict[str, EntityTypeDefinition] = {}
     known_aliases: set[str] = set()
     for record in _records(root.get("entity_types"), "entity_types"):
-        _require_fields(record, _ENTITY_FIELDS, "entity type")
+        _require_fields(
+            record, _ENTITY_FIELDS | frozenset({"extension_enabled"}), "entity type"
+        )
         missing = _ENTITY_FIELDS.difference(record)
         if missing:
             raise OntologyValidationError(
@@ -374,6 +378,11 @@ def _load_ontology_document(document: Any, raw_yaml: str) -> OntologyDefinition:
             known_aliases
         ):
             raise OntologyValidationError(f"duplicate entity aliases for {name}")
+        extension_enabled = record.get("extension_enabled", False)
+        if type(extension_enabled) is not bool:
+            raise OntologyValidationError(
+                f"extension_enabled for {name} must be a boolean"
+            )
         entity_types[name] = EntityTypeDefinition(
             name=name,
             description=_nonempty_string(
@@ -390,6 +399,7 @@ def _load_ontology_document(document: Any, raw_yaml: str) -> OntologyDefinition:
                 record["default_suppression_threshold"],
                 f"suppression threshold for {name}",
             ),
+            extension_enabled=extension_enabled,
         )
         known_aliases.update(aliases)
     if not entity_types:
@@ -442,6 +452,72 @@ def load_ontology_yaml(raw_yaml: str) -> OntologyDefinition:
 
     document, normalized_yaml = _parse_yaml(raw_yaml)
     return _load_ontology_document(document, normalized_yaml)
+
+
+def validate_ontology_definition(
+    definition: OntologyDefinition,
+    *,
+    expected_version: str | None = None,
+    expected_checksum: str | None = None,
+) -> OntologyDefinition:
+    """Recursively revalidate immutable ontology semantics at runtime seams."""
+
+    if type(definition) is not OntologyDefinition:
+        raise OntologyValidationError("ontology must be an exact OntologyDefinition")
+    version = _semantic_version(definition.version)
+    if expected_version is not None and version != expected_version:
+        raise OntologyValidationError("ontology version does not match build identity")
+    if type(definition.entity_types) is not type(MappingProxyType({})):
+        raise OntologyValidationError("ontology entity types must be immutable")
+    if type(definition.relations) is not type(MappingProxyType({})):
+        raise OntologyValidationError("ontology relations must be immutable")
+    if any(
+        type(name) is not str
+        or type(entity) is not EntityTypeDefinition
+        or entity.name != name
+        or type(entity.aliases) is not tuple
+        or type(entity.extension_enabled) is not bool
+        for name, entity in definition.entity_types.items()
+    ):
+        raise OntologyValidationError(
+            "ontology entity types failed recursive validation"
+        )
+    if any(
+        type(name) is not str
+        or type(relation) is not RelationDefinition
+        or relation.name != name
+        or type(relation.allowed_head_types) is not tuple
+        or type(relation.allowed_tail_types) is not tuple
+        for name, relation in definition.relations.items()
+    ):
+        raise OntologyValidationError("ontology relations failed recursive validation")
+    content = _definition_content(
+        version, definition.entity_types, definition.relations
+    )
+    semantic_checksum = _checksum(content)
+    if type(definition.checksum) is not str or definition.checksum != semantic_checksum:
+        raise OntologyValidationError("ontology semantic checksum is invalid")
+    if expected_checksum is not None and semantic_checksum != expected_checksum:
+        raise OntologyValidationError("ontology checksum does not match build identity")
+    canonical_yaml = _canonical_yaml(content)
+    if (
+        type(definition.canonical_yaml) is not str
+        or definition.canonical_yaml != canonical_yaml
+    ):
+        raise OntologyValidationError("ontology canonical semantics are invalid")
+    if type(definition.raw_yaml) is not str or not definition.raw_yaml.strip():
+        raise OntologyValidationError("ontology raw YAML must be nonempty")
+    reloaded = load_ontology_yaml(definition.raw_yaml)
+    if reloaded.checksum != semantic_checksum:
+        raise OntologyValidationError(
+            "ontology raw YAML differs from semantic identity"
+        )
+    if type(definition.provenance) is not type(MappingProxyType({})) or any(
+        type(key) is not str or type(value) is not str
+        for key, value in definition.provenance.items()
+    ):
+        raise OntologyValidationError("ontology provenance must be immutable strings")
+    return definition
 
 
 def load_ontology_extension(path: str | Path) -> OntologyExtensionDefinition:
@@ -579,6 +655,7 @@ def merge_ontology_extension(
                 default_retrieval_weight=extension.default_retrieval_weight,
                 default_suppression_policy=extension.default_suppression_policy,
                 default_suppression_threshold=extension.default_suppression_threshold,
+                extension_enabled=True,
             )
             continue
         if (
@@ -607,6 +684,7 @@ def merge_ontology_extension(
                 if extension.default_suppression_threshold is not None
                 else previous.default_suppression_threshold
             ),
+            extension_enabled=previous.extension_enabled,
         )
     all_names = set(entity_types)
     all_aliases = [

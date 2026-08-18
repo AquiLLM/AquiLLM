@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import socket
+from dataclasses import replace
 from math import inf, nan
 from pathlib import Path
 from types import MappingProxyType
@@ -129,6 +130,33 @@ def test_checksum_is_canonical_semantic_content_not_yaml_formatting(tmp_path):
     assert first.checksum == second.checksum
     assert first.canonical_yaml == second.canonical_yaml
     assert first.raw_yaml != ""
+
+
+def test_runtime_ontology_validation_recomputes_recursive_semantic_identity():
+    from apps.knowledge_graph.services.ontology import (
+        load_ontology,
+        validate_ontology_definition,
+    )
+
+    definition = load_ontology(ONTOLOGY_PATH)
+    assert (
+        validate_ontology_definition(
+            definition,
+            expected_version=definition.version,
+            expected_checksum=definition.checksum,
+        )
+        is definition
+    )
+
+    original = definition.entity_types["paper"]
+    forged_types = dict(definition.entity_types)
+    forged_types["paper"] = replace(original, extension_enabled=True)
+    forged = replace(definition, entity_types=MappingProxyType(forged_types))
+    with pytest.raises(ValueError, match="semantic|checksum"):
+        validate_ontology_definition(forged)
+
+    with pytest.raises(ValueError, match="version"):
+        validate_ontology_definition(definition, expected_version="different-version")
 
 
 @pytest.mark.parametrize(

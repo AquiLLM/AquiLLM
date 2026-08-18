@@ -1719,6 +1719,7 @@ def test_source_snapshot_rejects_forged_string_subclass_fingerprint():
 
 def _destination_objects(result):
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.models.artifacts import graph_identity_checksum
 
     identity = {
         "scope_type": GraphArtifact.ScopeType.DOCUMENT,
@@ -1728,6 +1729,13 @@ def _destination_objects(result):
         "extractor_version": "extractor-v1",
         "resolver_version": result.resolver_version,
         "filter_policy_version": "pending-v1",
+        "ontology_checksum": result.ontology_checksum,
+        "filter_policy_checksum": graph_identity_checksum(
+            "document-filter-policy", "pending-v1"
+        ),
+        "resolution_config_checksum": graph_identity_checksum(
+            "document-resolver", result.resolver_version
+        ),
     }
     artifact = SimpleNamespace(
         pk=7,
@@ -1942,6 +1950,7 @@ def test_task7_artifact_identity_uses_the_shared_concrete_resolver_version():
         DOCUMENT_ID,
         "b" * 64,
         "1.0.0",
+        "c" * 64,
         settings=extraction_settings,
     )
 

@@ -13,6 +13,7 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
+      - APP_EMBED_MODEL_REVISION=${APP_EMBED_MODEL_REVISION:-}
       - UV_PROJECT_ENVIRONMENT=/opt/venv
       - VIRTUAL_ENV=/opt/venv
       - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -64,6 +65,7 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
+      - APP_EMBED_MODEL_REVISION=${APP_EMBED_MODEL_REVISION:-}
       - UV_PROJECT_ENVIRONMENT=/opt/venv
       - VIRTUAL_ENV=/opt/venv
       - PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -394,9 +396,10 @@ services:
     environment:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
-      - VLLM_MODEL=${MEM0_EMBED_VLLM_MODEL:-Qwen/Qwen3-VL-Embedding-2B}
-      - VLLM_SERVED_MODEL_NAME=${MEM0_EMBED_MODEL:-Qwen/Qwen3-VL-Embedding-2B}
-      - VLLM_TOKENIZER=${MEM0_EMBED_TOKENIZER:-Qwen/Qwen3-VL-Embedding-2B}
+      - VLLM_MODEL=${APP_EMBED_MODEL:-Qwen/Qwen3-VL-Embedding-2B}
+      - VLLM_REVISION=${APP_EMBED_MODEL_REVISION:-}
+      - VLLM_SERVED_MODEL_NAME=${APP_EMBED_MODEL:-Qwen/Qwen3-VL-Embedding-2B}
+      - VLLM_TOKENIZER=${APP_EMBED_MODEL:-Qwen/Qwen3-VL-Embedding-2B}
       - VLLM_RUNNER=pooling
       - VLLM_TENSOR_PARALLEL_SIZE=${MEM0_EMBED_TENSOR_PARALLEL_SIZE:-1}
       - VLLM_GPU_MEMORY_UTILIZATION=${MEM0_EMBED_GPU_MEMORY_UTILIZATION:-0.12}

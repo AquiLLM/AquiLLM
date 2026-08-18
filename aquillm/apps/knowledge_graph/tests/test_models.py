@@ -38,7 +38,10 @@ from apps.knowledge_graph.models import (
 
 DOCUMENT_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 COLLECTION_ID = 22
-COLLECTION_EMBEDDING_SIGNATURE = "test-local:model@rev:dims=1024:prep=v1"
+COLLECTION_EMBEDDING_SIGNATURE = (
+    f"test-local:model@rev:endpoint={'e' * 64}:dims=1024:"
+    "prep=kg-entity-v1:max_chars=8192:batch=64"
+)
 
 
 def _database_is_reachable():
@@ -224,6 +227,19 @@ def test_graph_artifact_bulk_update_allows_lifecycle_status_changes():
     assert artifact.status == GraphArtifact.Status.FAILED
 
 
+def test_collection_promotion_confidence_preserves_missing_evidence():
+    field = CollectionEntity._meta.get_field("promotion_confidence")
+
+    assert field.null is True
+    entity = CollectionEntity(
+        extraction_confidence=0.9,
+        resolution_confidence=0.8,
+        retrieval_utility=0.7,
+        promotion_confidence=None,
+    )
+    assert entity._raw_validation_errors() == {}
+
+
 @pytest.mark.django_db(transaction=True)
 @database_required
 @pytest.mark.parametrize("model", [DocumentEntity, CollectionEntity])
@@ -337,6 +353,9 @@ def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
         "resolver_version",
         "filter_policy_version",
         "embedding_model_signature",
+        "ontology_checksum",
+        "filter_policy_checksum",
+        "resolution_config_checksum",
     )
     assert {("scope_type", "scope_id", "status"), ("source_hash",)} <= _index_fields(
         GraphArtifact

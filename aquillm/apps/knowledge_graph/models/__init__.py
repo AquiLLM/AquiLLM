@@ -1,6 +1,6 @@
 """Public model exports for knowledge-graph persistence."""
 
-from .artifacts import GraphArtifact, GraphBuildRun
+from .artifacts import GraphArtifact, GraphBuildRun, graph_identity_checksum
 from .associations import CanonicalEntityLink, CollectionEntityDocumentLink
 from .entities import (
     CanonicalEntity,
@@ -9,7 +9,13 @@ from .entities import (
     DocumentEntityMention,
     EntityMention,
 )
-from .inputs import CollectionArtifactInput
+from .inputs import (
+    CollectionArtifactInput,
+    collection_input_build_signature,
+    collection_input_source_signature,
+    collection_manifest_source_hash,
+    document_membership_signature,
+)
 from .ontology import OntologyVersion
 from .relations import CollectionRelation, CollectionRelationEvidence, RelationMention
 
@@ -19,6 +25,9 @@ __all__ = [
     "CollectionEntity",
     "CollectionArtifactInput",
     "CollectionEntityDocumentLink",
+    "collection_input_build_signature",
+    "collection_input_source_signature",
+    "collection_manifest_source_hash",
     "CollectionRelation",
     "CollectionRelationEvidence",
     "DocumentEntity",
@@ -26,6 +35,8 @@ __all__ = [
     "EntityMention",
     "GraphArtifact",
     "GraphBuildRun",
+    "graph_identity_checksum",
     "OntologyVersion",
     "RelationMention",
+    "document_membership_signature",
 ]
