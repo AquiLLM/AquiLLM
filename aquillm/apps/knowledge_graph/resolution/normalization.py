@@ -92,6 +92,8 @@ class StableIdentifier:
     value: str
 
     def __post_init__(self) -> None:
+        if type(self.scheme) is not str or type(self.value) is not str:
+            raise ValueError("stable identifier fields must be exact strings")
         if self.scheme not in {"doi", "arxiv", "orcid", "repository"}:
             raise ValueError("unsupported stable identifier scheme")
         if not self.value or self.value != self.value.strip():
@@ -333,9 +335,15 @@ def _repository_identifier(raw: str) -> StableIdentifier | None:
 def parse_stable_identifier(value: object) -> StableIdentifier | None:
     """Parse a complete DOI, arXiv, ORCID, or repository identifier."""
 
-    if not isinstance(value, str) or not value.strip():
+    if type(value) is not str:
         return None
     if len(value) > _MAX_IDENTIFIER_CHARACTERS:
+        return None
+    if any(
+        unicodedata.category(character) in {"Cc", "Cf", "Cs"} for character in value
+    ):
+        return None
+    if not value.strip():
         return None
     raw = unicodedata.normalize("NFKC", value).strip()
     for parser in (

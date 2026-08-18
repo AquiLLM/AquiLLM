@@ -132,7 +132,7 @@ def _confidence(value: object) -> float:
 
 
 def _validated_source_text(value: object) -> str:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise ValueError("source text must be a string")
     if len(value) > _MAX_SOURCE_TEXT_CHARACTERS:
         raise ValueError(
@@ -148,7 +148,7 @@ def _validated_source_text(value: object) -> str:
 
 
 def _validated_identifier(value: object) -> str:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise ValueError("identifier must be a string")
     if len(value) > _MAX_IDENTIFIER_CHARACTERS:
         raise ValueError(
@@ -160,7 +160,7 @@ def _validated_identifier(value: object) -> str:
 
 
 def _validated_source_key(value: object) -> str:
-    if not isinstance(value, str) or not value.strip():
+    if type(value) is not str or not value.strip():
         raise ValueError("source key must be a nonempty string")
     if len(value) > _MAX_SOURCE_KEY_CHARACTERS:
         raise ValueError(
@@ -183,12 +183,12 @@ def _validated_entity_type(value: object) -> str:
 
 
 def _canonical_uuid(value: object, field_name: str) -> str:
-    if not isinstance(value, (str, UUID)):
+    if type(value) not in {str, UUID}:
         raise ValueError(f"{field_name} must be a UUID")
-    if isinstance(value, str) and len(value) > 64:
+    if type(value) is str and len(value) > 64:
         raise ValueError(f"{field_name} exceeds the 64-character UUID limit")
     try:
-        parsed = value if isinstance(value, UUID) else UUID(str(value))
+        parsed = value if type(value) is UUID else UUID(value)
     except (AttributeError, TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be a UUID") from exc
     return str(parsed)
@@ -221,7 +221,7 @@ def _validated_coordinate_basis(
     position_basis: object,
     content_object_id: object,
 ) -> tuple[str, str]:
-    if not isinstance(position_basis, str) or position_basis not in {
+    if type(position_basis) is not str or position_basis not in {
         "document_global",
         "chunk_content",
     }:
@@ -266,6 +266,8 @@ class DocumentMention:
         _validated_source_text(self.source_text)
         _validated_db_integer(self.source_offset, "source_offset", minimum=0)
         _validated_identifier(self.identifier)
+        if type(self.source_key) is not str:
+            raise ValueError("source key must be a nonempty string")
         if self.source_key != "":
             _validated_source_key(self.source_key)
         _canonical_uuid(self.document_id, "document_id")
@@ -360,7 +362,7 @@ class ResolvedCluster:
             )
         ):
             raise ValueError("version_signature must be blank or canonical lower ASCII")
-        if not isinstance(self.identifier, str):
+        if type(self.identifier) is not str:
             raise ValueError("identifier must be a string")
         if len(self.identifier) > 255:
             raise ValueError("identifier exceeds the persistence limit")
@@ -413,7 +415,9 @@ class ResolutionResult:
 
     def __post_init__(self) -> None:
         _require_string(self.resolver_version, "resolver_version")
-        if not _HASH.fullmatch(self.ontology_checksum):
+        if type(self.ontology_checksum) is not str or not _HASH.fullmatch(
+            self.ontology_checksum
+        ):
             raise ValueError("ontology_checksum must be a lowercase SHA-256 digest")
         if not _HASH.fullmatch(self.input_fingerprint):
             raise ValueError("input_fingerprint must be a lowercase SHA-256 digest")
@@ -466,6 +470,7 @@ class _MentionView:
     source_offset: int
     document_id: str
     source_key: str
+    coordinate_scope: str
     chunk_id: str
     position_basis: str
     content_object_id: str
@@ -492,6 +497,7 @@ class _MentionView:
 class _PreparedSource:
     document_id: str
     source_key: str
+    coordinate_scope: str
     chunk_id: str
     position_basis: str
     content_object_id: str
@@ -503,7 +509,7 @@ class _PreparedSource:
 @dataclass(frozen=True, slots=True)
 class _AcronymDefinition:
     expansion: str
-    source_key: str
+    coordinate_scope: str
     full_mention_id: str
     acronym_mention_id: str
     definition_start: int
@@ -571,7 +577,7 @@ def _ontology_type_index(ontology: object) -> tuple[dict[str, str], str]:
             }
         )
     persisted_checksum = _value(ontology, "checksum", "")
-    if not isinstance(persisted_checksum, str):
+    if type(persisted_checksum) is not str:
         raise ValueError("ontology checksum must be a lowercase SHA-256 digest")
     if persisted_checksum != "":
         if not _HASH.fullmatch(persisted_checksum):
@@ -609,7 +615,7 @@ def _validated_ontology_type_text(value: object, field_name: str) -> str:
 def _metadata_identifier(mention: object) -> str:
     direct = _value(mention, "identifier", "")
     candidates: list[tuple[str, str, str]] = []
-    if not isinstance(direct, str):
+    if type(direct) is not str:
         raise ValueError("identifier must be a string")
     if direct != "":
         validated = _validated_identifier(direct)
@@ -623,7 +629,7 @@ def _metadata_identifier(mention: object) -> str:
             if key not in metadata:
                 continue
             value = metadata[key]
-            if not isinstance(value, str) or not value.strip():
+            if type(value) is not str or not value.strip():
                 raise ValueError(f"metadata {key} identifier must be nonempty text")
             validated = _validated_identifier(value)
             parsed = parse_stable_identifier(validated)
@@ -668,7 +674,7 @@ def _source_identity(
     mention: object,
     *,
     source_offset: int,
-) -> tuple[str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str]:
     document_id = _canonical_uuid(_value(mention, "document_id"), "document_id")
     chunk_id = _validated_db_integer(_value(mention, "chunk_id"), "chunk_id", minimum=1)
     position_basis, content_object_id = _validated_coordinate_basis(
@@ -676,7 +682,7 @@ def _source_identity(
         _value(mention, "content_object_id"),
     )
     explicit_source_key = _value(mention, "source_key", _MISSING)
-    if explicit_source_key is not _MISSING and not isinstance(explicit_source_key, str):
+    if explicit_source_key is not _MISSING and type(explicit_source_key) is not str:
         raise ValueError("source key must be a nonempty string")
     if explicit_source_key is not _MISSING and explicit_source_key != "":
         source_key = _validated_source_key(explicit_source_key)
@@ -684,9 +690,15 @@ def _source_identity(
         source_key = f"document:{document_id}:offset:{source_offset}"
     elif content_object_id:
         source_key = f"content:{content_object_id}"
+    coordinate_scope = (
+        f"document:{document_id}"
+        if position_basis == "document_global"
+        else f"content:{content_object_id}"
+    )
     return (
         document_id,
         _validated_source_key(source_key),
+        coordinate_scope,
         str(chunk_id),
         position_basis,
         content_object_id,
@@ -705,6 +717,7 @@ def _prepare_source_contexts(
         (
             document_id,
             source_key,
+            coordinate_scope,
             chunk_id,
             position_basis,
             content_object_id,
@@ -716,7 +729,7 @@ def _prepare_source_contexts(
         cached = cached_contexts.get(source_key)
         if cached is not None:
             source_text, context_digest = cached
-            if not isinstance(raw_source_text, str):
+            if type(raw_source_text) is not str:
                 raise ValueError("source text must be a string")
             if raw_source_text != source_text:
                 raise ValueError("source key has mismatched source context text")
@@ -737,6 +750,7 @@ def _prepare_source_contexts(
             _PreparedSource(
                 document_id=document_id,
                 source_key=source_key,
+                coordinate_scope=coordinate_scope,
                 chunk_id=chunk_id,
                 position_basis=position_basis,
                 content_object_id=content_object_id,
@@ -751,7 +765,7 @@ def _prepare_source_contexts(
 def _member_key(
     *,
     document_id: str,
-    source_key: str,
+    coordinate_scope: str,
     position_basis: str,
     content_object_id: str,
     start: int,
@@ -761,7 +775,7 @@ def _member_key(
 ) -> str:
     payload = {
         "document_id": document_id,
-        "source_key": source_key,
+        "coordinate_scope": coordinate_scope,
         "position_basis": position_basis,
         "content_object_id": content_object_id,
         "start": start,
@@ -824,12 +838,13 @@ def _adapt_mention(
         source_offset=source.source_offset,
         document_id=source.document_id,
         source_key=source.source_key,
+        coordinate_scope=source.coordinate_scope,
         chunk_id=source.chunk_id,
         position_basis=source.position_basis,
         content_object_id=source.content_object_id,
         member_key=_member_key(
             document_id=source.document_id,
-            source_key=source.source_key,
+            coordinate_scope=source.coordinate_scope,
             position_basis=source.position_basis,
             content_object_id=source.content_object_id,
             start=start,
@@ -979,23 +994,25 @@ def _initialism(value: str) -> str:
 
 def _is_parenthetical_definition(full: _MentionView, acronym: _MentionView) -> bool:
     if (
-        not full.source_text
-        or full.source_text != acronym.source_text
-        or full.source_key != acronym.source_key
-        or full.source_offset != acronym.source_offset
+        full.coordinate_scope != acronym.coordinate_scope
         or full.end >= acronym.start
         or _initialism(full.display_label) != _acronym_key(acronym.display_label)
     ):
         return False
-    full_end = full.end - full.source_offset
-    acronym_start = acronym.start - acronym.source_offset
-    acronym_end = acronym.end - acronym.source_offset
-    source = full.source_text
-    if not (0 <= full_end <= acronym_start < acronym_end <= len(source)):
-        return False
-    between = source[full_end:acronym_start]
-    following = source[acronym_end:]
-    return bool(re.fullmatch(r"\s*\(\s*", between) and re.match(r"\s*\)", following))
+    for source, source_offset in (
+        (full.source_text, full.source_offset),
+        (acronym.source_text, acronym.source_offset),
+    ):
+        full_end = full.end - source_offset
+        acronym_start = acronym.start - source_offset
+        acronym_end = acronym.end - source_offset
+        if not (0 <= full_end <= acronym_start < acronym_end <= len(source)):
+            continue
+        between = source[full_end:acronym_start]
+        following = source[acronym_end:]
+        if re.fullmatch(r"\s*\(\s*", between) and re.match(r"\s*\)", following):
+            return True
+    return False
 
 
 def _acronym_expansions(
@@ -1014,7 +1031,7 @@ def _acronym_expansions(
                 ].append(
                     _AcronymDefinition(
                         expansion=full.normalized_label,
-                        source_key=full.source_key,
+                        coordinate_scope=full.coordinate_scope,
                         full_mention_id=full.mention_id,
                         acronym_mention_id=acronym.mention_id,
                         definition_start=acronym.start,
@@ -1025,7 +1042,7 @@ def _acronym_expansions(
             sorted(
                 values,
                 key=lambda item: (
-                    item.source_key,
+                    item.coordinate_scope,
                     item.definition_start,
                     item.full_mention_id,
                     item.acronym_mention_id,
@@ -1075,8 +1092,18 @@ def _acronym_decision(
     right: _MentionView,
     expansions: Mapping[tuple[str, str], tuple[_AcronymDefinition, ...]],
 ) -> PairDecision | None:
-    left_definitions = expansions.get((left.entity_type, left.acronym_shape_key), ())
-    right_definitions = expansions.get((right.entity_type, right.acronym_shape_key), ())
+    left_definitions = tuple(
+        definition
+        for definition in expansions.get((left.entity_type, left.acronym_shape_key), ())
+        if definition.coordinate_scope == left.coordinate_scope
+    )
+    right_definitions = tuple(
+        definition
+        for definition in expansions.get(
+            (right.entity_type, right.acronym_shape_key), ()
+        )
+        if definition.coordinate_scope == right.coordinate_scope
+    )
     left_is_candidate = left.is_acronym or bool(left_definitions)
     right_is_candidate = right.is_acronym or bool(right_definitions)
     if not (left_is_candidate or right_is_candidate):
@@ -1095,23 +1122,23 @@ def _acronym_decision(
         right_key = right.acronym_shape_key
         if left_key != right_key:
             return None
-        definitions = expansions.get((left.entity_type, left_key), ())
-        candidate_expansions = {item.expansion for item in definitions}
-        if len(candidate_expansions) > 1:
-            return _rejected(left, right, "ambiguous_acronym", "ambiguous acronym")
-        if not definitions:
-            return _rejected(left, right, "undefined_acronym", "undefined acronym")
-        if left.source_key != right.source_key:
+        if left.coordinate_scope != right.coordinate_scope:
             return _rejected(
                 left,
                 right,
                 "source_mismatch",
                 "acronym definition belongs to another source coordinate space",
             )
+        definitions = left_definitions
+        candidate_expansions = {item.expansion for item in definitions}
+        if len(candidate_expansions) > 1:
+            return _rejected(left, right, "ambiguous_acronym", "ambiguous acronym")
+        if not definitions:
+            return _rejected(left, right, "undefined_acronym", "undefined acronym")
 
         def is_resolved(mention: _MentionView) -> bool:
             return any(
-                definition.source_key == mention.source_key
+                definition.coordinate_scope == mention.coordinate_scope
                 and mention.start >= definition.definition_start
                 for definition in definitions
             )
@@ -1130,7 +1157,18 @@ def _acronym_decision(
     acronym_key = acronym.acronym_shape_key
     if _initialism(full.display_label) != acronym_key:
         return None
-    definitions = expansions.get((acronym.entity_type, acronym_key), ())
+    if acronym.coordinate_scope != full.coordinate_scope:
+        return _rejected(
+            left,
+            right,
+            "source_mismatch",
+            "acronym definition belongs to another source coordinate space",
+        )
+    definitions = tuple(
+        definition
+        for definition in expansions.get((acronym.entity_type, acronym_key), ())
+        if definition.coordinate_scope == acronym.coordinate_scope
+    )
     candidate_expansions = {item.expansion for item in definitions}
     if len(candidate_expansions) > 1:
         return _rejected(left, right, "ambiguous_acronym", "ambiguous acronym")
@@ -1143,19 +1181,7 @@ def _acronym_decision(
     )
     if not relevant:
         return None
-    same_source = tuple(
-        definition
-        for definition in relevant
-        if definition.source_key == acronym.source_key
-    )
-    if not same_source:
-        return _rejected(
-            left,
-            right,
-            "source_mismatch",
-            "acronym definition belongs to another source coordinate space",
-        )
-    if any(acronym.start >= item.definition_start for item in same_source):
+    if any(acronym.start >= item.definition_start for item in relevant):
         return _accepted(
             left,
             right,

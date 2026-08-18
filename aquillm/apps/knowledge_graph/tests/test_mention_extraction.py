@@ -309,11 +309,24 @@ def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
         stats={"extraction_commit": committed.stats["extraction_commit"]}
     )
 
+    class ChecksumSubclass(str):
+        pass
+
+    subclass_checksum = SimpleNamespace(
+        stats={
+            **committed.stats,
+            "ontology_checksum": ChecksumSubclass("a" * 64),
+        }
+    )
+
     assert extraction_commit_is_valid(committed, entity_count=2, relation_count=1)
     assert not extraction_commit_is_valid(committed, entity_count=1, relation_count=1)
     assert not extraction_commit_is_valid(partial, entity_count=2, relation_count=1)
     assert not extraction_commit_is_valid(
         missing_checksum, entity_count=2, relation_count=1
+    )
+    assert not extraction_commit_is_valid(
+        subclass_checksum, entity_count=2, relation_count=1
     )
 
 

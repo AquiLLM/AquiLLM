@@ -3,9 +3,20 @@ from __future__ import annotations
 import pytest
 
 from apps.knowledge_graph.resolution.normalization import (
+    StableIdentifier,
     normalize_entity_label,
     parse_stable_identifier,
 )
+
+
+class _MasqueradingString(str):
+    def __eq__(self, other):
+        return True
+
+    def __ne__(self, other):
+        return False
+
+    __hash__ = str.__hash__
 
 
 @pytest.mark.parametrize(
@@ -213,6 +224,39 @@ def test_stable_identifiers_are_parsed_to_typed_canonical_values(
 )
 def test_invalid_or_embedded_identifier_like_text_is_rejected(raw):
     assert parse_stable_identifier(raw) is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://github.com/owner/repository\n",
+        "https://doi.org/10.5555/12345678\r",
+        "https://arxiv.org/abs/1706.03762\t",
+        "https://orcid.org/0000-0002-1825-0097\n",
+        "doi:10.5555/12345678\u202e",
+        "arXiv:1706.03762\ud800",
+    ],
+)
+def test_stable_identifier_parser_rejects_all_raw_unicode_control_categories(raw):
+    assert parse_stable_identifier(raw) is None
+
+
+def test_stable_identifier_parser_rejects_string_subclasses():
+    raw = _MasqueradingString("https://github.com/owner/repository")
+
+    assert parse_stable_identifier(raw) is None
+
+
+@pytest.mark.parametrize(
+    ("scheme", "value"),
+    [
+        (_MasqueradingString("doi"), "10.5555/12345678"),
+        ("doi", _MasqueradingString("10.5555/12345678")),
+    ],
+)
+def test_stable_identifier_constructor_rejects_string_subclasses(scheme, value):
+    with pytest.raises(ValueError, match="stable identifier.*string"):
+        StableIdentifier(scheme, value)
 
 
 @pytest.mark.parametrize("raw", ["", "   ", None, 42])

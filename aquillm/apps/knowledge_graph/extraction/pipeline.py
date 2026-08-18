@@ -354,7 +354,7 @@ def extraction_commit_is_valid(
     return (
         isinstance(marker, dict)
         and set(marker) == {"version", "entity_mention_count", "relation_mention_count"}
-        and isinstance(ontology_checksum, str)
+        and type(ontology_checksum) is str
         and len(ontology_checksum) == 64
         and all(character in "0123456789abcdef" for character in ontology_checksum)
         and type(marker.get("version")) is int

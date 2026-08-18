@@ -56,7 +56,7 @@ def _is_count(value: object) -> bool:
 
 
 def _is_hash(value: object) -> bool:
-    return isinstance(value, str) and _HASH.fullmatch(value) is not None
+    return type(value) is str and _HASH.fullmatch(value) is not None
 
 
 def resolution_commit_is_valid(
@@ -75,9 +75,16 @@ def resolution_commit_is_valid(
     return bool(
         isinstance(marker, Mapping)
         and frozenset(marker) == _COMMIT_FIELDS
+        and type(resolver_version) is str
+        and _is_hash(ontology_checksum)
+        and _is_count(source_mention_count)
+        and _is_hash(source_mention_fingerprint)
+        and _is_count(document_entity_count)
+        and _is_count(membership_count)
+        and _is_hash(result_checksum)
         and type(marker.get("version")) is int
         and marker.get("version") == 1
-        and isinstance(marker.get("resolver_version"), str)
+        and type(marker.get("resolver_version")) is str
         and marker.get("resolver_version") == resolver_version
         and _is_hash(marker.get("ontology_checksum"))
         and marker.get("ontology_checksum") == ontology_checksum

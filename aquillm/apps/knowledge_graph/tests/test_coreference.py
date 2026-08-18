@@ -38,6 +38,36 @@ class _UUIDLikeObject:
         return str(DOCUMENT_ID)
 
 
+class _DocumentUUIDMasquerade(str):
+    def __str__(self):
+        return str(DOCUMENT_ID)
+
+
+class _ContentUUIDMasquerade(str):
+    def __str__(self):
+        return str(CONTENT_OBJECT_ID)
+
+
+class _MasqueradingString(str):
+    def __eq__(self, other):
+        return True
+
+    def __ne__(self, other):
+        return False
+
+    __hash__ = str.__hash__
+
+
+class _ExplosiveString(str):
+    def strip(self, *args, **kwargs):
+        raise AssertionError("untrusted string subclass method was invoked")
+
+
+class _CoordinateBasisMasquerade(_MasqueradingString):
+    def __hash__(self):
+        return hash("document_global")
+
+
 def _ontology():
     return SimpleNamespace(
         checksum="b" * 64,
@@ -258,6 +288,24 @@ def test_exact_stable_identifier_clusters_differently_formatted_mentions():
     assert _cluster_ids(result) == {frozenset(("url", "prefixed"))}
     assert result.clusters[0].identifier == "doi:10.5555/12345678"
     assert _decision(result, "url", "prefixed").method == "stable_identifier"
+
+
+@pytest.mark.parametrize(
+    "raw_text",
+    [
+        "https://github.com/example/orion\n",
+        "https://doi.org/10.5555/12345678\r",
+        "https://arxiv.org/abs/1706.03762\t",
+        "https://orcid.org/0000-0002-1825-0097\n",
+    ],
+)
+def test_control_tainted_raw_labels_are_not_auto_linked_as_identifiers(raw_text):
+    result = resolve_document_mentions(
+        (_mention("tainted", raw_text, "paper"),),
+        _ontology(),
+    )
+
+    assert result.clusters[0].identifier == ""
 
 
 def test_exact_stable_identifier_precedes_pronoun_only_resolution_rejection():
@@ -611,6 +659,211 @@ def test_acronym_definitions_do_not_propagate_to_another_source_coordinate_space
         frozenset(("figure",)),
     }
     assert _decision(result, "definition", "figure").method == "source_mismatch"
+    assert _decision(result, "full", "figure").method == "source_mismatch"
+
+
+def test_document_global_acronym_definition_applies_across_text_chunks():
+    definition_text = "Retrieval-Augmented Generation (RAG) is defined."
+    full_text = "Retrieval-Augmented Generation"
+    definition_offset = 100
+    acronym_start = definition_offset + definition_text.index("RAG")
+    later_text = "Later, RAG is evaluated."
+    later_offset = 500
+    later_start = later_offset + later_text.index("RAG")
+    result = resolve_document_mentions(
+        (
+            _mention(
+                "full",
+                full_text,
+                start=definition_offset,
+                source_text=definition_text,
+                source_offset=definition_offset,
+                source_key="text-chunk:definition",
+                chunk_id=1,
+            ),
+            _mention(
+                "definition",
+                "RAG",
+                start=acronym_start,
+                source_text=definition_text,
+                source_offset=definition_offset,
+                source_key="text-chunk:definition",
+                chunk_id=1,
+            ),
+            _mention(
+                "later",
+                "RAG",
+                start=later_start,
+                source_text=later_text,
+                source_offset=later_offset,
+                source_key="text-chunk:later",
+                chunk_id=2,
+            ),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {frozenset(("full", "definition", "later"))}
+    assert _decision(result, "full", "later").accepted is True
+    assert _decision(result, "full", "later").method == "defined_acronym"
+
+
+def test_document_global_definition_can_use_overlapping_context_windows():
+    document_text = "Retrieval-Augmented Generation (RAG) is defined."
+    full_text = "Retrieval-Augmented Generation"
+    document_offset = 100
+    acronym_start = document_offset + document_text.index("RAG")
+    acronym_window_start = document_text.index("Generation")
+    result = resolve_document_mentions(
+        (
+            _mention(
+                "full",
+                full_text,
+                start=document_offset,
+                source_text=document_text,
+                source_offset=document_offset,
+                source_key="window:full",
+                chunk_id=1,
+            ),
+            _mention(
+                "definition",
+                "RAG",
+                start=acronym_start,
+                source_text=document_text[acronym_window_start:],
+                source_offset=document_offset + acronym_window_start,
+                source_key="window:acronym",
+                chunk_id=2,
+            ),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {frozenset(("full", "definition"))}
+    assert _decision(result, "full", "definition").method == "defined_acronym"
+
+
+def test_chunk_content_acronym_definition_stays_with_its_content_object():
+    definition_text = "Retrieval-Augmented Generation (RAG) is defined."
+    full_text = "Retrieval-Augmented Generation"
+    acronym_start = definition_text.index("RAG")
+    result = resolve_document_mentions(
+        (
+            _mention(
+                "full",
+                full_text,
+                start=0,
+                source_text=definition_text,
+                source_key="figure:first",
+                position_basis="chunk_content",
+                content_object_id=CONTENT_OBJECT_ID,
+            ),
+            _mention(
+                "definition",
+                "RAG",
+                start=acronym_start,
+                source_text=definition_text,
+                source_key="figure:first",
+                position_basis="chunk_content",
+                content_object_id=CONTENT_OBJECT_ID,
+            ),
+            _mention(
+                "other-figure",
+                "RAG",
+                start=0,
+                source_text="RAG",
+                source_key="figure:second",
+                position_basis="chunk_content",
+                content_object_id=OTHER_DOCUMENT_ID,
+            ),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {
+        frozenset(("full", "definition")),
+        frozenset(("other-figure",)),
+    }
+    assert _decision(result, "definition", "other-figure").method == "source_mismatch"
+
+
+def test_chunk_content_acronym_ambiguity_is_scoped_to_each_content_object():
+    first_text = "Retrieval-Augmented Generation (RAG). Later RAG."
+    second_text = "Red Amber Green (RAG). Later RAG."
+    first_full = "Retrieval-Augmented Generation"
+    second_full = "Red Amber Green"
+    first_positions = [
+        index for index in range(len(first_text)) if first_text.startswith("RAG", index)
+    ]
+    second_positions = [
+        index
+        for index in range(len(second_text))
+        if second_text.startswith("RAG", index)
+    ]
+    common = {"position_basis": "chunk_content", "source_offset": 0}
+    result = resolve_document_mentions(
+        (
+            _mention(
+                "first-full",
+                first_full,
+                start=0,
+                source_text=first_text,
+                source_key="figure:first",
+                content_object_id=CONTENT_OBJECT_ID,
+                **common,
+            ),
+            _mention(
+                "first-definition",
+                "RAG",
+                start=first_positions[0],
+                source_text=first_text,
+                source_key="figure:first",
+                content_object_id=CONTENT_OBJECT_ID,
+                **common,
+            ),
+            _mention(
+                "first-later",
+                "RAG",
+                start=first_positions[1],
+                source_text=first_text,
+                source_key="figure:first",
+                content_object_id=CONTENT_OBJECT_ID,
+                **common,
+            ),
+            _mention(
+                "second-full",
+                second_full,
+                start=0,
+                source_text=second_text,
+                source_key="figure:second",
+                content_object_id=OTHER_DOCUMENT_ID,
+                **common,
+            ),
+            _mention(
+                "second-definition",
+                "RAG",
+                start=second_positions[0],
+                source_text=second_text,
+                source_key="figure:second",
+                content_object_id=OTHER_DOCUMENT_ID,
+                **common,
+            ),
+            _mention(
+                "second-later",
+                "RAG",
+                start=second_positions[1],
+                source_text=second_text,
+                source_key="figure:second",
+                content_object_id=OTHER_DOCUMENT_ID,
+                **common,
+            ),
+        ),
+        _ontology(),
+    )
+
+    assert _cluster_ids(result) == {
+        frozenset(("first-full", "first-definition", "first-later")),
+        frozenset(("second-full", "second-definition", "second-later")),
+    }
 
 
 @pytest.mark.parametrize(
@@ -656,6 +909,42 @@ def test_chunk_content_cluster_identity_never_depends_on_chunk_database_pk():
     )
     reloaded = resolve_document_mentions(
         (_mention("mention", "Orion", "model", chunk_id=999, **common),),
+        _ontology(),
+    )
+
+    assert first.clusters[0].cluster_key == reloaded.clusters[0].cluster_key
+    assert first.input_fingerprint != reloaded.input_fingerprint
+
+
+def test_document_global_cluster_identity_ignores_representative_context_window():
+    first = resolve_document_mentions(
+        (
+            _mention(
+                "mention",
+                "Orion",
+                "model",
+                start=105,
+                source_text="xxxxxOrion",
+                source_offset=100,
+                source_key="text-chunk:first",
+                chunk_id=1,
+            ),
+        ),
+        _ontology(),
+    )
+    reloaded = resolve_document_mentions(
+        (
+            _mention(
+                "mention",
+                "Orion",
+                "model",
+                start=105,
+                source_text="............Orion",
+                source_offset=93,
+                source_key="text-chunk:replacement",
+                chunk_id=999,
+            ),
+        ),
         _ontology(),
     )
 
@@ -1124,6 +1413,63 @@ def test_explicit_identifier_and_source_key_cannot_masquerade_as_empty_strings()
 
 
 @pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"identifier": _MasqueradingString("doi:10.5555/12345678")}, "identifier"),
+        ({"source_key": _MasqueradingString("source:key")}, "source key"),
+        ({"source_text": _MasqueradingString("Orion")}, "source text"),
+        ({"position_basis": _CoordinateBasisMasquerade("evil")}, "position_basis"),
+        ({"document_id": _DocumentUUIDMasquerade("evil")}, "document_id"),
+        (
+            {
+                "position_basis": "chunk_content",
+                "content_object_id": _ContentUUIDMasquerade("evil"),
+            },
+            "content_object_id",
+        ),
+    ],
+)
+def test_public_resolution_strings_must_be_exact_builtin_strings(overrides, message):
+    with pytest.raises(ValueError, match=message):
+        resolution_input_fingerprint((_mapping_mention(**overrides),))
+
+
+def test_document_mention_and_metadata_reject_string_subclass_boundaries():
+    with pytest.raises(ValueError, match="source key"):
+        _mention(
+            "mention",
+            "Orion",
+            source_key=_MasqueradingString("source:key"),
+        )
+    with pytest.raises(ValueError, match="identifier"):
+        resolution_input_fingerprint(
+            (
+                _mapping_mention(
+                    metadata={
+                        "stable_identifier": _ExplosiveString("doi:10.5555/12345678")
+                    }
+                ),
+            )
+        )
+
+
+def test_repeated_source_context_rejects_string_subclass_equality_masquerade():
+    first = _mapping_mention(
+        mention_id="first",
+        source_key="shared-source",
+        source_text="Orion",
+    )
+    second = _mapping_mention(
+        mention_id="second",
+        source_key="shared-source",
+        source_text=_MasqueradingString("Changed context"),
+    )
+
+    with pytest.raises(ValueError, match="source text"):
+        resolution_input_fingerprint((first, second))
+
+
+@pytest.mark.parametrize(
     "metadata",
     [
         {"stable_identifier": False},
@@ -1214,6 +1560,22 @@ def test_ontology_checksum_cannot_masquerade_as_the_empty_string():
 
     with pytest.raises(ValueError, match="ontology checksum"):
         resolve_document_mentions((_mention("mention", "Orion", "model"),), ontology)
+
+
+def test_ontology_checksum_must_be_an_exact_builtin_string():
+    ontology = SimpleNamespace(
+        checksum=_MasqueradingString("b" * 64),
+        entity_types=_ontology().entity_types,
+    )
+
+    with pytest.raises(ValueError, match="ontology checksum"):
+        resolve_document_mentions((_mention("mention", "Orion", "model"),), ontology)
+
+    result = resolve_document_mentions(
+        (_mention("mention", "Orion", "model"),), _ontology()
+    )
+    with pytest.raises(ValueError, match="ontology_checksum"):
+        replace(result, ontology_checksum=_MasqueradingString("b" * 64))
 
 
 @pytest.mark.parametrize(
@@ -1396,6 +1758,31 @@ def test_resolution_commit_validator_requires_exact_typed_counts_and_hashes():
             membership_count=2,
             result_checksum="c" * 64,
         )
+
+    subclass_marker = {
+        **values,
+        "ontology_checksum": _MasqueradingString("f" * 64),
+    }
+    assert not resolution_commit_is_valid(
+        subclass_marker,
+        resolver_version=DOCUMENT_RESOLVER_VERSION,
+        ontology_checksum="a" * 64,
+        source_mention_count=2,
+        source_mention_fingerprint="b" * 64,
+        document_entity_count=1,
+        membership_count=2,
+        result_checksum="c" * 64,
+    )
+    assert not resolution_commit_is_valid(
+        values,
+        resolver_version=DOCUMENT_RESOLVER_VERSION,
+        ontology_checksum=_MasqueradingString("f" * 64),
+        source_mention_count=2,
+        source_mention_fingerprint="b" * 64,
+        document_entity_count=1,
+        membership_count=2,
+        result_checksum="c" * 64,
+    )
 
 
 def test_source_mention_fingerprint_is_order_independent_and_evidence_sensitive():
