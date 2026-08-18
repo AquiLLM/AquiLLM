@@ -584,10 +584,9 @@ def _config_payload(config: AssemblyConfig) -> dict[str, object]:
     }
 
 
-def _config_from_marker(marker: object) -> AssemblyConfig:
-    if type(marker) is not dict or type(marker.get("config")) is not dict:
-        raise CollectionGraphAssemblyError("assembly marker has no typed config")
-    payload = marker["config"]
+def _config_from_payload(payload: object) -> AssemblyConfig:
+    if type(payload) is not dict:
+        raise CollectionGraphAssemblyError("assembly config payload is not typed")
     try:
         if set(payload) != {
             "version",
@@ -624,7 +623,43 @@ def _config_from_marker(marker: object) -> AssemblyConfig:
         raise CollectionGraphAssemblyError("assembly marker config is invalid") from exc
 
 
-def _resolve_config(run: object, config: AssemblyConfig | None) -> AssemblyConfig:
+def _config_from_marker(marker: object) -> AssemblyConfig:
+    if type(marker) is not dict or type(marker.get("config")) is not dict:
+        raise CollectionGraphAssemblyError("assembly marker has no typed config")
+    return _config_from_payload(marker["config"])
+
+
+def _persisted_assembly_config(artifact: object, run: object) -> AssemblyConfig:
+    """Load the exact immutable config without silently substituting defaults."""
+
+    configs: list[AssemblyConfig] = []
+    metadata = artifact.metadata if type(artifact.metadata) is dict else {}
+    if "assembly_config" in metadata:
+        configs.append(_config_from_payload(metadata["assembly_config"]))
+    stats = run.stats if type(run.stats) is dict else {}
+    assembly_marker = stats.get("collection_assembly_commit")
+    if assembly_marker is not None:
+        configs.append(_config_from_marker(assembly_marker))
+    if not configs:
+        raise CollectionGraphAssemblyError("immutable assembly config is not persisted")
+    resolved = configs[0]
+    if any(config != resolved for config in configs[1:]):
+        raise CollectionGraphAssemblyError("persisted assembly configs disagree")
+    checksum = assembly_config_checksum(resolved)
+    if any(
+        getattr(row, "assembly_version", None) != resolved.version
+        or getattr(row, "assembly_config_checksum", None) != checksum
+        for row in (artifact, run)
+    ):
+        raise CollectionGraphAssemblyError(
+            "persisted assembly config differs from immutable identity"
+        )
+    return resolved
+
+
+def _resolve_config(
+    artifact: object, run: object, config: AssemblyConfig | None
+) -> AssemblyConfig:
     if config is not None:
         if type(config) is not AssemblyConfig:
             raise CollectionGraphAssemblyError(
@@ -633,12 +668,24 @@ def _resolve_config(run: object, config: AssemblyConfig | None) -> AssemblyConfi
         config.__post_init__()
         resolved = config
     else:
-        stats = run.stats if type(run.stats) is dict else {}
-        marker = stats.get("collection_assembly_commit")
-        resolved = AssemblyConfig() if marker is None else _config_from_marker(marker)
-    if (
-        resolved.version != run.assembly_version
-        or assembly_config_checksum(resolved) != run.assembly_config_checksum
+        from apps.knowledge_graph.models import GraphArtifact
+
+        if (
+            artifact.orchestration_version
+            == GraphArtifact.OrchestrationVersion.SCOPED_V1
+        ):
+            resolved = _persisted_assembly_config(artifact, run)
+        else:
+            stats = run.stats if type(run.stats) is dict else {}
+            marker = stats.get("collection_assembly_commit")
+            resolved = (
+                AssemblyConfig() if marker is None else _config_from_marker(marker)
+            )
+    checksum = assembly_config_checksum(resolved)
+    if any(
+        resolved.version != getattr(row, "assembly_version", None)
+        or checksum != getattr(row, "assembly_config_checksum", None)
+        for row in (artifact, run)
     ):
         raise CollectionGraphAssemblyError(
             "assembly config does not match the immutable build identity"
@@ -780,37 +827,20 @@ class _Task9LineageContext:
     links: tuple[object, ...]
 
 
-def _validate_task9_lineage_node(
+def _validate_task9_marker_envelope(
     artifact: object,
     run: object,
-    manifest: tuple[object, ...],
-    entities: tuple[object, ...],
-    links: tuple[object, ...],
     *,
     config: AssemblyConfig | None = None,
-) -> tuple[str, dict[str, object], int | None]:
+) -> tuple[str, dict[str, object]]:
+    """Authenticate immutable Task 9 marker fields before loading its rows."""
+
     from apps.knowledge_graph.resolution.collection import (
         MAX_COLLECTION_ENTITIES,
         MAX_COLLECTION_LINKS,
         MAX_COLLECTION_MEMBERSHIPS,
         MAX_RELATIONS,
-        CollectionResolutionConfig,
-        CollectionResolutionPersistenceError,
-        _collection_entity_row_audit,
-        _collection_link_row_audit,
-        _load_resolution_source_rows,
-        _raw_relation_snapshot,
-        _source_entity_fingerprint,
-        _source_relation_fingerprint,
     )
-
-    max_document_inputs = (
-        MAX_COLLECTION_DOCUMENT_INPUTS if config is None else config.max_document_inputs
-    )
-    if len(manifest) > max_document_inputs:
-        raise CollectionGraphAssemblyError(
-            "Task 9 manifest exceeds the assembly document-input cap"
-        )
 
     stats = run.stats if type(run.stats) is dict else {}
     resolution = stats.get("collection_resolution_commit")
@@ -965,7 +995,6 @@ def _validate_task9_lineage_node(
     if (
         type(marker_manifest_cap) is not int
         or not 1 <= marker_manifest_cap <= MAX_COLLECTION_DOCUMENT_INPUTS
-        or len(manifest) > marker_manifest_cap
         or (config is not None and marker_manifest_cap != config.max_document_inputs)
     ):
         raise CollectionGraphAssemblyError(
@@ -984,17 +1013,89 @@ def _validate_task9_lineage_node(
         raise CollectionGraphAssemblyError(
             "Task 9 lineage marker has an invalid row cap"
         )
+    if resolution is not None:
+        count_caps = {
+            "collection_entity_count": marker["max_entities"],
+            "automatic_assignment_count": marker["max_links"],
+            "link_count": marker["max_links"],
+            "raw_relation_count": marker["max_relations"],
+        }
+    else:
+        count_caps = {
+            "manifest_count": marker["max_document_inputs"],
+            "entity_count": marker["max_entities"],
+            "link_count": marker["max_links"],
+        }
+    if any(marker[key] > maximum for key, maximum in count_caps.items()):
+        raise CollectionGraphAssemblyError(
+            "Task 9 marker counts exceed their committed row cap"
+        )
+    if resolution is not None and (
+        marker["automatic_assignment_count"] > marker["link_count"]
+    ):
+        raise CollectionGraphAssemblyError(
+            "Task 9 marker counts exceed their committed row cap"
+        )
     expected = {
         "source_hash": artifact.source_hash,
         "ontology_checksum": artifact.ontology_checksum,
         "resolution_config_checksum": artifact.resolution_config_checksum,
         "assembly_version": artifact.assembly_version,
         "assembly_config_checksum": artifact.assembly_config_checksum,
+        (
+            "filter_policy_checksum" if resolution is not None else "policy_checksum"
+        ): artifact.filter_policy_checksum,
     }
-    if resolution is not None:
+    if any(marker.get(key) != value for key, value in expected.items()):
+        raise CollectionGraphAssemblyError(
+            "Task 9 lineage marker does not match immutable build identity"
+        )
+    return (
+        "resolution" if resolution is not None else "filter_rerun",
+        marker,
+    )
+
+
+def _validate_task9_lineage_node(
+    artifact: object,
+    run: object,
+    manifest: tuple[object, ...],
+    entities: tuple[object, ...],
+    links: tuple[object, ...],
+    *,
+    config: AssemblyConfig | None = None,
+) -> tuple[str, dict[str, object], int | None]:
+    from apps.knowledge_graph.resolution.collection import (
+        CollectionResolutionConfig,
+        CollectionResolutionPersistenceError,
+        _collection_entity_row_audit,
+        _collection_link_row_audit,
+        _load_resolution_source_rows,
+        _raw_relation_snapshot,
+        _source_entity_fingerprint,
+        _source_relation_fingerprint,
+    )
+
+    max_document_inputs = (
+        MAX_COLLECTION_DOCUMENT_INPUTS if config is None else config.max_document_inputs
+    )
+    if len(manifest) > max_document_inputs:
+        raise CollectionGraphAssemblyError(
+            "Task 9 manifest exceeds the assembly document-input cap"
+        )
+
+    kind, marker = _validate_task9_marker_envelope(artifact, run, config=config)
+    is_resolution = kind == "resolution"
+    if len(manifest) > marker["max_document_inputs"]:
+        raise CollectionGraphAssemblyError(
+            "Task 9 lineage marker has an invalid manifest cap"
+        )
+    if len(entities) > marker["max_entities"] or len(links) > marker["max_links"]:
+        raise CollectionGraphAssemblyError("Task 9 rows exceed their committed row cap")
+    expected = {}
+    if is_resolution:
         expected.update(
             {
-                "filter_policy_checksum": artifact.filter_policy_checksum,
                 "collection_entity_count": len(entities),
                 "link_count": len(links),
             }
@@ -1002,7 +1103,6 @@ def _validate_task9_lineage_node(
     else:
         expected.update(
             {
-                "policy_checksum": artifact.filter_policy_checksum,
                 "manifest_count": len(manifest),
                 "entity_count": len(entities),
                 "link_count": len(links),
@@ -1012,7 +1112,7 @@ def _validate_task9_lineage_node(
         raise CollectionGraphAssemblyError(
             "Task 9 lineage marker does not match locked rows"
         )
-    if resolution is not None:
+    if is_resolution:
         try:
             source_entities, source_relations = _load_resolution_source_rows(
                 artifact,
@@ -1026,7 +1126,9 @@ def _validate_task9_lineage_node(
                 ),
             )
             raw_relation_count, raw_relation_fingerprint = _raw_relation_snapshot(
-                manifest, for_update=True
+                manifest,
+                for_update=True,
+                max_relations=marker["max_relations"],
             )
         except CollectionResolutionPersistenceError as exc:
             raise CollectionGraphAssemblyError(
@@ -1078,16 +1180,16 @@ def _validate_task9_lineage_node(
                     "Task 9 automatic assignments do not partition source entities"
                 )
             automatic_source_ids.add(row.document_entity_id)
-    if resolution is not None and marker["automatic_assignment_count"] != len(
+    if is_resolution and marker["automatic_assignment_count"] != len(
         automatic_source_ids
     ):
         raise CollectionGraphAssemblyError(
             "Task 9 automatic assignment count differs from locked links"
         )
     return (
-        "resolution" if resolution is not None else "filter_rerun",
+        kind,
         marker,
-        None if resolution is not None else marker["source_artifact_id"],
+        None if is_resolution else marker["source_artifact_id"],
     )
 
 
@@ -1142,9 +1244,36 @@ def _load_filter_source_lineage(
         raise CollectionGraphAssemblyError(
             "filter rerun source artifact identity does not match the destination"
         )
-    max_document_inputs = (
-        MAX_COLLECTION_DOCUMENT_INPUTS if config is None else config.max_document_inputs
+    try:
+        source_run = GraphBuildRun.objects.select_for_update().get(
+            pk=marker["source_build_run_id"],
+            artifact=source,
+        )
+    except GraphBuildRun.DoesNotExist as exc:
+        raise CollectionGraphAssemblyError(
+            "filter rerun source build run is missing"
+        ) from exc
+    source_stats = source_run.stats if type(source_run.stats) is dict else {}
+    resolution_marker = source_stats.get("collection_resolution_commit")
+    filter_marker = source_stats.get("filter_commit")
+    if (resolution_marker is None) == (filter_marker is None):
+        raise CollectionGraphAssemblyError(
+            "filter rerun source build run has no exact Task 9 commit"
+        )
+    source_task9_marker = (
+        resolution_marker if resolution_marker is not None else filter_marker
     )
+    effective_config = AssemblyConfig() if config is None else config
+    max_entities, max_links = _task9_marker_query_caps(source_run, effective_config)
+    marker_manifest_cap = source_task9_marker.get("max_document_inputs")
+    if (
+        type(marker_manifest_cap) is not int
+        or not 1 <= marker_manifest_cap <= MAX_COLLECTION_DOCUMENT_INPUTS
+    ):
+        raise CollectionGraphAssemblyError(
+            "filter source Task 9 marker has an invalid manifest cap"
+        )
+    max_document_inputs = min(effective_config.max_document_inputs, marker_manifest_cap)
     source_manifest_query = (
         CollectionArtifactInput.objects.select_for_update()
         .select_related("document_artifact", "collection")
@@ -1174,25 +1303,6 @@ def _load_filter_source_lineage(
         raise CollectionGraphAssemblyError(
             "filter rerun source manifest differs from the destination snapshot"
         )
-    try:
-        source_run = GraphBuildRun.objects.select_for_update().get(
-            pk=marker["source_build_run_id"],
-            artifact=source,
-        )
-    except GraphBuildRun.DoesNotExist as exc:
-        raise CollectionGraphAssemblyError(
-            "filter rerun source build run is missing"
-        ) from exc
-    source_stats = source_run.stats if type(source_run.stats) is dict else {}
-    resolution_marker = source_stats.get("collection_resolution_commit")
-    filter_marker = source_stats.get("filter_commit")
-    if (resolution_marker is None) == (filter_marker is None):
-        raise CollectionGraphAssemblyError(
-            "filter rerun source build run has no exact Task 9 commit"
-        )
-    source_task9_marker = (
-        resolution_marker if resolution_marker is not None else filter_marker
-    )
     assembly_marker = source_stats.get("collection_assembly_commit")
     if assembly_marker is None:
         assembly_marker_checksum = None
@@ -1217,8 +1327,6 @@ def _load_filter_source_lineage(
         raise CollectionGraphAssemblyError(
             "filter rerun source commit checksum is invalid"
         )
-    max_entities = ASSEMBLY_V1_MAX_ENTITIES if config is None else config.max_entities
-    max_links = ASSEMBLY_V1_MAX_LINKS if config is None else config.max_links
     source_entity_query = (
         CollectionEntity.objects.select_for_update()
         .filter(artifact=source)
@@ -1610,7 +1718,42 @@ def _load_locked_manifest(
         raise CollectionGraphAssemblyError(str(exc)) from exc
 
 
-def _load_locked_task9_rows(artifact: object, config: AssemblyConfig):
+def _task9_marker_query_caps(run: object, config: AssemblyConfig) -> tuple[int, int]:
+    """Return fail-closed Task 9 row caps before any row materialization."""
+
+    from apps.knowledge_graph.resolution.collection import (
+        MAX_COLLECTION_ENTITIES,
+        MAX_COLLECTION_LINKS,
+    )
+
+    stats = run.stats if type(run.stats) is dict else {}
+    resolution_marker = stats.get("collection_resolution_commit")
+    filter_marker = stats.get("filter_commit")
+    if (resolution_marker is None) == (filter_marker is None):
+        raise CollectionGraphAssemblyError(
+            "candidate requires exactly one Task 9 resolution/filter commit marker"
+        )
+    marker = resolution_marker if resolution_marker is not None else filter_marker
+    if type(marker) is not dict:
+        raise CollectionGraphAssemblyError("Task 9 lineage marker is invalid")
+    limits = {
+        "max_entities": MAX_COLLECTION_ENTITIES,
+        "max_links": MAX_COLLECTION_LINKS,
+    }
+    if any(
+        type(marker.get(key)) is not int or not 1 <= marker[key] <= maximum
+        for key, maximum in limits.items()
+    ):
+        raise CollectionGraphAssemblyError(
+            "Task 9 lineage marker has an invalid row cap"
+        )
+    return (
+        min(config.max_entities, marker["max_entities"]),
+        min(config.max_links, marker["max_links"]),
+    )
+
+
+def _load_locked_task9_rows(artifact: object, run: object, config: AssemblyConfig):
     from apps.knowledge_graph.models import (
         CollectionEntity,
         CollectionEntityDocumentLink,
@@ -1635,15 +1778,16 @@ def _load_locked_task9_rows(artifact: object, config: AssemblyConfig):
         .filter(artifact=artifact)
         .order_by("pk")
     )
+    entity_cap, link_cap = _task9_marker_query_caps(run, config)
     try:
         entities = _bounded_query_rows(
             entity_query,
-            config.max_entities,
+            entity_cap,
             "assembly entity",
         )
         links = _bounded_query_rows(
             link_query,
-            config.max_links,
+            link_cap,
             "assembly link",
         )
     except CollectionResolutionPersistenceError as exc:
@@ -2301,7 +2445,7 @@ def _locked_projection(
         config,
     )
     ontology = _resolve_ontology(artifact, ontology)
-    entities, links = _load_locked_task9_rows(artifact, config)
+    entities, links = _load_locked_task9_rows(artifact, run, config)
     lineage_checksum = _validate_task9_lineage(
         artifact,
         run,
@@ -2514,7 +2658,7 @@ def assemble_collection_graph(
             lease_owner=lease_owner,
             lease_generation=lease_generation,
         )
-        config = _resolve_config(run, config)
+        config = _resolve_config(artifact, run, config)
         manifest = _load_locked_manifest(artifact, config)
         (
             plan,
@@ -2583,7 +2727,7 @@ def validate_collection_resolution_commit(
             lease_owner=lease_owner,
             lease_generation=lease_generation,
         )
-        config = _resolve_config(run, config)
+        config = _resolve_config(artifact, run, config)
         manifest = _load_locked_manifest(artifact, config)
         _validate_locked_manifest(
             collection,
@@ -2592,7 +2736,7 @@ def validate_collection_resolution_commit(
             aggregate_source_signature,
             config,
         )
-        entities, links = _load_locked_task9_rows(artifact, config)
+        entities, links = _load_locked_task9_rows(artifact, run, config)
         return _validate_task9_lineage(
             artifact,
             run,
@@ -2651,7 +2795,7 @@ def validate_locked_active_collection_snapshot(
             raise CollectionGraphAssemblyError(
                 f"active build run {field_name} differs from its artifact"
             )
-    resolved_config = _resolve_config(run, config)
+    resolved_config = _resolve_config(artifact, run, config)
     manifest = _load_locked_manifest(artifact, resolved_config)
     _validate_locked_manifest(
         collection,
@@ -2727,7 +2871,7 @@ def _validate_locked_complete_artifact(
     ontology: object | None,
     config: AssemblyConfig | None,
 ) -> AssemblyResult:
-    config = _resolve_config(run, config)
+    config = _resolve_config(artifact, run, config)
     manifest = _load_locked_manifest(artifact, config)
     (
         plan,

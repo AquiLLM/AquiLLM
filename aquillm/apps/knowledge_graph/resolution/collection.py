@@ -15,6 +15,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
+from heapq import merge
 from itertools import islice
 from math import isfinite
 
@@ -39,6 +40,7 @@ MAX_RELATIONS = 250_000
 MAX_COLLECTION_LINKS = 250_000
 MAX_TEXT_CHARACTERS = 8_192
 DEFAULT_EMBEDDING_BATCH_SIZE = 64
+_QUERY_PREDICATE_BATCH_SIZE = 5_000
 _HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 _VERSION_PATTERN = re.compile(r"[a-z0-9][a-z0-9.+:/_-]*")
 _ACRONYM_PATTERN = re.compile(r"[A-Z][A-Z0-9-]{1,11}")
@@ -1443,36 +1445,20 @@ def _source_relation_fingerprint(relations: Sequence[SupportedRelation]) -> str:
     )
 
 
-def _raw_relation_snapshot(
-    manifest: Sequence[object], *, for_update: bool
-) -> tuple[int, str]:
-    """Fingerprint every raw relation, including rejected/unassigned evidence."""
+def _fingerprint_raw_relation_rows(rows, *, max_relations: int) -> tuple[int, str]:
+    """Stream one exact Task 9 raw-relation envelope into its fingerprint."""
 
-    from apps.knowledge_graph.graph.assembly import ASSEMBLY_V1_MAX_EVIDENCE
-    from apps.knowledge_graph.models import RelationMention
-
-    artifact_ids = tuple(sorted(row.document_artifact_id for row in manifest))
-    query = RelationMention.objects.filter(artifact_id__in=artifact_ids).order_by("pk")
-    if for_update:
-        query = query.select_for_update()
-    rows = query.values(
-        "pk",
-        "artifact_id",
-        "document_id",
-        "chunk_id",
-        "head_id",
-        "tail_id",
-        "relation_type",
-        "extraction_confidence",
-        "metadata",
-    ).iterator(chunk_size=1_000)
+    if type(max_relations) is not int or not 1 <= max_relations <= MAX_RELATIONS:
+        raise CollectionResolutionPersistenceError(
+            "raw relation snapshot cap is invalid"
+        )
     digest = sha256(b"task9-raw-relation-snapshot-v1\0")
     count = 0
     for row in rows:
         count += 1
-        if count > ASSEMBLY_V1_MAX_EVIDENCE:
+        if count > max_relations:
             raise CollectionResolutionPersistenceError(
-                "raw relation evidence exceeds the assembly v1 operational cap"
+                "raw relation evidence exceeds the Task 9 relation cap"
             )
         payload = {
             "id": row["pk"],
@@ -1489,6 +1475,38 @@ def _raw_relation_snapshot(
     digest.update(b"\0count\0")
     digest.update(str(count).encode())
     return count, digest.hexdigest()
+
+
+def _raw_relation_snapshot(
+    manifest: Sequence[object], *, for_update: bool, max_relations: int
+) -> tuple[int, str]:
+    """Fingerprint every raw relation, including rejected/unassigned evidence."""
+
+    from apps.knowledge_graph.models import RelationMention
+
+    artifact_ids = tuple(sorted(row.document_artifact_id for row in manifest))
+    iterators = []
+    for artifact_id_batch in _query_value_batches(artifact_ids):
+        query = RelationMention.objects.filter(
+            artifact_id__in=artifact_id_batch
+        ).order_by("pk")
+        if for_update:
+            query = query.select_for_update()
+        iterators.append(
+            query.values(
+                "pk",
+                "artifact_id",
+                "document_id",
+                "chunk_id",
+                "head_id",
+                "tail_id",
+                "relation_type",
+                "extraction_confidence",
+                "metadata",
+            ).iterator(chunk_size=1_000)
+        )
+    rows = merge(*iterators, key=lambda row: row["pk"])
+    return _fingerprint_raw_relation_rows(rows, max_relations=max_relations)
 
 
 def _input_fingerprint(
@@ -2375,6 +2393,52 @@ def _bounded_query_rows(values, maximum: int, label: str) -> tuple[object, ...]:
     return rows
 
 
+def _query_value_batches(values: Iterable[object]):
+    """Yield deterministic fixed-size predicates for high-cardinality joins."""
+
+    ordered = tuple(sorted(set(values)))
+    for offset in range(0, len(ordered), _QUERY_PREDICATE_BATCH_SIZE):
+        yield ordered[offset : offset + _QUERY_PREDICATE_BATCH_SIZE]
+
+
+def _bounded_batched_query_rows(
+    values: Iterable[object],
+    query_factory: Callable[[tuple[object, ...]], object],
+    *,
+    maximum: int,
+    label: str,
+    row_key: Callable[[object], object],
+    sort_key: Callable[[object], object],
+) -> tuple[object, ...]:
+    """Run bounded ``IN`` predicates and merge rows once by stable identity."""
+
+    if type(maximum) is not int or maximum < 1:
+        raise CollectionResolutionPersistenceError(f"{label} cap is invalid")
+    rows_by_key: dict[object, object] = {}
+    for batch in _query_value_batches(values):
+        query = query_factory(batch)
+        query_iterator = getattr(query, "iterator", None)
+        if callable(query_iterator):
+            iterator = query_iterator(chunk_size=min(maximum, 1_000))
+        else:
+            try:
+                iterator = iter(query)
+            except TypeError as exc:
+                raise CollectionResolutionPersistenceError(
+                    f"{label} rows must be iterable"
+                ) from exc
+        for row in iterator:
+            key = row_key(row)
+            if key in rows_by_key:
+                continue
+            rows_by_key[key] = row
+            if len(rows_by_key) > maximum:
+                raise CollectionResolutionPersistenceError(
+                    f"{label} exceeds its cap ({maximum})"
+                )
+    return tuple(sorted(rows_by_key.values(), key=sort_key))
+
+
 def _bounded_document_artifacts(
     values: Iterable[object], max_document_inputs: int
 ) -> tuple[object, ...]:
@@ -2442,6 +2506,7 @@ def build_collection_snapshot(
     from apps.documents.models import Document
     from apps.knowledge_graph.graph.assembly import (
         AssemblyConfig,
+        _config_payload,
         assembly_config_checksum,
         lock_collection_graph_scope,
     )
@@ -2603,10 +2668,17 @@ def build_collection_snapshot(
                 "collection build generation changed before snapshot"
             )
         build_generation = expected_generation
-        sources = tuple(
-            GraphArtifact.objects.select_for_update()
-            .filter(pk__in=source_ids)
-            .order_by("pk")
+        sources = _bounded_batched_query_rows(
+            source_ids,
+            lambda source_id_batch: (
+                GraphArtifact.objects.select_for_update()
+                .filter(pk__in=source_id_batch)
+                .order_by("pk")
+            ),
+            maximum=resolution_config.max_document_inputs,
+            label="document artifact snapshot",
+            row_key=lambda row: row.pk,
+            sort_key=lambda row: row.pk,
         )
         if tuple(item.pk for item in sources) != tuple(sorted(source_ids)):
             raise CollectionResolutionPersistenceError(
@@ -2680,7 +2752,10 @@ def build_collection_snapshot(
             resolution_config_checksum=resolver_checksum,
             assembly_version=assembly_config.version,
             assembly_config_checksum=assembly_config_checksum(assembly_config),
-            metadata={"manifest_version": 2},
+            metadata={
+                "manifest_version": 2,
+                "assembly_config": _config_payload(assembly_config),
+            },
         )
         rows = [
             CollectionArtifactInput(
@@ -2782,10 +2857,17 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
         raise CollectionResolutionPersistenceError(
             "collection manifest repeats a document artifact"
         )
-    locked_sources = tuple(
-        GraphArtifact.objects.select_for_update()
-        .filter(pk__in=source_ids)
-        .order_by("pk")
+    locked_sources = _bounded_batched_query_rows(
+        source_ids,
+        lambda source_id_batch: (
+            GraphArtifact.objects.select_for_update()
+            .filter(pk__in=source_id_batch)
+            .order_by("pk")
+        ),
+        maximum=MAX_COLLECTION_DOCUMENT_INPUTS,
+        label="collection manifest source artifact",
+        row_key=lambda row: row.pk,
+        sort_key=lambda row: row.pk,
     )
     if {row.pk for row in locked_sources} != set(source_ids):
         raise CollectionResolutionPersistenceError(
@@ -2873,6 +2955,8 @@ def _load_resolution_source_rows(
     for_update: bool = False,
     config: CollectionResolutionConfig | None = None,
 ):
+    from django.db.models import Q
+
     from apps.knowledge_graph.models import (
         DocumentEntity,
         DocumentEntityMention,
@@ -2886,31 +2970,41 @@ def _load_resolution_source_rows(
         )
     config.__post_init__()
     manifest_by_artifact = {row.document_artifact_id: row for row in manifest_rows}
-    source_entity_query = DocumentEntity.objects.filter(
-        artifact_id__in=manifest_by_artifact,
-        status=DocumentEntity.Status.ACTIVE,
-    ).order_by("pk")
-    if for_update:
-        source_entity_query = source_entity_query.select_for_update()
-    source_entities = _bounded_query_rows(
+
+    def source_entity_query(artifact_id_batch):
+        query = DocumentEntity.objects.filter(
+            artifact_id__in=artifact_id_batch,
+            status=DocumentEntity.Status.ACTIVE,
+        ).order_by("pk")
+        return query.select_for_update() if for_update else query
+
+    source_entities = _bounded_batched_query_rows(
+        manifest_by_artifact,
         source_entity_query,
-        config.max_entities,
-        "collection source entity",
+        maximum=config.max_entities,
+        label="collection source entity",
+        row_key=lambda row: row.pk,
+        sort_key=lambda row: row.pk,
     )
-    membership_query = (
-        DocumentEntityMention.objects.select_related("mention")
-        .filter(
-            document_entity__in=source_entities,
-            status=DocumentEntityMention.Status.ACTIVE,
+
+    def membership_query(document_entity_id_batch):
+        query = (
+            DocumentEntityMention.objects.select_related("mention")
+            .filter(
+                document_entity_id__in=document_entity_id_batch,
+                status=DocumentEntityMention.Status.ACTIVE,
+            )
+            .order_by("document_entity_id", "mention_id")
         )
-        .order_by("document_entity_id", "mention_id")
-    )
-    if for_update:
-        membership_query = membership_query.select_for_update()
-    memberships = _bounded_query_rows(
+        return query.select_for_update() if for_update else query
+
+    memberships = _bounded_batched_query_rows(
+        (row.pk for row in source_entities),
         membership_query,
-        config.max_memberships,
-        "collection membership",
+        maximum=config.max_memberships,
+        label="collection membership",
+        row_key=lambda row: row.pk,
+        sort_key=lambda row: (row.document_entity_id, row.mention_id, row.pk),
     )
     memberships_by_entity: dict[int, list[object]] = defaultdict(list)
     mention_owner: dict[int, int] = {}
@@ -2965,18 +3059,30 @@ def _load_resolution_source_rows(
                 document_resolution_confidence=entity.resolution_confidence,
             )
         )
-    relation_query = RelationMention.objects.filter(
-        artifact_id__in=manifest_by_artifact,
-        head_id__in=mention_owner,
-        tail_id__in=mention_owner,
-    ).order_by("pk")
-    if for_update:
-        relation_query = relation_query.select_for_update()
-    relation_rows = _bounded_query_rows(
+
+    def relation_query(mention_id_batch):
+        query = RelationMention.objects.filter(
+            Q(head_id__in=mention_id_batch) | Q(tail_id__in=mention_id_batch)
+        ).order_by("pk")
+        return query.select_for_update() if for_update else query
+
+    relation_rows = _bounded_batched_query_rows(
+        mention_owner,
         relation_query,
-        config.max_relations,
-        "collection relation",
+        maximum=config.max_relations,
+        label="collection relation",
+        row_key=lambda row: row.pk,
+        sort_key=lambda row: row.pk,
     )
+    for row in relation_rows:
+        if (
+            row.head_id in mention_owner
+            and row.tail_id in mention_owner
+            and row.artifact_id not in manifest_by_artifact
+        ):
+            raise CollectionResolutionPersistenceError(
+                "collection relation escaped the exact manifest"
+            )
     supported_relations = tuple(
         SupportedRelation(
             relation_id=row.pk,
@@ -2987,7 +3093,9 @@ def _load_resolution_source_rows(
             supported=True,
         )
         for row in relation_rows
-        if mention_owner[row.head_id] != mention_owner[row.tail_id]
+        if row.head_id in mention_owner
+        and row.tail_id in mention_owner
+        and mention_owner[row.head_id] != mention_owner[row.tail_id]
     )
     return tuple(projected), supported_relations
 
@@ -3004,20 +3112,25 @@ def _filter_inputs_for_resolution(result, source_entity_rows, *, for_update: boo
     from apps.knowledge_graph.models import DocumentEntityMention, RelationMention
 
     source_ids = tuple(row.pk for row in source_entity_rows)
-    membership_query = (
-        DocumentEntityMention.objects.select_related("mention")
-        .filter(
-            document_entity_id__in=source_ids,
-            status=DocumentEntityMention.Status.ACTIVE,
+
+    def membership_query(document_entity_id_batch):
+        query = (
+            DocumentEntityMention.objects.select_related("mention")
+            .filter(
+                document_entity_id__in=document_entity_id_batch,
+                status=DocumentEntityMention.Status.ACTIVE,
+            )
+            .order_by("document_entity_id", "mention_id")
         )
-        .order_by("document_entity_id", "mention_id")
-    )
-    if for_update:
-        membership_query = membership_query.select_for_update()
-    memberships = _bounded_query_rows(
+        return query.select_for_update() if for_update else query
+
+    memberships = _bounded_batched_query_rows(
+        source_ids,
         membership_query,
-        result.config.max_memberships,
-        "collection membership",
+        maximum=result.config.max_memberships,
+        label="collection membership",
+        row_key=lambda row: row.pk,
+        sort_key=lambda row: (row.document_entity_id, row.mention_id, row.pk),
     )
     by_source: dict[int, list[object]] = defaultdict(list)
     mention_ids: set[int] = set()
@@ -3029,17 +3142,24 @@ def _filter_inputs_for_resolution(result, source_entity_rows, *, for_update: boo
             )
         mention_ids.add(membership.mention_id)
     participation = {mention_id: 0 for mention_id in mention_ids}
-    relation_query = RelationMention.objects.filter(
-        Q(head_id__in=mention_ids) | Q(tail_id__in=mention_ids)
-    ).order_by("pk")
-    if for_update:
-        relation_query = relation_query.select_for_update()
-    relation_rows = _bounded_query_rows(
-        relation_query.values_list("head_id", "tail_id"),
-        result.config.max_relations,
-        "collection relation",
+
+    def relation_query(mention_id_batch):
+        query = RelationMention.objects.filter(
+            Q(head_id__in=mention_id_batch) | Q(tail_id__in=mention_id_batch)
+        ).order_by("pk")
+        if for_update:
+            query = query.select_for_update()
+        return query.values_list("pk", "head_id", "tail_id")
+
+    relation_rows = _bounded_batched_query_rows(
+        mention_ids,
+        relation_query,
+        maximum=result.config.max_relations,
+        label="collection relation",
+        row_key=lambda row: row[0],
+        sort_key=lambda row: row[0],
     )
-    for head_id, tail_id in relation_rows:
+    for _relation_id, head_id, tail_id in relation_rows:
         if head_id in participation:
             participation[head_id] += 1
         if tail_id in participation:
@@ -3190,18 +3310,20 @@ def load_collection_filter_inputs(
             ontology=None,
             replay=False,
         )
-        source_row_query = (
-            DocumentEntity.objects.select_for_update()
-            .filter(
-                artifact_id__in=snapshot.document_artifact_ids,
-                status=DocumentEntity.Status.ACTIVE,
-            )
-            .order_by("pk")
-        )
-        source_rows = _bounded_query_rows(
-            source_row_query,
-            result.config.max_entities,
-            "collection source entity",
+        source_rows = _bounded_batched_query_rows(
+            snapshot.document_artifact_ids,
+            lambda artifact_id_batch: (
+                DocumentEntity.objects.select_for_update()
+                .filter(
+                    artifact_id__in=artifact_id_batch,
+                    status=DocumentEntity.Status.ACTIVE,
+                )
+                .order_by("pk")
+            ),
+            maximum=result.config.max_entities,
+            label="collection source entity",
+            row_key=lambda row: row.pk,
+            sort_key=lambda row: row.pk,
         )
         return _filter_inputs_for_resolution(result, source_rows, for_update=True)
 
@@ -4141,18 +4263,20 @@ def persist_collection_resolution(
             "collection manifest",
         )
         snapshot = _snapshot_from_locked_manifest(artifact, manifest)
-        source_entity_query = (
-            DocumentEntity.objects.select_for_update()
-            .filter(
-                artifact_id__in=snapshot.document_artifact_ids,
-                status=DocumentEntity.Status.ACTIVE,
-            )
-            .order_by("pk")
-        )
-        source_entities = _bounded_query_rows(
-            source_entity_query,
-            result.config.max_entities,
-            "collection source entity",
+        source_entities = _bounded_batched_query_rows(
+            snapshot.document_artifact_ids,
+            lambda artifact_id_batch: (
+                DocumentEntity.objects.select_for_update()
+                .filter(
+                    artifact_id__in=artifact_id_batch,
+                    status=DocumentEntity.Status.ACTIVE,
+                )
+                .order_by("pk")
+            ),
+            maximum=result.config.max_entities,
+            label="collection source entity",
+            row_key=lambda row: row.pk,
+            sort_key=lambda row: row.pk,
         )
         projected, source_relations = _load_resolution_source_rows(
             artifact,
@@ -4161,7 +4285,9 @@ def persist_collection_resolution(
             config=result.config,
         )
         raw_relation_count, raw_relation_fingerprint = _raw_relation_snapshot(
-            manifest, for_update=True
+            manifest,
+            for_update=True,
+            max_relations=result.config.max_relations,
         )
         _validate_result_against_source(
             result,

@@ -408,6 +408,7 @@ def test_current_state_querysets_exclude_building_artifacts_and_relations():
 
 
 def test_task9_marker_fingerprints_all_raw_relation_evidence_for_task10():
+    from apps.knowledge_graph.graph import assembly as module
     from apps.knowledge_graph.graph.assembly import _validate_task9_lineage_node
     from apps.knowledge_graph.resolution.collection import (
         _raw_relation_snapshot,
@@ -424,8 +425,15 @@ def test_task9_marker_fingerprints_all_raw_relation_evidence_for_task10():
     assert "_raw_relation_snapshot" in task10_source
     assert "RelationMention.objects" in fingerprint_source
     assert ".iterator(" in fingerprint_source
-    assert "ASSEMBLY_V1_MAX_EVIDENCE" in fingerprint_source
+    assert "ASSEMBLY_V1_MAX_EVIDENCE" not in fingerprint_source
+    assert "max_relations" in fingerprint_source
+    assert "max_relations=result.config.max_relations" in "".join(task9_source.split())
+    assert 'max_relations=marker["max_relations"]' in "".join(task10_source.split())
     assert "tuple(query)" not in fingerprint_source
+
+    projection_source = inspect.getsource(module._load_assembly_evidence)
+    assert "config.max_evidence" in projection_source
+    assert "ASSEMBLY_V1_MAX_EVIDENCE" not in projection_source
 
 
 def test_activation_fence_remembers_a_newer_artifact_that_previously_won():
@@ -478,7 +486,7 @@ def test_collection_operations_share_advisory_collection_artifact_lock_order():
     assert (
         snapshot.index("lock_collection_graph_scope")
         < snapshot.index("scope_artifacts = tuple")
-        < snapshot.index("sources = tuple")
+        < snapshot.index("sources = _bounded_batched_query_rows")
     )
     assert (
         filtering.index("lock_collection_graph_scope")

@@ -639,6 +639,7 @@ def _filter_inputs_from_artifact(artifact, config=None):
     )
     from apps.knowledge_graph.resolution.collection import (
         CollectionResolutionConfig,
+        _bounded_batched_query_rows,
         _bounded_query_rows,
     )
 
@@ -675,19 +676,25 @@ def _filter_inputs_from_artifact(artifact, config=None):
     for link in automatic_links:
         links_by_entity.setdefault(link.collection_entity_id, []).append(link)
         document_entity_ids.append(link.document_entity_id)
-    membership_query = (
-        DocumentEntityMention.objects.select_for_update()
-        .select_related("mention")
-        .filter(
-            document_entity_id__in=document_entity_ids,
-            status=DocumentEntityMention.Status.ACTIVE,
+
+    def membership_query(document_entity_id_batch):
+        return (
+            DocumentEntityMention.objects.select_for_update()
+            .select_related("mention")
+            .filter(
+                document_entity_id__in=document_entity_id_batch,
+                status=DocumentEntityMention.Status.ACTIVE,
+            )
+            .order_by("document_entity_id", "mention_id")
         )
-        .order_by("document_entity_id", "mention_id")
-    )
-    memberships = _bounded_query_rows(
+
+    memberships = _bounded_batched_query_rows(
+        document_entity_ids,
         membership_query,
-        config.max_memberships,
-        "filter membership",
+        maximum=config.max_memberships,
+        label="filter membership",
+        row_key=lambda row: row.pk,
+        sort_key=lambda row: (row.document_entity_id, row.mention_id, row.pk),
     )
     memberships_by_document_entity: dict[int, list[object]] = {}
     all_mention_ids: set[int] = set()
@@ -697,17 +704,24 @@ def _filter_inputs_from_artifact(artifact, config=None):
         ).append(membership)
         all_mention_ids.add(membership.mention_id)
     participation: dict[int, int] = {mention_id: 0 for mention_id in all_mention_ids}
-    relation_query = (
-        RelationMention.objects.select_for_update()
-        .filter(Q(head_id__in=all_mention_ids) | Q(tail_id__in=all_mention_ids))
-        .values_list("head_id", "tail_id")
-    )
-    relation_rows = _bounded_query_rows(
+
+    def relation_query(mention_id_batch):
+        return (
+            RelationMention.objects.select_for_update()
+            .filter(Q(head_id__in=mention_id_batch) | Q(tail_id__in=mention_id_batch))
+            .order_by("pk")
+            .values_list("pk", "head_id", "tail_id")
+        )
+
+    relation_rows = _bounded_batched_query_rows(
+        all_mention_ids,
         relation_query,
-        config.max_relations,
-        "filter relation",
+        maximum=config.max_relations,
+        label="filter relation",
+        row_key=lambda row: row[0],
+        sort_key=lambda row: row[0],
     )
-    for head_id, tail_id in relation_rows:
+    for _relation_id, head_id, tail_id in relation_rows:
         if head_id in participation:
             participation[head_id] += 1
         if tail_id in participation:
@@ -924,30 +938,22 @@ def _canonical_marker_checksum(marker: object) -> str:
     ).hexdigest()
 
 
-def _lock_filter_source_commit(
+def _lock_filter_source_envelope(
     *,
     source,
-    source_manifest,
-    source_entities,
-    source_links,
     source_runs,
     preferred_run_id: int | None = None,
 ):
-    """Bind a fully authenticated source run, preserving an existing binding."""
+    """Authenticate and bind one source marker before materializing its rows."""
 
     from apps.knowledge_graph.graph.assembly import (
         CollectionGraphAssemblyError,
-        _validate_task9_lineage,
+        _persisted_assembly_config,
+        _validate_task9_marker_envelope,
     )
 
     def validate(run):
-        stats = run.stats if type(run.stats) is dict else {}
-        resolution = stats.get("collection_resolution_commit")
-        filter_commit = stats.get("filter_commit")
-        if (resolution is None) == (filter_commit is None):
-            return None
-        marker = resolution if resolution is not None else filter_commit
-        if type(marker) is not dict or any(
+        if any(
             getattr(run, field) != getattr(source, field)
             for field in (
                 "scope_type",
@@ -967,15 +973,13 @@ def _lock_filter_source_commit(
         ):
             return None
         try:
-            _validate_task9_lineage(
-                source,
-                run,
-                source_manifest,
-                source_entities,
-                source_links,
+            assembly_config = _persisted_assembly_config(source, run)
+            _kind, marker = _validate_task9_marker_envelope(
+                source, run, config=assembly_config
             )
         except CollectionGraphAssemblyError:
             return None
+        stats = run.stats if type(run.stats) is dict else {}
         assembly_marker = stats.get("collection_assembly_commit")
         if assembly_marker is not None:
             if type(assembly_marker) is not dict:
@@ -996,6 +1000,17 @@ def _lock_filter_source_commit(
             run,
             _canonical_marker_checksum(marker),
             None if assembly_marker is None else assembly_marker["marker_checksum"],
+            assembly_config,
+            {
+                key: marker[key]
+                for key in (
+                    "max_document_inputs",
+                    "max_entities",
+                    "max_memberships",
+                    "max_relations",
+                    "max_links",
+                )
+            },
         )
 
     runs = tuple(source_runs)
@@ -1016,6 +1031,42 @@ def _lock_filter_source_commit(
     raise ValueError("filter rerun source has no valid committed build run")
 
 
+def _lock_filter_source_commit(
+    *,
+    source,
+    source_manifest,
+    source_entities,
+    source_links,
+    source_runs,
+    preferred_run_id: int | None = None,
+):
+    """Bind a fully authenticated source run, preserving an existing binding."""
+
+    from apps.knowledge_graph.graph.assembly import (
+        CollectionGraphAssemblyError,
+        _validate_task9_lineage,
+    )
+
+    envelope = _lock_filter_source_envelope(
+        source=source,
+        source_runs=source_runs,
+        preferred_run_id=preferred_run_id,
+    )
+    run, task9_checksum, assembly_checksum, assembly_config, _source_caps = envelope
+    try:
+        _validate_task9_lineage(
+            source,
+            run,
+            source_manifest,
+            source_entities,
+            source_links,
+            config=assembly_config,
+        )
+    except CollectionGraphAssemblyError as exc:
+        raise ValueError("filter rerun source rows failed exact validation") from exc
+    return run, task9_checksum, assembly_checksum, assembly_config
+
+
 def _validate_existing_filter_rerun(
     *,
     destination,
@@ -1030,12 +1081,14 @@ def _validate_existing_filter_rerun(
     source_build_run_id,
     source_task9_marker_checksum,
     source_assembly_marker_checksum,
+    source_assembly_config,
     max_document_inputs,
     max_entities,
     max_memberships,
     max_relations,
     max_links,
 ):
+    from apps.knowledge_graph.graph.assembly import _config_payload
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
         CollectionEntity,
@@ -1044,8 +1097,6 @@ def _validate_existing_filter_rerun(
         GraphBuildRun,
     )
     from apps.knowledge_graph.resolution.collection import (
-        MAX_COLLECTION_ENTITIES,
-        MAX_COLLECTION_LINKS,
         _bounded_query_rows,
         _snapshot_from_locked_manifest,
     )
@@ -1058,6 +1109,7 @@ def _validate_existing_filter_rerun(
         "filter_source_task9_marker_checksum": source_task9_marker_checksum,
         "filter_source_assembly_marker_checksum": source_assembly_marker_checksum,
         "filter_result_checksum": projection_checksum,
+        "assembly_config": _config_payload(source_assembly_config),
     }:
         raise ValueError("existing filter rerun artifact audit is corrupt")
     manifest_query = (
@@ -1166,12 +1218,12 @@ def _validate_existing_filter_rerun(
     )
     entities = _bounded_query_rows(
         entity_query,
-        MAX_COLLECTION_ENTITIES,
+        max_entities,
         "existing filter entity",
     )
     links = _bounded_query_rows(
         link_query,
-        MAX_COLLECTION_LINKS,
+        max_links,
         "existing filter link",
     )
     if len(entities) != len(source_entities) or len(links) != len(source_links):
@@ -1254,7 +1306,10 @@ def create_filter_rerun_artifact(
 
     from django.db import transaction
 
-    from apps.knowledge_graph.graph.assembly import lock_collection_graph_scope
+    from apps.knowledge_graph.graph.assembly import (
+        _config_payload,
+        lock_collection_graph_scope,
+    )
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
         CollectionEntity,
@@ -1263,9 +1318,6 @@ def create_filter_rerun_artifact(
         GraphBuildRun,
     )
     from apps.knowledge_graph.resolution.collection import (
-        MAX_COLLECTION_DOCUMENT_INPUTS,
-        MAX_COLLECTION_ENTITIES,
-        MAX_COLLECTION_LINKS,
         CollectionResolutionConfig,
         _bounded_query_rows,
         _collection_entity_row_audit,
@@ -1393,6 +1445,25 @@ def create_filter_rerun_artifact(
             expected_version=source.ontology_version,
             expected_checksum=source.ontology_checksum,
         )
+        (
+            source_build_run,
+            _source_task9_marker_checksum,
+            _source_assembly_marker_checksum,
+            _source_assembly_config,
+            source_caps,
+        ) = _lock_filter_source_envelope(
+            source=source,
+            source_runs=tuple(
+                run for run in scope_runs if run.artifact_id == source.pk
+            ),
+            preferred_run_id=preferred_run_id,
+        )
+        source_config = CollectionResolutionConfig(
+            max_entities=source_caps["max_entities"],
+            max_memberships=source_caps["max_memberships"],
+            max_relations=source_caps["max_relations"],
+            max_links=source_caps["max_links"],
+        )
         source_manifest_query = (
             CollectionArtifactInput.objects.select_for_update()
             .select_related("document_artifact", "collection")
@@ -1401,17 +1472,14 @@ def create_filter_rerun_artifact(
         )
         source_manifest = _bounded_query_rows(
             source_manifest_query,
-            MAX_COLLECTION_DOCUMENT_INPUTS,
+            source_caps["max_document_inputs"],
             "filter source manifest",
         )
         _snapshot_from_locked_manifest(source, source_manifest)
-        source_config = CollectionResolutionConfig()
         source_entities, evidence = _filter_inputs_from_artifact(
             source,
             source_config,
         )
-        if len(source_entities) > MAX_COLLECTION_ENTITIES:
-            raise ValueError("filter source entity cap exceeded")
         decisions = filter_collection_entities(evidence, ontology, policy)
         decisions_by_id = {int(item.entity_id): item for item in decisions}
         source_link_query = (
@@ -1422,7 +1490,7 @@ def create_filter_rerun_artifact(
         )
         source_links = _bounded_query_rows(
             source_link_query,
-            min(source_config.max_links, MAX_COLLECTION_LINKS),
+            source_caps["max_links"],
             "filter source link",
         )
         projection_checksum = _filter_rerun_projection_checksum(
@@ -1436,6 +1504,7 @@ def create_filter_rerun_artifact(
             source_build_run,
             source_task9_marker_checksum,
             source_assembly_marker_checksum,
+            source_assembly_config,
         ) = _lock_filter_source_commit(
             source=source,
             source_manifest=source_manifest,
@@ -1444,45 +1513,9 @@ def create_filter_rerun_artifact(
             source_runs=tuple(
                 run for run in scope_runs if run.artifact_id == source.pk
             ),
-            preferred_run_id=preferred_run_id,
+            preferred_run_id=source_build_run.pk,
         )
-        source_stats = (
-            source_build_run.stats if type(source_build_run.stats) is dict else {}
-        )
-        source_marker = source_stats.get("collection_resolution_commit")
-        if source_marker is None:
-            source_marker = source_stats.get("filter_commit")
-        manifest_cap = (
-            None
-            if type(source_marker) is not dict
-            else source_marker.get("max_document_inputs")
-        )
-        if (
-            type(manifest_cap) is not int
-            or not 1 <= manifest_cap <= MAX_COLLECTION_DOCUMENT_INPUTS
-            or len(source_manifest) > manifest_cap
-        ):
-            raise ValueError("filter source manifest cap is invalid")
-        cap_limits = {
-            "max_entities": MAX_COLLECTION_ENTITIES,
-            "max_memberships": source_config.max_memberships,
-            "max_relations": source_config.max_relations,
-            "max_links": MAX_COLLECTION_LINKS,
-        }
-        source_caps = {
-            key: source_marker.get(key) if type(source_marker) is dict else None
-            for key in cap_limits
-        }
-        if any(
-            type(source_caps[key]) is not int or not 1 <= source_caps[key] <= maximum
-            for key, maximum in cap_limits.items()
-        ):
-            raise ValueError("filter source row caps are invalid")
-        if (
-            len(source_entities) > source_caps["max_entities"]
-            or len(source_links) > source_caps["max_links"]
-        ):
-            raise ValueError("filter source rows exceed their committed caps")
+        manifest_cap = source_caps["max_document_inputs"]
         if existing is not None:
             return _validate_existing_filter_rerun(
                 destination=existing,
@@ -1497,6 +1530,7 @@ def create_filter_rerun_artifact(
                 source_build_run_id=source_build_run.pk,
                 source_task9_marker_checksum=source_task9_marker_checksum,
                 source_assembly_marker_checksum=source_assembly_marker_checksum,
+                source_assembly_config=source_assembly_config,
                 max_document_inputs=manifest_cap,
                 max_entities=source_caps["max_entities"],
                 max_memberships=source_caps["max_memberships"],
@@ -1521,6 +1555,7 @@ def create_filter_rerun_artifact(
                     source_assembly_marker_checksum
                 ),
                 "filter_result_checksum": projection_checksum,
+                "assembly_config": _config_payload(source_assembly_config),
             },
             **identity,
         )

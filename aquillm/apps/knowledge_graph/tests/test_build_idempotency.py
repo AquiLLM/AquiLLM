@@ -510,35 +510,28 @@ def test_terminal_bookkeeping_failure_never_masks_the_original_stage_error(monke
         )
 
 
-def test_collection_context_caps_documents_entities_chunks_and_characters_first():
+def test_collection_context_caps_only_graph_inputs_not_aggregate_source_volume():
     from apps.knowledge_graph.services import builds
 
-    resolution_config = SimpleNamespace(max_document_inputs=2, max_entities=3)
+    resolution_config = SimpleNamespace(max_document_inputs=10, max_entities=3)
     assembly_config = SimpleNamespace(
-        max_document_inputs=2,
+        max_document_inputs=10,
         max_entities=4,
-        max_evidence=5,
+        max_evidence=1,
     )
     builds._validate_collection_context_caps(
-        document_count=2,
-        entity_count=3,
-        chunk_count=5,
-        character_count=24,
+        document_count=10,
+        entity_count=1,
         resolution_config=resolution_config,
         assembly_config=assembly_config,
-        max_text_characters=8,
     )
     for changed, message in (
-        ({"document_count": 3}, "document"),
+        ({"document_count": 11}, "document"),
         ({"entity_count": 4}, "entity"),
-        ({"chunk_count": 6}, "chunk"),
-        ({"character_count": 25}, "character"),
     ):
         values = {
-            "document_count": 2,
-            "entity_count": 3,
-            "chunk_count": 5,
-            "character_count": 24,
+            "document_count": 10,
+            "entity_count": 1,
             **changed,
         }
         with pytest.raises(builds.CorruptBuildError, match=message):
@@ -546,7 +539,6 @@ def test_collection_context_caps_documents_entities_chunks_and_characters_first(
                 **values,
                 resolution_config=resolution_config,
                 assembly_config=assembly_config,
-                max_text_characters=8,
             )
 
     source = inspect.getsource(builds._collection_context)
@@ -555,9 +547,10 @@ def test_collection_context_caps_documents_entities_chunks_and_characters_first(
     assert source.index("_validate_collection_context_caps(") < source.index(
         "current_chunks = _ordered_chunks("
     )
-    assert source.index('Sum(Length("full_text"))') < source.index(
-        "documents = tuple(document_values)"
-    )
+    assert 'Sum(Length("full_text"))' not in source
+    assert "TextChunk.objects.filter" not in source
+    assert "materialized_chunk_count" not in source
+    assert "materialized_character_count" not in source
     assert "_bounded_context_rows(" in source
     assert "contributing_rows" not in source
     assert "collection awaits fresh document graph artifacts" in source

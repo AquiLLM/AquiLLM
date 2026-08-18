@@ -28,7 +28,7 @@ def test_task9_links_are_counted_before_they_are_materialized():
 
     assert "_bounded_query_rows(" in source
     assert "link_query" in source
-    assert "config.max_links" in source
+    assert "link_cap" in source
     assert "tuple(link_query)" not in source
 
 
@@ -37,7 +37,7 @@ def test_task9_entities_are_counted_before_they_are_materialized():
 
     assert "_bounded_query_rows(" in source
     assert "entity_query" in source
-    assert "config.max_entities" in source
+    assert "entity_cap" in source
     assert "tuple(entity_query)" not in source
 
 
@@ -73,6 +73,200 @@ def test_collection_paths_lock_contributors_before_the_ontology_row():
     assert active_source.index("_validate_locked_manifest(") < active_source.index(
         "_resolve_ontology("
     )
+
+
+def test_filter_source_lineage_uses_exact_persisted_assembly_config(monkeypatch):
+    from apps.knowledge_graph.graph import filtering
+    from apps.knowledge_graph.resolution.collection import build_collection_snapshot
+
+    config = replace(
+        assembly.AssemblyConfig(),
+        max_document_inputs=7,
+        max_filter_lineage_depth=2,
+    )
+    checksum = assembly.assembly_config_checksum(config)
+    identity = {
+        "scope_type": "collection",
+        "scope_id": "17",
+        "source_hash": "a" * 64,
+        "ontology_version": "1.0.0",
+        "extractor_version": "extractor-v1",
+        "resolver_version": "resolver-v1",
+        "filter_policy_version": "filter-v1",
+        "embedding_model_signature": "embedding-v1",
+        "ontology_checksum": "b" * 64,
+        "filter_policy_checksum": "c" * 64,
+        "resolution_config_checksum": "d" * 64,
+        "assembly_version": config.version,
+        "assembly_config_checksum": checksum,
+    }
+    source = SimpleNamespace(
+        pk=11,
+        metadata={"assembly_config": assembly._config_payload(config)},
+        **identity,
+    )
+    run = SimpleNamespace(
+        pk=12,
+        attempt=1,
+        stats={"collection_resolution_commit": {"version": 1}},
+        **identity,
+    )
+    captured = []
+    envelope_configs = []
+
+    def validate_envelope(_artifact, _run, *, config=None):
+        envelope_configs.append(config)
+        return (
+            "resolution",
+            {
+                "max_document_inputs": 7,
+                "max_entities": 50_000,
+                "max_memberships": 250_000,
+                "max_relations": 250_000,
+                "max_links": 250_000,
+            },
+        )
+
+    def validate_lineage(*_args, config=None, **_kwargs):
+        captured.append(config)
+        return "e" * 64
+
+    monkeypatch.setattr(assembly, "_validate_task9_lineage", validate_lineage)
+    monkeypatch.setattr(
+        assembly,
+        "_validate_task9_marker_envelope",
+        validate_envelope,
+    )
+    filtering._lock_filter_source_commit(
+        source=source,
+        source_manifest=(),
+        source_entities=(),
+        source_links=(),
+        source_runs=(run,),
+    )
+
+    assert envelope_configs == [config]
+    assert captured == [config]
+    assert captured[0].max_document_inputs == 7
+    assert captured[0].max_filter_lineage_depth == 2
+    snapshot_source = inspect.getsource(build_collection_snapshot)
+    assert '"assembly_config": _config_payload(assembly_config)' in snapshot_source
+
+
+def test_persisted_assembly_config_rejects_checksum_drift():
+    config = replace(assembly.AssemblyConfig(), max_filter_lineage_depth=1)
+    artifact = SimpleNamespace(
+        metadata={"assembly_config": assembly._config_payload(config)},
+        assembly_version=config.version,
+        assembly_config_checksum="0" * 64,
+    )
+    run = SimpleNamespace(
+        stats={},
+        assembly_version=config.version,
+        assembly_config_checksum="0" * 64,
+    )
+
+    with pytest.raises(assembly.CollectionGraphAssemblyError, match="immutable"):
+        assembly._persisted_assembly_config(artifact, run)
+
+
+def test_scoped_task10_loads_custom_persisted_config_instead_of_default():
+    from apps.knowledge_graph.models import GraphArtifact
+
+    config = replace(
+        assembly.AssemblyConfig(),
+        max_evidence=123,
+        max_filter_lineage_depth=2,
+    )
+    checksum = assembly.assembly_config_checksum(config)
+    artifact = SimpleNamespace(
+        metadata={"assembly_config": assembly._config_payload(config)},
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
+        assembly_version=config.version,
+        assembly_config_checksum=checksum,
+    )
+    run = SimpleNamespace(
+        stats={},
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
+        assembly_version=config.version,
+        assembly_config_checksum=checksum,
+    )
+
+    assert assembly._resolve_config(artifact, run, None) == config
+    source = inspect.getsource(assembly._resolve_config)
+    assert "_persisted_assembly_config(artifact, run)" in source
+
+
+def test_task9_marker_row_caps_reject_forged_counts_before_row_audits():
+    from apps.knowledge_graph.models import GraphBuildRun
+
+    config = assembly.AssemblyConfig()
+    marker = {
+        "version": 1,
+        "policy_checksum": "a" * 64,
+        "ontology_checksum": "b" * 64,
+        "resolution_config_checksum": "c" * 64,
+        "max_document_inputs": config.max_document_inputs,
+        "max_entities": 1,
+        "max_memberships": 1,
+        "max_relations": 1,
+        "max_links": 1,
+        "filter_result_checksum": "d" * 64,
+        "source_artifact_id": 2,
+        "source_build_run_id": 3,
+        "source_task9_marker_checksum": "e" * 64,
+        "source_assembly_marker_checksum": None,
+        "source_hash": "f" * 64,
+        "assembly_version": config.version,
+        "assembly_config_checksum": assembly.assembly_config_checksum(config),
+        "manifest_count": 0,
+        "entity_count": 2,
+        "link_count": 2,
+    }
+    artifact = SimpleNamespace(
+        pk=1,
+        source_hash=marker["source_hash"],
+        ontology_checksum=marker["ontology_checksum"],
+        resolution_config_checksum=marker["resolution_config_checksum"],
+        assembly_version=config.version,
+        assembly_config_checksum=marker["assembly_config_checksum"],
+        filter_policy_checksum=marker["policy_checksum"],
+    )
+    run = SimpleNamespace(
+        Stage=GraphBuildRun.Stage,
+        Status=GraphBuildRun.Status,
+        stage=GraphBuildRun.Stage.FILTERING,
+        status=GraphBuildRun.Status.SUCCEEDED,
+        stats={"filter_commit": marker},
+    )
+
+    with pytest.raises(assembly.CollectionGraphAssemblyError, match="row cap"):
+        assembly._validate_task9_marker_envelope(artifact, run, config=config)
+    with pytest.raises(assembly.CollectionGraphAssemblyError, match="row cap"):
+        assembly._validate_task9_lineage_node(
+            artifact,
+            run,
+            (),
+            (SimpleNamespace(), SimpleNamespace()),
+            (SimpleNamespace(), SimpleNamespace()),
+            config=config,
+        )
+    source = inspect.getsource(assembly._validate_task9_lineage_node)
+    assert source.index('len(entities) > marker["max_entities"]') < source.index(
+        "for row in entities"
+    )
+    assert source.index('len(links) > marker["max_links"]') < source.index(
+        "for row in links"
+    )
+
+
+def test_task9_rows_are_materialized_under_exact_marker_caps():
+    source = inspect.getsource(assembly._load_locked_task9_rows)
+
+    assert "artifact: object, run: object, config: AssemblyConfig" in source
+    assert "_task9_marker_query_caps(run, config)" in source
+    assert "entity_query,\n            entity_cap," in source
+    assert "link_query,\n            link_cap," in source
 
 
 def test_filter_lineage_depth_is_hard_bounded_and_checksum_addressed():

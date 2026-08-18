@@ -21,8 +21,8 @@ from time import perf_counter
 import structlog
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, transaction
-from django.db.models import Count, DateTimeField, ExpressionWrapper, F, Q, Sum, Value
-from django.db.models.functions import Length, Now
+from django.db.models import DateTimeField, ExpressionWrapper, F, Q, Value
+from django.db.models.functions import Now
 from django.utils import timezone
 
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -1939,19 +1939,14 @@ def _validate_collection_context_caps(
     *,
     document_count: int,
     entity_count: int,
-    chunk_count: int,
-    character_count: int,
     resolution_config: object,
     assembly_config: object,
-    max_text_characters: int,
 ) -> None:
-    """Reject oversized collection inputs before loading any source content."""
+    """Reject oversized graph inputs without coupling them to raw source volume."""
 
     counts = {
         "document": document_count,
         "entity": entity_count,
-        "chunk": chunk_count,
-        "character": character_count,
     }
     if any(type(value) is not int or value < 0 for value in counts.values()):
         raise CorruptBuildError(
@@ -1962,13 +1957,9 @@ def _validate_collection_context_caps(
         assembly_config.max_document_inputs,
     )
     entity_cap = min(resolution_config.max_entities, assembly_config.max_entities)
-    chunk_cap = assembly_config.max_evidence
-    character_cap = resolution_config.max_entities * max_text_characters
     for name, value, cap in (
         ("document", document_count, document_cap),
         ("entity", entity_count, entity_cap),
-        ("chunk", chunk_count, chunk_cap),
-        ("character", character_count, character_cap),
     ):
         if value > cap:
             raise CorruptBuildError(f"collection context {name} cap exceeded")
@@ -2005,7 +1996,7 @@ def _collection_context(
     embedding_model_signature: str | None = None,
 ) -> _CollectionContext:
     from apps.collections.models import Collection
-    from apps.documents.models import DESCENDED_FROM_DOCUMENT, TextChunk
+    from apps.documents.models import DESCENDED_FROM_DOCUMENT
     from apps.knowledge_graph.extraction.pipeline import (
         StaleSourceError,
         _ordered_chunks,
@@ -2027,7 +2018,6 @@ def _collection_context(
     )
     from apps.knowledge_graph.resolution import COLLECTION_RESOLVER_VERSION
     from apps.knowledge_graph.resolution.collection import (
-        MAX_TEXT_CHARACTERS,
         CollectionResolutionConfig,
         resolution_config_checksum,
     )
@@ -2061,21 +2051,11 @@ def _collection_context(
         model.objects.filter(collection_id=collection_id).count()
         for model in document_models
     )
-    document_character_count = sum(
-        model.objects.filter(collection_id=collection_id).aggregate(
-            character_count=Sum(Length("full_text"))
-        )["character_count"]
-        or 0
-        for model in document_models
-    )
     _validate_collection_context_caps(
         document_count=document_count,
         entity_count=0,
-        chunk_count=0,
-        character_count=document_character_count,
         resolution_config=resolution_config,
         assembly_config=assembly_config,
-        max_text_characters=MAX_TEXT_CHARACTERS,
     )
     document_id_values: list[object] = []
     for model in document_models:
@@ -2115,20 +2095,11 @@ def _collection_context(
         artifact_id__in=tuple(artifact.pk for artifact in artifacts),
         status=DocumentEntity.Status.ACTIVE,
     ).count()
-    chunk_totals = TextChunk.objects.filter(doc_id__in=artifact_document_ids).aggregate(
-        row_count=Count("pk"),
-        character_count=Sum(Length("content")),
-    )
-    chunk_count = chunk_totals["row_count"] or 0
-    character_count = document_character_count + (chunk_totals["character_count"] or 0)
     _validate_collection_context_caps(
         document_count=document_count,
         entity_count=entity_count,
-        chunk_count=chunk_count,
-        character_count=character_count,
         resolution_config=resolution_config,
         assembly_config=assembly_config,
-        max_text_characters=MAX_TEXT_CHARACTERS,
     )
     artifact_document_uuid_set = {uuid.UUID(value) for value in artifact_document_ids}
     document_values: list[object] = []
@@ -2149,25 +2120,10 @@ def _collection_context(
     documents_by_id = {str(document.id): document for document in documents}
     if set(documents_by_id) != set(artifact_document_ids):
         raise StaleBuildError("active document artifact escaped collection membership")
-    materialized_chunk_count = 0
-    materialized_character_count = document_character_count
     for artifact in artifacts:
         document = documents_by_id[artifact.scope_id]
         metadata = artifact.metadata if type(artifact.metadata) is dict else {}
         current_chunks = _ordered_chunks(document.id)
-        materialized_chunk_count += len(current_chunks)
-        materialized_character_count += sum(
-            len(chunk.content) for chunk in current_chunks
-        )
-        _validate_collection_context_caps(
-            document_count=document_count,
-            entity_count=entity_count,
-            chunk_count=materialized_chunk_count,
-            character_count=materialized_character_count,
-            resolution_config=resolution_config,
-            assembly_config=assembly_config,
-            max_text_characters=MAX_TEXT_CHARACTERS,
-        )
         current_chunk_signature = ordered_chunk_signature(
             current_chunks,
             concrete_model_label=document._meta.label_lower,
