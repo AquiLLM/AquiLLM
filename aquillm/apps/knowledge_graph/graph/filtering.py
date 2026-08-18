@@ -997,6 +997,7 @@ def _validate_existing_filter_rerun(
     source_build_run_id,
     source_task9_marker_checksum,
     source_assembly_marker_checksum,
+    max_document_inputs,
 ):
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
@@ -1019,12 +1020,15 @@ def _validate_existing_filter_rerun(
         "filter_result_checksum": projection_checksum,
     }:
         raise ValueError("existing filter rerun artifact audit is corrupt")
-    manifest = tuple(
+    manifest_query = (
         CollectionArtifactInput.objects.select_for_update()
         .select_related("document_artifact", "collection")
         .filter(artifact=destination)
         .order_by("document_artifact_id")
     )
+    if manifest_query.count() > max_document_inputs:
+        raise ValueError("existing filter rerun manifest exceeds its input cap")
+    manifest = tuple(manifest_query)
     if len(manifest) != len(source_manifest):
         raise ValueError("existing filter rerun is partial or corrupt")
     _snapshot_from_locked_manifest(destination, manifest)
@@ -1088,6 +1092,7 @@ def _validate_existing_filter_rerun(
         "policy_checksum": policy_checksum,
         "ontology_checksum": ontology_checksum,
         "resolution_config_checksum": source.resolution_config_checksum,
+        "max_document_inputs": max_document_inputs,
         "filter_result_checksum": projection_checksum,
         "source_artifact_id": source.pk,
         "source_build_run_id": source_build_run_id,
@@ -1202,6 +1207,7 @@ def create_filter_rerun_artifact(
         GraphBuildRun,
     )
     from apps.knowledge_graph.resolution.collection import (
+        MAX_COLLECTION_DOCUMENT_INPUTS,
         _collection_entity_row_audit,
         _collection_link_row_audit,
         _snapshot_from_locked_manifest,
@@ -1244,7 +1250,10 @@ def create_filter_rerun_artifact(
             )
         scope_runs = tuple(
             GraphBuildRun.objects.select_for_update()
-            .filter(artifact_id__in=(row.pk for row in scope_artifacts))
+            .filter(
+                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+                artifact__scope_id=str(collection_id),
+            )
             .order_by("pk")
         )
         if source.ontology_checksum != ontology_checksum:
@@ -1254,12 +1263,15 @@ def create_filter_rerun_artifact(
             expected_version=source.ontology_version,
             expected_checksum=source.ontology_checksum,
         )
-        source_manifest = tuple(
+        source_manifest_query = (
             CollectionArtifactInput.objects.select_for_update()
             .select_related("document_artifact", "collection")
             .filter(artifact=source)
             .order_by("document_artifact_id")
         )
+        if source_manifest_query.count() > MAX_COLLECTION_DOCUMENT_INPUTS:
+            raise ValueError("filter source manifest exceeds the v1 input cap")
+        source_manifest = tuple(source_manifest_query)
         _snapshot_from_locked_manifest(source, source_manifest)
         source_entities, evidence = _filter_inputs_from_artifact(source)
         decisions = filter_collection_entities(evidence, ontology, policy)
@@ -1320,6 +1332,25 @@ def create_filter_rerun_artifact(
             ),
             preferred_run_id=preferred_run_id,
         )
+        source_stats = (
+            source_build_run.stats
+            if type(source_build_run.stats) is dict
+            else {}
+        )
+        source_marker = source_stats.get("collection_resolution_commit")
+        if source_marker is None:
+            source_marker = source_stats.get("filter_commit")
+        manifest_cap = (
+            None
+            if type(source_marker) is not dict
+            else source_marker.get("max_document_inputs")
+        )
+        if (
+            type(manifest_cap) is not int
+            or not 1 <= manifest_cap <= MAX_COLLECTION_DOCUMENT_INPUTS
+            or len(source_manifest) > manifest_cap
+        ):
+            raise ValueError("filter source manifest cap is invalid")
         if existing is not None:
             return _validate_existing_filter_rerun(
                 destination=existing,
@@ -1334,6 +1365,7 @@ def create_filter_rerun_artifact(
                 source_build_run_id=source_build_run.pk,
                 source_task9_marker_checksum=source_task9_marker_checksum,
                 source_assembly_marker_checksum=source_assembly_marker_checksum,
+                max_document_inputs=manifest_cap,
             )
         destination = GraphArtifact.objects.create(
             status=GraphArtifact.Status.BUILDING,
@@ -1467,6 +1499,7 @@ def create_filter_rerun_artifact(
                     "policy_checksum": checksum,
                     "ontology_checksum": ontology_checksum,
                     "resolution_config_checksum": source.resolution_config_checksum,
+                    "max_document_inputs": manifest_cap,
                     "filter_result_checksum": projection_checksum,
                     "source_artifact_id": source.pk,
                     "source_build_run_id": source_build_run.pk,

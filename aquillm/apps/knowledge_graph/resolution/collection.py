@@ -15,6 +15,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
+from itertools import islice
 from math import isfinite
 
 from .normalization import normalize_entity_label
@@ -32,6 +33,7 @@ from .scoring import (
 COLLECTION_RESOLVER_VERSION = "collection-resolution-v1"
 EMBEDDING_PREPROCESSING_VERSION = "kg-entity-v1"
 MAX_COLLECTION_ENTITIES = 50_000
+MAX_COLLECTION_DOCUMENT_INPUTS = 10_000
 MAX_RELATIONS = 250_000
 MAX_TEXT_CHARACTERS = 8_192
 DEFAULT_EMBEDDING_BATCH_SIZE = 64
@@ -538,6 +540,7 @@ class CollectionResolutionConfig:
     neighborhood_weight: float = 0.15
     relation_support_threshold: float = 0.50
     max_entities: int = MAX_COLLECTION_ENTITIES
+    max_document_inputs: int = MAX_COLLECTION_DOCUMENT_INPUTS
 
     def __post_init__(self) -> None:
         if type(self.thresholds) is not ResolutionThresholds:
@@ -548,6 +551,11 @@ class CollectionResolutionConfig:
             ("max_candidate_pool_per_entity", 1, 10_000),
             ("exact_semantic_scan_limit", 2, 10_000),
             ("max_entities", 1, MAX_COLLECTION_ENTITIES),
+            (
+                "max_document_inputs",
+                1,
+                MAX_COLLECTION_DOCUMENT_INPUTS,
+            ),
         ):
             value = getattr(self, name)
             if type(value) is not int or not lower <= value <= upper:
@@ -594,6 +602,7 @@ def resolution_config_checksum(config: CollectionResolutionConfig) -> str:
             "neighborhood_weight": config.neighborhood_weight,
             "relation_support_threshold": config.relation_support_threshold,
             "max_entities": config.max_entities,
+            "max_document_inputs": config.max_document_inputs,
         }
     )
 
@@ -1504,6 +1513,7 @@ def _input_fingerprint(
                 "neighborhood_weight": config.neighborhood_weight,
                 "relation_support_threshold": config.relation_support_threshold,
                 "max_entities": config.max_entities,
+                "max_document_inputs": config.max_document_inputs,
             },
             "embedding": {
                 "model_signature": embedding_session.expected_model_signature,
@@ -2323,6 +2333,54 @@ class CollectionResolutionPersistenceError(RuntimeError):
     """Raised when a collection resolution write cannot preserve its snapshot."""
 
 
+def _bounded_document_artifacts(
+    values: Iterable[object], max_document_inputs: int
+) -> tuple[object, ...]:
+    """Consume at most one row beyond the checksum-addressed manifest cap."""
+
+    if (
+        type(max_document_inputs) is not int
+        or not 1 <= max_document_inputs <= MAX_COLLECTION_DOCUMENT_INPUTS
+    ):
+        raise CollectionResolutionPersistenceError(
+            "collection manifest cap is invalid"
+        )
+    query_count = getattr(values, "count", None)
+    query_iterator = getattr(values, "iterator", None)
+    if callable(query_count) and callable(query_iterator):
+        source_count = query_count()
+        if type(source_count) is not int or source_count < 0:
+            raise CollectionResolutionPersistenceError(
+                "document artifact query returned an invalid count"
+            )
+        if source_count > max_document_inputs:
+            raise CollectionResolutionPersistenceError(
+                "collection manifest exceeds its checksum-addressed "
+                "document-input cap"
+            )
+        source_iterator = query_iterator(
+            chunk_size=min(max_document_inputs, 1_000)
+        )
+    else:
+        try:
+            source_iterator = iter(values)
+        except TypeError as exc:
+            raise CollectionResolutionPersistenceError(
+                "document artifacts must be an iterable"
+            ) from exc
+    try:
+        rows = tuple(islice(source_iterator, max_document_inputs + 1))
+    except TypeError as exc:
+        raise CollectionResolutionPersistenceError(
+            "document artifacts must be an iterable"
+        ) from exc
+    if len(rows) > max_document_inputs:
+        raise CollectionResolutionPersistenceError(
+            "collection manifest exceeds its checksum-addressed document-input cap"
+        )
+    return rows
+
+
 def build_collection_snapshot(
     *,
     collection,
@@ -2401,6 +2459,13 @@ def build_collection_snapshot(
             "collection snapshot requires an exact assembly config"
         )
     assembly_config.__post_init__()
+    if (
+        resolution_config.max_document_inputs
+        != assembly_config.max_document_inputs
+    ):
+        raise CollectionResolutionPersistenceError(
+            "resolution and assembly manifest caps must match"
+        )
     policy_checksum = filter_policy_checksum(filter_policy)
     resolver_checksum = resolution_config_checksum(resolution_config)
     expected_signature = _bounded_text(
@@ -2426,7 +2491,10 @@ def build_collection_snapshot(
         raise CollectionResolutionPersistenceError(
             "collection embedding signature must bind one provider endpoint digest"
         )
-    source_objects = tuple(document_artifacts)
+    source_objects = _bounded_document_artifacts(
+        document_artifacts,
+        resolution_config.max_document_inputs,
+    )
     source_ids = tuple(getattr(item, "pk", None) for item in source_objects)
     if any(type(item) is not int or item <= 0 for item in source_ids):
         raise CollectionResolutionPersistenceError(
@@ -2438,7 +2506,7 @@ def build_collection_snapshot(
         )
     with transaction.atomic():
         collection = lock_collection_graph_scope(collection.pk)
-        scope_artifacts = tuple(
+        _scope_artifacts = tuple(
             GraphArtifact.objects.select_for_update()
             .filter(
                 scope_type=GraphArtifact.ScopeType.COLLECTION,
@@ -2446,15 +2514,20 @@ def build_collection_snapshot(
             )
             .order_by("pk")
         )
-        scope_artifact_ids = tuple(row.pk for row in scope_artifacts)
         _scope_runs = tuple(
             GraphBuildRun.objects.select_for_update()
-            .filter(artifact_id__in=scope_artifact_ids)
+            .filter(
+                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+                artifact__scope_id=str(collection.pk),
+            )
             .order_by("pk")
         )
         _scope_manifests = tuple(
             CollectionArtifactInput.objects.select_for_update()
-            .filter(artifact_id__in=scope_artifact_ids)
+            .filter(
+                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+                artifact__scope_id=str(collection.pk),
+            )
             .order_by("artifact_id", "document_artifact_id")
         )
         sources = tuple(
@@ -3282,6 +3355,7 @@ def _collection_resolution_marker_is_valid(
         "filter_policy_checksum",
         "ontology_checksum",
         "resolution_config_checksum",
+        "max_document_inputs",
         "embedding_model_signature",
         "assembly_version",
         "assembly_config_checksum",
@@ -3306,6 +3380,9 @@ def _collection_resolution_marker_is_valid(
         and marker.get("ontology_checksum") == artifact.ontology_checksum
         and marker.get("resolution_config_checksum")
         == artifact.resolution_config_checksum
+        and type(marker.get("max_document_inputs")) is int
+        and marker.get("max_document_inputs") == result.config.max_document_inputs
+        and len(result.snapshot.inputs) <= marker.get("max_document_inputs")
         and marker.get("embedding_model_signature")
         == artifact.embedding_model_signature
         and marker.get("assembly_version") == artifact.assembly_version
@@ -3768,7 +3845,10 @@ def persist_collection_resolution(
             )
         scope_runs = tuple(
             GraphBuildRun.objects.select_for_update()
-            .filter(artifact_id__in=(row.pk for row in scope_artifacts))
+            .filter(
+                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+                artifact__scope_id=str(collection_id),
+            )
             .order_by("pk")
         )
         run = next((row for row in scope_runs if row.pk == build_run_id), None)
@@ -3859,6 +3939,7 @@ def persist_collection_resolution(
             "filter_policy_checksum": filter_result.policy_checksum,
             "ontology_checksum": artifact.ontology_checksum,
             "resolution_config_checksum": artifact.resolution_config_checksum,
+            "max_document_inputs": result.config.max_document_inputs,
             "embedding_model_signature": artifact.embedding_model_signature,
             "assembly_version": artifact.assembly_version,
             "assembly_config_checksum": artifact.assembly_config_checksum,
@@ -3876,6 +3957,7 @@ def persist_collection_resolution(
 
 __all__ = [
     "COLLECTION_RESOLVER_VERSION",
+    "MAX_COLLECTION_DOCUMENT_INPUTS",
     "AliasEvidence",
     "CollectionBuildSnapshot",
     "CollectionEmbeddingSession",

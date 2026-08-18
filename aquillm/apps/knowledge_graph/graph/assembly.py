@@ -16,6 +16,10 @@ from hashlib import sha256
 from math import isfinite
 from typing import TYPE_CHECKING
 
+from apps.knowledge_graph.resolution.collection import (
+    MAX_COLLECTION_DOCUMENT_INPUTS,
+)
+
 if TYPE_CHECKING:
     from apps.knowledge_graph.services.ontology import OntologyDefinition
 
@@ -27,7 +31,8 @@ ASSEMBLY_V1_MAX_RELATIONS = 50_000
 ASSEMBLY_V1_MAX_EVIDENCE = 200_000
 ASSEMBLY_V1_MAX_ORPHAN_ENTITIES = ASSEMBLY_V1_MAX_ENTITIES
 _ASSEMBLY_INSERT_BATCH_SIZE = 1_000
-_ENDPOINT_ID_BATCH_SIZE = 5_000
+_QUERY_PREDICATE_BATCH_SIZE = 5_000
+_ENDPOINT_ID_BATCH_SIZE = _QUERY_PREDICATE_BATCH_SIZE
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_TOKEN_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 _ACTIVE = "active"
@@ -48,6 +53,7 @@ class AssemblyConfig:
     """Bounded, checksum-addressed collection assembly policy."""
 
     version: str = ASSEMBLY_VERSION
+    max_document_inputs: int = MAX_COLLECTION_DOCUMENT_INPUTS
     max_entities: int = ASSEMBLY_V1_MAX_ENTITIES
     max_links: int = ASSEMBLY_V1_MAX_LINKS
     # V1 materializes its deterministic projection before batched persistence.
@@ -84,6 +90,7 @@ class AssemblyConfig:
         ):
             raise ValueError("assembly version must be a safe nonempty string")
         upper_bounds = {
+            "max_document_inputs": MAX_COLLECTION_DOCUMENT_INPUTS,
             "max_entities": ASSEMBLY_V1_MAX_ENTITIES,
             "max_links": ASSEMBLY_V1_MAX_LINKS,
             "max_relations": ASSEMBLY_V1_MAX_RELATIONS,
@@ -124,6 +131,7 @@ def assembly_config_checksum(config: AssemblyConfig) -> str:
     config.__post_init__()
     payload = {
         "version": config.version,
+        "max_document_inputs": config.max_document_inputs,
         "max_entities": config.max_entities,
         "max_links": config.max_links,
         "max_relations": config.max_relations,
@@ -538,19 +546,27 @@ def _source_hash(value: object) -> str:
     return value
 
 
+def _query_value_batches(values: Iterable[object]) -> Iterator[tuple[object, ...]]:
+    """Yield stable, deduplicated values in bounded predicate batches."""
+
+    ordered = tuple(sorted(set(values)))
+    for offset in range(0, len(ordered), _QUERY_PREDICATE_BATCH_SIZE):
+        yield ordered[offset : offset + _QUERY_PREDICATE_BATCH_SIZE]
+
+
 def _id_batches(values: Iterable[int]) -> Iterator[tuple[int, ...]]:
-    """Yield stable endpoint-ID batches small enough for PostgreSQL predicates."""
+    """Yield stable positive database-ID batches for bounded predicates."""
 
     ordered = tuple(sorted(set(values)))
     if any(type(value) is not int or value < 1 for value in ordered):
         raise CollectionGraphAssemblyError("endpoint IDs must be positive integers")
-    for offset in range(0, len(ordered), _ENDPOINT_ID_BATCH_SIZE):
-        yield ordered[offset : offset + _ENDPOINT_ID_BATCH_SIZE]
+    yield from _query_value_batches(ordered)
 
 
 def _config_payload(config: AssemblyConfig) -> dict[str, object]:
     return {
         "version": config.version,
+        "max_document_inputs": config.max_document_inputs,
         "max_entities": config.max_entities,
         "max_links": config.max_links,
         "max_relations": config.max_relations,
@@ -569,6 +585,7 @@ def _config_from_marker(marker: object) -> AssemblyConfig:
     try:
         if set(payload) != {
             "version",
+            "max_document_inputs",
             "max_entities",
             "max_links",
             "max_relations",
@@ -585,6 +602,7 @@ def _config_from_marker(marker: object) -> AssemblyConfig:
             raise ValueError("assembly relation policies must be lists")
         return AssemblyConfig(
             version=payload["version"],
+            max_document_inputs=payload["max_document_inputs"],
             max_entities=payload["max_entities"],
             max_links=payload["max_links"],
             max_relations=payload["max_relations"],
@@ -727,6 +745,7 @@ def _validate_task9_lineage(
     entities: tuple[object, ...],
     links: tuple[object, ...],
     *,
+    config: AssemblyConfig | None = None,
     visited_artifact_ids: frozenset[int] = frozenset(),
 ) -> str:
     from apps.knowledge_graph.resolution.collection import (
@@ -742,6 +761,15 @@ def _validate_task9_lineage(
     if artifact.pk in visited_artifact_ids:
         raise CollectionGraphAssemblyError("Task 9 lineage contains an artifact cycle")
     visited_artifact_ids = visited_artifact_ids | {artifact.pk}
+    max_document_inputs = (
+        MAX_COLLECTION_DOCUMENT_INPUTS
+        if config is None
+        else config.max_document_inputs
+    )
+    if len(manifest) > max_document_inputs:
+        raise CollectionGraphAssemblyError(
+            "Task 9 manifest exceeds the assembly document-input cap"
+        )
 
     stats = run.stats if type(run.stats) is dict else {}
     resolution = stats.get("collection_resolution_commit")
@@ -785,6 +813,7 @@ def _validate_task9_lineage(
         "filter_policy_checksum",
         "ontology_checksum",
         "resolution_config_checksum",
+        "max_document_inputs",
         "embedding_model_signature",
         "assembly_version",
         "assembly_config_checksum",
@@ -799,6 +828,7 @@ def _validate_task9_lineage(
         "policy_checksum",
         "ontology_checksum",
         "resolution_config_checksum",
+        "max_document_inputs",
         "filter_result_checksum",
         "source_artifact_id",
         "source_build_run_id",
@@ -880,6 +910,16 @@ def _validate_task9_lineage(
     if any(type(marker.get(key)) is not int or marker[key] < 0 for key in count_keys):
         raise CollectionGraphAssemblyError(
             "Task 9 lineage marker has an invalid typed count"
+        )
+    marker_manifest_cap = marker.get("max_document_inputs")
+    if (
+        type(marker_manifest_cap) is not int
+        or not 1 <= marker_manifest_cap <= MAX_COLLECTION_DOCUMENT_INPUTS
+        or len(manifest) > marker_manifest_cap
+        or (config is not None and marker_manifest_cap != config.max_document_inputs)
+    ):
+        raise CollectionGraphAssemblyError(
+            "Task 9 lineage marker has an invalid manifest cap"
         )
     expected = {
         "source_hash": artifact.source_hash,
@@ -985,6 +1025,7 @@ def _validate_task9_lineage(
             artifact=artifact,
             manifest=manifest,
             marker=marker,
+            config=config,
             visited_artifact_ids=visited_artifact_ids,
         )
     return _content_checksum(
@@ -1001,6 +1042,7 @@ def _validate_filter_source_lineage(
     artifact: object,
     manifest: tuple[object, ...],
     marker: dict[str, object],
+    config: AssemblyConfig | None,
     visited_artifact_ids: frozenset[int],
 ) -> str:
     """Lock and authenticate the immutable Task 9 source of a filter rerun."""
@@ -1044,12 +1086,22 @@ def _validate_filter_source_lineage(
         raise CollectionGraphAssemblyError(
             "filter rerun source artifact identity does not match the destination"
         )
-    source_manifest = tuple(
+    max_document_inputs = (
+        MAX_COLLECTION_DOCUMENT_INPUTS
+        if config is None
+        else config.max_document_inputs
+    )
+    source_manifest_query = (
         CollectionArtifactInput.objects.select_for_update()
         .select_related("document_artifact", "collection")
         .filter(artifact=source)
         .order_by("document_artifact_id")
     )
+    if source_manifest_query.count() > max_document_inputs:
+        raise CollectionGraphAssemblyError(
+            "filter source manifest exceeds the assembly document-input cap"
+        )
+    source_manifest = tuple(source_manifest_query)
 
     def manifest_identity(row: object) -> tuple[object, ...]:
         return (
@@ -1126,17 +1178,26 @@ def _validate_filter_source_lineage(
         source_manifest,
         source_entities,
         source_links,
+        config=config,
         visited_artifact_ids=visited_artifact_ids,
     )
 
 
-def _lock_current_contributors(collection: object):
+def _lock_current_contributors(collection: object, config: AssemblyConfig):
     from apps.documents.models import DESCENDED_FROM_DOCUMENT
     from apps.knowledge_graph.models import GraphArtifact
 
     document_models = tuple(
         sorted(DESCENDED_FROM_DOCUMENT, key=lambda value: value._meta.label)
     )
+    document_count = sum(
+        model.objects.filter(collection_id=collection.pk).count()
+        for model in document_models
+    )
+    if document_count > config.max_document_inputs:
+        raise CollectionGraphAssemblyError(
+            "collection document membership exceeds the assembly input cap"
+        )
     document_references = tuple(
         row
         for model in document_models
@@ -1150,15 +1211,23 @@ def _lock_current_contributors(collection: object):
     reference_by_id = {str(row.id): row for row in document_references}
     # Global contributor lock order matches Task 9 snapshot creation:
     # source GraphArtifact PKs first, then their concrete Document rows.
-    active = tuple(
-        GraphArtifact.objects.select_for_update()
-        .filter(
-            scope_type=GraphArtifact.ScopeType.DOCUMENT,
-            scope_id__in=document_ids,
-            status=GraphArtifact.Status.ACTIVE,
+    active_reference_ids: list[int] = []
+    for document_id_batch in _query_value_batches(document_ids):
+        active_reference_ids.extend(
+            GraphArtifact.objects.filter(
+                scope_type=GraphArtifact.ScopeType.DOCUMENT,
+                scope_id__in=document_id_batch,
+                status=GraphArtifact.Status.ACTIVE,
+            ).values_list("pk", flat=True)
         )
-        .order_by("pk")
-    )
+    active_rows: list[object] = []
+    for artifact_id_batch in _id_batches(active_reference_ids):
+        active_rows.extend(
+            GraphArtifact.objects.select_for_update()
+            .filter(pk__in=artifact_id_batch)
+            .order_by("pk")
+        )
+    active = tuple(active_rows)
     if len(active) != len({row.scope_id for row in active}):
         raise CollectionGraphAssemblyError(
             "collection has multiple active artifacts for one document"
@@ -1193,15 +1262,16 @@ def _lock_current_contributors(collection: object):
         raise CollectionGraphAssemblyError(
             "collection membership changed during contributor locking"
         )
-    current_active_ids = tuple(
-        GraphArtifact.objects.filter(
-            scope_type=GraphArtifact.ScopeType.DOCUMENT,
-            scope_id__in=current_document_ids,
-            status=GraphArtifact.Status.ACTIVE,
+    current_active_id_rows: list[int] = []
+    for current_document_id_batch in _query_value_batches(current_document_ids):
+        current_active_id_rows.extend(
+            GraphArtifact.objects.filter(
+                scope_type=GraphArtifact.ScopeType.DOCUMENT,
+                scope_id__in=current_document_id_batch,
+                status=GraphArtifact.Status.ACTIVE,
+            ).values_list("pk", flat=True)
         )
-        .order_by("pk")
-        .values_list("pk", flat=True)
-    )
+    current_active_ids = tuple(sorted(current_active_id_rows))
     if current_active_ids != tuple(row.pk for row in active):
         raise CollectionGraphAssemblyError(
             "active document artifact snapshot changed during contributor locking"
@@ -1214,12 +1284,17 @@ def _validate_locked_manifest(
     artifact: object,
     manifest: tuple[object, ...],
     aggregate_source_signature: str,
+    config: AssemblyConfig,
 ) -> tuple[object, ...]:
     from apps.knowledge_graph.resolution.collection import (
         _snapshot_from_locked_manifest,
     )
 
-    _documents, active_sources = _lock_current_contributors(collection)
+    if len(manifest) > config.max_document_inputs:
+        raise CollectionGraphAssemblyError(
+            "collection manifest exceeds the assembly document-input cap"
+        )
+    _documents, active_sources = _lock_current_contributors(collection, config)
     manifest_source_ids = tuple(sorted(row.document_artifact_id for row in manifest))
     current_source_ids = tuple(sorted(row.pk for row in active_sources))
     if manifest_source_ids != current_source_ids:
@@ -1240,6 +1315,26 @@ def _validate_locked_manifest(
             "aggregate source signature does not match the exact manifest"
         )
     return active_sources
+
+
+def _load_locked_manifest(
+    artifact: object, config: AssemblyConfig
+) -> tuple[object, ...]:
+    """Count the candidate manifest before bounded materialization."""
+
+    from apps.knowledge_graph.models import CollectionArtifactInput
+
+    manifest_query = (
+        CollectionArtifactInput.objects.select_for_update()
+        .select_related("document_artifact", "collection")
+        .filter(artifact=artifact)
+        .order_by("document_artifact_id")
+    )
+    if manifest_query.count() > config.max_document_inputs:
+        raise CollectionGraphAssemblyError(
+            "collection manifest exceeds the assembly document-input cap"
+        )
+    return tuple(manifest_query)
 
 
 def _load_locked_task9_rows(artifact: object, config: AssemblyConfig):
@@ -1288,15 +1383,35 @@ def _load_assembly_evidence(
     manifest_by_artifact = {row.document_artifact_id: row for row in manifest}
     if len(manifest_by_artifact) != len(manifest):
         raise CollectionGraphAssemblyError("collection manifest source duplicates")
-    relation_query = (
-        RelationMention.objects.select_for_update()
-        .select_related("head", "tail", "chunk", "artifact")
-        .filter(artifact_id__in=source_artifact_ids)
-        .order_by("pk")
-    )
-    if relation_query.count() > config.max_evidence:
-        raise CollectionGraphAssemblyError("assembly evidence cap exceeded")
-    relation_mentions = tuple(relation_query)
+    relation_ids: list[int] = []
+    for source_artifact_batch in _query_value_batches(source_artifact_ids):
+        relation_id_rows = (
+            RelationMention.objects.filter(
+                artifact_id__in=source_artifact_batch
+            )
+            .order_by("pk")
+            .values_list("pk", flat=True)
+            .iterator(chunk_size=_ASSEMBLY_INSERT_BATCH_SIZE)
+        )
+        for relation_id in relation_id_rows:
+            relation_ids.append(relation_id)
+            if len(relation_ids) > config.max_evidence:
+                raise CollectionGraphAssemblyError(
+                    "assembly evidence cap exceeded"
+                )
+    relation_rows: list[object] = []
+    for relation_id_batch in _id_batches(relation_ids):
+        relation_rows.extend(
+            RelationMention.objects.select_for_update()
+            .select_related("head", "tail", "chunk", "artifact")
+            .filter(pk__in=relation_id_batch)
+            .order_by("pk")
+        )
+    relation_mentions = tuple(relation_rows)
+    if tuple(row.pk for row in relation_mentions) != tuple(sorted(relation_ids)):
+        raise CollectionGraphAssemblyError(
+            "relation evidence changed during bounded locking"
+        )
     endpoint_ids = {
         endpoint_id
         for row in relation_mentions
@@ -1855,11 +1970,20 @@ def _locked_projection(
     config: AssemblyConfig,
 ):
     _validate_locked_manifest(
-        collection, artifact, manifest, aggregate_source_signature
+        collection,
+        artifact,
+        manifest,
+        aggregate_source_signature,
+        config,
     )
     entities, links = _load_locked_task9_rows(artifact, config)
     lineage_checksum = _validate_task9_lineage(
-        artifact, run, manifest, entities, links
+        artifact,
+        run,
+        manifest,
+        entities,
+        links,
+        config=config,
     )
     (
         evidence_inputs,
@@ -1958,7 +2082,10 @@ def _locked_candidate(
     if lock_competing_runs:
         locked_runs = tuple(
             GraphBuildRun.objects.select_for_update()
-            .filter(artifact_id__in=artifact_by_id)
+            .filter(
+                artifact__scope_type=GraphArtifact.ScopeType.COLLECTION,
+                artifact__scope_id=str(collection_id),
+            )
             .order_by("pk")
         )
         run = next((row for row in locked_runs if row.pk == build_run_id), None)
@@ -1985,7 +2112,6 @@ def assemble_collection_graph(
     from django.db import transaction
 
     from apps.knowledge_graph.models import (
-        CollectionArtifactInput,
         CollectionRelation,
         CollectionRelationEvidence,
         GraphArtifact,
@@ -2000,12 +2126,7 @@ def assemble_collection_graph(
         )
         config = _resolve_config(run, config)
         ontology = _resolve_ontology(artifact, ontology)
-        manifest = tuple(
-            CollectionArtifactInput.objects.select_for_update()
-            .select_related("document_artifact", "collection")
-            .filter(artifact=artifact)
-            .order_by("document_artifact_id")
-        )
+        manifest = _load_locked_manifest(artifact, config)
         (
             plan,
             projection_stats,
@@ -2107,19 +2228,13 @@ def _validate_locked_complete_artifact(
     config: AssemblyConfig | None,
 ) -> AssemblyResult:
     from apps.knowledge_graph.models import (
-        CollectionArtifactInput,
         CollectionRelation,
         CollectionRelationEvidence,
     )
 
     config = _resolve_config(run, config)
     ontology = _resolve_ontology(artifact, ontology)
-    manifest = tuple(
-        CollectionArtifactInput.objects.select_for_update()
-        .select_related("document_artifact", "collection")
-        .filter(artifact=artifact)
-        .order_by("document_artifact_id")
-    )
+    manifest = _load_locked_manifest(artifact, config)
     (
         plan,
         projection_stats,
