@@ -127,6 +127,64 @@ def test_zero_gold_extraction_recall_is_one():
     assert report["relation_recall"] == 1.0
 
 
+def test_semantic_matching_ignores_ids_but_keeps_span_and_direction():
+    case = {
+        "expected": {
+            "entities": [
+                {
+                    "id": "gold-a",
+                    "text": "Atlas",
+                    "type": "model",
+                    "chunk_id": "c",
+                    "span_start": 1,
+                    "span_end": 6,
+                },
+                {"id": "gold-b", "text": "Service", "type": "service", "chunk_id": "c"},
+            ],
+            "relations": [{"source": "gold-a", "target": "gold-b", "type": "uses"}],
+            "auto_links": [],
+            "suppressed_evidence": [],
+        }
+    }
+    prediction = {
+        "entities": [
+            {
+                "id": "runtime-7",
+                "text": "atlas",
+                "type": "model",
+                "chunk_id": "c",
+                "span_start": 1,
+                "span_end": 6,
+                "confidence": 0.9,
+            },
+            {
+                "id": "runtime-8",
+                "text": "Service",
+                "type": "service",
+                "chunk_id": "c",
+                "confidence": 0.2,
+            },
+        ],
+        "relations": [
+            {
+                "source": "runtime-7",
+                "target": "runtime-8",
+                "type": "uses",
+                "confidence": 0.1,
+            }
+        ],
+    }
+    assert run_kg_eval.score_extraction(case, prediction)["relation_recall"] == 1.0
+    prediction["entities"][0]["span_start"] = 2
+    assert run_kg_eval.score_extraction(case, prediction)["entity_recall"] == 0.5
+
+
+def test_baseline_accepts_deduplicated_positive_integer_ids():
+    assert run_kg_eval.build_baseline_records(
+        ({"id": "case"},), {"case": [2, 2, "alias"]}
+    )[0]["result_ids"] == [2, "alias"]
+
+
 def test_retrieval_recall_is_limited_to_first_ten_unique_output_ids():
     case = {"expected_retrieval_chunk_ids": ["chunk-02", "chunk-11"]}
     retrieved = (

@@ -40,12 +40,18 @@ class FixtureValidationError(ValueError):
 
 
 def _freeze(value: Any) -> Any:
+    """Deep-freeze JSON-like fixture data without coercing YAML key types."""
     if isinstance(value, Mapping):
-        return MappingProxyType(
-            {str(key): _freeze(value[key]) for key in sorted(value)}
-        )
-    if isinstance(value, list):
+        if not all(isinstance(key, str) for key in value):
+            raise FixtureValidationError("mapping keys must be strings")
+        return MappingProxyType({key: _freeze(value[key]) for key in sorted(value)})
+    if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise FixtureValidationError(
+        f"unsupported fixture value type {type(value).__name__}"
+    )
     return value
 
 
@@ -349,7 +355,7 @@ def _load_cases(path: Path, validator: Any) -> tuple[Mapping[str, Any], ...]:
             payload = yaml.safe_load(fixture_file)
     except (OSError, yaml.YAMLError) as exc:
         raise FixtureValidationError(f"could not read fixture {path}: {exc}") from exc
-    payload = _require_mapping(payload, "top level")
+    payload = _require_mapping(_freeze(payload), "top level")
     if payload.get("schema_version") != 1:
         raise FixtureValidationError("top level schema_version must be 1")
     if "cases" not in payload:
@@ -365,7 +371,7 @@ def _load_cases(path: Path, validator: Any) -> tuple[Mapping[str, Any], ...]:
             raise FixtureValidationError(f"duplicate case id {case_id!r}")
         case_ids.add(case_id)
         validator(case, index)
-        normalized.append(_freeze(case))
+        normalized.append(case)
     return tuple(normalized)
 
 
@@ -390,6 +396,48 @@ def _structural_set(records: Any) -> set[str]:
     }
 
 
+def _entity_key(record: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Prediction entity contract: type, text, chunk_id, optional span_start/end.
+
+    IDs and confidence are intentionally ignored; ``id`` is only a legacy fallback
+    for old hand-written unit predictions that omit all semantic fields.
+    """
+    if all(key in record for key in ("type", "text", "chunk_id")):
+        return (
+            record["type"],
+            str(record["text"]).casefold(),
+            record["chunk_id"],
+            record.get("span_start"),
+            record.get("span_end"),
+        )
+    return ("legacy-id", record.get("id"))
+
+
+def _entity_set(records: Any) -> set[tuple[Any, ...]]:
+    return {
+        _entity_key(_require_mapping(record, "prediction entity"))
+        for record in records or ()
+    }
+
+
+def _relation_set(records: Any, entities: Any) -> set[tuple[Any, ...]]:
+    by_id = {
+        record.get("id"): _entity_key(_require_mapping(record, "prediction entity"))
+        for record in entities or ()
+    }
+    result = set()
+    for record in records or ():
+        record = _require_mapping(record, "prediction relation")
+        result.add(
+            (
+                record.get("type"),
+                by_id.get(record.get("source"), record.get("source")),
+                by_id.get(record.get("target"), record.get("target")),
+            )
+        )
+    return result
+
+
 def _precision(gold: set[str], predicted: set[str]) -> float:
     return 1.0 if not predicted else len(gold & predicted) / len(predicted)
 
@@ -404,11 +452,16 @@ def score_extraction(
     """Return set-based offline extraction metrics for injected prediction records."""
     expected = _require_mapping(case.get("expected"), "case.expected")
     report: dict[str, float] = {}
-    for name, gold_key in (("entity", "entities"), ("relation", "relations")):
-        gold = _structural_set(expected.get(gold_key))
-        predicted = _structural_set(predictions.get(gold_key))
-        report[f"{name}_precision"] = _precision(gold, predicted)
-        report[f"{name}_recall"] = _recall(gold, predicted)
+    gold_entities = _entity_set(expected.get("entities"))
+    predicted_entities = _entity_set(predictions.get("entities"))
+    report["entity_precision"] = _precision(gold_entities, predicted_entities)
+    report["entity_recall"] = _recall(gold_entities, predicted_entities)
+    gold_relations = _relation_set(expected.get("relations"), expected.get("entities"))
+    predicted_relations = _relation_set(
+        predictions.get("relations"), predictions.get("entities")
+    )
+    report["relation_precision"] = _precision(gold_relations, predicted_relations)
+    report["relation_recall"] = _recall(gold_relations, predicted_relations)
     for metric_name, key in (
         ("auto_link_precision", "auto_links"),
         ("suppression_precision", "suppressed_evidence"),
@@ -437,7 +490,7 @@ def score_retrieval(
 
 def build_baseline_records(
     cases: Sequence[Mapping[str, Any]],
-    injected_results: Mapping[str, Sequence[str]] | None = None,
+    injected_results: Mapping[str, Sequence[str | int]] | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     """Record actual vector IDs, returning explicit ``SKIP`` if none are available."""
     injected_results = injected_results or {}
@@ -454,24 +507,37 @@ def build_baseline_records(
                 "status": "SKIP",
             }
         else:
-            if (
-                isinstance(result_ids, (str, bytes))
-                or not isinstance(result_ids, Sequence)
-                or not all(isinstance(item, str) and item for item in result_ids)
+            if isinstance(result_ids, (str, bytes)) or not isinstance(
+                result_ids, Sequence
             ):
                 raise FixtureValidationError(
-                    f"baseline IDs for {case_id!r} must be a list of non-empty strings"
+                    f"baseline IDs for {case_id!r} must be a list of valid IDs"
                 )
+            deduped: list[str | int] = []
+            for item in result_ids:
+                if not (
+                    (isinstance(item, str) and item)
+                    or (
+                        isinstance(item, int)
+                        and not isinstance(item, bool)
+                        and item > 0
+                    )
+                ):
+                    raise FixtureValidationError(
+                    f"baseline IDs for {case_id!r} must be valid IDs"
+                    )
+                if item not in deduped:
+                    deduped.append(item)
             record = {
                 "id": case_id,
-                "result_ids": list(result_ids),
+                "result_ids": deduped,
                 "status": "RECORDED",
             }
         records.append(MappingProxyType(record))
     return tuple(records)
 
 
-def _load_injected_results(path: Path | None) -> Mapping[str, Sequence[str]]:
+def _load_injected_results(path: Path | None) -> Mapping[str, Sequence[str | int]]:
     if path is None:
         return MappingProxyType({})
     try:
@@ -517,12 +583,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Validate both fixture classes for a meaningful invalid-fixture exit code.
         load_extraction_cases(args.extraction_cases)
         retrieval_cases = load_retrieval_cases(args.retrieval_cases)
+        injected_results = _load_injected_results(args.retrieval_results)
+        unknown_case_ids = set(injected_results) - {
+            case["id"] for case in retrieval_cases
+        }
+        if unknown_case_ids:
+            raise FixtureValidationError(
+                f"unknown injected case IDs: {sorted(unknown_case_ids)!r}"
+            )
         if args.baseline_only:
             payload = {
                 "mode": "baseline-only",
-                "records": build_baseline_records(
-                    retrieval_cases, _load_injected_results(args.retrieval_results)
-                ),
+                "records": build_baseline_records(retrieval_cases, injected_results),
             }
         else:
             payload = {
