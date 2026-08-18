@@ -17,10 +17,14 @@ from apps.knowledge_graph.resolution.coreference import (
     PairDecision,
     ResolutionResult,
     resolution_input_fingerprint,
+    resolution_result_checksum,
     resolve_document_mentions,
 )
 from apps.knowledge_graph.resolution.persistence import (
+    ResolutionPersistenceError,
     _resolution_rows_match,
+    _validate_destination,
+    _validate_source_snapshot,
     persist_document_resolution,
     resolution_commit_is_valid,
     source_mention_fingerprint,
@@ -61,6 +65,11 @@ class _MasqueradingString(str):
 class _ExplosiveString(str):
     def strip(self, *args, **kwargs):
         raise AssertionError("untrusted string subclass method was invoked")
+
+
+class _ExplosiveTuple(tuple):
+    def __iter__(self):
+        raise AssertionError("untrusted tuple subclass iterator was invoked")
 
 
 class _CoordinateBasisMasquerade(_MasqueradingString):
@@ -1579,6 +1588,230 @@ def test_ontology_checksum_must_be_an_exact_builtin_string():
 
 
 @pytest.mark.parametrize(
+    "field_name",
+    ("resolver_version", "ontology_checksum", "input_fingerprint", "checksum"),
+)
+def test_resolution_result_identity_strings_require_exact_builtin_strings(field_name):
+    result = resolve_document_mentions(
+        (_mention("mention", "Orion", "model"),), _ontology()
+    )
+
+    with pytest.raises(ValueError, match=field_name):
+        replace(
+            result,
+            **{field_name: _MasqueradingString(getattr(result, field_name))},
+        )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "cluster_key",
+        "label",
+        "normalized_label",
+        "version_signature",
+        "entity_type",
+        "identifier",
+        "method",
+    ),
+)
+def test_resolved_cluster_identity_strings_require_exact_builtin_strings(field_name):
+    cluster = resolve_document_mentions(
+        (_mention("mention", "Orion", "model"),), _ontology()
+    ).clusters[0]
+
+    with pytest.raises(ValueError, match=field_name):
+        replace(
+            cluster,
+            **{field_name: _MasqueradingString(getattr(cluster, field_name))},
+        )
+
+
+def test_result_cluster_and_membership_mention_ids_require_exact_builtin_strings():
+    result = resolve_document_mentions(
+        (_mention("mention", "Orion", "model"),), _ontology()
+    )
+    cluster = result.clusters[0]
+    membership = cluster.memberships[0]
+    subclass_id = _MasqueradingString("mention")
+
+    with pytest.raises(ValueError, match="mention_id"):
+        replace(membership, mention_id=subclass_id)
+    with pytest.raises(ValueError, match="mention_ids"):
+        replace(cluster, mention_ids=(subclass_id,))
+    with pytest.raises(ValueError, match="mention_ids"):
+        replace(result, mention_ids=(subclass_id,))
+
+
+@pytest.mark.parametrize(
+    ("owner_name", "field_name"),
+    (
+        ("cluster", "mention_ids"),
+        ("cluster", "memberships"),
+        ("result", "mention_ids"),
+        ("result", "clusters"),
+        ("result", "decisions"),
+    ),
+)
+def test_resolution_identity_containers_require_exact_tuples(owner_name, field_name):
+    result = resolve_document_mentions(
+        (_mention("mention", "Orion", "model"),), _ontology()
+    )
+    owner = result.clusters[0] if owner_name == "cluster" else result
+
+    with pytest.raises(ValueError, match=field_name):
+        replace(
+            owner,
+            **{field_name: _ExplosiveTuple(getattr(owner, field_name))},
+        )
+
+
+@pytest.mark.parametrize("field_name", ("method", "reason"))
+def test_persisted_membership_strings_require_exact_builtin_strings(field_name):
+    membership = (
+        resolve_document_mentions((_mention("mention", "Orion", "model"),), _ontology())
+        .clusters[0]
+        .memberships[0]
+    )
+
+    with pytest.raises(ValueError, match=field_name):
+        replace(
+            membership,
+            **{field_name: _MasqueradingString(getattr(membership, field_name))},
+        )
+
+
+def test_persisted_membership_parent_requires_an_exact_builtin_string():
+    cluster = resolve_document_mentions(
+        (
+            _mention("first", "Orion", "model", start=0),
+            _mention("second", "Orion", "model", start=20),
+        ),
+        _ontology(),
+    ).clusters[0]
+    child = next(item for item in cluster.memberships if item.parent_mention_id)
+
+    with pytest.raises(ValueError, match="parent_mention_id"):
+        replace(
+            child,
+            parent_mention_id=_MasqueradingString(child.parent_mention_id),
+        )
+
+
+def test_source_snapshot_rejects_forged_string_subclass_fingerprint():
+    mention = _mapping_mention(id="mapping")
+    result = resolve_document_mentions((mention,), _ontology())
+    forged = replace(result)
+    object.__setattr__(
+        forged,
+        "input_fingerprint",
+        _MasqueradingString("f" * 64),
+    )
+    object.__setattr__(forged, "checksum", resolution_result_checksum(forged))
+
+    with pytest.raises(ResolutionPersistenceError, match="source context|fingerprint"):
+        _validate_source_snapshot(
+            SimpleNamespace(scope_id=DOCUMENT_ID),
+            forged,
+            (mention,),
+        )
+
+
+def _destination_objects(result):
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    identity = {
+        "scope_type": GraphArtifact.ScopeType.DOCUMENT,
+        "scope_id": DOCUMENT_ID,
+        "source_hash": "a" * 64,
+        "ontology_version": "1.0.0",
+        "extractor_version": "extractor-v1",
+        "resolver_version": result.resolver_version,
+        "filter_policy_version": "pending-v1",
+    }
+    artifact = SimpleNamespace(
+        pk=7,
+        status=GraphArtifact.Status.BUILDING,
+        **identity,
+    )
+    run = SimpleNamespace(
+        artifact_id=7,
+        status=GraphBuildRun.Status.RUNNING,
+        stage=GraphBuildRun.Stage.RESOLUTION,
+        **identity,
+    )
+    return artifact, run
+
+
+@pytest.mark.parametrize("target", ("cluster", "membership", "decision"))
+def test_destination_recursively_rejects_forged_nested_identity_strings(target):
+    result = resolve_document_mentions(
+        (
+            _mention("first", "Orion", "model", start=0),
+            _mention("second", "Orion", "model", start=20),
+        ),
+        _ontology(),
+    )
+    cluster = result.clusters[0]
+    if target == "cluster":
+        object.__setattr__(
+            cluster,
+            "cluster_key",
+            _MasqueradingString(cluster.cluster_key),
+        )
+    elif target == "membership":
+        object.__setattr__(
+            cluster.memberships[0],
+            "method",
+            _MasqueradingString(cluster.memberships[0].method),
+        )
+    else:
+        object.__setattr__(
+            result.decisions[0],
+            "method",
+            _MasqueradingString(result.decisions[0].method),
+        )
+    object.__setattr__(result, "checksum", resolution_result_checksum(result))
+    artifact, run = _destination_objects(result)
+
+    with pytest.raises(ResolutionPersistenceError, match="result"):
+        _validate_destination(artifact, run, result)
+
+
+def test_source_snapshot_rejects_forged_result_mention_ids():
+    mention = _mapping_mention(id="mapping")
+    result = resolve_document_mentions((mention,), _ontology())
+    object.__setattr__(
+        result,
+        "mention_ids",
+        (_MasqueradingString("mapping"),),
+    )
+    object.__setattr__(result, "checksum", resolution_result_checksum(result))
+
+    with pytest.raises(ResolutionPersistenceError, match="mention IDs"):
+        _validate_source_snapshot(
+            SimpleNamespace(scope_id=DOCUMENT_ID),
+            result,
+            (mention,),
+        )
+
+
+def test_destination_rejects_forged_cluster_mention_id_container_before_iteration():
+    result = resolve_document_mentions(
+        (_mention("mention", "Orion", "model"),), _ontology()
+    )
+    object.__setattr__(
+        result.clusters[0],
+        "mention_ids",
+        _ExplosiveTuple(("mention",)),
+    )
+    artifact, run = _destination_objects(result)
+
+    with pytest.raises(ResolutionPersistenceError, match="result"):
+        _validate_destination(artifact, run, result)
+
+
+@pytest.mark.parametrize(
     "identifier",
     [
         " repository:github.com/example/orion ",
@@ -1876,6 +2109,21 @@ def test_committed_resolution_state_rejects_extra_inactive_rows():
         }
     )
     assert not _resolution_rows_match(result, (tampered,), links)
+    for field_name in ("resolver_version", "result_checksum"):
+        subclass_metadata = {
+            **entity.metadata,
+            field_name: _MasqueradingString(entity.metadata[field_name]),
+        }
+        subclass_row = SimpleNamespace(
+            **{**vars(entity), "metadata": subclass_metadata}
+        )
+        assert not _resolution_rows_match(result, (subclass_row,), links)
+    object.__setattr__(cluster, "label", _MasqueradingString("wrong"))
+    object.__setattr__(result, "checksum", resolution_result_checksum(result))
+    entity.metadata["result_checksum"] = result.checksum
+    for link in links:
+        link.metadata["result_checksum"] = result.checksum
+    assert not _resolution_rows_match(result, (entity,), links)
 
 
 def test_singleton_resolution_rows_match_exact_link_provenance_idempotently():
@@ -1919,6 +2167,27 @@ def test_singleton_resolution_rows_match_exact_link_provenance_idempotently():
         result,
         (entity,),
         (SimpleNamespace(**{**vars(link), "method": "root"}),),
+    )
+    for field_name in ("method", "resolver_version", "parent_mention_id", "reason"):
+        subclass_link = SimpleNamespace(
+            **{
+                **vars(link),
+                field_name: _MasqueradingString(getattr(link, field_name)),
+            }
+        )
+        assert not _resolution_rows_match(result, (entity,), (subclass_link,))
+    subclass_checksum_link = SimpleNamespace(
+        **{
+            **vars(link),
+            "metadata": {
+                "result_checksum": _MasqueradingString(result.checksum),
+            },
+        }
+    )
+    assert not _resolution_rows_match(
+        result,
+        (entity,),
+        (subclass_checksum_link,),
     )
 
 

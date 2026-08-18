@@ -78,7 +78,7 @@ _HARD_CANNOT_LINK_METHODS = frozenset(
 
 
 def _require_string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
+    if type(value) is not str or not value.strip():
         raise ValueError(f"{field_name} must be a nonempty string")
     return value
 
@@ -334,13 +334,15 @@ class ResolvedCluster:
     confidence: float
 
     def __post_init__(self) -> None:
-        if not _HASH.fullmatch(self.cluster_key):
+        if type(self.cluster_key) is not str or not _HASH.fullmatch(self.cluster_key):
             raise ValueError("cluster_key must be a lowercase SHA-256 digest")
-        if not isinstance(self.mention_ids, tuple) or not self.mention_ids:
+        if type(self.mention_ids) is not tuple or not self.mention_ids:
             raise ValueError("mention_ids must be a nonempty tuple")
+        if not all(type(mention_id) is str for mention_id in self.mention_ids):
+            raise ValueError("mention_ids must contain exact strings")
         if len(set(self.mention_ids)) != len(self.mention_ids):
             raise ValueError("cluster mention IDs must be unique")
-        if not isinstance(self.memberships, tuple) or not all(
+        if type(self.memberships) is not tuple or not all(
             isinstance(membership, ClusterMembership) for membership in self.memberships
         ):
             raise ValueError("memberships must contain ClusterMembership values")
@@ -354,7 +356,7 @@ class ResolvedCluster:
         for field_name in ("label", "normalized_label", "entity_type", "method"):
             _require_string(getattr(self, field_name), field_name)
         if (
-            not isinstance(self.version_signature, str)
+            type(self.version_signature) is not str
             or len(self.version_signature) > 128
             or (
                 self.version_signature
@@ -419,20 +421,24 @@ class ResolutionResult:
             self.ontology_checksum
         ):
             raise ValueError("ontology_checksum must be a lowercase SHA-256 digest")
-        if not _HASH.fullmatch(self.input_fingerprint):
+        if type(self.input_fingerprint) is not str or not _HASH.fullmatch(
+            self.input_fingerprint
+        ):
             raise ValueError("input_fingerprint must be a lowercase SHA-256 digest")
-        if not isinstance(self.mention_ids, tuple):
+        if type(self.mention_ids) is not tuple:
             raise ValueError("mention_ids must be a tuple")
+        if not all(type(mention_id) is str for mention_id in self.mention_ids):
+            raise ValueError("mention_ids must contain exact strings")
         if len(set(self.mention_ids)) != len(self.mention_ids):
             raise ValueError("result mention IDs must be unique")
-        if not isinstance(self.clusters, tuple) or not all(
+        if type(self.clusters) is not tuple or not all(
             isinstance(cluster, ResolvedCluster) for cluster in self.clusters
         ):
             raise ValueError("clusters must contain ResolvedCluster values")
         cluster_keys = tuple(cluster.cluster_key for cluster in self.clusters)
         if len(set(cluster_keys)) != len(cluster_keys):
             raise ValueError("cluster keys must be unique")
-        if not isinstance(self.decisions, tuple) or not all(
+        if type(self.decisions) is not tuple or not all(
             isinstance(decision, PairDecision) for decision in self.decisions
         ):
             raise ValueError("decisions must contain PairDecision values")
@@ -450,7 +456,7 @@ class ResolutionResult:
         }
         if len(actual_pairs) != len(self.decisions) or actual_pairs != expected_pairs:
             raise ValueError("decisions must audit every mention pair exactly once")
-        if not _HASH.fullmatch(self.checksum):
+        if type(self.checksum) is not str or not _HASH.fullmatch(self.checksum):
             raise ValueError("checksum must be a lowercase SHA-256 digest")
 
 

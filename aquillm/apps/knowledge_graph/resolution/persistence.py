@@ -11,7 +11,10 @@ from uuid import UUID
 
 from .coreference import (
     MAX_DOCUMENT_MENTIONS,
+    ClusterMembership,
+    PairDecision,
     ResolutionResult,
+    ResolvedCluster,
     resolution_input_fingerprint,
     resolution_result_checksum,
 )
@@ -154,6 +157,47 @@ def source_mention_fingerprint(mentions) -> str:
     return sha256(encoded).hexdigest()
 
 
+def _revalidate_immutable_result(result: object) -> ResolutionResult:
+    try:
+        if type(result) is not ResolutionResult:
+            raise ValueError("result must be an exact ResolutionResult")
+        if (
+            type(result.mention_ids) is not tuple
+            or len(result.mention_ids) > MAX_DOCUMENT_MENTIONS
+        ):
+            raise ValueError("result mention IDs must be a bounded exact tuple")
+        if type(result.clusters) is not tuple:
+            raise ValueError("result clusters must be an exact tuple")
+        if type(result.decisions) is not tuple or len(result.decisions) > (
+            len(result.mention_ids) * (len(result.mention_ids) - 1) // 2
+        ):
+            raise ValueError("result decisions must be a bounded exact tuple")
+        for cluster in result.clusters:
+            if type(cluster) is not ResolvedCluster:
+                raise ValueError("clusters must contain exact ResolvedCluster values")
+            if type(cluster.mention_ids) is not tuple:
+                raise ValueError("cluster mention IDs must be an exact tuple")
+            if type(cluster.memberships) is not tuple:
+                raise ValueError("cluster memberships must be an exact tuple")
+            for membership in cluster.memberships:
+                if type(membership) is not ClusterMembership:
+                    raise ValueError(
+                        "memberships must contain exact ClusterMembership values"
+                    )
+                membership.__post_init__()
+            cluster.__post_init__()
+        for decision in result.decisions:
+            if type(decision) is not PairDecision:
+                raise ValueError("decisions must contain exact PairDecision values")
+            decision.__post_init__()
+        result.__post_init__()
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ResolutionPersistenceError(
+            "resolution result failed immutable identity validation"
+        ) from exc
+    return result
+
+
 def _validate_destination(artifact, run, result: ResolutionResult) -> None:
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
@@ -189,8 +233,7 @@ def _validate_destination(artifact, run, result: ResolutionResult) -> None:
             raise ResolutionPersistenceError(
                 f"build run {field} does not match destination artifact"
             )
-    if not isinstance(result, ResolutionResult):
-        raise ResolutionPersistenceError("result must be a ResolutionResult")
+    result = _revalidate_immutable_result(result)
     if result.resolver_version != artifact.resolver_version:
         raise ResolutionPersistenceError(
             "result resolver version does not match destination artifact"
@@ -210,9 +253,20 @@ def _validate_source_snapshot(artifact, result, mention_records) -> str:
     source_ids = tuple(str(_record_value(record, "id")) for record in mention_records)
     if len(source_ids) != len(set(source_ids)):
         raise ResolutionPersistenceError("source mention primary keys are duplicated")
+    if type(result.mention_ids) is not tuple or not all(
+        type(mention_id) is str for mention_id in result.mention_ids
+    ):
+        raise ResolutionPersistenceError(
+            "resolution result mention IDs must be exact strings"
+        )
     if set(source_ids) != set(result.mention_ids):
         raise ResolutionPersistenceError(
             "resolution result does not partition the persisted source mentions"
+        )
+    if not _is_hash(getattr(result, "input_fingerprint", None)):
+        raise ResolutionPersistenceError(
+            "resolution result input fingerprint must be an exact lowercase "
+            "SHA-256 digest"
         )
     if resolution_input_fingerprint(mention_records) != result.input_fingerprint:
         raise ResolutionPersistenceError(
@@ -230,10 +284,65 @@ def _cluster_methods(cluster) -> list[str]:
     return sorted(methods or {"root"})
 
 
+def _entity_row_identity_is_exact(row) -> bool:
+    metadata = getattr(row, "metadata", None)
+    methods = metadata.get("methods") if type(metadata) is dict else None
+    return bool(
+        all(
+            type(getattr(row, field_name, None)) is str
+            for field_name in (
+                "cluster_key",
+                "label",
+                "normalized_label",
+                "version_signature",
+                "entity_type",
+                "identifier",
+            )
+        )
+        and type(metadata) is dict
+        and type(metadata.get("resolver_version")) is str
+        and type(methods) is list
+        and all(type(method) is str for method in methods)
+        and _is_hash(metadata.get("result_checksum"))
+    )
+
+
+def _link_row_identity_is_exact(row) -> bool:
+    metadata = getattr(row, "metadata", None)
+    return bool(
+        type(getattr(row.document_entity, "cluster_key", None)) is str
+        and all(
+            type(getattr(row, field_name, None)) is str
+            for field_name in (
+                "method",
+                "resolver_version",
+                "parent_mention_id",
+                "reason",
+            )
+        )
+        and type(metadata) is dict
+        and _is_hash(metadata.get("result_checksum"))
+    )
+
+
 def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
+    try:
+        result = _revalidate_immutable_result(result)
+    except ResolutionPersistenceError:
+        return False
     if len(entity_rows) != len(result.clusters) or len(link_rows) != len(
         result.mention_ids
     ):
+        return False
+    active_entity_rows = tuple(
+        row for row in entity_rows if row.status == row.Status.ACTIVE
+    )
+    active_link_rows = tuple(
+        row for row in link_rows if row.status == row.Status.ACTIVE
+    )
+    if not all(_entity_row_identity_is_exact(row) for row in active_entity_rows):
+        return False
+    if not all(_link_row_identity_is_exact(row) for row in active_link_rows):
         return False
 
     expected_entities = {
@@ -261,8 +370,7 @@ def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
             row.identifier,
             row.metadata,
         )
-        for row in entity_rows
-        if row.status == row.Status.ACTIVE
+        for row in active_entity_rows
     }
     expected_links = {
         (
@@ -291,8 +399,7 @@ def _resolution_rows_match(result, entity_rows, link_rows) -> bool:
                 else None
             ),
         )
-        for row in link_rows
-        if row.status == row.Status.ACTIVE
+        for row in active_link_rows
     }
     return actual_entities == expected_entities and actual_links == expected_links
 
