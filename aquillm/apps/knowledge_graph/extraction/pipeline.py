@@ -299,6 +299,8 @@ def validate_build_identity(
 
     if run.artifact_id != artifact.pk:
         raise ValueError("build run must be owned by the destination artifact")
+    if getattr(run, "build_key", None) != getattr(artifact, "build_key", None):
+        raise ValueError("build run key does not match destination artifact")
     if artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT:
         raise ValueError("mention extraction requires a document artifact")
     if str(artifact.scope_id) != str(document_id):
@@ -314,16 +316,28 @@ def validate_build_identity(
         raise ValueError("build run assembly identity does not match destination")
 
 
-def validate_build_lifecycle(artifact, run) -> None:
+def validate_build_lifecycle(
+    artifact,
+    run,
+    *,
+    lease_owner=None,
+    lease_generation=None,
+) -> None:
     """Validate mutable lifecycle state required to write raw evidence."""
 
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import validate_build_lease
+
+    validate_build_lease(run, lease_owner, lease_generation)
 
     if artifact.status != GraphArtifact.Status.BUILDING:
         raise ValueError("destination artifact must be building")
     if run.status != GraphBuildRun.Status.RUNNING:
         raise ValueError("destination build run must be running")
-    if run.stage != GraphBuildRun.Stage.EXTRACTION:
+    if run.stage not in {
+        GraphBuildRun.Stage.EXTRACTION,
+        GraphBuildRun.Stage.EXTRACTING,
+    }:
         raise ValueError("destination build run must be in extraction stage")
 
 
@@ -459,10 +473,13 @@ def _get_concrete_document(document_id, *, for_update: bool = False):
 def _validate_source(document, expected_source_hash: str) -> None:
     calculated_hash = document.hash_fn(document.full_text)
     if not (
-        expected_source_hash
+        getattr(document, "ingestion_complete", None) is True
+        and expected_source_hash
         and document.full_text_hash == expected_source_hash == calculated_hash
     ):
-        raise StaleSourceError("document source hash does not match expected content")
+        raise StaleSourceError(
+            "document ingestion or source hash does not match expected content"
+        )
 
 
 def _ordered_chunks(document_id, *, for_update: bool = False):
@@ -586,6 +603,12 @@ def _resolve_ontology_definition(ontology_version: str, *, for_update=False):
     return definition
 
 
+def resolve_ontology_definition(ontology_version: str, *, for_update=False):
+    """Public Task 11 seam for a locked, validated ontology snapshot."""
+
+    return _resolve_ontology_definition(ontology_version, for_update=for_update)
+
+
 def _build_backend(settings):
     # The factory and provider implementation stay outside import-time web paths.
     from lib.knowledge_graph.extractors.factory import get_extraction_backend
@@ -600,7 +623,7 @@ def _extractor_identity(settings) -> str:
     return identity
 
 
-def _artifact_identity_values(
+def document_artifact_identity_values(
     document_id,
     expected_source_hash: str,
     ontology_version: str,
@@ -633,6 +656,10 @@ def _artifact_identity_values(
         "assembly_version": ASSEMBLY_NOT_APPLICABLE_VERSION,
         "assembly_config_checksum": ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
     }
+
+
+# Backward-compatible internal seam retained for Task 7 callers/tests.
+_artifact_identity_values = document_artifact_identity_values
 
 
 def _create_build_destination(
@@ -742,16 +769,28 @@ def _mark_terminal(
     artifact_status: str,
     run_status: str,
     error_code: str,
+    lease_owner=None,
+    lease_generation=None,
 ) -> None:
     from django.db import transaction
     from django.utils import timezone
 
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import validate_build_lease
 
     with transaction.atomic():
         artifact = GraphArtifact.objects.select_for_update().get(pk=artifact_id)
         run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
         if run.artifact_id != artifact.pk:
+            return
+        validate_build_lease(run, lease_owner, lease_generation)
+        run_metadata = getattr(run, "metadata", None)
+        metadata = run_metadata if type(run_metadata) is dict else {}
+        if metadata.get("orchestration_version") == 1:
+            # The coordinator owns the typed scoped terminal transition.  A
+            # stage primitive must never leave an extracting orchestration run
+            # in a partially terminal status if the process dies between two
+            # transactions.
             return
         committed_run = _find_committed_extraction_run(artifact, for_update=True)
         mutate_artifact, mutate_run = _terminal_mutation_policy(
@@ -780,6 +819,8 @@ def _safe_mark_terminal(
     artifact_status: str,
     run_status: str,
     error_code: str,
+    lease_owner=None,
+    lease_generation=None,
 ) -> bool:
     """Best-effort bookkeeping that cannot replace the triggering exception."""
 
@@ -790,6 +831,8 @@ def _safe_mark_terminal(
             artifact_status=artifact_status,
             run_status=run_status,
             error_code=error_code,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
         )
     except Exception:
         logger.exception(
@@ -808,12 +851,16 @@ def extract_into_build(
     document_id,
     expected_source_hash,
     ontology_version,
+    *,
+    lease_owner=None,
+    lease_generation=None,
 ):
     """Extract into one explicitly addressed building document artifact."""
 
     from django.db import transaction
 
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import validate_build_lease
     from lib.knowledge_graph.config import load_extraction_settings
 
     artifact = GraphArtifact.objects.get(pk=artifact_id)
@@ -825,10 +872,16 @@ def extract_into_build(
         expected_source_hash=expected_source_hash,
         ontology_version=ontology_version,
     )
+    validate_build_lease(run, lease_owner, lease_generation)
     committed_run = _find_committed_extraction_run(artifact)
     if committed_run is not None:
         return committed_run
-    validate_build_lifecycle(artifact, run)
+    validate_build_lifecycle(
+        artifact,
+        run,
+        lease_owner=lease_owner,
+        lease_generation=lease_generation,
+    )
     total_started = perf_counter()
     try:
         settings = load_extraction_settings()
@@ -872,12 +925,18 @@ def extract_into_build(
                 expected_source_hash=expected_source_hash,
                 ontology_version=ontology_version,
             )
+            validate_build_lease(locked_run, lease_owner, lease_generation)
             committed_run = _find_committed_extraction_run(
                 locked_artifact, for_update=True
             )
             if committed_run is not None:
                 return committed_run
-            validate_build_lifecycle(locked_artifact, locked_run)
+            validate_build_lifecycle(
+                locked_artifact,
+                locked_run,
+                lease_owner=lease_owner,
+                lease_generation=lease_generation,
+            )
             if (
                 locked_artifact.entity_mentions.exists()
                 or locked_artifact.relation_mentions.exists()
@@ -946,6 +1005,8 @@ def extract_into_build(
             artifact_status=GraphArtifact.Status.STALE,
             run_status=GraphBuildRun.Status.CANCELLED,
             error_code="source_or_config_stale",
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
         )
         raise
     except Exception as exc:
@@ -960,6 +1021,8 @@ def extract_into_build(
             artifact_status=GraphArtifact.Status.FAILED,
             run_status=GraphBuildRun.Status.FAILED,
             error_code=error_code,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
         )
         raise
 
@@ -1030,7 +1093,9 @@ __all__ = [
     "StaleSourceError",
     "StructuralExtractionError",
     "collect_document_evidence",
+    "document_artifact_identity_values",
     "extraction_commit_is_valid",
+    "resolve_ontology_definition",
     "extract_document_mentions",
     "extract_into_build",
     "serialize_entity_observations",

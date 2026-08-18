@@ -394,6 +394,7 @@ def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
     assert tuple(identity.fields) == (
         "scope_type",
         "scope_id",
+        "build_key",
         "source_hash",
         "ontology_version",
         "extractor_version",
@@ -427,10 +428,7 @@ def test_artifact_assembly_identity_is_typed_by_scope_and_policy_addressed():
     document = _artifact()
     document.prepare_for_persistence()
     assert document.assembly_version == ASSEMBLY_NOT_APPLICABLE_VERSION
-    assert (
-        document.assembly_config_checksum
-        == ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
-    )
+    assert document.assembly_config_checksum == ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM
 
     collection = _artifact(
         scope_type=GraphArtifact.ScopeType.COLLECTION,
@@ -461,9 +459,7 @@ def test_graph_build_run_and_ontology_are_typed_and_audit_safe():
     }
     assert GraphBuildRun._meta.get_field("stats").get_internal_type() == "JSONField"
     assert GraphBuildRun._meta.get_field("timings").get_internal_type() == "JSONField"
-    assert _constraint(
-        GraphBuildRun, "kg_run_assembly_identity_scope", CheckConstraint
-    )
+    assert _constraint(GraphBuildRun, "kg_run_assembly_identity_scope", CheckConstraint)
     assert _constraint(GraphBuildRun, "kg_build_run_attempt_positive", CheckConstraint)
 
     assert {"draft", "active", "superseded", "rejected"} == {
@@ -1792,9 +1788,12 @@ def test_collection_artifact_and_child_direct_deletion_is_refused():
         fixture.collection_artifact.delete()
 
     assert CollectionRelationEvidence.objects.filter(pk=fixture.evidence.pk).exists()
-    assert CollectionEntityDocumentLink.objects.filter(
-        pk__in=(fixture.head_mapping.pk, fixture.tail_mapping.pk)
-    ).count() == 2
+    assert (
+        CollectionEntityDocumentLink.objects.filter(
+            pk__in=(fixture.head_mapping.pk, fixture.tail_mapping.pk)
+        ).count()
+        == 2
+    )
     assert CollectionRelation.objects.filter(pk=fixture.relation.pk).exists()
     assert RelationMention.objects.filter(pk=fixture.relation_mention.pk).exists()
 

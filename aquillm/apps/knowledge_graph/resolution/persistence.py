@@ -209,8 +209,18 @@ def _revalidate_immutable_result(result: object) -> ResolutionResult:
     return result
 
 
-def _validate_destination(artifact, run, result: ResolutionResult) -> None:
+def _validate_destination(
+    artifact,
+    run,
+    result: ResolutionResult,
+    *,
+    lease_owner=None,
+    lease_generation=None,
+) -> None:
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import validate_build_lease
+
+    validate_build_lease(run, lease_owner, lease_generation)
 
     if run.artifact_id != artifact.pk:
         raise ResolutionPersistenceError(
@@ -227,11 +237,14 @@ def _validate_destination(artifact, run, result: ResolutionResult) -> None:
     if run.stage not in {
         GraphBuildRun.Stage.EXTRACTION,
         GraphBuildRun.Stage.RESOLUTION,
+        GraphBuildRun.Stage.EXTRACTING,
+        GraphBuildRun.Stage.RESOLVING,
     }:
         raise ResolutionPersistenceError(
             "destination build run must be in extraction or resolution stage"
         )
     for field in (
+        "build_key",
         "scope_type",
         "scope_id",
         "source_hash",
@@ -245,7 +258,7 @@ def _validate_destination(artifact, run, result: ResolutionResult) -> None:
         "assembly_version",
         "assembly_config_checksum",
     ):
-        if getattr(run, field) != getattr(artifact, field):
+        if getattr(run, field, None) != getattr(artifact, field, None):
             raise ResolutionPersistenceError(
                 f"build run {field} does not match destination artifact"
             )
@@ -518,7 +531,14 @@ def _write_resolution_rows(*, artifact, result, mentions_by_id):
     return tuple(sorted(entity_rows, key=lambda row: row.cluster_key)), len(link_rows)
 
 
-def persist_document_resolution(artifact_id, build_run_id, result):
+def persist_document_resolution(
+    artifact_id,
+    build_run_id,
+    result,
+    *,
+    lease_owner=None,
+    lease_generation=None,
+):
     """Persist a complete result without taking over build lifecycle transitions."""
 
     from django.db import transaction
@@ -534,7 +554,13 @@ def persist_document_resolution(artifact_id, build_run_id, result):
     with transaction.atomic():
         artifact = GraphArtifact.objects.select_for_update().get(pk=artifact_id)
         run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
-        _validate_destination(artifact, run, result)
+        _validate_destination(
+            artifact,
+            run,
+            result,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
+        )
         mentions = tuple(
             EntityMention.objects.select_for_update()
             .select_related("chunk")

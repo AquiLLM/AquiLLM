@@ -49,24 +49,21 @@ def collection_input_source_signature(
             "collection_id": collection_id,
             "document_id": str(document_id),
             "document_artifact_id": document_artifact.pk,
+            "document_artifact_build_key": document_artifact.build_key,
             "membership_signature": membership_signature,
             "document_source_hash": document_artifact.source_hash,
             "ontology_version": document_artifact.ontology_version,
             "extractor_version": document_artifact.extractor_version,
             "resolver_version": document_artifact.resolver_version,
             "filter_policy_version": document_artifact.filter_policy_version,
-            "embedding_model_signature": (
-                document_artifact.embedding_model_signature
-            ),
+            "embedding_model_signature": (document_artifact.embedding_model_signature),
             "ontology_checksum": document_artifact.ontology_checksum,
             "filter_policy_checksum": document_artifact.filter_policy_checksum,
             "resolution_config_checksum": (
                 document_artifact.resolution_config_checksum
             ),
             "assembly_version": document_artifact.assembly_version,
-            "assembly_config_checksum": (
-                document_artifact.assembly_config_checksum
-            ),
+            "assembly_config_checksum": (document_artifact.assembly_config_checksum),
         }
     )
 
@@ -82,6 +79,7 @@ def collection_input_build_signature(
         {
             "source_signature": source_signature,
             "destination_artifact_id": destination_artifact.pk,
+            "destination_build_key": destination_artifact.build_key,
             "destination_source_hash": destination_artifact.source_hash,
             "ontology_version": destination_artifact.ontology_version,
             "extractor_version": destination_artifact.extractor_version,
@@ -96,9 +94,7 @@ def collection_input_build_signature(
                 destination_artifact.resolution_config_checksum
             ),
             "assembly_version": destination_artifact.assembly_version,
-            "assembly_config_checksum": (
-                destination_artifact.assembly_config_checksum
-            ),
+            "assembly_config_checksum": (destination_artifact.assembly_config_checksum),
         }
     )
 
@@ -246,10 +242,7 @@ class CollectionArtifactInput(CollectionArtifactChildModelMixin, ValidatedGraphM
             errors["artifact"] = "Manifest destination must be a collection artifact."
         elif destination.scope_id != str(self.collection_id):
             errors["collection"] = "Manifest collection must match destination scope."
-        elif (
-            destination.status != GraphArtifact.Status.BUILDING
-            and self._state.adding
-        ):
+        elif destination.status != GraphArtifact.Status.BUILDING and self._state.adding:
             errors["artifact"] = (
                 "Manifest rows can only be added to a building artifact."
             )

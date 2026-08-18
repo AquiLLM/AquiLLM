@@ -286,6 +286,8 @@ def test_public_wrapper_and_explicit_destination_core_have_narrow_signatures():
         "document_id",
         "expected_source_hash",
         "ontology_version",
+        "lease_owner",
+        "lease_generation",
     )
 
 
@@ -573,6 +575,7 @@ def test_source_freshness_requires_expected_stored_and_recomputed_hash_to_match(
         {
             "full_text": text,
             "full_text_hash": source_hash,
+            "ingestion_complete": True,
             "hash_fn": staticmethod(RawTextDocument.hash_fn),
         },
     )()
@@ -582,6 +585,10 @@ def test_source_freshness_requires_expected_stored_and_recomputed_hash_to_match(
     with pytest.raises(StaleSourceError):
         _validate_source(document, source_hash)
     document.full_text_hash = source_hash
+    document.ingestion_complete = False
+    with pytest.raises(StaleSourceError):
+        _validate_source(document, source_hash)
+    document.ingestion_complete = True
     document.full_text = "content changed without updating its stored hash"
     with pytest.raises(StaleSourceError):
         _validate_source(document, source_hash)

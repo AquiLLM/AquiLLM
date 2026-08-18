@@ -2342,9 +2342,7 @@ def _bounded_document_artifacts(
         type(max_document_inputs) is not int
         or not 1 <= max_document_inputs <= MAX_COLLECTION_DOCUMENT_INPUTS
     ):
-        raise CollectionResolutionPersistenceError(
-            "collection manifest cap is invalid"
-        )
+        raise CollectionResolutionPersistenceError("collection manifest cap is invalid")
     query_count = getattr(values, "count", None)
     query_iterator = getattr(values, "iterator", None)
     if callable(query_count) and callable(query_iterator):
@@ -2355,12 +2353,9 @@ def _bounded_document_artifacts(
             )
         if source_count > max_document_inputs:
             raise CollectionResolutionPersistenceError(
-                "collection manifest exceeds its checksum-addressed "
-                "document-input cap"
+                "collection manifest exceeds its checksum-addressed document-input cap"
             )
-        source_iterator = query_iterator(
-            chunk_size=min(max_document_inputs, 1_000)
-        )
+        source_iterator = query_iterator(chunk_size=min(max_document_inputs, 1_000))
     else:
         try:
             source_iterator = iter(values)
@@ -2393,6 +2388,7 @@ def build_collection_snapshot(
     resolution_config: CollectionResolutionConfig | None = None,
     assembly_config: object | None = None,
     embedding_model_signature: str,
+    build_key: str | None = None,
 ):
     """Create a building collection artifact and its immutable source manifest."""
 
@@ -2433,6 +2429,8 @@ def build_collection_snapshot(
         ) from exc
     ontology_version = ontology.version
     ontology_checksum = ontology.checksum
+    if build_key is not None:
+        build_key = _require_hash(build_key, "collection build key")
     if type(filter_policy) is not FilterPolicy:
         raise CollectionResolutionPersistenceError(
             "collection snapshot requires an exact immutable FilterPolicy"
@@ -2459,10 +2457,7 @@ def build_collection_snapshot(
             "collection snapshot requires an exact assembly config"
         )
     assembly_config.__post_init__()
-    if (
-        resolution_config.max_document_inputs
-        != assembly_config.max_document_inputs
-    ):
+    if resolution_config.max_document_inputs != assembly_config.max_document_inputs:
         raise CollectionResolutionPersistenceError(
             "resolution and assembly manifest caps must match"
         )
@@ -2587,6 +2582,7 @@ def build_collection_snapshot(
             scope_type=GraphArtifact.ScopeType.COLLECTION,
             scope_id=collection.pk,
             status=GraphArtifact.Status.BUILDING,
+            build_key=build_key or "",
             source_hash=source_hash,
             ontology_version=_bounded_text(
                 ontology_version, "ontology version", maximum=128
@@ -2627,8 +2623,17 @@ def build_collection_snapshot(
         return artifact, tuple(rows)
 
 
-def _validate_collection_destination(artifact, run) -> None:
+def _validate_collection_destination(
+    artifact,
+    run,
+    *,
+    lease_owner=None,
+    lease_generation=None,
+) -> None:
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import validate_build_lease
+
+    validate_build_lease(run, lease_owner, lease_generation)
 
     if artifact.scope_type != GraphArtifact.ScopeType.COLLECTION:
         raise CollectionResolutionPersistenceError(
@@ -2644,11 +2649,15 @@ def _validate_collection_destination(artifact, run) -> None:
         )
     if run.status != GraphBuildRun.Status.RUNNING:
         raise CollectionResolutionPersistenceError("build run must be running")
-    if run.stage != GraphBuildRun.Stage.RESOLUTION:
+    if run.stage not in {
+        GraphBuildRun.Stage.RESOLUTION,
+        GraphBuildRun.Stage.RESOLVING,
+    }:
         raise CollectionResolutionPersistenceError(
             "collection resolver requires the resolution stage"
         )
     for field in (
+        "build_key",
         "scope_type",
         "scope_id",
         "source_hash",
@@ -2663,7 +2672,7 @@ def _validate_collection_destination(artifact, run) -> None:
         "assembly_version",
         "assembly_config_checksum",
     ):
-        if getattr(run, field) != getattr(artifact, field):
+        if getattr(run, field, None) != getattr(artifact, field, None):
             raise CollectionResolutionPersistenceError(
                 f"build run {field} does not match destination artifact"
             )
@@ -2681,10 +2690,26 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
 
     if artifact.scope_type != GraphArtifact.ScopeType.COLLECTION:
         raise CollectionResolutionPersistenceError("manifest owner is not a collection")
+    manifest_rows = tuple(manifest_rows)
+    source_ids = tuple(row.document_artifact_id for row in manifest_rows)
+    if len(source_ids) != len(set(source_ids)):
+        raise CollectionResolutionPersistenceError(
+            "collection manifest repeats a document artifact"
+        )
+    locked_sources = tuple(
+        GraphArtifact.objects.select_for_update()
+        .filter(pk__in=source_ids)
+        .order_by("pk")
+    )
+    if {row.pk for row in locked_sources} != set(source_ids):
+        raise CollectionResolutionPersistenceError(
+            "collection manifest source artifact was deleted"
+        )
+    source_by_id = {row.pk: row for row in locked_sources}
     source_signatures: list[str] = []
     snapshot_inputs: list[CollectionSnapshotInput] = []
     for row in manifest_rows:
-        source = row.document_artifact
+        source = source_by_id[row.document_artifact_id]
         if (
             row.artifact_id != artifact.pk
             or row.collection_id != int(artifact.scope_id)
@@ -2938,7 +2963,13 @@ def _filter_inputs_for_resolution(result, source_entity_rows, *, for_update: boo
     return tuple(sorted(projected, key=lambda item: item.entity_id))
 
 
-def load_collection_resolution_inputs(artifact_id: int, build_run_id: int):
+def load_collection_resolution_inputs(
+    artifact_id: int,
+    build_run_id: int,
+    *,
+    lease_owner=None,
+    lease_generation=None,
+):
     """Load only exact manifest entities/relations after locking build identity."""
 
     from django.db import transaction
@@ -2954,7 +2985,12 @@ def load_collection_resolution_inputs(artifact_id: int, build_run_id: int):
     with transaction.atomic():
         artifact = GraphArtifact.objects.select_for_update().get(pk=artifact_id)
         run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
-        _validate_collection_destination(artifact, run)
+        _validate_collection_destination(
+            artifact,
+            run,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
+        )
         manifest = tuple(
             CollectionArtifactInput.objects.select_for_update()
             .select_related("document_artifact", "collection")
@@ -2972,6 +3008,9 @@ def load_collection_filter_inputs(
     artifact_id: int,
     build_run_id: int,
     result: CollectionResolutionResult,
+    *,
+    lease_owner=None,
+    lease_generation=None,
 ):
     """Load the exact raw evidence needed to filter one resolved snapshot."""
 
@@ -2989,7 +3028,12 @@ def load_collection_filter_inputs(
     with transaction.atomic():
         artifact = GraphArtifact.objects.select_for_update().get(pk=artifact_id)
         run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
-        _validate_collection_destination(artifact, run)
+        _validate_collection_destination(
+            artifact,
+            run,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
+        )
         manifest = tuple(
             CollectionArtifactInput.objects.select_for_update()
             .select_related("document_artifact", "collection")
@@ -3386,8 +3430,7 @@ def _collection_resolution_marker_is_valid(
         and marker.get("embedding_model_signature")
         == artifact.embedding_model_signature
         and marker.get("assembly_version") == artifact.assembly_version
-        and marker.get("assembly_config_checksum")
-        == artifact.assembly_config_checksum
+        and marker.get("assembly_config_checksum") == artifact.assembly_config_checksum
         and type(marker.get("raw_relation_count")) is int
         and marker.get("raw_relation_count") == raw_relation_count
         and type(marker.get("raw_relation_fingerprint")) is str
@@ -3779,6 +3822,8 @@ def persist_collection_resolution(
     *,
     filter_policy,
     ontology: object,
+    lease_owner=None,
+    lease_generation=None,
 ):
     """Atomically write a complete shadow result; never activate or replace state."""
 
@@ -3856,7 +3901,12 @@ def persist_collection_resolution(
             raise CollectionResolutionPersistenceError(
                 "collection build run changed before scope locking"
             )
-        _validate_collection_destination(artifact, run)
+        _validate_collection_destination(
+            artifact,
+            run,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
+        )
         manifest = tuple(
             CollectionArtifactInput.objects.select_for_update()
             .select_related("document_artifact", "collection")

@@ -42,6 +42,10 @@ class CollectionGraphAssemblyError(RuntimeError):
     """Raised when assembly cannot preserve its locked input snapshot."""
 
 
+class CollectionGraphSourceStaleError(CollectionGraphAssemblyError):
+    """The collection/document source snapshot changed and should be rebuilt."""
+
+
 class EvidenceDisposition(StrEnum):
     PROMOTED = "promoted"
     SUPPRESSED = "suppressed"
@@ -188,9 +192,8 @@ class AssemblyEvidenceInput:
             value = getattr(self, field_name)
             if value is not None and (type(value) is not int or value < 1):
                 raise ValueError(f"{field_name} must be a positive row ID or null")
-        if (
-            type(self.relation_type) is not str
-            or not _SAFE_TOKEN_PATTERN.fullmatch(self.relation_type)
+        if type(self.relation_type) is not str or not _SAFE_TOKEN_PATTERN.fullmatch(
+            self.relation_type
         ):
             raise ValueError("relation type must be a canonical token")
         for field_name in ("head_entity_type", "tail_entity_type"):
@@ -505,9 +508,7 @@ def validate_assembly_projection(
     ):
         raise ValueError("collection graph orphan limits exceeded")
     disposition_counts = {
-        disposition: sum(
-            item.disposition is disposition for item in plan.evidence
-        )
+        disposition: sum(item.disposition is disposition for item in plan.evidence)
         for disposition in EvidenceDisposition
     }
     return AssemblyProjectionStats(
@@ -613,9 +614,7 @@ def _config_from_marker(marker: object) -> AssemblyConfig:
             generic_relation_types=frozenset(generic_values),
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise CollectionGraphAssemblyError(
-            "assembly marker config is invalid"
-        ) from exc
+        raise CollectionGraphAssemblyError("assembly marker config is invalid") from exc
 
 
 def _resolve_config(run: object, config: AssemblyConfig | None) -> AssemblyConfig:
@@ -647,7 +646,10 @@ def _resolve_ontology(artifact: object, ontology: object | None):
         validate_ontology_definition,
     )
 
-    if ontology is None:
+    artifact_metadata = artifact.metadata if type(artifact.metadata) is dict else {}
+    orchestration = artifact_metadata.get("orchestration_version") == 1
+    persisted_ontology = None
+    if ontology is None or orchestration:
         record = (
             OntologyVersion.objects.select_for_update()
             .filter(
@@ -658,19 +660,45 @@ def _resolve_ontology(artifact: object, ontology: object | None):
             .order_by("pk")
             .first()
         )
+        if orchestration and (
+            record is None or record.status != OntologyVersion.Status.ACTIVE
+        ):
+            raise CollectionGraphSourceStaleError(
+                "collection ontology is no longer the active graph ontology"
+            )
         metadata = None if record is None else record.metadata
         raw_yaml = metadata.get("yaml") if type(metadata) is dict else None
         if type(raw_yaml) is not str:
             raise CollectionGraphAssemblyError(
                 "artifact ontology identity has no persisted definition"
             )
-        ontology = load_ontology_yaml(raw_yaml)
+        persisted_ontology = load_ontology_yaml(raw_yaml)
+        if orchestration:
+            from apps.knowledge_graph.services.builds import (
+                _ontology_activation_signature,
+            )
+
+            if artifact_metadata.get(
+                "ontology_activation_signature"
+            ) != _ontology_activation_signature(persisted_ontology):
+                raise CollectionGraphSourceStaleError(
+                    "collection ontology activation changed"
+                )
+        if ontology is None:
+            ontology = persisted_ontology
     try:
-        return validate_ontology_definition(
+        resolved = validate_ontology_definition(
             ontology,
             expected_version=artifact.ontology_version,
             expected_checksum=artifact.ontology_checksum,
         )
+        if persisted_ontology is not None:
+            validate_ontology_definition(
+                persisted_ontology,
+                expected_version=artifact.ontology_version,
+                expected_checksum=artifact.ontology_checksum,
+            )
+        return resolved
     except (TypeError, ValueError) as exc:
         raise CollectionGraphAssemblyError(
             "ontology does not match the collection artifact identity"
@@ -702,9 +730,7 @@ def _relation_row_content(row: object) -> dict[str, object]:
         "support_count": row.support_count,
         "confidence": row.confidence,
         "metadata": {
-            key: value
-            for key, value in metadata.items()
-            if key != "row_audit_checksum"
+            key: value for key, value in metadata.items() if key != "row_audit_checksum"
         },
     }
 
@@ -727,9 +753,7 @@ def _evidence_row_content(row: object) -> dict[str, object]:
         "ontology_checksum": row.ontology_checksum,
         "assembly_config_checksum": row.assembly_config_checksum,
         "metadata": {
-            key: value
-            for key, value in metadata.items()
-            if key != "row_audit_checksum"
+            key: value for key, value in metadata.items() if key != "row_audit_checksum"
         },
     }
 
@@ -762,9 +786,7 @@ def _validate_task9_lineage(
         raise CollectionGraphAssemblyError("Task 9 lineage contains an artifact cycle")
     visited_artifact_ids = visited_artifact_ids | {artifact.pk}
     max_document_inputs = (
-        MAX_COLLECTION_DOCUMENT_INPUTS
-        if config is None
-        else config.max_document_inputs
+        MAX_COLLECTION_DOCUMENT_INPUTS if config is None else config.max_document_inputs
     )
     if len(manifest) > max_document_inputs:
         raise CollectionGraphAssemblyError(
@@ -786,11 +808,16 @@ def _validate_task9_lineage(
         allowed_run_state = (
             (run.Stage.PERSISTENCE, run.Status.RUNNING),
             (run.Stage.COMPLETE, run.Status.SUCCEEDED),
+            (run.Stage.ASSEMBLING, run.Status.RUNNING),
+            (run.Stage.VALIDATING, run.Status.RUNNING),
+            (run.Stage.ACTIVE, run.Status.SUCCEEDED),
         )
     elif resolution is not None:
         allowed_run_state = (
             (run.Stage.RESOLUTION, run.Status.RUNNING),
             (run.Stage.PERSISTENCE, run.Status.RUNNING),
+            (run.Stage.RESOLVING, run.Status.RUNNING),
+            (run.Stage.ASSEMBLING, run.Status.RUNNING),
         )
     else:
         allowed_run_state = (
@@ -845,9 +872,7 @@ def _validate_task9_lineage(
         normal_marker_keys if resolution is not None else filter_marker_keys
     )
     if set(marker) != expected_marker_keys:
-        raise CollectionGraphAssemblyError(
-            "Task 9 lineage marker schema is not exact"
-        )
+        raise CollectionGraphAssemblyError("Task 9 lineage marker schema is not exact")
     checksum_keys = {
         "source_hash",
         "ontology_checksum",
@@ -859,16 +884,14 @@ def _validate_task9_lineage(
         "filter_policy_checksum" if resolution is not None else "policy_checksum"
     )
     if any(
-        type(marker.get(key)) is not str
-        or not _HASH_PATTERN.fullmatch(marker[key])
+        type(marker.get(key)) is not str or not _HASH_PATTERN.fullmatch(marker[key])
         for key in checksum_keys
     ):
         raise CollectionGraphAssemblyError(
             "Task 9 lineage marker has an invalid typed checksum"
         )
     if resolution is not None and any(
-        type(marker.get(key)) is not str
-        or not _HASH_PATTERN.fullmatch(marker[key])
+        type(marker.get(key)) is not str or not _HASH_PATTERN.fullmatch(marker[key])
         for key in (
             "source_entity_fingerprint",
             "source_relation_fingerprint",
@@ -970,8 +993,7 @@ def _validate_task9_lineage(
             != _source_relation_fingerprint(source_relations)
             or marker["raw_relation_count"] != raw_relation_count
             or marker["raw_relation_fingerprint"] != raw_relation_fingerprint
-            or marker["embedding_model_signature"]
-            != artifact.embedding_model_signature
+            or marker["embedding_model_signature"] != artifact.embedding_model_signature
         ):
             raise CollectionGraphAssemblyError(
                 "Task 9 source entity/relation fingerprint drift detected"
@@ -981,12 +1003,10 @@ def _validate_task9_lineage(
         if (
             row.artifact_id != artifact.pk
             or str(row.collection_id) != artifact.scope_id
-            or metadata.get("filter_policy_checksum")
-            != artifact.filter_policy_checksum
+            or metadata.get("filter_policy_checksum") != artifact.filter_policy_checksum
             or metadata.get("filter_result_checksum")
             != marker["filter_result_checksum"]
-            or metadata.get("row_audit_checksum")
-            != _collection_entity_row_audit(row)
+            or metadata.get("row_audit_checksum") != _collection_entity_row_audit(row)
         ):
             raise CollectionGraphAssemblyError(
                 "Task 9 collection entity audit is corrupt"
@@ -1012,9 +1032,8 @@ def _validate_task9_lineage(
                     "Task 9 automatic assignments do not partition source entities"
                 )
             automatic_source_ids.add(row.document_entity_id)
-    if (
-        resolution is not None
-        and marker["automatic_assignment_count"] != len(automatic_source_ids)
+    if resolution is not None and marker["automatic_assignment_count"] != len(
+        automatic_source_ids
     ):
         raise CollectionGraphAssemblyError(
             "Task 9 automatic assignment count differs from locked links"
@@ -1078,8 +1097,7 @@ def _validate_filter_source_lineage(
         or source.extractor_version != artifact.extractor_version
         or source.resolver_version != artifact.resolver_version
         or source.embedding_model_signature != artifact.embedding_model_signature
-        or source.resolution_config_checksum
-        != artifact.resolution_config_checksum
+        or source.resolution_config_checksum != artifact.resolution_config_checksum
         or source.assembly_version != artifact.assembly_version
         or source.assembly_config_checksum != artifact.assembly_config_checksum
     ):
@@ -1087,9 +1105,7 @@ def _validate_filter_source_lineage(
             "filter rerun source artifact identity does not match the destination"
         )
     max_document_inputs = (
-        MAX_COLLECTION_DOCUMENT_INPUTS
-        if config is None
-        else config.max_document_inputs
+        MAX_COLLECTION_DOCUMENT_INPUTS if config is None else config.max_document_inputs
     )
     source_manifest_query = (
         CollectionArtifactInput.objects.select_for_update()
@@ -1154,8 +1170,7 @@ def _validate_filter_source_lineage(
                 "filter rerun source assembly audit is invalid"
             )
     if (
-        _content_checksum(source_task9_marker)
-        != marker["source_task9_marker_checksum"]
+        _content_checksum(source_task9_marker) != marker["source_task9_marker_checksum"]
         or assembly_marker_checksum != marker["source_assembly_marker_checksum"]
     ):
         raise CollectionGraphAssemblyError(
@@ -1184,8 +1199,13 @@ def _validate_filter_source_lineage(
 
 
 def _lock_current_contributors(collection: object, config: AssemblyConfig):
-    from apps.documents.models import DESCENDED_FROM_DOCUMENT
+    from apps.documents.models import DESCENDED_FROM_DOCUMENT, TextChunk
+    from apps.knowledge_graph.extraction.pipeline import (
+        StaleSourceError,
+        _validate_source,
+    )
     from apps.knowledge_graph.models import GraphArtifact
+    from apps.knowledge_graph.services.builds import ordered_chunk_signature
 
     document_models = tuple(
         sorted(DESCENDED_FROM_DOCUMENT, key=lambda value: value._meta.label)
@@ -1195,7 +1215,7 @@ def _lock_current_contributors(collection: object, config: AssemblyConfig):
         for model in document_models
     )
     if document_count > config.max_document_inputs:
-        raise CollectionGraphAssemblyError(
+        raise CollectionGraphSourceStaleError(
             "collection document membership exceeds the assembly input cap"
         )
     document_references = tuple(
@@ -1232,21 +1252,63 @@ def _lock_current_contributors(collection: object, config: AssemblyConfig):
         raise CollectionGraphAssemblyError(
             "collection has multiple active artifacts for one document"
         )
-    documents: list[object] = []
+    # Lock every concrete document before taking any chunk locks.  Collection
+    # builds use this same deterministic source-artifact/document/chunk order,
+    # so concurrent refreshes cannot form a cross-document lock cycle.
+    locked_sources: list[tuple[object, object]] = []
     for source in active:
         reference = reference_by_id.get(source.scope_id)
         if reference is None:
-            raise CollectionGraphAssemblyError(
+            raise CollectionGraphSourceStaleError(
                 "active document artifact escaped collection membership"
-        )
+            )
         model = type(reference)
         document = model.objects.select_for_update().get(pk=reference.pk)
         if (
             str(document.id) != source.scope_id
             or document.collection_id != collection.pk
         ):
-            raise CollectionGraphAssemblyError(
+            raise CollectionGraphSourceStaleError(
                 "contributing document moved during collection locking"
+            )
+        locked_sources.append((source, document))
+
+    documents: list[object] = []
+    for source, document in locked_sources:
+        metadata = source.metadata if type(source.metadata) is dict else {}
+        chunks = tuple(
+            TextChunk.objects.select_for_update()
+            .filter(doc_id=document.id)
+            .only(
+                "pk",
+                "doc_id",
+                "chunk_number",
+                "start_position",
+                "end_position",
+                "modality",
+                "content",
+            )
+            .order_by("chunk_number", "pk")
+        )
+        current_chunk_signature = ordered_chunk_signature(
+            chunks,
+            concrete_model_label=document._meta.label_lower,
+        )
+        try:
+            _validate_source(document, source.source_hash)
+            source_changed = False
+        except StaleSourceError:
+            source_changed = True
+        # Task 11 artifacts carry an exact chunk signature.  Existing active
+        # artifacts created before orchestration remain readable until their
+        # normal document rebuild upgrades them.
+        chunks_changed = (
+            metadata.get("orchestration_version") == 1
+            and metadata.get("ordered_chunk_signature") != current_chunk_signature
+        )
+        if source_changed or chunks_changed:
+            raise CollectionGraphSourceStaleError(
+                "contributing document source or chunks changed"
             )
         documents.append(document)
     current_document_ids = tuple(
@@ -1259,7 +1321,7 @@ def _lock_current_contributors(collection: object, config: AssemblyConfig):
         )
     )
     if current_document_ids != tuple(sorted(document_ids)):
-        raise CollectionGraphAssemblyError(
+        raise CollectionGraphSourceStaleError(
             "collection membership changed during contributor locking"
         )
     current_active_id_rows: list[int] = []
@@ -1273,7 +1335,7 @@ def _lock_current_contributors(collection: object, config: AssemblyConfig):
         )
     current_active_ids = tuple(sorted(current_active_id_rows))
     if current_active_ids != tuple(row.pk for row in active):
-        raise CollectionGraphAssemblyError(
+        raise CollectionGraphSourceStaleError(
             "active document artifact snapshot changed during contributor locking"
         )
     return tuple(documents), active
@@ -1298,7 +1360,7 @@ def _validate_locked_manifest(
     manifest_source_ids = tuple(sorted(row.document_artifact_id for row in manifest))
     current_source_ids = tuple(sorted(row.pk for row in active_sources))
     if manifest_source_ids != current_source_ids:
-        raise CollectionGraphAssemblyError(
+        raise CollectionGraphSourceStaleError(
             "collection active document artifact snapshot changed"
         )
     try:
@@ -1386,9 +1448,7 @@ def _load_assembly_evidence(
     relation_ids: list[int] = []
     for source_artifact_batch in _query_value_batches(source_artifact_ids):
         relation_id_rows = (
-            RelationMention.objects.filter(
-                artifact_id__in=source_artifact_batch
-            )
+            RelationMention.objects.filter(artifact_id__in=source_artifact_batch)
             .order_by("pk")
             .values_list("pk", flat=True)
             .iterator(chunk_size=_ASSEMBLY_INSERT_BATCH_SIZE)
@@ -1396,9 +1456,7 @@ def _load_assembly_evidence(
         for relation_id in relation_id_rows:
             relation_ids.append(relation_id)
             if len(relation_ids) > config.max_evidence:
-                raise CollectionGraphAssemblyError(
-                    "assembly evidence cap exceeded"
-                )
+                raise CollectionGraphAssemblyError("assembly evidence cap exceeded")
     relation_rows: list[object] = []
     for relation_id_batch in _id_batches(relation_ids):
         relation_rows.extend(
@@ -1866,9 +1924,10 @@ def _write_assembly(
         relation_rows,
         batch_size=_ASSEMBLY_INSERT_BATCH_SIZE,
     )
-    relation_by_key = {row_key.key: row for row_key, row in zip(
-        plan.relations, relation_rows, strict=True
-    )}
+    relation_by_key = {
+        row_key.key: row
+        for row_key, row in zip(plan.relations, relation_rows, strict=True)
+    }
     mention_by_id = {row.pk: row for row in relation_mentions}
     status_by_disposition = {
         EvidenceDisposition.PROMOTED: CollectionRelationEvidence.Status.ACTIVE,
@@ -1936,7 +1995,12 @@ def _write_assembly(
     )
     stats = run.stats if type(run.stats) is dict else {}
     run.stats = {**stats, "collection_assembly_commit": marker}
-    run.stage = run.Stage.PERSISTENCE
+    metadata = run.metadata if type(run.metadata) is dict else {}
+    run.stage = (
+        run.Stage.ASSEMBLING
+        if metadata.get("orchestration_version") == 1
+        else run.Stage.PERSISTENCE
+    )
     run.status = run.Status.RUNNING
     run.save(update_fields=["stats", "stage", "status"])
     metadata = artifact.metadata if type(artifact.metadata) is dict else {}
@@ -2015,8 +2079,18 @@ def _locked_projection(
     )
 
 
-def _candidate_identity(artifact: object, run: object, collection_id: int) -> None:
+def _candidate_identity(
+    artifact: object,
+    run: object,
+    collection_id: int,
+    *,
+    lease_owner=None,
+    lease_generation=None,
+) -> None:
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import validate_build_lease
+
+    validate_build_lease(run, lease_owner, lease_generation)
 
     if (
         artifact.scope_type != GraphArtifact.ScopeType.COLLECTION
@@ -2030,6 +2104,7 @@ def _candidate_identity(artifact: object, run: object, collection_id: int) -> No
             "build run and artifact do not identify the collection"
         )
     for field_name in (
+        "build_key",
         "source_hash",
         "ontology_version",
         "extractor_version",
@@ -2042,7 +2117,7 @@ def _candidate_identity(artifact: object, run: object, collection_id: int) -> No
         "assembly_version",
         "assembly_config_checksum",
     ):
-        if getattr(run, field_name) != getattr(artifact, field_name):
+        if getattr(run, field_name, None) != getattr(artifact, field_name, None):
             raise CollectionGraphAssemblyError(
                 f"build run {field_name} differs from candidate artifact"
             )
@@ -2060,6 +2135,8 @@ def _locked_candidate(
     build_run_id: int,
     *,
     lock_competing_runs: bool = False,
+    lease_owner=None,
+    lease_generation=None,
 ):
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
@@ -2095,7 +2172,13 @@ def _locked_candidate(
             )
     else:
         run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
-    _candidate_identity(artifact, run, collection_id)
+    _candidate_identity(
+        artifact,
+        run,
+        collection_id,
+        lease_owner=lease_owner,
+        lease_generation=lease_generation,
+    )
     return collection, artifact, run, scope_artifacts
 
 
@@ -2106,6 +2189,8 @@ def assemble_collection_graph(
     *,
     ontology: object | None = None,
     config: AssemblyConfig | None = None,
+    lease_owner=None,
+    lease_generation=None,
 ) -> AssemblyResult:
     """Commit relations/evidence to the existing Task 9 shadow artifact only."""
 
@@ -2122,7 +2207,10 @@ def assemble_collection_graph(
     aggregate_source_signature = _source_hash(aggregate_source_signature)
     with transaction.atomic():
         collection, artifact, run, _scope_artifacts = _locked_candidate(
-            collection_id, build_run_id
+            collection_id,
+            build_run_id,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
         )
         config = _resolve_config(run, config)
         ontology = _resolve_ontology(artifact, ontology)
@@ -2284,6 +2372,8 @@ def validate_collection_graph_artifact(
     *,
     ontology: object | None = None,
     config: AssemblyConfig | None = None,
+    lease_owner=None,
+    lease_generation=None,
 ) -> AssemblyResult:
     """Revalidate a complete shadow without changing current graph state."""
 
@@ -2297,6 +2387,8 @@ def validate_collection_graph_artifact(
             collection_id,
             build_run_id,
             lock_competing_runs=True,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
         )
         return _validate_locked_complete_artifact(
             collection=collection,
@@ -2315,10 +2407,13 @@ def activate_collection_graph(
     *,
     ontology: object | None = None,
     config: AssemblyConfig | None = None,
+    lease_owner=None,
+    lease_generation=None,
 ) -> AssemblyResult:
     """Atomically expose a validated shadow while enforcing monotonic newer-wins."""
 
     from django.db import transaction
+
     collection_id = _positive_int(collection_id, "collection id")
     build_run_id = _positive_int(build_run_id, "build run id")
     aggregate_source_signature = _source_hash(aggregate_source_signature)
@@ -2329,6 +2424,8 @@ def activate_collection_graph(
             collection_id,
             build_run_id,
             lock_competing_runs=True,
+            lease_owner=lease_owner,
+            lease_generation=lease_generation,
         )
         result = _validate_locked_complete_artifact(
             collection=collection,
@@ -2370,14 +2467,28 @@ def _swap_active_collection_artifact(
             raise CollectionGraphAssemblyError(
                 "active candidate is not the unique current collection artifact"
             )
-        if (
-            run.stage != GraphBuildRun.Stage.COMPLETE
-            or run.status != GraphBuildRun.Status.SUCCEEDED
-        ):
-            run.stage = GraphBuildRun.Stage.COMPLETE
+        metadata = run.metadata if type(run.metadata) is dict else {}
+        active_stage = (
+            GraphBuildRun.Stage.ACTIVE
+            if metadata.get("orchestration_version") == 1
+            else GraphBuildRun.Stage.COMPLETE
+        )
+        if run.stage != active_stage or run.status != GraphBuildRun.Status.SUCCEEDED:
+            run.stage = active_stage
             run.status = GraphBuildRun.Status.SUCCEEDED
             run.finished_at = timezone.now()
-            run.save(update_fields=["stage", "status", "finished_at"])
+            if metadata.get("orchestration_version") == 1:
+                run.lease_owner = ""
+                run.lease_expires_at = None
+            run.save(
+                update_fields=[
+                    "stage",
+                    "status",
+                    "finished_at",
+                    "lease_owner",
+                    "lease_expires_at",
+                ]
+            )
         return
     if len(active) > 1:
         raise CollectionGraphAssemblyError(
@@ -2392,15 +2503,44 @@ def _swap_active_collection_artifact(
         previous.status = GraphArtifact.Status.SUPERSEDED
         previous.superseded_at = superseded_at
         previous.save(update_fields=["status", "superseded_at"])
+        previous_run = (
+            GraphBuildRun.objects.filter(
+                artifact=previous,
+                stage=GraphBuildRun.Stage.ACTIVE,
+                status=GraphBuildRun.Status.SUCCEEDED,
+            )
+            .order_by("-attempt", "-pk")
+            .first()
+        )
+        if previous_run is not None:
+            previous_run.stage = GraphBuildRun.Stage.SUPERSEDED
+            previous_run.status = GraphBuildRun.Status.CANCELLED
+            previous_run.save(update_fields=["stage", "status"])
     activated_at = timezone.now()
     artifact.status = GraphArtifact.Status.ACTIVE
     artifact.activated_at = activated_at
     artifact.completed_at = activated_at
     artifact.save(update_fields=["status", "activated_at", "completed_at"])
-    run.stage = GraphBuildRun.Stage.COMPLETE
+    metadata = run.metadata if type(run.metadata) is dict else {}
+    run.stage = (
+        GraphBuildRun.Stage.ACTIVE
+        if metadata.get("orchestration_version") == 1
+        else GraphBuildRun.Stage.COMPLETE
+    )
     run.status = GraphBuildRun.Status.SUCCEEDED
     run.finished_at = activated_at
-    run.save(update_fields=["stage", "status", "finished_at"])
+    if metadata.get("orchestration_version") == 1:
+        run.lease_owner = ""
+        run.lease_expires_at = None
+    run.save(
+        update_fields=[
+            "stage",
+            "status",
+            "finished_at",
+            "lease_owner",
+            "lease_expires_at",
+        ]
+    )
 
 
 __all__ = [
@@ -2416,6 +2556,7 @@ __all__ = [
     "AssemblyResult",
     "CollectionAssemblyPlan",
     "CollectionGraphAssemblyError",
+    "CollectionGraphSourceStaleError",
     "EvidenceDisposition",
     "PlannedEvidence",
     "PlannedRelation",

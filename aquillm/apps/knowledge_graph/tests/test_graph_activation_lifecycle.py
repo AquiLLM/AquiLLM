@@ -70,6 +70,7 @@ def test_document_source_signature_changes_for_every_immutable_input_identity_fi
     document_id = uuid.uuid4()
     values = {
         "pk": 17,
+        "build_key": "0" * 64,
         "source_hash": "1" * 64,
         "ontology_version": "ontology-v1",
         "extractor_version": "extractor-v1",
@@ -95,6 +96,7 @@ def test_document_source_signature_changes_for_every_immutable_input_identity_fi
     baseline = signature()
     changes = {
         "pk": 18,
+        "build_key": "9" * 64,
         "source_hash": "a" * 64,
         "ontology_version": "ontology-v2",
         "extractor_version": "extractor-v2",
@@ -118,9 +120,7 @@ def test_document_source_signature_changes_for_every_immutable_input_identity_fi
 
 def test_supersession_has_a_distinct_immutable_lifecycle_timestamp():
     field_names = {field.name for field in GraphArtifact._meta.fields}
-    activation_source = inspect.getsource(
-        assembly._swap_active_collection_artifact
-    )
+    activation_source = inspect.getsource(assembly._swap_active_collection_artifact)
 
     assert "superseded_at" in field_names
     assert "superseded_at" in GraphArtifact._QUERYSET_IMMUTABLE_FIELDS
@@ -128,9 +128,7 @@ def test_supersession_has_a_distinct_immutable_lifecycle_timestamp():
     assert "previous.superseded_at =" in activation_source
 
     with pytest.raises(ValidationError, match="immutable"):
-        GraphArtifact.objects.filter(pk=1).update(
-            superseded_at=timezone.now()
-        )
+        GraphArtifact.objects.filter(pk=1).update(superseded_at=timezone.now())
 
 
 @pytest.mark.django_db(transaction=True)
@@ -236,8 +234,9 @@ def test_stale_or_superseded_document_contributor_is_rejected(source_status):
     )
     manifest = (SimpleNamespace(document_artifact_id=source.pk),)
 
-    with transaction.atomic(), pytest.raises(
-        assembly.CollectionGraphAssemblyError, match="snapshot changed"
+    with (
+        transaction.atomic(),
+        pytest.raises(assembly.CollectionGraphAssemblyError, match="snapshot changed"),
     ):
         assembly._validate_locked_manifest(
             collection,
@@ -280,8 +279,9 @@ def test_document_moved_to_another_collection_is_rejected_as_a_contributor():
     RawTextDocument.objects.filter(pk=document.pk).update(collection=destination)
     manifest = (SimpleNamespace(document_artifact_id=source.pk),)
 
-    with transaction.atomic(), pytest.raises(
-        assembly.CollectionGraphAssemblyError, match="snapshot changed"
+    with (
+        transaction.atomic(),
+        pytest.raises(assembly.CollectionGraphAssemblyError, match="snapshot changed"),
     ):
         assembly._validate_locked_manifest(
             original,
@@ -371,8 +371,9 @@ def test_older_candidate_cannot_activate_after_a_newer_winner():
         status=GraphBuildRun.Status.RUNNING,
     )
 
-    with transaction.atomic(), pytest.raises(
-        assembly.CollectionGraphAssemblyError, match="newer"
+    with (
+        transaction.atomic(),
+        pytest.raises(assembly.CollectionGraphAssemblyError, match="newer"),
     ):
         swap(artifact=candidate, run=run, scope_artifacts=(candidate, newer))
 

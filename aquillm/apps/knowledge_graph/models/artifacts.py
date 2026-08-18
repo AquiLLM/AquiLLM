@@ -32,6 +32,33 @@ def graph_identity_checksum(namespace: object, value: object) -> str:
     return sha256(payload).hexdigest()
 
 
+def legacy_graph_artifact_build_key(instance: object) -> str:
+    """Address pre-orchestrator artifacts without weakening their old identity."""
+
+    fields = (
+        "scope_type",
+        "scope_id",
+        "source_hash",
+        "ontology_version",
+        "extractor_version",
+        "resolver_version",
+        "filter_policy_version",
+        "embedding_model_signature",
+        "ontology_checksum",
+        "filter_policy_checksum",
+        "resolution_config_checksum",
+        "assembly_version",
+        "assembly_config_checksum",
+    )
+    payload = {
+        "namespace": "legacy-graph-artifact-v1",
+        "identity": {field: str(getattr(instance, field, "")) for field in fields},
+    }
+    return sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 ASSEMBLY_NOT_APPLICABLE_VERSION = "not-applicable"
 ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM = graph_identity_checksum(
     "assembly-config", ASSEMBLY_NOT_APPLICABLE_VERSION
@@ -394,6 +421,7 @@ class GraphArtifact(ValidatedGraphModel):
 
     scope_type = models.CharField(max_length=16, choices=ScopeType.choices)
     scope_id = models.CharField(max_length=64)
+    build_key = models.CharField(max_length=64, default="", editable=False)
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.BUILDING
     )
@@ -432,6 +460,7 @@ class GraphArtifact(ValidatedGraphModel):
     _IMMUTABLE_FIELDS = (
         "scope_type",
         "scope_id",
+        "build_key",
         "source_hash",
         "ontology_version",
         "extractor_version",
@@ -525,6 +554,10 @@ class GraphArtifact(ValidatedGraphModel):
                 name="kg_artifact_source_hash_nonempty",
             ),
             models.CheckConstraint(
+                condition=Q(build_key__regex=_CHECKSUM_PATTERN),
+                name="kg_artifact_build_key_valid",
+            ),
+            models.CheckConstraint(
                 condition=Q(source_hash__regex=_CHECKSUM_PATTERN),
                 name="kg_artifact_source_hash_valid",
             ),
@@ -553,6 +586,7 @@ class GraphArtifact(ValidatedGraphModel):
                 fields=[
                     "scope_type",
                     "scope_id",
+                    "build_key",
                     "source_hash",
                     "ontology_version",
                     "extractor_version",
@@ -583,6 +617,8 @@ class GraphArtifact(ValidatedGraphModel):
             self.scope_type, self.embedding_model_signature
         )
         self._prepare_identity_checksums()
+        if not self.build_key:
+            self.build_key = legacy_graph_artifact_build_key(self)
 
     def _prepare_identity_checksums(self) -> None:
         if not self.ontology_checksum:
@@ -611,7 +647,8 @@ class GraphArtifact(ValidatedGraphModel):
         super().clean()
         if self.pk:
             previous_lifecycle = (
-                type(self).objects.filter(pk=self.pk)
+                type(self)
+                .objects.filter(pk=self.pk)
                 .values("activated_at", "superseded_at")
                 .first()
             )
@@ -634,12 +671,19 @@ class GraphArtifact(ValidatedGraphModel):
             self.scope_type, self.embedding_model_signature
         )
         self._prepare_identity_checksums()
+        if not self.build_key:
+            self.build_key = legacy_graph_artifact_build_key(self)
+        if not re.fullmatch(_CHECKSUM_PATTERN, self.build_key):
+            raise ValidationError(
+                {"build_key": "Build key must be a lowercase SHA-256 digest."}
+            )
 
     def delete(self, *args, **kwargs):
         persisted_scope = None
         if self.pk:
             persisted_scope = (
-                type(self)._base_manager.filter(pk=self.pk)
+                type(self)
+                ._base_manager.filter(pk=self.pk)
                 .values_list("scope_type", flat=True)
                 .first()
             )
@@ -659,6 +703,19 @@ class GraphBuildRun(ValidatedGraphModel):
     """Durable audit of one build attempt, independent of ephemeral evidence."""
 
     class Stage(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        EXTRACTING = "extracting", "Extracting"
+        SNAPSHOTTING = "snapshotting", "Snapshotting"
+        RESOLVING = "resolving", "Resolving"
+        ASSEMBLING = "assembling", "Assembling"
+        VALIDATING = "validating", "Validating"
+        ACTIVE = "active", "Active"
+        FAILED = "failed", "Failed"
+        SUPERSEDED = "superseded", "Superseded"
+        STALE = "stale", "Stale"
+
+        # Typed legacy stages remain readable while Tasks 7-10 migrate to the
+        # scoped orchestration lifecycle. They are not used by Task 11 runs.
         ONTOLOGY = "ontology", "Ontology"
         EXTRACTION = "extraction", "Extraction"
         RESOLUTION = "resolution", "Resolution"
@@ -684,6 +741,7 @@ class GraphBuildRun(ValidatedGraphModel):
         on_delete=models.SET_NULL,
         related_name="build_runs",
     )
+    build_key = models.CharField(max_length=64, default="", editable=False)
     build_kind = models.CharField(max_length=16, choices=BuildKind.choices)
     scope_type = models.CharField(
         max_length=16, choices=GraphArtifact.ScopeType.choices
@@ -721,6 +779,10 @@ class GraphBuildRun(ValidatedGraphModel):
         max_length=16, choices=Status.choices, default=Status.PENDING
     )
     attempt = models.PositiveIntegerField(default=1)
+    lease_owner = models.CharField(max_length=128, blank=True, default="")
+    lease_generation = models.PositiveIntegerField(default=0)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    stage_marker = models.JSONField(default=dict, blank=True)
     error_code = models.CharField(max_length=128, blank=True, default="")
     error_message = models.TextField(blank=True, default="")
     error_metadata = models.JSONField(default=dict, blank=True)
@@ -734,6 +796,7 @@ class GraphBuildRun(ValidatedGraphModel):
     _IMMUTABLE_FIELDS = (
         "artifact",
         "artifact_id",
+        "build_key",
         "build_kind",
         "scope_type",
         "scope_id",
@@ -764,6 +827,10 @@ class GraphBuildRun(ValidatedGraphModel):
             models.CheckConstraint(
                 condition=Q(scope_type__in=GraphArtifact.ScopeType.values),
                 name="kg_build_scope_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(build_kind=models.F("scope_type")),
+                name="kg_build_kind_matches_scope",
             ),
             models.CheckConstraint(
                 condition=(
@@ -815,6 +882,16 @@ class GraphBuildRun(ValidatedGraphModel):
             models.CheckConstraint(
                 condition=Q(
                     stage__in=(
+                        "queued",
+                        "extracting",
+                        "snapshotting",
+                        "resolving",
+                        "assembling",
+                        "validating",
+                        "active",
+                        "failed",
+                        "superseded",
+                        "stale",
                         "ontology",
                         "extraction",
                         "resolution",
@@ -824,6 +901,84 @@ class GraphBuildRun(ValidatedGraphModel):
                     )
                 ),
                 name="kg_build_stage_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(build_key__regex=_CHECKSUM_PATTERN),
+                name="kg_build_key_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        stage__in=(
+                            "ontology",
+                            "extraction",
+                            "resolution",
+                            "filtering",
+                            "persistence",
+                            "complete",
+                        )
+                    )
+                    | Q(
+                        build_kind="document",
+                        stage__in=(
+                            "queued",
+                            "extracting",
+                            "resolving",
+                            "validating",
+                            "active",
+                            "failed",
+                            "superseded",
+                            "stale",
+                        ),
+                    )
+                    | Q(
+                        build_kind="collection",
+                        stage__in=(
+                            "queued",
+                            "snapshotting",
+                            "resolving",
+                            "assembling",
+                            "validating",
+                            "active",
+                            "failed",
+                            "superseded",
+                            "stale",
+                        ),
+                    )
+                ),
+                name="kg_build_stage_matches_kind",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        stage__in=(
+                            "ontology",
+                            "extraction",
+                            "resolution",
+                            "filtering",
+                            "persistence",
+                            "complete",
+                        )
+                    )
+                    | Q(stage="queued", status="pending")
+                    | Q(
+                        stage__in=(
+                            "extracting",
+                            "snapshotting",
+                            "resolving",
+                            "assembling",
+                            "validating",
+                        ),
+                        status="running",
+                    )
+                    | Q(stage="active", status="succeeded")
+                    | Q(stage="failed", status="failed")
+                    | Q(
+                        stage__in=("superseded", "stale"),
+                        status="cancelled",
+                    )
+                ),
+                name="kg_build_stage_status_valid",
             ),
             models.CheckConstraint(
                 condition=Q(
@@ -855,10 +1010,63 @@ class GraphBuildRun(ValidatedGraphModel):
                 condition=Q(attempt__gte=1),
                 name="kg_build_run_attempt_positive",
             ),
+            models.CheckConstraint(
+                condition=Q(lease_generation__gte=0),
+                name="kg_build_lease_generation_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(lease_owner="", lease_expires_at__isnull=True)
+                    | (
+                        ~Q(lease_owner="")
+                        & Q(lease_expires_at__isnull=False)
+                        & Q(lease_generation__gte=1)
+                    )
+                ),
+                name="kg_build_lease_complete",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~Q(stage__in=("active", "failed", "superseded", "stale"))
+                    | Q(lease_owner="", lease_expires_at__isnull=True)
+                ),
+                name="kg_build_terminal_lease_clear",
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "build_kind",
+                    "scope_type",
+                    "scope_id",
+                    "build_key",
+                ],
+                condition=Q(
+                    stage__in=(
+                        "queued",
+                        "extracting",
+                        "snapshotting",
+                        "resolving",
+                        "assembling",
+                        "validating",
+                        "active",
+                        "failed",
+                        "superseded",
+                        "stale",
+                    )
+                ),
+                name="kg_build_identity_unique",
+            ),
         ]
         indexes = [
             models.Index(fields=["artifact", "status"], name="kg_run_art_status_idx"),
             models.Index(fields=["status", "stage"], name="kg_run_status_stage_idx"),
+            models.Index(
+                fields=["build_kind", "scope_id", "build_key", "status"],
+                name="kg_run_build_key_status_idx",
+            ),
+            models.Index(
+                fields=["status", "lease_expires_at"],
+                name="kg_run_status_lease_idx",
+            ),
         ]
 
     def populate_artifact_snapshot(self) -> None:
@@ -867,6 +1075,7 @@ class GraphBuildRun(ValidatedGraphModel):
         artifact = GraphArtifact.objects.get(pk=self.artifact_id)
         self.build_kind = artifact.scope_type
         for field in (
+            "build_key",
             "scope_type",
             "scope_id",
             "source_hash",
@@ -886,6 +1095,13 @@ class GraphBuildRun(ValidatedGraphModel):
     def prepare_for_persistence(self) -> None:
         if not self.pk:
             self.populate_artifact_snapshot()
+        if not self.build_key and not self.artifact_id:
+            # Compatibility runs created directly by Tasks 7-10 still receive
+            # a durable opaque identity. Task 11 always supplies its exact,
+            # reproducible build key explicitly.
+            self.build_key = sha256(
+                f"legacy-graph-run:{uuid.uuid4()}".encode("ascii")
+            ).hexdigest()
         self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
         self.source_hash = _validate_source_hash(self.source_hash)
         self.embedding_model_signature = _validate_embedding_model_signature(
@@ -924,6 +1140,29 @@ class GraphBuildRun(ValidatedGraphModel):
             self.scope_type, self.embedding_model_signature
         )
         self._prepare_identity_checksums()
+        if not re.fullmatch(_CHECKSUM_PATTERN, self.build_key):
+            raise ValidationError(
+                {"build_key": "Build key must be a lowercase SHA-256 digest."}
+            )
+        metadata = self.metadata if type(self.metadata) is dict else {}
+        if metadata.get("orchestration_version") == 1:
+            from apps.knowledge_graph.services.builds import (
+                validate_orchestration_stage,
+                validate_stage_transition,
+            )
+
+            validate_orchestration_stage(self.build_kind, self.stage, self.status)
+            if self.pk:
+                previous_stage = (
+                    type(self)
+                    .objects.filter(pk=self.pk)
+                    .values_list("stage", flat=True)
+                    .first()
+                )
+                if previous_stage is not None:
+                    validate_stage_transition(
+                        self.build_kind, previous_stage, self.stage
+                    )
         if self.artifact_id:
             artifact = GraphArtifact.objects.get(pk=self.artifact_id)
             expected = {
