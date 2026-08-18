@@ -294,18 +294,25 @@ def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
 
     committed = SimpleNamespace(
         stats={
+            "ontology_checksum": "a" * 64,
             "extraction_commit": {
                 "version": 1,
                 "entity_mention_count": 2,
                 "relation_mention_count": 1,
-            }
+            },
         }
     )
     partial = SimpleNamespace(stats={"entity_mention_count": 2})
+    missing_checksum = SimpleNamespace(
+        stats={"extraction_commit": committed.stats["extraction_commit"]}
+    )
 
     assert _extraction_commit_is_valid(committed, entity_count=2, relation_count=1)
     assert not _extraction_commit_is_valid(committed, entity_count=1, relation_count=1)
     assert not _extraction_commit_is_valid(partial, entity_count=2, relation_count=1)
+    assert not _extraction_commit_is_valid(
+        missing_checksum, entity_count=2, relation_count=1
+    )
 
 
 def test_interleaving_commit_preserves_completed_artifact_and_owning_run():
@@ -1034,6 +1041,73 @@ def test_destination_validation_rejects_cross_artifact_build_run_before_sql():
             expected_source_hash="a" * 64,
             ontology_version="1.0.0",
         )
+
+
+@pytest.mark.parametrize(
+    "request_overrides,cross_artifact_run,should_reject",
+    [
+        (
+            {"document_id": uuid.UUID("22222222-2222-4222-8222-222222222222")},
+            False,
+            True,
+        ),
+        ({"expected_source_hash": "b" * 64}, False, True),
+        ({"ontology_version": "2.0.0"}, False, True),
+        ({}, True, True),
+        ({}, False, False),
+    ],
+)
+def test_committed_fast_path_validates_identity_before_bypassing_lifecycle(
+    monkeypatch, request_overrides, cross_artifact_run, should_reject
+):
+    from apps.knowledge_graph.extraction import pipeline
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    artifact = GraphArtifact(
+        pk=1,
+        scope_type=GraphArtifact.ScopeType.DOCUMENT,
+        scope_id=DOCUMENT_ID,
+        status=GraphArtifact.Status.ACTIVE,
+        source_hash="a" * 64,
+        ontology_version="1.0.0",
+        extractor_version="extractor",
+        resolver_version="pending",
+        filter_policy_version="pending",
+    )
+    run_artifact = GraphArtifact(pk=2) if cross_artifact_run else artifact
+    run = GraphBuildRun(
+        pk=3,
+        artifact=run_artifact,
+        status=GraphBuildRun.Status.SUCCEEDED,
+        stage=GraphBuildRun.Stage.EXTRACTION,
+    )
+
+    class Manager:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self, **_kwargs):
+            return self.value
+
+    monkeypatch.setattr(GraphArtifact, "objects", Manager(artifact))
+    monkeypatch.setattr(GraphBuildRun, "objects", Manager(run))
+    monkeypatch.setattr(
+        pipeline,
+        "_find_committed_extraction_run",
+        lambda _artifact: run,
+    )
+    request = {
+        "document_id": DOCUMENT_ID,
+        "expected_source_hash": "a" * 64,
+        "ontology_version": "1.0.0",
+        **request_overrides,
+    }
+
+    if should_reject:
+        with pytest.raises(ValueError):
+            pipeline.extract_into_build(artifact.pk, run.pk, **request)
+    else:
+        assert pipeline.extract_into_build(artifact.pk, run.pk, **request) is run
 
 
 def test_relation_model_accepts_an_endpoint_represented_by_an_overlapping_observation():

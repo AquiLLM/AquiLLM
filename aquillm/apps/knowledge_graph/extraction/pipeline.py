@@ -284,6 +284,43 @@ def collect_document_evidence(
     )
 
 
+def validate_build_identity(
+    artifact,
+    run,
+    *,
+    document_id,
+    expected_source_hash: str,
+    ontology_version: str,
+) -> None:
+    """Validate immutable request identity before any committed-result fast path."""
+
+    from apps.knowledge_graph.models import GraphArtifact
+
+    if run.artifact_id != artifact.pk:
+        raise ValueError("build run must be owned by the destination artifact")
+    if artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT:
+        raise ValueError("mention extraction requires a document artifact")
+    if artifact.scope_id != document_id:
+        raise ValueError("destination artifact document does not match")
+    if artifact.source_hash != expected_source_hash:
+        raise ValueError("destination artifact source hash does not match")
+    if artifact.ontology_version != ontology_version:
+        raise ValueError("destination artifact ontology does not match")
+
+
+def validate_build_lifecycle(artifact, run) -> None:
+    """Validate mutable lifecycle state required to write raw evidence."""
+
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    if artifact.status != GraphArtifact.Status.BUILDING:
+        raise ValueError("destination artifact must be building")
+    if run.status != GraphBuildRun.Status.RUNNING:
+        raise ValueError("destination build run must be running")
+    if run.stage != GraphBuildRun.Stage.EXTRACTION:
+        raise ValueError("destination build run must be in extraction stage")
+
+
 def validate_build_destination(
     artifact,
     run,
@@ -292,26 +329,16 @@ def validate_build_destination(
     expected_source_hash: str,
     ontology_version: str,
 ) -> None:
-    """Validate the explicitly addressed building artifact and owning run."""
+    """Validate immutable identity and mutable state for a new evidence write."""
 
-    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
-
-    if run.artifact_id != artifact.pk:
-        raise ValueError("build run must be owned by the destination artifact")
-    if artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT:
-        raise ValueError("mention extraction requires a document artifact")
-    if artifact.scope_id != document_id:
-        raise ValueError("destination artifact document does not match")
-    if artifact.status != GraphArtifact.Status.BUILDING:
-        raise ValueError("destination artifact must be building")
-    if artifact.source_hash != expected_source_hash:
-        raise ValueError("destination artifact source hash does not match")
-    if artifact.ontology_version != ontology_version:
-        raise ValueError("destination artifact ontology does not match")
-    if run.status != GraphBuildRun.Status.RUNNING:
-        raise ValueError("destination build run must be running")
-    if run.stage != GraphBuildRun.Stage.EXTRACTION:
-        raise ValueError("destination build run must be in extraction stage")
+    validate_build_identity(
+        artifact,
+        run,
+        document_id=document_id,
+        expected_source_hash=expected_source_hash,
+        ontology_version=ontology_version,
+    )
+    validate_build_lifecycle(artifact, run)
 
 
 def _extraction_commit_is_valid(
@@ -322,8 +349,12 @@ def _extraction_commit_is_valid(
 ) -> bool:
     stats = run.stats if isinstance(run.stats, dict) else {}
     marker = stats.get("extraction_commit")
+    ontology_checksum = stats.get("ontology_checksum")
     return (
         isinstance(marker, dict)
+        and isinstance(ontology_checksum, str)
+        and len(ontology_checksum) == 64
+        and all(character in "0123456789abcdef" for character in ontology_checksum)
         and type(marker.get("version")) is int
         and marker.get("version") == 1
         and type(marker.get("entity_mention_count")) is int
@@ -733,18 +764,17 @@ def extract_into_build(
 
     artifact = GraphArtifact.objects.get(pk=artifact_id)
     run = GraphBuildRun.objects.get(pk=build_run_id)
-    if run.artifact_id != artifact.pk:
-        raise ValueError("build run must be owned by the destination artifact")
-    committed_run = _find_committed_extraction_run(artifact)
-    if committed_run is not None:
-        return committed_run
-    validate_build_destination(
+    validate_build_identity(
         artifact,
         run,
         document_id=document_id,
         expected_source_hash=expected_source_hash,
         ontology_version=ontology_version,
     )
+    committed_run = _find_committed_extraction_run(artifact)
+    if committed_run is not None:
+        return committed_run
+    validate_build_lifecycle(artifact, run)
     total_started = perf_counter()
     try:
         settings = load_extraction_settings()
@@ -777,20 +807,19 @@ def extract_into_build(
                 pk=artifact_id
             )
             locked_run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
-            if locked_run.artifact_id != locked_artifact.pk:
-                raise ValueError("build run must be owned by the destination artifact")
-            committed_run = _find_committed_extraction_run(
-                locked_artifact, for_update=True
-            )
-            if committed_run is not None:
-                return committed_run
-            validate_build_destination(
+            validate_build_identity(
                 locked_artifact,
                 locked_run,
                 document_id=document_id,
                 expected_source_hash=expected_source_hash,
                 ontology_version=ontology_version,
             )
+            committed_run = _find_committed_extraction_run(
+                locked_artifact, for_update=True
+            )
+            if committed_run is not None:
+                return committed_run
+            validate_build_lifecycle(locked_artifact, locked_run)
             if (
                 locked_artifact.entity_mentions.exists()
                 or locked_artifact.relation_mentions.exists()
@@ -937,4 +966,6 @@ __all__ = [
     "extract_into_build",
     "serialize_entity_observations",
     "validate_build_destination",
+    "validate_build_identity",
+    "validate_build_lifecycle",
 ]
