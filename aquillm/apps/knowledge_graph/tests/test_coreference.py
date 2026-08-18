@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import socket
 import uuid
@@ -1078,6 +1079,68 @@ def test_resolution_input_fingerprint_binds_source_context():
     )
 
     assert original.input_fingerprint != changed.input_fingerprint
+
+
+def test_resolution_fingerprints_count_querysets_before_materialization(monkeypatch):
+    from apps.knowledge_graph.resolution import persistence
+
+    monkeypatch.setattr(persistence, "MAX_DOCUMENT_MENTIONS", 1)
+    events = []
+
+    class OverCapQuery:
+        def count(self):
+            events.append("count")
+            return 2
+
+        def iterator(self, *, chunk_size):
+            events.append(("iterator", chunk_size))
+            raise AssertionError("over-cap rows must not be iterated")
+
+        def __iter__(self):
+            raise AssertionError("over-cap rows must not populate a queryset cache")
+
+    with pytest.raises(ValueError, match="mention cap"):
+        persistence.source_mention_fingerprint(OverCapQuery())
+    assert events == ["count"]
+
+    events.clear()
+    with pytest.raises(ValueError, match="resolution entity cap"):
+        persistence.resolution_rows_fingerprint(OverCapQuery(), ())
+    assert events == ["count"]
+
+
+def test_resolution_fingerprint_caps_actual_iteration_after_count_drift():
+    from apps.knowledge_graph.resolution.persistence import _bounded_rows
+
+    consumed = []
+
+    class Query:
+        def count(self):
+            return 1
+
+        def iterator(self, *, chunk_size):
+            assert chunk_size == 2
+            for value in range(10):
+                consumed.append(value)
+                yield value
+
+    with pytest.raises(ValueError, match="membership.*cap"):
+        _bounded_rows(Query(), 2, "membership")
+    assert consumed == [0, 1, 2]
+
+
+def test_document_resolution_persistence_bounds_rows_before_materialization():
+    from apps.knowledge_graph.resolution import persistence
+
+    persist_source = inspect.getsource(persistence.persist_document_resolution)
+    existing_source = inspect.getsource(persistence._existing_resolution)
+
+    compact_persist = " ".join(persist_source.split())
+    compact_existing = " ".join(existing_source.split())
+    assert "_bounded_rows( mention_query" in compact_persist
+    assert "_bounded_rows( relation_query" in compact_persist
+    assert "_bounded_rows( entity_query" in compact_existing
+    assert "_bounded_rows( link_query" in compact_existing
 
 
 def test_resolution_input_fingerprint_hashes_repeated_source_context_once(monkeypatch):

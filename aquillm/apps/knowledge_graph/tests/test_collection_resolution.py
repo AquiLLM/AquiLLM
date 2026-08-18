@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import math
 import os
 import socket
@@ -22,6 +23,7 @@ from apps.knowledge_graph.resolution.collection import (
     CollectionBuildSnapshot,
     CollectionEmbeddingSession,
     CollectionResolutionConfig,
+    CollectionResolutionPersistenceError,
     CollectionSnapshotInput,
     DocumentEntityInput,
     SignedEmbeddingBatch,
@@ -470,6 +472,44 @@ def test_intermediate_similarity_is_candidate_not_automatic():
     assert len(result.clusters) == 2
     assert _decision(result, "a", "b").outcome is ResolutionOutcome.CANDIDATE
     assert _expected_persisted_link_count(result) == 4
+
+
+def test_projected_collection_links_are_rejected_before_persistence_writer():
+    from apps.knowledge_graph.resolution import collection as module
+
+    session, _backend = _session(
+        {
+            "Atlas": _unit_vector(1.0, 0.0),
+            "Atlas family": _unit_vector(0.82, 0.57),
+        }
+    )
+    config = CollectionResolutionConfig(
+        thresholds=ResolutionThresholds(
+            automatic=0.95,
+            candidate=0.75,
+            retrieval_similarity=0.70,
+        ),
+        embedding_weight=1.0,
+        neighborhood_weight=0.0,
+        max_links=3,
+    )
+    result = resolve_collection_entities(
+        _snapshot(config=config),
+        (
+            _document_entity("a", "Atlas"),
+            _document_entity("b", "Atlas family"),
+        ),
+        _ontology(),
+        config=config,
+        embedding_session=session,
+    )
+
+    with pytest.raises(CollectionResolutionPersistenceError, match="link cap"):
+        _expected_persisted_link_count(result)
+    persistence_source = inspect.getsource(module.persist_collection_resolution)
+    assert persistence_source.index("_expected_persisted_link_count(") < (
+        persistence_source.index("_write_collection_resolution(")
+    )
 
 
 def test_supported_neighborhood_agreement_is_last_tier_and_can_raise_confidence():

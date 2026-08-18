@@ -50,6 +50,23 @@ def _ontology():
     return load_ontology(path)
 
 
+def _persist_active_ontology():
+    from django.utils import timezone
+
+    from apps.knowledge_graph.models import OntologyVersion
+
+    ontology = _ontology()
+    path = Path(__file__).resolve().parents[1] / "ontologies" / "research-v1.yaml"
+    return OntologyVersion.objects.create(
+        kind=OntologyVersion.Kind.GRAPH,
+        version=ontology.version,
+        checksum=ontology.checksum,
+        status=OntologyVersion.Status.ACTIVE,
+        activated_at=timezone.now(),
+        metadata={"yaml": path.read_text(encoding="utf-8")},
+    )
+
+
 def _persist_document(*, label: str = "race"):
     from django.contrib.auth.models import User
 
@@ -409,6 +426,241 @@ def test_duplicate_collection_refreshes_share_one_live_occurrence(monkeypatch):
     )
 
 
+def test_collection_return_active_rejects_document_activation_that_wins_lock_race(
+    monkeypatch,
+):
+    from django.utils import timezone
+
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services import builds
+
+    _persist_active_ontology()
+    collection, document, chunk = _persist_document(label="active-fast-path")
+    activation_signature = builds._ontology_activation_signature(_ontology())
+    old_context = _document_context(document, chunk)
+    old_context = replace(
+        old_context,
+        identity=replace(
+            old_context.identity,
+            ontology_activation_signature=activation_signature,
+        ),
+    )
+    new_settings = SimpleNamespace(
+        **{**vars(old_context.settings), "model_revision": "revision-2"}
+    )
+    new_context = replace(
+        old_context,
+        settings=new_settings,
+        identity=replace(
+            old_context.identity,
+            extractor_model_revision="revision-2",
+        ),
+    )
+    old_artifact, _old_run, _owner, _generation = _document_occurrence(
+        old_context,
+        generation=1,
+        artifact_status=GraphArtifact.Status.ACTIVE,
+        run_stage=GraphBuildRun.Stage.ACTIVE,
+        run_status=GraphBuildRun.Status.SUCCEEDED,
+    )
+    new_artifact, new_run, owner, lease_generation = _document_occurrence(
+        new_context,
+        generation=2,
+        artifact_status=GraphArtifact.Status.BUILDING,
+        run_stage=GraphBuildRun.Stage.VALIDATING,
+        run_status=GraphBuildRun.Status.RUNNING,
+        claim=True,
+    )
+    context = builds._collection_context(
+        collection.pk,
+        ontology=_ontology(),
+        embedding_model_signature=_embedding_signature(),
+    )
+    build_key = builds.derive_collection_build_key(context.identity)
+    collection_artifact, collection_run, _lease_owner, _lease_generation, completed = (
+        builds._bootstrap_collection_build(context, build_key)
+    )
+    assert completed is False
+    now = timezone.now()
+    GraphArtifact.objects.filter(pk=collection_artifact.pk).update(
+        status=GraphArtifact.Status.ACTIVE,
+        activated_at=now,
+        completed_at=now,
+    )
+    GraphBuildRun.objects.filter(pk=collection_run.pk).update(
+        stage=GraphBuildRun.Stage.ACTIVE,
+        status=GraphBuildRun.Status.SUCCEEDED,
+        lease_owner="",
+        lease_expires_at=None,
+        finished_at=now,
+    )
+
+    _patch_document_activation(monkeypatch, lambda: new_context)
+    activation_locked = Event()
+    release_activation = Event()
+
+    def blocking_counts(_artifact, _run):
+        activation_locked.set()
+        assert release_activation.wait(timeout=20)
+        return {
+            "entity_mention_count": 0,
+            "relation_mention_count": 0,
+            "document_entity_count": 0,
+            "membership_count": 0,
+        }
+
+    monkeypatch.setattr(builds, "_document_commit_counts", blocking_counts)
+    validation_started = Event()
+    original_revalidate = builds._revalidate_active_collection_build
+
+    def signalling_revalidate(*args, **kwargs):
+        validation_started.set()
+        return original_revalidate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        builds,
+        "_revalidate_active_collection_build",
+        signalling_revalidate,
+    )
+    refreshes = []
+    monkeypatch.setattr(
+        builds,
+        "_enqueue_current_collection_refresh",
+        refreshes.append,
+    )
+
+    def activate_document():
+        close_old_connections()
+        try:
+            builds._activate_document_build(
+                new_context,
+                new_artifact.pk,
+                new_run.pk,
+                lease_owner=owner,
+                lease_generation=lease_generation,
+            )
+        finally:
+            close_old_connections()
+
+    def return_active():
+        close_old_connections()
+        try:
+            return builds._bootstrap_collection_build(context, build_key)
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        activation_future = executor.submit(activate_document)
+        assert activation_locked.wait(timeout=20)
+        active_future = executor.submit(return_active)
+        assert validation_started.wait(timeout=20)
+        release_activation.set()
+        activation_future.result(timeout=30)
+        with pytest.raises(builds.StaleBuildError, match="live contributors"):
+            active_future.result(timeout=30)
+
+    old_artifact.refresh_from_db()
+    new_artifact.refresh_from_db()
+    collection_artifact.refresh_from_db()
+    collection_run.refresh_from_db()
+    assert old_artifact.status == GraphArtifact.Status.SUPERSEDED
+    assert new_artifact.status == GraphArtifact.Status.ACTIVE
+    assert collection_artifact.status == GraphArtifact.Status.ACTIVE
+    assert collection_run.stage == GraphBuildRun.Stage.ACTIVE
+    assert collection_run.status == GraphBuildRun.Status.SUCCEEDED
+    assert (
+        GraphArtifact.objects.filter(
+            scope_type=GraphArtifact.ScopeType.COLLECTION,
+            scope_id=str(collection.pk),
+        ).count()
+        == 1
+    )
+    assert refreshes == [collection.pk]
+
+
+def test_collection_contributor_then_ontology_order_avoids_reverse_document_deadlock():
+    from apps.collections.models import Collection
+    from apps.documents.models import RawTextDocument, TextChunk
+    from apps.knowledge_graph.graph import assembly
+    from apps.knowledge_graph.models import (
+        GraphArtifact,
+        GraphBuildRun,
+        OntologyVersion,
+    )
+    from apps.knowledge_graph.services import builds
+
+    ontology_record = _persist_active_ontology()
+    collection, document, chunk = _persist_document(label="reverse-lock-order")
+    context = _document_context(document, chunk)
+    context = replace(
+        context,
+        identity=replace(
+            context.identity,
+            ontology_activation_signature=builds._ontology_activation_signature(
+                _ontology()
+            ),
+        ),
+    )
+    artifact, _run, _owner, _lease_generation = _document_occurrence(
+        context,
+        generation=1,
+        artifact_status=GraphArtifact.Status.ACTIVE,
+        run_stage=GraphBuildRun.Stage.ACTIVE,
+        run_status=GraphBuildRun.Status.SUCCEEDED,
+    )
+    contributors_locked = Event()
+    release_collection = Event()
+    document_attempting = Event()
+    document_artifact_locked = Event()
+
+    def collection_path():
+        close_old_connections()
+        try:
+            with transaction.atomic():
+                locked_collection = Collection.objects.select_for_update().get(
+                    pk=collection.pk
+                )
+                _documents, sources = assembly._lock_current_contributors(
+                    locked_collection,
+                    assembly.AssemblyConfig(),
+                )
+                assert tuple(row.pk for row in sources) == (artifact.pk,)
+                contributors_locked.set()
+                assert release_collection.wait(timeout=20)
+                assembly._resolve_ontology(artifact, _ontology())
+        finally:
+            close_old_connections()
+
+    def document_path():
+        close_old_connections()
+        try:
+            with transaction.atomic():
+                document_attempting.set()
+                GraphArtifact.objects.select_for_update().get(pk=artifact.pk)
+                document_artifact_locked.set()
+                RawTextDocument.objects.select_for_update().get(pk=document.pk)
+                tuple(
+                    TextChunk.objects.select_for_update()
+                    .filter(doc_id=document.pk)
+                    .order_by("pk")
+                )
+                OntologyVersion.objects.select_for_update().get(pk=ontology_record.pk)
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        collection_future = executor.submit(collection_path)
+        assert contributors_locked.wait(timeout=20)
+        document_future = executor.submit(document_path)
+        assert document_attempting.wait(timeout=20)
+        assert document_artifact_locked.wait(timeout=0.2) is False
+        release_collection.set()
+        collection_future.result(timeout=30)
+        document_future.result(timeout=30)
+
+    assert document_artifact_locked.is_set()
+
+
 def test_document_source_a_b_a_creates_a_new_occurrence_and_duplicate_joins_it(
     monkeypatch,
 ):
@@ -573,6 +825,11 @@ def test_collection_policy_a_b_a_creates_a_new_occurrence_and_duplicate_joins_it
         assembly,
         "_validate_locked_complete_artifact",
         lambda **_kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        assembly,
+        "validate_locked_active_collection_snapshot",
+        lambda **_kwargs: (),
     )
 
     def bootstrap_and_activate(context):

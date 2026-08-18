@@ -34,7 +34,9 @@ COLLECTION_RESOLVER_VERSION = "collection-resolution-v1"
 EMBEDDING_PREPROCESSING_VERSION = "kg-entity-v1"
 MAX_COLLECTION_ENTITIES = 50_000
 MAX_COLLECTION_DOCUMENT_INPUTS = 10_000
+MAX_COLLECTION_MEMBERSHIPS = 250_000
 MAX_RELATIONS = 250_000
+MAX_COLLECTION_LINKS = 250_000
 MAX_TEXT_CHARACTERS = 8_192
 DEFAULT_EMBEDDING_BATCH_SIZE = 64
 _HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -541,6 +543,9 @@ class CollectionResolutionConfig:
     relation_support_threshold: float = 0.50
     max_entities: int = MAX_COLLECTION_ENTITIES
     max_document_inputs: int = MAX_COLLECTION_DOCUMENT_INPUTS
+    max_memberships: int = MAX_COLLECTION_MEMBERSHIPS
+    max_relations: int = MAX_RELATIONS
+    max_links: int = MAX_COLLECTION_LINKS
 
     def __post_init__(self) -> None:
         if type(self.thresholds) is not ResolutionThresholds:
@@ -551,6 +556,9 @@ class CollectionResolutionConfig:
             ("max_candidate_pool_per_entity", 1, 10_000),
             ("exact_semantic_scan_limit", 2, 10_000),
             ("max_entities", 1, MAX_COLLECTION_ENTITIES),
+            ("max_memberships", 1, MAX_COLLECTION_MEMBERSHIPS),
+            ("max_relations", 1, MAX_RELATIONS),
+            ("max_links", 1, MAX_COLLECTION_LINKS),
             (
                 "max_document_inputs",
                 1,
@@ -603,6 +611,9 @@ def resolution_config_checksum(config: CollectionResolutionConfig) -> str:
             "relation_support_threshold": config.relation_support_threshold,
             "max_entities": config.max_entities,
             "max_document_inputs": config.max_document_inputs,
+            "max_memberships": config.max_memberships,
+            "max_relations": config.max_relations,
+            "max_links": config.max_links,
         }
     )
 
@@ -1781,7 +1792,7 @@ def resolve_collection_entities(
     )
     canonical_map, allowed_relations = _ontology_maps(ontology)
 
-    inputs = tuple(entities)
+    inputs = tuple(islice(iter(entities), config.max_entities + 1))
     if len(inputs) > config.max_entities:
         raise ValueError("collection entity input exceeds configured limit")
     if any(type(item) is not DocumentEntityInput for item in inputs):
@@ -1801,8 +1812,8 @@ def resolve_collection_entities(
     ):
         raise ValueError("document entity is outside exact manifest snapshot")
 
-    relation_inputs = tuple(relations)
-    if len(relation_inputs) > MAX_RELATIONS:
+    relation_inputs = tuple(islice(iter(relations), config.max_relations + 1))
+    if len(relation_inputs) > config.max_relations:
         raise ValueError("relation input exceeds configured limit")
     if any(type(item) is not SupportedRelation for item in relation_inputs):
         raise ValueError("relations must contain exact SupportedRelation values")
@@ -2333,6 +2344,37 @@ class CollectionResolutionPersistenceError(RuntimeError):
     """Raised when a collection resolution write cannot preserve its snapshot."""
 
 
+def _bounded_query_rows(values, maximum: int, label: str) -> tuple[object, ...]:
+    """Count querysets before iteration and cap arbitrary iterables at cap + 1."""
+
+    if type(maximum) is not int or maximum < 1:
+        raise CollectionResolutionPersistenceError(f"{label} cap is invalid")
+    query_count = getattr(values, "count", None)
+    query_iterator = getattr(values, "iterator", None)
+    if callable(query_count) and callable(query_iterator):
+        row_count = query_count()
+        if type(row_count) is not int or row_count < 0:
+            raise CollectionResolutionPersistenceError(f"{label} count is invalid")
+        if row_count > maximum:
+            raise CollectionResolutionPersistenceError(
+                f"{label} exceeds its cap ({maximum})"
+            )
+        iterator = query_iterator(chunk_size=min(maximum, 1_000))
+    else:
+        try:
+            iterator = iter(values)
+        except TypeError as exc:
+            raise CollectionResolutionPersistenceError(
+                f"{label} rows must be iterable"
+            ) from exc
+    rows = tuple(islice(iterator, maximum + 1))
+    if len(rows) > maximum:
+        raise CollectionResolutionPersistenceError(
+            f"{label} exceeds its cap ({maximum})"
+        )
+    return rows
+
+
 def _bounded_document_artifacts(
     values: Iterable[object], max_document_inputs: int
 ) -> tuple[object, ...]:
@@ -2730,7 +2772,11 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
 
     if artifact.scope_type != GraphArtifact.ScopeType.COLLECTION:
         raise CollectionResolutionPersistenceError("manifest owner is not a collection")
-    manifest_rows = tuple(manifest_rows)
+    manifest_rows = _bounded_query_rows(
+        manifest_rows,
+        MAX_COLLECTION_DOCUMENT_INPUTS,
+        "collection manifest",
+    )
     source_ids = tuple(row.document_artifact_id for row in manifest_rows)
     if len(source_ids) != len(set(source_ids)):
         raise CollectionResolutionPersistenceError(
@@ -2820,13 +2866,25 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
     )
 
 
-def _load_resolution_source_rows(artifact, manifest_rows, *, for_update: bool = False):
+def _load_resolution_source_rows(
+    artifact,
+    manifest_rows,
+    *,
+    for_update: bool = False,
+    config: CollectionResolutionConfig | None = None,
+):
     from apps.knowledge_graph.models import (
         DocumentEntity,
         DocumentEntityMention,
         RelationMention,
     )
 
+    config = CollectionResolutionConfig() if config is None else config
+    if type(config) is not CollectionResolutionConfig:
+        raise CollectionResolutionPersistenceError(
+            "collection resolution config is invalid"
+        )
+    config.__post_init__()
     manifest_by_artifact = {row.document_artifact_id: row for row in manifest_rows}
     source_entity_query = DocumentEntity.objects.filter(
         artifact_id__in=manifest_by_artifact,
@@ -2834,7 +2892,11 @@ def _load_resolution_source_rows(artifact, manifest_rows, *, for_update: bool = 
     ).order_by("pk")
     if for_update:
         source_entity_query = source_entity_query.select_for_update()
-    source_entities = tuple(source_entity_query)
+    source_entities = _bounded_query_rows(
+        source_entity_query,
+        config.max_entities,
+        "collection source entity",
+    )
     membership_query = (
         DocumentEntityMention.objects.select_related("mention")
         .filter(
@@ -2845,7 +2907,11 @@ def _load_resolution_source_rows(artifact, manifest_rows, *, for_update: bool = 
     )
     if for_update:
         membership_query = membership_query.select_for_update()
-    memberships = tuple(membership_query)
+    memberships = _bounded_query_rows(
+        membership_query,
+        config.max_memberships,
+        "collection membership",
+    )
     memberships_by_entity: dict[int, list[object]] = defaultdict(list)
     mention_owner: dict[int, int] = {}
     for membership in memberships:
@@ -2906,7 +2972,11 @@ def _load_resolution_source_rows(artifact, manifest_rows, *, for_update: bool = 
     ).order_by("pk")
     if for_update:
         relation_query = relation_query.select_for_update()
-    relation_rows = tuple(relation_query)
+    relation_rows = _bounded_query_rows(
+        relation_query,
+        config.max_relations,
+        "collection relation",
+    )
     supported_relations = tuple(
         SupportedRelation(
             relation_id=row.pk,
@@ -2944,7 +3014,11 @@ def _filter_inputs_for_resolution(result, source_entity_rows, *, for_update: boo
     )
     if for_update:
         membership_query = membership_query.select_for_update()
-    memberships = tuple(membership_query)
+    memberships = _bounded_query_rows(
+        membership_query,
+        result.config.max_memberships,
+        "collection membership",
+    )
     by_source: dict[int, list[object]] = defaultdict(list)
     mention_ids: set[int] = set()
     for membership in memberships:
@@ -2960,7 +3034,12 @@ def _filter_inputs_for_resolution(result, source_entity_rows, *, for_update: boo
     ).order_by("pk")
     if for_update:
         relation_query = relation_query.select_for_update()
-    for head_id, tail_id in relation_query.values_list("head_id", "tail_id"):
+    relation_rows = _bounded_query_rows(
+        relation_query.values_list("head_id", "tail_id"),
+        result.config.max_relations,
+        "collection relation",
+    )
+    for head_id, tail_id in relation_rows:
         if head_id in participation:
             participation[head_id] += 1
         if tail_id in participation:
@@ -3007,6 +3086,7 @@ def load_collection_resolution_inputs(
     artifact_id: int,
     build_run_id: int,
     *,
+    config: CollectionResolutionConfig | None = None,
     lease_owner=None,
     lease_generation=None,
 ):
@@ -3031,15 +3111,24 @@ def load_collection_resolution_inputs(
             lease_owner=lease_owner,
             lease_generation=lease_generation,
         )
-        manifest = tuple(
+        resolved_config = CollectionResolutionConfig() if config is None else config
+        manifest_query = (
             CollectionArtifactInput.objects.select_for_update()
             .select_related("document_artifact", "collection")
             .filter(artifact=artifact)
             .order_by("document_artifact_id")
         )
+        manifest = _bounded_query_rows(
+            manifest_query,
+            resolved_config.max_document_inputs,
+            "collection manifest",
+        )
         snapshot = _snapshot_from_locked_manifest(artifact, manifest)
         entities, relations = _load_resolution_source_rows(
-            artifact, manifest, for_update=True
+            artifact,
+            manifest,
+            for_update=True,
+            config=resolved_config,
         )
         return snapshot, entities, relations
 
@@ -3074,15 +3163,23 @@ def load_collection_filter_inputs(
             lease_owner=lease_owner,
             lease_generation=lease_generation,
         )
-        manifest = tuple(
+        manifest_query = (
             CollectionArtifactInput.objects.select_for_update()
             .select_related("document_artifact", "collection")
             .filter(artifact=artifact)
             .order_by("document_artifact_id")
         )
+        manifest = _bounded_query_rows(
+            manifest_query,
+            result.config.max_document_inputs,
+            "collection manifest",
+        )
         snapshot = _snapshot_from_locked_manifest(artifact, manifest)
         projected, relations = _load_resolution_source_rows(
-            artifact, manifest, for_update=True
+            artifact,
+            manifest,
+            for_update=True,
+            config=result.config,
         )
         _validate_result_against_source(
             result,
@@ -3093,13 +3190,18 @@ def load_collection_filter_inputs(
             ontology=None,
             replay=False,
         )
-        source_rows = tuple(
+        source_row_query = (
             DocumentEntity.objects.select_for_update()
             .filter(
                 artifact_id__in=snapshot.document_artifact_ids,
                 status=DocumentEntity.Status.ACTIVE,
             )
             .order_by("pk")
+        )
+        source_rows = _bounded_query_rows(
+            source_row_query,
+            result.config.max_entities,
+            "collection source entity",
         )
         return _filter_inputs_for_resolution(result, source_rows, for_update=True)
 
@@ -3282,7 +3384,12 @@ def _expected_persisted_link_count(result: CollectionResolutionResult) -> int:
         min(len(targets), result.audit.max_candidates_per_entity)
         for targets in alternatives.values()
     )
-    return len(result.source_entity_ids) + alternative_count
+    expected_count = len(result.source_entity_ids) + alternative_count
+    if expected_count > result.config.max_links:
+        raise CollectionResolutionPersistenceError(
+            "projected collection link cap exceeded"
+        )
+    return expected_count
 
 
 def _decision_row_checksum(payload: object) -> str:
@@ -3440,6 +3547,10 @@ def _collection_resolution_marker_is_valid(
         "ontology_checksum",
         "resolution_config_checksum",
         "max_document_inputs",
+        "max_entities",
+        "max_memberships",
+        "max_relations",
+        "max_links",
         "embedding_model_signature",
         "assembly_version",
         "assembly_config_checksum",
@@ -3467,6 +3578,10 @@ def _collection_resolution_marker_is_valid(
         and type(marker.get("max_document_inputs")) is int
         and marker.get("max_document_inputs") == result.config.max_document_inputs
         and len(result.snapshot.inputs) <= marker.get("max_document_inputs")
+        and marker.get("max_entities") == result.config.max_entities
+        and marker.get("max_memberships") == result.config.max_memberships
+        and marker.get("max_relations") == result.config.max_relations
+        and marker.get("max_links") == result.config.max_links
         and marker.get("embedding_model_signature")
         == artifact.embedding_model_signature
         and marker.get("assembly_version") == artifact.assembly_version
@@ -3552,13 +3667,23 @@ def _existing_collection_resolution(
 
     stats = run.stats if type(run.stats) is dict else {}
     marker = stats.get("collection_resolution_commit")
-    entities = tuple(
-        CollectionEntity.objects.filter(artifact=artifact).order_by("cluster_key")
+    entity_query = CollectionEntity.objects.filter(artifact=artifact).order_by(
+        "cluster_key"
     )
-    links = tuple(
+    link_query = (
         CollectionEntityDocumentLink.objects.select_related("collection_entity")
         .filter(artifact=artifact)
         .order_by("pk")
+    )
+    entities = _bounded_query_rows(
+        entity_query,
+        result.config.max_entities,
+        "persisted collection entity",
+    )
+    links = _bounded_query_rows(
+        link_query,
+        result.config.max_links,
+        "persisted collection link",
     )
     expected_link_count = _expected_persisted_link_count(result)
     if marker is None:
@@ -4010,11 +4135,11 @@ def persist_collection_resolution(
             .filter(artifact=artifact)
             .order_by("document_artifact_id")
         )
-        if manifest_query.count() > result.config.max_document_inputs:
-            raise CollectionResolutionPersistenceError(
-                "collection manifest exceeds the resolution input cap"
-            )
-        manifest = tuple(manifest_query)
+        manifest = _bounded_query_rows(
+            manifest_query,
+            result.config.max_document_inputs,
+            "collection manifest",
+        )
         snapshot = _snapshot_from_locked_manifest(artifact, manifest)
         source_entity_query = (
             DocumentEntity.objects.select_for_update()
@@ -4024,13 +4149,16 @@ def persist_collection_resolution(
             )
             .order_by("pk")
         )
-        if source_entity_query.count() > result.config.max_entities:
-            raise CollectionResolutionPersistenceError(
-                "collection source entity cap exceeded before persistence"
-            )
-        source_entities = tuple(source_entity_query)
+        source_entities = _bounded_query_rows(
+            source_entity_query,
+            result.config.max_entities,
+            "collection source entity",
+        )
         projected, source_relations = _load_resolution_source_rows(
-            artifact, manifest, for_update=True
+            artifact,
+            manifest,
+            for_update=True,
+            config=result.config,
         )
         raw_relation_count, raw_relation_fingerprint = _raw_relation_snapshot(
             manifest, for_update=True
@@ -4066,6 +4194,7 @@ def persist_collection_resolution(
             raise CollectionResolutionPersistenceError(
                 "filter result differs from deterministic locked-source projection"
             )
+        expected_link_count = _expected_persisted_link_count(result)
         existing = _existing_collection_resolution(
             artifact,
             run,
@@ -4081,7 +4210,6 @@ def persist_collection_resolution(
         entity_rows, links = _write_collection_resolution(
             artifact, manifest, source_entities, result, filter_result
         )
-        expected_link_count = _expected_persisted_link_count(result)
         if len(links) != expected_link_count:
             raise CollectionResolutionPersistenceError(
                 "persisted link count does not match resolution result"
@@ -4097,6 +4225,10 @@ def persist_collection_resolution(
             "ontology_checksum": artifact.ontology_checksum,
             "resolution_config_checksum": artifact.resolution_config_checksum,
             "max_document_inputs": result.config.max_document_inputs,
+            "max_entities": result.config.max_entities,
+            "max_memberships": result.config.max_memberships,
+            "max_relations": result.config.max_relations,
+            "max_links": result.config.max_links,
             "embedding_model_signature": artifact.embedding_model_signature,
             "assembly_version": artifact.assembly_version,
             "assembly_config_checksum": artifact.assembly_config_checksum,
@@ -4115,6 +4247,10 @@ def persist_collection_resolution(
 __all__ = [
     "COLLECTION_RESOLVER_VERSION",
     "MAX_COLLECTION_DOCUMENT_INPUTS",
+    "MAX_COLLECTION_ENTITIES",
+    "MAX_COLLECTION_LINKS",
+    "MAX_COLLECTION_MEMBERSHIPS",
+    "MAX_RELATIONS",
     "AliasEvidence",
     "CollectionBuildSnapshot",
     "CollectionEmbeddingSession",

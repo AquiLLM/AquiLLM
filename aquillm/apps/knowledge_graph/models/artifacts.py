@@ -611,6 +611,11 @@ class GraphArtifact(ValidatedGraphModel):
                 ],
                 name="kg_artifact_build_occurrence",
             ),
+            models.UniqueConstraint(
+                fields=["scope_type", "scope_id", "build_generation"],
+                condition=Q(orchestration_version=1),
+                name="kg_artifact_scope_generation_unique",
+            ),
         ]
         indexes = [
             models.Index(
@@ -1061,6 +1066,16 @@ class GraphBuildRun(ValidatedGraphModel):
                 ],
                 condition=Q(orchestration_version=1),
                 name="kg_build_occurrence_unique",
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "build_kind",
+                    "scope_type",
+                    "scope_id",
+                    "build_generation",
+                ],
+                condition=Q(orchestration_version=1),
+                name="kg_run_scope_generation_unique",
             ),
             models.UniqueConstraint(
                 fields=["artifact"],

@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from datetime import timedelta
 from enum import StrEnum
 from hashlib import sha256
+from itertools import islice
 from threading import Event, Thread
 from time import perf_counter
 
@@ -540,6 +541,10 @@ def _document_context(
     settings: object | None = None,
 ) -> _DocumentContext:
     from apps.knowledge_graph.extraction.pipeline import (
+        DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS,
+        DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
+        DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,
+        DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
         _get_concrete_document,
         _ordered_chunks,
         _validate_source,
@@ -586,6 +591,10 @@ def _document_context(
                 "batch_size": getattr(settings, "batch_size", None),
                 "max_batch_characters": getattr(settings, "max_batch_characters", None),
                 "local_files_only": getattr(settings, "local_files_only", None),
+                "max_chunks": DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
+                "max_characters": DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS,
+                "max_entities": DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,
+                "max_relations": DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
             },
         ),
         ontology_version=_text(ontology.version, "ontology version", maximum=128),
@@ -819,6 +828,8 @@ def _document_extraction_commit_state(
     run: object,
 ) -> CommitMarkerState:
     from apps.knowledge_graph.extraction.pipeline import (
+        DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,
+        DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
         extraction_commit_is_valid,
         extraction_evidence_fingerprint,
     )
@@ -832,6 +843,11 @@ def _document_extraction_commit_state(
     relation_query = RelationMention.objects.filter(artifact=artifact).order_by("pk")
     entity_count = entity_query.count()
     relation_count = relation_query.count()
+    if (
+        entity_count > DOCUMENT_EXTRACTION_V1_MAX_ENTITIES
+        or relation_count > DOCUMENT_EXTRACTION_V1_MAX_RELATIONS
+    ):
+        return CommitMarkerState.CORRUPT
     evidence_fingerprint = None
     if (
         getattr(artifact, "orchestration_version", None)
@@ -840,8 +856,8 @@ def _document_extraction_commit_state(
         == GraphArtifact.OrchestrationVersion.SCOPED_V1
     ):
         evidence_fingerprint = extraction_evidence_fingerprint(
-            tuple(entity_query),
-            tuple(relation_query),
+            entity_query,
+            relation_query,
         )
     return _commit_marker_state(
         getattr(run, "stats", None),
@@ -865,7 +881,9 @@ def _document_resolution_commit_state(
         DocumentEntityMention,
         EntityMention,
     )
+    from apps.knowledge_graph.resolution.coreference import MAX_DOCUMENT_MENTIONS
     from apps.knowledge_graph.resolution.persistence import (
+        _bounded_rows,
         resolution_commit_is_valid,
         resolution_rows_fingerprint,
         source_mention_fingerprint,
@@ -879,7 +897,15 @@ def _document_resolution_commit_state(
     ).filter(document_entity__artifact=artifact)
     entity_count = entity_query.count()
     membership_count = link_query.count()
+    mention_query = EntityMention.objects.filter(artifact=artifact).order_by("pk")
+    mention_count = mention_query.count()
     rows_present = bool(entity_count or membership_count)
+    if mention_count > MAX_DOCUMENT_MENTIONS:
+        return CommitMarkerState.CORRUPT
+    if entity_count > MAX_DOCUMENT_MENTIONS:
+        return CommitMarkerState.CORRUPT
+    if membership_count > MAX_DOCUMENT_MENTIONS:
+        return CommitMarkerState.CORRUPT
     if type(stats) is not dict or "resolution_commit" not in stats:
         return _commit_marker_state(
             stats,
@@ -889,10 +915,22 @@ def _document_resolution_commit_state(
         )
     if type(marker) is not dict:
         return CommitMarkerState.CORRUPT
-    mentions = tuple(EntityMention.objects.filter(artifact=artifact).order_by("pk"))
-    entities = tuple(entity_query.order_by("pk"))
-    links = tuple(link_query.order_by("mention_id"))
     try:
+        mentions = _bounded_rows(
+            mention_query,
+            MAX_DOCUMENT_MENTIONS,
+            "document mention",
+        )
+        entities = _bounded_rows(
+            entity_query.order_by("pk"),
+            MAX_DOCUMENT_MENTIONS,
+            "document resolution entity",
+        )
+        links = _bounded_rows(
+            link_query.order_by("mention_id"),
+            MAX_DOCUMENT_MENTIONS,
+            "document resolution membership",
+        )
         source_fingerprint = source_mention_fingerprint(mentions)
         rows_fingerprint = resolution_rows_fingerprint(entities, links)
     except (TypeError, ValueError):
@@ -1716,8 +1754,14 @@ def build_document_graph(document_id, expected_source_hash, document_build_key):
         extract_into_build,
     )
     from apps.knowledge_graph.models import EntityMention, GraphBuildRun
-    from apps.knowledge_graph.resolution.coreference import resolve_document_mentions
-    from apps.knowledge_graph.resolution.persistence import persist_document_resolution
+    from apps.knowledge_graph.resolution.coreference import (
+        MAX_DOCUMENT_MENTIONS,
+        resolve_document_mentions,
+    )
+    from apps.knowledge_graph.resolution.persistence import (
+        _bounded_rows,
+        persist_document_resolution,
+    )
 
     started = perf_counter()
     context = _document_context(document_id, expected_source_hash)
@@ -1776,9 +1820,17 @@ def build_document_graph(document_id, expected_source_hash, document_build_key):
                 raise CorruptBuildError("document resolution commit is corrupt")
             if resolution_state is CommitMarkerState.ABSENT:
                 with LeaseHeartbeat(run.pk, lease_owner, lease_generation):
-                    mentions = tuple(
-                        EntityMention.objects.filter(artifact=artifact).order_by("pk")
-                    )
+                    mention_query = EntityMention.objects.filter(
+                        artifact=artifact
+                    ).order_by("pk")
+                    try:
+                        mentions = _bounded_rows(
+                            mention_query,
+                            MAX_DOCUMENT_MENTIONS,
+                            "document mention",
+                        )
+                    except ValueError as exc:
+                        raise CorruptBuildError(str(exc)) from exc
                     result = resolve_document_mentions(mentions, context.ontology)
                     persist_document_resolution(
                         artifact.pk,
@@ -1922,6 +1974,27 @@ def _validate_collection_context_caps(
             raise CorruptBuildError(f"collection context {name} cap exceeded")
 
 
+def _bounded_context_rows(values, maximum: int, label: str) -> tuple[object, ...]:
+    """Bound both the preflight count and the post-count iterator snapshot."""
+
+    if type(maximum) is not int or maximum < 1:
+        raise CorruptBuildError(f"{label} cap is invalid")
+    count = values.count()
+    if type(count) is not int or count < 0:
+        raise CorruptBuildError(f"{label} count is invalid")
+    if count > maximum:
+        raise CorruptBuildError(f"{label} cap exceeded")
+    rows = tuple(
+        islice(
+            values.iterator(chunk_size=min(maximum, 1_000)),
+            maximum + 1,
+        )
+    )
+    if len(rows) > maximum:
+        raise CorruptBuildError(f"{label} cap exceeded")
+    return rows
+
+
 def _collection_context(
     collection_id: object,
     *,
@@ -1935,6 +2008,7 @@ def _collection_context(
     from apps.documents.models import DESCENDED_FROM_DOCUMENT, TextChunk
     from apps.knowledge_graph.extraction.pipeline import (
         StaleSourceError,
+        _ordered_chunks,
         _validate_source,
     )
     from apps.knowledge_graph.graph.assembly import (
@@ -1971,6 +2045,10 @@ def _collection_context(
         CollectionResolutionConfig() if resolution_config is None else resolution_config
     )
     assembly_config = AssemblyConfig() if assembly_config is None else assembly_config
+    document_cap = min(
+        resolution_config.max_document_inputs,
+        assembly_config.max_document_inputs,
+    )
     embedding_model_signature = (
         strict_index_embedding_signature()
         if embedding_model_signature is None
@@ -1999,21 +2077,30 @@ def _collection_context(
         assembly_config=assembly_config,
         max_text_characters=MAX_TEXT_CHARACTERS,
     )
-    document_ids = tuple(
-        document_id
-        for model in document_models
-        for document_id in model.objects.filter(
-            collection_id=collection_id
-        ).values_list("id", flat=True)
-    )
+    document_id_values: list[object] = []
+    for model in document_models:
+        remaining = document_cap - len(document_id_values)
+        rows = _bounded_context_rows(
+            model.objects.filter(collection_id=collection_id)
+            .order_by("id")
+            .values_list("id", flat=True),
+            max(remaining, 1),
+            "collection document",
+        )
+        document_id_values.extend(rows)
+        if len(document_id_values) > document_cap:
+            raise CorruptBuildError("collection document cap exceeded")
+    document_ids = tuple(document_id_values)
     if len(document_ids) != len(set(document_ids)):
         raise CorruptBuildError("collection contains duplicate concrete document UUIDs")
-    artifacts = tuple(
+    artifacts = _bounded_context_rows(
         GraphArtifact.objects.filter(
             scope_type=GraphArtifact.ScopeType.DOCUMENT,
             scope_id__in=tuple(map(str, document_ids)),
             status=GraphArtifact.Status.ACTIVE,
-        ).order_by("pk")
+        ).order_by("pk"),
+        document_cap,
+        "collection document artifact",
     )
     artifact_document_ids = tuple(artifact.scope_id for artifact in artifacts)
     if len(artifact_document_ids) != len(set(artifact_document_ids)):
@@ -2044,30 +2131,42 @@ def _collection_context(
         max_text_characters=MAX_TEXT_CHARACTERS,
     )
     artifact_document_uuid_set = {uuid.UUID(value) for value in artifact_document_ids}
-    documents = tuple(
-        document
-        for model in document_models
-        for document in model.objects.filter(
-            id__in=artifact_document_uuid_set,
-            collection_id=collection_id,
-        ).order_by("pk")
-    )
+    document_values: list[object] = []
+    for model in document_models:
+        remaining = document_cap - len(document_values)
+        rows = _bounded_context_rows(
+            model.objects.filter(
+                id__in=artifact_document_uuid_set,
+                collection_id=collection_id,
+            ).order_by("pk"),
+            max(remaining, 1),
+            "collection concrete document",
+        )
+        document_values.extend(rows)
+        if len(document_values) > document_cap:
+            raise CorruptBuildError("collection concrete document cap exceeded")
+    documents = tuple(document_values)
     documents_by_id = {str(document.id): document for document in documents}
     if set(documents_by_id) != set(artifact_document_ids):
         raise StaleBuildError("active document artifact escaped collection membership")
+    materialized_chunk_count = 0
+    materialized_character_count = document_character_count
     for artifact in artifacts:
         document = documents_by_id[artifact.scope_id]
         metadata = artifact.metadata if type(artifact.metadata) is dict else {}
-        current_chunks = tuple(
-            document.chunks.only(
-                "pk",
-                "doc_id",
-                "chunk_number",
-                "start_position",
-                "end_position",
-                "modality",
-                "content",
-            ).order_by("chunk_number", "pk")
+        current_chunks = _ordered_chunks(document.id)
+        materialized_chunk_count += len(current_chunks)
+        materialized_character_count += sum(
+            len(chunk.content) for chunk in current_chunks
+        )
+        _validate_collection_context_caps(
+            document_count=document_count,
+            entity_count=entity_count,
+            chunk_count=materialized_chunk_count,
+            character_count=materialized_character_count,
+            resolution_config=resolution_config,
+            assembly_config=assembly_config,
+            max_text_characters=MAX_TEXT_CHARACTERS,
         )
         current_chunk_signature = ordered_chunk_signature(
             current_chunks,
@@ -2168,16 +2267,68 @@ def _lock_collection_build_rows(
     return collection, artifacts, runs
 
 
+def _revalidate_active_collection_build(
+    context: _CollectionContext,
+    collection: object,
+    artifact: object,
+    run: object,
+    build_key: str,
+) -> None:
+    """Linearize an active fast path against its locked live manifest."""
+
+    from apps.knowledge_graph.graph.assembly import (
+        CollectionGraphAssemblyError,
+        CollectionGraphSourceStaleError,
+        validate_locked_active_collection_snapshot,
+    )
+
+    identity = context.identity
+    if (
+        derive_collection_build_key(context.identity) != build_key
+        or artifact.build_key != build_key
+        or run.build_key != build_key
+        or artifact.source_hash != identity.aggregate_source_signature
+        or artifact.ontology_version != identity.ontology_version
+        or artifact.ontology_checksum != identity.ontology_checksum
+        or artifact.extractor_version != identity.extractor_version
+        or artifact.resolver_version != identity.resolver_version
+        or artifact.filter_policy_version != identity.filter_version
+        or artifact.filter_policy_checksum != identity.filter_checksum
+        or artifact.resolution_config_checksum != identity.resolver_checksum
+        or artifact.assembly_version != identity.assembly_version
+        or artifact.assembly_config_checksum != identity.assembly_checksum
+        or artifact.embedding_model_signature != identity.embedding_model_signature
+    ):
+        raise CorruptBuildError(
+            "active collection occurrence differs from the requested build identity"
+        )
+    try:
+        validate_locked_active_collection_snapshot(
+            collection=collection,
+            artifact=artifact,
+            run=run,
+            aggregate_source_signature=identity.aggregate_source_signature,
+            ontology=context.ontology,
+            config=context.assembly_config,
+        )
+    except CollectionGraphSourceStaleError:
+        raise
+    except CollectionGraphAssemblyError as exc:
+        raise CorruptBuildError("active collection snapshot is corrupt") from exc
+
+
 def _bootstrap_collection_build(
     context: _CollectionContext,
     build_key: str,
 ) -> tuple[object, object, str | None, int | None, bool]:
+    from apps.knowledge_graph.graph.assembly import CollectionGraphSourceStaleError
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
     from apps.knowledge_graph.resolution.collection import build_collection_snapshot
 
     owner = uuid.uuid4().hex
+    stale_active = False
     with transaction.atomic():
-        _collection, artifacts, runs = _lock_collection_build_rows(
+        collection, artifacts, runs = _lock_collection_build_rows(
             context.identity.collection_id,
             build_key=build_key,
         )
@@ -2197,8 +2348,27 @@ def _bootstrap_collection_build(
             run = run_by_artifact[artifact.pk]
             if run.lease_owner or run.lease_expires_at is not None:
                 raise CorruptBuildError("active collection owns a build lease")
-            return artifact, run, None, None, True
-        if action in {OccurrenceAction.RESUME, OccurrenceAction.RETRY}:
+            try:
+                _revalidate_active_collection_build(
+                    context,
+                    collection,
+                    artifact,
+                    run,
+                    build_key,
+                )
+            except CollectionGraphSourceStaleError:
+                transaction.on_commit(
+                    lambda: _enqueue_current_collection_refresh(
+                        context.identity.collection_id
+                    ),
+                    robust=True,
+                )
+                stale_active = True
+            else:
+                return artifact, run, None, None, True
+        if stale_active:
+            pass
+        elif action in {OccurrenceAction.RESUME, OccurrenceAction.RETRY}:
             artifact = max(
                 (
                     row
@@ -2272,8 +2442,10 @@ def _bootstrap_collection_build(
                     "last_stage": GraphBuildRun.Stage.QUEUED,
                 },
             )
-        lease_owner, lease_generation = _claim_locked_run(run, owner)
-        return artifact, run, lease_owner, lease_generation, False
+        if not stale_active:
+            lease_owner, lease_generation = _claim_locked_run(run, owner)
+            return artifact, run, lease_owner, lease_generation, False
+    raise StaleBuildError("active collection graph no longer matches live contributors")
 
 
 def _terminal_collection_build(
@@ -2405,6 +2577,7 @@ def refresh_collection_graph(
                     snapshot, entities, relations = load_collection_resolution_inputs(
                         artifact.pk,
                         run.pk,
+                        config=context.resolution_config,
                         lease_owner=lease_owner,
                         lease_generation=lease_generation,
                     )

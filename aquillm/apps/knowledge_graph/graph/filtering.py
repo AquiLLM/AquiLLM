@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
+from itertools import islice
 from math import isfinite, log1p
 
 _HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -389,7 +390,10 @@ def filter_collection_resolution(
         expected_checksum=resolution.snapshot.ontology_checksum,
     )
     ontology_checksum = ontology.checksum
-    ordered = tuple(sorted(tuple(entities), key=lambda item: item.entity_id))
+    bounded = tuple(islice(iter(entities), resolution.config.max_entities + 1))
+    if len(bounded) > resolution.config.max_entities:
+        raise ValueError("filter evidence exceeds the resolution entity cap")
+    ordered = tuple(sorted(bounded, key=lambda item: item.entity_id))
     if any(type(item) is not EntityFilterInput for item in ordered):
         raise ValueError("filter entities must contain exact EntityFilterInput values")
     clusters = {cluster.cluster_key: cluster for cluster in resolution.clusters}
@@ -588,7 +592,7 @@ def filter_collection_entities(
 ) -> tuple[EntityFilterDecision, ...]:
     """Apply a policy deterministically without invoking extraction or an LLM."""
 
-    bounded = tuple(entities)
+    bounded = tuple(islice(iter(entities), 50_001))
     if len(bounded) > 50_000:
         raise ValueError("filter input exceeds the configured entity limit")
     if any(type(entity) is not EntityFilterInput for entity in bounded):
@@ -624,7 +628,7 @@ def _explicit_position(metadata: object) -> PositionKind:
         return PositionKind.OTHER
 
 
-def _filter_inputs_from_artifact(artifact):
+def _filter_inputs_from_artifact(artifact, config=None):
     from django.db.models import Q
 
     from apps.knowledge_graph.models import (
@@ -633,13 +637,26 @@ def _filter_inputs_from_artifact(artifact):
         DocumentEntityMention,
         RelationMention,
     )
+    from apps.knowledge_graph.resolution.collection import (
+        CollectionResolutionConfig,
+        _bounded_query_rows,
+    )
 
-    entities = tuple(
+    config = CollectionResolutionConfig() if config is None else config
+    if type(config) is not CollectionResolutionConfig:
+        raise ValueError("filter input resolution config is invalid")
+    config.__post_init__()
+    entity_query = (
         CollectionEntity.objects.select_for_update()
         .filter(artifact=artifact)
         .order_by("cluster_key")
     )
-    automatic_links = tuple(
+    entities = _bounded_query_rows(
+        entity_query,
+        config.max_entities,
+        "filter collection entity",
+    )
+    automatic_link_query = (
         CollectionEntityDocumentLink.objects.select_for_update()
         .select_related("document_entity")
         .filter(
@@ -648,12 +665,17 @@ def _filter_inputs_from_artifact(artifact):
         )
         .order_by("collection_entity_id", "document_entity_id")
     )
+    automatic_links = _bounded_query_rows(
+        automatic_link_query,
+        config.max_links,
+        "filter automatic link",
+    )
     links_by_entity: dict[int, list[object]] = {}
     document_entity_ids: list[int] = []
     for link in automatic_links:
         links_by_entity.setdefault(link.collection_entity_id, []).append(link)
         document_entity_ids.append(link.document_entity_id)
-    memberships = tuple(
+    membership_query = (
         DocumentEntityMention.objects.select_for_update()
         .select_related("mention")
         .filter(
@@ -661,6 +683,11 @@ def _filter_inputs_from_artifact(artifact):
             status=DocumentEntityMention.Status.ACTIVE,
         )
         .order_by("document_entity_id", "mention_id")
+    )
+    memberships = _bounded_query_rows(
+        membership_query,
+        config.max_memberships,
+        "filter membership",
     )
     memberships_by_document_entity: dict[int, list[object]] = {}
     all_mention_ids: set[int] = set()
@@ -670,11 +697,17 @@ def _filter_inputs_from_artifact(artifact):
         ).append(membership)
         all_mention_ids.add(membership.mention_id)
     participation: dict[int, int] = {mention_id: 0 for mention_id in all_mention_ids}
-    for head_id, tail_id in (
+    relation_query = (
         RelationMention.objects.select_for_update()
         .filter(Q(head_id__in=all_mention_ids) | Q(tail_id__in=all_mention_ids))
         .values_list("head_id", "tail_id")
-    ):
+    )
+    relation_rows = _bounded_query_rows(
+        relation_query,
+        config.max_relations,
+        "filter relation",
+    )
+    for head_id, tail_id in relation_rows:
         if head_id in participation:
             participation[head_id] += 1
         if tail_id in participation:
@@ -998,6 +1031,10 @@ def _validate_existing_filter_rerun(
     source_task9_marker_checksum,
     source_assembly_marker_checksum,
     max_document_inputs,
+    max_entities,
+    max_memberships,
+    max_relations,
+    max_links,
 ):
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
@@ -1007,6 +1044,9 @@ def _validate_existing_filter_rerun(
         GraphBuildRun,
     )
     from apps.knowledge_graph.resolution.collection import (
+        MAX_COLLECTION_ENTITIES,
+        MAX_COLLECTION_LINKS,
+        _bounded_query_rows,
         _snapshot_from_locked_manifest,
     )
 
@@ -1026,9 +1066,11 @@ def _validate_existing_filter_rerun(
         .filter(artifact=destination)
         .order_by("document_artifact_id")
     )
-    if manifest_query.count() > max_document_inputs:
-        raise ValueError("existing filter rerun manifest exceeds its input cap")
-    manifest = tuple(manifest_query)
+    manifest = _bounded_query_rows(
+        manifest_query,
+        max_document_inputs,
+        "existing filter rerun manifest",
+    )
     if len(manifest) != len(source_manifest):
         raise ValueError("existing filter rerun is partial or corrupt")
     _snapshot_from_locked_manifest(destination, manifest)
@@ -1057,7 +1099,7 @@ def _validate_existing_filter_rerun(
     runs = tuple(
         GraphBuildRun.objects.select_for_update()
         .filter(artifact=destination)
-        .order_by("pk")
+        .order_by("pk")[:2]
     )
     if len(runs) != 1:
         raise ValueError("existing filter rerun marker is missing or ambiguous")
@@ -1093,6 +1135,10 @@ def _validate_existing_filter_rerun(
         "ontology_checksum": ontology_checksum,
         "resolution_config_checksum": source.resolution_config_checksum,
         "max_document_inputs": max_document_inputs,
+        "max_entities": max_entities,
+        "max_memberships": max_memberships,
+        "max_relations": max_relations,
+        "max_links": max_links,
         "filter_result_checksum": projection_checksum,
         "source_artifact_id": source.pk,
         "source_build_run_id": source_build_run_id,
@@ -1107,16 +1153,26 @@ def _validate_existing_filter_rerun(
     }
     if marker != expected_marker:
         raise ValueError("existing filter rerun commit marker is corrupt")
-    entities = tuple(
+    entity_query = (
         CollectionEntity.objects.select_for_update()
         .filter(artifact=destination)
         .order_by("cluster_key")
     )
-    links = tuple(
+    link_query = (
         CollectionEntityDocumentLink.objects.select_for_update()
         .select_related("collection_entity")
         .filter(artifact=destination)
         .order_by("pk")
+    )
+    entities = _bounded_query_rows(
+        entity_query,
+        MAX_COLLECTION_ENTITIES,
+        "existing filter entity",
+    )
+    links = _bounded_query_rows(
+        link_query,
+        MAX_COLLECTION_LINKS,
+        "existing filter link",
     )
     if len(entities) != len(source_entities) or len(links) != len(source_links):
         raise ValueError("existing filter rerun rows are partial or corrupt")
@@ -1208,6 +1264,10 @@ def create_filter_rerun_artifact(
     )
     from apps.knowledge_graph.resolution.collection import (
         MAX_COLLECTION_DOCUMENT_INPUTS,
+        MAX_COLLECTION_ENTITIES,
+        MAX_COLLECTION_LINKS,
+        CollectionResolutionConfig,
+        _bounded_query_rows,
         _collection_entity_row_audit,
         _collection_link_row_audit,
         _snapshot_from_locked_manifest,
@@ -1339,18 +1399,31 @@ def create_filter_rerun_artifact(
             .filter(artifact=source)
             .order_by("document_artifact_id")
         )
-        if source_manifest_query.count() > MAX_COLLECTION_DOCUMENT_INPUTS:
-            raise ValueError("filter source manifest exceeds the v1 input cap")
-        source_manifest = tuple(source_manifest_query)
+        source_manifest = _bounded_query_rows(
+            source_manifest_query,
+            MAX_COLLECTION_DOCUMENT_INPUTS,
+            "filter source manifest",
+        )
         _snapshot_from_locked_manifest(source, source_manifest)
-        source_entities, evidence = _filter_inputs_from_artifact(source)
+        source_config = CollectionResolutionConfig()
+        source_entities, evidence = _filter_inputs_from_artifact(
+            source,
+            source_config,
+        )
+        if len(source_entities) > MAX_COLLECTION_ENTITIES:
+            raise ValueError("filter source entity cap exceeded")
         decisions = filter_collection_entities(evidence, ontology, policy)
         decisions_by_id = {int(item.entity_id): item for item in decisions}
-        source_links = tuple(
+        source_link_query = (
             CollectionEntityDocumentLink.objects.select_for_update()
             .select_related("document_entity", "manifest_input")
             .filter(artifact=source)
             .order_by("pk")
+        )
+        source_links = _bounded_query_rows(
+            source_link_query,
+            min(source_config.max_links, MAX_COLLECTION_LINKS),
+            "filter source link",
         )
         projection_checksum = _filter_rerun_projection_checksum(
             source_artifact=source,
@@ -1390,6 +1463,26 @@ def create_filter_rerun_artifact(
             or len(source_manifest) > manifest_cap
         ):
             raise ValueError("filter source manifest cap is invalid")
+        cap_limits = {
+            "max_entities": MAX_COLLECTION_ENTITIES,
+            "max_memberships": source_config.max_memberships,
+            "max_relations": source_config.max_relations,
+            "max_links": MAX_COLLECTION_LINKS,
+        }
+        source_caps = {
+            key: source_marker.get(key) if type(source_marker) is dict else None
+            for key in cap_limits
+        }
+        if any(
+            type(source_caps[key]) is not int or not 1 <= source_caps[key] <= maximum
+            for key, maximum in cap_limits.items()
+        ):
+            raise ValueError("filter source row caps are invalid")
+        if (
+            len(source_entities) > source_caps["max_entities"]
+            or len(source_links) > source_caps["max_links"]
+        ):
+            raise ValueError("filter source rows exceed their committed caps")
         if existing is not None:
             return _validate_existing_filter_rerun(
                 destination=existing,
@@ -1405,6 +1498,10 @@ def create_filter_rerun_artifact(
                 source_task9_marker_checksum=source_task9_marker_checksum,
                 source_assembly_marker_checksum=source_assembly_marker_checksum,
                 max_document_inputs=manifest_cap,
+                max_entities=source_caps["max_entities"],
+                max_memberships=source_caps["max_memberships"],
+                max_relations=source_caps["max_relations"],
+                max_links=source_caps["max_links"],
             )
         build_generation = (
             max(
@@ -1545,6 +1642,10 @@ def create_filter_rerun_artifact(
                     "ontology_checksum": ontology_checksum,
                     "resolution_config_checksum": source.resolution_config_checksum,
                     "max_document_inputs": manifest_cap,
+                    "max_entities": source_caps["max_entities"],
+                    "max_memberships": source_caps["max_memberships"],
+                    "max_relations": source_caps["max_relations"],
+                    "max_links": source_caps["max_links"],
                     "filter_result_checksum": projection_checksum,
                     "source_artifact_id": source.pk,
                     "source_build_run_id": source_build_run.pk,

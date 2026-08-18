@@ -84,8 +84,8 @@ def test_task10_counts_manifests_before_materializing_them():
     source = inspect.getsource(assembly._load_locked_manifest)
 
     assert "config.max_document_inputs" in source
-    assert ".count()" in source
-    assert source.index(".count()") < source.index("tuple(manifest_query)")
+    assert "_bounded_query_rows(" in source
+    assert "tuple(manifest_query)" not in source
 
 
 def test_task9_markers_audit_the_exact_manifest_cap():
@@ -96,7 +96,7 @@ def test_task9_markers_audit_the_exact_manifest_cap():
         collection_resolution._collection_resolution_marker_is_valid
     )
     filtering_source = inspect.getsource(filtering.create_filter_rerun_artifact)
-    lineage_source = inspect.getsource(assembly._validate_task9_lineage)
+    lineage_source = inspect.getsource(assembly._validate_task9_lineage_node)
 
     assert '"max_document_inputs": result.config.max_document_inputs' in (
         persistence_source
@@ -166,3 +166,153 @@ def test_competing_build_runs_use_collection_scope_join_without_id_lists():
         "filter(artifact_id__in=(row.pk for row in scope_artifacts))" not in source
         for source in sources
     )
+
+
+def test_collection_resolution_caps_are_checksum_addressed_for_every_row_family():
+    config = collection_resolution.CollectionResolutionConfig()
+    cap_fields = (
+        "max_entities",
+        "max_memberships",
+        "max_relations",
+        "max_links",
+    )
+
+    for field_name in cap_fields:
+        assert type(getattr(config, field_name)) is int
+        assert getattr(config, field_name) > 1
+        assert collection_resolution.resolution_config_checksum(config) != (
+            collection_resolution.resolution_config_checksum(
+                replace(config, **{field_name: getattr(config, field_name) - 1})
+            )
+        )
+
+
+def test_pure_collection_resolution_and_filter_bound_iterables_before_tuple():
+    resolution_source = inspect.getsource(
+        collection_resolution.resolve_collection_entities
+    )
+    filter_source = inspect.getsource(filtering.filter_collection_resolution)
+
+    assert "islice(iter(entities), config.max_entities + 1)" in resolution_source
+    assert "islice(iter(relations), config.max_relations + 1)" in resolution_source
+    assert "islice(iter(entities), resolution.config.max_entities + 1)" in filter_source
+
+
+def test_collection_query_cap_counts_before_iterator_or_cache_materialization():
+    bounded = getattr(collection_resolution, "_bounded_query_rows", None)
+    assert callable(bounded)
+    events = []
+
+    class OverCapQuery:
+        def count(self):
+            events.append("count")
+            return 2
+
+        def iterator(self, *, chunk_size):
+            events.append(("iterator", chunk_size))
+            raise AssertionError("over-cap query must not be iterated")
+
+        def __iter__(self):
+            raise AssertionError("over-cap query must not populate its cache")
+
+    with pytest.raises(
+        collection_resolution.CollectionResolutionPersistenceError,
+        match="membership.*cap",
+    ):
+        bounded(OverCapQuery(), 1, "collection membership")
+    assert events == ["count"]
+
+
+def test_collection_query_cap_bounds_actual_iteration_after_count_drift():
+    consumed = []
+
+    class Query:
+        def count(self):
+            return 1
+
+        def iterator(self, *, chunk_size):
+            assert chunk_size == 2
+            for value in range(10):
+                consumed.append(value)
+                yield value
+
+    with pytest.raises(
+        collection_resolution.CollectionResolutionPersistenceError,
+        match="relation.*cap",
+    ):
+        collection_resolution._bounded_query_rows(Query(), 2, "collection relation")
+    assert consumed == [0, 1, 2]
+
+
+def test_task9_and_filter_loaders_guard_every_large_queryset_before_conversion():
+    resolution_source = inspect.getsource(
+        collection_resolution._load_resolution_source_rows
+    )
+    filter_projection_source = inspect.getsource(
+        collection_resolution._filter_inputs_for_resolution
+    )
+    load_resolution_source = inspect.getsource(
+        collection_resolution.load_collection_resolution_inputs
+    )
+    load_filter_source = inspect.getsource(
+        collection_resolution.load_collection_filter_inputs
+    )
+    persist_resolution_source = inspect.getsource(
+        collection_resolution.persist_collection_resolution
+    )
+    artifact_filter_source = inspect.getsource(filtering._filter_inputs_from_artifact)
+    rerun_source = inspect.getsource(filtering.create_filter_rerun_artifact)
+    existing_rerun_source = inspect.getsource(filtering._validate_existing_filter_rerun)
+    lineage_source = inspect.getsource(assembly._load_filter_source_lineage)
+
+    for source, query_names in (
+        (
+            resolution_source,
+            ("source_entity_query", "membership_query", "relation_query"),
+        ),
+        (filter_projection_source, ("membership_query", "relation_query")),
+        (load_resolution_source, ("manifest_query",)),
+        (load_filter_source, ("manifest_query", "source_row_query")),
+        (persist_resolution_source, ("manifest_query", "source_entity_query")),
+        (
+            artifact_filter_source,
+            (
+                "entity_query",
+                "automatic_link_query",
+                "membership_query",
+                "relation_query",
+            ),
+        ),
+        (rerun_source, ("source_manifest_query", "source_link_query")),
+        (existing_rerun_source, ("manifest_query", "entity_query", "link_query")),
+        (
+            lineage_source,
+            ("source_manifest_query", "source_entity_query", "source_link_query"),
+        ),
+    ):
+        compact = " ".join(source.split())
+        for query_name in query_names:
+            assert f"_bounded_query_rows( {query_name}" in compact
+
+
+def test_task9_and_filter_markers_persist_every_checksum_addressed_row_cap():
+    persist_source = inspect.getsource(
+        collection_resolution.persist_collection_resolution
+    )
+    marker_validation_source = inspect.getsource(
+        collection_resolution._collection_resolution_marker_is_valid
+    )
+    filter_source = inspect.getsource(filtering.create_filter_rerun_artifact)
+    lineage_source = inspect.getsource(assembly._validate_task9_lineage_node)
+
+    for field_name in (
+        "max_entities",
+        "max_memberships",
+        "max_relations",
+        "max_links",
+    ):
+        marker_field = f'"{field_name}"'
+        assert marker_field in persist_source
+        assert marker_field in marker_validation_source
+        assert marker_field in filter_source
+        assert marker_field in lineage_source

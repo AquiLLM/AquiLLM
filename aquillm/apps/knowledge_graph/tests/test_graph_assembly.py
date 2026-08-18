@@ -306,9 +306,14 @@ def test_orm_assembly_boundary_declares_locking_and_has_no_provider_imports():
         for prefix in forbidden
     )
     assembly_source = inspect.getsource(assemble_collection_graph)
+    assembly_lock_source = inspect.getsource(module._locked_candidate)
+    assembly_row_source = inspect.getsource(module._load_locked_assembly_rows)
     activation_source = inspect.getsource(activate_collection_graph)
-    assert "select_for_update" in assembly_source
     assert "transaction.atomic" in assembly_source
+    assert "_locked_candidate" in assembly_source
+    assert "_load_locked_assembly_rows" in assembly_source
+    assert "select_for_update" in assembly_lock_source
+    assert "select_for_update" in assembly_row_source
     assert "select_for_update" in activation_source
     assert "transaction.atomic" in activation_source
     assert "_locked_candidate" in activation_source
@@ -403,14 +408,14 @@ def test_current_state_querysets_exclude_building_artifacts_and_relations():
 
 
 def test_task9_marker_fingerprints_all_raw_relation_evidence_for_task10():
-    from apps.knowledge_graph.graph.assembly import _validate_task9_lineage
+    from apps.knowledge_graph.graph.assembly import _validate_task9_lineage_node
     from apps.knowledge_graph.resolution.collection import (
         _raw_relation_snapshot,
         persist_collection_resolution,
     )
 
     task9_source = inspect.getsource(persist_collection_resolution)
-    task10_source = inspect.getsource(_validate_task9_lineage)
+    task10_source = inspect.getsource(_validate_task9_lineage_node)
     fingerprint_source = inspect.getsource(_raw_relation_snapshot)
 
     assert "raw_relation_fingerprint" in task9_source
@@ -470,12 +475,16 @@ def test_collection_operations_share_advisory_collection_artifact_lock_order():
     assert candidate.index("lock_collection_graph_scope") < candidate.index(
         "GraphArtifact.objects.select_for_update"
     )
-    assert snapshot.index("lock_collection_graph_scope") < snapshot.index(
-        "scope_artifacts = tuple"
-    ) < snapshot.index("sources = tuple")
-    assert filtering.index("lock_collection_graph_scope") < filtering.index(
-        "scope_artifacts = tuple"
-    ) < filtering.index("source_manifest = tuple")
+    assert (
+        snapshot.index("lock_collection_graph_scope")
+        < snapshot.index("scope_artifacts = tuple")
+        < snapshot.index("sources = tuple")
+    )
+    assert (
+        filtering.index("lock_collection_graph_scope")
+        < filtering.index("scope_artifacts = tuple")
+        < filtering.index("source_manifest = _bounded_query_rows")
+    )
 
 
 def test_locked_projection_persistence_uses_batched_trusted_base_managers():
@@ -707,25 +716,37 @@ def test_postgres_assembly_reuses_task9_rows_and_activates_atomically():
     assert artifact.status == GraphArtifact.Status.BUILDING
     assert not GraphArtifact.objects.current_collection(collection.pk).exists()
     assert not CollectionRelation.objects.current().filter(artifact=artifact).exists()
-    assert tuple(
-        CollectionEntity.objects.filter(artifact=artifact)
-        .order_by("pk")
-        .values_list("pk", flat=True)
-    ) == entity_ids_before
-    assert tuple(
-        CollectionEntityDocumentLink.objects.filter(artifact=artifact)
-        .order_by("pk")
-        .values_list("pk", flat=True)
-    ) == link_ids_before
+    assert (
+        tuple(
+            CollectionEntity.objects.filter(artifact=artifact)
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        == entity_ids_before
+    )
+    assert (
+        tuple(
+            CollectionEntityDocumentLink.objects.filter(artifact=artifact)
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        == link_ids_before
+    )
     relation = CollectionRelation.objects.get(artifact=artifact)
     assert relation.support_count == 2
     assert relation.confidence == 0.8
-    assert CollectionRelationEvidence.objects.filter(
-        artifact=artifact, status=CollectionRelationEvidence.Status.ACTIVE
-    ).count() == 2
-    assert CollectionRelationEvidence.objects.filter(
-        artifact=artifact, status=CollectionRelationEvidence.Status.SUPPRESSED
-    ).count() == 1
+    assert (
+        CollectionRelationEvidence.objects.filter(
+            artifact=artifact, status=CollectionRelationEvidence.Status.ACTIVE
+        ).count()
+        == 2
+    )
+    assert (
+        CollectionRelationEvidence.objects.filter(
+            artifact=artifact, status=CollectionRelationEvidence.Status.SUPPRESSED
+        ).count()
+        == 1
+    )
     rejected = CollectionRelationEvidence.objects.get(
         artifact=artifact, status=CollectionRelationEvidence.Status.REJECTED
     )
@@ -746,9 +767,12 @@ def test_postgres_assembly_reuses_task9_rows_and_activates_atomically():
     assert run.stage == GraphBuildRun.Stage.COMPLETE
     assert run.status == GraphBuildRun.Status.SUCCEEDED
     assert CollectionRelation.objects.current().get(pk=relation.pk) == relation
-    assert activate_collection_graph(
-        collection.pk,
-        run.pk,
-        artifact.source_hash,
-        ontology=_ontology(),
-    ) == activated
+    assert (
+        activate_collection_graph(
+            collection.pk,
+            run.pk,
+            artifact.source_hash,
+            ontology=_ontology(),
+        )
+        == activated
+    )

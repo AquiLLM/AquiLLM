@@ -553,11 +553,181 @@ def test_collection_context_caps_documents_entities_chunks_and_characters_first(
     assert "Document.filter(" not in source
     assert "_validate_collection_context_caps(" in source
     assert source.index("_validate_collection_context_caps(") < source.index(
-        "current_chunks = tuple("
+        "current_chunks = _ordered_chunks("
     )
-    assert source.index('Sum(Length("full_text"))') < source.index("documents = tuple(")
+    assert source.index('Sum(Length("full_text"))') < source.index(
+        "documents = tuple(document_values)"
+    )
+    assert "_bounded_context_rows(" in source
     assert "contributing_rows" not in source
     assert "collection awaits fresh document graph artifacts" in source
+
+
+def test_collection_context_queryset_cap_bounds_actual_iteration_after_count_drift():
+    from apps.knowledge_graph.services import builds
+
+    bounded = getattr(builds, "_bounded_context_rows", None)
+    assert callable(bounded)
+    consumed = []
+
+    class Query:
+        def count(self):
+            return 1
+
+        def iterator(self, *, chunk_size):
+            assert chunk_size == 2
+            for value in range(10):
+                consumed.append(value)
+                yield value
+
+    with pytest.raises(builds.CorruptBuildError, match="document.*cap"):
+        bounded(Query(), 2, "collection document")
+    assert consumed == [0, 1, 2]
+
+
+def test_collection_return_active_revalidates_locked_manifest_before_success():
+    from apps.knowledge_graph.services import builds
+
+    bootstrap_source = inspect.getsource(builds._bootstrap_collection_build)
+    revalidate = getattr(builds, "_revalidate_active_collection_build", None)
+    assert callable(revalidate)
+    revalidate_source = inspect.getsource(revalidate)
+    return_active_branch = bootstrap_source[
+        bootstrap_source.index(
+            "if action is OccurrenceAction.RETURN_ACTIVE"
+        ) : bootstrap_source.index("if action in {OccurrenceAction.RESUME")
+    ]
+
+    assert return_active_branch.index("_revalidate_active_collection_build(") < (
+        return_active_branch.index("return artifact, run, None, None, True")
+    )
+    assert "validate_locked_active_collection_snapshot(" in revalidate_source
+    assert "derive_collection_build_key(context.identity)" in revalidate_source
+    assert "artifact.build_key != build_key" in revalidate_source
+    assert "run.build_key != build_key" in revalidate_source
+    assert "transaction.on_commit(" in bootstrap_source
+
+
+def test_collection_return_active_classifies_locked_snapshot_corruption(monkeypatch):
+    from apps.knowledge_graph.graph import assembly
+    from apps.knowledge_graph.services import builds
+
+    identity = _collection_identity()
+    build_key = builds.derive_collection_build_key(identity)
+    context = SimpleNamespace(
+        identity=identity,
+        ontology=object(),
+        assembly_config=object(),
+    )
+    artifact = SimpleNamespace(
+        build_key=build_key,
+        source_hash=identity.aggregate_source_signature,
+        ontology_version=identity.ontology_version,
+        ontology_checksum=identity.ontology_checksum,
+        extractor_version=identity.extractor_version,
+        resolver_version=identity.resolver_version,
+        filter_policy_version=identity.filter_version,
+        filter_policy_checksum=identity.filter_checksum,
+        resolution_config_checksum=identity.resolver_checksum,
+        assembly_version=identity.assembly_version,
+        assembly_config_checksum=identity.assembly_checksum,
+        embedding_model_signature=identity.embedding_model_signature,
+    )
+    run = SimpleNamespace(build_key=build_key)
+
+    def reject_corrupt_snapshot(**_kwargs):
+        raise assembly.CollectionGraphAssemblyError("corrupt marker")
+
+    monkeypatch.setattr(
+        assembly,
+        "validate_locked_active_collection_snapshot",
+        reject_corrupt_snapshot,
+    )
+    with pytest.raises(builds.CorruptBuildError, match="active collection snapshot"):
+        builds._revalidate_active_collection_build(
+            context,
+            SimpleNamespace(pk=identity.collection_id),
+            artifact,
+            run,
+            build_key,
+        )
+
+
+@pytest.mark.parametrize(
+    ("target", "field_name"),
+    (
+        ("argument", None),
+        ("artifact", "build_key"),
+        ("run", "build_key"),
+        ("artifact", "source_hash"),
+        ("artifact", "ontology_version"),
+        ("artifact", "ontology_checksum"),
+        ("artifact", "extractor_version"),
+        ("artifact", "resolver_version"),
+        ("artifact", "filter_policy_version"),
+        ("artifact", "filter_policy_checksum"),
+        ("artifact", "resolution_config_checksum"),
+        ("artifact", "assembly_version"),
+        ("artifact", "assembly_config_checksum"),
+        ("artifact", "embedding_model_signature"),
+    ),
+)
+def test_collection_return_active_rejects_each_identity_mismatch(
+    monkeypatch,
+    target,
+    field_name,
+):
+    from apps.knowledge_graph.graph import assembly
+    from apps.knowledge_graph.services import builds
+
+    identity = _collection_identity()
+    build_key = builds.derive_collection_build_key(identity)
+    context = SimpleNamespace(
+        identity=identity,
+        ontology=object(),
+        assembly_config=object(),
+    )
+    artifact = SimpleNamespace(
+        build_key=build_key,
+        source_hash=identity.aggregate_source_signature,
+        ontology_version=identity.ontology_version,
+        ontology_checksum=identity.ontology_checksum,
+        extractor_version=identity.extractor_version,
+        resolver_version=identity.resolver_version,
+        filter_policy_version=identity.filter_version,
+        filter_policy_checksum=identity.filter_checksum,
+        resolution_config_checksum=identity.resolver_checksum,
+        assembly_version=identity.assembly_version,
+        assembly_config_checksum=identity.assembly_checksum,
+        embedding_model_signature=identity.embedding_model_signature,
+    )
+    run = SimpleNamespace(build_key=build_key)
+    validator_called = False
+
+    def accept_snapshot(**_kwargs):
+        nonlocal validator_called
+        validator_called = True
+
+    monkeypatch.setattr(
+        assembly,
+        "validate_locked_active_collection_snapshot",
+        accept_snapshot,
+    )
+    requested_key = build_key
+    if target == "argument":
+        requested_key = "0" * 64
+    else:
+        setattr(artifact if target == "artifact" else run, field_name, object())
+
+    with pytest.raises(builds.CorruptBuildError, match="requested build identity"):
+        builds._revalidate_active_collection_build(
+            context,
+            SimpleNamespace(pk=identity.collection_id),
+            artifact,
+            run,
+            requested_key,
+        )
+    assert validator_called is False
 
 
 def test_tasks7_and_9_bound_occurrence_history_and_keep_monotonic_generation():
@@ -584,6 +754,8 @@ def test_tasks7_and_9_bound_occurrence_history_and_keep_monotonic_generation():
     task7_resume = inspect.getsource(_find_committed_extraction_run)
     assert "candidate_ids" in task7_resume
     assert "[:2]" in task7_resume
+    assert "tuple(entity_query)" not in task7_resume
+    assert "tuple(relation_query)" not in task7_resume
 
     task9_lock = inspect.getsource(_lock_collection_destination_occurrence)
     assert "candidate_artifact_id" in task9_lock
@@ -592,6 +764,33 @@ def test_tasks7_and_9_bound_occurrence_history_and_keep_monotonic_generation():
     assert "_lock_collection_destination_occurrence" in task9_persist
     assert "scope_artifacts = tuple(" not in task9_persist
     assert "scope_runs = tuple(" not in task9_persist
+
+
+def test_document_resume_markers_and_resolver_cap_rows_before_materialization():
+    from apps.knowledge_graph.services import builds
+
+    extraction_source = inspect.getsource(builds._document_extraction_commit_state)
+    resolution_source = inspect.getsource(builds._document_resolution_commit_state)
+    coordinator_source = inspect.getsource(builds.build_document_graph)
+
+    assert extraction_source.index("entity_count >") < extraction_source.index(
+        "extraction_evidence_fingerprint("
+    )
+    assert extraction_source.index("relation_count >") < extraction_source.index(
+        "extraction_evidence_fingerprint("
+    )
+    assert "tuple(entity_query)" not in extraction_source
+    assert "tuple(relation_query)" not in extraction_source
+
+    assert "tuple(mention_query)" not in resolution_source
+    assert "tuple(entity_query.order_by" not in resolution_source
+    assert "tuple(link_query.order_by" not in resolution_source
+    assert resolution_source.count("_bounded_rows(") >= 3
+
+    assert "_bounded_rows(" in coordinator_source
+    assert coordinator_source.index("_bounded_rows(") < coordinator_source.index(
+        "resolve_document_mentions("
+    )
 
 
 def test_recurrent_build_identity_creates_a_new_occurrence_after_an_intervening_key():

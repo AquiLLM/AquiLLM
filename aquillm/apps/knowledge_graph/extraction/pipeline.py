@@ -6,6 +6,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass, replace
 from hashlib import sha256
+from itertools import islice
 from time import perf_counter
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,11 @@ if TYPE_CHECKING:
 _FATAL_STRUCTURAL_DIAGNOSTICS = frozenset(
     {"missing_entity_output", "missing_relation_output"}
 )
+DOCUMENT_EXTRACTION_V1_MAX_CHUNKS = 10_000
+DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS = 10_000_000
+DOCUMENT_EXTRACTION_V1_MAX_ENTITIES = 512
+DOCUMENT_EXTRACTION_V1_MAX_RELATIONS = 4_096
+_QUERY_ITERATOR_BATCH_SIZE = 1_000
 logger = structlog.stdlib.get_logger(__name__)
 
 
@@ -210,6 +216,14 @@ def collect_document_evidence(
 ) -> ExtractedDocumentEvidence:
     """Run provider extraction outside SQL transactions and map all evidence."""
 
+    if len(windows) > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
+        raise StructuralExtractionError("document extraction chunk cap exceeded")
+    if (
+        len(full_text) > DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS
+        or sum(len(window.content) for window in windows)
+        > DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS
+    ):
+        raise StructuralExtractionError("document extraction character cap exceeded")
     batches = batch_extraction_windows(
         windows,
         max_count=max_batch_count,
@@ -218,6 +232,8 @@ def collect_document_evidence(
     mapped_entities: list[MappedEntityEvidence] = []
     mapped_relations: list[MappedRelationEvidence] = []
     diagnostic_counts: Counter[str] = Counter()
+    raw_entity_count = 0
+    raw_relation_count = 0
 
     for batch in batches:
         results = backend.extract_batch(
@@ -229,6 +245,16 @@ def collect_document_evidence(
                 "provider returned a different number of window results"
             )
         for window, result in zip(batch, results, strict=True):
+            raw_entity_count += len(result.entities)
+            if raw_entity_count > DOCUMENT_EXTRACTION_V1_MAX_ENTITIES:
+                raise StructuralExtractionError(
+                    "provider entity cap exceeded before candidate materialization"
+                )
+            raw_relation_count += len(result.relations)
+            if raw_relation_count > DOCUMENT_EXTRACTION_V1_MAX_RELATIONS:
+                raise StructuralExtractionError(
+                    "provider relation cap exceeded before candidate materialization"
+                )
             fatal_codes = sorted(
                 diagnostic.code
                 for diagnostic in result.diagnostics
@@ -380,16 +406,40 @@ def extraction_commit_is_valid(
     assembly_config_checksum = getattr(run, "assembly_config_checksum", None)
     artifact_id = getattr(run, "artifact_id", None)
     artifact = getattr(run, "artifact", None) if artifact_id else None
+    base_fields = {
+        "version",
+        "assembly_version",
+        "assembly_config_checksum",
+        "entity_mention_count",
+        "relation_mention_count",
+    }
+    cap_fields = {
+        "max_chunks",
+        "max_characters",
+        "max_entities",
+        "max_relations",
+    }
+    scoped_v1 = bool(
+        getattr(run, "orchestration_version", 0) == 1
+        or getattr(artifact, "orchestration_version", 0) == 1
+    )
+    marker_fields = set(marker) if isinstance(marker, dict) else set()
+    fields_valid = marker_fields == base_fields | cap_fields or (
+        not scoped_v1 and marker_fields == base_fields
+    )
+    caps_valid = isinstance(marker, dict) and (
+        marker_fields == base_fields
+        or bool(
+            marker.get("max_chunks") == DOCUMENT_EXTRACTION_V1_MAX_CHUNKS
+            and marker.get("max_characters") == DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS
+            and marker.get("max_entities") == DOCUMENT_EXTRACTION_V1_MAX_ENTITIES
+            and marker.get("max_relations") == DOCUMENT_EXTRACTION_V1_MAX_RELATIONS
+        )
+    )
     marker_valid = (
         isinstance(marker, dict)
-        and set(marker)
-        == {
-            "version",
-            "assembly_version",
-            "assembly_config_checksum",
-            "entity_mention_count",
-            "relation_mention_count",
-        }
+        and fields_valid
+        and caps_valid
         and type(ontology_checksum) is str
         and len(ontology_checksum) == 64
         and all(character in "0123456789abcdef" for character in ontology_checksum)
@@ -431,11 +481,57 @@ def extraction_commit_is_valid(
     )
 
 
+def _bounded_evidence_rows(values, maximum: int, label: str) -> tuple[object, ...]:
+    """Count querysets before iterating and cap arbitrary iterables at cap + 1."""
+
+    if type(maximum) is not int or maximum < 1:
+        raise ValueError("evidence row cap must be a positive integer")
+    query_count = getattr(values, "count", None)
+    query_iterator = getattr(values, "iterator", None)
+    if callable(query_count) and callable(query_iterator):
+        count = query_count()
+        if type(count) is not int or count < 0:
+            raise ValueError(f"{label} count is invalid")
+        if count > maximum:
+            raise ValueError(f"{label} cap exceeded ({maximum})")
+        records = tuple(
+            islice(
+                query_iterator(chunk_size=min(maximum, _QUERY_ITERATOR_BATCH_SIZE)),
+                maximum + 1,
+            )
+        )
+        if len(records) > maximum:
+            raise ValueError(f"{label} cap exceeded ({maximum})")
+        return records
+    rows = tuple(islice(iter(values), maximum + 1))
+    if len(rows) > maximum:
+        raise ValueError(f"{label} cap exceeded ({maximum})")
+    return rows
+
+
 def extraction_evidence_fingerprint(entities, relations) -> str:
     """Hash every immutable persisted Task 7 evidence field in PK order."""
 
-    entity_rows = tuple(sorted(entities, key=lambda row: row.pk))
-    relation_rows = tuple(sorted(relations, key=lambda row: row.pk))
+    entity_rows = tuple(
+        sorted(
+            _bounded_evidence_rows(
+                entities,
+                DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,
+                "extraction entity",
+            ),
+            key=lambda row: row.pk,
+        )
+    )
+    relation_rows = tuple(
+        sorted(
+            _bounded_evidence_rows(
+                relations,
+                DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
+                "extraction relation",
+            ),
+            key=lambda row: row.pk,
+        )
+    )
     payload = {
         "entities": [
             {
@@ -513,8 +609,8 @@ def _find_committed_extraction_run(artifact, *, for_update: bool = False):
         == GraphArtifact.OrchestrationVersion.SCOPED_V1
     ):
         evidence_fingerprint = extraction_evidence_fingerprint(
-            tuple(entity_query),
-            tuple(relation_query),
+            entity_query,
+            relation_query,
         )
     return next(
         (
@@ -573,6 +669,9 @@ def _validate_source(document, expected_source_hash: str) -> None:
 
 
 def _ordered_chunks(document_id, *, for_update: bool = False):
+    from django.db.models import Sum
+    from django.db.models.functions import Coalesce, Length
+
     from apps.documents.models import TextChunk
 
     queryset = (
@@ -590,7 +689,28 @@ def _ordered_chunks(document_id, *, for_update: bool = False):
     )
     if for_update:
         queryset = queryset.select_for_update()
-    return tuple(queryset)
+    if queryset.count() > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
+        raise StaleSourceError("ordered document chunk cap exceeded")
+    totals = queryset.aggregate(total_characters=Coalesce(Sum(Length("content")), 0))
+    total_characters = totals.get("total_characters")
+    if type(total_characters) is not int or total_characters < 0:
+        raise StaleSourceError("ordered document chunk character count is invalid")
+    if total_characters > DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS:
+        raise StaleSourceError("ordered document chunk character cap exceeded")
+    chunks = tuple(
+        islice(
+            queryset.iterator(
+                chunk_size=min(
+                    DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
+                    _QUERY_ITERATOR_BATCH_SIZE,
+                )
+            ),
+            DOCUMENT_EXTRACTION_V1_MAX_CHUNKS + 1,
+        )
+    )
+    if len(chunks) > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
+        raise StaleSourceError("ordered document chunk cap exceeded")
+    return chunks
 
 
 def _chunk_snapshot(chunks) -> tuple[tuple[object, ...], ...]:
@@ -1118,6 +1238,10 @@ def extract_into_build(
                     ),
                     "entity_mention_count": entity_count,
                     "relation_mention_count": relation_count,
+                    "max_chunks": DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
+                    "max_characters": DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS,
+                    "max_entities": DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,
+                    "max_relations": DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
                 },
             }
             locked_run.timings = {
@@ -1217,6 +1341,10 @@ def extract_document_mentions(
 
 
 __all__ = [
+    "DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS",
+    "DOCUMENT_EXTRACTION_V1_MAX_CHUNKS",
+    "DOCUMENT_EXTRACTION_V1_MAX_ENTITIES",
+    "DOCUMENT_EXTRACTION_V1_MAX_RELATIONS",
     "ExtractedDocumentEvidence",
     "DocumentResolutionError",
     "ExtractionInProgressError",

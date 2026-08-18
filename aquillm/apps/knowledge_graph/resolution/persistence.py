@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from datetime import date, datetime
 from hashlib import sha256
+from itertools import islice
 from math import isfinite
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from .coreference import (
 )
 
 _HASH = re.compile(r"[0-9a-f]{64}")
+_QUERY_ITERATOR_BATCH_SIZE = 1_000
 _COMMIT_FIELDS = frozenset(
     (
         "version",
@@ -170,12 +172,40 @@ def _json_value(value: object) -> object:
     raise ValueError(f"unsupported mention fingerprint value: {type(value).__name__}")
 
 
+def _bounded_rows(values, maximum: int, label: str) -> tuple[object, ...]:
+    if type(maximum) is not int or maximum < 1:
+        raise ValueError("resolution row cap must be a positive integer")
+    query_count = getattr(values, "count", None)
+    query_iterator = getattr(values, "iterator", None)
+    if callable(query_count) and callable(query_iterator):
+        count = query_count()
+        if type(count) is not int or count < 0:
+            raise ValueError(f"{label} count is invalid")
+        if count > maximum:
+            raise ValueError(f"{label} cap exceeded ({maximum})")
+        records = tuple(
+            islice(
+                query_iterator(chunk_size=min(maximum, _QUERY_ITERATOR_BATCH_SIZE)),
+                maximum + 1,
+            )
+        )
+        if len(records) > maximum:
+            raise ValueError(f"{label} cap exceeded ({maximum})")
+        return records
+    records = tuple(islice(iter(values), maximum + 1))
+    if len(records) > maximum:
+        raise ValueError(f"{label} cap exceeded ({maximum})")
+    return records
+
+
 def source_mention_fingerprint(mentions) -> str:
     """Hash every persisted raw-mention field in stable primary-key order."""
 
-    records = tuple(mentions)
-    if len(records) > MAX_DOCUMENT_MENTIONS:
-        raise ValueError(f"document mention cap exceeded ({MAX_DOCUMENT_MENTIONS})")
+    records = _bounded_rows(
+        mentions,
+        MAX_DOCUMENT_MENTIONS,
+        "document mention",
+    )
     normalized = [
         {field: _json_value(_record_value(record, field)) for field in _SOURCE_FIELDS}
         for record in records
@@ -201,12 +231,16 @@ def source_mention_fingerprint(mentions) -> str:
 def resolution_rows_fingerprint(entities, links) -> str:
     """Hash the complete persisted document-resolution projection."""
 
-    entity_records = tuple(entities)
-    link_records = tuple(links)
-    if len(entity_records) > MAX_DOCUMENT_MENTIONS:
-        raise ValueError("document resolution entity cap exceeded")
-    if len(link_records) > MAX_DOCUMENT_MENTIONS:
-        raise ValueError("document resolution membership cap exceeded")
+    entity_records = _bounded_rows(
+        entities,
+        MAX_DOCUMENT_MENTIONS,
+        "document resolution entity",
+    )
+    link_records = _bounded_rows(
+        links,
+        MAX_DOCUMENT_MENTIONS,
+        "document resolution membership",
+    )
 
     def normalized(records, fields, label):
         rows = [
@@ -527,17 +561,23 @@ def _existing_resolution(
 ):
     from apps.knowledge_graph.models import DocumentEntity, DocumentEntityMention
 
-    entity_rows = tuple(
-        DocumentEntity.objects.filter(artifact=artifact).order_by("cluster_key")
+    entity_query = DocumentEntity.objects.filter(artifact=artifact).order_by(
+        "cluster_key"
     )
-    link_rows = tuple(
+    link_query = (
         DocumentEntityMention.objects.select_related("document_entity")
         .filter(document_entity__artifact=artifact)
         .order_by("mention_id")
     )
+    entity_count = entity_query.count()
+    link_count = link_query.count()
+    if entity_count > MAX_DOCUMENT_MENTIONS:
+        raise ResolutionPersistenceError("document resolution entity cap exceeded")
+    if link_count > MAX_DOCUMENT_MENTIONS:
+        raise ResolutionPersistenceError("document resolution membership cap exceeded")
     marker = stats.get("resolution_commit")
     if marker is None:
-        if entity_rows or link_rows:
+        if entity_count or link_count:
             raise ResolutionPersistenceError(
                 "destination contains resolution rows without a commit marker"
             )
@@ -555,6 +595,16 @@ def _existing_resolution(
         result_checksum=result.checksum,
     ):
         raise ResolutionPersistenceError("existing resolution commit marker is invalid")
+    entity_rows = _bounded_rows(
+        entity_query,
+        MAX_DOCUMENT_MENTIONS,
+        "document resolution entity",
+    )
+    link_rows = _bounded_rows(
+        link_query,
+        MAX_DOCUMENT_MENTIONS,
+        "document resolution membership",
+    )
     if not _resolution_rows_match(result, entity_rows, link_rows):
         raise ResolutionPersistenceError(
             "persisted resolution rows do not match their commit marker"
@@ -632,6 +682,7 @@ def persist_document_resolution(
     from django.db import transaction
 
     from apps.knowledge_graph.extraction.pipeline import (
+        DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
         extraction_commit_is_valid,
         extraction_evidence_fingerprint,
     )
@@ -652,18 +703,31 @@ def persist_document_resolution(
             lease_owner=lease_owner,
             lease_generation=lease_generation,
         )
-        mentions = tuple(
+        mention_query = (
             EntityMention.objects.select_for_update()
             .select_related("chunk")
             .filter(artifact=artifact)
             .order_by("pk")
         )
-        source_count = len(mentions)
-        relations = tuple(
+        relation_query = (
             RelationMention.objects.select_for_update()
             .filter(artifact=artifact)
             .order_by("pk")
         )
+        try:
+            mentions = _bounded_rows(
+                mention_query,
+                MAX_DOCUMENT_MENTIONS,
+                "document mention",
+            )
+            relations = _bounded_rows(
+                relation_query,
+                DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
+                "document relation",
+            )
+        except ValueError as exc:
+            raise ResolutionPersistenceError(str(exc)) from exc
+        source_count = len(mentions)
         relation_count = len(relations)
         evidence_fingerprint = None
         if (

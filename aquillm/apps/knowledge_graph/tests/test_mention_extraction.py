@@ -97,6 +97,159 @@ class _Backend:
         return tuple(next(self.results) for _text in texts)
 
 
+def test_document_character_cap_rejects_before_provider_inference(monkeypatch):
+    from apps.knowledge_graph.extraction import pipeline
+
+    monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS", 8)
+
+    class NeverBackend:
+        def extract_batch(self, *_args, **_kwargs):
+            raise AssertionError("over-cap input must not reach the provider")
+
+    with pytest.raises(StructuralExtractionError, match="character cap"):
+        collect_document_evidence(
+            (_window(1, "123456789", 0),),
+            full_text="123456789",
+            backend=NeverBackend(),
+            ontology=_ontology(),
+            max_batch_count=1,
+            max_batch_characters=100,
+        )
+
+
+def test_provider_entity_cap_is_checked_before_candidate_iteration(monkeypatch):
+    from apps.knowledge_graph.extraction import pipeline
+
+    monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_ENTITIES", 1)
+
+    class OverCapCandidates:
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            raise AssertionError("over-cap candidates must not be materialized")
+
+    class Backend:
+        def extract_batch(self, *_args, **_kwargs):
+            return (
+                SimpleNamespace(
+                    entities=OverCapCandidates(),
+                    relations=(),
+                    diagnostics=(),
+                ),
+            )
+
+    with pytest.raises(StructuralExtractionError, match="entity cap"):
+        collect_document_evidence(
+            (_window(1, "Orion", 0),),
+            full_text="Orion",
+            backend=Backend(),
+            ontology=_ontology(),
+            max_batch_count=1,
+            max_batch_characters=100,
+        )
+
+
+def test_extraction_fingerprint_counts_querysets_before_materialization(monkeypatch):
+    from apps.knowledge_graph.extraction import pipeline
+
+    monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_ENTITIES", 1)
+    events = []
+
+    class OverCapQuery:
+        def count(self):
+            events.append("count")
+            return 2
+
+        def iterator(self, *, chunk_size):
+            events.append(("iterator", chunk_size))
+            raise AssertionError("over-cap rows must not be iterated")
+
+        def __iter__(self):
+            raise AssertionError("over-cap rows must not populate a queryset cache")
+
+    with pytest.raises(ValueError, match="entity.*cap"):
+        pipeline.extraction_evidence_fingerprint(OverCapQuery(), ())
+    assert events == ["count"]
+
+
+def test_extraction_fingerprint_caps_actual_iteration_after_count_drift():
+    from apps.knowledge_graph.extraction.pipeline import _bounded_evidence_rows
+
+    consumed = []
+
+    class Query:
+        def count(self):
+            return 1
+
+        def iterator(self, *, chunk_size):
+            assert chunk_size == 2
+            for value in range(10):
+                consumed.append(value)
+                yield value
+
+    with pytest.raises(ValueError, match="entity.*cap"):
+        _bounded_evidence_rows(Query(), 2, "entity")
+    assert consumed == [0, 1, 2]
+
+
+def test_ordered_chunks_are_counted_and_sized_before_materialization():
+    from apps.knowledge_graph.extraction import pipeline
+
+    source = inspect.getsource(pipeline._ordered_chunks)
+
+    assert "queryset.count()" in source
+    assert "DOCUMENT_EXTRACTION_V1_MAX_CHUNKS" in source
+    assert "DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS" in source
+    assert "queryset.iterator(" in source
+    assert "islice(" in source
+    assert source.index("queryset.count()") < source.index("queryset.iterator(")
+    assert source.index("aggregate(") < source.index("queryset.iterator(")
+
+
+def test_scoped_v1_extraction_marker_requires_exact_hard_caps():
+    from apps.knowledge_graph.extraction import pipeline
+
+    artifact = SimpleNamespace(
+        orchestration_version=1,
+        ontology_checksum="a" * 64,
+        assembly_version="not-applicable",
+        assembly_config_checksum="b" * 64,
+    )
+    base_marker = {
+        "version": 1,
+        "assembly_version": artifact.assembly_version,
+        "assembly_config_checksum": artifact.assembly_config_checksum,
+        "entity_mention_count": 1,
+        "relation_mention_count": 1,
+    }
+    run = SimpleNamespace(
+        artifact_id=1,
+        artifact=artifact,
+        orchestration_version=1,
+        ontology_checksum=artifact.ontology_checksum,
+        assembly_version=artifact.assembly_version,
+        assembly_config_checksum=artifact.assembly_config_checksum,
+        stats={"extraction_commit": base_marker},
+    )
+
+    assert not pipeline.extraction_commit_is_valid(
+        run, entity_count=1, relation_count=1
+    )
+    run.stats["extraction_commit"] = {
+        **base_marker,
+        "max_chunks": pipeline.DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
+        "max_characters": pipeline.DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS,
+        "max_entities": pipeline.DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,
+        "max_relations": pipeline.DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
+    }
+    assert pipeline.extraction_commit_is_valid(run, entity_count=1, relation_count=1)
+    run.stats["extraction_commit"]["max_relations"] += 1
+    assert not pipeline.extraction_commit_is_valid(
+        run, entity_count=1, relation_count=1
+    )
+
+
 def test_persisted_ontology_yaml_is_revalidated_without_a_temp_file():
     raw_yaml = ONTOLOGY_PATH.read_text(encoding="utf-8")
 
@@ -673,12 +826,27 @@ def test_ordered_chunk_query_loads_only_extraction_fields(monkeypatch):
             calls.append(("only", fields))
             return self
 
-        def __iter__(self):
+        def count(self):
+            calls.append(("count",))
+            return 0
+
+        def aggregate(self, **expressions):
+            calls.append(("aggregate", tuple(expressions)))
+            return {"total_characters": 0}
+
+        def iterator(self, *, chunk_size):
+            calls.append(("iterator", chunk_size))
             return iter(())
+
+        def __iter__(self):
+            raise AssertionError("ordered chunks must not populate queryset cache")
 
     monkeypatch.setattr(document_models.TextChunk, "objects", Query())
 
     assert _ordered_chunks(DOCUMENT_ID) == ()
+    assert ("count",) in calls
+    assert ("aggregate", ("total_characters",)) in calls
+    assert ("iterator", 1_000) in calls
     assert (
         "only",
         (
@@ -691,6 +859,45 @@ def test_ordered_chunk_query_loads_only_extraction_fields(monkeypatch):
             "content",
         ),
     ) in calls
+
+
+def test_ordered_chunk_query_caps_actual_iteration_after_count_drift(monkeypatch):
+    from apps.documents import models as document_models
+    from apps.knowledge_graph.extraction import pipeline
+
+    consumed = []
+
+    class Query:
+        def filter(self, **_kwargs):
+            return self
+
+        def order_by(self, *_fields):
+            return self
+
+        def only(self, *_fields):
+            return self
+
+        def count(self):
+            return 0
+
+        def aggregate(self, **_expressions):
+            return {"total_characters": 0}
+
+        def iterator(self, *, chunk_size):
+            assert chunk_size == 2
+            for value in range(10):
+                consumed.append(value)
+                yield value
+
+        def __iter__(self):
+            raise AssertionError("ordered chunks must use a bounded iterator")
+
+    monkeypatch.setattr(document_models.TextChunk, "objects", Query())
+    monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_CHUNKS", 2)
+
+    with pytest.raises(pipeline.StaleSourceError, match="chunk cap"):
+        pipeline._ordered_chunks(DOCUMENT_ID)
+    assert consumed == [0, 1, 2]
 
 
 def test_window_construction_rejects_chunks_from_a_different_document_uuid():
@@ -859,6 +1066,10 @@ def test_public_extraction_persists_deduped_mentions_exact_relation_endpoints_an
         "assembly_config_checksum": run.artifact.assembly_config_checksum,
         "entity_mention_count": 2,
         "relation_mention_count": 1,
+        "max_chunks": pipeline.DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
+        "max_characters": pipeline.DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS,
+        "max_entities": pipeline.DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,
+        "max_relations": pipeline.DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
     }
     mentions = list(EntityMention.objects.filter(artifact=run.artifact))
     assert len(mentions) == 2

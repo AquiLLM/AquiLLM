@@ -258,6 +258,14 @@ class Migration(migrations.Migration):
             ),
         ),
         migrations.AddConstraint(
+            model_name="graphartifact",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(orchestration_version=1),
+                fields=("scope_type", "scope_id", "build_generation"),
+                name="kg_artifact_scope_generation_unique",
+            ),
+        ),
+        migrations.AddConstraint(
             model_name="graphbuildrun",
             constraint=models.CheckConstraint(
                 condition=models.Q(
@@ -438,6 +446,19 @@ class Migration(migrations.Migration):
                     "build_generation",
                 ),
                 name="kg_build_occurrence_unique",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="graphbuildrun",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(orchestration_version=1),
+                fields=(
+                    "build_kind",
+                    "scope_type",
+                    "scope_id",
+                    "build_generation",
+                ),
+                name="kg_run_scope_generation_unique",
             ),
         ),
         migrations.AddConstraint(
