@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a provenance-first, incrementally maintained collection knowledge graph with GLiNER2 extraction, conservative entity resolution, permission-safe cross-collection canonical links, and fail-open graph expansion inside AquiLLM's existing hybrid RAG retrieval.
+**Goal:** Build a provenance-first, incrementally maintained collection knowledge graph with GLiNER2 extraction, conservative entity resolution, permission-safe cross-collection canonical links, and fail-open personalized graph expansion inside AquiLLM's existing hybrid RAG retrieval.
 
-**Architecture:** Add a dedicated `apps.knowledge_graph` Django app backed by the existing PostgreSQL/pgvector database. GLiNER2 runs only in a dedicated Celery worker and emits immutable entity/relation mentions tied to `TextChunk` spans; deterministic document and collection resolvers promote those mentions into versioned collection graphs, while deployment-wide canonical entities connect equivalent collection nodes without merging their claims. Existing vector/trigram/exact retrieval remains primary: graph traversal expands its seed chunks within the caller's already-authorized document set, and the existing reranker produces the final chunk order.
+**Architecture:** Add a dedicated `apps.knowledge_graph` Django app backed by the existing PostgreSQL/pgvector database. GLiNER2 runs only in a dedicated Celery worker and emits immutable entity/relation mentions tied to `TextChunk` spans; deterministic document and collection resolvers promote those mentions into versioned collection graphs, while deployment-wide canonical entities connect equivalent collection nodes without merging their claims. Existing vector/trigram/exact retrieval remains primary: its ranked chunks define a personalized restart vector, bounded personalized PageRank (PPR) propagates that mass over the caller's already-authorized active graph slice, and the existing reranker produces the final order of real, citable chunks.
 
 **Tech Stack:** Python 3.12, Django 5, PostgreSQL 17 + pgvector, Celery + Redis, GLiNER2 local inference, existing AquiLLM embedding/reranking services, structlog, pytest/pytest-django, Docker Compose.
 
@@ -29,6 +29,8 @@ Additional requirements approved in the design discussion:
 - raw extraction evidence is retained even when an entity is suppressed or rejected;
 - cross-collection deduplication uses persistent canonical links; any dictionary is a rebuildable cache, never the source of truth;
 - claims stay collection-owned even when their endpoint identities are canonicalized;
+- query-time graph retrieval uses bounded personalized PageRank seeded only by the current RAG candidates, never global PageRank over inaccessible graph state;
+- canonical identity links are zero-hop equivalence bridges for propagation, not semantic claims, and equivalent authorized nodes are mass-normalized so alias or collection multiplicity cannot inflate rank;
 - ontology definitions and type/relation constraints are versioned;
 - LLM-generated ontology changes are proposals only and require explicit activation;
 - the feature ships disabled by default.
@@ -94,7 +96,8 @@ aquillm/apps/knowledge_graph/
     invalidation.py              # Content, move, delete, ontology/model invalidation
   retrieval/
     types.py                     # GraphExpansionRequest/Result/Diagnostics
-    expansion.py                 # Bounded, permission-scoped graph traversal
+    ppr.py                       # ORM-free deterministic PPR kernel and scoring
+    expansion.py                 # Permission-scoped graph loading and chunk projection
   tasks.py                       # Thin Celery entry points; no model import at module load
   services/builds.py             # Idempotent staged build orchestration
   services/inspection.py         # Bounded artifact/build health summaries
@@ -188,18 +191,23 @@ ExtractionBatchResult(
     relations=(relation_candidate,),
     diagnostics=(diagnostic,),
 )
+graph_expansion_seed = GraphExpansionSeed(
+    chunk_id=1,
+    rank=1,
+    restart_weight=1.0,
+)
+
 GraphExpansionRequest(
-    query="Which model uses MMLU?",
-    seed_chunk_ids=(1,),
+    seeds=(graph_expansion_seed,),
     allowed_doc_ids=(uuid_value,),
-    allowed_collection_ids=(collection_uuid,),
+    allowed_collection_ids=(collection_pk,),
 )
 GraphExpansionResult(chunk_ids=(2,), diagnostics=GraphExpansionDiagnostics(status="hit"))
 ```
 
 `ExtractionBatchResult` includes `diagnostics: tuple[ExtractionDiagnostic, ...]`. Diagnostics must be immutable, provider-neutral rejected-output evidence with a stable code, candidate kind, input index, and a tuple of scalar key/value details; do not store a provider object or mutable mapping. This is the contract Task 6 uses for malformed spans, unknown types, and ambiguous raw relation endpoints. It may retain extracted private surface text for build audit, but callers must never copy those details into operational logs or public retrieval diagnostics.
 
-Require offsets to be half-open (`start <= offset < end`), confidence in `[0, 1]`, tuples rather than mutable lists, scalar-only diagnostic details, and no Django imports in either types module.
+Require offsets to be half-open (`start <= offset < end`), confidence in `[0, 1]`, tuples rather than mutable lists, scalar-only diagnostic details, and no Django imports in either types module. `GraphExpansionSeed` requires a real positive integer `TextChunk` ID, a unique positive fused rank, and a finite positive restart weight. `GraphExpansionRequest` requires a nonempty exact tuple of unique seeds ordered by fused rank, plus nonempty unique canonically sorted tuples of UUID document IDs and positive integer collection primary keys. It intentionally carries no raw query text: PPR is personalized by the already-ranked RAG seeds, while the existing reranker remains responsible for query/chunk relevance.
 
 - [ ] **Step 2: Run the contract test and confirm failure**
 
@@ -836,7 +844,7 @@ Test duplicate delivery, retry after provider failure, concurrent older/newer bu
 The collection refresh snapshots the sorted set of currently active contributing document artifacts. Its idempotency key is:
 
 ```text
-collection UUID + aggregate document-artifact source signature
+positive integer collection PK + aggregate document-artifact source signature
 + collection resolver/filter/assembly versions + ontology checksum
 ```
 
@@ -1078,86 +1086,180 @@ git commit -m "feat(kg): link collection entities conservatively"
 
 ## Chunk 6: Permission-Safe Hybrid Retrieval
 
-### Task 15: Implement bounded graph candidate expansion
+### Task 15: Implement bounded personalized PageRank candidate expansion
 
 **Subagent:** `kg-retrieval-expansion`
 
 **Files:**
+- Create: `aquillm/apps/knowledge_graph/retrieval/ppr.py`
 - Create: `aquillm/apps/knowledge_graph/retrieval/expansion.py`
+- Create: `aquillm/apps/knowledge_graph/tests/test_retrieval_ppr.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_retrieval_expansion.py`
+- Create: `aquillm/apps/knowledge_graph/tests/test_retrieval_snapshot.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_retrieval_overlay_permissions.py`
+- Modify: `aquillm/apps/knowledge_graph/retrieval/types.py`
+- Modify: `aquillm/lib/knowledge_graph/tests/test_contracts.py`
 - Reference: `aquillm/apps/collections/models/collection.py`
 - Reference: `aquillm/apps/documents/models/chunks.py`
+- Reference: `aquillm/apps/knowledge_graph/services/ontology.py`
 
-- [ ] **Step 1: Write failing local and cross-collection expansion tests**
+- [ ] **Step 1: Write failing seed, PPR, and cross-collection expansion tests**
 
-Given real seed chunk IDs and explicit authorized document/collection IDs, test:
+Evolve the unused Task 1 retrieval boundary before integrating it: replace raw `seed_chunk_ids`/query text with immutable `GraphExpansionSeed(chunk_id, rank, restart_weight)` values, keep document IDs as UUIDs, and use AquiLLM's real positive integer `Collection.pk` values. Replace the ambiguous diagnostics `version_signature` with optional opaque `algorithm_signature` and `graph_version_signature` fields; both must be exact lowercase SHA-256 values when present. `GraphExpansionResult.chunk_ids` is an ordered, unique tuple of novel real chunk IDs and may not contain a seed ID. Given weighted real seed chunks and explicit authorized document/collection IDs, test:
 
 ```text
-seed chunk
- -> entity mention
- -> active collection entity
- -> one semantic relation edge
- -> supporting real chunk
+ranked RAG seed chunks
+ -> active mentioned collection entities
+ -> normalized personalized restart vector
+ -> bounded semantic-relation subgraph
+ -> fixed-iteration PPR entity scores
+ -> supporting real chunks
 ```
 
 and:
 
 ```text
 seed collection entity
- -> canonical identity link (identity bridge, not a semantic hop)
- -> authorized peer collection entity
- -> one semantic relation edge
+ -> authorized canonical identity supernode (zero semantic hops)
+ -> mass-normalized authorized peer collection entities
+ -> bounded semantic relation propagation
  -> supporting real chunk
 ```
 
-Only actual `TextChunk` IDs may be returned. Building, failed, stale, or superseded artifacts are ignored.
+Keep `retrieval/ppr.py` ORM-free and use hand-computable graphs in `test_retrieval_ppr.py` to assert the PPR recurrence exactly:
+
+```text
+p(0) = restart
+p(t+1) = alpha * restart + (1 - alpha) * (P^T * p(t) + dangling_mass * restart)
+```
+
+Run a fixed number of iterations rather than a tolerance-dependent loop. Each persisted directed relation produces its full-weight forward transition and a lower-weight reverse *retrieval* transition; the reverse transition points to the same evidence and does not create or assert an inverse claim. Ontology-declared `undirected` relations receive equal reciprocal transitions. Resolve direction from each relation's collection artifact and its exact immutable persisted ontology version/checksum through the provider-neutral ontology loader; do not consult only the currently active ontology or call an LLM.
+
+Freeze the `ppr_v1` transition contract exactly:
+
+```text
+direction_factor = 1.0 forward or undirected; 0.35 reverse-of-directed
+support_factor(s) = 1 + log1p(min(s, 32)) / log1p(32)
+utility_factor(u) = 0.5 + 0.5 * u
+raw_edge_weight = direction_factor * confidence * support_factor(support_count)
+                  * utility_factor(destination_retrieval_utility)
+```
+
+For each persisted relation row, define `support_count` as the count of distinct *active authorized* evidence provenance keys and `confidence` as the maximum finite relation-mention confidence among that same evidence set; never use an aggregate influenced by an unselected document. A relation with no active authorized evidence is absent. All inputs must be finite and inside their persisted ranges; discard a zero-weight edge and reject non-finite math. First map each authorized relation endpoint to an identity supernode. Its private stable ordering key is `('local', CollectionEntity.cluster_key)` for an unlinked node or `('canonical', CanonicalEntity.pk)` for linked copies; the persistent canonical row key does not change when another authorized collection copy is added and is never exposed. Group rows by `(source supernode, relation type, target supernode, retrieval direction)`, take the maximum raw weight in each group rather than summing canonical copies, union their distinct authorized evidence provenance, and discard collapsed self-loops. Preserve each pre-normalized group's earliest `admission_hop`, defined as one plus the minimum semantic hop of the source frontier from which that retrieval direction was first eligible; a reciprocal or cyclic group discovered only while processing hop one therefore has `admission_hop=2` even when both endpoints are already present. Select the top `max_fanout` groups per source by descending raw weight and `(source key, relation type, target key, retrieval direction)`. Process minimum-hop frontiers in order; within one frontier, admit those groups by the same ordering until the global node/edge cap, never partially admitting a group beyond a cap. Only then normalize each source row with `math.fsum`; multiple retained relation groups to the same target sum in the transition matrix but retain their individual normalized shares for evidence attribution. A node with no positive retained edge is dangling. This order—permission-scope evidence, canonicalize, group/dedupe, remove self-loops, annotate earliest admission frontier, fan-out, hop-ordered global caps, normalize—is normative.
+
+For restart mass, map each seed chunk's active collection mappings to identity supernodes and dedupe them *before* division. Divide that seed's weight equally across its distinct identity supernodes, then sum contributions from all seeds landing on each supernode and normalize once. Thus mappings `[A1, A2, B]`, where `A1` and `A2` are canonically equivalent, produce the same per-seed split as `[A1, B]`. During hop-ordered induction, separately propagate each supernode's lexicographically minimum `(semantic_hop, fused_seed_rank)` label; it is used only for deterministic evidence attribution/ties and never changes transition weights or PPR mass. Collection-local relations and evidence remain collection-owned.
+
+Only actual `TextChunk` IDs may be returned. After the final iteration, score each retained relation group by its deterministic edge flow, `(1 - alpha) * p[source] * normalized_group_share`. Collapse multiple authorized relation mentions for one chunk to the maximum confidence (then the lexicographically least stable evidence provenance on an exact tie), order distinct chunks by descending collapsed confidence and stable document/chunk coordinates, retain at most the per-edge cap, and divide edge flow equally across them. Keep the maximum contribution per `(target identity supernode, relation evidence chunk)` and then aggregate with `math.fsum` across distinct target supernodes. For a destination identity without selected relation evidence, collapse active mapped mentions per chunk by maximum entity-mention confidence, order by descending confidence and stable document/chunk coordinates, select at most the configured per-entity cap, and assign each `0.25 * p[destination] / selected_mention_count`; for a chunk that has both paths, retain the maximum contribution for that `(identity supernode, chunk)`. The `0.25` mention factor is a frozen `ppr_v1` constant. Exclude all original seed chunks, then sort novel candidates by descending total contribution, minimum semantic hop, best contributing seed rank, stable document/chunk coordinates, and finally chunk PK. Apply the per-document cap while scanning that order, then stop at the total candidate cap. Building, failed, stale, superseded, suppressed, rejected, candidate-only, or unmapped artifacts/nodes/links/evidence are ignored.
 
 - [ ] **Step 2: Write failing permission and bound tests**
 
 Test that:
 
-- both `allowed_doc_ids` and `allowed_collection_ids` are required nonempty fields on `GraphExpansionRequest`, and every allowed document is proven to belong to an allowed collection before traversal;
-- unselected or inaccessible documents are excluded in the first ORM query, not filtered after traversal;
+- both `allowed_doc_ids` and `allowed_collection_ids` are required nonempty fields on `GraphExpansionRequest`; the initial scope query proves that the collection tuple is exactly the set represented by those authorized documents, so an extra collection ID with no authorized document cannot widen traversal;
+- request construction rejects duplicate seed IDs/ranks; every otherwise valid seed chunk must be a real row inside the explicit authorized-document snapshot, and missing, stale, or out-of-scope seed IDs fail open to an empty expansion rather than being silently replaced;
+- unselected or inaccessible documents are excluded in the initial scope validation and in every subsequent graph/evidence query, not filtered after traversal;
 - raw `CollectionsRef` IDs are never accepted by this service;
 - parent/child collection selection tests pin the current `Collection.get_user_accessible_documents` behavior, including the existing difference between recursive `user_can_view` and direct-row `filter_by_user_perm`; this KG feature must neither widen nor silently "fix" that separate permission contract;
 - document-access cache/revocation tests prove graph traversal receives exactly the same authorized document snapshot as baseline retrieval and cannot bypass that resolver;
-- one semantic hop, per-node fan-out, total candidate, and per-document caps are enforced;
-- self-loops and duplicate evidence do not consume multiple result slots;
-- deterministic support/rank ordering breaks ties by chunk PK;
+- PPR is computed only after every query restricts documents, collection entities, both endpoints of canonical links, relations, and evidence to the explicit allowlist; computing over a global graph and filtering afterward is forbidden;
+- two semantic hops, per-node fan-out, induced-node, induced-edge, relation-evidence-row, per-edge-evidence, per-entity-mention, fixed-iteration, total-candidate, and per-document caps are enforced before materialization;
+- seed, authorized-document, and authorized-collection hard caps are checked with cap-plus-one/count-before-tuple guards; an oversized valid scope produces a bounded miss and exact baseline retrieval rather than a giant `IN` predicate;
+- the two-hop limit bounds which nodes may enter the induced graph; later PPR iterations may redistribute mass only among those already admitted nodes and can never discover a third-hop node;
+- canonical identity bridges consume zero semantic hops, but an identity with many authorized collection copies receives the same total mass as a singleton identity;
+- a golden mixed mapping `[A1, A2, B]` with canonical `A1 == A2` has the same restart split and final scores as `[A1, B]`;
+- forward and lower-weight reverse retrieval transitions, ontology-declared undirected edges, cycles, dangling nodes, high-degree hubs, self-loops, duplicate evidence, and multiple seed paths have deterministic hand-checked outcomes;
+- two authorized artifacts built from different immutable ontology snapshots use each artifact's own checksummed relation direction, and a missing/mismatched ontology snapshot fails open without guessing;
+- changing seed restart weights changes the expected ranking, while permuting ORM result order without changing persisted identity keys or graph semantics does not;
+- literal hand-computed fixtures pin raw/grouped/normalized transition weights, edge-flow and mention projection scores, final ranks, and the canonical JSON/SHA-256 `ppr_v1` algorithm signature;
+- fan-out selection is by versioned transition weight and stable semantic identity, never database insertion order; original seed chunks and duplicate evidence are removed before result caps so they cannot consume expansion slots;
+- deterministic PPR/evidence ordering uses the complete normative chain: descending total contribution, minimum semantic hop, best contributing seed rank, stable document/chunk coordinates, then chunk PK;
 - timeout/database error returns an empty result with status, never raises into chunk search;
-- diagnostics contain only counts/timing/status and non-enumerating version signatures, with no artifact IDs, query text, entity labels, collection names, or inaccessible counts.
+- concurrent artifact activation/canonical-link replacement cannot mix old and new rows: the result is one internally consistent authorized graph snapshot with its matching signature, or a fail-open miss;
+- diagnostics contain only counts/timing/status, the static algorithm version, and non-enumerating version/config signatures, with no artifact IDs, PPR node scores, query text, entity labels, collection names, or inaccessible counts.
 
 - [ ] **Step 3: Run tests and confirm failure**
 
-Run: `python -m pytest aquillm/apps/knowledge_graph/tests/test_retrieval_expansion.py aquillm/apps/knowledge_graph/tests/test_retrieval_overlay_permissions.py -q`
+Run: `python -m pytest aquillm/apps/knowledge_graph/tests/test_retrieval_ppr.py aquillm/apps/knowledge_graph/tests/test_retrieval_expansion.py aquillm/apps/knowledge_graph/tests/test_retrieval_snapshot.py aquillm/apps/knowledge_graph/tests/test_retrieval_overlay_permissions.py -q`
 
 Expected: FAIL.
 
-- [ ] **Step 4: Implement one bounded PostgreSQL expansion**
+- [ ] **Step 4: Implement bounded authorized-subgraph loading and PPR**
 
-`expand_chunk_candidates(request) -> GraphExpansionResult` must require the explicit document and collection allowlists frozen in Task 1, verify their relationship in the first query, and query only active artifacts inside that intersection. Use a transaction-local PostgreSQL statement timeout when supported, plus hard row limits. Initial defaults:
+Implement three reusable internal seams rather than one opaque end-to-end function:
 
 ```text
-KG_OVERLAY_MAX_HOPS=1
+authorized_retrieval_snapshot(*, timeout_ms) -> read-only repeatable-read context
+load_authorized_graph_snapshot(request, *, load_max_hops) -> AuthorizedGraphSnapshot
+rank_authorized_graph_snapshot(snapshot, request, *, effective_max_hops,
+                               _eval_trace=None) -> GraphExpansionResult
+```
+
+`expand_chunk_candidates(request) -> GraphExpansionResult` is the production composition: open `authorized_retrieval_snapshot`, load with the request's shipping hop limit, then rank with the same effective hop limit and no trace collector. The loader requires an already-open snapshot context so Task 20 may execute the production baseline candidate read and graph load inside one database snapshot without duplicating either implementation. `AuthorizedGraphSnapshot` is an immutable, provider-neutral record of the exact authorized scope/artifact/canonical memberships plus the permission-filtered, canonicalized, pre-normalized relation groups, bounded evidence, and fallback mentions. It stores every group's `admission_hop` and enough stable ordering/provenance data to reapply fan-out, global node/edge caps, normalization, and evidence projection; it stores no query text and is never serialized to a tool response. The package-private `_eval_trace` hook accepts only the explicit Task 20 debug/test evaluation context and cannot be passed through the public expansion contract, diagnostics, logs, or tool payloads.
+
+For an effective one-hop view of a shared two-hop snapshot, filter the pre-normalized groups to `admission_hop <= 1`, then rerun the *entire* normative fan-out, hop-ordered node/edge-cap, row-normalization, PPR, and evidence-projection pipeline with `max_hops=1`; do not merely filter final nodes by minimum hop. A golden test must prove byte-for-byte equality of ordered chunk IDs, contributions, operational graph signature, and private trace between this derived view and a direct frozen `load_max_hops=1` plus `effective_max_hops=1` execution. The two-hop loader must retain all bounded pre-normalized frontier-zero groups needed for that replay before processing hop one, so reciprocal or cyclic hop-two groups cannot leak into the one-hop arm.
+
+All APIs require the explicit document and collection allowlists frozen above, verify their relationship in the initial scope query, and query only active artifacts inside that intersection. On PostgreSQL, perform the bounded reads in one short read-only repeatable-read transaction with a transaction-local statement timeout and no row locks; capture the exact active artifact/canonical-link snapshot and restrict every later query to it. This prevents concurrent activation from producing a mixed-version graph while leaving writers unblocked. Convert a validated positive integer `Collection.pk` to the graph artifact's canonical decimal-string `scope_id` only at the persistence boundary; never reinterpret it as a UUID. Every later ORM query must repeat the authorization predicates on both endpoints rather than trusting IDs discovered through a wider traversal. Load a deterministic, radius-bounded induced graph with a fixed number of batched ORM queries; never traverse hidden nodes and filter the result later. Pool authorized canonical equivalents into identity supernodes, sum seed mass that lands on the same supernode, normalize the restart vector once, build normalized transition rows, and run PPR in process with `math.fsum` and deterministic ordering. Check one monotonic total deadline before and after every database batch and PPR iteration. Initial defaults:
+
+```text
+KG_OVERLAY_ALGORITHM=ppr_v1
+KG_OVERLAY_RRF_K=60
+KG_OVERLAY_MAX_SEEDS=64
+KG_OVERLAY_MAX_SCOPE_DOCUMENTS=10000
+KG_OVERLAY_MAX_SCOPE_COLLECTIONS=128
+KG_OVERLAY_MAX_HOPS=2
 KG_OVERLAY_MAX_FANOUT=10
+KG_OVERLAY_MAX_NODES=200
+KG_OVERLAY_MAX_EDGES=1000
+KG_OVERLAY_MAX_EVIDENCE_ROWS=3000
+KG_OVERLAY_MAX_EVIDENCE_PER_EDGE=3
+KG_OVERLAY_MAX_MENTIONS_PER_ENTITY=2
+KG_OVERLAY_PPR_RESTART=0.20
+KG_OVERLAY_PPR_ITERATIONS=8
 KG_OVERLAY_MAX_CANDIDATES=20
+KG_OVERLAY_MAX_PER_DOCUMENT=3
 KG_OVERLAY_TIMEOUT_MS=150
 ```
 
-Do not invoke GLiNER2, embeddings, rerankers, LLMs, or a network service on this path. Do not add a retrieval cache in v1.
+These are not merely examples: except for RRF `k` and restart probability, the listed resource defaults are also the immutable v1 hard ceilings and settings may only lower them. Enforce these exact envelopes before any query or allocation:
+
+```text
+1 <= RRF_K <= 1000
+1 <= MAX_SEEDS <= 64
+1 <= MAX_SCOPE_DOCUMENTS <= 10000
+1 <= MAX_SCOPE_COLLECTIONS <= 128
+1 <= MAX_HOPS <= 2
+1 <= MAX_FANOUT <= 10
+1 <= MAX_NODES <= 200
+1 <= MAX_EDGES <= 1000
+1 <= MAX_EVIDENCE_ROWS <= 3000
+1 <= MAX_EVIDENCE_PER_EDGE <= 3
+1 <= MAX_MENTIONS_PER_ENTITY <= 2
+0 < PPR_RESTART < 1
+1 <= PPR_ITERATIONS <= 8
+1 <= MAX_CANDIDATES <= 20
+1 <= MAX_PER_DOCUMENT <= 3
+1 <= TIMEOUT_MS <= 150
+```
+
+Also require `MAX_SCOPE_COLLECTIONS <= MAX_SCOPE_DOCUMENTS`, `MAX_EDGES <= MAX_NODES * MAX_FANOUT`, `MAX_EVIDENCE_PER_EDGE <= MAX_EVIDENCE_ROWS`, and `MAX_PER_DOCUMENT <= MAX_CANDIDATES`. Test every ceiling and ceiling-plus-one without issuing an ORM query.
+
+For storage-envelope purposes, `MAX_NODES` independently bounds every node-side queryset fetched before identity collapse: seed mention/mapping associations, authorized `CollectionEntity` rows, document links, and active canonical links. The number of such batched query phases is fixed, so total node-side materialization is a fixed multiple of `MAX_NODES`. `MAX_EDGES` bounds physical current `CollectionRelation` rows fetched before semantic grouping. Use cap-plus-one/count-before-iterator guards and return a miss if any raw envelope is exceeded; canonical collapse must never be used to justify first materializing an unbounded number of copies. Evidence and fallback-mention limits likewise apply in the database before Python projection.
+
+Build `graph_algorithm_signature` as lowercase SHA-256 over UTF-8 canonical JSON (`sort_keys=True`, separators `(',', ':')`, `ensure_ascii=True`, `allow_nan=False`). The payload contains every effective setting above plus `algorithm='ppr_v1'`, `seed_version='rrf_seed_v1'`, `transition_version='ppr_transition_v1'`, `evidence_version='ppr_evidence_v1'`, the configured canonical resolver version, `reverse_factor='0.35'`, `support_cap=32`, `utility_floor='0.5'`, and `mention_factor='0.25'`; all decimal constants, including the normalized configured restart probability, are canonical decimal strings rather than platform-dependent binary-float renderings. A literal fixture pins the expected serialized bytes and digest. If seed-to-identity expansion alone exceeds `MAX_NODES`, or any bounded loader observes cap-plus-one/count drift, return a bounded miss rather than truncating a seed's identity set or allocating beyond the ceiling.
+
+The algorithm/config checksum must cover seed/scope/hop/fan-out/node/edge/evidence/mention/iteration/candidate/document caps, restart probability, transition-weight version (including the fixed reverse-direction factor), canonical resolver version, and evidence-scoring version. The operational `graph_version_signature` is intentionally request-induced: it covers a one-way digest of the exact authorized document/collection scope, selected active collection/source artifact identities, and the active canonical memberships and graph rows actually loaded by this expansion, so link or live-evidence changes cannot masquerade as the same result. It may therefore differ between one-hop and two-hop runs and is not the cross-arm evaluation snapshot identity defined in Task 20. Static `ppr_v1` scoring constants live in the ORM-free kernel and are covered by that version; they may not change without changing the algorithm signature. Fail closed on malformed/non-finite weights and fail open to an empty expansion on timeout/storage errors. Do not invoke GLiNER2, embeddings, rerankers, LLMs, or a network service on this path. Do not add a retrieval cache in v1.
 
 - [ ] **Step 5: Run tests**
 
-Run: `python -m pytest aquillm/apps/knowledge_graph/tests/test_retrieval_expansion.py aquillm/apps/knowledge_graph/tests/test_retrieval_overlay_permissions.py -q`
+Run: `python -m pytest aquillm/apps/knowledge_graph/tests/test_retrieval_ppr.py aquillm/apps/knowledge_graph/tests/test_retrieval_expansion.py aquillm/apps/knowledge_graph/tests/test_retrieval_snapshot.py aquillm/apps/knowledge_graph/tests/test_retrieval_overlay_permissions.py -q`
 
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add aquillm/apps/knowledge_graph/retrieval/expansion.py aquillm/apps/knowledge_graph/tests/test_retrieval_expansion.py aquillm/apps/knowledge_graph/tests/test_retrieval_overlay_permissions.py
-git commit -m "feat(kg): add bounded graph candidate expansion"
+git add aquillm/apps/knowledge_graph/retrieval aquillm/apps/knowledge_graph/tests/test_retrieval_ppr.py aquillm/apps/knowledge_graph/tests/test_retrieval_expansion.py aquillm/apps/knowledge_graph/tests/test_retrieval_snapshot.py aquillm/apps/knowledge_graph/tests/test_retrieval_overlay_permissions.py aquillm/lib/knowledge_graph/tests/test_contracts.py
+git commit -m "feat(kg): add bounded personalized graph expansion"
 ```
 
 ### Task 16: Integrate graph candidates before the existing reranker
@@ -1165,6 +1267,8 @@ git commit -m "feat(kg): add bounded graph candidate expansion"
 **Subagent:** `kg-chunk-search-integration`
 
 **Files:**
+- Create: `aquillm/apps/documents/services/chunk_search_candidates.py`
+- Create: `aquillm/apps/documents/tests/test_chunk_search_candidates.py`
 - Create: `aquillm/apps/documents/tests/test_chunk_search_graph_overlay.py`
 - Modify: `aquillm/apps/documents/services/chunk_search.py`
 - Modify: `aquillm/aquillm/settings.py`
@@ -1177,13 +1281,17 @@ Cover:
 
 - disabled feature returns the exact existing candidate/result order and diagnostics shape, with no graph-specific keys added;
 - enabled expansion receives allowlists derived from the already-authorized `docs` argument, never raw chat collection IDs;
+- vector/trigram/exact ranks are fused into deterministic positive PPR restart weights without comparing provider-specific raw scores;
+- seed and authorized-document/collection scopes are cap-checked before materializing request tuples; an oversized scope skips graph expansion and preserves the exact baseline path;
 - graph candidates are real ORM `TextChunk` rows;
 - duplicate graph/vector/trigram/exact chunks appear once;
 - graph candidates join the candidate pool before the existing reranker;
+- original seed chunks returned by the graph do not consume overlay candidate slots and remain present exactly once through baseline retrieval;
 - graph timeout/error produces the exact vector/trigram/exact baseline rather than raising;
 - vector failure with trigram/exact seeds may still expand;
 - candidate cap and deterministic ordering are honored;
 - existing 4-tuple return `(vector_results, trigram_results, reranked_results, diagnostics)` remains unchanged.
+- the reusable candidate-preparation seam yields exactly the same ordered baseline pool and graph seeds when called by production chunk search or by Task 20's comparison runner; no search branch or RRF implementation is duplicated.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -1191,9 +1299,17 @@ Run: `python -m pytest aquillm/apps/documents/tests/test_chunk_search_graph_over
 
 Expected: FAIL.
 
-- [ ] **Step 3: Refactor candidate dedupe into a small helper**
+- [ ] **Step 3: Refactor candidate dedupe and seed weighting into small helpers**
 
-Materialize vector/trigram/exact candidates, dedupe baseline seeds, call graph expansion, append graph-supported rows, and dedupe the combined pool before the existing fallback/reranker branch. When the overlay is disabled or misses, preserve baseline behavior byte-for-byte where observable.
+Move the current vector/trigram/exact acquisition and pre-rerank candidate preparation into `collect_hybrid_candidate_snapshot(...) -> HybridCandidateSnapshot` in `chunk_search_candidates.py`; `text_chunk_search` must call this helper rather than retain a parallel branch. The helper accepts the already-authorized document queryset/snapshot plus a query and any query embedding prepared by the existing embedding path, performs no reranking or graph access, and returns immutable ordered vector, trigram, and exact-match chunk IDs, the deduplicated baseline candidate pool, and its `GraphExpansionSeed` tuple. It preserves the exact existing source-specific limits/failure behavior and records exact-match candidates even though the public four-tuple does not expose a separate exact-match field. Task 20 imports this same helper inside its read-only database snapshot; it may not reconstruct ranks from public results or reimplement the searches.
+
+Materialize vector/trigram/exact candidates, dedupe baseline seeds, and compute reciprocal-rank-fusion weights:
+
+```text
+seed_weight(chunk) = sum(1 / (KG_OVERLAY_RRF_K + one_based_rank))
+```
+
+Normalize the finite positive weights before constructing `GraphExpansionSeed` values; use chunk PK only as the final deterministic tie-break. Raw vector distances, trigram similarities, and exact-match flags are intentionally not mixed because their scales are not comparable. `HybridCandidateSnapshot` is the sole production/eval source of the fused seed ranks and weights. Call graph expansion, append graph-supported rows, and dedupe the combined pool before the existing fallback/reranker branch. When the overlay is disabled or misses, preserve baseline behavior byte-for-byte where observable.
 
 - [ ] **Step 4: Add structured graph diagnostics**
 
@@ -1201,21 +1317,21 @@ Extend `obs.rag.search` and the returned diagnostics with:
 
 ```text
 graph_ms graph_seed_count graph_candidate_count
-graph_status graph_version_signature
+graph_status graph_algorithm_signature graph_version_signature
 ```
 
-Add these fields only when `KG_OVERLAY_ENABLED=1`; the disabled path must preserve the pre-feature diagnostics object exactly. Use statuses `miss|hit|timeout|error`. `graph_version_signature` is a one-way aggregate of only the authorized active artifact versions and must not expose artifact IDs, collection counts, or inaccessible state. Never log query text or graph labels. The public result rows and no-result payload remain unchanged; graph diagnostics stay inside the existing diagnostics channel and may not add graph triples or pseudo-evidence.
+Add these fields only when `KG_OVERLAY_ENABLED=1`; the disabled path must preserve the pre-feature diagnostics object exactly. Use statuses `miss|hit|timeout|error`. `graph_algorithm_signature` binds `ppr_v1`, RRF, PPR, transition, and evidence-scoring configuration without exposing seed weights or node scores. `graph_version_signature` is the Task 15 request-induced one-way aggregate and must not expose artifact IDs, scope sizes, collection counts, or inaccessible state. Never log query text or graph labels. The public result rows and no-result payload remain unchanged; graph diagnostics stay inside the existing diagnostics channel and may not add graph triples or pseudo-evidence.
 
 - [ ] **Step 5: Run focused regression suite**
 
-Run: `python -m pytest aquillm/apps/documents/tests/test_chunk_search_graph_overlay.py aquillm/apps/documents/tests/test_chunk_search_candidate_tuning.py aquillm/apps/documents/tests/test_chunk_search_diagnostics.py aquillm/apps/documents/tests/test_chunk_search_query_cache.py -q`
+Run: `python -m pytest aquillm/apps/documents/tests/test_chunk_search_candidates.py aquillm/apps/documents/tests/test_chunk_search_graph_overlay.py aquillm/apps/documents/tests/test_chunk_search_candidate_tuning.py aquillm/apps/documents/tests/test_chunk_search_diagnostics.py aquillm/apps/documents/tests/test_chunk_search_query_cache.py -q`
 
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/tests/test_chunk_search_graph_overlay.py aquillm/aquillm/settings.py
+git add aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_search_candidates.py aquillm/apps/documents/tests/test_chunk_search_candidates.py aquillm/apps/documents/tests/test_chunk_search_graph_overlay.py aquillm/aquillm/settings.py
 git commit -m "feat(rag): expand hybrid candidates through collection graph"
 ```
 
@@ -1241,6 +1357,7 @@ Prove that a graph-expanded chunk:
 
 - uses the unchanged verbose and compact tool row shapes;
 - produces only its real `[doc:<uuid> chunk:<numeric-pk>]` citation;
+- preserves the same real-chunk citation contract for a second-hop or authorized cross-collection PPR result;
 - never exposes canonical nodes, triples, scores, or pseudo-evidence as citable rows;
 - strips every `graph_*` field from verbose, compact, and no-result public tool payload diagnostics, even though enabled `chunk_search` retains those fields internally for structured metrics;
 - obeys existing per-document and token evidence caps;
@@ -1304,7 +1421,7 @@ git commit -m "test(rag): preserve citations with graph expansion"
 
 Require:
 
-- rebuild accepts exactly one of `--document <uuid>`, `--collection <uuid>`, or operator-wide `--all`, and enqueues rather than extracting synchronously;
+- rebuild accepts exactly one of `--document <uuid>`, `--collection <positive-integer-pk>`, or operator-wide `--all`, and enqueues rather than extracting synchronously;
 - every rebuild creates a durable `GraphRebuildRequest` with caller-supplied-or-generated UUID, scope, requested document/source snapshot, expected aggregate signature, status, timestamps, and terminal failure counts; the command prints the request UUID and supports `--request-id <uuid>` for deterministic automation;
 - `--all` means every eligible document/collection in the local deployment database; it is not user-access scoped and requires `--yes` unless combined with `--dry-run`;
 - `--eval-only` bypasses `KG_BUILD_ENABLED` only when Django is in an explicit test/debug environment with `KG_EVAL_BYPASS_ALLOWED=1`, requires one concrete `--collection`, rejects `--all`, marks the build/task payload/build run as evaluation-only, and is rejected in production settings;
@@ -1385,16 +1502,29 @@ KG_GLINER2_DEVICE=cpu
 KG_GLINER2_BATCH_SIZE=8
 KG_GLINER2_CACHE_DIR=/root/.cache/huggingface
 KG_GLINER2_LOCAL_FILES_ONLY=0
-KG_OVERLAY_MAX_HOPS=1
+KG_OVERLAY_ALGORITHM=ppr_v1
+KG_OVERLAY_RRF_K=60
+KG_OVERLAY_MAX_SEEDS=64
+KG_OVERLAY_MAX_SCOPE_DOCUMENTS=10000
+KG_OVERLAY_MAX_SCOPE_COLLECTIONS=128
+KG_OVERLAY_MAX_HOPS=2
 KG_OVERLAY_MAX_FANOUT=10
+KG_OVERLAY_MAX_NODES=200
+KG_OVERLAY_MAX_EDGES=1000
+KG_OVERLAY_MAX_EVIDENCE_ROWS=3000
+KG_OVERLAY_MAX_EVIDENCE_PER_EDGE=3
+KG_OVERLAY_MAX_MENTIONS_PER_ENTITY=2
+KG_OVERLAY_PPR_RESTART=0.20
+KG_OVERLAY_PPR_ITERATIONS=8
 KG_OVERLAY_MAX_CANDIDATES=20
+KG_OVERLAY_MAX_PER_DOCUMENT=3
 KG_OVERLAY_TIMEOUT_MS=150
 KG_ARTIFACT_RETENTION_DAYS=30
 KG_ARTIFACT_KEEP_SUPERSEDED=2
 KG_EVAL_BYPASS_ALLOWED=0
 ```
 
-Invalid or missing required values must disable/fail graph work according to fail-open policy, never break Django startup. `KG_EVAL_BYPASS_ALLOWED=1` is valid only with debug/test settings and must never be documented as a deployed production option.
+Invalid or missing required values must disable/fail graph work according to fail-open policy, never break Django startup. PPR restart must be finite and strictly between zero and one; tests must enforce every exact Task 15 v1 ceiling and cross-field rule at the ceiling and ceiling-plus-one before any ORM call. The algorithm/config signature must change when any effective RRF, PPR, traversal, candidate, transition, or evidence-scoring configuration field or frozen versioned constant changes; request-specific seeds, allowlists, and loaded graph rows are explicitly excluded and belong to request/snapshot identity instead. Although `MAX_HOPS=1` and lower iteration counts remain valid bounded diagnostic/evaluation configurations, this v1 rollout and its measured gates require the shipping values `MAX_HOPS=2` and `PPR_ITERATIONS=8`; production enablement with different values requires a separately measured/approved gate set and is not covered by this plan. `KG_EVAL_BYPASS_ALLOWED=1` is valid only with debug/test settings and must never be documented as a deployed production option.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -1410,7 +1540,7 @@ The runbook order is mandatory:
 2. prefetch and verify the immutable checkpoint;
 3. start the dedicated worker;
 4. enable builds only;
-5. backfill one explicitly named representative collection with `rebuild_knowledge_graph --collection <uuid>`;
+5. backfill one explicitly named representative collection with `rebuild_knowledge_graph --collection <positive-integer-pk>`;
 6. inspect extraction/resolution/filter quality and failed builds;
 7. run the exact baseline and comparison commands from Task 20 and record numeric gates;
 8. enable graph retrieval in development/staging;
@@ -1451,10 +1581,15 @@ git commit -m "docs(kg): add controlled graph rollout runbook"
 - Modify: `aquillm/apps/knowledge_graph/tests/test_eval_runner.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_retrieval_eval.py`
 - Modify: `docs/documents/operations/knowledge-graph-overlay-runbook.md`
+- Reference: `aquillm/apps/documents/services/chunk_search_candidates.py`
+- Reference: `aquillm/apps/knowledge_graph/retrieval/expansion.py`
+- Reference: `aquillm/apps/knowledge_graph/retrieval/ppr.py`
 
-- [ ] **Step 1: Add failing end-to-end eval tests with deterministic fakes**
+- [ ] **Step 1: Add failing end-to-end and PPR-ablation eval tests with deterministic fakes**
 
-The runner must compare vector-only and graph-expanded retrieval on the same concrete collection/database fixture and report Recall@K, MRR, nDCG, graph hit rate, inaccessible-result count, added latency, and citation-evidence coverage. Extraction metrics must score mention spans, relation direction/endpoints, automatic identity links, and suppression decisions separately. Tests must reject different/missing collection scopes between reports and reject `--eval-only` outside explicit test/debug settings.
+Run vector-only, a hop-only ablation (`max_hops=1` with the same effective configured shipping PPR iteration count—eight in this rollout—and every other shipping scoring/cap value unchanged), and shipping `ppr_v1` as three arms of one comparison call. Perform any deterministic query-embedding preparation first, resolve one canonical sorted permission scope, then enter Task 15's `authorized_retrieval_snapshot`. Inside that one read-only repeatable-read database snapshot, revalidate the permission scope, call Task 16's `collect_hybrid_candidate_snapshot` for the baseline database search and exact fused seeds, and call Task 15's `load_authorized_graph_snapshot(..., load_max_hops=2)` exactly once. Reuse that immutable candidate snapshot for all arms. Derive the one-hop arm only by calling `rank_authorized_graph_snapshot(..., effective_max_hops=1)` on the shared graph snapshot; its `admission_hop` replay must reapply fan-out, global caps, normalization, PPR, and evidence projection and must equal a direct operational `MAX_HOPS=1` execution. Rank the shipping arm from the same graph snapshot with `effective_max_hops=2`. Hash the exact scope, candidate/seed snapshot, active artifact/version identities, canonical memberships, pre-normalized groups, nodes, relations, and evidence in that loaded superset into a private `comparison_snapshot_signature`. All three arms record that same signature, while each graph arm also retains its distinct request-induced `graph_version_signature` and expected algorithm signature. A snapshot change, timeout, or cap failure aborts the whole comparison rather than comparing mismatched arms.
+
+Extend the retrieval fixture with relationship, two-hop, authorized cross-collection identity, high-degree hub, dangling/cycle, duplicate-evidence, negative/noise, and inaccessible-neighbor cases. Report Recall@K, MRR, nDCG, graph hit rate, inaccessible-result count, added latency, citation-evidence coverage, PPR seed coverage, induced node/edge counts, and the proportion of returned novel chunks whose minimum semantic distance from any seeded identity is exactly two after zero-hop canonical collapse. Capture distance, best contributing seed rank, and contribution only through a private eval-only trace collector; it must never enter `GraphExpansionResult`, operational diagnostics/logs, tool payloads, or citations. Extraction metrics must score mention spans, relation direction/endpoints, automatic identity links, and suppression decisions separately. Tests must reject a missing/mismatched comparison snapshot, collection scope, seed set, fixture checksum, or artifact version inside the bundle. The one-hop and PPR algorithm signatures must be present and distinct only because of their expected checksum-addressed hop configuration. Reject comparison/eval bypass outside explicit test/debug settings.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -1464,19 +1599,19 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement reproducible reports and rollout comparison**
 
-Emit JSON plus a human-readable table containing model/checkpoint, ontology, resolver/filter versions, authorized graph version signature, fixture checksum, and vector-only versus graph metrics. The runner must create a missing output parent and atomically replace the final report only after successful completion. Never silently drop skipped cases and never include private entity labels in the report.
+Add `--mode comparison` and emit one atomic JSON bundle plus a human-readable table containing the canonical sorted collection scope, model/checkpoint, ontology, resolver/filter versions, common `comparison_snapshot_signature`, per-arm request-induced graph and PPR/RRF/transition/evidence algorithm signatures, fixture checksum, and vector-only versus one-hop versus PPR metrics. The runner accepts repeatable `--collection <positive-integer-pk>` arguments, rejects duplicates/unsorted internal state, canonicalizes them once, and permits one through four collections; the checked-in cross-collection fixture and Task 21 final gate require at least two. Every arm must use exactly the documents authorized from that same collection set. The one-hop arm is a private evaluation-only view of the shared two-hop snapshot, not a separately deployed retriever. Create a missing output parent and atomically replace the final comparison report only after all arms and invariants succeed. Never silently drop skipped cases and never include private entity labels, seed weights, node scores, raw scope IDs outside the operator-only report, or eval traces in operational output.
 
-Add `--eval-only` to graph-overlay mode. It may bypass `KG_OVERLAY_ENABLED` only when debug/test settings and `KG_EVAL_BYPASS_ALLOWED=1` are both present, only for the one `--collection` supplied, and must use the same permission-scoped expansion service. Reject it in production settings. This is the sole path allowed to measure overlay gates while both shipping feature flags remain `0`.
+`--mode comparison` requires `--eval-only` and may bypass `KG_OVERLAY_ENABLED` only when debug/test settings and `KG_EVAL_BYPASS_ALLOWED=1` are both present. It must call the exact reusable candidate-preparation, permission-scoped snapshot loader, and ranking kernel installed by Tasks 15/16; Task 20 may not duplicate vector/trigram/exact search, RRF, graph ORM loading, fan-out/cap logic, or PPR. Only the package-private shared-snapshot/trace hook may differ, and tests prove the production `text_chunk_search` path and comparison path produce identical baseline candidate and seed ordering before reranking. Reject it in production settings. This is the sole path allowed to measure overlay gates while both shipping feature flags remain `0`.
 
 - [ ] **Step 4: Implement the measured-gate workflow**
 
-Create the runbook's explicit `PENDING_MEASUREMENT` gate table and implement `--write-measured-gates` plus `--verify-gates`. The writer consumes same-collection baseline/overlay reports and atomically records the measured values; verification fails while any value is pending or failing. At minimum gates require zero inaccessible chunks, exact baseline behavior on miss/error, stricter automatic-link precision than candidate-link precision, positive Recall@10/nDCG movement on relationship/alias/cross-document cases, graph expansion p95 within the configured local-DB budget, and 100% curated citation-evidence coverage. `KG_OVERLAY_ENABLED=1` is forbidden while any gate is pending or failing. Actual DB-backed measurement and gate writing occur only in Task 21's Compose-backed sequence.
+Create the runbook's explicit `PENDING_MEASUREMENT` gate table and implement `--write-measured-gates --comparison-report <path>` plus `--verify-gates --comparison-report <path>`. Validation first proves that the single bundle contains all three arms under one exact comparison snapshot/scope/seed set and the shipping PPR arm used `MAX_HOPS=2`; verification fails while an arm is missing or any value is pending or failing. At minimum gates require zero inaccessible chunks, exact baseline behavior on miss/error, stricter automatic-link precision than candidate-link precision, positive Recall@10/nDCG movement on relationship/alias/cross-document/cross-collection cases, PPR quality no worse than the bounded one-hop arm on the curated set and better on at least one minimum-distance-two case, graph expansion p95 within the configured local-DB budget, deterministic repeated PPR rankings, and 100% curated citation-evidence coverage. `KG_OVERLAY_ENABLED=1` is forbidden while any gate is pending or failing. Actual DB-backed measurement and gate writing occur only in Task 21's Compose-backed sequence.
 
 - [ ] **Step 5: Run deterministic runner tests without host database access**
 
 Run: `python -m pytest aquillm/apps/knowledge_graph/tests/test_eval_runner.py aquillm/apps/knowledge_graph/tests/test_retrieval_eval.py -q`
 
-Expected: PASS; tests use deterministic fakes/pytest DB fixtures, prove report-parent atomic creation, reject cross-collection report comparison, prove measured-gate write/verify behavior, and leave the checked-in runbook gates explicitly pending for Task 21.
+Expected: PASS; tests use deterministic fakes/pytest DB fixtures, prove atomic comparison-snapshot/report creation, reject any arm/scope/seed/snapshot mismatch, exercise a two-collection canonical-spine case, prove measured-gate write/verify behavior, and leave the checked-in runbook gates explicitly pending for Task 21.
 
 - [ ] **Step 6: Commit**
 
@@ -1541,17 +1676,27 @@ Expected: image builds, dependency check passes, and the pinned local checkpoint
 
 - [ ] **Step 6: Start isolated dependencies and run the eval-only sample comparison**
 
-Keep both shipping flags disabled. Before starting, the operator must set `KG_EVAL_COLLECTION_ID` in the PowerShell session to an approved existing fixture-collection UUID. From the repository root, run this block; it fails before Compose startup when the variable is absent or invalid, starts the database, Redis, and the explicitly eval-authorized dedicated worker, runs every management/eval command inside the same Compose network, and tears those services down in `finally`:
+Keep both shipping flags disabled. Before starting, the operator must set `KG_EVAL_COLLECTION_IDS` in the PowerShell session to a comma-separated list of two through four approved positive integer fixture-collection primary keys that exercise an authorized canonical-spine link. From the repository root, run this block; it fails before Compose startup when the variable is absent, duplicated, or invalid, rebuilds every collection, runs the one-snapshot comparison inside the same Compose network, and tears those services down in `finally`:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
-[Guid]$kgEvalGuid = [Guid]::Empty
-if (-not [Guid]::TryParse($env:KG_EVAL_COLLECTION_ID, [ref]$kgEvalGuid)) {
-    throw 'Set KG_EVAL_COLLECTION_ID to an approved collection UUID before running verification.'
+$kgParsedCollectionPks = @()
+foreach ($kgRawCollectionId in ($env:KG_EVAL_COLLECTION_IDS -split ',')) {
+    [long]$kgCollectionPk = 0
+    if (-not [long]::TryParse($kgRawCollectionId.Trim(), [ref]$kgCollectionPk) -or $kgCollectionPk -le 0) {
+        throw 'Set KG_EVAL_COLLECTION_IDS to two through four comma-separated positive integer collection primary keys.'
+    }
+    $kgParsedCollectionPks += $kgCollectionPk
 }
-$kgEvalCollectionId = $kgEvalGuid.ToString()
-$kgRebuildRequestId = [Guid]::NewGuid().ToString()
+$kgEvalCollectionPks = @($kgParsedCollectionPks | Sort-Object -Unique)
+if ($kgEvalCollectionPks.Count -lt 2 -or $kgEvalCollectionPks.Count -gt 4 -or $kgEvalCollectionPks.Count -ne $kgParsedCollectionPks.Count) {
+    throw 'KG_EVAL_COLLECTION_IDS must contain two through four distinct collection primary keys.'
+}
+$kgEvalCollectionArgs = @()
+foreach ($kgCollectionPk in $kgEvalCollectionPks) {
+    $kgEvalCollectionArgs += @('--collection', $kgCollectionPk.ToString([Globalization.CultureInfo]::InvariantCulture))
+}
 $kgTemporaryEnvNames = @('DJANGO_DEBUG', 'KG_BUILD_ENABLED', 'KG_OVERLAY_ENABLED', 'KG_EVAL_BYPASS_ALLOWED')
 $kgPriorEnv = @{}
 foreach ($kgEnvName in $kgTemporaryEnvNames) {
@@ -1565,12 +1710,15 @@ $kgComposeArgs = @('--env-file', '.env', '-f', 'deploy/compose/development.yml',
 
 try {
     docker compose @kgComposeArgs up -d db redis worker_knowledge_graph
-    docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph manage.py rebuild_knowledge_graph --collection $kgEvalCollectionId --request-id $kgRebuildRequestId --eval-only
-    docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph manage.py inspect_knowledge_graph --request-id $kgRebuildRequestId --wait --timeout-seconds 1800
-    docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph -m apps.knowledge_graph.evals.run_kg_eval --mode vector-only --collection $kgEvalCollectionId --output /app/artifacts/kg-eval-vector.json
-    docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph -m apps.knowledge_graph.evals.run_kg_eval --mode graph-overlay --eval-only --collection $kgEvalCollectionId --output /app/artifacts/kg-eval-overlay.json
-    docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph -m apps.knowledge_graph.evals.run_kg_eval --write-measured-gates --baseline-report /app/artifacts/kg-eval-vector.json --overlay-report /app/artifacts/kg-eval-overlay.json --runbook /app/docs/documents/operations/knowledge-graph-overlay-runbook.md
-    docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph -m apps.knowledge_graph.evals.run_kg_eval --verify-gates --baseline-report /app/artifacts/kg-eval-vector.json --overlay-report /app/artifacts/kg-eval-overlay.json --runbook /app/docs/documents/operations/knowledge-graph-overlay-runbook.md
+    foreach ($kgCollectionPk in $kgEvalCollectionPks) {
+        $kgCollectionId = $kgCollectionPk.ToString([Globalization.CultureInfo]::InvariantCulture)
+        $kgRebuildRequestId = [Guid]::NewGuid().ToString()
+        docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph manage.py rebuild_knowledge_graph --collection $kgCollectionId --request-id $kgRebuildRequestId --eval-only
+        docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph manage.py inspect_knowledge_graph --request-id $kgRebuildRequestId --wait --timeout-seconds 1800
+    }
+    docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph -m apps.knowledge_graph.evals.run_kg_eval --mode comparison --eval-only @kgEvalCollectionArgs --output /app/artifacts/kg-eval-comparison.json
+    docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph -m apps.knowledge_graph.evals.run_kg_eval --write-measured-gates --comparison-report /app/artifacts/kg-eval-comparison.json --runbook /app/docs/documents/operations/knowledge-graph-overlay-runbook.md
+    docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph -m apps.knowledge_graph.evals.run_kg_eval --verify-gates --comparison-report /app/artifacts/kg-eval-comparison.json --runbook /app/docs/documents/operations/knowledge-graph-overlay-runbook.md
     docker compose @kgComposeArgs run --rm --no-deps --entrypoint /opt/venv/bin/python worker_knowledge_graph manage.py prune_knowledge_graph --dry-run
 }
 finally {
@@ -1590,11 +1738,11 @@ finally {
 }
 ```
 
-Expected: both `KG_BUILD_ENABLED` and `KG_OVERLAY_ENABLED` remain `0`; the worker and service each confirm the debug-only bypass authorization; inspection observes the exact rebuild request through all member-document builds and correlated collection activation; both reports use the same collection and exist under repository `artifacts/`; measured gates are written, reviewed/approved per the runbook ownership rule, and verification exits zero with no `PENDING_MEASUREMENT` values; pruning dry-run proves no active/building artifact is eligible; worker, database, and Redis containers are stopped; all four temporary environment overrides are restored to their prior values or removed when previously unset.
+Expected: both `KG_BUILD_ENABLED` and `KG_OVERLAY_ENABLED` remain `0`; the worker and service each confirm the debug-only bypass authorization; inspection observes one exact rebuild request per collection through all member-document builds and correlated collection activation; the atomic comparison report contains vector-only, one-hop, and PPR arms with one collection scope/seed set/snapshot signature and a passing cross-collection case; measured gates are written, reviewed/approved per the runbook ownership rule, and verification exits zero with no `PENDING_MEASUREMENT` values; pruning dry-run proves no active/building artifact is eligible; worker, database, and Redis containers are stopped; all four temporary environment overrides are restored to their prior values or removed when previously unset.
 
 - [ ] **Step 7: Commit measured gates, then review the final diff**
 
-After the designated owner reviews the two reports and approves the written numeric gates:
+After the designated owner reviews the atomic comparison report and approves the written numeric gates:
 
 ```bash
 git add docs/documents/operations/knowledge-graph-overlay-runbook.md
