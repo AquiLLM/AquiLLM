@@ -378,6 +378,26 @@ CELERY_RESULT_BACKEND = "redis://redis:6379"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+CELERY_TASK_QUEUE_MAX_PRIORITY = 10
+CELERY_TASK_PUBLISH_RETRY = True
+CELERY_TASK_PUBLISH_RETRY_POLICY = {
+    "max_retries": 3,
+    "interval_start": 0,
+    "interval_step": 0.5,
+    "interval_max": 5,
+}
+CELERY_TASK_ROUTES = {
+    "apps.knowledge_graph.tasks.build_document_graph_task": {
+        "queue": "knowledge-graph-extraction",
+    },
+    "apps.knowledge_graph.tasks.refresh_collection_graph_task": {
+        "queue": "knowledge-graph-extraction",
+    },
+    "apps.knowledge_graph.tasks.prune_graph_artifacts_task": {
+        "queue": "knowledge-graph-extraction",
+        "priority": 9,
+    },
+}
 
 # Zotero Integration Settings
 # OAuth credentials should be set in environment variables:

@@ -906,6 +906,10 @@ git commit -m "feat(kg): orchestrate idempotent graph builds"
 - Create: `aquillm/apps/knowledge_graph/tests/test_tasks.py`
 - Create: `deploy/docker/knowledge-graph/Dockerfile`
 - Create: `aquillm/tests/integration/test_knowledge_graph_compose.py`
+- Modify: `.dockerignore`
+- Modify: `pyproject.toml`
+- Modify: `uv.lock`
+- Modify: `aquillm/apps/knowledge_graph/services/builds.py`
 - Modify: `aquillm/aquillm/settings.py`
 - Modify: `deploy/compose/base.yml`
 - Modify: `deploy/compose/development.yml`
@@ -923,6 +927,9 @@ Assert:
 - graph worker receives `DJANGO_DEBUG`, `KG_BUILD_ENABLED`, `KG_OVERLAY_ENABLED`, and fail-closed `KG_EVAL_BYPASS_ALLOWED` as explicit Compose environment overrides, and depends on healthy `db` and `redis` services;
 - worker is under an optional `knowledge-graph` profile;
 - worker installs `--extra knowledge-graph-local` while web/default worker Dockerfiles do not;
+- the Linux graph-worker lock selects the explicit PyTorch CPU index, contains no CUDA/NVIDIA/Triton packages, and the image asserts `torch.version.cuda is None` after its frozen sync;
+- `.env` and `.env.*` never enter the Docker build context;
+- base/production run the image's immutable source while persisting only `/app/artifacts` and the model cache; development variants may retain the live source bind;
 - Hugging Face cache is persistent and configurable;
 - web does not depend on graph-worker readiness.
 
@@ -936,11 +943,13 @@ Expected: FAIL.
 
 Tasks accept scalar IDs and expected hashes only, call build services lazily, use bounded retries for transient broker/storage/provider failures, and record terminal failure. No GLiNER2 type appears in a task signature or top-level import.
 
+The document-facing producer accepts a typed document UUID plus expected source hash, derives the exact immutable build key before publish, and sends three canonical JSON scalars. The collection producer likewise publishes the exact aggregate signature and build key. Validate every UUID/integer/hash/key at the task boundary before importing the build service. Exhausted bounded publish retries emit a payload-free structured failure event and re-raise; a durable transactional outbox is explicitly deferred to the operational reconciliation work rather than implied here.
+
 Provide distinct task entry points for `build_document_graph_task` and `refresh_collection_graph_task`; task chaining is not the source of correctness. Each entry point calls the independently idempotent service above, so redelivery and out-of-order completion remain safe. Add a low-priority maintenance entry point for artifact pruning, but do not schedule it until Task 18 defines retention policy.
 
 - [ ] **Step 4: Add dedicated worker image/profile**
 
-Build from the same application source with `uv sync --frozen --no-dev --extra knowledge-graph-local`, then set `WORKDIR /app/aquillm`. Configure CPU initially and a persistent `HF_HOME`; GPU support is explicitly deferred. In each Compose variant, pass the four graph/debug settings through with defaults `DJANGO_DEBUG=0`, `KG_BUILD_ENABLED=0`, `KG_OVERLAY_ENABLED=0`, and `KG_EVAL_BYPASS_ALLOWED=0`, and require healthy `db`/`redis` before the dedicated worker starts.
+Build from the same application source with `uv sync --frozen --no-dev --extra knowledge-graph-local`, then set `WORKDIR /app/aquillm`. Pin Linux Torch to the explicit CPU index in `pyproject.toml`/`uv.lock`, retain the normal PyPI wheel on non-Linux platforms, and fail the image build if CUDA-backed Torch is installed. Configure a persistent `HF_HOME`; GPU support is explicitly deferred. Base/production must execute immutable image source and mount only the artifact output and model cache, while development variants may bind the repository for live editing. In each Compose variant, pass the four graph/debug settings through with defaults `DJANGO_DEBUG=0`, `KG_BUILD_ENABLED=0`, `KG_OVERLAY_ENABLED=0`, and `KG_EVAL_BYPASS_ALLOWED=0`, and require healthy `db`/`redis` before the dedicated worker starts.
 
 - [ ] **Step 5: Run tests and Compose validation**
 
@@ -953,7 +962,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add aquillm/apps/knowledge_graph/tasks.py aquillm/apps/knowledge_graph/tests/test_tasks.py aquillm/aquillm/settings.py deploy/docker/knowledge-graph deploy/compose aquillm/tests/integration/test_knowledge_graph_compose.py
+git add .dockerignore pyproject.toml uv.lock aquillm/apps/knowledge_graph/tasks.py aquillm/apps/knowledge_graph/services/builds.py aquillm/apps/knowledge_graph/tests/test_tasks.py aquillm/aquillm/settings.py deploy/docker/knowledge-graph deploy/compose aquillm/tests/integration/test_knowledge_graph_compose.py docs/superpowers/plans/2026-08-17-gliner2-knowledge-graph-hybrid-retrieval.md
 git commit -m "build(kg): add isolated extraction worker"
 ```
 

@@ -27,8 +27,15 @@ from django.utils import timezone
 
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _LEASE_DURATION = timedelta(minutes=30)
+BUILD_LEASE_RETRY_SECONDS = int(_LEASE_DURATION.total_seconds()) + 30
 _DOCUMENT_LOCK_NAMESPACE = 0x4B47
 _EXTRACTOR_PACKAGE_IDENTITY = "gliner2==1.3.2"
+_GRAPH_TASK_PUBLISH_RETRY_POLICY = {
+    "max_retries": 3,
+    "interval_start": 0,
+    "interval_step": 0.5,
+    "interval_max": 5,
+}
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -1326,20 +1333,116 @@ def validate_orchestration_stage(build_kind: str, stage: str, status: str) -> No
         )
 
 
+def _publish_graph_task(
+    task,
+    *,
+    kwargs: dict[str, object],
+    build_kind: str,
+    scope_id: str,
+) -> None:
+    try:
+        task.apply_async(
+            kwargs=kwargs,
+            retry=True,
+            retry_policy=dict(_GRAPH_TASK_PUBLISH_RETRY_POLICY),
+        )
+    except Exception as exc:
+        logger.error(
+            "obs.kg.task_publish_failed",
+            task_name=task.name,
+            build_kind=build_kind,
+            scope_id=scope_id,
+            error_type=type(exc).__name__,
+            publish_retry_exhausted=True,
+            durable_outbox=False,
+        )
+        raise
+
+
+def derive_current_document_build_key(
+    document_id: uuid.UUID,
+    expected_source_hash: str,
+) -> str:
+    """Derive the exact immutable Task 11 key for a current document snapshot."""
+
+    context = _document_context(document_id, expected_source_hash)
+    return derive_document_build_key(context.identity)
+
+
+def enqueue_document_build(
+    document_id: uuid.UUID,
+    expected_source_hash: str,
+) -> None:
+    """Publish one provider-neutral, JSON-safe document build request."""
+
+    from lib.knowledge_graph.config import get_build_enabled
+
+    if not get_build_enabled():
+        return
+    if type(document_id) is not uuid.UUID:
+        raise ValueError("document id must be an exact UUID")
+    source_hash = _hash(expected_source_hash, "expected source hash")
+    build_key = derive_current_document_build_key(document_id, source_hash)
+    from apps.knowledge_graph.tasks import build_document_graph_task
+
+    _publish_graph_task(
+        build_document_graph_task,
+        kwargs={
+            "document_id": str(document_id),
+            "expected_source_hash": source_hash,
+            "document_build_key": build_key,
+        },
+        build_kind="document",
+        scope_id=str(document_id),
+    )
+    logger.info(
+        "obs.kg.build_stage",
+        build_kind="document",
+        scope_id=str(document_id),
+        stage="build_requested",
+        expected_source_hash=source_hash,
+        build_key=build_key,
+    )
+
+
 def enqueue_collection_refresh(
     collection_id: int,
-    aggregate_source_signature: str | None = None,
-    collection_build_key: str | None = None,
+    aggregate_source_signature: str,
+    collection_build_key: str,
 ) -> None:
-    """Lazy Task 12 seam; intentionally performs no task routing in Task 11."""
+    """Publish one exact, JSON-safe collection refresh request."""
+
+    from lib.knowledge_graph.config import get_build_enabled
+
+    if not get_build_enabled():
+        return
+    if type(collection_id) is not int or not 0 < collection_id < 2**63:
+        raise ValueError("collection id must be a positive database integer")
+    aggregate_signature = _hash(
+        aggregate_source_signature,
+        "aggregate source signature",
+    )
+    build_key = _hash(collection_build_key, "collection build key")
+    from apps.knowledge_graph.tasks import refresh_collection_graph_task
+
+    _publish_graph_task(
+        refresh_collection_graph_task,
+        kwargs={
+            "collection_id": collection_id,
+            "aggregate_source_signature": aggregate_signature,
+            "collection_build_key": build_key,
+        },
+        build_kind="collection",
+        scope_id=str(collection_id),
+    )
 
     logger.info(
         "obs.kg.build_stage",
         build_kind="collection",
         scope_id=str(collection_id),
         stage="refresh_requested",
-        aggregate_source_signature=aggregate_source_signature,
-        build_key=collection_build_key,
+        aggregate_source_signature=aggregate_signature,
+        build_key=build_key,
     )
 
 
@@ -2735,12 +2838,19 @@ def refresh_collection_graph(
 
 
 __all__ = [
+    "BUILD_LEASE_RETRY_SECONDS",
+    "BuildInProgressError",
     "BuildLeaseLostError",
     "CollectionBuildIdentity",
+    "CorruptBuildError",
     "DocumentBuildIdentity",
+    "StaleBuildError",
     "build_document_graph",
+    "derive_current_document_build_key",
     "derive_collection_build_key",
     "derive_document_build_key",
+    "enqueue_collection_refresh",
+    "enqueue_document_build",
     "refresh_collection_graph",
     "validate_orchestration_stage",
     "validate_build_lease",
