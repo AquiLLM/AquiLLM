@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import TYPE_CHECKING
 
+import structlog
+
 from lib.knowledge_graph.types import RelationCandidate
 
 from .windows import (
@@ -27,6 +29,7 @@ if TYPE_CHECKING:
 _FATAL_STRUCTURAL_DIAGNOSTICS = frozenset(
     {"missing_entity_output", "missing_relation_output"}
 )
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class StructuralExtractionError(RuntimeError):
@@ -41,8 +44,16 @@ class MidflightSourceChangedError(StaleSourceError):
     """Raised when document text or ordered chunks change during inference."""
 
 
+class OntologySnapshotChangedError(StaleSourceError):
+    """Raised when a selected persisted ontology is no longer reproducible."""
+
+
 class DocumentResolutionError(LookupError):
     """Raised when a UUID does not resolve to exactly one concrete document."""
+
+
+class ExtractionInProgressError(RuntimeError):
+    """Raised when the same immutable build identity is already in progress."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +314,61 @@ def validate_build_destination(
         raise ValueError("destination build run must be in extraction stage")
 
 
+def _extraction_commit_is_valid(
+    run,
+    *,
+    entity_count: int,
+    relation_count: int,
+) -> bool:
+    stats = run.stats if isinstance(run.stats, dict) else {}
+    marker = stats.get("extraction_commit")
+    return (
+        isinstance(marker, dict)
+        and type(marker.get("version")) is int
+        and marker.get("version") == 1
+        and type(marker.get("entity_mention_count")) is int
+        and marker.get("entity_mention_count") == entity_count
+        and type(marker.get("relation_mention_count")) is int
+        and marker.get("relation_mention_count") == relation_count
+    )
+
+
+def _find_committed_extraction_run(artifact, *, for_update: bool = False):
+    from apps.knowledge_graph.models import (
+        EntityMention,
+        GraphBuildRun,
+        RelationMention,
+    )
+
+    runs = GraphBuildRun.objects.filter(artifact=artifact).order_by("-pk")
+    if for_update:
+        runs = runs.select_for_update()
+    entity_count = EntityMention.objects.filter(artifact=artifact).count()
+    relation_count = RelationMention.objects.filter(artifact=artifact).count()
+    return next(
+        (
+            run
+            for run in runs
+            if _extraction_commit_is_valid(
+                run,
+                entity_count=entity_count,
+                relation_count=relation_count,
+            )
+        ),
+        None,
+    )
+
+
+def _terminal_mutation_policy(
+    *, target_run_id: int, committed_run_id: int | None
+) -> tuple[bool, bool]:
+    """Return whether terminal bookkeeping may mutate artifact and target run."""
+
+    if committed_run_id is None:
+        return True, True
+    return False, committed_run_id != target_run_id
+
+
 def _get_concrete_document(document_id, *, for_update: bool = False):
     from apps.documents.models.document_types import DESCENDED_FROM_DOCUMENT
 
@@ -311,9 +377,9 @@ def _get_concrete_document(document_id, *, for_update: bool = False):
         queryset = model.objects
         if for_update:
             queryset = queryset.select_for_update()
-        document = queryset.filter(id=document_id).first()
-        if document is not None:
-            matches.append(document)
+        matches.extend(queryset.filter(id=document_id).order_by("pk")[:2])
+        if len(matches) > 1:
+            break
     if len(matches) != 1:
         raise DocumentResolutionError(
             "document UUID must resolve to exactly one concrete subtype; "
@@ -334,8 +400,18 @@ def _validate_source(document, expected_source_hash: str) -> None:
 def _ordered_chunks(document_id, *, for_update: bool = False):
     from apps.documents.models import TextChunk
 
-    queryset = TextChunk.objects.filter(doc_id=document_id).order_by(
-        "chunk_number", "pk"
+    queryset = (
+        TextChunk.objects.filter(doc_id=document_id)
+        .only(
+            "pk",
+            "doc_id",
+            "chunk_number",
+            "start_position",
+            "end_position",
+            "modality",
+            "content",
+        )
+        .order_by("chunk_number", "pk")
     )
     if for_update:
         queryset = queryset.select_for_update()
@@ -362,6 +438,10 @@ def _windows_for_document(document, chunks) -> tuple[ExtractionWindow, ...]:
 
     from apps.documents.models import TextChunk
 
+    if any(chunk.doc_id != document.id for chunk in chunks):
+        raise DocumentResolutionError(
+            "ordered chunk provenance must match exactly one document UUID"
+        )
     has_image = any(chunk.modality == TextChunk.Modality.IMAGE for chunk in chunks)
     content_type = None
     if has_image:
@@ -407,21 +487,32 @@ def _resolve_ontology_definition(ontology_version: str, *, for_update=False):
     queryset = OntologyVersion.objects.filter(
         kind=OntologyVersion.Kind.GRAPH,
         version=ontology_version,
-        status=OntologyVersion.Status.ACTIVE,
     )
     if for_update:
         queryset = queryset.select_for_update()
     record = queryset.first()
     if record is None:
-        raise OntologyValidationError(
+        raise OntologySnapshotChangedError(
             "extraction requires a persisted active graph ontology version"
         )
-    raw_yaml = record.metadata.get("yaml")
+    if record.status != OntologyVersion.Status.ACTIVE:
+        raise OntologySnapshotChangedError(
+            "selected graph ontology is no longer active"
+        )
+    metadata = record.metadata if isinstance(record.metadata, dict) else {}
+    raw_yaml = metadata.get("yaml")
     if not isinstance(raw_yaml, str):
-        raise OntologyValidationError("persisted ontology is missing validated YAML")
-    definition = load_ontology_yaml(raw_yaml)
+        raise OntologySnapshotChangedError(
+            "persisted ontology is missing validated YAML"
+        )
+    try:
+        definition = load_ontology_yaml(raw_yaml)
+    except OntologyValidationError as exc:
+        raise OntologySnapshotChangedError(
+            "persisted ontology YAML is no longer valid"
+        ) from exc
     if definition.version != record.version or definition.checksum != record.checksum:
-        raise OntologyValidationError(
+        raise OntologySnapshotChangedError(
             "persisted ontology version or checksum does not match its YAML"
         )
     return definition
@@ -441,6 +532,26 @@ def _extractor_identity(settings) -> str:
     return identity
 
 
+def _artifact_identity_values(
+    document_id,
+    expected_source_hash: str,
+    ontology_version: str,
+    *,
+    settings,
+) -> dict[str, object]:
+    from apps.knowledge_graph.models import GraphArtifact
+
+    return {
+        "scope_type": GraphArtifact.ScopeType.DOCUMENT,
+        "scope_id": document_id,
+        "source_hash": expected_source_hash,
+        "ontology_version": ontology_version,
+        "extractor_version": _extractor_identity(settings),
+        "resolver_version": "pending-v1",
+        "filter_policy_version": "pending-v1",
+    }
+
+
 def _create_build_destination(
     document_id,
     expected_source_hash: str,
@@ -453,17 +564,17 @@ def _create_build_destination(
 
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
+    identity = _artifact_identity_values(
+        document_id,
+        expected_source_hash,
+        ontology_version,
+        settings=settings,
+    )
     with transaction.atomic():
         artifact = GraphArtifact.objects.create(
-            scope_type=GraphArtifact.ScopeType.DOCUMENT,
-            scope_id=document_id,
             status=GraphArtifact.Status.BUILDING,
-            source_hash=expected_source_hash,
-            ontology_version=ontology_version,
-            extractor_version=_extractor_identity(settings),
-            resolver_version="pending-v1",
-            filter_policy_version="pending-v1",
             metadata={"stage": "raw_extraction"},
+            **identity,
         )
         run = GraphBuildRun.objects.create(
             artifact=artifact,
@@ -557,19 +668,53 @@ def _mark_terminal(
         run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
         if run.artifact_id != artifact.pk:
             return
+        committed_run = _find_committed_extraction_run(artifact, for_update=True)
+        mutate_artifact, mutate_run = _terminal_mutation_policy(
+            target_run_id=run.pk,
+            committed_run_id=(committed_run.pk if committed_run is not None else None),
+        )
         now = timezone.now()
-        if artifact.status == GraphArtifact.Status.BUILDING:
+        if mutate_artifact and artifact.status == GraphArtifact.Status.BUILDING:
             GraphArtifact.objects.filter(pk=artifact.pk).update(
                 status=artifact_status,
                 completed_at=now,
             )
-        if run.status == GraphBuildRun.Status.RUNNING:
+        if mutate_run and run.status == GraphBuildRun.Status.RUNNING:
             GraphBuildRun.objects.filter(pk=run.pk).update(
                 status=run_status,
                 error_code=error_code,
                 error_message=error_code,
                 finished_at=now,
             )
+
+
+def _safe_mark_terminal(
+    artifact_id,
+    build_run_id,
+    *,
+    artifact_status: str,
+    run_status: str,
+    error_code: str,
+) -> bool:
+    """Best-effort bookkeeping that cannot replace the triggering exception."""
+
+    try:
+        _mark_terminal(
+            artifact_id,
+            build_run_id,
+            artifact_status=artifact_status,
+            run_status=run_status,
+            error_code=error_code,
+        )
+    except Exception:
+        logger.exception(
+            "obs.kg.terminal_update_failed",
+            artifact_id=artifact_id,
+            build_run_id=build_run_id,
+            error_code=error_code,
+        )
+        return False
+    return True
 
 
 def extract_into_build(
@@ -588,6 +733,11 @@ def extract_into_build(
 
     artifact = GraphArtifact.objects.get(pk=artifact_id)
     run = GraphBuildRun.objects.get(pk=build_run_id)
+    if run.artifact_id != artifact.pk:
+        raise ValueError("build run must be owned by the destination artifact")
+    committed_run = _find_committed_extraction_run(artifact)
+    if committed_run is not None:
+        return committed_run
     validate_build_destination(
         artifact,
         run,
@@ -627,6 +777,13 @@ def extract_into_build(
                 pk=artifact_id
             )
             locked_run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
+            if locked_run.artifact_id != locked_artifact.pk:
+                raise ValueError("build run must be owned by the destination artifact")
+            committed_run = _find_committed_extraction_run(
+                locked_artifact, for_update=True
+            )
+            if committed_run is not None:
+                return committed_run
             validate_build_destination(
                 locked_artifact,
                 locked_run,
@@ -674,6 +831,11 @@ def extract_into_build(
                 "model_id": settings.model_id,
                 "model_revision": settings.model_revision,
                 "ontology_checksum": ontology.checksum,
+                "extraction_commit": {
+                    "version": 1,
+                    "entity_mention_count": entity_count,
+                    "relation_mention_count": relation_count,
+                },
             }
             locked_run.timings = {
                 "inference_seconds": inference_seconds,
@@ -683,12 +845,12 @@ def extract_into_build(
             locked_run.save(update_fields=["stats", "timings"])
         return GraphBuildRun.objects.get(pk=build_run_id)
     except StaleSourceError:
-        _mark_terminal(
+        _safe_mark_terminal(
             artifact_id,
             build_run_id,
             artifact_status=GraphArtifact.Status.STALE,
             run_status=GraphBuildRun.Status.CANCELLED,
-            error_code="source_stale",
+            error_code="source_or_config_stale",
         )
         raise
     except Exception as exc:
@@ -697,7 +859,7 @@ def extract_into_build(
             if isinstance(exc, StructuralExtractionError)
             else "provider_or_evidence_failure"
         )
-        _mark_terminal(
+        _safe_mark_terminal(
             artifact_id,
             build_run_id,
             artifact_status=GraphArtifact.Status.FAILED,
@@ -714,18 +876,44 @@ def extract_document_mentions(
 ):
     """Create a building destination and persist raw mention evidence into it."""
 
+    from django.db import IntegrityError
+
+    from apps.knowledge_graph.models import GraphArtifact
     from lib.knowledge_graph.config import load_extraction_settings
 
     document = _get_concrete_document(document_id)
     _validate_source(document, expected_source_hash)
-    _resolve_ontology_definition(ontology_version)
     settings = load_extraction_settings()
-    artifact, run = _create_build_destination(
+    identity = _artifact_identity_values(
         document_id,
         expected_source_hash,
         ontology_version,
         settings=settings,
     )
+    artifact = GraphArtifact.objects.filter(**identity).first()
+    if artifact is not None:
+        committed_run = _find_committed_extraction_run(artifact)
+        if committed_run is not None:
+            return committed_run
+        raise ExtractionInProgressError(
+            "the immutable document extraction identity is already in progress"
+        )
+    _resolve_ontology_definition(ontology_version)
+    try:
+        artifact, run = _create_build_destination(
+            document_id,
+            expected_source_hash,
+            ontology_version,
+            settings=settings,
+        )
+    except IntegrityError:
+        artifact = GraphArtifact.objects.get(**identity)
+        committed_run = _find_committed_extraction_run(artifact)
+        if committed_run is not None:
+            return committed_run
+        raise ExtractionInProgressError(
+            "the immutable document extraction identity was created concurrently"
+        ) from None
     return extract_into_build(
         artifact.pk,
         run.pk,
@@ -738,8 +926,10 @@ def extract_document_mentions(
 __all__ = [
     "ExtractedDocumentEvidence",
     "DocumentResolutionError",
+    "ExtractionInProgressError",
     "MidflightSourceChangedError",
     "MappedRelationEvidence",
+    "OntologySnapshotChangedError",
     "StaleSourceError",
     "StructuralExtractionError",
     "collect_document_evidence",

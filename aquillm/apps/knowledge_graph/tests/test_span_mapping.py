@@ -54,15 +54,25 @@ def test_text_span_maps_to_document_global_offsets_and_validates_source_slice():
 
 
 def test_source_slice_comparison_allows_only_documented_nfc_normalization():
+    canonical_equivalent = "\u212b"
+    normalized_source = "\u00c5"
+    window = _window(content=canonical_equivalent, start_position=0)
+    candidate = _candidate(text=canonical_equivalent, start=0, end=1)
+
+    mapped = map_entity_candidate(window, candidate, full_text=normalized_source)
+
+    assert mapped.normalized_text == normalized_source
+    assert mapped.raw_text == canonical_equivalent
+
+
+def test_unicode_normalization_cannot_create_an_out_of_bounds_global_end():
     decomposed = "Cafe\u0301"
     composed = "Caf\u00e9"
     window = _window(content=decomposed, start_position=0)
     candidate = _candidate(text=decomposed, start=0, end=len(decomposed))
 
-    mapped = map_entity_candidate(window, candidate, full_text=composed)
-
-    assert mapped.normalized_text == composed
-    assert mapped.raw_text == decomposed
+    with pytest.raises(SpanMappingError, match="document bounds"):
+        map_entity_candidate(window, candidate, full_text=composed)
 
 
 def test_text_span_rejects_a_source_slice_mismatch():

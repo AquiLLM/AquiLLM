@@ -163,6 +163,8 @@ def map_entity_candidate(
     if window.modality == "text":
         start = window.start_position + candidate.start
         end = window.start_position + candidate.end
+        if not 0 <= start < end <= len(full_text):
+            raise SpanMappingError("mapped text span exceeds document bounds")
         source_slice = full_text[start:end]
         if normalize_source_text(source_slice) != normalize_source_text(candidate.text):
             raise SpanMappingError(

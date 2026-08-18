@@ -4,6 +4,7 @@ import inspect
 import os
 import socket
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from django.conf import settings
@@ -286,6 +287,247 @@ def test_public_wrapper_and_explicit_destination_core_have_narrow_signatures():
     )
 
 
+def test_atomic_extraction_marker_rejects_partial_or_mismatched_evidence():
+    from apps.knowledge_graph.extraction.pipeline import (
+        _extraction_commit_is_valid,
+    )
+
+    committed = SimpleNamespace(
+        stats={
+            "extraction_commit": {
+                "version": 1,
+                "entity_mention_count": 2,
+                "relation_mention_count": 1,
+            }
+        }
+    )
+    partial = SimpleNamespace(stats={"entity_mention_count": 2})
+
+    assert _extraction_commit_is_valid(committed, entity_count=2, relation_count=1)
+    assert not _extraction_commit_is_valid(committed, entity_count=1, relation_count=1)
+    assert not _extraction_commit_is_valid(partial, entity_count=2, relation_count=1)
+
+
+def test_interleaving_commit_preserves_completed_artifact_and_owning_run():
+    from apps.knowledge_graph.extraction.pipeline import _terminal_mutation_policy
+
+    assert _terminal_mutation_policy(target_run_id=7, committed_run_id=7) == (
+        False,
+        False,
+    )
+    assert _terminal_mutation_policy(target_run_id=8, committed_run_id=7) == (
+        False,
+        True,
+    )
+    assert _terminal_mutation_policy(target_run_id=8, committed_run_id=None) == (
+        True,
+        True,
+    )
+
+
+def test_sequential_duplicate_returns_committed_summary_without_creating_destination(
+    monkeypatch,
+):
+    from apps.knowledge_graph.extraction import pipeline
+    from apps.knowledge_graph.models import GraphArtifact
+    from lib.knowledge_graph import config
+
+    artifact = SimpleNamespace(pk=3)
+    committed_run = SimpleNamespace(pk=7, stats={"extraction_commit": {"version": 1}})
+    document = SimpleNamespace(
+        id=DOCUMENT_ID,
+        full_text="Orion",
+        full_text_hash="a" * 64,
+        hash_fn=lambda _text: "a" * 64,
+    )
+
+    class Query:
+        def filter(self, **_kwargs):
+            return self
+
+        def first(self):
+            return artifact
+
+    monkeypatch.setattr(GraphArtifact, "objects", Query())
+    monkeypatch.setattr(pipeline, "_get_concrete_document", lambda _id: document)
+    monkeypatch.setattr(pipeline, "_validate_source", lambda *_args: None)
+    monkeypatch.setattr(
+        pipeline, "_resolve_ontology_definition", lambda *_args, **_kwargs: object()
+    )
+    monkeypatch.setattr(config, "load_extraction_settings", lambda: object())
+    monkeypatch.setattr(
+        pipeline, "_artifact_identity_values", lambda *_args, **_kwargs: {}
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_find_committed_extraction_run",
+        lambda _artifact: committed_run,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_create_build_destination",
+        lambda *_args, **_kwargs: pytest.fail(
+            "duplicate must not create a destination"
+        ),
+    )
+
+    assert (
+        pipeline.extract_document_mentions(DOCUMENT_ID, "a" * 64, "1.0.0")
+        is committed_run
+    )
+
+
+def test_interleaving_other_attempt_commit_only_terminalizes_the_losing_run(
+    monkeypatch,
+):
+    from contextlib import nullcontext
+
+    from django.db import transaction
+
+    from apps.knowledge_graph.extraction import pipeline
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    artifact = SimpleNamespace(
+        pk=3,
+        status=GraphArtifact.Status.BUILDING,
+    )
+    losing_run = SimpleNamespace(
+        pk=8,
+        artifact_id=3,
+        status=GraphBuildRun.Status.RUNNING,
+    )
+    committed_run = SimpleNamespace(pk=7)
+    artifact_updates = []
+    run_updates = []
+
+    class Manager:
+        def __init__(self, value, updates):
+            self.value = value
+            self.updates = updates
+
+        def select_for_update(self):
+            return self
+
+        def get(self, **_kwargs):
+            return self.value
+
+        def filter(self, **_kwargs):
+            return self
+
+        def update(self, **kwargs):
+            self.updates.append(kwargs)
+
+    monkeypatch.setattr(GraphArtifact, "objects", Manager(artifact, artifact_updates))
+    monkeypatch.setattr(GraphBuildRun, "objects", Manager(losing_run, run_updates))
+    monkeypatch.setattr(transaction, "atomic", nullcontext)
+    monkeypatch.setattr(
+        pipeline,
+        "_find_committed_extraction_run",
+        lambda _artifact, **_kwargs: committed_run,
+    )
+
+    pipeline._mark_terminal(
+        artifact.pk,
+        losing_run.pk,
+        artifact_status=GraphArtifact.Status.FAILED,
+        run_status=GraphBuildRun.Status.FAILED,
+        error_code="provider_failure",
+    )
+
+    assert artifact_updates == []
+    assert run_updates[0]["status"] == GraphBuildRun.Status.FAILED
+
+
+def test_terminal_bookkeeping_failure_is_logged_without_masking_original(
+    monkeypatch,
+):
+    from apps.knowledge_graph.extraction import pipeline
+
+    monkeypatch.setattr(
+        pipeline,
+        "_mark_terminal",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("database down")),
+    )
+    logged = []
+    monkeypatch.setattr(
+        pipeline.logger,
+        "exception",
+        lambda event, **kwargs: logged.append((event, kwargs)),
+    )
+
+    assert (
+        pipeline._safe_mark_terminal(
+            1,
+            2,
+            artifact_status="failed",
+            run_status="failed",
+            error_code="provider_failure",
+        )
+        is False
+    )
+    assert logged[0][0] == "obs.kg.terminal_update_failed"
+
+
+@pytest.mark.parametrize(
+    "status,checksum", [("superseded", None), ("active", "f" * 64)]
+)
+def test_ontology_deactivation_or_checksum_drift_is_classified_as_snapshot_stale(
+    monkeypatch, status, checksum
+):
+    from apps.knowledge_graph.extraction.pipeline import (
+        OntologySnapshotChangedError,
+        _resolve_ontology_definition,
+    )
+    from apps.knowledge_graph.models import OntologyVersion
+
+    definition = _ontology()
+    record = SimpleNamespace(
+        status=status,
+        version=definition.version,
+        checksum=checksum or definition.checksum,
+        metadata={"yaml": definition.raw_yaml},
+    )
+
+    class Query:
+        def filter(self, **_kwargs):
+            return self
+
+        def first(self):
+            return record
+
+    monkeypatch.setattr(OntologyVersion, "objects", Query())
+
+    with pytest.raises(OntologySnapshotChangedError):
+        _resolve_ontology_definition("1.0.0")
+
+
+def test_malformed_ontology_metadata_is_classified_as_snapshot_stale(monkeypatch):
+    from apps.knowledge_graph.extraction.pipeline import (
+        OntologySnapshotChangedError,
+        _resolve_ontology_definition,
+    )
+    from apps.knowledge_graph.models import OntologyVersion
+
+    record = SimpleNamespace(
+        status=OntologyVersion.Status.ACTIVE,
+        version="1.0.0",
+        checksum="f" * 64,
+        metadata=None,
+    )
+
+    class Query:
+        def filter(self, **_kwargs):
+            return self
+
+        def first(self):
+            return record
+
+    monkeypatch.setattr(OntologyVersion, "objects", Query())
+
+    with pytest.raises(OntologySnapshotChangedError):
+        _resolve_ontology_definition("1.0.0")
+
+
 def test_source_freshness_requires_expected_stored_and_recomputed_hash_to_match():
     from apps.documents.models import RawTextDocument
     from apps.knowledge_graph.extraction.pipeline import (
@@ -315,6 +557,106 @@ def test_source_freshness_requires_expected_stored_and_recomputed_hash_to_match(
         _validate_source(document, source_hash)
 
 
+def test_concrete_document_resolution_rejects_two_rows_from_the_same_subtype(
+    monkeypatch,
+):
+    from apps.documents.models import document_types
+    from apps.knowledge_graph.extraction.pipeline import (
+        DocumentResolutionError,
+        _get_concrete_document,
+    )
+
+    class Query:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, **_kwargs):
+            return self
+
+        def order_by(self, *_fields):
+            return self
+
+        def first(self):
+            return self.rows[0] if self.rows else None
+
+        def __getitem__(self, value):
+            return self.rows[value]
+
+    duplicate_type = type(
+        "DuplicateDocumentType",
+        (),
+        {"objects": Query([object(), object()])},
+    )
+    empty_type = type("EmptyDocumentType", (), {"objects": Query([])})
+    monkeypatch.setattr(
+        document_types,
+        "DESCENDED_FROM_DOCUMENT",
+        [duplicate_type, empty_type],
+    )
+
+    with pytest.raises(DocumentResolutionError, match="exactly one"):
+        _get_concrete_document(DOCUMENT_ID)
+
+
+def test_ordered_chunk_query_loads_only_extraction_fields(monkeypatch):
+    from apps.documents import models as document_models
+    from apps.knowledge_graph.extraction.pipeline import _ordered_chunks
+
+    calls = []
+
+    class Query:
+        def filter(self, **kwargs):
+            calls.append(("filter", kwargs))
+            return self
+
+        def order_by(self, *fields):
+            calls.append(("order_by", fields))
+            return self
+
+        def only(self, *fields):
+            calls.append(("only", fields))
+            return self
+
+        def __iter__(self):
+            return iter(())
+
+    monkeypatch.setattr(document_models.TextChunk, "objects", Query())
+
+    assert _ordered_chunks(DOCUMENT_ID) == ()
+    assert (
+        "only",
+        (
+            "pk",
+            "doc_id",
+            "chunk_number",
+            "start_position",
+            "end_position",
+            "modality",
+            "content",
+        ),
+    ) in calls
+
+
+def test_window_construction_rejects_chunks_from_a_different_document_uuid():
+    from apps.knowledge_graph.extraction.pipeline import (
+        DocumentResolutionError,
+        _windows_for_document,
+    )
+
+    document = SimpleNamespace(id=DOCUMENT_ID)
+    wrong_document_id = uuid.UUID("22222222-2222-4222-8222-222222222222")
+    chunk = SimpleNamespace(
+        pk=1,
+        doc_id=wrong_document_id,
+        content="Orion",
+        start_position=0,
+        modality="text",
+    )
+
+    with pytest.raises(DocumentResolutionError, match="chunk provenance"):
+        _windows_for_document(document, (chunk,))
+
+
 def _postgres_available() -> bool:
     database = settings.DATABASES["default"]
     try:
@@ -330,6 +672,40 @@ database_required = pytest.mark.skipif(
     not _postgres_available() and not os.environ.get("KG_REQUIRE_POSTGRES_TESTS"),
     reason="configured PostgreSQL database is not reachable",
 )
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_duplicate_uuid_within_one_concrete_document_table_is_rejected(monkeypatch):
+    from django.contrib.auth.models import User
+
+    from apps.collections.models import Collection
+    from apps.documents.models import RawTextDocument
+    from apps.knowledge_graph.extraction.pipeline import (
+        DocumentResolutionError,
+        _get_concrete_document,
+    )
+
+    monkeypatch.setattr(
+        "apps.documents.tasks.chunking.create_chunks.delay",
+        lambda *_args, **_kwargs: None,
+    )
+    user = User.objects.create_user(username=f"kg-duplicate-{uuid.uuid4()}")
+    for index in range(2):
+        text = f"duplicate UUID document {index}"
+        document = RawTextDocument(
+            id=DOCUMENT_ID,
+            title=f"Duplicate {index}",
+            full_text=text,
+            full_text_hash=RawTextDocument.hash_fn(text),
+            collection=Collection.objects.create(name=f"Duplicate KG {uuid.uuid4()}"),
+            ingested_by=user,
+            ingestion_complete=True,
+        )
+        document.save(dont_rechunk=True)
+
+    with pytest.raises(DocumentResolutionError, match="exactly one"):
+        _get_concrete_document(DOCUMENT_ID)
 
 
 def _persist_active_ontology():
@@ -421,6 +797,11 @@ def test_public_extraction_persists_deduped_mentions_exact_relation_endpoints_an
     assert run.stats["relation_mention_count"] == 1
     assert run.stats["model_revision"]
     assert run.stats["ontology_checksum"] == _ontology().checksum
+    assert run.stats["extraction_commit"] == {
+        "version": 1,
+        "entity_mention_count": 2,
+        "relation_mention_count": 1,
+    }
     mentions = list(EntityMention.objects.filter(artifact=run.artifact))
     assert len(mentions) == 2
     assert {len(mention.metadata["observations"]) for mention in mentions} == {2}
@@ -431,6 +812,16 @@ def test_public_extraction_persists_deduped_mentions_exact_relation_endpoints_an
     assert relation.tail.raw_text == "MMLU"
     document.refresh_from_db()
     assert document.ingestion_complete is True
+
+    repeated = pipeline.extract_document_mentions(
+        document.id,
+        document.full_text_hash,
+        "1.0.0",
+    )
+    assert repeated.pk == run.pk
+    assert GraphArtifact.objects.filter(scope_id=document.id).count() == 1
+    assert EntityMention.objects.filter(artifact=run.artifact).count() == 2
+    assert RelationMention.objects.filter(artifact=run.artifact).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
