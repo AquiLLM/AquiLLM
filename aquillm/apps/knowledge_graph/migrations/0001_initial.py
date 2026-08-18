@@ -58,7 +58,7 @@ class Migration(migrations.Migration):
                 ('ontology_version', models.CharField(max_length=128)),
                 ('extractor_version', models.CharField(max_length=128)),
                 ('resolver_version', models.CharField(max_length=128)),
-                ('filter_version', models.CharField(max_length=128)),
+                ('filter_policy_version', models.CharField(max_length=128)),
                 ('metadata', models.JSONField(blank=True, default=dict)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
@@ -67,7 +67,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 'indexes': [models.Index(fields=['scope_type', 'scope_id', 'status'], name='kg_art_scope_status_idx'), models.Index(fields=['source_hash'], name='kg_art_source_hash_idx')],
-                'constraints': [models.UniqueConstraint(condition=models.Q(('status', 'active')), fields=('scope_type', 'scope_id'), name='kg_one_active_artifact_per_scope'), models.UniqueConstraint(fields=('scope_type', 'scope_id', 'source_hash', 'ontology_version', 'extractor_version', 'resolver_version', 'filter_version'), name='kg_artifact_build_identity')],
+                'constraints': [models.UniqueConstraint(condition=models.Q(('status', 'active')), fields=('scope_type', 'scope_id'), name='kg_one_active_artifact_per_scope'), models.UniqueConstraint(fields=('scope_type', 'scope_id', 'source_hash', 'ontology_version', 'extractor_version', 'resolver_version', 'filter_policy_version'), name='kg_artifact_build_identity')],
             },
         ),
         migrations.CreateModel(

@@ -30,7 +30,7 @@ class GraphArtifact(models.Model):
     ontology_version = models.CharField(max_length=128)
     extractor_version = models.CharField(max_length=128)
     resolver_version = models.CharField(max_length=128)
-    filter_version = models.CharField(max_length=128)
+    filter_policy_version = models.CharField(max_length=128)
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -44,7 +44,7 @@ class GraphArtifact(models.Model):
         "ontology_version",
         "extractor_version",
         "resolver_version",
-        "filter_version",
+        "filter_policy_version",
     )
 
     class Meta:
@@ -63,7 +63,7 @@ class GraphArtifact(models.Model):
                     "ontology_version",
                     "extractor_version",
                     "resolver_version",
-                    "filter_version",
+                    "filter_policy_version",
                 ],
                 name="kg_artifact_build_identity",
             ),

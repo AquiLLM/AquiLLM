@@ -71,7 +71,7 @@ def _artifact(**overrides):
         "ontology_version": "ontology-v1",
         "extractor_version": "extractor-v1",
         "resolver_version": "resolver-v1",
-        "filter_version": "filter-v1",
+        "filter_policy_version": "filter-v1",
     }
     values.update(overrides)
     return GraphArtifact(**values)
@@ -115,6 +115,10 @@ def test_app_is_registered_with_domain_app_label():
 
 def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
     assert GraphArtifact._meta.get_field("scope_id").get_internal_type() == "UUIDField"
+    assert (
+        GraphArtifact._meta.get_field("filter_policy_version").get_internal_type()
+        == "CharField"
+    )
     assert {value for value, _ in GraphArtifact.ScopeType.choices} == {
         "document",
         "collection",
@@ -142,7 +146,7 @@ def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
         "ontology_version",
         "extractor_version",
         "resolver_version",
-        "filter_version",
+        "filter_policy_version",
     )
     assert {("scope_type", "scope_id", "status"), ("source_hash",)} <= _index_fields(
         GraphArtifact
@@ -161,9 +165,7 @@ def test_graph_build_run_and_ontology_are_typed_and_audit_safe():
     }
     assert GraphBuildRun._meta.get_field("stats").get_internal_type() == "JSONField"
     assert GraphBuildRun._meta.get_field("timings").get_internal_type() == "JSONField"
-    assert _constraint(
-        GraphBuildRun, "kg_build_run_attempt_positive", CheckConstraint
-    )
+    assert _constraint(GraphBuildRun, "kg_build_run_attempt_positive", CheckConstraint)
 
     assert {"draft", "active", "superseded", "rejected"} == {
         value for value, _ in OntologyVersion.Status.choices
@@ -185,8 +187,9 @@ def test_entity_mention_has_typed_provenance_constraints_and_indexes():
         == "UUIDField"
     )
     assert (
-        EntityMention._meta.get_field("content_object_type")
-        .remote_field.on_delete.__name__
+        EntityMention._meta.get_field(
+            "content_object_type"
+        ).remote_field.on_delete.__name__
         == "PROTECT"
     )
     assert {value for value, _ in EntityMention.PositionBasis.choices} == {
@@ -238,6 +241,30 @@ def test_entity_mention_requires_document_global_positions_for_text_chunks():
     )
 
     with pytest.raises(ValidationError, match="document_global"):
+        mention.clean()
+
+
+def test_text_entity_mention_rejects_image_content_object_provenance():
+    mention = EntityMention(
+        artifact=_artifact(),
+        document_id=DOCUMENT_ID,
+        chunk=TextChunk(modality=TextChunk.Modality.TEXT, doc_id=DOCUMENT_ID),
+        start=0,
+        end=7,
+        position_basis=EntityMention.PositionBasis.DOCUMENT_GLOBAL,
+        raw_text="Aquilla",
+        normalized_text="aquilla",
+        entity_type="model",
+        extraction_confidence=0.9,
+        content_object_type=ContentType(
+            pk=1,
+            app_label="apps_documents",
+            model="documentfigure",
+        ),
+        content_object_id=DOCUMENT_ID,
+    )
+
+    with pytest.raises(ValidationError, match="must not include image provenance"):
         mention.clean()
 
 
@@ -308,6 +335,16 @@ def test_resolved_entities_are_explicitly_owned_and_only_resolved_nodes_have_vec
         DocumentEntity._meta.get_field("document_id").get_internal_type() == "UUIDField"
     )
     assert DocumentEntityMention._meta.get_field("mention").unique is True
+    assert (
+        DocumentEntityMention._meta.get_field(
+            "document_entity"
+        ).remote_field.on_delete.__name__
+        == "CASCADE"
+    )
+    assert (
+        DocumentEntityMention._meta.get_field("mention").remote_field.on_delete.__name__
+        == "CASCADE"
+    )
 
     collection_vector = CollectionEntity._meta.get_field("embedding")
     canonical_vector = CanonicalEntity._meta.get_field("embedding")
@@ -413,6 +450,112 @@ def test_relation_evidence_rejects_a_different_relation_type():
         evidence.clean()
 
 
+def _unsaved_relation_evidence():
+    collection_artifact = _artifact(
+        pk=1,
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=COLLECTION_ID,
+    )
+    document_artifact = _artifact(pk=2, source_hash="b" * 64)
+    source = CollectionEntity(
+        pk=10,
+        artifact=collection_artifact,
+        collection_id=COLLECTION_ID,
+        label="Aquilla",
+        normalized_label="aquilla",
+        entity_type="model",
+    )
+    target = CollectionEntity(
+        pk=11,
+        artifact=collection_artifact,
+        collection_id=COLLECTION_ID,
+        label="MMLU",
+        normalized_label="mmlu",
+        entity_type="benchmark",
+    )
+    head = EntityMention(pk=20, artifact=document_artifact, document_id=DOCUMENT_ID)
+    tail = EntityMention(pk=21, artifact=document_artifact, document_id=DOCUMENT_ID)
+    relation_mention = RelationMention(
+        pk=30,
+        artifact=document_artifact,
+        document_id=DOCUMENT_ID,
+        head=head,
+        tail=tail,
+        relation_type="evaluates_on",
+    )
+    relation = CollectionRelation(
+        pk=40,
+        artifact=collection_artifact,
+        source=source,
+        target=target,
+        relation_type="evaluates_on",
+    )
+    return CollectionRelationEvidence(
+        relation=relation,
+        relation_mention=relation_mention,
+    )
+
+
+def test_relation_evidence_rejects_swapped_endpoint_mappings(monkeypatch):
+    evidence = _unsaved_relation_evidence()
+    mapped_pairs = {
+        (evidence.relation_mention.head_id, evidence.relation.target_id),
+        (evidence.relation_mention.tail_id, evidence.relation.source_id),
+    }
+    monkeypatch.setattr(
+        evidence,
+        "_endpoint_has_active_mapping",
+        lambda mention_id, entity_id: (mention_id, entity_id) in mapped_pairs,
+        raising=False,
+    )
+
+    with pytest.raises(ValidationError, match="head|tail|mapped"):
+        evidence.clean()
+
+
+def test_relation_evidence_rejects_unmapped_endpoint(monkeypatch):
+    evidence = _unsaved_relation_evidence()
+    monkeypatch.setattr(
+        evidence,
+        "_endpoint_has_active_mapping",
+        lambda _mention_id, _entity_id: False,
+    )
+
+    with pytest.raises(ValidationError, match="head|tail|mapped"):
+        evidence.clean()
+
+
+def test_relation_evidence_rejects_endpoint_from_other_artifact_or_collection(
+    monkeypatch,
+):
+    evidence = _unsaved_relation_evidence()
+    evidence.relation.target.artifact_id = 999
+    evidence.relation.target.collection_id = uuid.uuid4()
+    monkeypatch.setattr(
+        evidence,
+        "_endpoint_has_active_mapping",
+        lambda _mention_id, _entity_id: True,
+        raising=False,
+    )
+
+    with pytest.raises(ValidationError, match="artifact|collection"):
+        evidence.clean()
+
+
+def test_relation_evidence_accepts_separate_document_artifact_when_actively_mapped(
+    monkeypatch,
+):
+    evidence = _unsaved_relation_evidence()
+    monkeypatch.setattr(
+        evidence,
+        "_endpoint_has_active_mapping",
+        lambda _mention_id, _entity_id: True,
+        raising=False,
+    )
+
+    evidence.clean()
+
+
 @pytest.mark.django_db(transaction=True)
 @database_required
 def test_database_enforces_one_active_artifact_and_version_identity():
@@ -493,17 +636,62 @@ def test_deleting_chunk_cascades_evidence_but_retains_completed_build_audit():
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_relation_evidence_preserves_each_unique_support_and_cascades_with_mention():
-    artifact = _artifact(
+def test_deleting_resolution_entities_or_links_preserves_raw_mentions():
+    artifact = _artifact()
+    artifact.save()
+    chunk = _chunk()
+    mention = _mention(artifact, chunk)
+    document_entity = DocumentEntity.objects.create(
+        artifact=artifact,
+        document_id=DOCUMENT_ID,
+        label="Aquilla",
+        normalized_label="aquilla",
+        entity_type="model",
+    )
+    link = DocumentEntityMention.objects.create(
+        document_entity=document_entity,
+        mention=mention,
+    )
+
+    document_entity.delete()
+
+    assert EntityMention.objects.filter(pk=mention.pk).exists()
+    assert not DocumentEntityMention.objects.filter(pk=link.pk).exists()
+
+    replacement_entity = DocumentEntity.objects.create(
+        artifact=artifact,
+        document_id=DOCUMENT_ID,
+        label="Aquilla replacement",
+        normalized_label="aquilla-replacement",
+        entity_type="model",
+    )
+    replacement_link = DocumentEntityMention.objects.create(
+        document_entity=replacement_entity,
+        mention=mention,
+    )
+
+    replacement_link.delete()
+
+    assert EntityMention.objects.filter(pk=mention.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_relation_evidence_preserves_each_unique_support_and_cascades_with_mention(
+    django_assert_num_queries,
+):
+    collection_artifact = _artifact(
         scope_type=GraphArtifact.ScopeType.COLLECTION,
         scope_id=COLLECTION_ID,
         status=GraphArtifact.Status.ACTIVE,
     )
-    artifact.save()
+    collection_artifact.save()
+    document_artifact = _artifact(status=GraphArtifact.Status.ACTIVE)
+    document_artifact.save()
     chunk = _chunk()
-    head = _mention(artifact, chunk)
+    head = _mention(document_artifact, chunk)
     tail = _mention(
-        artifact,
+        document_artifact,
         chunk,
         start=18,
         end=22,
@@ -512,7 +700,7 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
         entity_type="benchmark",
     )
     mention = RelationMention.objects.create(
-        artifact=artifact,
+        artifact=document_artifact,
         document_id=DOCUMENT_ID,
         chunk=chunk,
         head=head,
@@ -520,32 +708,78 @@ def test_relation_evidence_preserves_each_unique_support_and_cascades_with_menti
         relation_type="evaluates_on",
         extraction_confidence=0.8,
     )
+    head_document_entity = DocumentEntity.objects.create(
+        artifact=document_artifact,
+        document_id=DOCUMENT_ID,
+        label="Aquilla",
+        normalized_label="aquilla",
+        entity_type="model",
+    )
+    tail_document_entity = DocumentEntity.objects.create(
+        artifact=document_artifact,
+        document_id=DOCUMENT_ID,
+        label="MMLU",
+        normalized_label="mmlu",
+        entity_type="benchmark",
+    )
+    DocumentEntityMention.objects.create(
+        document_entity=head_document_entity,
+        mention=head,
+    )
+    DocumentEntityMention.objects.create(
+        document_entity=tail_document_entity,
+        mention=tail,
+    )
     source = CollectionEntity.objects.create(
-        artifact=artifact,
+        artifact=collection_artifact,
         collection_id=COLLECTION_ID,
         label="Aquilla",
         normalized_label="aquilla",
         entity_type="model",
     )
     target = CollectionEntity.objects.create(
-        artifact=artifact,
+        artifact=collection_artifact,
         collection_id=COLLECTION_ID,
         label="MMLU",
         normalized_label="mmlu",
         entity_type="benchmark",
     )
     relation = CollectionRelation.objects.create(
-        artifact=artifact,
+        artifact=collection_artifact,
         source=source,
         target=target,
         relation_type="evaluates_on",
         support_count=1,
         confidence=0.8,
     )
-    evidence = CollectionRelationEvidence.objects.create(
+    head_mapping = CollectionEntityDocumentLink.objects.create(
+        document_entity=head_document_entity,
+        collection_entity=source,
+        score=0.9,
+        method="exact",
+        resolver_version=collection_artifact.resolver_version,
+    )
+    CollectionEntityDocumentLink.objects.create(
+        document_entity=tail_document_entity,
+        collection_entity=target,
+        score=0.9,
+        method="exact",
+        resolver_version=collection_artifact.resolver_version,
+    )
+    evidence = CollectionRelationEvidence(
         relation=relation,
         relation_mention=mention,
     )
+
+    head_mapping.status = CollectionEntityDocumentLink.Status.SUPPRESSED
+    head_mapping.save(update_fields=["status"])
+    with pytest.raises(ValidationError, match="Head mention"):
+        evidence.clean()
+    head_mapping.status = CollectionEntityDocumentLink.Status.ACTIVE
+    head_mapping.save(update_fields=["status"])
+    with django_assert_num_queries(2):
+        evidence.clean()
+    evidence.save()
 
     with pytest.raises(IntegrityError), transaction.atomic():
         CollectionRelationEvidence.objects.create(

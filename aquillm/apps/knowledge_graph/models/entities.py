@@ -112,6 +112,10 @@ class EntityMention(models.Model):
                 errors["position_basis"] = (
                     "Text evidence requires document_global positions."
                 )
+            if self.content_object_type_id or self.content_object_id:
+                errors["content_object_id"] = (
+                    "Text evidence must not include image provenance."
+                )
         elif chunk.modality == TextChunk.Modality.IMAGE:
             if self.position_basis != self.PositionBasis.CHUNK_CONTENT:
                 errors["position_basis"] = (

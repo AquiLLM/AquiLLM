@@ -5,6 +5,7 @@ from django.db.models import F, Q
 from apps.documents.models import TextChunk
 
 from .artifacts import GraphArtifact
+from .associations import CollectionEntityDocumentLink
 from .entities import CollectionEntity, EntityMention, ResolutionStatus
 
 
@@ -178,11 +179,68 @@ class CollectionRelationEvidence(models.Model):
 
     def clean(self):
         super().clean()
-        if (
-            self.relation_id
-            and self.relation_mention_id
-            and self.relation.relation_type != self.relation_mention.relation_type
-        ):
+        if not self.relation_id or not self.relation_mention_id:
+            return
+
+        relation = self.relation
+        mention = self.relation_mention
+        if relation.relation_type != mention.relation_type:
             raise ValidationError(
                 {"relation_mention": "Evidence relation type must match the relation."}
             )
+
+        errors: dict[str, str] = {}
+        artifact = relation.artifact
+        if artifact.scope_type != GraphArtifact.ScopeType.COLLECTION:
+            errors["relation"] = "Evidence relation requires a collection artifact."
+        for field_name, endpoint in (
+            ("source", relation.source),
+            ("target", relation.target),
+        ):
+            if endpoint.artifact_id != relation.artifact_id:
+                errors[field_name] = "Relation endpoint artifact must match."
+            elif endpoint.collection_id != artifact.scope_id:
+                errors[field_name] = "Relation endpoint collection must match artifact."
+
+        for field_name, endpoint in (("head", mention.head), ("tail", mention.tail)):
+            if endpoint.artifact_id != mention.artifact_id:
+                errors[field_name] = (
+                    "Raw endpoint artifact must match relation mention."
+                )
+            elif endpoint.document_id != mention.document_id:
+                errors[field_name] = (
+                    "Raw endpoint document must match relation mention."
+                )
+
+        if not errors:
+            if not self._endpoint_has_active_mapping(
+                mention.head_id, relation.source_id
+            ):
+                errors["head"] = (
+                    "Head mention is not actively mapped to relation source."
+                )
+            if not self._endpoint_has_active_mapping(
+                mention.tail_id, relation.target_id
+            ):
+                errors["tail"] = (
+                    "Tail mention is not actively mapped to relation target."
+                )
+        if errors:
+            raise ValidationError(errors)
+
+    def _endpoint_has_active_mapping(self, mention_id: int, entity_id: int) -> bool:
+        relation = self.relation
+        mention = self.relation_mention
+        return CollectionEntityDocumentLink.objects.filter(
+            collection_entity_id=entity_id,
+            collection_entity__artifact_id=relation.artifact_id,
+            collection_entity__collection_id=relation.artifact.scope_id,
+            collection_entity__status=ResolutionStatus.ACTIVE,
+            document_entity__artifact_id=mention.artifact_id,
+            document_entity__document_id=mention.document_id,
+            document_entity__status=ResolutionStatus.ACTIVE,
+            document_entity__mention_links__mention_id=mention_id,
+            document_entity__mention_links__status=ResolutionStatus.ACTIVE,
+            resolver_version=relation.artifact.resolver_version,
+            status=ResolutionStatus.ACTIVE,
+        ).exists()
