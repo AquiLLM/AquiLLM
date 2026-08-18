@@ -59,7 +59,7 @@ def _entity_result(*entities: tuple[str, str, float, int, int]) -> dict[str, Any
                 "end": end,
             }
         )
-    return {"entities": grouped}
+    return {"entities": [grouped]}
 
 
 def _spanned_relation(
@@ -70,24 +70,22 @@ def _spanned_relation(
     head_text, head_confidence, head_start, head_end = head
     tail_text, tail_confidence, tail_start, tail_end = tail
     return {
-        "relation_extraction": {
-            relation_type: [
-                {
-                    "head": {
-                        "text": head_text,
-                        "confidence": head_confidence,
-                        "start": head_start,
-                        "end": head_end,
-                    },
-                    "tail": {
-                        "text": tail_text,
-                        "confidence": tail_confidence,
-                        "start": tail_start,
-                        "end": tail_end,
-                    },
-                }
-            ]
-        }
+        relation_type: [
+            {
+                "head": {
+                    "text": head_text,
+                    "confidence": head_confidence,
+                    "start": head_start,
+                    "end": head_end,
+                },
+                "tail": {
+                    "text": tail_text,
+                    "confidence": tail_confidence,
+                    "start": tail_start,
+                    "end": tail_end,
+                },
+            }
+        ]
     }
 
 
@@ -96,6 +94,7 @@ def _install_fake_provider(
     *,
     entity_results: list[dict[str, Any]] | None = None,
     relation_results: list[dict[str, Any]] | None = None,
+    raw_results: list[dict[str, Any]] | None = None,
     load_error: Exception | None = None,
     inference_error: Exception | None = None,
 ) -> SimpleNamespace:
@@ -127,23 +126,28 @@ def _install_fake_provider(
             schema,
             *,
             batch_size,
+            format_results,
             include_confidence,
             include_spans,
         ):
             kwargs = {
                 "batch_size": batch_size,
+                "format_results": format_results,
                 "include_confidence": include_confidence,
                 "include_spans": include_spans,
             }
             calls.batch.append((texts, schema, kwargs))
             if inference_error is not None:
                 raise inference_error
-            resolved_entities = entity_results or [{"entities": {}} for _ in texts]
-            resolved_relations = relation_results or [
-                {"relation_extraction": {}} for _ in texts
-            ]
+            if raw_results is not None:
+                return raw_results
+            resolved_entities = entity_results or [{"entities": [{}]} for _ in texts]
+            default_relations = {
+                name: [] for name in calls.schema_relations[-1]
+            }
+            resolved_relations = relation_results or [default_relations for _ in texts]
             return [
-                {**entity_result, **relation_result}
+                {**default_relations, **entity_result, **relation_result}
                 for entity_result, relation_result in zip(
                     resolved_entities, resolved_relations, strict=True
                 )
@@ -217,6 +221,7 @@ def test_loads_exact_pinned_snapshot_and_supported_gliner2_arguments(
     ]
     expected_kwargs = {
         "batch_size": 8,
+        "format_results": False,
         "include_confidence": True,
         "include_spans": True,
     }
@@ -313,6 +318,64 @@ def test_normalizes_entities_and_spanned_relations_to_neutral_candidates(
     assert result.diagnostics == ()
 
 
+def test_empty_raw_sample_is_diagnostic_not_clean_empty_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_provider(monkeypatch, raw_results=[{}])
+
+    result = _backend().extract_batch(("A paper.",), ontology=_ontology())[0]
+
+    assert result.entities == ()
+    assert result.relations == ()
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        "missing_entity_output",
+        "missing_relation_output",
+        "missing_relation_output",
+    ]
+    assert {
+        dict(diagnostic.details).get("relation_type")
+        for diagnostic in result.diagnostics
+        if diagnostic.code == "missing_relation_output"
+    } == {"uses_dataset", "reports_metric"}
+
+
+def test_unformatted_output_preserves_repeated_surface_spans_and_relation_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = "Qwen3 compares with Qwen3 on MMLU."
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[
+            _entity_result(
+                ("model", "Qwen3", 0.96, 0, 5),
+                ("model", "Qwen3", 0.94, 20, 25),
+                ("dataset", "MMLU", 0.91, 29, 33),
+            )
+        ],
+        relation_results=[
+            _spanned_relation(
+                "uses_dataset",
+                ("Qwen3", 0.88, 20, 25),
+                ("MMLU", 0.86, 29, 33),
+            )
+        ],
+    )
+
+    result = _backend().extract_batch((text,), ontology=_ontology())[0]
+
+    assert [(entity.text, entity.start, entity.end) for entity in result.entities] == [
+        ("Qwen3", 0, 5),
+        ("Qwen3", 20, 25),
+        ("MMLU", 29, 33),
+    ]
+    assert result.relations == (
+        RelationCandidate(
+            "uses_dataset", "Qwen3", "MMLU", 20, 25, 29, 33, 0.86
+        ),
+    )
+    assert result.diagnostics == ()
+
+
 @pytest.mark.parametrize(
     ("raw_entity", "expected_code"),
     [
@@ -339,6 +402,54 @@ def test_rejects_invalid_entities_to_diagnostics(
     assert result.diagnostics[0].input_index == 0
 
 
+def test_huge_integer_entity_confidence_is_rejected_without_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[
+            _entity_result(("model", "Qwen3", 10**1000, 0, 5))
+        ],
+    )
+
+    result = _backend().extract_batch(("Qwen3",), ontology=_ontology())[0]
+
+    assert result.entities == ()
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        "invalid_entity_confidence"
+    ]
+
+
+def test_huge_integer_relation_confidence_is_rejected_without_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[
+            _entity_result(
+                ("model", "Qwen3", 0.95, 0, 5),
+                ("dataset", "MMLU", 0.91, 11, 15),
+            )
+        ],
+        relation_results=[
+            _spanned_relation(
+                "uses_dataset",
+                ("Qwen3", 10**1000, 0, 5),
+                ("MMLU", 0.8, 11, 15),
+            )
+        ],
+    )
+
+    result = _backend().extract_batch(
+        ("Qwen3 uses MMLU.",), ontology=_ontology()
+    )[0]
+
+    assert result.relations == ()
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        "invalid_relation_confidence"
+    ]
+
+
 def test_rejects_unknown_relation_and_nan_endpoint_confidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -348,40 +459,38 @@ def test_rejects_unknown_relation_and_nan_endpoint_confidence(
     )
     relation_results = [
         {
-            "relation_extraction": {
-                "invented_relation": [
-                    {
-                        "head": {
-                            "text": "Qwen3",
-                            "confidence": 0.8,
-                            "start": 0,
-                            "end": 5,
-                        },
-                        "tail": {
-                            "text": "MMLU",
-                            "confidence": 0.8,
-                            "start": 11,
-                            "end": 15,
-                        },
-                    }
-                ],
-                "uses_dataset": [
-                    {
-                        "head": {
-                            "text": "Qwen3",
-                            "confidence": float("nan"),
-                            "start": 0,
-                            "end": 5,
-                        },
-                        "tail": {
-                            "text": "MMLU",
-                            "confidence": 0.8,
-                            "start": 11,
-                            "end": 15,
-                        },
-                    }
-                ],
-            }
+            "invented_relation": [
+                {
+                    "head": {
+                        "text": "Qwen3",
+                        "confidence": 0.8,
+                        "start": 0,
+                        "end": 5,
+                    },
+                    "tail": {
+                        "text": "MMLU",
+                        "confidence": 0.8,
+                        "start": 11,
+                        "end": 15,
+                    },
+                }
+            ],
+            "uses_dataset": [
+                {
+                    "head": {
+                        "text": "Qwen3",
+                        "confidence": float("nan"),
+                        "start": 0,
+                        "end": 5,
+                    },
+                    "tail": {
+                        "text": "MMLU",
+                        "confidence": 0.8,
+                        "start": 11,
+                        "end": 15,
+                    },
+                }
+            ],
         }
     ]
     _install_fake_provider(
@@ -393,10 +502,10 @@ def test_rejects_unknown_relation_and_nan_endpoint_confidence(
     )[0]
 
     assert result.relations == ()
-    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+    assert {diagnostic.code for diagnostic in result.diagnostics} == {
         "unknown_relation_type",
         "invalid_relation_confidence",
-    ]
+    }
 
 
 def test_rejects_malformed_relation_span_instead_of_matching_by_text(
@@ -425,6 +534,19 @@ def test_rejects_malformed_relation_span_instead_of_matching_by_text(
     assert [diagnostic.code for diagnostic in result.diagnostics] == [
         "malformed_relation_span"
     ]
+    assert dict(result.diagnostics[0].details) == {
+        "endpoint": "head",
+        "endpoint_text": "Qwen3",
+        "head_confidence": 0.8,
+        "head_end": 5,
+        "head_start": -1,
+        "head_text": "Qwen3",
+        "relation_type": "uses_dataset",
+        "tail_confidence": 0.8,
+        "tail_end": 15,
+        "tail_start": 11,
+        "tail_text": "MMLU",
+    }
 
 
 def test_text_only_relation_endpoints_resolve_to_unique_compatible_mentions(
@@ -440,14 +562,12 @@ def test_text_only_relation_endpoints_resolve_to_unique_compatible_mentions(
         ],
         relation_results=[
             {
-                "relation_extraction": {
-                    "uses_dataset": [
-                        {
-                            "head": {"text": "Qwen3", "confidence": 0.8},
-                            "tail": {"text": "MMLU", "confidence": 0.7},
-                        }
-                    ]
-                }
+                "uses_dataset": [
+                    {
+                        "head": {"text": "Qwen3", "confidence": 0.8},
+                        "tail": {"text": "MMLU", "confidence": 0.7},
+                    }
+                ]
             }
         ],
     )
@@ -479,14 +599,12 @@ def test_ambiguous_text_only_endpoint_is_retained_only_as_diagnostic(
         ],
         relation_results=[
             {
-                "relation_extraction": {
-                    "uses_dataset": [
-                        {
-                            "head": {"text": "Qwen3", "confidence": 0.8},
-                            "tail": {"text": "MMLU", "confidence": 0.7},
-                        }
-                    ]
-                }
+                "uses_dataset": [
+                    {
+                        "head": {"text": "Qwen3", "confidence": 0.8},
+                        "tail": {"text": "MMLU", "confidence": 0.7},
+                    }
+                ]
             }
         ],
     )
@@ -498,6 +616,46 @@ def test_ambiguous_text_only_endpoint_is_retained_only_as_diagnostic(
     assert diagnostic.code == "ambiguous_relation_endpoint"
     assert ("endpoint", "head") in diagnostic.details
     assert ("endpoint_text", "Qwen3") in diagnostic.details
+    assert dict(diagnostic.details) == {
+        "endpoint": "head",
+        "endpoint_text": "Qwen3",
+        "head_confidence": 0.8,
+        "head_end": None,
+        "head_start": None,
+        "head_text": "Qwen3",
+        "relation_type": "uses_dataset",
+        "tail_confidence": 0.7,
+        "tail_end": None,
+        "tail_start": None,
+        "tail_text": "MMLU",
+    }
+
+
+def test_spanned_endpoint_with_multiple_compatible_entity_types_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[
+            _entity_result(
+                ("model", "Qwen3", 0.95, 0, 5),
+                ("paper", "Qwen3", 0.90, 0, 5),
+                ("dataset", "MMLU", 0.91, 11, 15),
+            )
+        ],
+        relation_results=[
+            _spanned_relation(
+                "uses_dataset", ("Qwen3", 0.8, 0, 5), ("MMLU", 0.7, 11, 15)
+            )
+        ],
+    )
+
+    result = _backend().extract_batch(
+        ("Qwen3 uses MMLU.",), ontology=_ontology()
+    )[0]
+
+    assert result.relations == ()
+    assert result.diagnostics[0].code == "ambiguous_relation_endpoint"
 
 
 def test_disallowed_endpoint_type_is_diagnostic_not_promoted(

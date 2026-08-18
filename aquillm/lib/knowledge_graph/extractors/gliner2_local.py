@@ -103,11 +103,11 @@ def _diagnostic(
 
 
 def _valid_confidence(value: object) -> bool:
-    return (
-        type(value) in (int, float)
-        and isfinite(value)
-        and 0.0 <= value <= 1.0
-    )
+    if type(value) is int:
+        return 0 <= value <= 1
+    if type(value) is float:
+        return isfinite(value) and 0.0 <= value <= 1.0
+    return False
 
 
 def _valid_span(
@@ -139,17 +139,42 @@ def _normalize_entities(
             )
         )
         return entities, diagnostics
-    grouped = raw_result.get("entities", {})
-    if not isinstance(grouped, Mapping):
+    if "entities" not in raw_result:
+        diagnostics.append(
+            _diagnostic(
+                "missing_entity_output",
+                "entity",
+                input_index,
+                reason="provider_section_absent",
+            )
+        )
+        return entities, diagnostics
+    raw_groups = raw_result["entities"]
+    if not isinstance(raw_groups, Sequence) or isinstance(
+        raw_groups, (str, bytes)
+    ):
         diagnostics.append(
             _diagnostic(
                 "malformed_entity_output",
                 "entity",
                 input_index,
-                reason="entities_not_mapping",
+                reason="entities_not_sequence",
             )
         )
         return entities, diagnostics
+    if not raw_groups:
+        return entities, diagnostics
+    if len(raw_groups) != 1 or not isinstance(raw_groups[0], Mapping):
+        diagnostics.append(
+            _diagnostic(
+                "malformed_entity_output",
+                "entity",
+                input_index,
+                reason="invalid_entity_group",
+            )
+        )
+        return entities, diagnostics
+    grouped = raw_groups[0]
 
     for entity_type, candidates in grouped.items():
         if not isinstance(candidates, Sequence) or isinstance(
@@ -240,21 +265,43 @@ def _allowed_types(definition: object, endpoint: str) -> frozenset[str]:
     return frozenset(item for item in value if isinstance(item, str))
 
 
-def _endpoint_error(
+def _safe_diagnostic_value(value: object) -> str | int | float | bool | None:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and isfinite(value):
+        return value
+    return None
+
+
+def _relation_error(
     code: str,
     *,
     input_index: int,
     relation_type: str,
-    endpoint: str,
-    endpoint_text: object,
+    raw_candidate: Mapping[object, object],
+    endpoint: str | None,
 ) -> ExtractionDiagnostic:
+    details: dict[str, str | int | float | bool | None] = {
+        "relation_type": relation_type,
+        "endpoint": endpoint,
+        "endpoint_text": None,
+    }
+    for side in ("head", "tail"):
+        raw_endpoint = raw_candidate.get(side)
+        endpoint_mapping = (
+            raw_endpoint if isinstance(raw_endpoint, Mapping) else {}
+        )
+        for field in ("text", "start", "end", "confidence"):
+            details[f"{side}_{field}"] = _safe_diagnostic_value(
+                endpoint_mapping.get(field)
+            )
+    if endpoint in ("head", "tail"):
+        details["endpoint_text"] = details[f"{endpoint}_text"]
     return _diagnostic(
         code,
         "relation",
         input_index,
-        relation_type=relation_type,
-        endpoint=endpoint,
-        endpoint_text=endpoint_text if isinstance(endpoint_text, str) else None,
+        **details,
     )
 
 
@@ -264,35 +311,36 @@ def _resolve_endpoint(
     endpoint: str,
     relation_type: str,
     relation_definition: object,
+    raw_candidate: Mapping[object, object],
     entities: Sequence[EntityCandidate],
     text: str,
     input_index: int,
 ) -> tuple[tuple[str, int, int, float] | None, ExtractionDiagnostic | None]:
     if not isinstance(raw_endpoint, Mapping):
-        return None, _endpoint_error(
+        return None, _relation_error(
             "malformed_relation_endpoint",
             input_index=input_index,
             relation_type=relation_type,
+            raw_candidate=raw_candidate,
             endpoint=endpoint,
-            endpoint_text=None,
         )
     surface = raw_endpoint.get("text")
     confidence = raw_endpoint.get("confidence")
     if not _valid_confidence(confidence):
-        return None, _endpoint_error(
+        return None, _relation_error(
             "invalid_relation_confidence",
             input_index=input_index,
             relation_type=relation_type,
+            raw_candidate=raw_candidate,
             endpoint=endpoint,
-            endpoint_text=surface,
         )
     if not isinstance(surface, str) or not surface.strip():
-        return None, _endpoint_error(
+        return None, _relation_error(
             "malformed_relation_endpoint",
             input_index=input_index,
             relation_type=relation_type,
+            raw_candidate=raw_candidate,
             endpoint=endpoint,
-            endpoint_text=surface,
         )
 
     allowed = _allowed_types(relation_definition, endpoint)
@@ -303,31 +351,42 @@ def _resolve_endpoint(
         start = raw_endpoint.get("start")
         end = raw_endpoint.get("end")
         if not (has_start and has_end and _valid_span(text, surface, start, end)):
-            return None, _endpoint_error(
+            return None, _relation_error(
                 "malformed_relation_span",
                 input_index=input_index,
                 relation_type=relation_type,
+                raw_candidate=raw_candidate,
                 endpoint=endpoint,
-                endpoint_text=surface,
             )
         spanned_matches = [
             entity
             for entity in surface_matches
             if entity.start == start and entity.end == end
         ]
-        if any(entity.entity_type in allowed for entity in spanned_matches):
+        compatible = [
+            entity for entity in spanned_matches if entity.entity_type in allowed
+        ]
+        if len(compatible) == 1:
             return (surface, start, end, float(confidence)), None
+        if len(compatible) > 1:
+            return None, _relation_error(
+                "ambiguous_relation_endpoint",
+                input_index=input_index,
+                relation_type=relation_type,
+                raw_candidate=raw_candidate,
+                endpoint=endpoint,
+            )
         code = (
             "disallowed_relation_endpoint"
             if spanned_matches
             else "unresolved_relation_endpoint"
         )
-        return None, _endpoint_error(
+        return None, _relation_error(
             code,
             input_index=input_index,
             relation_type=relation_type,
+            raw_candidate=raw_candidate,
             endpoint=endpoint,
-            endpoint_text=surface,
         )
 
     compatible = [
@@ -342,24 +401,24 @@ def _resolve_endpoint(
             float(confidence),
         ), None
     if len(compatible) > 1:
-        return None, _endpoint_error(
+        return None, _relation_error(
             "ambiguous_relation_endpoint",
             input_index=input_index,
             relation_type=relation_type,
+            raw_candidate=raw_candidate,
             endpoint=endpoint,
-            endpoint_text=surface,
         )
     code = (
         "disallowed_relation_endpoint"
         if surface_matches
         else "unresolved_relation_endpoint"
     )
-    return None, _endpoint_error(
+    return None, _relation_error(
         code,
         input_index=input_index,
         relation_type=relation_type,
+        raw_candidate=raw_candidate,
         endpoint=endpoint,
-        endpoint_text=surface,
     )
 
 
@@ -383,19 +442,21 @@ def _normalize_relations(
             )
         )
         return relations, diagnostics
-    grouped = raw_result.get("relation_extraction", {})
-    if not isinstance(grouped, Mapping):
-        diagnostics.append(
-            _diagnostic(
-                "malformed_relation_output",
-                "relation",
-                input_index,
-                reason="relations_not_mapping",
+    for expected_relation_type in ontology_relations:
+        if expected_relation_type not in raw_result:
+            diagnostics.append(
+                _diagnostic(
+                    "missing_relation_output",
+                    "relation",
+                    input_index,
+                    relation_type=expected_relation_type,
+                    reason="provider_section_absent",
+                )
             )
-        )
-        return relations, diagnostics
 
-    for relation_type, candidates in grouped.items():
+    for relation_type, candidates in raw_result.items():
+        if relation_type == "entities":
+            continue
         if not isinstance(candidates, Sequence) or isinstance(
             candidates, (str, bytes)
         ):
@@ -410,18 +471,30 @@ def _normalize_relations(
             )
             continue
         for raw_candidate in candidates:
+            normalized_relation_type = str(relation_type)
             if (
                 not isinstance(relation_type, str)
                 or relation_type not in ontology_relations
             ):
-                diagnostics.append(
-                    _diagnostic(
-                        "unknown_relation_type",
-                        "relation",
-                        input_index,
-                        relation_type=str(relation_type),
+                if isinstance(raw_candidate, Mapping):
+                    diagnostics.append(
+                        _relation_error(
+                            "unknown_relation_type",
+                            input_index=input_index,
+                            relation_type=normalized_relation_type,
+                            raw_candidate=raw_candidate,
+                            endpoint=None,
+                        )
                     )
-                )
+                else:
+                    diagnostics.append(
+                        _diagnostic(
+                            "unknown_relation_type",
+                            "relation",
+                            input_index,
+                            relation_type=normalized_relation_type,
+                        )
+                    )
                 continue
             if not isinstance(raw_candidate, Mapping):
                 diagnostics.append(
@@ -440,6 +513,7 @@ def _normalize_relations(
                 endpoint="head",
                 relation_type=relation_type,
                 relation_definition=definition,
+                raw_candidate=raw_candidate,
                 entities=entities,
                 text=text,
                 input_index=input_index,
@@ -452,6 +526,7 @@ def _normalize_relations(
                 endpoint="tail",
                 relation_type=relation_type,
                 relation_definition=definition,
+                raw_candidate=raw_candidate,
                 entities=entities,
                 text=text,
                 input_index=input_index,
@@ -531,6 +606,7 @@ class GLiNER2LocalBackend:
         }
         inference_options = {
             "batch_size": self._settings.batch_size,
+            "format_results": False,
             "include_confidence": True,
             "include_spans": True,
         }
