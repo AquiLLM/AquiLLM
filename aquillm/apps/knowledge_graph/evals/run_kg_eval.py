@@ -2003,7 +2003,7 @@ def revalidate_fixture_database_rows(
         ):
             raise ComparisonAborted("fixture chunk span/text topology mismatch")
         try:
-            vector = tuple(embedding)
+            vector = tuple(float(value) for value in embedding)
         except TypeError as error:
             raise ComparisonAborted("fixture chunk embedding is missing") from error
         if canonical_embedding_sha256(vector) != expected.embedding_sha256:

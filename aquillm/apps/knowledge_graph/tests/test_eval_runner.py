@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
+import numpy as np
 import pytest
 import yaml
 
@@ -1910,7 +1911,7 @@ def test_fixture_manifest_revalidates_exact_authorized_db_rows_and_vectors():
             start_position=binding.start,
             end_position=binding.end,
             content=logical_chunks[symbol],
-            embedding=[0.0] * 1024,
+            embedding=np.zeros(1024, dtype=np.float32),
         )
         for symbol, binding in resolved.chunks.items()
         if resolved.collections[binding.collection_symbol].authorized
@@ -1921,7 +1922,6 @@ def test_fixture_manifest_revalidates_exact_authorized_db_rows_and_vectors():
         document_rows=document_rows,
         chunk_rows=chunk_rows,
     )
-
     assert attestation["document_ids"] == tuple(
         sorted((row.id for row in document_rows), key=lambda value: value.int)
     )
