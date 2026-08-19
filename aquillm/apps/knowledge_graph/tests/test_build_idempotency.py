@@ -926,6 +926,18 @@ def test_next_build_generation_is_monotonic_for_a_scope_occurrence():
     assert _next_build_generation(artifacts) == 8
 
 
+def test_next_build_generation_includes_detached_audit_run_generations():
+    from apps.knowledge_graph.services.builds import _next_build_generation
+
+    artifacts = (SimpleNamespace(build_generation=3),)
+    detached_runs = (
+        SimpleNamespace(build_generation=7, artifact_id=None),
+        SimpleNamespace(build_generation=11, artifact_id=None),
+    )
+
+    assert _next_build_generation(artifacts, detached_runs) == 12
+
+
 def test_scope_lockers_select_only_current_candidate_and_active_occurrences():
     from apps.knowledge_graph.graph.assembly import _locked_candidate
     from apps.knowledge_graph.services import builds
@@ -1087,7 +1099,7 @@ def test_document_refresh_callback_resolves_an_exact_post_commit_key(monkeypatch
         ),
     )
 
-    builds._enqueue_current_collection_refresh(context.identity.collection_id)
+    builds.enqueue_current_collection_refresh(context.identity.collection_id)
 
     assert scheduled == [
         (
@@ -1119,7 +1131,7 @@ def test_document_move_registers_both_collection_refreshes_on_commit(monkeypatch
     monkeypatch.setattr(builds.transaction, "on_commit", capture_callback)
     monkeypatch.setattr(
         builds,
-        "_enqueue_current_collection_refresh",
+        "enqueue_current_collection_refresh",
         refreshed.append,
     )
 

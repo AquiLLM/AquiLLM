@@ -203,13 +203,45 @@ class OccurrenceAction(StrEnum):
     CREATE = "create"
 
 
-def _next_build_generation(artifacts) -> int:
-    generations = tuple(getattr(row, "build_generation", None) for row in artifacts)
-    if any(type(value) is not int or value < 1 for value in generations):
+def _next_build_generation(artifacts, scope_runs=()) -> int:
+    artifact_generations = tuple(
+        getattr(row, "build_generation", None) for row in artifacts
+    )
+    run_generations = tuple(
+        getattr(row, "build_generation", None) for row in scope_runs
+    )
+    if any(
+        type(value) is not int or value < 1
+        for value in (*artifact_generations, *run_generations)
+    ):
         raise CorruptBuildError("build occurrence generation is invalid")
-    if len(generations) != len(set(generations)):
+    if len(artifact_generations) != len(set(artifact_generations)):
         raise CorruptBuildError("scope owns duplicate build generations")
-    return max(generations, default=0) + 1
+    if len(run_generations) != len(set(run_generations)):
+        raise CorruptBuildError("scope owns duplicate run generations")
+    return max((*artifact_generations, *run_generations), default=0) + 1
+
+
+def _lock_latest_scope_run(build_kind: str, scope_id: object):
+    """Lock the newest attached or detached audit occurrence for allocation."""
+
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.models.artifacts import canonical_graph_scope_id
+
+    if build_kind not in GraphBuildRun.BuildKind.values:
+        raise ValueError("build kind must be a graph scope type")
+    canonical_scope = canonical_graph_scope_id(build_kind, scope_id)
+    rows = tuple(
+        GraphBuildRun.objects.select_for_update()
+        .filter(
+            build_kind=build_kind,
+            scope_type=build_kind,
+            scope_id=canonical_scope,
+            orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
+        )
+        .order_by("-build_generation", "-pk")[:1]
+    )
+    return rows
 
 
 def _occurrence_action(artifacts, runs, build_key: str) -> OccurrenceAction:
@@ -627,18 +659,31 @@ def _document_context(
     )
 
 
-def _lock_document_scope(document_id: uuid.UUID) -> None:
-    if connection.vendor != "postgresql":
-        return
-    lock_key = (
+def document_graph_advisory_lock_key(document_id: uuid.UUID) -> int:
+    if type(document_id) is not uuid.UUID or document_id.version is None:
+        raise ValueError("document graph scope must be an exact RFC 4122 UUID")
+    return (
         int.from_bytes(sha256(document_id.bytes).digest()[:4], "big", signed=False)
         & 0x7FFFFFFF
     )
+
+
+def _lock_document_scope(document_id: uuid.UUID) -> None:
+    if connection.vendor != "postgresql":
+        return
+    lock_key = document_graph_advisory_lock_key(document_id)
     with connection.cursor() as cursor:
         cursor.execute(
             "SELECT pg_advisory_xact_lock(%s, %s)",
             [_DOCUMENT_LOCK_NAMESPACE, lock_key],
         )
+
+
+def lock_document_graph_advisory_scope(document_id: uuid.UUID) -> None:
+    """Acquire the canonical document graph advisory transaction lock."""
+
+    document_graph_advisory_lock_key(document_id)
+    _lock_document_scope(document_id)
 
 
 def _bounded_scope_artifact_ids(
@@ -1446,7 +1491,7 @@ def enqueue_collection_refresh(
     )
 
 
-def _enqueue_current_collection_refresh(collection_id: int) -> None:
+def enqueue_current_collection_refresh(collection_id: int) -> None:
     """Resolve an exact post-commit collection snapshot for the Task 12 seam."""
 
     try:
@@ -1498,7 +1543,7 @@ def _register_document_refresh_callbacks(
         affected.add(initial_collection_id)
     for collection_id in sorted(affected):
         transaction.on_commit(
-            lambda collection_id=collection_id: _enqueue_current_collection_refresh(
+            lambda collection_id=collection_id: enqueue_current_collection_refresh(
                 collection_id
             ),
             robust=True,
@@ -1521,6 +1566,10 @@ def _bootstrap_document_build(
         artifacts, runs, document, chunks = _lock_document_build_rows(
             context.identity.document_id,
             build_key=build_key,
+        )
+        scope_runs = _lock_latest_scope_run(
+            GraphBuildRun.BuildKind.DOCUMENT,
+            context.identity.document_id,
         )
         try:
             _validate_source(document, context.identity.source_hash)
@@ -1587,7 +1636,7 @@ def _bootstrap_document_build(
             elif artifact.status != GraphArtifact.Status.BUILDING:
                 raise CorruptBuildError("document retry artifact is not reusable")
         else:
-            build_generation = _next_build_generation(artifacts)
+            build_generation = _next_build_generation(artifacts, scope_runs)
             artifact = GraphArtifact.objects.create(
                 status=GraphArtifact.Status.BUILDING,
                 build_generation=build_generation,
@@ -2391,6 +2440,10 @@ def _bootstrap_collection_build(
             context.identity.collection_id,
             build_key=build_key,
         )
+        scope_runs = _lock_latest_scope_run(
+            GraphBuildRun.BuildKind.COLLECTION,
+            context.identity.collection_id,
+        )
         action = _occurrence_action(artifacts, runs, build_key)
         run_by_artifact = {row.artifact_id: row for row in runs}
         artifact = None
@@ -2417,7 +2470,7 @@ def _bootstrap_collection_build(
                 )
             except CollectionGraphSourceStaleError:
                 transaction.on_commit(
-                    lambda: _enqueue_current_collection_refresh(
+                    lambda: enqueue_current_collection_refresh(
                         context.identity.collection_id
                     ),
                     robust=True,
@@ -2454,7 +2507,7 @@ def _bootstrap_collection_build(
             elif artifact.status != GraphArtifact.Status.BUILDING:
                 raise CorruptBuildError("collection retry artifact is not reusable")
         else:
-            build_generation = _next_build_generation(artifacts)
+            build_generation = _next_build_generation(artifacts, scope_runs)
             artifact, _manifest = build_collection_snapshot(
                 collection=context.collection,
                 document_artifacts=context.document_artifacts,
@@ -2538,7 +2591,7 @@ def _terminal_collection_build(
         _apply_locked_terminal(run, target, error_code=error_code)
         if stale and reschedule:
             transaction.on_commit(
-                lambda: _enqueue_current_collection_refresh(
+                lambda: enqueue_current_collection_refresh(
                     context.identity.collection_id
                 ),
                 robust=True,
@@ -2850,6 +2903,7 @@ __all__ = [
     "derive_collection_build_key",
     "derive_document_build_key",
     "enqueue_collection_refresh",
+    "enqueue_current_collection_refresh",
     "enqueue_document_build",
     "refresh_collection_graph",
     "validate_orchestration_stage",

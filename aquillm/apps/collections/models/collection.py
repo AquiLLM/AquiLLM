@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Optional
 
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, router
 
 if TYPE_CHECKING:
     from .permission import CollectionPermission
@@ -42,6 +42,31 @@ def _get_document_types():
 
 
 class CollectionQuerySet(models.QuerySet):
+    _PARENT_WRITE_NAMES = frozenset({"parent", "parent_id"})
+
+    def update(self, **kwargs):
+        if self._PARENT_WRITE_NAMES.intersection(kwargs):
+            raise ValidationError(
+                "Collection parent changes require an instance save or move_to()."
+            )
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        requested = tuple(fields)
+        if self._PARENT_WRITE_NAMES.intersection(requested):
+            raise ValidationError(
+                "Collection parent changes cannot use bulk_update()."
+            )
+        return super().bulk_update(objs, requested, batch_size=batch_size)
+
+    def bulk_create(self, objs, **kwargs):
+        update_fields = tuple(kwargs.get("update_fields") or ())
+        if self._PARENT_WRITE_NAMES.intersection(update_fields):
+            raise ValidationError(
+                "Collection parent changes cannot use a bulk upsert."
+            )
+        return super().bulk_create(objs, **kwargs)
+
     def filter_by_user_perm(self, user, perm='VIEW') -> 'CollectionQuerySet':
         from .permission import CollectionPermission
         
@@ -71,6 +96,49 @@ class Collection(models.Model):
         db_table = 'aquillm_collection'
         unique_together = ('name', 'parent')
         ordering = ['name']
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        requested_fields = None if update_fields is None else tuple(update_fields)
+        if requested_fields is not None:
+            kwargs["update_fields"] = requested_fields
+        writes_parent = (
+            self._state.adding
+            or requested_fields is None
+            or bool({"parent", "parent_id"}.intersection(requested_fields))
+        )
+        if self._state.adding or self.pk is None or not writes_parent:
+            return super().save(*args, **kwargs)
+
+        database_alias = kwargs.get("using") or router.db_for_write(
+            type(self),
+            instance=self,
+        )
+        observed = (
+            type(self)._base_manager.using(database_alias)
+            .filter(pk=self.pk)
+            .values("parent_id")
+            .first()
+        )
+        if observed is None:
+            raise ValidationError("The persisted collection no longer exists.")
+        from apps.knowledge_graph.graph.invalidation import (
+            locked_collection_parent_rows,
+        )
+
+        parent_ids = tuple(
+            value
+            for value in (observed["parent_id"], self.parent_id)
+            if value is not None
+        )
+        with locked_collection_parent_rows(
+            int(self.pk),
+            parent_ids,
+            using=database_alias,
+        ):
+            save_kwargs = dict(kwargs)
+            save_kwargs["using"] = database_alias
+            return super().save(*args, **save_kwargs)
 
     def get_path(self):
         path = [self.name]
@@ -135,7 +203,10 @@ class Collection(models.Model):
         if getattr(settings, "RAG_CACHE_ENABLED", False):
             cached_refs = rag_cache.get_cached_doc_access_refs(user.id, collection_ids, perm)
             if cached_refs is not None:
-                return rag_cache.rehydrate_documents_from_refs(cached_refs)
+                return rag_cache.rehydrate_documents_from_refs(
+                    cached_refs,
+                    allowed_collection_ids=collection_ids,
+                )
 
         doc_types = _get_document_types()
         documents = functools.reduce(

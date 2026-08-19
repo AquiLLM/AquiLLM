@@ -5,12 +5,13 @@ import functools
 import hashlib
 import structlog
 import uuid
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, List, Optional, Any
 
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
-from django.db import models
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import models, router, transaction
 
 if TYPE_CHECKING:
     from .chunks import TextChunk
@@ -59,7 +60,6 @@ class Document(models.Model):
     ingested_by = models.ForeignKey(User, on_delete=models.RESTRICT)
     ingestion_date = models.DateTimeField(auto_now_add=True)
     ingestion_complete = models.BooleanField(default=True)
-
     class Meta:
         abstract = True
         constraints = [
@@ -116,44 +116,224 @@ class Document(models.Model):
         return None
 
     def save(self, *args, dont_rechunk=False, **kwargs):
-        if dont_rechunk:
-            super().save(*args, **kwargs)
-            return
-        
-        self.full_text_hash = self.hash_fn(self.full_text)
+        document_model = type(self)
+        database_alias = kwargs.get("using") or router.db_for_write(
+            document_model,
+            instance=self,
+        )
+        update_fields = kwargs.get("update_fields")
+        requested_fields = None if update_fields is None else set(update_fields)
+        writes_text = (
+            self._state.adding
+            or requested_fields is None
+            or bool({"full_text", "full_text_hash"} & requested_fields)
+        )
+        writes_collection = (
+            self._state.adding
+            or requested_fields is None
+            or bool({"collection", "collection_id"} & requested_fields)
+        )
+        canonical_hash = self.hash_fn(self.full_text) if writes_text else None
 
-        is_new = (not (d := Document.get_by_id(doc_id=self.id))) or (self.full_text_hash != d.full_text_hash)
-        super().save(*args, **kwargs)
-        
-        if is_new:
-            self.ingestion_complete = False
-            self.save(dont_rechunk=True, update_fields=['ingestion_complete'])
+        from apps.knowledge_graph.graph.invalidation import (
+            DocumentLifecycleRef,
+            consume_document_save_lifecycle,
+            document_lifecycle_row_is_locked,
+            locked_document_lifecycle_row,
+            schedule_document_content_invalidation,
+            schedule_document_move_invalidation,
+        )
+
+        def publish_chunks() -> None:
+            from apps.documents.tasks.chunking import create_chunks
+
+            if canonical_hash is None:
+                raise RuntimeError("chunk publication requires a persisted content hash")
             try:
-                from apps.documents.tasks.chunking import create_chunks
-
-                create_chunks.delay(str(self.id))
-                return
-            except Exception as e:
-                logger.error(
-                    "obs.documents.chunk_create_failed",
-                    doc_id=self.id,
-                    error=str(e),
-                    error_type=type(e).__name__,
+                create_chunks.delay(
+                    str(self.id),
+                    canonical_hash,
+                    document_model._meta.label_lower,
+                    int(self.pkid),
                 )
-                self.ingestion_complete = False
-                self.save(dont_rechunk=True, update_fields=['ingestion_complete'])
+            except Exception as exc:
+                logger.error(
+                    "obs.documents.chunk_enqueue_failed",
+                    document_id=str(self.id),
+                    concrete_model=document_model._meta.label_lower,
+                    document_pkid=int(self.pkid),
+                    expected_source_hash=canonical_hash,
+                    error_type=type(exc).__name__,
+                )
 
-    def move_to(self, new_collection):
-        """Move this document to a new collection"""
-        if not new_collection.user_can_edit(self.ingested_by):
-            raise ValidationError("User does not have permission to move documents to this collection")
+        lifecycle_guard = nullcontext(None)
+        if (
+            not self._state.adding
+            and self.pkid is not None
+            and writes_collection
+            and not document_lifecycle_row_is_locked(self, using=database_alias)
+        ):
+            observed = (
+                document_model._base_manager.using(database_alias)
+                .filter(pkid=self.pkid)
+                .values("id", "full_text_hash", "collection_id")
+                .first()
+            )
+            if observed is None:
+                raise ValidationError("The exact persisted document row no longer exists.")
+            if observed["id"] != self.id:
+                raise ValidationError({"id": "A persisted document UUID is immutable."})
+            lifecycle_guard = locked_document_lifecycle_row(
+                DocumentLifecycleRef(
+                    concrete_model_label=document_model._meta.label_lower,
+                    document_pkid=int(self.pkid),
+                    document_id=self.id,
+                ),
+                (observed["collection_id"], self.collection_id),
+                using=database_alias,
+                active_or_building_only=True,
+            )
+
+        with lifecycle_guard as locked_state:
+            with transaction.atomic(using=database_alias):
+                previous = None
+                if not self._state.adding and self.pkid is not None:
+                    if locked_state is not None:
+                        locked_row, _locked_collections = locked_state
+                        previous = {
+                            "id": locked_row.id,
+                            "full_text_hash": locked_row.full_text_hash,
+                            "collection_id": locked_row.collection_id,
+                        }
+                    else:
+                        previous = (
+                            document_model._base_manager.using(database_alias)
+                            .select_for_update()
+                            .filter(pkid=self.pkid)
+                            .values("id", "full_text_hash", "collection_id")
+                            .first()
+                        )
+                    if previous is not None and previous["id"] != self.id:
+                        raise ValidationError(
+                            {"id": "A persisted document UUID is immutable."}
+                        )
+                    if (
+                        previous is not None
+                        and writes_collection
+                        and previous["collection_id"] != self.collection_id
+                    ):
+                        ownership_source = (
+                            locked_state[0] if locked_state is not None else self
+                        )
+                        child_figures = getattr(
+                            ownership_source,
+                            "child_figures",
+                            None,
+                        )
+                        if child_figures is not None and child_figures.exists():
+                            raise ValidationError(
+                                "Documents with derived figures cannot be moved until "
+                                "a figure move policy exists"
+                            )
+
+                if writes_text:
+                    if canonical_hash is None:
+                        raise RuntimeError("text writes require a canonical content hash")
+                    self.full_text_hash = canonical_hash
+                    content_changed = (
+                        previous is None
+                        or previous["full_text_hash"] != canonical_hash
+                    )
+                else:
+                    content_changed = False
+                    if previous is not None:
+                        self.full_text_hash = previous["full_text_hash"]
+
+                if content_changed and not dont_rechunk:
+                    self.ingestion_complete = False
+                    if requested_fields is not None:
+                        requested_fields.update(
+                            {"full_text", "full_text_hash", "ingestion_complete"}
+                        )
+                elif requested_fields is not None and writes_text:
+                    requested_fields.update({"full_text", "full_text_hash"})
+
+                save_kwargs = dict(kwargs)
+                save_kwargs["using"] = database_alias
+                if requested_fields is not None:
+                    save_kwargs["update_fields"] = sorted(requested_fields)
+                super().save(*args, **save_kwargs)
+
+                pending = consume_document_save_lifecycle(self)
+                if pending is not None:
+                    lifecycle_kind, event, lifecycle_alias = pending
+                    if lifecycle_kind == "content":
+                        schedule_document_content_invalidation(
+                            event,
+                            using=lifecycle_alias,
+                            after_cleanup=None if dont_rechunk else publish_chunks,
+                        )
+                    elif lifecycle_kind == "move":
+                        schedule_document_move_invalidation(
+                            event,
+                            using=lifecycle_alias,
+                        )
+                    else:
+                        raise RuntimeError("unknown document lifecycle event")
+                elif previous is None and not dont_rechunk:
+                    transaction.on_commit(
+                        publish_chunks,
+                        using=database_alias,
+                        robust=True,
+                    )
+
+    def move_to(self, new_collection, *, actor):
+        """Move this document when ``actor`` may edit both collection boundaries."""
+        from apps.knowledge_graph.graph.invalidation import (
+            DocumentLifecycleRef,
+            locked_document_lifecycle_row,
+        )
+
+        document_model = type(self)
+        database_alias = self._state.db or router.db_for_write(
+            document_model,
+            instance=self,
+        )
+        document_ref = DocumentLifecycleRef(
+            concrete_model_label=document_model._meta.label_lower,
+            document_pkid=self.pkid,
+            document_id=self.id,
+        )
+
+        with locked_document_lifecycle_row(
+            document_ref,
+            (self.collection_id, new_collection.pk),
+            using=database_alias,
+            active_or_building_only=True,
+        ) as (current, _affected_collection_ids):
+            if not current.collection.user_can_edit(actor):
+                raise PermissionDenied(
+                    "You do not have permission to edit the source collection"
+                )
+            if not new_collection.user_can_edit(actor):
+                raise PermissionDenied(
+                    "You do not have permission to edit the destination collection"
+                )
+
+            child_figures = getattr(current, "child_figures", None)
+            if child_figures is not None and child_figures.exists():
+                raise ValidationError(
+                    "Documents with derived figures cannot be moved until a figure move policy exists"
+                )
+
+            current.collection = new_collection
+            current.save(
+                dont_rechunk=True,
+                update_fields=["collection"],
+                using=database_alias,
+            )
+
         self.collection = new_collection
-        self.save()
-
-    def delete(self, *args, **kwargs):
-        from .chunks import TextChunk
-        TextChunk.objects.filter(doc_id=self.id).delete()
-        return super().delete(*args, **kwargs)
 
     def __str__(self):
         return f'{ContentType.objects.get_for_model(self)} -- {self.title} in {self.collection.name}'

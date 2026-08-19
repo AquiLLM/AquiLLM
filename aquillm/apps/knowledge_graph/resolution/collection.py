@@ -2837,6 +2837,7 @@ def _validate_collection_destination(
 
 def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSnapshot:
     from apps.documents.models import Document
+    from apps.knowledge_graph.graph.manifest_locking import LockedCollectionManifest
     from apps.knowledge_graph.models import GraphArtifact
     from apps.knowledge_graph.models.inputs import (
         collection_input_build_signature,
@@ -2847,36 +2848,55 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
 
     if artifact.scope_type != GraphArtifact.ScopeType.COLLECTION:
         raise CollectionResolutionPersistenceError("manifest owner is not a collection")
-    manifest_rows = _bounded_query_rows(
+    locked_manifest = (
+        manifest_rows
+        if isinstance(manifest_rows, LockedCollectionManifest)
+        else None
+    )
+    rows = _bounded_query_rows(
         manifest_rows,
         MAX_COLLECTION_DOCUMENT_INPUTS,
         "collection manifest",
     )
-    source_ids = tuple(row.document_artifact_id for row in manifest_rows)
+    source_ids = tuple(row.document_artifact_id for row in rows)
     if len(source_ids) != len(set(source_ids)):
         raise CollectionResolutionPersistenceError(
             "collection manifest repeats a document artifact"
         )
-    locked_sources = _bounded_batched_query_rows(
-        source_ids,
-        lambda source_id_batch: (
-            GraphArtifact.objects.select_for_update()
-            .filter(pk__in=source_id_batch)
-            .order_by("pk")
-        ),
-        maximum=MAX_COLLECTION_DOCUMENT_INPUTS,
-        label="collection manifest source artifact",
-        row_key=lambda row: row.pk,
-        sort_key=lambda row: row.pk,
-    )
+    if locked_manifest is None:
+        locked_sources = _bounded_batched_query_rows(
+            source_ids,
+            lambda source_id_batch: (
+                GraphArtifact.objects.select_for_update()
+                .filter(pk__in=source_id_batch)
+                .order_by("pk")
+            ),
+            maximum=MAX_COLLECTION_DOCUMENT_INPUTS,
+            label="collection manifest source artifact",
+            row_key=lambda row: row.pk,
+            sort_key=lambda row: row.pk,
+        )
+        locked_documents = None
+    else:
+        locked_sources = manifest_rows.document_artifacts
+        locked_documents = manifest_rows.documents
     if {row.pk for row in locked_sources} != set(source_ids):
         raise CollectionResolutionPersistenceError(
             "collection manifest source artifact was deleted"
         )
     source_by_id = {row.pk: row for row in locked_sources}
+    document_by_id = (
+        None
+        if locked_documents is None
+        else {row.id: row for row in locked_documents}
+    )
+    if document_by_id is not None and len(document_by_id) != len(locked_documents):
+        raise CollectionResolutionPersistenceError(
+            "collection manifest document identity is ambiguous"
+        )
     source_signatures: list[str] = []
     snapshot_inputs: list[CollectionSnapshotInput] = []
-    for row in manifest_rows:
+    for row in rows:
         source = source_by_id[row.document_artifact_id]
         if (
             row.artifact_id != artifact.pk
@@ -2889,12 +2909,19 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
             raise CollectionResolutionPersistenceError(
                 "collection manifest ownership or active source changed"
             )
-        document = Document.get_by_id(row.document_id)
-        if document is None:
-            raise CollectionResolutionPersistenceError(
-                "collection manifest document was deleted"
-            )
-        document = type(document).objects.select_for_update().get(pk=document.pk)
+        if document_by_id is None:
+            document = Document.get_by_id(row.document_id)
+            if document is None:
+                raise CollectionResolutionPersistenceError(
+                    "collection manifest document was deleted"
+                )
+            document = type(document).objects.select_for_update().get(pk=document.pk)
+        else:
+            document = document_by_id.get(row.document_id)
+            if document is None:
+                raise CollectionResolutionPersistenceError(
+                    "collection manifest document was deleted"
+                )
         expected_membership = document_membership_signature(document)
         if (
             document.collection_id != row.collection_id
@@ -3214,15 +3241,35 @@ def load_collection_resolution_inputs(
 
     from django.db import transaction
 
+    from apps.knowledge_graph.graph.assembly import lock_collection_graph_scope
+    from apps.knowledge_graph.graph.manifest_locking import (
+        lock_collection_manifest_sources,
+    )
     from apps.knowledge_graph.models import (
-        CollectionArtifactInput,
         GraphArtifact,
         GraphBuildRun,
     )
 
     _positive_int(artifact_id, "artifact id")
     _positive_int(build_run_id, "build run id")
+    destination = (
+        GraphArtifact.objects.filter(pk=artifact_id)
+        .values("scope_type", "scope_id", "collection_scope_id")
+        .first()
+    )
+    if (
+        destination is None
+        or destination["scope_type"] != GraphArtifact.ScopeType.COLLECTION
+        or type(destination["collection_scope_id"]) is not int
+        or destination["collection_scope_id"] < 1
+        or destination["scope_id"] != str(destination["collection_scope_id"])
+    ):
+        raise CollectionResolutionPersistenceError(
+            "destination artifact has no canonical collection scope"
+        )
+    collection_id = destination["collection_scope_id"]
     with transaction.atomic():
+        lock_collection_graph_scope(collection_id)
         artifact = GraphArtifact.objects.select_for_update().get(pk=artifact_id)
         run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
         _validate_collection_destination(
@@ -3232,16 +3279,9 @@ def load_collection_resolution_inputs(
             lease_generation=lease_generation,
         )
         resolved_config = CollectionResolutionConfig() if config is None else config
-        manifest_query = (
-            CollectionArtifactInput.objects.select_for_update()
-            .select_related("document_artifact", "collection")
-            .filter(artifact=artifact)
-            .order_by("document_artifact_id")
-        )
-        manifest = _bounded_query_rows(
-            manifest_query,
-            resolved_config.max_document_inputs,
-            "collection manifest",
+        manifest = lock_collection_manifest_sources(
+            artifact,
+            maximum=resolved_config.max_document_inputs,
         )
         snapshot = _snapshot_from_locked_manifest(artifact, manifest)
         entities, relations = _load_resolution_source_rows(
@@ -3265,8 +3305,11 @@ def load_collection_filter_inputs(
 
     from django.db import transaction
 
+    from apps.knowledge_graph.graph.assembly import lock_collection_graph_scope
+    from apps.knowledge_graph.graph.manifest_locking import (
+        lock_collection_manifest_sources,
+    )
     from apps.knowledge_graph.models import (
-        CollectionArtifactInput,
         DocumentEntity,
         GraphArtifact,
         GraphBuildRun,
@@ -3274,7 +3317,24 @@ def load_collection_filter_inputs(
 
     _positive_int(artifact_id, "artifact id")
     _positive_int(build_run_id, "build run id")
+    destination = (
+        GraphArtifact.objects.filter(pk=artifact_id)
+        .values("scope_type", "scope_id", "collection_scope_id")
+        .first()
+    )
+    if (
+        destination is None
+        or destination["scope_type"] != GraphArtifact.ScopeType.COLLECTION
+        or type(destination["collection_scope_id"]) is not int
+        or destination["collection_scope_id"] < 1
+        or destination["scope_id"] != str(destination["collection_scope_id"])
+    ):
+        raise CollectionResolutionPersistenceError(
+            "destination artifact has no canonical collection scope"
+        )
+    collection_id = destination["collection_scope_id"]
     with transaction.atomic():
+        lock_collection_graph_scope(collection_id)
         artifact = GraphArtifact.objects.select_for_update().get(pk=artifact_id)
         run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
         _validate_collection_destination(
@@ -3283,16 +3343,9 @@ def load_collection_filter_inputs(
             lease_owner=lease_owner,
             lease_generation=lease_generation,
         )
-        manifest_query = (
-            CollectionArtifactInput.objects.select_for_update()
-            .select_related("document_artifact", "collection")
-            .filter(artifact=artifact)
-            .order_by("document_artifact_id")
-        )
-        manifest = _bounded_query_rows(
-            manifest_query,
-            result.config.max_document_inputs,
-            "collection manifest",
+        manifest = lock_collection_manifest_sources(
+            artifact,
+            maximum=result.config.max_document_inputs,
         )
         snapshot = _snapshot_from_locked_manifest(artifact, manifest)
         projected, relations = _load_resolution_source_rows(
@@ -4196,8 +4249,10 @@ def persist_collection_resolution(
         filter_collection_resolution,
         filter_policy_checksum,
     )
+    from apps.knowledge_graph.graph.manifest_locking import (
+        lock_collection_manifest_sources,
+    )
     from apps.knowledge_graph.models import (
-        CollectionArtifactInput,
         DocumentEntity,
         GraphArtifact,
         GraphBuildRun,
@@ -4251,16 +4306,9 @@ def persist_collection_resolution(
             lease_owner=lease_owner,
             lease_generation=lease_generation,
         )
-        manifest_query = (
-            CollectionArtifactInput.objects.select_for_update()
-            .select_related("document_artifact", "collection")
-            .filter(artifact=artifact)
-            .order_by("document_artifact_id")
-        )
-        manifest = _bounded_query_rows(
-            manifest_query,
-            result.config.max_document_inputs,
-            "collection manifest",
+        manifest = lock_collection_manifest_sources(
+            artifact,
+            maximum=result.config.max_document_inputs,
         )
         snapshot = _snapshot_from_locked_manifest(artifact, manifest)
         source_entities = _bounded_batched_query_rows(

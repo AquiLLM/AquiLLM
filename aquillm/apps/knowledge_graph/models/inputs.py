@@ -144,7 +144,7 @@ class CollectionArtifactInput(CollectionArtifactChildModelMixin, ValidatedGraphM
     )
     collection = models.ForeignKey(
         Collection,
-        on_delete=models.RESTRICT,
+        on_delete=models.DO_NOTHING,
         related_name="knowledge_graph_inputs",
     )
     document_id = models.UUIDField()

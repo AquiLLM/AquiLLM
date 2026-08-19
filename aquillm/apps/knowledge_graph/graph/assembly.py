@@ -1202,8 +1202,10 @@ def _load_filter_source_lineage(
 ) -> _Task9LineageContext:
     """Lock and authenticate the immutable Task 9 source of a filter rerun."""
 
+    from apps.knowledge_graph.graph.manifest_locking import (
+        lock_collection_manifest_sources,
+    )
     from apps.knowledge_graph.models import (
-        CollectionArtifactInput,
         CollectionEntity,
         CollectionEntityDocumentLink,
         GraphArtifact,
@@ -1274,19 +1276,13 @@ def _load_filter_source_lineage(
             "filter source Task 9 marker has an invalid manifest cap"
         )
     max_document_inputs = min(effective_config.max_document_inputs, marker_manifest_cap)
-    source_manifest_query = (
-        CollectionArtifactInput.objects.select_for_update()
-        .select_related("document_artifact", "collection")
-        .filter(artifact=source)
-        .order_by("document_artifact_id")
-    )
     try:
-        source_manifest = _bounded_query_rows(
-            source_manifest_query,
-            max_document_inputs,
-            "filter source manifest",
+        source_manifest = lock_collection_manifest_sources(
+            source,
+            maximum=max_document_inputs,
+            label="filter source manifest",
         )
-    except CollectionResolutionPersistenceError as exc:
+    except (CollectionResolutionPersistenceError, RuntimeError) as exc:
         raise CollectionGraphAssemblyError(str(exc)) from exc
 
     def manifest_identity(row: object) -> tuple[object, ...]:
@@ -1584,7 +1580,7 @@ def _lock_current_contributors(collection: object, config: AssemblyConfig):
             raise CollectionGraphSourceStaleError(
                 "active document artifact escaped collection membership"
             )
-        document = model.objects.select_for_update().get(pk=source.scope_id)
+        document = model.objects.select_for_update().get(id=source.scope_id)
         if (
             str(document.id) != source.scope_id
             or document.collection_id != collection.pk
@@ -1696,25 +1692,16 @@ def _load_locked_manifest(
 ) -> tuple[object, ...]:
     """Count the candidate manifest before bounded materialization."""
 
-    from apps.knowledge_graph.models import CollectionArtifactInput
-    from apps.knowledge_graph.resolution.collection import (
-        CollectionResolutionPersistenceError,
-        _bounded_query_rows,
+    from apps.knowledge_graph.graph.manifest_locking import (
+        lock_collection_manifest_sources,
     )
 
-    manifest_query = (
-        CollectionArtifactInput.objects.select_for_update()
-        .select_related("document_artifact", "collection")
-        .filter(artifact=artifact)
-        .order_by("document_artifact_id")
-    )
     try:
-        return _bounded_query_rows(
-            manifest_query,
-            config.max_document_inputs,
-            "collection manifest",
+        return lock_collection_manifest_sources(
+            artifact,
+            maximum=config.max_document_inputs,
         )
-    except CollectionResolutionPersistenceError as exc:
+    except RuntimeError as exc:
         raise CollectionGraphAssemblyError(str(exc)) from exc
 
 

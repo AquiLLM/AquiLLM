@@ -269,10 +269,36 @@ def document_refs_from_documents(documents: Sequence[Any]) -> list[dict[str, Any
     return [{"model": d.__class__.__name__, "pkid": int(d.pkid)} for d in documents]
 
 
-def rehydrate_documents_from_refs(refs: Sequence[Mapping[str, Any]]) -> list[Any]:
+def _validated_collection_allowlist(
+    allowed_collection_ids: Sequence[int],
+) -> tuple[int, ...]:
+    try:
+        collection_ids = tuple(allowed_collection_ids)
+    except TypeError as exc:
+        raise ValueError(
+            "allowed_collection_ids must contain positive integers within the signed-bigint range"
+        ) from exc
+
+    if any(
+        type(collection_id) is not int
+        or collection_id <= 0
+        or collection_id > 2**63 - 1
+        for collection_id in collection_ids
+    ):
+        raise ValueError(
+            "allowed_collection_ids must contain positive integers within the signed-bigint range"
+        )
+    return tuple(sorted(set(collection_ids)))
+
+
+def rehydrate_documents_from_refs(
+    refs: Sequence[Mapping[str, Any]],
+    allowed_collection_ids: Sequence[int],
+) -> list[Any]:
     from django.apps import apps
 
-    if not refs:
+    collection_ids = _validated_collection_allowlist(allowed_collection_ids)
+    if not refs or not collection_ids:
         return []
 
     by_model: dict[str, list[int]] = defaultdict(list)
@@ -294,7 +320,10 @@ def rehydrate_documents_from_refs(refs: Sequence[Mapping[str, Any]]) -> list[Any
             continue
         uniq_pks = list(dict.fromkeys(pks))
         try:
-            qs = model.objects.filter(pkid__in=uniq_pks)
+            qs = model.objects.filter(
+                pkid__in=uniq_pks,
+                collection_id__in=collection_ids,
+            )
         except Exception:
             continue
         for doc in qs:

@@ -491,7 +491,7 @@ def test_collection_operations_share_advisory_collection_artifact_lock_order():
     assert (
         filtering.index("lock_collection_graph_scope")
         < filtering.index("scope_artifacts = tuple")
-        < filtering.index("source_manifest = _bounded_query_rows")
+        < filtering.index("source_manifest = lock_collection_manifest_sources")
     )
 
 

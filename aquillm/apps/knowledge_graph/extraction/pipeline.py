@@ -372,6 +372,24 @@ def validate_build_lifecycle(
         raise ValueError("destination build run must be in extraction stage")
 
 
+def _lock_extraction_orchestration_rows(
+    artifact_id: int,
+    build_run_id: int,
+    document_id,
+):
+    """Lock D advisory, artifact, and run before any concrete source row."""
+
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import (
+        lock_document_graph_advisory_scope,
+    )
+
+    lock_document_graph_advisory_scope(document_id)
+    artifact = GraphArtifact.objects.select_for_update().get(pk=artifact_id)
+    run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
+    return artifact, run
+
+
 def validate_build_destination(
     artifact,
     run,
@@ -1162,10 +1180,11 @@ def extract_into_build(
 
         persistence_started = perf_counter()
         with transaction.atomic():
-            locked_artifact = GraphArtifact.objects.select_for_update().get(
-                pk=artifact_id
+            locked_artifact, locked_run = _lock_extraction_orchestration_rows(
+                artifact_id,
+                build_run_id,
+                document_id,
             )
-            locked_run = GraphBuildRun.objects.select_for_update().get(pk=build_run_id)
             validate_build_identity(
                 locked_artifact,
                 locked_run,

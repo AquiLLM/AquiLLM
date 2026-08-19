@@ -4,7 +4,7 @@ import structlog
 
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 
@@ -67,7 +67,9 @@ def move_document(request, doc_id):
         return JsonResponse({"error": "Target collection not found"}, status=404)
 
     try:
-        document.move_to(new_collection)
+        document.move_to(new_collection, actor=request.user)
+    except PermissionDenied as e:
+        return JsonResponse({"error": str(e)}, status=403)
     except ValidationError as e:
         return JsonResponse({"error": str(e)}, status=400)
 

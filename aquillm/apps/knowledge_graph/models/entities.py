@@ -523,7 +523,7 @@ class CollectionEntity(CollectionArtifactChildModelMixin, ValidatedGraphModel):
     )
     collection = models.ForeignKey(
         Collection,
-        on_delete=models.CASCADE,
+        on_delete=models.DO_NOTHING,
         related_name="knowledge_graph_entities",
     )
     cluster_key = models.CharField(max_length=64, editable=False)

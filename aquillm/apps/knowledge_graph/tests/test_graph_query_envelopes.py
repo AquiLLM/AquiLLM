@@ -82,11 +82,16 @@ def test_task9_counts_queryset_like_inputs_before_bounded_iteration():
 
 
 def test_task10_counts_manifests_before_materializing_them():
+    from apps.knowledge_graph.graph.manifest_locking import _read_manifest
+
     source = inspect.getsource(assembly._load_locked_manifest)
+    reader = inspect.getsource(_read_manifest)
 
     assert "config.max_document_inputs" in source
-    assert "_bounded_query_rows(" in source
-    assert "tuple(manifest_query)" not in source
+    assert "lock_collection_manifest_sources(" in source
+    assert "_bounded_rows(" in reader
+    assert "maximum" in reader
+    assert "tuple(query)" not in reader
 
 
 def test_task9_markers_audit_the_exact_manifest_cap():
@@ -367,10 +372,17 @@ def test_task9_and_filter_loaders_guard_every_large_queryset_before_conversion()
     existing_rerun_source = inspect.getsource(filtering._validate_existing_filter_rerun)
     lineage_source = inspect.getsource(assembly._load_filter_source_lineage)
 
+    for source in (
+        load_resolution_source,
+        load_filter_source,
+        persist_resolution_source,
+        rerun_source,
+        existing_rerun_source,
+        lineage_source,
+    ):
+        assert "lock_collection_manifest_sources(" in source
+
     for source, query_names in (
-        (load_resolution_source, ("manifest_query",)),
-        (load_filter_source, ("manifest_query",)),
-        (persist_resolution_source, ("manifest_query",)),
         (
             artifact_filter_source,
             (
@@ -378,11 +390,11 @@ def test_task9_and_filter_loaders_guard_every_large_queryset_before_conversion()
                 "automatic_link_query",
             ),
         ),
-        (rerun_source, ("source_manifest_query", "source_link_query")),
-        (existing_rerun_source, ("manifest_query", "entity_query", "link_query")),
+        (rerun_source, ("source_link_query",)),
+        (existing_rerun_source, ("entity_query", "link_query")),
         (
             lineage_source,
-            ("source_manifest_query", "source_entity_query", "source_link_query"),
+            ("source_entity_query", "source_link_query"),
         ),
     ):
         compact = " ".join(source.split())

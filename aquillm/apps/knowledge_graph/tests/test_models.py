@@ -13,7 +13,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import CheckConstraint, UniqueConstraint
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
@@ -122,6 +122,13 @@ def _artifact(**overrides):
     }
     values.update(overrides)
     values["scope_id"] = str(values["scope_id"])
+    if "collection_scope_id" not in overrides:
+        values["collection_scope_id"] = None
+        if values["scope_type"] == GraphArtifact.ScopeType.COLLECTION:
+            try:
+                values["collection_scope_id"] = int(values["scope_id"])
+            except ValueError:
+                values["collection_scope_id"] = COLLECTION_ID
     if "embedding_model_signature" not in overrides:
         values["embedding_model_signature"] = (
             COLLECTION_EMBEDDING_SIGNATURE
@@ -400,9 +407,55 @@ def test_graph_artifact_has_scope_lifecycle_identity_constraints_and_indexes():
     assert _constraint(
         GraphArtifact, "kg_artifact_assembly_identity_scope", CheckConstraint
     )
+    assert _constraint(
+        GraphArtifact, "kg_artifact_collection_scope_xor", CheckConstraint
+    )
     assert {("scope_type", "scope_id", "status"), ("source_hash",)} <= _index_fields(
         GraphArtifact
     )
+
+
+def test_collection_graph_ownership_is_explicit_immutable_and_non_cascading():
+    collection_scope = GraphArtifact._meta.get_field("collection_scope")
+
+    assert collection_scope.null is True
+    assert collection_scope.remote_field.on_delete is models.DO_NOTHING
+    assert "collection_scope" in GraphArtifact._IMMUTABLE_FIELDS
+    assert "collection_scope_id" in GraphArtifact._IMMUTABLE_FIELDS
+    for model in (CollectionArtifactInput, CollectionEntity):
+        collection = model._meta.get_field("collection")
+        assert collection.null is False
+        assert collection.remote_field.on_delete is models.DO_NOTHING
+
+
+def test_graph_artifact_collection_scope_auto_binds_and_matches_typed_scope():
+    auto_bound = _artifact(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=COLLECTION_ID,
+        collection_scope_id=None,
+    )
+    auto_bound.prepare_for_persistence()
+    assert auto_bound.collection_scope_id == COLLECTION_ID
+
+    mismatched = _artifact(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=COLLECTION_ID,
+        collection_scope_id=COLLECTION_ID + 1,
+    )
+    with pytest.raises(ValidationError, match="match the canonical scope ID"):
+        mismatched.prepare_for_persistence()
+
+    document = _artifact(collection_scope_id=COLLECTION_ID)
+    with pytest.raises(ValidationError, match="cannot own a collection scope"):
+        document.prepare_for_persistence()
+
+
+def test_collection_graph_scope_rejects_values_outside_signed_bigint():
+    from apps.knowledge_graph.models.artifacts import canonical_graph_scope_id
+
+    assert canonical_graph_scope_id("collection", 2**63 - 1) == str(2**63 - 1)
+    with pytest.raises(ValidationError, match="signed bigint"):
+        canonical_graph_scope_id("collection", 2**63)
 
 
 def test_artifact_assembly_identity_is_typed_by_scope_and_policy_addressed():

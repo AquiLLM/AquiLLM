@@ -974,11 +974,22 @@ git commit -m "build(kg): add isolated extraction worker"
 - Create: `aquillm/apps/knowledge_graph/graph/invalidation.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_graph_enqueue.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_document_lifecycle.py`
+- Create: `aquillm/apps/knowledge_graph/migrations/0003_graph_lifecycle_ownership.py`
+- Create: `aquillm/apps/documents/migrations/0004_documentfigure_concrete_parent_key.py`
 - Modify: `aquillm/apps/documents/tasks/chunking.py`
 - Modify: `aquillm/apps/documents/models/document.py`
+- Modify: `aquillm/apps/documents/models/document_types/figure.py`
+- Modify: `aquillm/apps/documents/services/rag_cache.py`
+- Modify: `aquillm/apps/documents/views/api.py`
+- Modify: `aquillm/apps/collections/models/collection.py`
 - Modify: `aquillm/apps/knowledge_graph/apps.py`
+- Modify: `aquillm/apps/knowledge_graph/models/artifacts.py`
+- Modify: `aquillm/apps/knowledge_graph/models/entities.py`
+- Modify: `aquillm/apps/knowledge_graph/models/inputs.py`
+- Modify: `aquillm/apps/knowledge_graph/services/builds.py`
 - Modify: `aquillm/apps/ingestion/tests/test_multimodal_ingestion_media_storage.py`
 - Modify: `aquillm/apps/documents/tests/test_multimodal_chunk_position_uniqueness.py`
+- Modify: affected collection/document/cache API and orchestration tests
 
 - [ ] **Step 1: Write failing enqueue tests for both success branches**
 
@@ -988,11 +999,16 @@ Cover normal chunk creation, a successful `DocumentFigure`/image chunk creation,
 
 Require:
 
-- content change marks the old document artifact stale before replacement activation;
+- content change terminalizes the old document occurrence and removes its source-bearing artifact before replacement activation, while retaining the detached build-run audit;
 - move captures old/new collection IDs, reuses document extraction, and refreshes both collection graphs;
 - instance deletion and queryset/cascade deletion cannot leave active graph evidence;
-- parent-document deletion behavior for `DocumentFigure` is explicit and tested despite its `GenericForeignKey`;
-- all invalidation work is queued with `transaction.on_commit`, never performed synchronously in a model method.
+- collection deletion, including an empty collection with a graph artifact, cannot be blocked by graph provenance FKs;
+- `DocumentFigure` stores a logical parent UUID and the parent's concrete PK separately, survives a database round trip, and is collected atomically with its parent;
+- legacy figure-parent values written through the old `GenericForeignKey` are repaired deterministically, while unresolved values are cleared rather than guessed;
+- moving a parent that owns figures is rejected until a destination-figure policy exists;
+- the requesting actor, not the original ingester, must have edit permission on both the source and destination collections;
+- a primed document-access cache cannot return a deleted, moved, or newly unauthorized document;
+- transactional deletion performs the minimum synchronous fail-closed graph cleanup needed to satisfy database provenance constraints; all rebuild and refresh publication remains deferred with `transaction.on_commit`.
 
 - [ ] **Step 3: Run tests and confirm failure**
 
@@ -1002,22 +1018,32 @@ Expected: FAIL.
 
 - [ ] **Step 4: Centralize post-chunk success enqueueing**
 
-Add one helper called from both success exits of `create_chunks()`. Pass `document_id` and the expected `full_text_hash`; never copy another document's graph rows because evidence chunk IDs and collection resolution differ.
+Add one helper called from both success exits of `create_chunks()`. Pass `document_id` and the expected `full_text_hash`; never copy another document's graph rows because evidence chunk IDs and collection resolution differ. Compute embeddings before the replacement transaction where possible, then delete old chunks, insert the complete replacement, set `ingestion_complete=True`, and register the graph enqueue callback in one transaction. Recheck the expected hash under that transaction so an older queued chunk job cannot publish evidence for newer content.
 
-- [ ] **Step 5: Register deletion safety for every concrete document model**
+- [ ] **Step 5: Add typed lifecycle ownership and guarded cleanup**
 
-Because `TextChunk.doc_id` is not a foreign key and queryset cascades can bypass `Document.delete()`, register narrowly scoped pre/post-delete handlers from `KnowledgeGraphConfig.ready()` for concrete document types. Handlers enqueue cleanup/refresh only; protect imports from cycles and test idempotency.
+Add an immutable nullable `GraphArtifact.collection_scope` FK: document artifacts require `NULL`, collection artifacts require the real collection and must match `scope_id`. Use `DO_NOTHING` for this FK and the existing direct collection FKs on manifests/entities so Django's deletion collector reaches lifecycle receivers, while database FKs still fail closed if cleanup is bypassed. Backfill existing collection artifacts and reject an unmappable scope.
 
-- [ ] **Step 6: Run focused and ingestion regressions**
+Because `TextChunk.doc_id` is not a foreign key and queryset cascades can bypass `Document.delete()`, register stable-UID pre/post-save and pre/post-delete handlers from `KnowledgeGraphConfig.ready()` for all concrete document types, plus collection deletion. The first source `pre_delete` receiver must build a bounded immutable context from Django's public delete `origin`, covering the complete selected collection/document/typed-figure cascade and every dependent graph collection scope. Acquire that entire collection advisory/row union in ascending order, then exact document scopes/rows in canonical order, recompute the context under those locks, and fail closed on expansion, contraction, missing origin, or any later receiver outside the frozen context; never append a newly discovered lower lock during signal processing. The guarded invalidation service must otherwise use the same advisory/row-lock order as graph assembly, terminalize runs, and delete obsolete collection artifacts before document artifacts and chunks through an internal collector path. `GraphBuildRun` rows remain as audit records with `artifact=NULL`, and future generation allocation must include those orphaned run generations. Move-only events preserve the document artifact and chunks while replacing old/new collection graphs.
+
+- [ ] **Step 6: Repair figure-parent and authorization boundaries**
+
+Replace the broken forward `GenericForeignKey`: its UUID field currently receives the concrete model's integer primary key. Keep the repaired logical parent UUID/content-type/concrete-PK triple for provenance and API compatibility, but make ownership database-backed with exactly zero or one of seven nullable typed parent FKs (one for each supported non-figure concrete document model). Every typed FK uses `CASCADE` and exposes that model's `child_figures` reverse relation; remove the abstract reverse `GenericRelation`. The selected FK is the ownership source of truth, its PK must equal the stored concrete parent PK, and the validated property must synchronize and verify the full typed identity. Data-migrate exact logical UUID matches first, then the legacy `UUID.int -> pkid` form, bind the matching typed owner, and clear unresolved or ambiguous values rather than guessing. This real FK is required so a figure attached after Django Collector discovery makes the stale parent deletion roll back instead of leaving an orphan; a fresh retry then collects the figure and runs its normal graph cleanup.
+
+Figures intentionally live in a dedicated child collection while their source document lives in the parent collection, so do not require equal collection IDs. Parent and figure lifecycle cleanup must instead include both ownership sides' collection scopes in the same canonical sorted lock set before either document row is locked. Pin stale-Collector races in both directions: a collected figure reparented away aborts the old deletion, and a figure attached after collection discovery causes the stale deletion to roll back while a fresh retry succeeds.
+
+Make `Document.move_to(..., actor=...)` require actor edit access to both source and destination. Pass the freshly authorized collection-ID tuple into cache rehydration and filter every restored reference by current collection membership; cached PKs are never authorization.
+
+- [ ] **Step 7: Run focused and ingestion regressions**
 
 Run: `python -m pytest aquillm/apps/knowledge_graph/tests/test_graph_enqueue.py aquillm/apps/knowledge_graph/tests/test_document_lifecycle.py aquillm/apps/documents/tests/test_multimodal_chunk_position_uniqueness.py aquillm/apps/ingestion/tests/test_multimodal_ingestion_media_storage.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add aquillm/apps/knowledge_graph aquillm/apps/documents/tasks/chunking.py aquillm/apps/documents/models/document.py aquillm/apps/documents/tests/test_multimodal_chunk_position_uniqueness.py aquillm/apps/ingestion/tests/test_multimodal_ingestion_media_storage.py
+git add aquillm/apps/knowledge_graph aquillm/apps/documents/migrations/0004_documentfigure_concrete_parent_key.py aquillm/apps/documents/models/document.py aquillm/apps/documents/models/document_types/figure.py aquillm/apps/documents/services/rag_cache.py aquillm/apps/documents/tasks/chunking.py aquillm/apps/documents/views/api.py aquillm/apps/documents/tests aquillm/apps/collections/models/collection.py aquillm/apps/collections/tests aquillm/apps/ingestion/tests/test_multimodal_ingestion_media_storage.py docs/superpowers/plans/2026-08-17-gliner2-knowledge-graph-hybrid-retrieval.md
 git commit -m "feat(kg): maintain graphs across document lifecycle"
 ```
 
@@ -1417,7 +1443,7 @@ git commit -m "test(rag): preserve citations with graph expansion"
 - Create: `aquillm/apps/knowledge_graph/services/pruning.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_management_commands.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_pruning.py`
-- Create: `aquillm/apps/knowledge_graph/migrations/0003_graph_rebuild_request.py`
+- Create: `aquillm/apps/knowledge_graph/migrations/0004_graph_rebuild_request.py`
 - Modify: `aquillm/apps/knowledge_graph/tasks.py`
 - Modify: `aquillm/apps/knowledge_graph/services/builds.py`
 - Modify: `aquillm/apps/knowledge_graph/models/artifacts.py`
@@ -1480,7 +1506,7 @@ Expected: PASS and all commands load without optional ML imports.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add aquillm/apps/knowledge_graph/management aquillm/apps/knowledge_graph/migrations/0003_graph_rebuild_request.py aquillm/apps/knowledge_graph/models/artifacts.py aquillm/apps/knowledge_graph/services/builds.py aquillm/apps/knowledge_graph/services/inspection.py aquillm/apps/knowledge_graph/services/pruning.py aquillm/apps/knowledge_graph/tasks.py aquillm/apps/knowledge_graph/tests/test_management_commands.py aquillm/apps/knowledge_graph/tests/test_pruning.py aquillm/apps/knowledge_graph/tests/test_tasks.py aquillm/apps/knowledge_graph/tests/test_build_idempotency.py aquillm/lib/knowledge_graph/config.py aquillm/aquillm/settings.py
+git add aquillm/apps/knowledge_graph/management aquillm/apps/knowledge_graph/migrations/0004_graph_rebuild_request.py aquillm/apps/knowledge_graph/models/artifacts.py aquillm/apps/knowledge_graph/services/builds.py aquillm/apps/knowledge_graph/services/inspection.py aquillm/apps/knowledge_graph/services/pruning.py aquillm/apps/knowledge_graph/tasks.py aquillm/apps/knowledge_graph/tests/test_management_commands.py aquillm/apps/knowledge_graph/tests/test_pruning.py aquillm/apps/knowledge_graph/tests/test_tasks.py aquillm/apps/knowledge_graph/tests/test_build_idempotency.py aquillm/lib/knowledge_graph/config.py aquillm/aquillm/settings.py
 git commit -m "feat(kg): add graph operations and retention"
 ```
 

@@ -10,6 +10,7 @@ import pytest
 from django.conf import settings
 from django.db import IntegrityError, migrations, models, transaction
 from django.db.models import Q, UniqueConstraint
+from django.db.models.deletion import Collector
 
 from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
@@ -290,3 +291,48 @@ def test_distinct_scoped_generations_allocate_and_activate_in_order():
     assert prior_run.stage == GraphBuildRun.Stage.SUPERSEDED
     assert candidate.status == GraphArtifact.Status.ACTIVE
     assert candidate_run.stage == GraphBuildRun.Stage.ACTIVE
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+@pytest.mark.parametrize(
+    ("scope_type", "scope_id"),
+    (
+        (GraphArtifact.ScopeType.DOCUMENT, DOCUMENT_ID),
+        (GraphArtifact.ScopeType.COLLECTION, COLLECTION_ID),
+    ),
+)
+def test_generation_allocation_survives_detached_document_and_collection_audit_runs(
+    scope_type,
+    scope_id,
+):
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.services.builds import (
+        _lock_latest_scope_run,
+        _next_build_generation,
+    )
+
+    if scope_type == GraphArtifact.ScopeType.COLLECTION:
+        Collection.objects.create(pk=scope_id, name=f"generation {uuid.uuid4()}")
+    artifact = _artifact(
+        build_key="d" * 64,
+        build_generation=9,
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
+    artifact.save()
+    audit = GraphBuildRun.objects.create(
+        artifact=artifact,
+        stage=GraphBuildRun.Stage.QUEUED,
+        status=GraphBuildRun.Status.PENDING,
+    )
+    collector = Collector(using="default")
+    collector.collect((artifact,))
+    collector.delete()
+    audit.refresh_from_db()
+    assert audit.artifact_id is None
+
+    with transaction.atomic():
+        locked = _lock_latest_scope_run(scope_type, scope_id)
+        assert tuple(row.pk for row in locked) == (audit.pk,)
+        assert _next_build_generation((), locked) == 10

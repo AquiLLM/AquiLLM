@@ -525,7 +525,7 @@ def test_collection_return_active_rejects_document_activation_that_wins_lock_rac
     refreshes = []
     monkeypatch.setattr(
         builds,
-        "_enqueue_current_collection_refresh",
+        "enqueue_current_collection_refresh",
         refreshes.append,
     )
 
@@ -1293,7 +1293,7 @@ def test_document_refresh_on_commit_is_discarded_by_outer_rollback(monkeypatch):
     collection, document, chunk = _persist_document(label="on-commit-rollback")
     context = _document_context(document, chunk)
     callbacks = []
-    monkeypatch.setattr(builds, "_enqueue_current_collection_refresh", callbacks.append)
+    monkeypatch.setattr(builds, "enqueue_current_collection_refresh", callbacks.append)
 
     with pytest.raises(RuntimeError, match="rollback injection"):
         with transaction.atomic():
@@ -1445,10 +1445,12 @@ def test_terminalization_survives_document_and_collection_deletion():
         stale=False,
         error_code="source_deleted",
     )
-    doc_artifact.refresh_from_db()
     doc_run.refresh_from_db()
-    assert doc_artifact.status == GraphArtifact.Status.FAILED
-    assert doc_run.stage == GraphBuildRun.Stage.FAILED
+    assert not GraphArtifact.objects.filter(pk=doc_artifact.pk).exists()
+    assert doc_run.artifact_id is None
+    assert doc_run.stage == GraphBuildRun.Stage.STALE
+    assert doc_run.status == GraphBuildRun.Status.CANCELLED
+    assert doc_run.error_code == "document_deleted"
 
     deleted_collection = Collection.objects.create(
         name=f"deleted collection {uuid.uuid4().hex}"
@@ -1471,7 +1473,9 @@ def test_terminalization_survives_document_and_collection_deletion():
         stale=False,
         error_code="source_deleted",
     )
-    col_artifact.refresh_from_db()
     col_run.refresh_from_db()
-    assert col_artifact.status == GraphArtifact.Status.FAILED
-    assert col_run.stage == GraphBuildRun.Stage.FAILED
+    assert not GraphArtifact.objects.filter(pk=col_artifact.pk).exists()
+    assert col_run.artifact_id is None
+    assert col_run.stage == GraphBuildRun.Stage.STALE
+    assert col_run.status == GraphBuildRun.Status.CANCELLED
+    assert col_run.error_code == "collection_deleted"

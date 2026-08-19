@@ -1089,8 +1089,10 @@ def _validate_existing_filter_rerun(
     max_links,
 ):
     from apps.knowledge_graph.graph.assembly import _config_payload
+    from apps.knowledge_graph.graph.manifest_locking import (
+        lock_collection_manifest_sources,
+    )
     from apps.knowledge_graph.models import (
-        CollectionArtifactInput,
         CollectionEntity,
         CollectionEntityDocumentLink,
         GraphArtifact,
@@ -1112,16 +1114,10 @@ def _validate_existing_filter_rerun(
         "assembly_config": _config_payload(source_assembly_config),
     }:
         raise ValueError("existing filter rerun artifact audit is corrupt")
-    manifest_query = (
-        CollectionArtifactInput.objects.select_for_update()
-        .select_related("document_artifact", "collection")
-        .filter(artifact=destination)
-        .order_by("document_artifact_id")
-    )
-    manifest = _bounded_query_rows(
-        manifest_query,
-        max_document_inputs,
-        "existing filter rerun manifest",
+    manifest = lock_collection_manifest_sources(
+        destination,
+        maximum=max_document_inputs,
+        label="existing filter rerun manifest",
     )
     if len(manifest) != len(source_manifest):
         raise ValueError("existing filter rerun is partial or corrupt")
@@ -1310,6 +1306,9 @@ def create_filter_rerun_artifact(
         _config_payload,
         lock_collection_graph_scope,
     )
+    from apps.knowledge_graph.graph.manifest_locking import (
+        lock_collection_manifest_sources,
+    )
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
         CollectionEntity,
@@ -1464,16 +1463,10 @@ def create_filter_rerun_artifact(
             max_relations=source_caps["max_relations"],
             max_links=source_caps["max_links"],
         )
-        source_manifest_query = (
-            CollectionArtifactInput.objects.select_for_update()
-            .select_related("document_artifact", "collection")
-            .filter(artifact=source)
-            .order_by("document_artifact_id")
-        )
-        source_manifest = _bounded_query_rows(
-            source_manifest_query,
-            source_caps["max_document_inputs"],
-            "filter source manifest",
+        source_manifest = lock_collection_manifest_sources(
+            source,
+            maximum=source_caps["max_document_inputs"],
+            label="filter source manifest",
         )
         _snapshot_from_locked_manifest(source, source_manifest)
         source_entities, evidence = _filter_inputs_from_artifact(

@@ -180,6 +180,10 @@ def canonical_graph_scope_id(scope_type: object, value: object) -> str:
                     )
                 }
             )
+        if int(canonical) > 2**63 - 1:
+            raise ValidationError(
+                {"scope_id": "Collection scope must fit a signed bigint PK."}
+            )
         return canonical
     raise ValidationError({"scope_type": "Graph scope type is invalid."})
 
@@ -425,6 +429,14 @@ class GraphArtifact(ValidatedGraphModel):
 
     scope_type = models.CharField(max_length=16, choices=ScopeType.choices)
     scope_id = models.CharField(max_length=64)
+    collection_scope = models.ForeignKey(
+        "apps_collections.Collection",
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        related_name="knowledge_graph_artifacts",
+        editable=False,
+    )
     build_key = models.CharField(max_length=64, default="", editable=False)
     build_generation = models.PositiveBigIntegerField(default=1, editable=False)
     orchestration_version = models.PositiveSmallIntegerField(
@@ -470,6 +482,8 @@ class GraphArtifact(ValidatedGraphModel):
     _IMMUTABLE_FIELDS = (
         "scope_type",
         "scope_id",
+        "collection_scope",
+        "collection_scope_id",
         "build_key",
         "build_generation",
         "orchestration_version",
@@ -509,6 +523,13 @@ class GraphArtifact(ValidatedGraphModel):
                     )
                 ),
                 name="kg_artifact_typed_scope_id",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(scope_type="document", collection_scope__isnull=True)
+                    | Q(scope_type="collection", collection_scope__isnull=False)
+                ),
+                name="kg_artifact_collection_scope_xor",
             ),
             models.CheckConstraint(
                 condition=(
@@ -627,6 +648,7 @@ class GraphArtifact(ValidatedGraphModel):
 
     def prepare_for_persistence(self) -> None:
         self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self._validate_collection_scope()
         self.source_hash = _validate_source_hash(self.source_hash)
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
@@ -658,6 +680,29 @@ class GraphArtifact(ValidatedGraphModel):
             )
         _prepare_assembly_identity(self)
 
+    def _validate_collection_scope(self) -> None:
+        if self.scope_type == self.ScopeType.DOCUMENT:
+            if self.collection_scope_id is not None:
+                raise ValidationError(
+                    {
+                        "collection_scope": (
+                            "Document artifacts cannot own a collection scope."
+                        )
+                    }
+                )
+            return
+        if self.scope_type == self.ScopeType.COLLECTION:
+            if self.collection_scope_id is None:
+                self.collection_scope_id = int(self.scope_id)
+            if str(self.collection_scope_id) != self.scope_id:
+                raise ValidationError(
+                    {
+                        "collection_scope": (
+                            "Collection scope must match the canonical scope ID."
+                        )
+                    }
+                )
+
     def clean(self):
         super().clean()
         if self.pk:
@@ -681,6 +726,7 @@ class GraphArtifact(ValidatedGraphModel):
                 if lifecycle_errors:
                     raise ValidationError(lifecycle_errors)
         self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        self._validate_collection_scope()
         self.source_hash = _validate_source_hash(self.source_hash)
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature

@@ -337,12 +337,17 @@ def test_filter_lineage_depth_is_rejected_before_loading_the_over_cap_hop():
 
 
 def test_filter_lineage_rows_are_counted_before_materialization_without_recursion():
+    from apps.knowledge_graph.graph.manifest_locking import _read_manifest
+
     loader = getattr(assembly, "_load_filter_source_lineage", None)
     assert callable(loader)
     source = inspect.getsource(loader)
 
     compact = " ".join(source.split())
-    assert "_bounded_query_rows( source_manifest_query" in compact
+    assert "source_manifest = lock_collection_manifest_sources(" in compact
+    manifest_reader = inspect.getsource(_read_manifest)
+    assert "_bounded_rows(" in manifest_reader
+    assert "maximum" in manifest_reader
     assert "_bounded_query_rows( source_entity_query" in compact
     assert "_bounded_query_rows( source_link_query" in compact
     assert "tuple(source_manifest_query)" not in source
