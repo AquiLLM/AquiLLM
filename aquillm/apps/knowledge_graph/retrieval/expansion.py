@@ -68,6 +68,10 @@ class _AuthorizedStorageScope:
     manifest_rows: tuple[dict[str, object], ...]
     seed_chunks: tuple[dict[str, object], ...]
     ontology_directions: dict[tuple[int, str], str]
+    evaluation_only: bool
+    evaluation_request_ids: tuple[UUID, ...]
+    evaluation_canonical_memberships: tuple[tuple[int, str], ...]
+    evaluation_canonical_checksum: str
 
     @property
     def collection_artifact_ids(self) -> tuple[int, ...]:
@@ -80,6 +84,14 @@ class _AuthorizedStorageScope:
     @property
     def manifest_ids(self) -> tuple[int, ...]:
         return tuple(int(row["id"]) for row in self.manifest_rows)
+
+    @property
+    def collection_artifact_status(self) -> str:
+        return "superseded" if self.evaluation_only else "active"
+
+    @property
+    def document_artifact_statuses(self) -> tuple[str, ...]:
+        return ("superseded",) if self.evaluation_only else ("active", "superseded")
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,7 +367,10 @@ def _select_fallback_rows(
     }
 
 
-def _require_live_snapshot_state() -> _RetrievalSnapshotState:
+def _require_live_snapshot_state(
+    *,
+    check_deadline: bool = True,
+) -> _RetrievalSnapshotState:
     state = _ACTIVE_RETRIEVAL_SNAPSHOT.get()
     if state is None:
         raise RuntimeError("loader requires a live authorized snapshot context")
@@ -364,7 +379,8 @@ def _require_live_snapshot_state() -> _RetrievalSnapshotState:
     connection = connections[state.using]
     if connection.vendor != "postgresql" or not connection.in_atomic_block:
         raise RuntimeError("authorized retrieval snapshot context is no longer live")
-    state.deadline.check()
+    if check_deadline:
+        state.deadline.check()
     return state
 
 
@@ -386,6 +402,24 @@ def _bounded_values(
     if len(rows) > maximum:
         raise _SnapshotMiss
     return tuple(rows)
+
+
+def _bounded_objects(
+    queryset: object,
+    *,
+    maximum: int,
+    state: _RetrievalSnapshotState,
+) -> tuple[object, ...]:
+    """Materialize bounded model rows without acquiring locks."""
+
+    if type(maximum) is not int or maximum < 0:
+        raise ValueError("query maximum must be a nonnegative exact integer")
+    state.deadline.check()
+    rows = tuple(queryset.order_by("pk")[: maximum + 1])
+    state.deadline.check()
+    if len(rows) > maximum:
+        raise _SnapshotMiss
+    return rows
 
 
 def _load_document_membership(
@@ -420,9 +454,357 @@ def _load_document_membership(
     return _validate_scope_membership(request, observed)
 
 
+def _authorize_evaluation_collection_scope(
+    capability: _EvaluationArtifactCapability,
+    allowed_collection_ids: tuple[int, ...],
+    state: _RetrievalSnapshotState,
+) -> tuple[dict[str, object], ...]:
+    """Authorize exact terminal eval occurrences before graph content access."""
+
+    from apps.knowledge_graph.models import (
+        GraphArtifact,
+        GraphBuildRun,
+        GraphRebuildRequest,
+    )
+
+    if type(capability) is not _EvaluationArtifactCapability:
+        raise _SnapshotMiss
+    if type(allowed_collection_ids) is not tuple or any(
+        type(collection_id) is not int or collection_id <= 0
+        for collection_id in allowed_collection_ids
+    ):
+        raise _SnapshotMiss
+    if tuple(item[0] for item in capability.collection_requests) != (
+        allowed_collection_ids
+    ):
+        raise _SnapshotMiss
+    request_ids = tuple(item[1] for item in capability.collection_requests)
+    request_rows = _bounded_values(
+        GraphRebuildRequest.objects.using(state.using).filter(pk__in=request_ids),
+        (
+            "id",
+            "scope_type",
+            "scope_id",
+            "status",
+            "evaluation_only",
+            "activated_artifact_pk",
+            "activated_run_pk",
+            "activated_build_key",
+            "activated_build_generation",
+            "activated_source_hash",
+        ),
+        maximum=len(request_ids),
+        state=state,
+    )
+    artifact_fields = (
+        "id",
+        "collection_scope_id",
+        "scope_type",
+        "scope_id",
+        "rebuild_request_id",
+        "status",
+        "evaluation_only",
+        *_EVALUATION_IDENTITY_FIELDS,
+    )
+    artifact_rows = _bounded_values(
+        GraphArtifact.objects.using(state.using).filter(
+            rebuild_request_id__in=request_ids,
+            collection_scope_id__in=allowed_collection_ids,
+            scope_type=GraphArtifact.ScopeType.COLLECTION,
+            status=GraphArtifact.Status.SUPERSEDED,
+            evaluation_only=True,
+        ),
+        artifact_fields,
+        maximum=len(request_ids),
+        state=state,
+    )
+    artifact_ids = tuple(int(row["id"]) for row in artifact_rows)
+    run_rows = _bounded_values(
+        GraphBuildRun.objects.using(state.using).filter(
+            artifact_id__in=artifact_ids,
+            rebuild_request_id__in=request_ids,
+            build_kind=GraphBuildRun.BuildKind.COLLECTION,
+            evaluation_only=True,
+        ),
+        (
+            "id",
+            "artifact_id",
+            "rebuild_request_id",
+            "evaluation_only",
+            "build_kind",
+            "scope_type",
+            "scope_id",
+            *_EVALUATION_IDENTITY_FIELDS,
+            "stage",
+            "status",
+            "lease_owner",
+            "lease_expires_at",
+            "finished_at",
+            "stage_marker",
+        ),
+        maximum=len(request_ids),
+        state=state,
+    )
+    return _select_evaluation_artifact_occurrences(
+        capability,
+        request_rows=request_rows,
+        artifact_rows=artifact_rows,
+        run_rows=run_rows,
+    )
+
+
+def _authorize_evaluation_artifacts(
+    capability: _EvaluationArtifactCapability,
+    request: GraphExpansionRequest,
+    state: _RetrievalSnapshotState,
+) -> tuple[dict[str, object], ...]:
+    """Authorize one exact request after the collection-only preflight seam."""
+
+    return _authorize_evaluation_collection_scope(
+        capability,
+        request.allowed_collection_ids,
+        state,
+    )
+
+
+def _resolve_evaluation_canonical_memberships(
+    *,
+    entity_rows: tuple[object, ...],
+    provenance_rows: tuple[object, ...],
+    source_memberships: tuple[object, ...],
+    artifact_embedding_signatures: dict[int, str],
+    resolver_version: str | None = None,
+) -> tuple[tuple[tuple[int, str], ...], str]:
+    """Run the exact production canonical kernels over authorized eval inputs."""
+
+    from apps.knowledge_graph.resolution.canonical import (
+        CANONICAL_RESOLVER_VERSION,
+        _derive_locked_embedding_candidates,
+        build_canonical_inputs_from_provenance,
+        resolve_canonical_entities,
+    )
+
+    inputs = build_canonical_inputs_from_provenance(
+        entity_rows,
+        provenance_rows,
+        source_memberships,
+    )
+    embedding_candidates = _derive_locked_embedding_candidates(
+        entity_rows,
+        artifact_embedding_signatures=artifact_embedding_signatures,
+    )
+    resolution = resolve_canonical_entities(
+        inputs,
+        embedding_candidates=embedding_candidates,
+        resolver_version=(
+            CANONICAL_RESOLVER_VERSION if resolver_version is None else resolver_version
+        ),
+    )
+    memberships = tuple(
+        sorted(
+            (
+                (entity_id, component.identity_key)
+                for component in resolution.components
+                for entity_id in component.entity_ids
+            ),
+            key=lambda item: item[0],
+        )
+    )
+    if {item[0] for item in memberships} != {
+        int(getattr(row, "pk")) for row in entity_rows
+    } or any(_HASH_PATTERN.fullmatch(item[1]) is None for item in memberships):
+        raise _SnapshotMiss
+    try:
+        checksum = _require_sha256(
+            resolution.checksum,
+            "evaluation canonical resolution checksum",
+        )
+    except ValueError as error:
+        raise _SnapshotMiss from error
+    return memberships, checksum
+
+
+def _load_evaluation_canonical_projection(
+    *,
+    request: GraphExpansionRequest,
+    collection_artifacts: tuple[dict[str, object], ...],
+    manifest_rows: tuple[dict[str, object], ...],
+    state: _RetrievalSnapshotState,
+) -> tuple[tuple[tuple[int, str], ...], str]:
+    """Read exact eval provenance and project canonical memberships in memory."""
+
+    from django.db.models import F
+
+    from apps.knowledge_graph.models import (
+        CollectionEntity,
+        CollectionEntityDocumentLink,
+        DocumentEntityMention,
+        GraphArtifact,
+    )
+    from apps.knowledge_graph.models.entities import ResolutionStatus
+    from apps.knowledge_graph.resolution.canonical import (
+        MAX_CANONICAL_ENTITIES,
+        MAX_CANONICAL_MEMBERSHIPS,
+        MAX_CANONICAL_SOURCE_LINKS,
+        CanonicalProvenanceRow,
+        CanonicalSourceMembership,
+    )
+
+    artifact_ids = tuple(int(row["id"]) for row in collection_artifacts)
+    document_artifact_ids = tuple(
+        sorted({int(row["document_artifact_id"]) for row in manifest_rows})
+    )
+    manifest_ids = tuple(int(row["id"]) for row in manifest_rows)
+    entity_rows = _bounded_objects(
+        CollectionEntity.objects.using(state.using).filter(
+            artifact_id__in=artifact_ids,
+            artifact__status=GraphArtifact.Status.SUPERSEDED,
+            artifact__evaluation_only=True,
+            status=ResolutionStatus.ACTIVE,
+            collection_id__in=request.allowed_collection_ids,
+            collection_id=F("artifact__collection_scope_id"),
+        ),
+        maximum=MAX_CANONICAL_ENTITIES,
+        state=state,
+    )
+    if not entity_rows:
+        raise _SnapshotMiss
+
+    source_rows = _bounded_values(
+        CollectionEntityDocumentLink.objects.using(state.using).filter(
+            artifact_id__in=artifact_ids,
+            artifact__status=GraphArtifact.Status.SUPERSEDED,
+            artifact__evaluation_only=True,
+            status=ResolutionStatus.ACTIVE,
+            outcome="automatic",
+            resolver_version=F("artifact__resolver_version"),
+            collection_entity__status=ResolutionStatus.ACTIVE,
+            collection_entity__artifact_id=F("artifact_id"),
+            manifest_input_id__in=manifest_ids,
+            manifest_input__artifact_id=F("artifact_id"),
+            manifest_input__collection_id=F("collection_entity__collection_id"),
+            document_entity__status=ResolutionStatus.ACTIVE,
+            document_entity__artifact_id__in=document_artifact_ids,
+            document_entity__artifact__status=GraphArtifact.Status.SUPERSEDED,
+            document_entity__artifact__evaluation_only=True,
+            manifest_input__document_artifact_id=F("document_entity__artifact_id"),
+            manifest_input__document_id=F("document_entity__document_id"),
+        ),
+        (
+            "id",
+            "collection_entity_id",
+            "document_entity_id",
+            "document_entity__artifact_id",
+        ),
+        maximum=MAX_CANONICAL_SOURCE_LINKS,
+        state=state,
+    )
+    source_memberships = tuple(
+        CanonicalSourceMembership(
+            collection_entity_id=int(row["collection_entity_id"]),
+            document_entity_id=int(row["document_entity_id"]),
+            document_artifact_id=int(row["document_entity__artifact_id"]),
+        )
+        for row in source_rows
+    )
+    if len(
+        {
+            (
+                row.collection_entity_id,
+                row.document_entity_id,
+                row.document_artifact_id,
+            )
+            for row in source_memberships
+        }
+    ) != len(source_memberships) or {
+        row.collection_entity_id for row in source_memberships
+    } != {int(getattr(row, "pk")) for row in entity_rows}:
+        raise _SnapshotMiss
+
+    document_entity_ids = tuple(
+        sorted({row.document_entity_id for row in source_memberships})
+    )
+    mention_rows = _bounded_objects(
+        DocumentEntityMention.objects.using(state.using)
+        .filter(
+            document_entity_id__in=document_entity_ids,
+            status=ResolutionStatus.ACTIVE,
+            document_entity__status=ResolutionStatus.ACTIVE,
+            document_entity__artifact_id__in=document_artifact_ids,
+            document_entity__artifact__status=GraphArtifact.Status.SUPERSEDED,
+            document_entity__artifact__evaluation_only=True,
+            mention__artifact_id=F("document_entity__artifact_id"),
+            mention__artifact__status=GraphArtifact.Status.SUPERSEDED,
+            mention__artifact__evaluation_only=True,
+            mention__document_id=F("document_entity__document_id"),
+            resolver_version=F("document_entity__artifact__resolver_version"),
+        )
+        .select_related("mention"),
+        maximum=MAX_CANONICAL_MEMBERSHIPS,
+        state=state,
+    )
+    mention_by_key: dict[tuple[int, int], object] = {}
+    for row in mention_rows:
+        key = (int(row.document_entity_id), int(row.mention_id))
+        if key in mention_by_key:
+            raise _SnapshotMiss
+        mention_by_key[key] = row
+    source_entity_by_document_entity = {
+        row.document_entity_id: row.collection_entity_id for row in source_memberships
+    }
+    document_artifact_by_entity = {
+        row.document_entity_id: row.document_artifact_id for row in source_memberships
+    }
+    if len(source_entity_by_document_entity) != len(document_artifact_by_entity):
+        raise _SnapshotMiss
+    provenance_rows: list[object] = []
+    for row in mention_rows:
+        if row.method not in {"ontology_alias", "defined_acronym"}:
+            continue
+        parent_value = row.parent_mention_id
+        if (
+            type(parent_value) is not str
+            or re.fullmatch(r"[1-9][0-9]*", parent_value) is None
+        ):
+            raise _SnapshotMiss
+        parent = mention_by_key.get((int(row.document_entity_id), int(parent_value)))
+        if parent is None:
+            raise _SnapshotMiss
+        collection_entity_id = source_entity_by_document_entity[
+            int(row.document_entity_id)
+        ]
+        provenance_rows.append(
+            CanonicalProvenanceRow(
+                collection_entity_id=collection_entity_id,
+                document_entity_id=int(row.document_entity_id),
+                document_artifact_id=document_artifact_by_entity[
+                    int(row.document_entity_id)
+                ],
+                mention_id=int(row.mention_id),
+                parent_mention_id=int(parent_value),
+                method=cast(str, row.method),
+                surface=cast(str, row.mention.raw_text),
+                parent_surface=cast(str, parent.mention.raw_text),
+                source_collection_entity_id=collection_entity_id,
+            )
+        )
+    artifact_embedding_signatures = {
+        int(row["id"]): cast(str, row["embedding_model_signature"])
+        for row in collection_artifacts
+    }
+    return _resolve_evaluation_canonical_memberships(
+        entity_rows=entity_rows,
+        provenance_rows=tuple(provenance_rows),
+        source_memberships=source_memberships,
+        artifact_embedding_signatures=artifact_embedding_signatures,
+        resolver_version=state.config.canonical_resolver_version,
+    )
+
+
 def _load_storage_scope(
     request: GraphExpansionRequest,
     state: _RetrievalSnapshotState,
+    evaluation_artifacts: _EvaluationArtifactCapability | None = None,
 ) -> _AuthorizedStorageScope:
     """Load the exact active C/D artifact snapshot and revalidate its ontology."""
 
@@ -436,29 +818,38 @@ def _load_storage_scope(
     )
     from apps.knowledge_graph.services.ontology import load_ontology_yaml
 
+    authorized_evaluation_artifacts = (
+        _authorize_evaluation_artifacts(evaluation_artifacts, request, state)
+        if evaluation_artifacts is not None
+        else ()
+    )
     membership = _load_document_membership(request, state)
-    collection_artifacts = _bounded_values(
-        GraphArtifact.objects.using(state.using).filter(
-            scope_type=GraphArtifact.ScopeType.COLLECTION,
-            scope_id__in=tuple(str(value) for value in request.allowed_collection_ids),
-            collection_scope_id__in=request.allowed_collection_ids,
-            status=GraphArtifact.Status.ACTIVE,
-            evaluation_only=False,
-        ),
-        (
-            "id",
-            "scope_id",
-            "collection_scope_id",
-            "build_key",
-            "source_hash",
-            "ontology_version",
-            "ontology_checksum",
-            "resolver_version",
-            "assembly_version",
-            "assembly_config_checksum",
-        ),
-        maximum=state.config.max_scope_collections,
-        state=state,
+    collection_artifacts = (
+        authorized_evaluation_artifacts
+        if evaluation_artifacts is not None
+        else _bounded_values(
+            GraphArtifact.objects.using(state.using).filter(
+                scope_type=GraphArtifact.ScopeType.COLLECTION,
+                scope_id__in=tuple(
+                    str(value) for value in request.allowed_collection_ids
+                ),
+                collection_scope_id__in=request.allowed_collection_ids,
+                status=GraphArtifact.Status.ACTIVE,
+                evaluation_only=False,
+            ),
+            (
+                "id",
+                "scope_type",
+                "scope_id",
+                "collection_scope_id",
+                "rebuild_request_id",
+                "status",
+                "evaluation_only",
+                *_EVALUATION_IDENTITY_FIELDS,
+            ),
+            maximum=state.config.max_scope_collections,
+            state=state,
+        )
     )
     selected_collection_ids = tuple(
         int(row["collection_scope_id"]) for row in collection_artifacts
@@ -482,29 +873,58 @@ def _load_storage_scope(
         "membership_signature",
         "build_signature",
         "document_artifact__build_key",
+        "document_artifact__build_generation",
+        "document_artifact__orchestration_version",
         "document_artifact__scope_id",
+        "document_artifact__scope_type",
+        "document_artifact__rebuild_request_id",
+        "document_artifact__status",
+        "document_artifact__evaluation_only",
         "document_artifact__source_hash",
+        "document_artifact__extractor_version",
         "document_artifact__resolver_version",
+        "document_artifact__resolution_config_checksum",
+        "document_artifact__filter_policy_version",
+        "document_artifact__filter_policy_checksum",
+        "document_artifact__embedding_model_signature",
         "document_artifact__ontology_version",
         "document_artifact__ontology_checksum",
+        "document_artifact__assembly_version",
+        "document_artifact__assembly_config_checksum",
     )
     manifest_accumulator: list[dict[str, object]] = []
     for raw_batch in _query_batches(request.allowed_doc_ids):
         remaining = state.config.max_scope_documents - len(manifest_accumulator)
-        rows = _bounded_values(
-            CollectionArtifactInput.objects.using(state.using).filter(
-                artifact_id__in=artifact_ids,
+        manifest_query = CollectionArtifactInput.objects.using(state.using).filter(
+            artifact_id__in=artifact_ids,
+            collection_id__in=request.allowed_collection_ids,
+            document_id__in=cast(tuple[UUID, ...], raw_batch),
+            artifact__collection_scope_id=F("collection_id"),
+            document_artifact__scope_type=GraphArtifact.ScopeType.DOCUMENT,
+        )
+        if evaluation_artifacts is None:
+            manifest_query = manifest_query.filter(
                 artifact__status=GraphArtifact.Status.ACTIVE,
-                collection_id__in=request.allowed_collection_ids,
-                document_id__in=cast(tuple[UUID, ...], raw_batch),
-                artifact__collection_scope_id=F("collection_id"),
+                artifact__evaluation_only=False,
                 document_artifact__status__in=(
                     GraphArtifact.Status.ACTIVE,
                     GraphArtifact.Status.SUPERSEDED,
                 ),
-                document_artifact__scope_type=GraphArtifact.ScopeType.DOCUMENT,
                 document_artifact__evaluation_only=False,
-            ),
+            )
+        else:
+            manifest_query = manifest_query.filter(
+                artifact__status=GraphArtifact.Status.SUPERSEDED,
+                artifact__evaluation_only=True,
+                artifact__rebuild_request_id__in=tuple(
+                    item[1] for item in evaluation_artifacts.collection_requests
+                ),
+                document_artifact__status=GraphArtifact.Status.SUPERSEDED,
+                document_artifact__evaluation_only=True,
+                document_artifact__rebuild_request_id=F("artifact__rebuild_request_id"),
+            )
+        rows = _bounded_values(
+            manifest_query,
             manifest_fields,
             maximum=remaining,
             state=state,
@@ -517,6 +937,8 @@ def _load_storage_scope(
         for row in manifest_rows
     )
     if len({row[0] for row in manifest_scope}) != len(manifest_scope):
+        raise _SnapshotMiss
+    if set(manifest_scope) != set(membership):
         raise _SnapshotMiss
     if any(
         membership_by_document.get(document_id) != collection_id
@@ -536,6 +958,36 @@ def _load_storage_scope(
         for row in manifest_rows
     ):
         raise _SnapshotMiss
+    artifact_rows_by_id = {int(row["id"]): row for row in collection_artifacts}
+    if evaluation_artifacts is not None:
+        for row in manifest_rows:
+            document_identity = {
+                field: row[f"document_artifact__{field}"]
+                for field in _EVALUATION_IDENTITY_FIELDS
+            }
+            _validate_evaluation_identity_row(document_identity)
+            collection_artifact = artifact_rows_by_id[int(row["artifact_id"])]
+            if (
+                row["document_artifact__status"] != GraphArtifact.Status.SUPERSEDED
+                or row["document_artifact__evaluation_only"] is not True
+                or row["document_artifact__rebuild_request_id"]
+                != collection_artifact["rebuild_request_id"]
+                or any(
+                    row[f"document_artifact__{field}"] != collection_artifact[field]
+                    for field in (
+                        "orchestration_version",
+                        "extractor_version",
+                        "resolver_version",
+                        "resolution_config_checksum",
+                        "filter_policy_version",
+                        "filter_policy_checksum",
+                        "embedding_model_signature",
+                        "ontology_version",
+                        "ontology_checksum",
+                    )
+                )
+            ):
+                raise _SnapshotMiss
 
     seed_ids = tuple(seed.chunk_id for seed in request.seeds)
     seed_chunks = _bounded_values(
@@ -624,12 +1076,33 @@ def _load_storage_scope(
                 relation_definition.direction
             )
 
+    evaluation_canonical_memberships: tuple[tuple[int, str], ...] = ()
+    evaluation_canonical_checksum = ""
+    if evaluation_artifacts is not None:
+        (
+            evaluation_canonical_memberships,
+            evaluation_canonical_checksum,
+        ) = _load_evaluation_canonical_projection(
+            request=request,
+            collection_artifacts=collection_artifacts,
+            manifest_rows=manifest_rows,
+            state=state,
+        )
+
     return _AuthorizedStorageScope(
         document_membership=membership,
         collection_artifacts=collection_artifacts,
         manifest_rows=manifest_rows,
         seed_chunks=seed_chunks,
         ontology_directions=ontology_directions,
+        evaluation_only=evaluation_artifacts is not None,
+        evaluation_request_ids=(
+            tuple(item[1] for item in evaluation_artifacts.collection_requests)
+            if evaluation_artifacts is not None
+            else ()
+        ),
+        evaluation_canonical_memberships=evaluation_canonical_memberships,
+        evaluation_canonical_checksum=evaluation_canonical_checksum,
     )
 
 
@@ -707,6 +1180,17 @@ def _load_seed_collection_entity_ids(
         "document_link": quote(DocumentEntityMention._meta.db_table),
         "mention": quote(EntityMention._meta.db_table),
     }
+    occurrence_sql = (
+        "collection_artifact.status = 'superseded' "
+        "AND collection_artifact.evaluation_only = TRUE "
+        "AND document_artifact.status = 'superseded' "
+        "AND document_artifact.evaluation_only = TRUE"
+        if scope.evaluation_only
+        else "collection_artifact.status = 'active' "
+        "AND collection_artifact.evaluation_only = FALSE "
+        "AND document_artifact.status IN ('active', 'superseded') "
+        "AND document_artifact.evaluation_only = FALSE"
+    )
     sql = f"""
         WITH seed_scope(seed_chunk_id, document_id) AS (VALUES {seed_values})
         SELECT seed_scope.seed_chunk_id, link.collection_entity_id,
@@ -740,7 +1224,7 @@ def _load_seed_collection_entity_ids(
           AND link.manifest_input_id = ANY(%s::bigint[])
           AND manifest_input.collection_id = ANY(%s::bigint[])
           AND manifest_input.document_id = ANY(%s::uuid[])
-          AND collection_artifact.status = 'active'
+          AND {occurrence_sql}
           AND collection_artifact.scope_type = 'collection'
           AND collection_artifact.collection_scope_id = manifest_input.collection_id
           AND collection_artifact.scope_id = manifest_input.collection_id::text
@@ -751,8 +1235,6 @@ def _load_seed_collection_entity_ids(
           AND link.artifact_id = collection_entity.artifact_id
           AND collection_entity.status = 'active'
           AND collection_entity.collection_id = manifest_input.collection_id
-          AND document_artifact.status IN ('active', 'superseded')
-          AND document_artifact.evaluation_only = FALSE
           AND document_artifact.scope_type = 'document'
           AND document_artifact.scope_id = manifest_input.document_id::text
           AND document_entity.status = 'active'
@@ -788,18 +1270,39 @@ def _permission_membership_subquery(
 ):
     """Return a current exact-scope permission proof for one collection entity."""
 
-    from django.db.models import OuterRef
+    from django.db.models import F, OuterRef
 
-    from apps.knowledge_graph.models import CollectionEntityDocumentLink
+    from apps.knowledge_graph.models import (
+        CollectionEntityDocumentLink,
+        GraphArtifact,
+    )
+    from apps.knowledge_graph.models.entities import ResolutionStatus
 
-    query = (
-        CollectionEntityDocumentLink.objects.using(state.using)
-        .current()
-        .filter(
-            collection_entity_id=OuterRef(collection_entity_outer_ref),
-            artifact_id__in=scope.collection_artifact_ids,
-            manifest_input__collection_id__in=request.allowed_collection_ids,
+    query = CollectionEntityDocumentLink.objects.using(state.using)
+    if scope.evaluation_only:
+        query = query.filter(
+            artifact__status=GraphArtifact.Status.SUPERSEDED,
+            artifact__evaluation_only=True,
+            status=ResolutionStatus.ACTIVE,
+            outcome="automatic",
+            resolver_version=F("artifact__resolver_version"),
+            document_entity__status=ResolutionStatus.ACTIVE,
+            document_entity__artifact_id__in=scope.document_artifact_ids,
+            document_entity__artifact__status=GraphArtifact.Status.SUPERSEDED,
+            document_entity__artifact__evaluation_only=True,
+            collection_entity__status=ResolutionStatus.ACTIVE,
+            collection_entity__artifact_id=F("artifact_id"),
+            manifest_input__artifact_id=F("artifact_id"),
+            manifest_input__collection_id=F("collection_entity__collection_id"),
+            manifest_input__document_artifact_id=F("document_entity__artifact_id"),
+            manifest_input__document_id=F("document_entity__document_id"),
         )
+    else:
+        query = query.current()
+    query = query.filter(
+        collection_entity_id=OuterRef(collection_entity_outer_ref),
+        artifact_id__in=scope.collection_artifact_ids,
+        manifest_input__collection_id__in=request.allowed_collection_ids,
     )
     return query.filter(
         _batched_in_q("manifest_input_id", scope.manifest_ids),
@@ -826,14 +1329,22 @@ def _load_authorized_entity_rows(
 
     from django.db.models import Exists
 
-    from apps.knowledge_graph.models import CollectionEntity
+    from apps.knowledge_graph.models import CollectionEntity, GraphArtifact
+    from apps.knowledge_graph.models.entities import ResolutionStatus
 
     if not entity_ids:
         return ()
+    query = CollectionEntity.objects.using(state.using)
+    if scope.evaluation_only:
+        query = query.filter(
+            artifact__status=GraphArtifact.Status.SUPERSEDED,
+            artifact__evaluation_only=True,
+            status=ResolutionStatus.ACTIVE,
+        )
+    else:
+        query = query.current()
     query = (
-        CollectionEntity.objects.using(state.using)
-        .current()
-        .filter(
+        query.filter(
             pk__in=entity_ids,
             artifact_id__in=scope.collection_artifact_ids,
             collection_id__in=request.allowed_collection_ids,
@@ -937,6 +1448,50 @@ def _extend_identity_registry(
         entities[row.pk] = row
 
     if not missing:
+        return
+    if scope.evaluation_only:
+        component_by_entity = dict(scope.evaluation_canonical_memberships)
+        if any(entity_id not in component_by_entity for entity_id in missing):
+            raise _SnapshotMiss
+        selected_components = {component_by_entity[entity_id] for entity_id in missing}
+        peer_entity_ids = tuple(
+            sorted(
+                entity_id
+                for entity_id, component in scope.evaluation_canonical_memberships
+                if component in selected_components
+            )
+        )
+        peer_missing = tuple(
+            entity_id for entity_id in peer_entity_ids if entity_id not in entities
+        )
+        remaining = state.config.max_nodes - len(entities)
+        if len(peer_missing) > remaining:
+            raise _SnapshotMiss
+        for row in _load_authorized_entity_rows(
+            peer_missing,
+            request=request,
+            scope=scope,
+            state=state,
+            maximum=remaining,
+        ):
+            entities[row.pk] = row
+        for entity_id in peer_entity_ids:
+            component = component_by_entity[entity_id]
+            identity: StableNodeKey = ("local", component)
+            previous = identity_by_entity.setdefault(entity_id, identity)
+            if previous != identity:
+                raise _SnapshotMiss
+            audit_value = (
+                discovery_hop,
+                entity_id,
+                entity_id,
+                component,
+                scope.evaluation_canonical_checksum,
+                state.config.canonical_resolver_version,
+            )
+            previous_audit = canonical_audit.setdefault(entity_id, audit_value)
+            if previous_audit[1:] != audit_value[1:]:
+                raise _SnapshotMiss
         return
     direct_links = _bounded_values(
         CanonicalEntityLink.objects.using(state.using)
@@ -1057,6 +1612,43 @@ def _extend_identity_registry(
     identity_by_entity.update(projected)
 
 
+def _authorized_collection_link_filters(
+    scope: _AuthorizedStorageScope,
+    prefix: str,
+) -> dict[str, object]:
+    """Use production-current filters or their exact eval occurrence analogue."""
+
+    from django.db.models import F
+
+    from apps.knowledge_graph.models import GraphArtifact
+    from apps.knowledge_graph.models.associations import _current_link_filters
+    from apps.knowledge_graph.models.entities import ResolutionStatus
+
+    if not scope.evaluation_only:
+        return _current_link_filters(prefix)
+    path = f"{prefix}__" if prefix else ""
+    return {
+        f"{path}artifact__status": GraphArtifact.Status.SUPERSEDED,
+        f"{path}artifact__evaluation_only": True,
+        f"{path}status": ResolutionStatus.ACTIVE,
+        f"{path}outcome": "automatic",
+        f"{path}resolver_version": F(f"{path}artifact__resolver_version"),
+        f"{path}document_entity__status": ResolutionStatus.ACTIVE,
+        f"{path}document_entity__artifact__status": GraphArtifact.Status.SUPERSEDED,
+        f"{path}document_entity__artifact__evaluation_only": True,
+        f"{path}collection_entity__status": ResolutionStatus.ACTIVE,
+        f"{path}collection_entity__artifact_id": F(f"{path}artifact_id"),
+        f"{path}manifest_input__artifact_id": F(f"{path}artifact_id"),
+        f"{path}manifest_input__collection_id": F(
+            f"{path}collection_entity__collection_id"
+        ),
+        f"{path}manifest_input__document_artifact_id": F(
+            f"{path}document_entity__artifact_id"
+        ),
+        f"{path}manifest_input__document_id": F(f"{path}document_entity__document_id"),
+    }
+
+
 def _authorized_evidence_queryset(
     *,
     request: GraphExpansionRequest,
@@ -1072,14 +1664,18 @@ def _authorized_evidence_queryset(
         CollectionRelationEvidence,
         GraphArtifact,
     )
-    from apps.knowledge_graph.models.associations import _current_link_filters
     from apps.knowledge_graph.models.entities import ResolutionStatus
 
     query = (
         CollectionRelationEvidence.objects.using(state.using)
         .filter(
             artifact_id__in=scope.collection_artifact_ids,
-            artifact__status=GraphArtifact.Status.ACTIVE,
+            artifact__status=(
+                GraphArtifact.Status.SUPERSEDED
+                if scope.evaluation_only
+                else GraphArtifact.Status.ACTIVE
+            ),
+            artifact__evaluation_only=scope.evaluation_only,
             status=CollectionRelationEvidence.Status.ACTIVE,
             relation__isnull=False,
             relation__artifact_id=F("artifact_id"),
@@ -1090,11 +1686,8 @@ def _authorized_evidence_queryset(
             relation__target__artifact_id=F("artifact_id"),
             ontology_checksum=F("artifact__ontology_checksum"),
             assembly_config_checksum=F("artifact__assembly_config_checksum"),
-            relation_mention__artifact__status__in=(
-                GraphArtifact.Status.ACTIVE,
-                GraphArtifact.Status.SUPERSEDED,
-            ),
-            relation_mention__artifact__evaluation_only=False,
+            relation_mention__artifact__status__in=scope.document_artifact_statuses,
+            relation_mention__artifact__evaluation_only=scope.evaluation_only,
             relation_mention__artifact__scope_type=GraphArtifact.ScopeType.DOCUMENT,
             relation_mention__relation_type=F("relation__relation_type"),
             relation_mention__chunk__doc_id=F("relation_mention__document_id"),
@@ -1116,8 +1709,8 @@ def _authorized_evidence_queryset(
             tail_mapping__document_entity__mention_links__resolver_version=F(
                 "tail_mapping__document_entity__artifact__resolver_version"
             ),
-            **_current_link_filters("head_mapping"),
-            **_current_link_filters("tail_mapping"),
+            **_authorized_collection_link_filters(scope, "head_mapping"),
+            **_authorized_collection_link_filters(scope, "tail_mapping"),
         )
         .filter(
             Q(relation__source__collection_id=F("relation__target__collection_id")),
@@ -1212,7 +1805,12 @@ def _load_physical_relations(
         .filter(
             Exists(evidence_exists),
             artifact_id__in=scope.collection_artifact_ids,
-            artifact__status=GraphArtifact.Status.ACTIVE,
+            artifact__status=(
+                GraphArtifact.Status.SUPERSEDED
+                if scope.evaluation_only
+                else GraphArtifact.Status.ACTIVE
+            ),
+            artifact__evaluation_only=scope.evaluation_only,
             status=ResolutionStatus.ACTIVE,
             source__status=ResolutionStatus.ACTIVE,
             target__status=ResolutionStatus.ACTIVE,
@@ -1374,6 +1972,17 @@ def _load_authorized_identity_mentions(
         "document_link": quote(DocumentEntityMention._meta.db_table),
         "mention": quote(EntityMention._meta.db_table),
     }
+    occurrence_sql = (
+        "collection_artifact.status = 'superseded' "
+        "AND collection_artifact.evaluation_only = TRUE "
+        "AND document_artifact.status = 'superseded' "
+        "AND document_artifact.evaluation_only = TRUE"
+        if scope.evaluation_only
+        else "collection_artifact.status = 'active' "
+        "AND collection_artifact.evaluation_only = FALSE "
+        "AND document_artifact.status IN ('active', 'superseded') "
+        "AND document_artifact.evaluation_only = FALSE"
+    )
     seed_chunk_ids = tuple(seed.chunk_id for seed in request.seeds)
     total_cap = state.config.max_nodes * state.config.max_mentions_per_entity
     document_batches = tuple(_query_batches(request.allowed_doc_ids))
@@ -1463,7 +2072,7 @@ def _load_authorized_identity_mentions(
                  AND chunk.doc_id = entity_mention.document_id
                 WHERE link.artifact_id = ANY(%s::bigint[])
                   AND observed.chunk_id <> ALL(%s::bigint[])
-                  AND collection_artifact.status = 'active'
+                  AND {occurrence_sql}
                   AND collection_artifact.scope_type = 'collection'
                   AND collection_artifact.collection_scope_id =
                       manifest_input.collection_id
@@ -1475,8 +2084,6 @@ def _load_authorized_identity_mentions(
                   AND link.outcome = 'automatic'
                   AND link.resolver_version = collection_artifact.resolver_version
                   AND manifest_input.artifact_id = collection_artifact.id
-                  AND document_artifact.status IN ('active', 'superseded')
-                  AND document_artifact.evaluation_only = FALSE
                   AND document_artifact.scope_type = 'document'
                   AND document_artifact.scope_id = manifest_input.document_id::text
                   AND document_entity.status = 'active'
@@ -1605,9 +2212,33 @@ def authorized_retrieval_snapshot(
         try:
             deadline.check()
             yield deadline
-            deadline.check()
         finally:
             _ACTIVE_RETRIEVAL_SNAPSHOT.reset(token)
+
+
+@contextmanager
+def authorized_retrieval_query_snapshot(
+    *,
+    timeout_ms: int,
+    _clock: Callable[[], float] | None = None,
+) -> Iterator[_MonotonicDeadline]:
+    """Reset one bounded query budget inside the active RR transaction."""
+
+    state = _require_live_snapshot_state(check_deadline=False)
+    if type(timeout_ms) is not int or not 1 <= timeout_ms <= state.config.timeout_ms:
+        raise ValueError("timeout_ms exceeds the effective configured timeout")
+    deadline = (
+        _MonotonicDeadline.after_ms(timeout_ms)
+        if _clock is None
+        else _MonotonicDeadline.after_ms(timeout_ms, clock=_clock)
+    )
+    token = _ACTIVE_RETRIEVAL_SNAPSHOT.set(replace(state, deadline=deadline))
+    try:
+        deadline.check()
+        yield deadline
+        deadline.check()
+    finally:
+        _ACTIVE_RETRIEVAL_SNAPSHOT.reset(token)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -1619,6 +2250,201 @@ class _EvaluationTraceCapability:
     def __post_init__(self) -> None:
         if not callable(self.sink):
             raise ValueError("evaluation trace sink must be callable")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _EvaluationArtifactCapability:
+    """Exact private collection-to-evaluation-request authorization."""
+
+    collection_requests: tuple[tuple[int, UUID], ...]
+
+    def __post_init__(self) -> None:
+        mappings = _exact_tuple(
+            self.collection_requests,
+            "collection_requests",
+            maximum=4,
+            nonempty=True,
+        )
+        validated: list[tuple[int, UUID]] = []
+        for mapping in mappings:
+            if type(mapping) is not tuple or len(mapping) != 2:
+                raise ValueError(
+                    "collection_requests must contain exact collection/request pairs"
+                )
+            collection_id = _positive_database_int(
+                mapping[0],
+                "collection_requests collection_id",
+            )
+            request_id = mapping[1]
+            if type(request_id) is not UUID:
+                raise ValueError("collection_requests request_id must be an exact UUID")
+            validated.append((collection_id, request_id))
+        canonical = tuple(sorted(validated, key=lambda item: item[0]))
+        if tuple(validated) != canonical:
+            raise ValueError("collection_requests must be canonically sorted")
+        if len({item[0] for item in canonical}) != len(canonical):
+            raise ValueError("collection_requests collection IDs must be unique")
+        if len({item[1] for item in canonical}) != len(canonical):
+            raise ValueError("collection_requests request IDs must be unique")
+        object.__setattr__(self, "collection_requests", canonical)
+
+
+_EVALUATION_IDENTITY_FIELDS = (
+    "build_key",
+    "build_generation",
+    "orchestration_version",
+    "source_hash",
+    "ontology_version",
+    "extractor_version",
+    "resolver_version",
+    "filter_policy_version",
+    "embedding_model_signature",
+    "ontology_checksum",
+    "filter_policy_checksum",
+    "resolution_config_checksum",
+    "assembly_version",
+    "assembly_config_checksum",
+)
+_EVALUATION_HASH_FIELDS = frozenset(
+    {
+        "build_key",
+        "source_hash",
+        "ontology_checksum",
+        "filter_policy_checksum",
+        "resolution_config_checksum",
+        "assembly_config_checksum",
+    }
+)
+
+
+def _require_bounded_identity_string(value: object, field_name: str) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or value != value.strip()
+        or len(value) > 512
+        or "\x00" in value
+    ):
+        raise _SnapshotMiss
+    return value
+
+
+def _validate_evaluation_identity_row(row: dict[str, object]) -> None:
+    for field_name in _EVALUATION_IDENTITY_FIELDS:
+        value = row.get(field_name)
+        if field_name in _EVALUATION_HASH_FIELDS:
+            try:
+                _require_sha256(value, field_name)
+            except ValueError as error:
+                raise _SnapshotMiss from error
+        elif field_name == "build_generation":
+            try:
+                _positive_database_int(value, field_name)
+            except ValueError as error:
+                raise _SnapshotMiss from error
+        elif field_name == "orchestration_version":
+            if type(value) is not int or value != 1:
+                raise _SnapshotMiss
+        else:
+            _require_bounded_identity_string(value, field_name)
+
+
+def _select_evaluation_artifact_occurrences(
+    capability: _EvaluationArtifactCapability,
+    *,
+    request_rows: tuple[dict[str, object], ...],
+    artifact_rows: tuple[dict[str, object], ...],
+    run_rows: tuple[dict[str, object], ...],
+) -> tuple[dict[str, object], ...]:
+    """Fence exact completed eval occurrences without changing public loading."""
+
+    if type(capability) is not _EvaluationArtifactCapability:
+        raise _SnapshotMiss
+    if any(type(rows) is not tuple for rows in (request_rows, artifact_rows, run_rows)):
+        raise _SnapshotMiss
+    if any(
+        type(row) is not dict
+        for rows in (request_rows, artifact_rows, run_rows)
+        for row in rows
+    ):
+        raise _SnapshotMiss
+
+    selected: list[dict[str, object]] = []
+    for collection_id, request_id in capability.collection_requests:
+        matching_requests = tuple(
+            row for row in request_rows if row.get("id") == request_id
+        )
+        if len(matching_requests) != 1:
+            raise _SnapshotMiss
+        request = matching_requests[0]
+        if (
+            request.get("scope_type") != "collection"
+            or request.get("scope_id") != str(collection_id)
+            or request.get("status") != "succeeded"
+            or request.get("evaluation_only") is not True
+        ):
+            raise _SnapshotMiss
+
+        matching_artifacts = tuple(
+            row
+            for row in artifact_rows
+            if row.get("collection_scope_id") == collection_id
+            and row.get("scope_type") == "collection"
+            and row.get("scope_id") == str(collection_id)
+            and row.get("rebuild_request_id") == request_id
+            and row.get("status") == "superseded"
+            and row.get("evaluation_only") is True
+        )
+        if len(matching_artifacts) != 1:
+            raise _SnapshotMiss
+        artifact = matching_artifacts[0]
+        try:
+            artifact_id = _positive_database_int(artifact.get("id"), "artifact id")
+        except ValueError as error:
+            raise _SnapshotMiss from error
+        _validate_evaluation_identity_row(artifact)
+
+        matching_runs = tuple(
+            row
+            for row in run_rows
+            if row.get("artifact_id") == artifact_id
+            and row.get("rebuild_request_id") == request_id
+        )
+        if len(matching_runs) != 1:
+            raise _SnapshotMiss
+        run = matching_runs[0]
+        try:
+            run_id = _positive_database_int(run.get("id"), "run id")
+        except ValueError as error:
+            raise _SnapshotMiss from error
+        _validate_evaluation_identity_row(run)
+        marker = run.get("stage_marker")
+        if (
+            run.get("evaluation_only") is not True
+            or run.get("build_kind") != "collection"
+            or run.get("scope_type") != "collection"
+            or run.get("scope_id") != str(collection_id)
+            or run.get("stage") != "superseded"
+            or run.get("status") != "cancelled"
+            or run.get("lease_owner") != ""
+            or run.get("lease_expires_at") is not None
+            or run.get("finished_at") is None
+            or type(marker) is not dict
+            or marker.get("evaluation_completed") is not True
+            or any(
+                run.get(field) != artifact.get(field)
+                for field in _EVALUATION_IDENTITY_FIELDS
+            )
+            or request.get("activated_artifact_pk") != artifact_id
+            or request.get("activated_run_pk") != run_id
+            or request.get("activated_build_key") != artifact.get("build_key")
+            or request.get("activated_build_generation")
+            != artifact.get("build_generation")
+            or request.get("activated_source_hash") != artifact.get("source_hash")
+        ):
+            raise _SnapshotMiss
+        selected.append(artifact)
+    return tuple(selected)
 
 
 def _positive_database_int(value: object, field_name: str) -> int:
@@ -1848,6 +2674,53 @@ class AuthorizedIdentityMention:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthorizedArtifactProvenance:
+    """Typed private provenance for one exact authorized artifact occurrence."""
+
+    artifact_id: int
+    scope_type: str
+    scope_id: str
+    collection_id: int
+    rebuild_request_id: UUID | None
+    evaluation_only: bool
+    build_key: str
+    build_generation: int
+    orchestration_version: int
+    source_hash: str
+    ontology_version: str
+    ontology_checksum: str
+    extractor_version: str
+    resolver_version: str
+    resolution_config_checksum: str
+    filter_policy_version: str
+    filter_policy_checksum: str
+    embedding_model_signature: str
+    assembly_version: str
+    assembly_config_checksum: str
+
+    def __post_init__(self) -> None:
+        _positive_database_int(self.artifact_id, "artifact provenance id")
+        _positive_database_int(self.collection_id, "artifact provenance collection")
+        if self.scope_type not in {"collection", "document"}:
+            raise ValueError("artifact provenance scope_type is invalid")
+        _require_bounded_identity_string(self.scope_id, "artifact provenance scope_id")
+        if (
+            self.rebuild_request_id is not None
+            and type(self.rebuild_request_id) is not UUID
+        ):
+            raise ValueError("artifact provenance rebuild_request_id is invalid")
+        if type(self.evaluation_only) is not bool:
+            raise ValueError("artifact provenance evaluation_only must be exact")
+        identity = {
+            field: getattr(self, field) for field in _EVALUATION_IDENTITY_FIELDS
+        }
+        try:
+            _validate_evaluation_identity_row(identity)
+        except _SnapshotMiss as error:
+            raise ValueError("artifact provenance identity is invalid") from error
+
+
+@dataclass(frozen=True, slots=True)
 class AuthorizedGraphSnapshot:
     """Immutable, provider-neutral permission-safe graph ranking input."""
 
@@ -1860,6 +2733,7 @@ class AuthorizedGraphSnapshot:
     seed_identities: tuple[AuthorizedSeedIdentity, ...]
     relation_groups: tuple[AuthorizedRelationGroup, ...]
     mentions: tuple[AuthorizedIdentityMention, ...]
+    artifact_provenance: tuple[AuthorizedArtifactProvenance, ...] = ()
     raw_audit_rows: tuple[tuple[int, str, tuple[object, ...]], ...] = ()
 
     def __post_init__(self) -> None:
@@ -2002,6 +2876,33 @@ class AuthorizedGraphSnapshot:
                 > self.config.max_mentions_per_entity
             ):
                 raise ValueError("mentions per identity exceed their configured cap")
+
+        artifact_provenance = _exact_tuple(
+            self.artifact_provenance,
+            "artifact_provenance",
+            maximum=(
+                self.config.max_scope_documents + self.config.max_scope_collections
+            ),
+        )
+        if any(
+            type(item) is not AuthorizedArtifactProvenance
+            for item in artifact_provenance
+        ):
+            raise ValueError(
+                "artifact_provenance must contain exact typed provenance values"
+            )
+        provenance_order = tuple(
+            sorted(
+                artifact_provenance,
+                key=lambda item: (item.scope_type, item.scope_id, item.artifact_id),
+            )
+        )
+        if artifact_provenance != provenance_order:
+            raise ValueError("artifact_provenance must be canonically sorted")
+        if len({item.artifact_id for item in artifact_provenance}) != len(
+            artifact_provenance
+        ):
+            raise ValueError("artifact_provenance artifact IDs must be unique")
 
         allowed_documents = set(document_ids)
         evidence_rows = chain(
@@ -2760,13 +3661,10 @@ def _storage_scope_signature(
             [
                 row["id"],
                 row["collection_scope_id"],
-                row["build_key"],
-                row["source_hash"],
-                row["ontology_version"],
-                row["ontology_checksum"],
-                row["resolver_version"],
-                row["assembly_version"],
-                row["assembly_config_checksum"],
+                row.get("rebuild_request_id"),
+                row.get("status"),
+                row.get("evaluation_only"),
+                *[row[field] for field in _EVALUATION_IDENTITY_FIELDS],
             ]
             for row in scope.collection_artifacts
         ],
@@ -2784,13 +3682,24 @@ def _storage_scope_signature(
                 row["source_signature"],
                 row["membership_signature"],
                 row["build_signature"],
-                row["document_artifact__build_key"],
-                row["document_artifact__source_hash"],
-                row["document_artifact__resolver_version"],
-                row["document_artifact__ontology_version"],
-                row["document_artifact__ontology_checksum"],
+                row["document_artifact__rebuild_request_id"],
+                row["document_artifact__status"],
+                row["document_artifact__evaluation_only"],
+                *[
+                    row[f"document_artifact__{field}"]
+                    for field in _EVALUATION_IDENTITY_FIELDS
+                ],
             ]
             for row in scope.manifest_rows
+        ],
+        "evaluation_canonical_checksum": scope.evaluation_canonical_checksum,
+        "evaluation_canonical_memberships": [
+            [entity_id, component]
+            for entity_id, component in scope.evaluation_canonical_memberships
+        ],
+        "evaluation_only": scope.evaluation_only,
+        "evaluation_request_ids": [
+            str(request_id) for request_id in scope.evaluation_request_ids
         ],
     }
     encoded = json.dumps(
@@ -2804,10 +3713,61 @@ def _storage_scope_signature(
     return sha256(encoded).hexdigest()
 
 
+def _artifact_provenance(
+    scope: _AuthorizedStorageScope,
+) -> tuple[AuthorizedArtifactProvenance, ...]:
+    rows: list[AuthorizedArtifactProvenance] = []
+    for artifact in scope.collection_artifacts:
+        rows.append(
+            AuthorizedArtifactProvenance(
+                artifact_id=int(artifact["id"]),
+                scope_type=cast(str, artifact["scope_type"]),
+                scope_id=cast(str, artifact["scope_id"]),
+                collection_id=int(artifact["collection_scope_id"]),
+                rebuild_request_id=cast(UUID | None, artifact["rebuild_request_id"]),
+                evaluation_only=cast(bool, artifact["evaluation_only"]),
+                **{field: artifact[field] for field in _EVALUATION_IDENTITY_FIELDS},
+            )
+        )
+    document_rows: dict[int, dict[str, object]] = {}
+    for manifest in scope.manifest_rows:
+        artifact_id = int(manifest["document_artifact_id"])
+        previous = document_rows.setdefault(artifact_id, manifest)
+        if previous != manifest:
+            raise _SnapshotMiss
+    for artifact_id, manifest in document_rows.items():
+        rows.append(
+            AuthorizedArtifactProvenance(
+                artifact_id=artifact_id,
+                scope_type=cast(str, manifest["document_artifact__scope_type"]),
+                scope_id=cast(str, manifest["document_artifact__scope_id"]),
+                collection_id=int(manifest["collection_id"]),
+                rebuild_request_id=cast(
+                    UUID | None,
+                    manifest["document_artifact__rebuild_request_id"],
+                ),
+                evaluation_only=cast(
+                    bool,
+                    manifest["document_artifact__evaluation_only"],
+                ),
+                **{
+                    field: manifest[f"document_artifact__{field}"]
+                    for field in _EVALUATION_IDENTITY_FIELDS
+                },
+            )
+        )
+    return tuple(
+        sorted(
+            rows, key=lambda item: (item.scope_type, item.scope_id, item.artifact_id)
+        )
+    )
+
+
 def load_authorized_graph_snapshot(
     request: GraphExpansionRequest,
     *,
     load_max_hops: int,
+    _eval_artifacts: _EvaluationArtifactCapability | None = None,
 ) -> AuthorizedGraphSnapshot:
     """Load an immutable authorized graph inside the live snapshot context."""
 
@@ -2824,7 +3784,12 @@ def load_authorized_graph_snapshot(
     _deadline = state.deadline
     _deadline.check()
 
-    scope = _load_storage_scope(request, state)
+    if (
+        _eval_artifacts is not None
+        and type(_eval_artifacts) is not _EvaluationArtifactCapability
+    ):
+        raise _SnapshotMiss
+    scope = _load_storage_scope(request, state, _eval_artifacts)
     _deadline.check()
     seed_entity_rows = _load_seed_collection_entity_ids(request, scope, state)
     entities: dict[int, _AuthorizedEntityRow] = {}
@@ -3031,6 +3996,7 @@ def load_authorized_graph_snapshot(
         seed_identities=seed_identities,
         relation_groups=relation_groups,
         mentions=mentions,
+        artifact_provenance=_artifact_provenance(scope),
         raw_audit_rows=sorted_audit_rows,
     )
     _deadline.check()

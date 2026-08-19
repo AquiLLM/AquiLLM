@@ -1,10 +1,12 @@
 """Local vLLM / OpenAI-compatible rerank HTTP client."""
+
 from __future__ import annotations
 
-import structlog
-from typing import Any, Type, TYPE_CHECKING
+from math import isfinite
+from typing import TYPE_CHECKING, Any
 
 import requests
+import structlog
 
 from apps.documents.services import rag_cache
 from apps.documents.services.chunk_rerank_config import (
@@ -29,15 +31,54 @@ if TYPE_CHECKING:
 logger = structlog.stdlib.get_logger(__name__)
 
 
-def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list, top_k: int):
+class _StrictCompleteScoringCapability:
+    __slots__ = ()
+
+
+_STRICT_COMPLETE_SCORING = _StrictCompleteScoringCapability()
+
+
+def _is_complete_finite_scoring(
+    pairs: list[tuple[int, float]],
+    candidate_count: int,
+) -> bool:
+    return (
+        len(pairs) == candidate_count
+        and all(
+            type(index) is int
+            and 0 <= index < candidate_count
+            and type(score) in (int, float)
+            and isfinite(float(score))
+            for index, score in pairs
+        )
+        and {index for index, _score in pairs} == set(range(candidate_count))
+    )
+
+
+def rerank_via_local_vllm(
+    model_cls: type[TextChunk],
+    query: str,
+    chunks_list,
+    top_k: int,
+    *,
+    _complete_scoring_capability: object | None = None,
+):
+    if (
+        _complete_scoring_capability is not None
+        and _complete_scoring_capability is not _STRICT_COMPLETE_SCORING
+    ):
+        raise PermissionError("complete local scoring requires its private capability")
+    require_complete_scoring = _complete_scoring_capability is _STRICT_COMPLETE_SCORING
     if not chunks_list:
-        return model_cls.objects.none()
+        return () if require_complete_scoring else model_cls.objects.none()
 
     base_v1 = rerank_base_url()
     rm = rerank_model()
     qsig = rag_cache.query_signature_for_rerank(query)
     cand_ids = [c.pk for c in chunks_list]
-    cached_ranked = rag_cache.get_cached_rerank_result(qsig, cand_ids, top_k, rm)
+    cached_ranked = None
+    if not require_complete_scoring:
+        cached_ranked = rag_cache.get_cached_rerank_result(qsig, cand_ids, top_k, rm)
     if cached_ranked:
         logger.info(
             "obs.rag.rerank_cache_hit",
@@ -49,7 +90,9 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
     raw_documents = [chunk.content for chunk in chunks_list]
     multimodal_documents = [rerank_document_payload(chunk) for chunk in chunks_list]
     char_limit = rerank_doc_char_limit()
-    documents = [doc[:char_limit] if len(doc) > char_limit else doc for doc in raw_documents]
+    documents = [
+        doc[:char_limit] if len(doc) > char_limit else doc for doc in raw_documents
+    ]
     multimodal_documents_trimmed: list[Any] = []
     for mm_doc, text_doc in zip(multimodal_documents, documents):
         if isinstance(mm_doc, list):
@@ -62,14 +105,16 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
             multimodal_documents_trimmed.append(normalized)
         else:
             multimodal_documents_trimmed.append(text_doc)
-    has_multimodal_docs = any(isinstance(doc, list) for doc in multimodal_documents_trimmed)
+    has_multimodal_docs = any(
+        isinstance(doc, list) for doc in multimodal_documents_trimmed
+    )
     if not documents:
-        return model_cls.objects.none()
+        return () if require_complete_scoring else model_cls.objects.none()
 
     base_root = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
 
     def _finish(ranked_ids: list[int], winning_endpoint: str | None = None):
-        if ranked_ids:
+        if ranked_ids and not require_complete_scoring:
             rag_cache.set_cached_rerank_result(qsig, cand_ids, top_k, rm, ranked_ids)
             if winning_endpoint:
                 rag_cache.set_cached_rerank_capability(base_v1, rm, winning_endpoint)
@@ -103,10 +148,16 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
         f"{base_root}/v2/rerank",
         f"{base_v1}/rerank",
     ]
-    preferred = rag_cache.get_cached_rerank_capability(base_v1, rm)
+    preferred = None
+    if not require_complete_scoring:
+        preferred = rag_cache.get_cached_rerank_capability(base_v1, rm)
     if preferred:
         rerank_endpoints = [preferred] + [e for e in rerank_endpoints if e != preferred]
     if rerank_model_is_qwen3_vl():
+        rerank_endpoints = []
+    if require_complete_scoring:
+        # Generic rerank endpoints expose only the truncated ranking, so they cannot
+        # attest that every candidate was scored.
         rerank_endpoints = []
     rerank_payloads = (
         {
@@ -197,9 +248,16 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
                 pairs = parse_score_results(response.json())
                 if not pairs:
                     continue
+                if require_complete_scoring and not _is_complete_finite_scoring(
+                    pairs,
+                    len(chunks_list),
+                ):
+                    continue
                 ranked_ids = [
                     chunks_list[idx].pk
-                    for idx, _ in sorted(pairs, key=lambda item: item[1], reverse=True)[:top_k]
+                    for idx, _ in sorted(pairs, key=lambda item: item[1], reverse=True)[
+                        :top_k
+                    ]
                 ]
                 if ranked_ids:
                     return _finish(ranked_ids, endpoint)
@@ -240,7 +298,10 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
                             "messages": [
                                 {
                                     "role": "system",
-                                    "content": "Given a search query, retrieve relevant candidates that answer the query.",
+                                    "content": (
+                                        "Given a search query, retrieve "
+                                        "relevant candidates that answer the query."
+                                    ),
                                 },
                                 {"role": "query", "content": effective_query},
                                 {"role": "document", "content": mm_doc},
@@ -266,6 +327,11 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
 
             if not scored:
                 continue
+            if require_complete_scoring and not _is_complete_finite_scoring(
+                scored,
+                len(chunks_list),
+            ):
+                continue
 
             scored.sort(key=lambda item: item[1], reverse=True)
             ranked_ids = [chunks_list[idx].pk for idx, _ in scored[:top_k]]
@@ -275,9 +341,11 @@ def rerank_via_local_vllm(model_cls: Type["TextChunk"], query: str, chunks_list,
             continue
 
     if first_http_error:
-        logger.warning("obs.rag.rerank_requests_failed", first_http_error=first_http_error)
+        logger.warning(
+            "obs.rag.rerank_requests_failed", first_http_error=first_http_error
+        )
 
-    return model_cls.objects.none()
+    return () if require_complete_scoring else model_cls.objects.none()
 
 
 __all__ = ["rerank_via_local_vllm"]

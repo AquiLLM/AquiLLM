@@ -6,6 +6,7 @@ cases:
     description: "No accessible evidence exists for the query."
     privacy_intent: "security-sensitive: private evidence must remain excluded."
     query: "What did the private incident conclude?"
+    quality_tags: [negative_noise]
     accessible_collection_ids: [collection-public]
     documents:
       - doc_id: doc-private-only
@@ -19,6 +20,7 @@ cases:
     description: "Both accessible collections supply conflicting evidence and neither is silently dropped."
     privacy_intent: "two user-authorized collections; preserve conflict and collection provenance."
     query: "What is the supported context window for Orion?"
+    quality_tags: [relationship, cross_collection]
     accessible_collection_ids: [collection-policy-a, collection-policy-b]
     documents:
       - doc_id: doc-policy-a
@@ -38,6 +40,7 @@ cases:
     description: "A matching private security collection is excluded when it is not accessible."
     privacy_intent: "security-sensitive: never return private collection evidence without authorization."
     query: "Which rotation interval is documented for service tokens?"
+    quality_tags: [inaccessible_neighbor]
     accessible_collection_ids: [collection-public]
     documents:
       - doc_id: doc-public-token-guide
@@ -56,6 +59,7 @@ cases:
     description: "A vector seed in collection A expands through canonical identity into accessible collection B."
     privacy_intent: "cross-collection expansion is allowed only because both collections are authorized."
     query: "How does the Orion model rank source passages?"
+    quality_tags: [alias, cross_document, cross_collection]
     accessible_collection_ids: [collection-research-a, collection-research-b]
     documents:
       - doc_id: doc-orion-a
@@ -74,3 +78,146 @@ cases:
         type: canonical_identity
     expected_retrieval_chunk_ids: [orion-a-seed-001, orion-b-identity-001]
     baseline_vector_result_ids: [orion-a-seed-001]
+    expected_min_semantic_distance:
+      orion-a-seed-001: 0
+      orion-b-identity-001: 0
+
+  - id: relationship_expands_to_evidence
+    description: "A seeded model mention reaches a separate relation-evidence chunk."
+    privacy_intent: "all evidence is in one authorized research collection."
+    query: "Which dataset does Atlas use?"
+    quality_tags: [relationship, cross_document]
+    accessible_collection_ids: [collection-research-a]
+    documents:
+      - doc_id: doc-atlas-overview
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: atlas-overview-seed-001
+            text: "Atlas is evaluated in the public benchmark report."
+      - doc_id: doc-atlas-dataset
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: atlas-dataset-relation-001
+            text: "The Atlas model uses the Northstar dataset for retrieval training."
+    expected_retrieval_chunk_ids:
+      - atlas-overview-seed-001
+      - atlas-dataset-relation-001
+    baseline_vector_result_ids: [atlas-overview-seed-001]
+    expected_min_semantic_distance:
+      atlas-overview-seed-001: 0
+      atlas-dataset-relation-001: 1
+
+  - id: two_hop_cross_document_metric
+    description: "A paper seed reaches a metric only through an intermediate evaluation task."
+    privacy_intent: "all three documents belong to the exact authorized collection."
+    query: "Which metric is reported for the Atlas retrieval benchmark?"
+    quality_tags: [relationship, two_hop, cross_document]
+    accessible_collection_ids: [collection-research-a]
+    documents:
+      - doc_id: doc-atlas-paper
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: atlas-paper-seed-001
+            text: "The Atlas paper evaluates retrieval quality."
+      - doc_id: doc-atlas-task
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: atlas-task-hop-001
+            text: "Atlas is evaluated on the Northstar passage-ranking task."
+      - doc_id: doc-atlas-metric
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: atlas-metric-hop-002
+            text: "The Northstar passage-ranking task is measured with nDCG at ten."
+    expected_retrieval_chunk_ids:
+      - atlas-paper-seed-001
+      - atlas-task-hop-001
+      - atlas-metric-hop-002
+    baseline_vector_result_ids: [atlas-paper-seed-001]
+    expected_min_semantic_distance:
+      atlas-paper-seed-001: 0
+      atlas-task-hop-001: 1
+      atlas-metric-hop-002: 2
+
+  - id: bounded_high_degree_hub
+    description: "A high-degree hub keeps the curated strong neighbor and excludes noisy spokes."
+    privacy_intent: "fan-out and candidate caps apply before any result leaves the authorized scope."
+    query: "What is the strongest supported Atlas finding?"
+    quality_tags: [hub, negative_noise]
+    accessible_collection_ids: [collection-research-a]
+    documents:
+      - doc_id: doc-hub-seed
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: hub-seed-001
+            text: "Atlas appears in many benchmark comparisons."
+      - doc_id: doc-hub-strong
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: hub-strong-001
+            text: "Repeated curated evidence shows Atlas improves retrieval recall."
+      - doc_id: doc-hub-noise
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: hub-noise-001
+            text: "A navigation index lists unrelated benchmark names."
+    expected_retrieval_chunk_ids: [hub-seed-001, hub-strong-001]
+    baseline_vector_result_ids: [hub-seed-001]
+    expected_min_semantic_distance:
+      hub-seed-001: 0
+      hub-strong-001: 1
+
+  - id: dangling_cycle_is_deterministic
+    description: "A cycle with a dangling destination has one stable bounded ranking."
+    privacy_intent: "cycle handling cannot enumerate graph internals or escape the collection."
+    query: "Which service follows the Atlas encoder?"
+    quality_tags: [dangling, cycle]
+    accessible_collection_ids: [collection-research-a]
+    documents:
+      - doc_id: doc-cycle-a
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: cycle-seed-001
+            text: "The Atlas encoder supplies the retrieval service."
+      - doc_id: doc-cycle-b
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: cycle-service-001
+            text: "The retrieval service cites Atlas and forwards passages to synthesis."
+      - doc_id: doc-cycle-dangling
+        collection_id: collection-research-a
+        chunks:
+          - chunk_id: dangling-synthesis-001
+            text: "The synthesis stage has no outgoing corpus relation."
+    expected_retrieval_chunk_ids:
+      - cycle-seed-001
+      - cycle-service-001
+      - dangling-synthesis-001
+    baseline_vector_result_ids: [cycle-seed-001]
+    expected_min_semantic_distance:
+      cycle-seed-001: 0
+      cycle-service-001: 1
+      dangling-synthesis-001: 2
+
+  - id: duplicate_relation_evidence_collapses
+    description: "Duplicate provenance for one relationship yields unique real chunks."
+    privacy_intent: "duplicate graph support must not duplicate citations or ranking credit."
+    query: "What evidence supports the Orion reranker?"
+    quality_tags: [duplicate_evidence, relationship]
+    accessible_collection_ids: [collection-research-b]
+    documents:
+      - doc_id: doc-orion-reranker-seed
+        collection_id: collection-research-b
+        chunks:
+          - chunk_id: reranker-seed-001
+            text: "Orion uses a reranker after initial retrieval."
+      - doc_id: doc-orion-reranker-evidence
+        collection_id: collection-research-b
+        chunks:
+          - chunk_id: reranker-evidence-001
+            text: "Two extraction observations cite this same reranker evidence sentence."
+    expected_retrieval_chunk_ids: [reranker-seed-001, reranker-evidence-001]
+    baseline_vector_result_ids: [reranker-seed-001]
+    expected_min_semantic_distance:
+      reranker-seed-001: 0
+      reranker-evidence-001: 1

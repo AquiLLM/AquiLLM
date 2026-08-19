@@ -392,18 +392,21 @@ def test_runbook_uses_compose_network_and_an_isolated_eval_worker() -> None:
     assert f"{normal_prefix} rebuild_knowledge_graph" in runbook
     assert f"{normal_prefix} inspect_knowledge_graph" in runbook
     assert f"{normal_prefix} prune_knowledge_graph" in runbook
-    assert 'KG_EVAL_QUEUE="knowledge-graph-eval-$(date +%s)-$$"' in runbook
+    assert 'KG_EVAL_RUN_ID="$(python -c' in runbook
+    assert 'KG_EVAL_PROJECT="aquillm-kg-eval-$KG_EVAL_RUN_ID"' in runbook
+    assert 'KG_EVAL_QUEUE="knowledge-graph-eval-$KG_EVAL_RUN_ID"' in runbook
+    assert "env -i" in runbook
     assert "trap - EXIT INT TERM" in runbook
     assert "trap 'status=$?; cleanup_kg_eval; exit \"$status\"' EXIT" in runbook
     assert "trap 'cleanup_kg_eval; exit 130' INT" in runbook
     assert "trap 'cleanup_kg_eval; exit 143' TERM" in runbook
     assert "trap cleanup_kg_eval EXIT INT TERM" not in runbook
-    assert 'docker rm -f "$KG_EVAL_WORKER_NAME"' in runbook
-    assert '-e KG_EXTRACTION_QUEUE="$KG_EVAL_QUEUE"' in runbook
-    assert "-e DJANGO_DEBUG=1" in runbook
-    assert "-e KG_EVAL_BYPASS_ALLOWED=1" in runbook
-    assert "-e KG_BUILD_ENABLED=0" in runbook
-    assert "-e KG_OVERLAY_ENABLED=0" in runbook
+    assert 'docker rm -fv "$worker_container"' in runbook
+    assert '"KG_EXTRACTION_QUEUE=$KG_EVAL_QUEUE"' in runbook
+    assert "DJANGO_DEBUG=1 KG_EVAL_BYPASS_ALLOWED=1" in runbook
+    assert "KG_BUILD_ENABLED=0 KG_OVERLAY_ENABLED=0" in runbook
+    cleanup = runbook.split("stop_eval_worker() {", 1)[1].split("}\n", 1)[0]
+    assert cleanup.index("docker inspect") < cleanup.index("docker rm -fv")
     assert '--user "$(id -u):$(id -g)"' in runbook
     assert "kg_eval_python manage.py rebuild_knowledge_graph" in runbook
     assert "kg_eval_python manage.py inspect_knowledge_graph" in runbook

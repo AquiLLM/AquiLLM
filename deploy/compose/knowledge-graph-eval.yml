@@ -1,0 +1,219 @@
+# Task21 disposable synthetic-evaluation override. Always combine this with a
+# unique `--project-name` and the reviewed absolute TASK21_ENV_FILE.
+# Runtime sidecars: docker compose up -d --no-deps vllm_embed
+#                   docker compose up -d --no-deps vllm_rerank
+# Warm GLiNER as root: docker compose run --rm --no-deps --user 0:0 worker_knowledge_graph
+# After root warming/chown, prove the host identity can use the cache:
+# docker compose run --rm --no-deps --user "$(id -u):$(id -g)" worker_knowledge_graph \
+#   sh -c 'test -r /opt/kg-eval-hf-cache && test -w /opt/kg-eval-hf-cache'
+# Cleanup must select/verify only resources labelled com.docker.compose.project.
+
+services:
+  web:
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+
+  worker:
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+
+  worker_knowledge_graph:
+    restart: "no"
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_NAME:?POSTGRES_NAME is required}
+      POSTGRES_NAME: ${POSTGRES_NAME:?POSTGRES_NAME is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      DJANGO_CACHE_REDIS_URL: redis://redis:6379/1
+      RAG_CACHE_ENABLED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      DJANGO_DEBUG: "1"
+      KG_BUILD_ENABLED: "0"
+      KG_OVERLAY_ENABLED: "0"
+      KG_EVAL_BYPASS_ALLOWED: "1"
+      COHERE_KEY: ""
+      APP_EMBED_BASE_URL: http://vllm_embed:8000/v1
+      APP_EMBED_API_KEY: EMPTY
+      APP_EMBED_MODEL: ${APP_EMBED_MODEL:?APP_EMBED_MODEL is required}
+      APP_EMBED_MODEL_REVISION: ${APP_EMBED_MODEL_REVISION:?APP_EMBED_MODEL_REVISION is required}
+      APP_EMBED_TOKENIZER_REVISION: ${APP_EMBED_TOKENIZER_REVISION:?APP_EMBED_TOKENIZER_REVISION is required}
+      APP_EMBED_CODE_REVISION: ${APP_EMBED_CODE_REVISION:?APP_EMBED_CODE_REVISION is required}
+      APP_EMBED_VLLM_RUNNER: ${APP_EMBED_VLLM_RUNNER:?APP_EMBED_VLLM_RUNNER is required}
+      APP_EMBED_VLLM_DTYPE: ${APP_EMBED_VLLM_DTYPE:?APP_EMBED_VLLM_DTYPE is required}
+      APP_EMBED_VLLM_STRICT_PROTECTED_ARGS: "1"
+      APP_EMBED_VLLM_API_KEY: EMPTY
+      APP_EMBED_VLLM_DOWNLOAD_DIR: /root/.cache/huggingface/hub
+      APP_EMBED_VLLM_PYTHON_BIN: python3
+      MEM0_EMBED_VLLM_EXTRA_ARGS: >-
+        --quantization bitsandbytes --load-format bitsandbytes
+        --model-loader-extra-config
+        '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}'
+      MEM0_EMBED_VLLM_TRUST_REMOTE_CODE: "1"
+      MEM0_EMBED_TENSOR_PARALLEL_SIZE: "1"
+      MEM0_EMBED_GPU_MEMORY_UTILIZATION: "0.12"
+      MEM0_EMBED_MAX_MODEL_LEN: "2048"
+      APP_EMBED_DIMS: "1024"
+      APP_EMBED_ALLOW_DIMENSIONS_OVERRIDE: "0"
+      APP_RERANK_PROVIDER: local
+      APP_RERANK_BASE_URL: http://vllm_rerank:8000/v1
+      APP_RERANK_API_KEY: EMPTY
+      APP_RERANK_MODEL: ${APP_RERANK_MODEL:?APP_RERANK_MODEL is required}
+      APP_RERANK_VLLM_MODEL: ${APP_RERANK_VLLM_MODEL:?APP_RERANK_VLLM_MODEL is required}
+      APP_RERANK_TOKENIZER: ${APP_RERANK_TOKENIZER:?APP_RERANK_TOKENIZER is required}
+      APP_RERANK_MODEL_REVISION: ${APP_RERANK_MODEL_REVISION:?APP_RERANK_MODEL_REVISION is required}
+      APP_RERANK_TOKENIZER_REVISION: ${APP_RERANK_TOKENIZER_REVISION:?APP_RERANK_TOKENIZER_REVISION is required}
+      APP_RERANK_CODE_REVISION: ${APP_RERANK_CODE_REVISION:?APP_RERANK_CODE_REVISION is required}
+      APP_RERANK_VLLM_RUNNER: ${APP_RERANK_VLLM_RUNNER:?APP_RERANK_VLLM_RUNNER is required}
+      APP_RERANK_VLLM_DTYPE: ${APP_RERANK_VLLM_DTYPE:?APP_RERANK_VLLM_DTYPE is required}
+      APP_RERANK_VLLM_STRICT_PROTECTED_ARGS: "1"
+      APP_RERANK_VLLM_TASK: score
+      APP_RERANK_VLLM_DOWNLOAD_DIR: /root/.cache/huggingface/hub
+      APP_RERANK_VLLM_PYTHON_BIN: python3
+      APP_RERANK_VLLM_EXTRA_ARGS: >-
+        --chat-template /templates/qwen3_vl_reranker.jinja --hf-overrides
+        '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+      APP_RERANK_VLLM_TRUST_REMOTE_CODE: "1"
+      APP_RERANK_TENSOR_PARALLEL_SIZE: "1"
+      APP_RERANK_GPU_MEMORY_UTILIZATION: "0.25"
+      APP_RERANK_MAX_MODEL_LEN: "1024"
+      KG_EXTRACTOR_PROVIDER: gliner2_local
+      KG_EXTRACTOR_FAIL_OPEN: "0"
+      KG_GLINER2_MODEL: ${KG_GLINER2_MODEL:?KG_GLINER2_MODEL is required}
+      KG_GLINER2_REVISION: ${KG_GLINER2_REVISION:?KG_GLINER2_REVISION is required}
+      KG_GLINER2_DEVICE: ${KG_GLINER2_DEVICE:?KG_GLINER2_DEVICE is required}
+      KG_GLINER2_BATCH_SIZE: ${KG_GLINER2_BATCH_SIZE:?KG_GLINER2_BATCH_SIZE is required}
+      KG_GLINER2_MAX_BATCH_CHARACTERS: ${KG_GLINER2_MAX_BATCH_CHARACTERS:?KG_GLINER2_MAX_BATCH_CHARACTERS is required}
+      KG_GLINER2_LOCAL_FILES_ONLY: "1"
+      HF_HOME: /opt/kg-eval-hf-cache
+      KG_GLINER2_CACHE_DIR: /opt/kg-eval-hf-cache
+    volumes: !override
+      - ../..:/app
+      - kg_eval_app_venv_shadow:/app/.venv
+      - kg_eval_gliner_cache:/opt/kg-eval-hf-cache
+
+  worker_memory_promotion:
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+
+  nginx:
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+
+  get_certs:
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+
+  db:
+    restart: "no"
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_NAME:?POSTGRES_NAME is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  storage:
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+
+  redis:
+    restart: "no"
+    volumes: !override
+      - kg_eval_redis_data:/data
+
+  vllm:
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+
+  vllm_ocr:
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+
+  vllm_transcribe:
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+
+  vllm_embed:
+    restart: "no"
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_CACHE: /root/.cache/huggingface/hub
+      TRANSFORMERS_CACHE: /root/.cache/huggingface/hub
+      VLLM_API_KEY: EMPTY
+      VLLM_DOWNLOAD_DIR: /root/.cache/huggingface/hub
+      VLLM_PYTHON_BIN: python3
+      VLLM_EXTRA_ARGS: >-
+        --quantization bitsandbytes --load-format bitsandbytes
+        --model-loader-extra-config
+        '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}'
+      LMCACHE_ENABLED: "0"
+      LMCACHE_EXTRA_ARGS: ""
+      VLLM_MODEL: ${APP_EMBED_MODEL:?APP_EMBED_MODEL is required}
+      VLLM_SERVED_MODEL_NAME: ${APP_EMBED_MODEL:?APP_EMBED_MODEL is required}
+      VLLM_TOKENIZER: ${APP_EMBED_MODEL:?APP_EMBED_MODEL is required}
+      VLLM_REVISION: ${APP_EMBED_MODEL_REVISION:?APP_EMBED_MODEL_REVISION is required}
+      VLLM_TOKENIZER_REVISION: ${APP_EMBED_TOKENIZER_REVISION:?APP_EMBED_TOKENIZER_REVISION is required}
+      VLLM_CODE_REVISION: ${APP_EMBED_CODE_REVISION:?APP_EMBED_CODE_REVISION is required}
+      VLLM_RUNNER: ${APP_EMBED_VLLM_RUNNER:?APP_EMBED_VLLM_RUNNER is required}
+      VLLM_DTYPE: ${APP_EMBED_VLLM_DTYPE:?APP_EMBED_VLLM_DTYPE is required}
+      VLLM_STRICT_PROTECTED_ARGS: "1"
+      VLLM_TRUST_REMOTE_CODE: "1"
+      VLLM_TENSOR_PARALLEL_SIZE: "1"
+      VLLM_GPU_MEMORY_UTILIZATION: "0.12"
+      VLLM_MAX_MODEL_LEN: "2048"
+    volumes: !override
+      - kg_eval_vllm_cache:/root/.cache/huggingface
+
+  vllm_rerank:
+    restart: "no"
+    env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_CACHE: /root/.cache/huggingface/hub
+      TRANSFORMERS_CACHE: /root/.cache/huggingface/hub
+      VLLM_API_KEY: EMPTY
+      VLLM_DOWNLOAD_DIR: /root/.cache/huggingface/hub
+      VLLM_PYTHON_BIN: python3
+      VLLM_EXTRA_ARGS: >-
+        --chat-template /templates/qwen3_vl_reranker.jinja --hf-overrides
+        '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+      LMCACHE_ENABLED: "0"
+      LMCACHE_EXTRA_ARGS: ""
+      VLLM_MODEL: ${APP_RERANK_VLLM_MODEL:?APP_RERANK_VLLM_MODEL is required}
+      VLLM_SERVED_MODEL_NAME: ${APP_RERANK_MODEL:?APP_RERANK_MODEL is required}
+      VLLM_TOKENIZER: ${APP_RERANK_TOKENIZER:?APP_RERANK_TOKENIZER is required}
+      VLLM_REVISION: ${APP_RERANK_MODEL_REVISION:?APP_RERANK_MODEL_REVISION is required}
+      VLLM_TOKENIZER_REVISION: ${APP_RERANK_TOKENIZER_REVISION:?APP_RERANK_TOKENIZER_REVISION is required}
+      VLLM_CODE_REVISION: ${APP_RERANK_CODE_REVISION:?APP_RERANK_CODE_REVISION is required}
+      VLLM_RUNNER: ${APP_RERANK_VLLM_RUNNER:?APP_RERANK_VLLM_RUNNER is required}
+      VLLM_DTYPE: ${APP_RERANK_VLLM_DTYPE:?APP_RERANK_VLLM_DTYPE is required}
+      VLLM_STRICT_PROTECTED_ARGS: "1"
+      VLLM_TASK: score
+      VLLM_TRUST_REMOTE_CODE: "1"
+      VLLM_TENSOR_PARALLEL_SIZE: "1"
+      VLLM_GPU_MEMORY_UTILIZATION: "0.25"
+      VLLM_MAX_MODEL_LEN: "1024"
+    volumes: !override
+      - kg_eval_vllm_cache:/root/.cache/huggingface
+
+volumes:
+  postgres_data:
+    labels:
+      aquillm.task21.eval: "true"
+  kg_eval_redis_data:
+    labels:
+      aquillm.task21.eval: "true"
+  kg_eval_app_venv_shadow:
+    labels:
+      aquillm.task21.eval: "true"
+  kg_eval_gliner_cache:
+    labels:
+      aquillm.task21.eval: "true"
+  kg_eval_vllm_cache:
+    labels:
+      aquillm.task21.eval: "true"
+
+networks:
+  default:
+    labels:
+      aquillm.task21.eval: "true"

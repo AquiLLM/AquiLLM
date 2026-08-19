@@ -1,0 +1,115 @@
+"""Security, timing, and retained-trace contracts for Task20 retrieval eval."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from apps.knowledge_graph.evals import run_kg_eval
+from apps.knowledge_graph.tests import retrieval_eval_support as support
+
+
+def test_stable_graph_but_nondeterministic_final_reranker_aborts_comparison():
+    calls = 0
+
+    def materialize(_model, _query, _top_k, baseline, *, graph_chunk_ids=(), **_kw):
+        nonlocal calls
+        baseline_ids = tuple(row.pk for row in baseline)
+        if tuple(graph_chunk_ids) == (5, 6):
+            calls += 1
+            ordered = (1, 2, 3, 5, 6) if calls == 1 else (1, 2, 3, 6, 5)
+            return support.ranking(ordered, graph_ids=(5, 6))
+        return support.ranking(
+            (*baseline_ids, *graph_chunk_ids), graph_ids=graph_chunk_ids
+        )
+
+    kwargs, *_rest = support.comparison_kwargs(materializer=materialize)
+    with pytest.raises(run_kg_eval.ComparisonAborted, match="deterministic repeated"):
+        run_kg_eval.run_one_snapshot_comparison(**kwargs)
+
+
+def test_permission_refetch_leak_count_is_measured_not_hardcoded():
+    def materialize(_model, _query, _top_k, baseline, *, graph_chunk_ids=(), **_kw):
+        baseline_ids = tuple(row.pk for row in baseline)
+        return support.ranking(
+            (*baseline_ids, *graph_chunk_ids),
+            graph_ids=graph_chunk_ids,
+            inaccessible=1 if tuple(graph_chunk_ids) == (5, 6) else 0,
+        )
+
+    kwargs, *_rest = support.comparison_kwargs(materializer=materialize)
+    result = run_kg_eval.run_one_snapshot_comparison(**kwargs)
+
+    assert result["arms"]["vector_only"]["inaccessible_result_count"] == 0
+    assert result["arms"]["one_hop"]["inaccessible_result_count"] == 0
+    assert result["arms"]["ppr_v1"]["inaccessible_result_count"] == 1
+
+
+def test_latency_includes_candidate_graph_load_materialization_and_rerank():
+    times = iter((0.000, 0.001, 0.001, 0.003, 0.003, 0.006, 0.006, 0.010, 0.010, 0.015))
+
+    def materialize(_model, _query, _top_k, baseline, *, graph_chunk_ids=(), **_kw):
+        baseline_ids = tuple(row.pk for row in baseline)
+        return support.ranking(
+            (*baseline_ids, *graph_chunk_ids),
+            graph_ids=graph_chunk_ids,
+            materialization_ms=5.0,
+            rerank_ms=7.0,
+        )
+
+    kwargs, *_rest = support.comparison_kwargs(materializer=materialize)
+    result = run_kg_eval.run_one_snapshot_comparison(
+        **kwargs,
+        clock=lambda: next(times),
+    )
+
+    assert result["arms"]["vector_only"]["latency_ms"] == 13.0
+    assert result["arms"]["one_hop"]["latency_ms"] == 18.0
+    assert result["arms"]["ppr_v1"]["latency_ms"] == 19.0
+    assert result["arms"]["vector_only"]["graph_added_latency_ms"] == 0.0
+    assert result["arms"]["one_hop"]["graph_added_latency_ms"] == 10.0
+    assert result["arms"]["ppr_v1"]["graph_added_latency_ms"] == 11.0
+
+
+def test_hop_counts_and_distance_two_value_come_from_retained_returned_trace():
+    kwargs, *_rest = support.comparison_kwargs()
+    result = run_kg_eval.run_one_snapshot_comparison(**kwargs)
+
+    assert result["arms"]["one_hop"]["node_count"] == 2
+    assert result["arms"]["one_hop"]["edge_count"] == 1
+    assert result["arms"]["ppr_v1"]["node_count"] == 3
+    assert result["arms"]["ppr_v1"]["edge_count"] == 2
+    assert result["arms"]["ppr_v1"]["distance_2_novel_fraction"] == 0.5
+
+    def omit_distance_two(
+        _model, _query, _top_k, baseline, *, graph_chunk_ids=(), **_kw
+    ):
+        baseline_ids = tuple(row.pk for row in baseline)
+        returned = tuple(value for value in graph_chunk_ids if value != 6)
+        return support.ranking((*baseline_ids, *returned), graph_ids=returned)
+
+    kwargs, *_rest = support.comparison_kwargs(materializer=omit_distance_two)
+    omitted = run_kg_eval.run_one_snapshot_comparison(**kwargs)
+    assert omitted["arms"]["ppr_v1"]["distance_2_novel_fraction"] == 0.0
+
+
+def test_comparison_aborts_on_scope_mismatch_before_candidate_search():
+    kwargs, scope, _candidates, _graph = support.comparison_kwargs()
+    changed = SimpleNamespace(
+        documents=scope.documents,
+        allowed_doc_ids=(support.DOC_B,),
+        allowed_collection_ids=(1,),
+    )
+    scopes = iter((scope, changed))
+    candidate_called = False
+
+    def collect(*_args, **_kwargs):
+        nonlocal candidate_called
+        candidate_called = True
+
+    kwargs["resolve_scope"] = lambda *_args: next(scopes)
+    kwargs["collect_candidates"] = collect
+    with pytest.raises(run_kg_eval.ComparisonAborted, match="scope"):
+        run_kg_eval.run_one_snapshot_comparison(**kwargs)
+    assert candidate_called is False

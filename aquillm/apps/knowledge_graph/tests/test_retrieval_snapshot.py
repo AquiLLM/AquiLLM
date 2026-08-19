@@ -5,6 +5,8 @@ from __future__ import annotations
 import inspect
 import os
 import socket
+from dataclasses import replace
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -75,6 +77,7 @@ def test_snapshot_seams_exist_but_only_composition_is_public() -> None:
     assert not hasattr(retrieval, "AuthorizedGraphSnapshot")
     assert not hasattr(retrieval, "rank_authorized_graph_snapshot")
     assert not hasattr(retrieval, "_EvaluationTraceCapability")
+    assert not hasattr(retrieval, "_EvaluationArtifactCapability")
 
 
 @pytest.mark.parametrize("timeout_ms", (True, 0, 151, 1.5, "150"))
@@ -303,6 +306,252 @@ def test_snapshot_context_is_outer_repeatable_read_read_only_without_locks() -> 
     assert "SET LOCAL statement_timeout" in source
     assert "in_atomic_block" in source
     assert "select_for_update" not in module_source
+
+
+def test_each_eval_query_gets_fresh_deadline_inside_one_outer_snapshot(monkeypatch):
+    now = [0.0]
+    config = expansion._load_algorithm_config()
+    outer_deadline = expansion._MonotonicDeadline.after_ms(
+        150,
+        clock=lambda: now[0],
+    )
+    state = expansion._RetrievalSnapshotState(
+        config=replace(config, timeout_ms=150),
+        deadline=outer_deadline,
+        using="default",
+    )
+    monkeypatch.setattr(
+        expansion,
+        "_require_live_snapshot_state",
+        lambda **_kwargs: state,
+    )
+
+    with expansion.authorized_retrieval_query_snapshot(
+        timeout_ms=150,
+        _clock=lambda: now[0],
+    ) as first:
+        now[0] = 0.140
+        first.check()
+
+    # The suite is now beyond the original 150 ms deadline, but the second
+    # query receives its own bounded budget inside the same transaction state.
+    now[0] = 0.160
+    with expansion.authorized_retrieval_query_snapshot(
+        timeout_ms=150,
+        _clock=lambda: now[0],
+    ) as second:
+        now[0] = 0.300
+        second.check()
+
+    assert first is not second
+    assert first.expires_at == pytest.approx(0.150)
+    assert second.expires_at == pytest.approx(0.310)
+
+
+def test_eval_artifact_capability_selects_exact_successful_terminal_occurrences():
+    request_id = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    capability = expansion._EvaluationArtifactCapability(((7, request_id),))
+    request_rows = (
+        {
+            "id": request_id,
+            "scope_type": "collection",
+            "scope_id": "7",
+            "status": "succeeded",
+            "evaluation_only": True,
+            "activated_artifact_pk": 11,
+            "activated_run_pk": 21,
+            "activated_build_key": "7" * 64,
+            "activated_build_generation": 2,
+            "activated_source_hash": "8" * 64,
+        },
+    )
+    artifact_rows = (
+        {
+            "id": 10,
+            "collection_scope_id": 7,
+            "scope_type": "collection",
+            "scope_id": "7",
+            "rebuild_request_id": None,
+            "status": "active",
+            "evaluation_only": False,
+            "build_key": "1" * 64,
+            "build_generation": 1,
+            "orchestration_version": 1,
+            "source_hash": "2" * 64,
+            "ontology_version": "old",
+            "ontology_checksum": "3" * 64,
+            "resolver_version": "old",
+            "resolution_config_checksum": "4" * 64,
+            "filter_policy_version": "old",
+            "filter_policy_checksum": "5" * 64,
+            "extractor_version": "old",
+            "embedding_model_signature": "old",
+            "assembly_version": "old",
+            "assembly_config_checksum": "6" * 64,
+        },
+        {
+            "id": 11,
+            "collection_scope_id": 7,
+            "scope_type": "collection",
+            "scope_id": "7",
+            "rebuild_request_id": request_id,
+            "status": "superseded",
+            "evaluation_only": True,
+            "build_key": "7" * 64,
+            "build_generation": 2,
+            "orchestration_version": 1,
+            "source_hash": "8" * 64,
+            "ontology_version": "research-v1",
+            "ontology_checksum": "9" * 64,
+            "resolver_version": "collection-resolver-v1",
+            "resolution_config_checksum": "a" * 64,
+            "filter_policy_version": "collection-filter-v1",
+            "filter_policy_checksum": "b" * 64,
+            "extractor_version": "gliner2:model@revision",
+            "embedding_model_signature": "embedding:model@revision",
+            "assembly_version": "collection-assembly-v1",
+            "assembly_config_checksum": "c" * 64,
+        },
+    )
+    run_rows = (
+        {
+            "id": 21,
+            "artifact_id": 11,
+            "rebuild_request_id": request_id,
+            "evaluation_only": True,
+            "build_kind": "collection",
+            "scope_type": "collection",
+            "scope_id": "7",
+            "build_key": "7" * 64,
+            "build_generation": 2,
+            "orchestration_version": 1,
+            "source_hash": "8" * 64,
+            "ontology_version": "research-v1",
+            "ontology_checksum": "9" * 64,
+            "resolver_version": "collection-resolver-v1",
+            "resolution_config_checksum": "a" * 64,
+            "filter_policy_version": "collection-filter-v1",
+            "filter_policy_checksum": "b" * 64,
+            "extractor_version": "gliner2:model@revision",
+            "embedding_model_signature": "embedding:model@revision",
+            "assembly_version": "collection-assembly-v1",
+            "assembly_config_checksum": "c" * 64,
+            "stage": "superseded",
+            "status": "cancelled",
+            "lease_owner": "",
+            "lease_expires_at": None,
+            "finished_at": "terminal",
+            "stage_marker": {"evaluation_completed": True},
+        },
+    )
+
+    selected = expansion._select_evaluation_artifact_occurrences(
+        capability,
+        request_rows=request_rows,
+        artifact_rows=artifact_rows,
+        run_rows=run_rows,
+    )
+
+    assert tuple(row["id"] for row in selected) == (11,)
+    assert selected[0]["rebuild_request_id"] == request_id
+
+    broken_run = ({**run_rows[0], "lease_owner": "still-owned"},)
+    with pytest.raises(expansion._SnapshotMiss):
+        expansion._select_evaluation_artifact_occurrences(
+            capability,
+            request_rows=request_rows,
+            artifact_rows=artifact_rows,
+            run_rows=broken_run,
+        )
+
+
+def test_eval_artifacts_are_authorized_before_any_content_query():
+    source = inspect.getsource(expansion._load_storage_scope)
+
+    assert source.index("_authorize_evaluation_artifacts") < source.index(
+        "_load_document_membership"
+    )
+
+
+def test_eval_authorization_mismatch_stops_before_membership_or_content(monkeypatch):
+    capability = expansion._EvaluationArtifactCapability(
+        ((1, UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")),)
+    )
+    state = expansion._RetrievalSnapshotState(
+        config=expansion._load_algorithm_config(),
+        deadline=expansion._MonotonicDeadline.after_ms(150),
+        using="default",
+    )
+    membership_called = False
+
+    def reject(*_args, **_kwargs):
+        raise expansion._SnapshotMiss
+
+    def observe_membership(*_args, **_kwargs):
+        nonlocal membership_called
+        membership_called = True
+        raise AssertionError("content membership must not be queried")
+
+    monkeypatch.setattr(expansion, "_authorize_evaluation_artifacts", reject)
+    monkeypatch.setattr(expansion, "_load_document_membership", observe_membership)
+
+    with pytest.raises(expansion._SnapshotMiss):
+        expansion._load_storage_scope(
+            _request(documents=(_DOC_A,), collections=(1,)),
+            state,
+            capability,
+        )
+
+    assert membership_called is False
+
+
+def test_eval_canonical_projection_reuses_production_kernels_without_writes():
+    first = SimpleNamespace(
+        pk=101,
+        collection_id=1,
+        artifact_id=11,
+        cluster_key="1" * 64,
+        label="Acme Rocket",
+        normalized_label="acme rocket",
+        entity_type="organization",
+        identifier="",
+        version_signature="v1",
+        embedding=None,
+        embedding_model_signature="",
+        embedding_input_hash="",
+    )
+    second = SimpleNamespace(
+        pk=202,
+        collection_id=2,
+        artifact_id=22,
+        cluster_key="2" * 64,
+        label="Acme Rocket",
+        normalized_label="acme rocket",
+        entity_type="organization",
+        identifier="",
+        version_signature="v1",
+        embedding=None,
+        embedding_model_signature="",
+        embedding_input_hash="",
+    )
+
+    memberships, checksum = expansion._resolve_evaluation_canonical_memberships(
+        entity_rows=(first, second),
+        provenance_rows=(),
+        source_memberships=(),
+        artifact_embedding_signatures={
+            11: "embedding:model@revision",
+            22: "embedding:model@revision",
+        },
+    )
+
+    assert memberships[0][1] == memberships[1][1]
+    assert len(checksum) == 64
+    source = inspect.getsource(expansion._resolve_evaluation_canonical_memberships)
+    assert "build_canonical_inputs_from_provenance" in source
+    assert "resolve_canonical_entities" in source
+    for forbidden in (".save(", ".create(", ".delay(", ".apply_async("):
+        assert forbidden not in source
 
 
 def test_loader_source_pins_permission_first_caps_and_exact_evidence_fences() -> None:

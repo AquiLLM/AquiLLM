@@ -5,6 +5,7 @@ cases:
   - id: acronym_definition_then_full_name
     description: "A definition of RAG is linked to a later spelled-out mention."
     privacy_intent: "public research text; identity resolution must remain document-scoped evidence."
+    quality_tags: [mention_span, relation_direction, automatic_link]
     documents:
       - doc_id: doc-rag-overview
         collection_id: collection-research-a
@@ -62,6 +63,7 @@ cases:
   - id: ambiguous_acronym_two_meanings
     description: "The same acronym denotes two distinct concepts and must not auto-link."
     privacy_intent: "public technical material; avoid unsafe conflation of ambiguous acronyms."
+    quality_tags: [mention_span, candidate_link_rejection]
     documents:
       - doc_id: doc-nlp-f1
         collection_id: collection-research-a
@@ -96,6 +98,7 @@ cases:
   - id: shared_model_name_across_documents
     description: "A model name repeated in two documents resolves to one canonical identity."
     privacy_intent: "public product references; retain source-document provenance."
+    quality_tags: [mention_span, automatic_link, cross_document]
     documents:
       - doc_id: doc-orion-release
         collection_id: collection-research-a
@@ -133,6 +136,7 @@ cases:
   - id: nearby_model_versions_remain_distinct
     description: "Closely named versions are different models and must not auto-link."
     privacy_intent: "public release notes; preserve version boundaries."
+    quality_tags: [mention_span, candidate_link_rejection]
     documents:
       - doc_id: doc-orion-versions
         collection_id: collection-research-a
@@ -161,6 +165,7 @@ cases:
   - id: overlap_boundary_relation
     description: "A relation whose endpoints fall on adjacent overlapping chunks is retained."
     privacy_intent: "public research text; chunk overlap is evidence, not duplicate identity."
+    quality_tags: [mention_span, relation_endpoints, relation_direction]
     documents:
       - doc_id: doc-latency-study
         collection_id: collection-research-a
@@ -212,6 +217,7 @@ cases:
   - id: publisher_boilerplate_suppressed
     description: "Publisher boilerplate is retained as suppressed evidence rather than a graph entity."
     privacy_intent: "public material; suppression must remain auditable and must not erase evidence."
+    quality_tags: [mention_span, suppression]
     documents:
       - doc_id: doc-paper-with-boilerplate
         collection_id: collection-research-a

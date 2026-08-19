@@ -15,8 +15,14 @@ from uuid import UUID
 import pytest
 from django.test import override_settings
 
-from apps.documents.services.chunk_search import text_chunk_search
-from apps.documents.services.chunk_search_candidates import HybridCandidateSnapshot
+from apps.documents.services.chunk_search import (
+    materialize_and_rerank_candidates,
+    text_chunk_search,
+)
+from apps.documents.services.chunk_search_candidates import (
+    AuthorizedDocumentScope,
+    HybridCandidateSnapshot,
+)
 from apps.knowledge_graph.retrieval import (
     GraphExpansionConfig,
     GraphExpansionDiagnostics,
@@ -133,6 +139,417 @@ def _result(*chunk_ids: int) -> GraphExpansionResult:
         ),
         seed_chunk_ids=(1,),
     )
+
+
+def test_shared_materialize_rerank_seam_uses_full_baseline_and_permission_refetch(
+    monkeypatch,
+) -> None:
+    vector = _chunk(1)
+    trigram = _chunk(2)
+    exact = _chunk(3)
+    graph = _chunk(4)
+    hidden = _chunk(5, _DOC_B)
+    model, filters = _model([graph])
+    scope = AuthorizedDocumentScope(
+        documents=(SimpleNamespace(id=_DOC_A, collection_id=7),),
+        allowed_doc_ids=(_DOC_A,),
+        allowed_collection_ids=(7,),
+    )
+    observed: list[tuple[int, ...]] = []
+
+    def rerank(_model, _query, rows, _top_k):
+        identifiers = tuple(row.pk for row in rows)
+        observed.append(identifiers)
+        return list(reversed(rows))
+
+    monkeypatch.setattr(
+        "apps.documents.services.chunk_search.rerank_chunks",
+        rerank,
+    )
+
+    ranked = materialize_and_rerank_candidates(
+        model,
+        "exact trigram query",
+        2,
+        (vector, trigram, exact),
+        authorized_scope=scope,
+        graph_chunk_ids=(4,),
+        max_graph_candidates=2,
+    )
+    rejected = materialize_and_rerank_candidates(
+        model,
+        "exact trigram query",
+        2,
+        (vector, trigram, exact),
+        authorized_scope=scope,
+        graph_chunk_ids=(hidden.pk,),
+        max_graph_candidates=2,
+    )
+
+    assert observed == [(1, 2, 3, 4), (1, 2, 3)]
+    assert tuple(row.pk for row in ranked.ranked_results) == (4, 3, 2, 1)
+    assert tuple(row.pk for row in ranked.graph_candidates) == (4,)
+    assert rejected.inaccessible_candidate_count == 1
+    assert tuple(row.pk for row in rejected.ranked_results) == (3, 2, 1)
+    assert filters == [
+        {"pk__in": (4,), "doc_id__in": (_DOC_A,)},
+        {"pk__in": (5,), "doc_id__in": (_DOC_A,)},
+    ]
+
+
+def test_shipping_fallback_cannot_surface_a_graph_row_appended_after_top_k(
+    monkeypatch,
+) -> None:
+    """Document why a measured comparison must never accept fail-open reranking."""
+
+    baseline = tuple(_chunk(identifier) for identifier in range(1, 13))
+    graph = _chunk(13)
+    model, _filters = _model([graph])
+    scope = AuthorizedDocumentScope(
+        documents=(SimpleNamespace(id=_DOC_A, collection_id=7),),
+        allowed_doc_ids=(_DOC_A,),
+        allowed_collection_ids=(7,),
+    )
+    monkeypatch.setattr(
+        "apps.documents.services.chunk_search.rerank_chunks",
+        lambda _model, _query, rows, top_k: tuple(rows)[:top_k],
+    )
+
+    result = materialize_and_rerank_candidates(
+        model,
+        "relationship query",
+        10,
+        baseline,
+        authorized_scope=scope,
+        graph_chunk_ids=(graph.pk,),
+        max_graph_candidates=1,
+    )
+
+    assert tuple(row.pk for row in result.graph_candidates) == (13,)
+    assert tuple(row.pk for row in result.ranked_results) == tuple(range(1, 11))
+    assert graph.pk not in {row.pk for row in result.ranked_results}
+
+
+def test_strict_eval_rerank_uses_exact_local_output_and_never_falls_back(
+    monkeypatch,
+) -> None:
+    from apps.documents.services import chunk_rerank
+
+    rows = tuple(_chunk(identifier) for identifier in (1, 2, 3))
+    returned = (rows[2], rows[0], rows[1])
+    monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
+    monkeypatch.setattr(
+        chunk_rerank,
+        "rerank_via_local_vllm",
+        lambda *_args, **_kwargs: returned,
+    )
+
+    result = chunk_rerank._strict_local_rerank_chunks(
+        object,
+        "relationship query",
+        rows,
+        3,
+        _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
+    )
+
+    assert result == returned
+
+
+def test_strict_eval_rerank_aborts_on_empty_or_error_instead_of_fallback(
+    monkeypatch,
+) -> None:
+    from apps.documents.services import chunk_rerank
+
+    rows = (_chunk(1), _chunk(2))
+    monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
+    monkeypatch.setattr(
+        chunk_rerank,
+        "rerank_via_local_vllm",
+        lambda *_args, **_kwargs: (),
+    )
+
+    with pytest.raises(chunk_rerank.StrictRerankUnavailable, match="empty"):
+        chunk_rerank._strict_local_rerank_chunks(
+            object,
+            "query",
+            rows,
+            2,
+            _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
+        )
+
+    def fail(*_args, **_kwargs):
+        raise TimeoutError("reranker timed out")
+
+    monkeypatch.setattr(chunk_rerank, "rerank_via_local_vllm", fail)
+    with pytest.raises(TimeoutError, match="timed out"):
+        chunk_rerank._strict_local_rerank_chunks(
+            object,
+            "query",
+            rows,
+            2,
+            _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
+        )
+
+
+@pytest.mark.parametrize(
+    ("returned", "message"),
+    (
+        ((_chunk(1),), "complete"),
+        ((_chunk(1), _chunk(1)), "unique"),
+        ((_chunk(1), _chunk(9)), "candidate pool"),
+    ),
+)
+def test_strict_eval_rerank_rejects_partial_duplicate_or_out_of_pool(
+    monkeypatch,
+    returned,
+    message,
+) -> None:
+    from apps.documents.services import chunk_rerank
+
+    rows = (_chunk(1), _chunk(2))
+    monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
+    monkeypatch.setattr(
+        chunk_rerank,
+        "rerank_via_local_vllm",
+        lambda *_args, **_kwargs: returned,
+    )
+
+    with pytest.raises(chunk_rerank.StrictRerankUnavailable, match=message):
+        chunk_rerank._strict_local_rerank_chunks(
+            object,
+            "query",
+            rows,
+            2,
+            _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
+        )
+
+
+def test_strict_eval_rerank_requires_exact_local_provider_and_capability(
+    monkeypatch,
+) -> None:
+    from apps.documents.services import chunk_rerank
+
+    rows = (_chunk(1),)
+    monkeypatch.setenv("APP_RERANK_PROVIDER", "vllm")
+    with pytest.raises(chunk_rerank.StrictRerankUnavailable, match="exact local"):
+        chunk_rerank._strict_local_rerank_chunks(
+            object,
+            "query",
+            rows,
+            1,
+            _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
+        )
+    monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
+    with pytest.raises(PermissionError, match="capability"):
+        chunk_rerank._strict_local_rerank_chunks(
+            object,
+            "query",
+            rows,
+            1,
+            _capability=object(),
+        )
+
+
+@override_settings(RAG_CACHE_ENABLED=False)
+def test_strict_eval_reranks_all_arms_without_cache_hits_or_writes(monkeypatch):
+    from apps.documents.services import chunk_rerank, rag_cache
+
+    rows = (_chunk(1), _chunk(2))
+    observed = []
+
+    def no_cache_backend(*_args, **_kwargs):
+        raise AssertionError("disabled rerank cache touched its backend")
+
+    def local_adapter(_model, _query, chunks, _top_k, **_kwargs):
+        observed.append(tuple(row.pk for row in chunks))
+        return tuple(chunks)
+
+    monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
+    monkeypatch.setattr(rag_cache, "cache_get", no_cache_backend)
+    monkeypatch.setattr(rag_cache, "cache_set", no_cache_backend)
+    monkeypatch.setattr(chunk_rerank, "rerank_via_local_vllm", local_adapter)
+
+    signature = rag_cache.query_signature_for_rerank("same query")
+    assert rag_cache.get_cached_rerank_result(signature, (1, 2), 2, "model") is None
+    rag_cache.set_cached_rerank_result(signature, (1, 2), 2, "model", [1, 2])
+    for _arm in ("vector", "one-hop", "ppr", "ppr-repeat"):
+        chunk_rerank._strict_local_rerank_chunks(
+            object,
+            "same query",
+            rows,
+            2,
+            _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
+        )
+
+    assert observed == [(1, 2)] * 4
+
+
+@pytest.mark.parametrize("partial_mode", ("batch", "per_document"))
+@override_settings(RAG_CACHE_ENABLED=False)
+def test_strict_eval_rejects_partial_scoring_even_when_top_k_is_full(
+    monkeypatch,
+    partial_mode,
+):
+    from apps.documents.services import chunk_rerank
+    from apps.documents.services import chunk_rerank_local_vllm as local_vllm
+
+    rows = tuple(_chunk(identifier) for identifier in range(1, 13))
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    def post(_url, *, json, **_kwargs):
+        return Response(json)
+
+    def partial_pairs(_payload):
+        if partial_mode == "batch":
+            return [(index, float(10 - index)) for index in range(10)]
+        return []
+
+    def partial_single(payload):
+        if partial_mode == "batch":
+            raise ValueError("no per-document fallback")
+        text = payload.get("text_2") or payload.get("document")
+        identifier = int(str(text).rsplit("-", 1)[1])
+        if identifier > 10:
+            raise ValueError("candidate was not scored")
+        return float(13 - identifier)
+
+    def ordered(_model, identifiers):
+        by_id = {row.pk: row for row in rows}
+        return tuple(by_id[identifier] for identifier in identifiers)
+
+    monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
+    monkeypatch.setattr(local_vllm, "rerank_base_url", lambda: "http://local/v1")
+    monkeypatch.setattr(local_vllm, "rerank_model", lambda: "Qwen/reranker")
+    monkeypatch.setattr(local_vllm, "rerank_model_is_qwen3_vl", lambda: True)
+    monkeypatch.setattr(local_vllm, "rerank_document_payload", lambda row: row.content)
+    monkeypatch.setattr(local_vllm, "parse_score_results", partial_pairs)
+    monkeypatch.setattr(local_vllm, "parse_single_score", partial_single)
+    monkeypatch.setattr(local_vllm, "ordered_queryset_from_ids", ordered)
+    monkeypatch.setattr(local_vllm.requests, "post", post)
+
+    with pytest.raises(chunk_rerank.StrictRerankUnavailable, match="empty"):
+        chunk_rerank._strict_local_rerank_chunks(
+            object,
+            "query",
+            rows,
+            10,
+            _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
+        )
+
+
+@pytest.mark.parametrize("score_mode", ("batch", "per_document"))
+@pytest.mark.parametrize("bad_score", (True, float("nan"), float("inf"), -float("inf")))
+@override_settings(RAG_CACHE_ENABLED=False)
+def test_strict_eval_rejects_nonfinite_or_boolean_scores(
+    monkeypatch,
+    score_mode,
+    bad_score,
+):
+    from apps.documents.services import chunk_rerank
+    from apps.documents.services import chunk_rerank_local_vllm as local_vllm
+
+    rows = (_chunk(1), _chunk(2))
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    def pairs(_payload):
+        return [(0, 1.0), (1, bad_score)] if score_mode == "batch" else []
+
+    def single(payload):
+        if score_mode == "batch":
+            raise ValueError("batch-only response")
+        text = payload.get("text_2") or payload.get("document")
+        return 1.0 if str(text).endswith("-1") else bad_score
+
+    monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
+    monkeypatch.setattr(local_vllm, "rerank_base_url", lambda: "http://local/v1")
+    monkeypatch.setattr(local_vllm, "rerank_model", lambda: "Qwen/reranker")
+    monkeypatch.setattr(local_vllm, "rerank_model_is_qwen3_vl", lambda: True)
+    monkeypatch.setattr(local_vllm, "rerank_document_payload", lambda row: row.content)
+    monkeypatch.setattr(local_vllm, "parse_score_results", pairs)
+    monkeypatch.setattr(local_vllm, "parse_single_score", single)
+    monkeypatch.setattr(
+        local_vllm,
+        "ordered_queryset_from_ids",
+        lambda _model, identifiers: tuple(rows[index - 1] for index in identifiers),
+    )
+    monkeypatch.setattr(
+        local_vllm.requests,
+        "post",
+        lambda *_args, **kwargs: Response(kwargs["json"]),
+    )
+
+    with pytest.raises(chunk_rerank.StrictRerankUnavailable, match="empty"):
+        chunk_rerank._strict_local_rerank_chunks(
+            object,
+            "query",
+            rows,
+            2,
+            _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
+        )
+
+
+def test_shared_materializer_can_require_strict_rerank_even_below_top_k(
+    monkeypatch,
+) -> None:
+    from apps.documents.services import chunk_rerank, chunk_search
+
+    baseline = (_chunk(1), _chunk(2))
+    model, _filters = _model([])
+    observed: list[tuple[int, ...]] = []
+
+    def strict_rerank(_model, _query, rows, _top_k, **_kwargs):
+        observed.append(tuple(row.pk for row in rows))
+        return tuple(reversed(rows))
+
+    monkeypatch.setattr(chunk_search, "_strict_local_rerank_chunks", strict_rerank)
+    result = materialize_and_rerank_candidates(
+        model,
+        "relationship query",
+        10,
+        baseline,
+        authorized_scope=None,
+        _eval_rerank_capability=chunk_rerank._STRICT_EVALUATION_RERANK,
+    )
+
+    assert observed == [(1, 2)]
+    assert tuple(row.pk for row in result.ranked_results) == (2, 1)
+
+    with pytest.raises(TypeError):
+        materialize_and_rerank_candidates(
+            model,
+            "relationship query",
+            10,
+            baseline,
+            authorized_scope=None,
+            _strict_rerank=strict_rerank,
+        )
+    with pytest.raises(ValueError, match="capability"):
+        materialize_and_rerank_candidates(
+            model,
+            "relationship query",
+            10,
+            baseline,
+            authorized_scope=None,
+            _eval_rerank_capability=object(),
+        )
 
 
 @override_settings(KG_OVERLAY_ENABLED=True, RAG_CACHE_ENABLED=False)
@@ -287,6 +704,38 @@ def test_expansion_error_preserves_exact_baseline_and_safe_diagnostics(
     }
     assert "private" not in repr(graph_diagnostics)
     assert "secret" not in repr(graph_diagnostics)
+
+
+def test_private_eval_failure_capability_uses_production_overlay_exception_catch():
+    from apps.documents.services import chunk_search
+
+    scope = AuthorizedDocumentScope(
+        documents=(SimpleNamespace(id=_DOC_A, collection_id=7),),
+        allowed_doc_ids=(_DOC_A,),
+        allowed_collection_ids=(7,),
+    )
+
+    graph_ids, diagnostics = chunk_search._apply_graph_overlay(
+        object,
+        _snapshot(),
+        scope,
+        _config(),
+        preflight_status=None,
+        _eval_failure_capability=chunk_search._EVALUATION_GRAPH_FAILURE,
+    )
+
+    assert graph_ids == ()
+    assert diagnostics["graph_status"] == "error"
+    assert diagnostics["graph_candidate_count"] == 0
+    with pytest.raises(ValueError, match="capability"):
+        chunk_search._apply_graph_overlay(
+            object,
+            _snapshot(),
+            scope,
+            _config(),
+            preflight_status=None,
+            _eval_failure_capability=object(),
+        )
 
 
 @override_settings(KG_OVERLAY_ENABLED=True, RAG_CACHE_ENABLED=False)

@@ -401,15 +401,15 @@ PROFILE_MAIN_MODEL=hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16
 PROFILE_MAIN_SERVED_NAME=qwen3.6:27b-mtp-awq
 PROFILE_MAIN_GPU_MEMORY_UTILIZATION=0.45
 PROFILE_MAIN_MAX_MODEL_LEN=40960
-PROFILE_MAIN_EXTRA_ARGS=--kv-cache-dtype turboquant_4bit_nc --dtype float16 --download-dir /root/.cache/huggingface/hub --attention-backend TURBOQUANT --chat-template /templates/qwen_fixed_chat_template.jinja --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-num-seqs 1 --no-enable-prefix-caching --speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+PROFILE_MAIN_EXTRA_ARGS=--kv-cache-dtype turboquant_4bit_nc --download-dir /root/.cache/huggingface/hub --attention-backend TURBOQUANT --chat-template /templates/qwen_fixed_chat_template.jinja --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-num-seqs 1 --no-enable-prefix-caching --speculative-config '{"method":"mtp","num_speculative_tokens":3}'
 PROFILE_EMBED_MODEL=Qwen/Qwen3-VL-Embedding-2B
 PROFILE_EMBED_GPU_MEMORY_UTILIZATION=0.12
 PROFILE_EMBED_MAX_MODEL_LEN=2048
-PROFILE_EMBED_EXTRA_ARGS=--quantization bitsandbytes --load-format bitsandbytes --dtype float16 --model-loader-extra-config '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}'
+PROFILE_EMBED_EXTRA_ARGS=--quantization bitsandbytes --load-format bitsandbytes --model-loader-extra-config '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}'
 PROFILE_RERANK_MODEL=Qwen/Qwen3-VL-Reranker-2B
 PROFILE_RERANK_GPU_MEMORY_UTILIZATION=0.08
 PROFILE_RERANK_MAX_MODEL_LEN=1024
-PROFILE_RERANK_EXTRA_ARGS=--runner pooling --dtype float16 --chat-template /templates/qwen3_vl_reranker.jinja --hf-overrides '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+PROFILE_RERANK_EXTRA_ARGS=--chat-template /templates/qwen3_vl_reranker.jinja --hf-overrides '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
 "@ | Set-Utf8NoBom -Path $ProfileEnvPath
     @"
 name: $ProfileProject
@@ -424,6 +424,7 @@ services:
       VLLM_TENSOR_PARALLEL_SIZE: "1"
       VLLM_GPU_MEMORY_UTILIZATION: `${PROFILE_MAIN_GPU_MEMORY_UTILIZATION:?}
       VLLM_MAX_MODEL_LEN: `${PROFILE_MAIN_MAX_MODEL_LEN:?}
+      VLLM_DTYPE: float16
       VLLM_TRUST_REMOTE_CODE: "1"
       VLLM_EXTRA_ARGS: `${PROFILE_MAIN_EXTRA_ARGS:?}
       HF_HOME: /root/.cache/huggingface
@@ -467,6 +468,7 @@ services:
       VLLM_MODEL: `${PROFILE_EMBED_MODEL:?}
       VLLM_SERVED_MODEL_NAME: `${PROFILE_EMBED_MODEL:?}
       VLLM_RUNNER: pooling
+      VLLM_DTYPE: float16
       VLLM_TENSOR_PARALLEL_SIZE: "1"
       VLLM_GPU_MEMORY_UTILIZATION: `${PROFILE_EMBED_GPU_MEMORY_UTILIZATION:?}
       VLLM_MAX_MODEL_LEN: `${PROFILE_EMBED_MAX_MODEL_LEN:?}
@@ -484,7 +486,9 @@ services:
     environment:
       VLLM_MODEL: `${PROFILE_RERANK_MODEL:?}
       VLLM_SERVED_MODEL_NAME: `${PROFILE_RERANK_MODEL:?}
+      VLLM_RUNNER: pooling
       VLLM_TASK: score
+      VLLM_DTYPE: float16
       VLLM_TENSOR_PARALLEL_SIZE: "1"
       VLLM_GPU_MEMORY_UTILIZATION: `${PROFILE_RERANK_GPU_MEMORY_UTILIZATION:?}
       VLLM_MAX_MODEL_LEN: `${PROFILE_RERANK_MAX_MODEL_LEN:?}

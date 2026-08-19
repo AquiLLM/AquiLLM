@@ -207,53 +207,343 @@ Do not skip or reorder these steps.
    on that queue. The deployed worker cannot consume these tasks because it
    continues to consume only its configured non-evaluation queue.
 
-   The following Bash procedure uses the same Compose network, disables both
-   shipping flags in every temporary process, gives the report restrictive
-   creation permissions, waits for both requests, and removes the worker and
-   purges its unique queue on success, interruption, or failure. Replace the
-   fixture placeholders with two through four approved collection IDs and
-   caller-generated UUIDs. `--no-deps` reuses the already-running deployment
-   database and broker and creates no temporary dependency containers.
+   The evaluation is synthetic and must use a fresh database, broker, queue,
+   Compose project, and cache volumes. It must never reuse, activate an ontology
+   on, stop, or otherwise mutate a shared deployment. The reviewed environment
+   file must pin the extractor, strict local embedding, and strict local
+   reranker model/revisions and
+   set `APP_EMBED_BASE_URL=http://vllm_embed:8000/v1`,
+   `APP_EMBED_API_KEY=EMPTY`, `APP_EMBED_DIMS=1024`, and
+   `APP_EMBED_ALLOW_DIMENSIONS_OVERRIDE=0`. It must also set
+   `APP_RERANK_PROVIDER=local`,
+   `APP_RERANK_BASE_URL=http://vllm_rerank:8000/v1`,
+   `APP_RERANK_API_KEY=EMPTY`, and an immutable lowercase 40-hex
+   `APP_RERANK_MODEL_REVISION`. The explicit
+   `APP_RERANK_TOKENIZER_REVISION` and `APP_RERANK_CODE_REVISION` must equal
+   that commit. Likewise, `APP_EMBED_MODEL_REVISION`,
+   `APP_EMBED_TOKENIZER_REVISION`, and `APP_EMBED_CODE_REVISION` must be the
+   same lowercase 40-hex commit. `APP_RERANK_MODEL`,
+   `APP_RERANK_VLLM_MODEL`, and `APP_RERANK_TOKENIZER` must be the same exact
+   bounded Hugging Face repository ID. Both sidecars must set their strict
+   protected-argument fence to `1`, tokenizer/code revisions explicitly,
+   `VLLM_TRUST_REMOTE_CODE=1`, tensor parallelism `1`, and the reviewed
+   runner/dtype/resource envelope. The reranker task is exactly `score`.
+   `VLLM_EXTRA_ARGS` contains only the reviewed non-protected canonical
+   payload; `LMCACHE_ENABLED=0`. Before deploying the strict shipping
+   embed/rerank services, migrate any legacy operator environment by removing
+   `--model`, `--served-model-name`, `--tokenizer`, revision, runner, dtype,
+   trust, task, tensor-parallel, GPU-utilization, max-length, API-key, and
+   download-directory options from
+   `MEM0_EMBED_VLLM_EXTRA_ARGS` and `APP_RERANK_VLLM_EXTRA_ARGS`; set their
+   typed variables instead. Set `VLLM_STRICT_PROTECTED_ARGS=1`,
+   `VLLM_API_KEY=EMPTY`, `VLLM_DOWNLOAD_DIR=/root/.cache/huggingface/hub`,
+   and `VLLM_PYTHON_BIN=python3` on both strict sidecars. The strict wrapper
+   rejects duplicates and any noncanonical remaining payload.
+   Main, OCR, and transcription profiles remain compatibility-mode unless
+   separately migrated and attested. It must route the shipping rerank cache only to the
+   isolated broker with `DJANGO_CACHE_REDIS_URL=redis://redis:6379/1` and
+   `RAG_CACHE_ENABLED=1`. The checked-in
+   `deploy/compose/knowledge-graph-eval.yml` override replaces every inherited
+   development service env file with that reviewed absolute path, explicitly
+   maps the fresh PostgreSQL database/user/password, and replaces host caches
+   with project-scoped named volumes. Its graph/extractor cache is mounted at
+   neutral `/opt/kg-eval-hf-cache` with both `HF_HOME` and
+   `KG_GLINER2_CACHE_DIR` set to that path. The seeder creates only clearly named
+   synthetic rows and a manifest; it creates no graph request, artifact, run,
+   or graph rows.
+
+   Run this Bash procedure from the repository root. It canonicalizes the four
+   exact collection/request pairs emitted by the manifest, verifies every
+   request's terminal JSON, and checksum-binds cleanup. `vllm_embed` and
+   `vllm_rerank` are started together with `--no-deps`; both must be healthy at
+   once. A normal profile start is forbidden because it would also start
+   unrelated vLLM services.
 
    ```bash
    set -euo pipefail
+   : "${TASK21_ENV_FILE:?set TASK21_ENV_FILE to the absolute reviewed eval env file}"
+   case "$TASK21_ENV_FILE" in /*) ;; *) echo "TASK21_ENV_FILE must be absolute" >&2; exit 64 ;; esac
+   TASK21_ENV_FILE="$(realpath -- "$TASK21_ENV_FILE")"
+   test -f "$TASK21_ENV_FILE"
    install -d -m 700 artifacts
-   KG_EVAL_QUEUE="knowledge-graph-eval-$(date +%s)-$$"
-   KG_EVAL_WORKER_NAME="aquillm-kg-eval-$(date +%s)-$$"
+   KG_EVAL_RUN_ID="$(python -c 'import uuid; print(uuid.uuid4().hex)')"
+   KG_EVAL_PROJECT="aquillm-kg-eval-$KG_EVAL_RUN_ID"
+   KG_EVAL_QUEUE="knowledge-graph-eval-$KG_EVAL_RUN_ID"
+   KG_EVAL_WORKER_NAME="$KG_EVAL_PROJECT-worker"
+   KG_EVAL_MANIFEST=/app/artifacts/kg-eval-fixture-manifest.json
+   KG_EVAL_REPORT=/app/artifacts/kg-eval-comparison.json
+   KG_EVAL_ONTOLOGY_CHECKSUM=eb8d0c6b512216db2592f16898cd59ab76a2c95e9151c5fabfcc3f1be87a9059
+   KG_EVAL_WRAPPER_SHA256="$(sha256sum deploy/scripts/vllm_start.sh | awk '{print $1}')"
+   KG_EVAL_PARSER_SHA256="$(sha256sum deploy/scripts/parse_vllm_extra_args.py | awk '{print $1}')"
+   KG_EVAL_TEMPLATE_SHA256="$(sha256sum deploy/docker/vllm/chat_templates/qwen3_vl_reranker.jinja | awk '{print $1}')"
+   KG_EVAL_DOCKER_ENV=(env -i "PATH=$PATH")
+   for variable in HOME DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG \
+     DOCKER_TLS_VERIFY DOCKER_CERT_PATH XDG_RUNTIME_DIR; do
+     if test -n "${!variable:-}"; then
+       KG_EVAL_DOCKER_ENV+=("$variable=${!variable}")
+     fi
+   done
+
+   kg_eval_compose() {
+     "${KG_EVAL_DOCKER_ENV[@]}" \
+       "TASK21_ENV_FILE=$TASK21_ENV_FILE" \
+       "KG_EXTRACTION_QUEUE=$KG_EVAL_QUEUE" \
+       DJANGO_DEBUG=1 KG_EVAL_BYPASS_ALLOWED=1 \
+       KG_BUILD_ENABLED=0 KG_OVERLAY_ENABLED=0 \
+       DJANGO_CACHE_REDIS_URL=redis://redis:6379/1 \
+       RAG_CACHE_ENABLED=1 COHERE_KEY= \
+       docker compose --env-file "$TASK21_ENV_FILE" -p "$KG_EVAL_PROJECT" \
+         -f deploy/compose/development.yml \
+         -f deploy/compose/knowledge-graph-eval.yml \
+         --profile knowledge-graph --profile vllm "$@"
+   }
+
+   kg_eval_python() {
+     kg_eval_compose run --rm --no-deps \
+       --user "$(id -u):$(id -g)" -e COHERE_KEY= \
+       -e PYTHONDONTWRITEBYTECODE=1 \
+       --entrypoint /bin/sh worker_knowledge_graph \
+       -c 'umask 077; cd /app/aquillm; exec /opt/venv/bin/python "$@"' sh "$@"
+   }
+
+   kg_eval_no_cache_python() {
+     kg_eval_compose run --rm --no-deps \
+       --user "$(id -u):$(id -g)" -e COHERE_KEY= \
+       -e PYTHONDONTWRITEBYTECODE=1 -e RAG_CACHE_ENABLED=0 \
+       --entrypoint /bin/sh worker_knowledge_graph \
+       -c 'umask 077; cd /app/aquillm; exec /opt/venv/bin/python "$@"' sh "$@"
+   }
+
+   kg_eval_root_python() {
+     kg_eval_compose run --rm --no-deps --user 0:0 \
+       -e COHERE_KEY= -e KG_GLINER2_LOCAL_FILES_ONLY=0 \
+       -e PYTHONDONTWRITEBYTECODE=1 \
+       --entrypoint /bin/sh worker_knowledge_graph \
+       -c 'umask 077; cd /app/aquillm; exec /opt/venv/bin/python "$@"' sh "$@"
+   }
+
+   stop_eval_worker() {
+     case "$KG_EVAL_PROJECT" in aquillm-kg-eval-[0-9a-f][0-9a-f]*) ;; *) return 97 ;; esac
+     test "$KG_EVAL_WORKER_NAME" = "$KG_EVAL_PROJECT-worker"
+     local worker_container
+     worker_container="$(docker ps -aq --filter "name=^/${KG_EVAL_WORKER_NAME}$")"
+     if test -n "$worker_container"; then
+       case "$worker_container" in *[!0-9a-f]*) return 99 ;; esac
+       test "$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$worker_container")" = "$KG_EVAL_PROJECT"
+       test "$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$worker_container")" = worker_knowledge_graph
+       test "$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.oneoff" }}' "$worker_container")" = True
+       docker rm -fv "$worker_container" >/dev/null
+     fi
+   }
+
+   purge_eval_queue() {
+     kg_eval_compose run --rm --no-deps -e COHERE_KEY= \
+       --entrypoint /opt/venv/bin/celery worker_knowledge_graph \
+       -A aquillm purge -Q "$KG_EVAL_QUEUE" -f >/dev/null 2>&1 || true
+   }
 
    cleanup_kg_eval() {
      trap - EXIT INT TERM
-     docker rm -f "$KG_EVAL_WORKER_NAME" >/dev/null 2>&1 || true
-     docker compose --env-file .env -f deploy/compose/development.yml --profile knowledge-graph run --rm --no-deps \
-       -e KG_EXTRACTION_QUEUE="$KG_EVAL_QUEUE" \
-       --entrypoint /opt/venv/bin/celery worker_knowledge_graph \
-       -A aquillm purge -Q "$KG_EVAL_QUEUE" -f >/dev/null 2>&1 || true
-     unset KG_EVAL_QUEUE KG_EVAL_WORKER_NAME
-     unset -f kg_eval_python 2>/dev/null || true
+     local cleanup_status=0
+     case "$KG_EVAL_PROJECT" in aquillm-kg-eval-[0-9a-f][0-9a-f]*) ;; *) return 97 ;; esac
+     stop_eval_worker
+     purge_eval_queue
+     if test -n "${KG_EVAL_MANIFEST_CHECKSUM:-}"; then
+       kg_eval_python manage.py seed_knowledge_graph_eval_fixture \
+         --cleanup --fixture-manifest "$KG_EVAL_MANIFEST" \
+         --expected-manifest-checksum "$KG_EVAL_MANIFEST_CHECKSUM" || cleanup_status=$?
+     fi
+     while IFS= read -r volume; do
+       test -z "$volume" || case "$volume" in "$KG_EVAL_PROJECT"_*) ;; *) return 98 ;; esac
+     done < <(docker volume ls -q --filter "label=com.docker.compose.project=$KG_EVAL_PROJECT")
+     kg_eval_compose down --volumes --remove-orphans || cleanup_status=$?
+     test -z "$(docker ps -aq --filter "label=com.docker.compose.project=$KG_EVAL_PROJECT")" || cleanup_status=$?
+     test -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$KG_EVAL_PROJECT")" || cleanup_status=$?
+     return "$cleanup_status"
    }
    trap 'status=$?; cleanup_kg_eval; exit "$status"' EXIT
    trap 'cleanup_kg_eval; exit 130' INT
    trap 'cleanup_kg_eval; exit 143' TERM
 
-   docker compose --env-file .env -f deploy/compose/development.yml --profile knowledge-graph run -d --name "$KG_EVAL_WORKER_NAME" --no-deps \
-     -e KG_EXTRACTION_QUEUE="$KG_EVAL_QUEUE" \
-     -e DJANGO_DEBUG=1 \
-     -e KG_EVAL_BYPASS_ALLOWED=1 \
-     -e KG_BUILD_ENABLED=0 \
-     -e KG_OVERLAY_ENABLED=0 \
-     worker_knowledge_graph
+   kg_eval_compose config --quiet
+   kg_eval_compose build worker_knowledge_graph vllm_embed vllm_rerank
+   kg_eval_compose up -d --wait --wait-timeout 300 db redis
+   kg_eval_python manage.py migrate --noinput
 
-   kg_eval_python() {
-     docker compose --env-file .env -f deploy/compose/development.yml --profile knowledge-graph run --rm --no-deps \
-       --user "$(id -u):$(id -g)" \
-       -e KG_EXTRACTION_QUEUE="$KG_EVAL_QUEUE" \
-       -e DJANGO_DEBUG=1 \
-       -e KG_EVAL_BYPASS_ALLOWED=1 \
-       -e KG_BUILD_ENABLED=0 \
-       -e KG_OVERLAY_ENABLED=0 \
-       --entrypoint /bin/sh worker_knowledge_graph \
-       -c 'umask 077; exec /opt/venv/bin/python "$@"' sh "$@"
-   }
+   kg_eval_python manage.py activate_knowledge_graph_ontology \
+     --path research-v1.yaml \
+     --expected-checksum "$KG_EVAL_ONTOLOGY_CHECKSUM" --dry-run
+   kg_eval_python manage.py activate_knowledge_graph_ontology \
+     --path research-v1.yaml \
+     --expected-checksum "$KG_EVAL_ONTOLOGY_CHECKSUM" --yes
+
+   kg_eval_compose up -d --wait --wait-timeout 3600 --no-deps vllm_embed vllm_rerank
+   KG_EVAL_EMBED_CONTAINER="$(kg_eval_compose ps -q vllm_embed)"
+   KG_EVAL_RERANK_CONTAINER="$(kg_eval_compose ps -q vllm_rerank)"
+   test -n "$KG_EVAL_EMBED_CONTAINER"
+   test -n "$KG_EVAL_RERANK_CONTAINER"
+   test "$(docker inspect --format '{{.State.Health.Status}}' "$KG_EVAL_EMBED_CONTAINER")" = healthy
+   test "$(docker inspect --format '{{.State.Health.Status}}' "$KG_EVAL_RERANK_CONTAINER")" = healthy
+   printf 'vllm_simultaneous_gpu_gate=ok\n'
+
+   for service_container in \
+     "vllm_embed:$KG_EVAL_EMBED_CONTAINER" \
+     "vllm_rerank:$KG_EVAL_RERANK_CONTAINER"; do
+     IFS=: read -r service container extra <<<"$service_container"
+     test -z "${extra:-}"
+     docker exec \
+       -e "EXPECTED_VLLM_SERVICE=$service" \
+       -e "EXPECTED_WRAPPER_SHA256=$KG_EVAL_WRAPPER_SHA256" \
+       -e "EXPECTED_PARSER_SHA256=$KG_EVAL_PARSER_SHA256" \
+       -e "EXPECTED_TEMPLATE_SHA256=$KG_EVAL_TEMPLATE_SHA256" \
+       "$container" python3 -c '
+   import hashlib
+   import json
+   import os
+   import re
+   import shlex
+   from pathlib import Path
+   argv = [item.decode("utf-8") for item in Path("/proc/1/cmdline").read_bytes().split(b"\0") if item]
+   def flag(name):
+       assert argv.count(name) == 1
+       index = argv.index(name)
+       return argv[index + 1]
+   def file_sha256(path):
+       return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+   assert file_sha256("/vllm_start.sh") == os.environ["EXPECTED_WRAPPER_SHA256"]
+   assert file_sha256("/parse_vllm_extra_args.py") == os.environ["EXPECTED_PARSER_SHA256"]
+   model = os.environ["VLLM_MODEL"]
+   revision = os.environ["VLLM_REVISION"]
+   assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*", model)
+   assert re.fullmatch(r"[0-9a-f]{40}", revision)
+   assert model == os.environ["VLLM_SERVED_MODEL_NAME"] == os.environ["VLLM_TOKENIZER"]
+   assert revision == os.environ["VLLM_TOKENIZER_REVISION"]
+   assert revision == os.environ["VLLM_CODE_REVISION"]
+   assert os.environ["VLLM_STRICT_PROTECTED_ARGS"] == "1"
+   assert os.environ["VLLM_TRUST_REMOTE_CODE"] == "1"
+   assert os.environ["VLLM_API_KEY"] == "EMPTY"
+   assert os.environ["VLLM_DOWNLOAD_DIR"] == "/root/.cache/huggingface/hub"
+   assert os.environ["VLLM_PYTHON_BIN"] == "python3"
+   assert os.environ["LMCACHE_ENABLED"] == "0"
+   assert Path(argv[0]).name == "python3"
+   assert flag("--model") == os.environ["VLLM_MODEL"]
+   assert flag("--served-model-name") == os.environ["VLLM_SERVED_MODEL_NAME"]
+   assert flag("--tokenizer") == os.environ["VLLM_TOKENIZER"]
+   assert flag("--revision") == os.environ["VLLM_REVISION"]
+   assert flag("--tokenizer-revision") == os.environ["VLLM_TOKENIZER_REVISION"]
+   assert flag("--code-revision") == os.environ["VLLM_CODE_REVISION"]
+   assert flag("--runner") == "pooling"
+   assert flag("--dtype") == "float16"
+   assert flag("--tensor-parallel-size") == "1"
+   assert flag("--api-key") == "EMPTY"
+   assert flag("--download-dir") == "/root/.cache/huggingface/hub"
+   assert argv.count("--trust-remote-code") == 1
+   service = os.environ["EXPECTED_VLLM_SERVICE"]
+   if service == "vllm_embed":
+       assert model == os.environ["APP_EMBED_MODEL"]
+       assert revision == os.environ["APP_EMBED_MODEL_REVISION"]
+       assert revision == os.environ["APP_EMBED_TOKENIZER_REVISION"]
+       assert revision == os.environ["APP_EMBED_CODE_REVISION"]
+       assert flag("--gpu-memory-utilization") == "0.12"
+       assert flag("--max-model-len") == "2048"
+       assert "--task" not in argv
+       assert flag("--quantization") == "bitsandbytes"
+       assert flag("--load-format") == "bitsandbytes"
+       loader = json.loads(flag("--model-loader-extra-config"))
+       assert loader == {
+           "load_in_4bit": True,
+           "bnb_4bit_compute_dtype": "float16",
+           "bnb_4bit_quant_type": "nf4",
+           "bnb_4bit_use_double_quant": True,
+       }
+       expected_extra_args = [
+           "--quantization", "bitsandbytes",
+           "--load-format", "bitsandbytes",
+           "--model-loader-extra-config",
+           '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}',
+       ]
+   else:
+       assert service == "vllm_rerank"
+       assert model == os.environ["APP_RERANK_VLLM_MODEL"]
+       assert model == os.environ["APP_RERANK_MODEL"]
+       assert model == os.environ["APP_RERANK_TOKENIZER"]
+       assert revision == os.environ["APP_RERANK_MODEL_REVISION"]
+       assert revision == os.environ["APP_RERANK_TOKENIZER_REVISION"]
+       assert revision == os.environ["APP_RERANK_CODE_REVISION"]
+       assert flag("--task") == "score"
+       assert flag("--gpu-memory-utilization") == "0.25"
+       assert flag("--max-model-len") == "1024"
+       assert flag("--chat-template") == "/templates/qwen3_vl_reranker.jinja"
+       overrides = json.loads(flag("--hf-overrides"))
+       assert overrides == {
+           "architectures": ["Qwen3VLForSequenceClassification"],
+           "classifier_from_token": ["no", "yes"],
+           "is_original_qwen3_reranker": True,
+       }
+       assert file_sha256("/templates/qwen3_vl_reranker.jinja") == os.environ["EXPECTED_TEMPLATE_SHA256"]
+       expected_extra_args = [
+           "--chat-template", "/templates/qwen3_vl_reranker.jinja",
+           "--hf-overrides",
+           '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}',
+       ]
+   assert shlex.split(os.environ["VLLM_EXTRA_ARGS"]) == expected_extra_args
+   print(f"{service}_provenance=ok")'
+   done
+
+   kg_eval_no_cache_python -c '
+   from aquillm.utils import get_strict_index_embeddings, strict_index_embedding_signature
+   from apps.knowledge_graph.evals.fixture_manifest import canonical_embedding_sha256
+   signature = strict_index_embedding_signature()
+   rows, actual = get_strict_index_embeddings(
+       ["Aquillm synthetic KG evaluation probe"],
+       expected_model_signature=signature,
+   )
+   assert actual == signature and len(rows) == 1 and rows[0][0] == 0
+   vector_sha = canonical_embedding_sha256(tuple(rows[0][1]))
+   print(f"strict_embedding_signature={signature} vector_sha256={vector_sha}")'
+
+   kg_eval_python manage.py seed_knowledge_graph_eval_fixture \
+     --fixture-manifest "$KG_EVAL_MANIFEST"
+   KG_EVAL_MANIFEST_CHECKSUM="$(kg_eval_python -c '
+   import sys
+   from pathlib import Path
+   from apps.knowledge_graph.evals.fixture_manifest import fixture_manifest_checksum, load_fixture_manifest
+   print(fixture_manifest_checksum(load_fixture_manifest(Path(sys.argv[1]))))
+   ' "$KG_EVAL_MANIFEST")"
+   test "${#KG_EVAL_MANIFEST_CHECKSUM}" -eq 64
+
+   mapfile -t KG_EVAL_SCOPE < <(kg_eval_python -c '
+   import sys
+   from pathlib import Path
+   from apps.knowledge_graph.evals.fixture_manifest import load_fixture_manifest
+   manifest = load_fixture_manifest(Path(sys.argv[1]))
+   for binding in manifest["authorized_scope"]:
+       print(binding["collection_id"], binding["rebuild_request_id"])
+   ' "$KG_EVAL_MANIFEST")
+   test "${#KG_EVAL_SCOPE[@]}" -eq 4
+
+   kg_eval_no_cache_python -c '
+   from apps.documents.models import TextChunk
+   from apps.documents.services.chunk_rerank import (
+       _STRICT_EVALUATION_RERANK,
+       _strict_local_rerank_chunks,
+   )
+   rows = tuple(TextChunk.objects.order_by("pk")[:2])
+   assert len(rows) == 2
+   first = _strict_local_rerank_chunks(
+       TextChunk, "Aquillm synthetic relationship probe", rows, 2,
+       _capability=_STRICT_EVALUATION_RERANK,
+   )
+   second = _strict_local_rerank_chunks(
+       TextChunk, "Aquillm synthetic relationship probe", rows, 2,
+       _capability=_STRICT_EVALUATION_RERANK,
+   )
+   assert tuple(row.pk for row in first) == tuple(row.pk for row in second)
+   print("strict_local_reranker=ok")'
+
+   kg_eval_root_python manage.py check_knowledge_graph_extractor
+   kg_eval_compose run -d --name "$KG_EVAL_WORKER_NAME" --no-deps \
+     -e PYTHONDONTWRITEBYTECODE=1 worker_knowledge_graph
 
    for attempt in $(seq 1 60); do
      if docker logs "$KG_EVAL_WORKER_NAME" 2>&1 | grep -q ' ready\.'; then
@@ -265,14 +555,79 @@ Do not skip or reorder these steps.
      fi
      sleep 1
    done
+   docker exec -e "EXPECTED_QUEUE=$KG_EVAL_QUEUE" "$KG_EVAL_WORKER_NAME" \
+     /bin/sh -c 'test "$KG_EXTRACTION_QUEUE" = "$EXPECTED_QUEUE"'
 
-   kg_eval_python manage.py rebuild_knowledge_graph --collection <pk-a> --request-id <uuid-a> --eval-only
-   kg_eval_python manage.py inspect_knowledge_graph --request-id <uuid-a> --wait --timeout-seconds 1800
-   kg_eval_python manage.py rebuild_knowledge_graph --collection <pk-b> --request-id <uuid-b> --eval-only
-   kg_eval_python manage.py inspect_knowledge_graph --request-id <uuid-b> --wait --timeout-seconds 1800
-   kg_eval_python -m apps.knowledge_graph.evals.run_kg_eval --mode comparison --eval-only --collection <pk-a> --collection <pk-b> --output /app/artifacts/kg-eval-comparison.json
-   kg_eval_python -m apps.knowledge_graph.evals.run_kg_eval --write-measured-gates --comparison-report /app/artifacts/kg-eval-comparison.json --runbook /app/docs/documents/operations/knowledge-graph-overlay-runbook.md
-   kg_eval_python -m apps.knowledge_graph.evals.run_kg_eval --verify-gates --comparison-report /app/artifacts/kg-eval-comparison.json --runbook /app/docs/documents/operations/knowledge-graph-overlay-runbook.md
+   KG_EVAL_COMPARE_ARGS=()
+   for binding in "${KG_EVAL_SCOPE[@]}"; do
+     read -r collection_id request_id extra <<<"$binding"
+     test -z "${extra:-}"
+     KG_EVAL_COMPARE_ARGS+=(--collection "$collection_id" --rebuild-request "$request_id")
+     kg_eval_python manage.py rebuild_knowledge_graph \
+       --collection "$collection_id" --request-id "$request_id" --eval-only
+     inspection="$(kg_eval_python manage.py inspect_knowledge_graph \
+       --request-id "$request_id" --wait --timeout-seconds 1800)"
+     kg_eval_python -c '
+   import json, sys
+   report = json.loads(sys.argv[1])
+   assert report["request_id"] == sys.argv[2]
+   assert report["effective_request_id"] == sys.argv[2]
+   assert report["status"] == "succeeded"
+   assert report["request_error_code"] == ""
+   assert report["failure_count"] == 0 and report["truncated"] is False
+   assert report["artifacts"] and report["builds"]
+   assert all(row["evaluation_only"] is True for row in report["artifacts"])
+   assert all(row["rebuild_request_id"] == sys.argv[2] for row in report["artifacts"])
+   assert all(row["evaluation_only"] is True for row in report["builds"])
+   assert all(row["rebuild_request_id"] == sys.argv[2] for row in report["builds"])
+   assert all(row["status"] == "succeeded" for row in report["builds"])
+   ' "$inspection" "$request_id"
+   done
+
+   stop_eval_worker
+   purge_eval_queue
+   kg_eval_compose run --rm --no-deps \
+     --user 0:0 \
+     -e "KG_EVAL_HOST_UID=$(id -u)" -e "KG_EVAL_HOST_GID=$(id -g)" \
+     -e PYTHONDONTWRITEBYTECODE=1 \
+     --entrypoint /bin/sh worker_knowledge_graph -c '
+   set -eu
+   test "$HF_HOME" = /opt/kg-eval-hf-cache
+   test "$KG_GLINER2_CACHE_DIR" = /opt/kg-eval-hf-cache
+   test -d "$KG_GLINER2_CACHE_DIR"
+   chown -R "$KG_EVAL_HOST_UID:$KG_EVAL_HOST_GID" "$KG_GLINER2_CACHE_DIR"'
+   kg_eval_python -c '
+   import os
+   from pathlib import Path
+   cache = Path(os.environ["KG_GLINER2_CACHE_DIR"])
+   assert cache == Path("/opt/kg-eval-hf-cache")
+   probe = cache / ".task20-host-uid-probe"
+   probe.write_bytes(b"task20")
+   assert probe.read_bytes() == b"task20"
+   probe.unlink()
+   print("kg_eval_cache_host_uid=ok")'
+   kg_eval_python manage.py check_knowledge_graph_extractor
+
+   kg_eval_no_cache_python -m apps.knowledge_graph.evals.run_kg_eval \
+     --mode comparison --eval-only "${KG_EVAL_COMPARE_ARGS[@]}" \
+     --fixture-manifest "$KG_EVAL_MANIFEST" --output "$KG_EVAL_REPORT"
+   kg_eval_python -c '
+   import sys
+   from pathlib import Path
+   from apps.knowledge_graph.evals.run_kg_eval import _load_comparison_report
+   _load_comparison_report(Path(sys.argv[1]))
+   print("comparison_report=validated")
+   ' "$KG_EVAL_REPORT"
+
+   printf 'Designated approver: review the JSON and human table, then enter the manifest checksum: '
+   read -r KG_EVAL_APPROVED_MANIFEST_CHECKSUM
+   test "$KG_EVAL_APPROVED_MANIFEST_CHECKSUM" = "$KG_EVAL_MANIFEST_CHECKSUM"
+   kg_eval_python -m apps.knowledge_graph.evals.run_kg_eval \
+     --write-measured-gates --comparison-report "$KG_EVAL_REPORT" \
+     --runbook /app/docs/documents/operations/knowledge-graph-overlay-runbook.md
+   kg_eval_python -m apps.knowledge_graph.evals.run_kg_eval \
+     --verify-gates --comparison-report "$KG_EVAL_REPORT" \
+     --runbook /app/docs/documents/operations/knowledge-graph-overlay-runbook.md
 
    cleanup_kg_eval
    ```

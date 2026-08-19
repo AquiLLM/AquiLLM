@@ -1,7 +1,9 @@
 """Parse local vLLM / OpenAI-style rerank and score HTTP responses."""
+
 from __future__ import annotations
 
-from typing import Type, TYPE_CHECKING
+from math import isfinite
+from typing import TYPE_CHECKING
 
 from django.db.models import Case, When
 
@@ -9,7 +11,14 @@ if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
 
-def fallback_rerank(model_cls: Type["TextChunk"], chunks, top_k: int):
+def _finite_score(value) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    result = float(value)
+    return result if isfinite(result) else None
+
+
+def fallback_rerank(model_cls: type[TextChunk], chunks, top_k: int):
     chunk_ids = [chunk.pk for chunk in list(chunks)[:top_k]]
     if not chunk_ids:
         return model_cls.objects.none()
@@ -17,7 +26,7 @@ def fallback_rerank(model_cls: Type["TextChunk"], chunks, top_k: int):
     return model_cls.objects.filter(pk__in=chunk_ids).order_by(preserved)
 
 
-def ordered_queryset_from_ids(model_cls: Type["TextChunk"], ranked_ids: list[int]):
+def ordered_queryset_from_ids(model_cls: type[TextChunk], ranked_ids: list[int]):
     if not ranked_ids:
         return model_cls.objects.none()
     preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(ranked_ids)])
@@ -62,35 +71,39 @@ def parse_score_results(body) -> list[tuple[int, float]]:
         idx = item.get("index")
         if not isinstance(idx, int):
             continue
-        score = item.get("score")
-        if not isinstance(score, (int, float)):
-            score = item.get("relevance_score")
-        if not isinstance(score, (int, float)):
+        score = _finite_score(item.get("score"))
+        if score is None:
+            score = _finite_score(item.get("relevance_score"))
+        if score is None:
             continue
-        pairs.append((idx, float(score)))
+        pairs.append((idx, score))
     return pairs
 
 
 def parse_single_score(body) -> float:
-    if isinstance(body, (int, float)):
-        return float(body)
+    direct = _finite_score(body)
+    if direct is not None:
+        return direct
     if isinstance(body, dict):
-        if isinstance(body.get("score"), (int, float)):
-            return float(body["score"])
+        score = _finite_score(body.get("score"))
+        if score is not None:
+            return score
         data = body.get("data")
         if isinstance(data, list) and data:
             first = data[0]
             if isinstance(first, dict):
                 for key in ("score", "relevance_score"):
-                    if isinstance(first.get(key), (int, float)):
-                        return float(first[key])
+                    score = _finite_score(first.get(key))
+                    if score is not None:
+                        return score
         results = body.get("results")
         if isinstance(results, list) and results:
             first = results[0]
             if isinstance(first, dict):
                 for key in ("score", "relevance_score"):
-                    if isinstance(first.get(key), (int, float)):
-                        return float(first[key])
+                    score = _finite_score(first.get(key))
+                    if score is not None:
+                        return score
     raise ValueError(f"Unable to parse score response: {body!r}")
 
 

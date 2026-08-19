@@ -1671,6 +1671,20 @@ git commit -m "test(kg): gate graph quality and retrieval uplift"
 - Verify all files above; modify only to correct discovered plan-scope defects.
 - Modify: `docs/documents/operations/knowledge-graph-overlay-runbook.md` only to record the measured/approved gates produced in Step 6.
 
+> **Task 21 execution correction (2026-08-19):** The historical command
+> blocks in Steps 5 and 6 below are superseded and **must not be executed**.
+> They reuse ambient configuration and shared services and do not bind the
+> synthetic fixture, eval-only rebuild requests, or immutable embedding and
+> reranker runtimes introduced by the completed implementation. The sole
+> accepted Task 21 runtime procedure is Mandatory rollout step 7 in
+> `docs/documents/operations/knowledge-graph-overlay-runbook.md`. It creates a
+> unique disposable Compose project, database, broker, queue, caches, and
+> worker; uses the checked-in synthetic fixture manifest; keeps both shipping
+> flags disabled; attests the exact local extractor, embedding, and reranker;
+> obtains human approval before writing gates; and removes only resources with
+> the exact disposable-project labels. Steps 1–4 remain the static/test matrix,
+> with real PostgreSQL cases forced as described by that runbook.
+
 - [ ] **Step 1: Run knowledge-graph and import-isolation tests**
 
 Run: `python -m pytest aquillm/lib/knowledge_graph/tests aquillm/apps/knowledge_graph/tests aquillm/tests/integration/test_knowledge_graph_import_isolation.py aquillm/tests/integration/test_knowledge_graph_compose.py -q`
@@ -1699,7 +1713,13 @@ Run: `python aquillm/manage.py makemigrations --check --dry-run`
 
 Run: `python aquillm/manage.py check`
 
-Expected: PASS/no pending migrations.
+Expected: import, architecture, file-length-ratchet, Django, and
+`makemigrations apps_knowledge_graph --check --dry-run` gates pass. The global
+autodetector still reports the frozen pre-plan `apps_chat`/`apps_documents`
+model-state drift; compare that output to the recorded baseline and require no
+new drift. Do not generate the proposed documents migration here: it would
+remove existing document/collection uniqueness constraints and is outside this
+plan's safe schema scope.
 
 - [ ] **Step 5: Build and verify the optional worker**
 

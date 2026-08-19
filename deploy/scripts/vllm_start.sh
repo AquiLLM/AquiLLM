@@ -30,8 +30,10 @@ PORT="${VLLM_PORT:-8000}"
 
 # If OCR_VLLM_EXTRA_ARGS is omitted, keep OCR startup VRAM-friendly with fp8 KV + 4-bit weights.
 # Same baseline as .env.example.
-_DEFAULT_OCR_VLLM_EXTRA_ARGS="--kv-cache-dtype fp8 --compilation-config '{\"cudagraph_mode\":\"PIECEWISE\"}' --quantization bitsandbytes --load-format bitsandbytes --dtype float16 --model-loader-extra-config '{\"load_in_4bit\":true,\"bnb_4bit_compute_dtype\":\"float16\",\"bnb_4bit_quant_type\":\"nf4\",\"bnb_4bit_use_double_quant\":true}'"
+_DEFAULT_OCR_VLLM_EXTRA_ARGS="--kv-cache-dtype fp8 --compilation-config '{\"cudagraph_mode\":\"PIECEWISE\"}' --quantization bitsandbytes --load-format bitsandbytes --model-loader-extra-config '{\"load_in_4bit\":true,\"bnb_4bit_compute_dtype\":\"float16\",\"bnb_4bit_quant_type\":\"nf4\",\"bnb_4bit_use_double_quant\":true}'"
 _DEFAULT_TRANSCRIBE_VLLM_EXTRA_ARGS="--enforce-eager --max-num-seqs 1 --max-num-batched-tokens 50000 --generation-config /opt/aquillm/nemotron-generation-config"
+VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
+OCR_VLLM_EXTRA_ARGS="${OCR_VLLM_EXTRA_ARGS:-}"
 
 # Compose sometimes injects VLLM_EXTRA_ARGS="" when ${VAR:-} interpolation is empty on the host,
 # which overrides env_file. Recover from the service-specific *VLLM_EXTRA_ARGS in the same .env.
@@ -56,6 +58,9 @@ fi
 if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
   case "${VLLM_MODEL:-}" in
     *Qwen2.5-VL*|*Qwen/Qwen2.5-VL*|*Qwen3.5-4B*|*Qwen/Qwen3.5-4B*)
+      if [ -z "${VLLM_DTYPE:-}" ]; then
+        export VLLM_DTYPE="float16"
+      fi
       if [ -n "${OCR_VLLM_EXTRA_ARGS// }" ]; then
         export VLLM_EXTRA_ARGS="${OCR_VLLM_EXTRA_ARGS}"
       else
@@ -64,6 +69,17 @@ if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
       ;;
   esac
 fi
+
+# Strict sidecars must reject an alternate interpreter before invoking it for
+# help, parsing, downloads, or model startup.
+case "${VLLM_STRICT_PROTECTED_ARGS:-0}" in
+  1|true|TRUE)
+    if [ "${VLLM_PYTHON_BIN:-}" != "python3" ]; then
+      echo "ERROR: invalid strict vLLM service contract: VLLM_PYTHON_BIN must be python3" >&2
+      exit 64
+    fi
+    ;;
+esac
 
 detect_python_bin() {
   if [ -n "${VLLM_PYTHON_BIN:-}" ] && command -v "${VLLM_PYTHON_BIN}" >/dev/null 2>&1; then
@@ -84,10 +100,246 @@ if ! PYTHON_BIN="$(detect_python_bin)"; then
   exit 127
 fi
 
+_VLLM_HELP_STATE=0
+_VLLM_HELP_TEXT=""
+
+load_vllm_help() {
+  if [ "${_VLLM_HELP_STATE}" = "1" ]; then
+    return 0
+  fi
+  if [ "${_VLLM_HELP_STATE}" = "-1" ]; then
+    return 1
+  fi
+  if ! _VLLM_HELP_TEXT="$(
+    "${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server --help 2>&1
+  )"; then
+    _VLLM_HELP_STATE=-1
+    return 1
+  fi
+  _VLLM_HELP_STATE=1
+}
+
 supports_arg() {
   local arg_name="$1"
-  "${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server --help 2>&1 | grep -q -- "${arg_name}"
+  load_vllm_help || return 1
+  grep -Fq -- "${arg_name}" <<< "${_VLLM_HELP_TEXT}"
 }
+
+reject_protected_extra_args() {
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+      --model|--model=*|\
+      --served-model-name|--served-model-name=*|\
+      --tokenizer|--tokenizer=*|\
+      --revision|--revision=*|\
+      --tokenizer-revision|--tokenizer-revision=*|\
+      --code-revision|--code-revision=*|\
+      --trust-remote-code|--trust-remote-code=*|\
+      --no-trust-remote-code|--no-trust-remote-code=*|\
+      --runner|--runner=*|\
+      --dtype|--dtype=*|\
+      --tensor-parallel-size|--tensor-parallel-size=*|\
+      --gpu-memory-utilization|--gpu-memory-utilization=*|\
+      --max-model-len|--max-model-len=*|\
+      --api-key|--api-key=*|\
+      --download-dir|--download-dir=*|\
+      --task|--task=*)
+        echo "ERROR: protected vLLM option is not allowed in extra args: ${arg}" >&2
+        return 64
+        ;;
+    esac
+  done
+}
+
+strict_protected_args_enabled() {
+  case "${VLLM_STRICT_PROTECTED_ARGS:-0}" in
+    1|true|TRUE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+parse_extra_args_into() {
+  local raw="$1"
+  local output_name="$2"
+  local parser_script="/parse_vllm_extra_args.py"
+  local parser_output
+  local -n parsed_output="${output_name}"
+  parsed_output=()
+
+  if [ -f "${parser_script}" ] && [ -r "${parser_script}" ]; then
+    parser_output="$(mktemp)"
+    if ! "${PYTHON_BIN}" "${parser_script}" "${raw}" > "${parser_output}"; then
+      rm -f -- "${parser_output}"
+      echo "ERROR: vLLM extra-argument parser rejected its input." >&2
+      return 65
+    fi
+    mapfile -d '' -t parsed_output < "${parser_output}"
+    rm -f -- "${parser_output}"
+    if strict_protected_args_enabled && [ "${#parsed_output[@]}" -eq 0 ]; then
+      echo "ERROR: strict vLLM extra-argument parser returned no arguments." >&2
+      return 65
+    fi
+    return 0
+  fi
+
+  if strict_protected_args_enabled; then
+    echo "ERROR: strict vLLM service requires /parse_vllm_extra_args.py." >&2
+    return 66
+  fi
+  # Compatibility fallback for legacy images. Strict sidecars never evaluate it.
+  eval "${output_name}=( ${raw} )"
+}
+
+strict_contract_error() {
+  echo "ERROR: invalid strict vLLM service contract: $1" >&2
+  return 64
+}
+
+is_safe_hf_repo_id() {
+  local value="$1"
+  [ "${#value}" -le 256 ] \
+    && [[ "${value}" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,126}[A-Za-z0-9])?/[A-Za-z0-9]([A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$ ]]
+}
+
+validate_strict_service_contract() {
+  local model="${VLLM_MODEL:-}"
+  local served="${VLLM_SERVED_MODEL_NAME:-}"
+  local tokenizer="${VLLM_TOKENIZER:-}"
+  local revision="${VLLM_REVISION:-}"
+  local tokenizer_revision="${VLLM_TOKENIZER_REVISION:-}"
+  local code_revision="${VLLM_CODE_REVISION:-}"
+  local gpu="${VLLM_GPU_MEMORY_UTILIZATION:-}"
+  local required_arg
+
+  if ! is_safe_hf_repo_id "${model}"; then
+    strict_contract_error "model must be a bounded Hugging Face repository ID"
+    return
+  fi
+  if [ "${served}" != "${model}" ] || [ "${tokenizer}" != "${model}" ]; then
+    strict_contract_error "model, served model, and tokenizer must be identical"
+    return
+  fi
+  if ! [[ "${revision}" =~ ^[0-9a-f]{40}$ ]] \
+    || [ "${tokenizer_revision}" != "${revision}" ] \
+    || [ "${code_revision}" != "${revision}" ]; then
+    strict_contract_error "model, tokenizer, and code revisions must be one lowercase commit"
+    return
+  fi
+  if [ "${VLLM_RUNNER:-}" != "pooling" ] || [ "${VLLM_DTYPE:-}" != "float16" ]; then
+    strict_contract_error "runner and dtype must be the canonical pooling/float16 pair"
+    return
+  fi
+  if [ "${VLLM_TRUST_REMOTE_CODE:-}" != "1" ]; then
+    strict_contract_error "trust-remote-code must be explicitly enabled"
+    return
+  fi
+  if [ "${VLLM_API_KEY:-}" != "EMPTY" ]; then
+    strict_contract_error "API key must be the canonical EMPTY token"
+    return
+  fi
+  if [ "${VLLM_DOWNLOAD_DIR:-}" != "/root/.cache/huggingface/hub" ]; then
+    strict_contract_error "download directory must be the canonical model cache"
+    return
+  fi
+  if [ "${LMCACHE_ENABLED:-}" != "0" ] || [ -n "${LMCACHE_EXTRA_ARGS:-}" ]; then
+    strict_contract_error "LMCache must be explicitly disabled without extra arguments"
+    return
+  fi
+  if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
+    strict_contract_error "extra arguments must be the canonical service payload"
+    return
+  fi
+  if [[ "${model}" == *[Rr]eranker* ]]; then
+    if [ "${VLLM_TASK:-}" != "score" ]; then
+      strict_contract_error "reranker task must be score"
+      return
+    fi
+  elif [ -n "${VLLM_TASK:-}" ]; then
+    strict_contract_error "non-reranker strict services must not set a scoring task"
+    return
+  fi
+  if ! [[ "${VLLM_TENSOR_PARALLEL_SIZE:-}" =~ ^[1-9][0-9]*$ ]] \
+    || ! [[ "${VLLM_MAX_MODEL_LEN:-}" =~ ^[1-9][0-9]*$ ]]; then
+    strict_contract_error "tensor parallel size and max model length must be positive integers"
+    return
+  fi
+  if ! [[ "${gpu}" =~ ^(0\.[0-9]+|1(\.0+)?)$ ]] || [[ "${gpu}" =~ ^0\.0+$ ]]; then
+    strict_contract_error "GPU memory utilization must be in (0, 1]"
+    return
+  fi
+
+  local required_args=(
+    --model
+    --served-model-name
+    --tokenizer
+    --revision
+    --tokenizer-revision
+    --code-revision
+    --runner
+    --dtype
+    --trust-remote-code
+    --tensor-parallel-size
+    --gpu-memory-utilization
+    --max-model-len
+    --api-key
+    --download-dir
+  )
+  if [ -n "${VLLM_TASK:-}" ]; then
+    required_args+=(--task)
+  fi
+  for required_arg in "${required_args[@]}"; do
+    if ! supports_arg "${required_arg}"; then
+      strict_contract_error "required option ${required_arg} is unsupported"
+      return
+    fi
+  done
+}
+
+validate_strict_extra_args() {
+  local -a expected=()
+  local index
+  if [[ "${VLLM_MODEL:-}" == *[Rr]eranker* ]]; then
+    expected=(
+      --chat-template
+      /templates/qwen3_vl_reranker.jinja
+      --hf-overrides
+      '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+    )
+  elif [[ "${VLLM_MODEL:-}" == *Embedding* ]] \
+    || [[ "${VLLM_MODEL:-}" == *embedding* ]]; then
+    expected=(
+      --quantization
+      bitsandbytes
+      --load-format
+      bitsandbytes
+      --model-loader-extra-config
+      '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}'
+    )
+  else
+    strict_contract_error "strict service must be the pinned embedding or reranker role"
+    return
+  fi
+  if [ "${#extra_args[@]}" -ne "${#expected[@]}" ]; then
+    strict_contract_error "extra arguments differ from the canonical service payload"
+    return
+  fi
+  for index in "${!expected[@]}"; do
+    if [ "${extra_args[$index]}" != "${expected[$index]}" ]; then
+      strict_contract_error "extra arguments differ from the canonical service payload"
+      return
+    fi
+  done
+}
+
+_strict_extra_args_preparsed=0
+if strict_protected_args_enabled; then
+  parse_extra_args_into "${VLLM_EXTRA_ARGS:-}" extra_args
+  reject_protected_extra_args "${extra_args[@]}"
+  validate_strict_extra_args
+  _strict_extra_args_preparsed=1
+  validate_strict_service_contract
+fi
 
 resolve_gguf_model_path() {
   local spec="$1"
@@ -224,6 +476,14 @@ if [ -n "${VLLM_REVISION:-}" ] && supports_arg "--revision"; then
   cmd+=(--revision "${VLLM_REVISION}")
 fi
 
+if [ -n "${VLLM_TOKENIZER_REVISION:-}" ] && supports_arg "--tokenizer-revision"; then
+  cmd+=(--tokenizer-revision "${VLLM_TOKENIZER_REVISION}")
+fi
+
+if [ -n "${VLLM_CODE_REVISION:-}" ] && supports_arg "--code-revision"; then
+  cmd+=(--code-revision "${VLLM_CODE_REVISION}")
+fi
+
 if [ -n "${VLLM_RUNNER:-}" ] && supports_arg "--runner"; then
   cmd+=(--runner "${VLLM_RUNNER}")
 fi
@@ -248,14 +508,15 @@ fi
 
 # bitsandbytes + Qwen3-VL sequence-classification reranker can fail loading
 # classifier weights. Use fp16 for rerank until that path is proven stable.
-# Match rerank intents broadly: score task, reranker model id, pooling runner, or known reranker hf_overrides marker.
+# Match explicit rerank intents only. Embedding sidecars also use the pooling
+# runner, so pooling alone must never strip their required quantization payload.
 _vllm_task_trim="${VLLM_TASK:-}"
 _vllm_task_trim="${_vllm_task_trim%%[$'\r']}"
 _rerank_bnb_strip=0
-if [[ "${VLLM_EXTRA_ARGS:-}" == *[Bb]itsandbytes* ]]; then
+if ! strict_protected_args_enabled \
+  && [[ "${VLLM_EXTRA_ARGS:-}" == *[Bb]itsandbytes* ]]; then
   if [ "${_vllm_task_trim}" = "score" ] \
     || [[ "${VLLM_MODEL:-}" == *[Rr]eranker* ]] \
-    || [[ "${VLLM_RUNNER:-}" == "pooling" ]] \
     || [[ "${VLLM_EXTRA_ARGS:-}" == *is_original_qwen3_reranker* ]]; then
     _rerank_bnb_strip=1
   fi
@@ -285,26 +546,16 @@ while i < len(toks):
     out.append(toks[i])
     i += 1
 
-has_dtype = any(out[j] == "--dtype" and j + 1 < len(out) for j in range(len(out)))
-if not has_dtype:
-    out.extend(["--dtype", "float16"])
-
 print(shlex.join(out))
 PY
   )"
 fi
 
 if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
-  parser_script="/parse_vllm_extra_args.py"
-  if [ -f "${parser_script}" ]; then
-    mapfile -d '' -t extra_args < <("${PYTHON_BIN}" "${parser_script}" "${VLLM_EXTRA_ARGS}")
-    if [ "${#extra_args[@]}" -gt 0 ]; then
-      cmd+=("${extra_args[@]}")
-    fi
-  else
-    # Fallback for unexpected image/script skew.
-    # shellcheck disable=SC2206,SC2294
-    eval "extra_args=( ${VLLM_EXTRA_ARGS} )"
+  if [ "${_strict_extra_args_preparsed}" != "1" ]; then
+    parse_extra_args_into "${VLLM_EXTRA_ARGS}" extra_args
+  fi
+  if [ "${#extra_args[@]}" -gt 0 ]; then
     cmd+=("${extra_args[@]}")
   fi
 fi
@@ -312,15 +563,11 @@ fi
 # Optional LMCache / KV connector flags (see .env.example: LMCACHE_*).
 if [ "${LMCACHE_ENABLED:-0}" = "1" ] || [ "${LMCACHE_ENABLED:-}" = "true" ] || [ "${LMCACHE_ENABLED:-}" = "TRUE" ]; then
   if [ -n "${LMCACHE_EXTRA_ARGS:-}" ]; then
-    parser_script="/parse_vllm_extra_args.py"
-    if [ -f "${parser_script}" ]; then
-      mapfile -d '' -t lmc_args < <("${PYTHON_BIN}" "${parser_script}" "${LMCACHE_EXTRA_ARGS}")
-      if [ "${#lmc_args[@]}" -gt 0 ]; then
-        cmd+=("${lmc_args[@]}")
+    parse_extra_args_into "${LMCACHE_EXTRA_ARGS}" lmc_args
+    if [ "${#lmc_args[@]}" -gt 0 ]; then
+      if strict_protected_args_enabled; then
+        reject_protected_extra_args "${lmc_args[@]}"
       fi
-    else
-      # shellcheck disable=SC2206,SC2294
-      eval "lmc_args=( ${LMCACHE_EXTRA_ARGS} )"
       cmd+=("${lmc_args[@]}")
     fi
   fi
@@ -338,7 +585,10 @@ fi
 # Avoid vLLM env validation warnings for wrapper-only variables.
 unset \
   _rerank_bnb_strip \
+  _strict_extra_args_preparsed \
   _vllm_task_trim \
+  _VLLM_HELP_STATE \
+  _VLLM_HELP_TEXT \
   VLLM_HOST \
   VLLM_PORT \
   VLLM_MODEL \
@@ -348,12 +598,16 @@ unset \
   VLLM_MAX_MODEL_LEN \
   VLLM_DTYPE \
   VLLM_REVISION \
+  VLLM_TOKENIZER_REVISION \
+  VLLM_CODE_REVISION \
   VLLM_SERVICE_KIND \
   VLLM_RUNNER \
   VLLM_TASK \
+  VLLM_API_KEY \
   VLLM_DOWNLOAD_DIR \
   VLLM_TOKENIZER \
   VLLM_TRUST_REMOTE_CODE \
+  VLLM_STRICT_PROTECTED_ARGS \
   VLLM_EXTRA_ARGS \
   VLLM_PYTHON_BIN \
   VLLM_BASE_URL \

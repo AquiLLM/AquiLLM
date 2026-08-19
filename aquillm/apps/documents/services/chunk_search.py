@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from time import perf_counter
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -12,7 +13,12 @@ from django.conf import settings as django_settings
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError
 
-from apps.documents.services.chunk_rerank import _fallback_rerank, rerank_chunks
+from apps.documents.services.chunk_rerank import (
+    _STRICT_EVALUATION_RERANK,
+    _fallback_rerank,
+    _strict_local_rerank_chunks,
+    rerank_chunks,
+)
 from apps.documents.services.chunk_search_candidates import (
     CandidateScopeLimit,
     HybridCandidateSnapshot,
@@ -30,10 +36,176 @@ if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
 logger = structlog.stdlib.get_logger(__name__)
+_EVALUATION_GRAPH_FAILURE = object()
+_EVALUATION_GRAPH_MISS = object()
 
 # Compatibility aliases used by conversation-search's independent chunk model.
 _exact_term_query = _candidate_exact_term_query
 _salient_exact_terms = _candidate_salient_exact_terms
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateRankingResult:
+    """One permission-checked candidate pool and its production rerank output."""
+
+    combined_candidates: tuple[object, ...]
+    graph_candidates: tuple[object, ...]
+    ranked_results: tuple[object, ...]
+    inaccessible_candidate_count: int
+    materialization_ms: float
+    rerank_ms: float
+
+
+def _candidate_identifier(candidate: object) -> int:
+    identifier = getattr(candidate, "pk", None)
+    if type(identifier) is not int or identifier <= 0:
+        raise ValueError("candidate rows require positive integer primary keys")
+    return identifier
+
+
+def _candidate_identity(candidate: object) -> tuple[str, int]:
+    """Use a durable PK when present, otherwise exact in-memory identity."""
+
+    identifier = getattr(candidate, "pk", None)
+    if type(identifier) is int and identifier > 0:
+        return ("pk", identifier)
+    return ("object", id(candidate))
+
+
+def materialize_and_rerank_candidates(
+    model_cls: type[TextChunk],
+    query: str,
+    top_k: int,
+    baseline_candidates: tuple[object, ...],
+    *,
+    authorized_scope: object | None,
+    graph_chunk_ids: tuple[int, ...] = (),
+    max_graph_candidates: int = 0,
+    _eval_rerank_capability: object | None = None,
+) -> CandidateRankingResult:
+    """Permission-refetch graph rows, append to the baseline, and rerank once."""
+
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be nonempty")
+    if type(top_k) is not int or top_k <= 0:
+        raise ValueError("top_k must be a positive exact integer")
+    if type(baseline_candidates) is not tuple:
+        raise ValueError("baseline_candidates must be an exact tuple")
+    baseline_identities = tuple(_candidate_identity(row) for row in baseline_candidates)
+    if len(set(baseline_identities)) != len(baseline_identities):
+        raise ValueError("baseline candidates must be unique")
+    if type(graph_chunk_ids) is not tuple or any(
+        type(identifier) is not int or identifier <= 0 for identifier in graph_chunk_ids
+    ):
+        raise ValueError("graph_chunk_ids must be an exact positive integer tuple")
+    if len(set(graph_chunk_ids)) != len(graph_chunk_ids):
+        raise ValueError("graph_chunk_ids must be unique")
+    if type(max_graph_candidates) is not int or max_graph_candidates < 0:
+        raise ValueError("max_graph_candidates must be a nonnegative exact integer")
+    if (
+        _eval_rerank_capability is not None
+        and _eval_rerank_capability is not _STRICT_EVALUATION_RERANK
+    ):
+        raise ValueError("invalid strict eval rerank capability")
+    if len(graph_chunk_ids) > max_graph_candidates:
+        raise CandidateScopeLimit("graph candidate materialization exceeds its cap")
+
+    materialization_started = perf_counter()
+    inaccessible = 0
+    allowed_doc_ids: tuple[UUID, ...] = ()
+    if authorized_scope is not None:
+        from apps.documents.services.chunk_search_candidates import (
+            AuthorizedDocumentScope,
+        )
+
+        if type(authorized_scope) is not AuthorizedDocumentScope:
+            raise ValueError("authorized_scope must be an exact frozen scope")
+        allowed_doc_ids = authorized_scope.allowed_doc_ids
+        inaccessible += sum(
+            getattr(row, "doc_id", None) not in set(allowed_doc_ids)
+            for row in baseline_candidates
+        )
+    elif graph_chunk_ids:
+        inaccessible += len(graph_chunk_ids)
+
+    baseline_id_set = {
+        identifier
+        for identity_type, identifier in baseline_identities
+        if identity_type == "pk"
+    }
+    novel_ids = tuple(
+        identifier
+        for identifier in graph_chunk_ids
+        if identifier not in baseline_id_set
+    )
+    graph_rows: tuple[object, ...] = ()
+    if novel_ids and authorized_scope is not None:
+        loaded = tuple(
+            model_cls.objects.filter(
+                pk__in=novel_ids,
+                doc_id__in=allowed_doc_ids,
+            )
+        )
+        by_identifier: dict[int, object] = {}
+        allowed = set(allowed_doc_ids)
+        invalid_materialization = False
+        for row in loaded:
+            identifier = _candidate_identifier(row)
+            document_id = getattr(row, "doc_id", None)
+            if (
+                identifier not in novel_ids
+                or identifier in by_identifier
+                or type(document_id) is not UUID
+                or document_id not in allowed
+            ):
+                invalid_materialization = True
+                continue
+            if hasattr(model_cls, "_meta") and not isinstance(row, model_cls):
+                invalid_materialization = True
+                continue
+            by_identifier[identifier] = row
+        missing = set(novel_ids).difference(by_identifier)
+        if invalid_materialization or missing:
+            inaccessible += len(novel_ids)
+        else:
+            graph_rows = tuple(by_identifier[identifier] for identifier in novel_ids)
+
+    combined = (*baseline_candidates, *graph_rows)
+    materialization_ms = (perf_counter() - materialization_started) * 1_000
+    rerank_started = perf_counter()
+    if _eval_rerank_capability is _STRICT_EVALUATION_RERANK:
+        reranked = _strict_local_rerank_chunks(
+            model_cls,
+            query,
+            combined,
+            top_k,
+            _capability=_eval_rerank_capability,
+        )
+    elif len(combined) <= top_k:
+        reranked = _fallback_rerank(model_cls, combined, top_k)
+    else:
+        reranked = rerank_chunks(model_cls, query, combined, top_k)
+    ranked_results = tuple(reranked)
+    rerank_ms = (perf_counter() - rerank_started) * 1_000
+    combined_identities = set(_candidate_identity(row) for row in combined)
+    ranked_identities = tuple(_candidate_identity(row) for row in ranked_results)
+    if len(set(ranked_identities)) != len(ranked_identities) or any(
+        identity not in combined_identities for identity in ranked_identities
+    ):
+        raise ValueError("reranker returned rows outside the candidate pool")
+    inaccessible += sum(
+        getattr(row, "doc_id", None) not in set(allowed_doc_ids)
+        for row in ranked_results
+        if authorized_scope is not None
+    )
+    return CandidateRankingResult(
+        combined_candidates=tuple(combined),
+        graph_candidates=graph_rows,
+        ranked_results=ranked_results,
+        inaccessible_candidate_count=inaccessible,
+        materialization_ms=materialization_ms,
+        rerank_ms=rerank_ms,
+    )
 
 
 def _graph_diagnostics(
@@ -62,15 +234,27 @@ def _apply_graph_overlay(
     graph_config: object | None,
     *,
     preflight_status: str | None,
-) -> tuple[list[object], dict[str, object]]:
-    """Append authorized ORM chunks or return the exact baseline pool."""
+    _eval_failure_capability: object | None = None,
+) -> tuple[tuple[int, ...], dict[str, object]]:
+    """Return bounded graph IDs; the shared seam permission-refetches them."""
+
+    if _eval_failure_capability is not None and _eval_failure_capability not in {
+        _EVALUATION_GRAPH_FAILURE,
+        _EVALUATION_GRAPH_MISS,
+    }:
+        raise ValueError("invalid graph failure evaluation capability")
+    if _eval_failure_capability is _EVALUATION_GRAPH_MISS:
+        if preflight_status != "miss":
+            raise ValueError("graph miss evaluation requires miss preflight")
+    elif preflight_status is not None and _eval_failure_capability is not None:
+        raise ValueError("graph failure evaluation cannot set preflight status")
 
     started_at = perf_counter()
     baseline = list(snapshot.baseline_candidates)
     algorithm_signature = getattr(graph_config, "algorithm_signature", None)
     seed_count = len(snapshot.graph_seeds)
     if preflight_status is not None:
-        return baseline, _graph_diagnostics(
+        return (), _graph_diagnostics(
             started_at=started_at,
             seed_count=seed_count,
             candidate_count=0,
@@ -79,7 +263,7 @@ def _apply_graph_overlay(
             version_signature=None,
         )
     if snapshot.graph_seed_error:
-        return baseline, _graph_diagnostics(
+        return (), _graph_diagnostics(
             started_at=started_at,
             seed_count=0,
             candidate_count=0,
@@ -88,7 +272,7 @@ def _apply_graph_overlay(
             version_signature=None,
         )
     if not snapshot.graph_seeds:
-        return baseline, _graph_diagnostics(
+        return (), _graph_diagnostics(
             started_at=started_at,
             seed_count=0,
             candidate_count=0,
@@ -117,6 +301,8 @@ def _apply_graph_overlay(
             allowed_doc_ids=scope.allowed_doc_ids,
             allowed_collection_ids=scope.allowed_collection_ids,
         )
+        if _eval_failure_capability is _EVALUATION_GRAPH_FAILURE:
+            raise RuntimeError("forced evaluation of production fail-open composition")
         result = expand_chunk_candidates(request)
         if type(result) is not GraphExpansionResult:
             raise ValueError("graph expansion returned an invalid result")
@@ -124,7 +310,7 @@ def _apply_graph_overlay(
         if result_diagnostics.algorithm_signature != graph_config.algorithm_signature:
             raise ValueError("graph expansion used a different algorithm config")
         if result_diagnostics.status != "hit":
-            return baseline, _graph_diagnostics(
+            return (), _graph_diagnostics(
                 started_at=started_at,
                 seed_count=result_diagnostics.seed_count,
                 candidate_count=0,
@@ -140,7 +326,7 @@ def _apply_graph_overlay(
             if identifier not in baseline_ids
         )[: graph_config.max_candidates]
         if not novel_ids:
-            return baseline, _graph_diagnostics(
+            return (), _graph_diagnostics(
                 started_at=started_at,
                 seed_count=result_diagnostics.seed_count,
                 candidate_count=0,
@@ -149,41 +335,16 @@ def _apply_graph_overlay(
                 version_signature=result_diagnostics.graph_version_signature,
             )
 
-        rows = tuple(
-            model_cls.objects.filter(
-                pk__in=novel_ids,
-                doc_id__in=scope.allowed_doc_ids,
-            )
-        )
-        allowed_doc_ids = set(scope.allowed_doc_ids)
-        by_identifier: dict[int, object] = {}
-        for row in rows:
-            identifier = getattr(row, "pk", None)
-            document_id = getattr(row, "doc_id", None)
-            if (
-                type(identifier) is not int
-                or identifier not in novel_ids
-                or identifier in by_identifier
-                or type(document_id) is not UUID
-                or document_id not in allowed_doc_ids
-            ):
-                raise ValueError("graph expansion returned an unauthorized chunk row")
-            if hasattr(model_cls, "_meta") and not isinstance(row, model_cls):
-                raise ValueError("graph expansion must resolve real TextChunk rows")
-            by_identifier[identifier] = row
-        if set(by_identifier) != set(novel_ids):
-            raise ValueError("graph expansion chunk rows changed during validation")
-        graph_rows = [by_identifier[identifier] for identifier in novel_ids]
-        return baseline + graph_rows, _graph_diagnostics(
+        return novel_ids, _graph_diagnostics(
             started_at=started_at,
             seed_count=result_diagnostics.seed_count,
-            candidate_count=len(graph_rows),
+            candidate_count=len(novel_ids),
             status="hit",
             algorithm_signature=result_diagnostics.algorithm_signature,
             version_signature=result_diagnostics.graph_version_signature,
         )
     except Exception:
-        return baseline, _graph_diagnostics(
+        return (), _graph_diagnostics(
             started_at=started_at,
             seed_count=seed_count,
             candidate_count=0,
@@ -261,10 +422,10 @@ def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: 
             app_config_getter=apps.get_app_config,
         )
         vector_ms = (perf_counter() - vector_started) * 1000
-        combined_candidates = list(snapshot.baseline_candidates)
+        graph_chunk_ids: tuple[int, ...] = ()
         graph_diagnostics: dict[str, object] = {}
         if overlay_enabled:
-            combined_candidates, graph_diagnostics = _apply_graph_overlay(
+            graph_chunk_ids, graph_diagnostics = _apply_graph_overlay(
                 model_cls,
                 snapshot,
                 graph_scope,
@@ -272,22 +433,58 @@ def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: 
                 preflight_status=graph_preflight_status,
             )
 
-        if len(combined_candidates) <= top_k:
-            reranked_results = _fallback_rerank(
-                model_cls,
-                combined_candidates,
-                top_k,
-            )
-            rerank_ms = 0.0
-        else:
-            rerank_start = perf_counter()
-            reranked_results = rerank_chunks(
+        try:
+            ranking = materialize_and_rerank_candidates(
                 model_cls,
                 query,
-                combined_candidates,
                 top_k,
+                snapshot.baseline_candidates,
+                authorized_scope=graph_scope,
+                graph_chunk_ids=graph_chunk_ids,
+                max_graph_candidates=(
+                    int(getattr(graph_config, "max_candidates", 0))
+                    if graph_chunk_ids
+                    else 0
+                ),
             )
-            rerank_ms = (perf_counter() - rerank_start) * 1000
+        except Exception:
+            ranking = materialize_and_rerank_candidates(
+                model_cls,
+                query,
+                top_k,
+                snapshot.baseline_candidates,
+                authorized_scope=None,
+            )
+            if overlay_enabled:
+                graph_diagnostics = _graph_diagnostics(
+                    started_at=total_start,
+                    seed_count=len(snapshot.graph_seeds),
+                    candidate_count=0,
+                    status="error",
+                    algorithm_signature=getattr(
+                        graph_config,
+                        "algorithm_signature",
+                        None,
+                    ),
+                    version_signature=None,
+                )
+        if overlay_enabled and ranking.inaccessible_candidate_count:
+            graph_diagnostics.update(
+                graph_status="error",
+                graph_candidate_count=0,
+            )
+        if overlay_enabled:
+            graph_diagnostics["graph_ms"] = (
+                float(graph_diagnostics.get("graph_ms", 0.0))
+                + ranking.materialization_ms
+            )
+            if graph_diagnostics.get("graph_status") == "hit":
+                graph_diagnostics["graph_candidate_count"] = len(
+                    ranking.graph_candidates
+                )
+        combined_candidates = ranking.combined_candidates
+        reranked_results = list(ranking.ranked_results)
+        rerank_ms = ranking.rerank_ms
 
         total_ms = (perf_counter() - total_start) * 1000
         logger.info(
@@ -364,4 +561,8 @@ def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: 
         raise
 
 
-__all__ = ["text_chunk_search"]
+__all__ = [
+    "CandidateRankingResult",
+    "materialize_and_rerank_candidates",
+    "text_chunk_search",
+]
