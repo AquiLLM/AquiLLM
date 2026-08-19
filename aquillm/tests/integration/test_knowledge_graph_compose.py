@@ -411,7 +411,7 @@ def test_runbook_uses_compose_network_and_an_isolated_eval_worker() -> None:
     assert "kg_eval_python manage.py rebuild_knowledge_graph" in runbook
     assert "kg_eval_python manage.py inspect_knowledge_graph" in runbook
     assert "kg_eval_python -m apps.knowledge_graph.evals.run_kg_eval" in runbook
-    assert "/app/artifacts/kg-eval-comparison.json" in runbook
+    assert "/app/artifacts/kg-eval-comparison-$KG_EVAL_RUN_ID.json" in runbook
     assert "Never enable the evaluation bypass on the deployed graph worker" in runbook
     assert "restricted operator-only output" in runbook
     for gate_name in (

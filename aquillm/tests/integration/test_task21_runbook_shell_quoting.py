@@ -40,3 +40,16 @@ def test_reranker_probe_initializes_django_before_model_import() -> None:
     setup = probe.index("django.setup()")
     model_import = probe.index("from apps.documents.models import TextChunk")
     assert settings < setup < model_import
+
+
+def test_runtime_artifact_paths_are_scoped_to_the_unique_run() -> None:
+    procedure = _procedure()
+
+    assert (
+        'KG_EVAL_MANIFEST="/app/artifacts/kg-eval-fixture-manifest-'
+        '$KG_EVAL_RUN_ID.json"' in procedure
+    )
+    assert (
+        'KG_EVAL_REPORT="/app/artifacts/kg-eval-comparison-$KG_EVAL_RUN_ID.json"'
+        in procedure
+    )

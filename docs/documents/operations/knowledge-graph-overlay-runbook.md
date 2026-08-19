@@ -272,8 +272,8 @@ Do not skip or reorder these steps.
    KG_EVAL_PROJECT="aquillm-kg-eval-$KG_EVAL_RUN_ID"
    KG_EVAL_QUEUE="knowledge-graph-eval-$KG_EVAL_RUN_ID"
    KG_EVAL_WORKER_NAME="$KG_EVAL_PROJECT-worker"
-   KG_EVAL_MANIFEST=/app/artifacts/kg-eval-fixture-manifest.json
-   KG_EVAL_REPORT=/app/artifacts/kg-eval-comparison.json
+   KG_EVAL_MANIFEST="/app/artifacts/kg-eval-fixture-manifest-$KG_EVAL_RUN_ID.json"
+   KG_EVAL_REPORT="/app/artifacts/kg-eval-comparison-$KG_EVAL_RUN_ID.json"
    KG_EVAL_ONTOLOGY_CHECKSUM=eb8d0c6b512216db2592f16898cd59ab76a2c95e9151c5fabfcc3f1be87a9059
    KG_EVAL_WRAPPER_SHA256="$(sha256sum deploy/scripts/vllm_start.sh | awk '{print $1}')"
    KG_EVAL_PARSER_SHA256="$(sha256sum deploy/scripts/parse_vllm_extra_args.py | awk '{print $1}')"
