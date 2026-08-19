@@ -528,6 +528,10 @@ Do not skip or reorder these steps.
    test "${#KG_EVAL_SCOPE[@]}" -eq 4
 
    kg_eval_no_cache_python -c '
+   import os
+   os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aquillm.settings")
+   import django
+   django.setup()
    from apps.documents.models import TextChunk
    from apps.documents.services.chunk_rerank import (
        _STRICT_EVALUATION_RERANK,
