@@ -751,14 +751,35 @@ class CollectionEntity(CollectionArtifactChildModelMixin, ValidatedGraphModel):
             raise ValidationError(errors)
 
 
+class CanonicalEntityQuerySet(ImmutableGraphQuerySet):
+    """Expose only live registry rows for one exact resolver version."""
+
+    def current(self, *, resolver_version: str):
+        if (
+            type(resolver_version) is not str
+            or not resolver_version
+            or resolver_version != resolver_version.strip()
+        ):
+            raise ValueError("resolver_version must be a nonempty exact string")
+        return self.filter(
+            resolver_version=resolver_version,
+            status=ResolutionStatus.ACTIVE,
+        )
+
+
 class CanonicalEntity(ValidatedGraphModel):
     """Internal cross-collection identity without evidence or access grants."""
 
     Status = ResolutionStatus
 
+    identity_key = models.CharField(max_length=64, editable=False)
+    resolver_version = models.CharField(max_length=128, editable=False)
     label = models.TextField()
     normalized_label = models.CharField(max_length=512)
     entity_type = models.CharField(max_length=128)
+    version_signature = models.CharField(
+        max_length=128, blank=True, default="", editable=False
+    )
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.ACTIVE
     )
@@ -767,17 +788,120 @@ class CanonicalEntity(ValidatedGraphModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    _IMMUTABLE_FIELDS = (
+        "identity_key",
+        "resolver_version",
+        "label",
+        "normalized_label",
+        "entity_type",
+        "version_signature",
+        "status",
+        "embedding",
+        "metadata",
+        "created_at",
+    )
+    _QUERYSET_IMMUTABLE_FIELDS = _IMMUTABLE_FIELDS
+
+    objects = models.Manager.from_queryset(CanonicalEntityQuerySet)()
+
+    @classmethod
+    def _transition_registry_status_locked(
+        cls,
+        primary_keys: tuple[int, ...],
+        *,
+        target: str,
+        using: str = "default",
+    ) -> int:
+        """Internal lifecycle transition for already registry-locked rows."""
+
+        from django.db import connections
+
+        if not connections[using].in_atomic_block:
+            raise RuntimeError("canonical status transitions require an atomic block")
+        if target not in {cls.Status.ACTIVE, cls.Status.SUPERSEDED}:
+            raise ValueError("canonical registry target status is invalid")
+        if type(primary_keys) is not tuple or any(
+            type(value) is not int or value < 1 for value in primary_keys
+        ):
+            raise ValueError("canonical registry primary keys are invalid")
+        if primary_keys != tuple(sorted(set(primary_keys))):
+            raise ValueError(
+                "canonical registry primary keys must be sorted and unique"
+            )
+        changed = 0
+        for start in range(0, len(primary_keys), 5_000):
+            query = cls.objects.using(using).filter(
+                pk__in=primary_keys[start : start + 5_000],
+                status__in=(cls.Status.ACTIVE, cls.Status.SUPERSEDED),
+            )
+            changed += models.QuerySet.update(query, status=target)
+        return changed
+
     class Meta:
         app_label = "apps_knowledge_graph"
         constraints = [
             models.CheckConstraint(
                 condition=Q(status__in=ResolutionStatus.values),
                 name="kg_canonical_entity_status_valid",
-            )
+            ),
+            models.CheckConstraint(
+                condition=Q(identity_key__regex=r"^[0-9a-f]{64}$"),
+                name="kg_canonical_identity_key_valid",
+            ),
+            models.UniqueConstraint(
+                fields=["resolver_version", "identity_key"],
+                name="kg_canonical_identity_unique",
+            ),
+            models.CheckConstraint(
+                condition=~Q(resolver_version=""),
+                name="kg_canonical_resolver_nonempty",
+            ),
+            models.CheckConstraint(
+                condition=Q(version_signature="")
+                | Q(version_signature__regex=r"^[a-z0-9][a-z0-9.+:/_-]*$"),
+                name="kg_canonical_version_signature_valid",
+            ),
+            models.CheckConstraint(
+                condition=~Q(resolver_version="canonical-resolution-v1")
+                | Q(embedding__isnull=True),
+                name="kg_canonical_v1_embedding_null",
+            ),
         ]
         indexes = [
             models.Index(
                 fields=["entity_type", "normalized_label"],
                 name="kg_canonical_entity_lookup",
-            )
+            ),
+            models.Index(
+                fields=["resolver_version", "status", "entity_type"],
+                name="kg_can_entity_res_type_idx",
+            ),
         ]
+
+    def clean(self):
+        super().clean()
+        errors: dict[str, str] = {}
+        if not re.fullmatch(r"[0-9a-f]{64}", self.identity_key or ""):
+            errors["identity_key"] = "Identity key must be a lowercase SHA-256 digest."
+        if (
+            type(self.resolver_version) is not str
+            or not self.resolver_version
+            or self.resolver_version != self.resolver_version.strip()
+            or len(self.resolver_version) > 128
+            or "\x00" in self.resolver_version
+        ):
+            errors["resolver_version"] = (
+                "Resolver version must be a bounded exact string."
+            )
+        if type(self.metadata) is not dict:
+            errors["metadata"] = "Canonical metadata must be an exact mapping."
+        if self.version_signature and not re.fullmatch(
+            r"[a-z0-9][a-z0-9.+:/_-]*", self.version_signature
+        ):
+            errors["version_signature"] = "Version signature is not canonical."
+        if self.embedding is not None:
+            errors["embedding"] = (
+                "Canonical registry embeddings are not an audited v1 identity signal."
+            )
+        if errors:
+            raise ValidationError(errors)

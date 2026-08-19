@@ -1059,7 +1059,11 @@ git commit -m "feat(kg): maintain graphs across document lifecycle"
 - Create: `aquillm/apps/knowledge_graph/resolution/canonical.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_canonical_resolution.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_canonical_permissions.py`
+- Create: `aquillm/apps/knowledge_graph/migrations/0004_canonical_identity_audit.py`
 - Modify: `aquillm/apps/knowledge_graph/models/associations.py`
+- Modify: `aquillm/apps/knowledge_graph/models/entities.py`
+- Modify: `aquillm/apps/knowledge_graph/resolution/collection.py`
+- Modify: `aquillm/apps/knowledge_graph/graph/assembly.py`
 - Modify: `aquillm/apps/knowledge_graph/services/builds.py`
 
 - [ ] **Step 1: Write failing canonical-resolution tests**
@@ -1100,7 +1104,7 @@ Expose a rebuildable lookup equivalent to:
 canonical_entity_id -> [(collection_a_id, entity_a_id), (collection_b_id, entity_b_id)]
 ```
 
-If stored in Django cache, include canonical resolver version and active artifact IDs in the key and treat a miss/error as a database lookup. Do not create the reverse source-of-truth mapping proposed earlier.
+The v1 implementation should derive this lookup directly from bounded, permission-filtered database rows. If a later implementation stores it in Django cache, include the canonical resolver version, active artifact IDs, and a durable canonical-link generation in the key, and treat every miss/error or generation mismatch as a database lookup. Active artifact IDs alone are insufficient because links may be inserted, deleted, or reassigned under the same artifact. Do not create the reverse source-of-truth mapping proposed earlier.
 
 Invalidate or version-bust derived canonical lookup entries whenever a collection artifact is activated/superseded, a collection entity/canonical link is deleted, or the canonical resolver version changes. Cache invalidation failure must fail open to a permission-filtered database lookup; stale cache entries must never authorize traversal.
 
@@ -1113,7 +1117,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add aquillm/apps/knowledge_graph/resolution/canonical.py aquillm/apps/knowledge_graph/models/associations.py aquillm/apps/knowledge_graph/services/builds.py aquillm/apps/knowledge_graph/tests/test_canonical_resolution.py aquillm/apps/knowledge_graph/tests/test_canonical_permissions.py
+git add aquillm/apps/knowledge_graph/migrations/0004_canonical_identity_audit.py aquillm/apps/knowledge_graph/resolution/canonical.py aquillm/apps/knowledge_graph/models/associations.py aquillm/apps/knowledge_graph/models/entities.py aquillm/apps/knowledge_graph/resolution/collection.py aquillm/apps/knowledge_graph/graph/assembly.py aquillm/apps/knowledge_graph/services/builds.py aquillm/apps/knowledge_graph/tests/test_canonical_resolution.py aquillm/apps/knowledge_graph/tests/test_canonical_permissions.py docs/superpowers/plans/2026-08-17-gliner2-knowledge-graph-hybrid-retrieval.md
 git commit -m "feat(kg): link collection entities conservatively"
 ```
 
@@ -1443,7 +1447,7 @@ git commit -m "test(rag): preserve citations with graph expansion"
 - Create: `aquillm/apps/knowledge_graph/services/pruning.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_management_commands.py`
 - Create: `aquillm/apps/knowledge_graph/tests/test_pruning.py`
-- Create: `aquillm/apps/knowledge_graph/migrations/0004_graph_rebuild_request.py`
+- Create: `aquillm/apps/knowledge_graph/migrations/0005_graph_rebuild_request.py`
 - Modify: `aquillm/apps/knowledge_graph/tasks.py`
 - Modify: `aquillm/apps/knowledge_graph/services/builds.py`
 - Modify: `aquillm/apps/knowledge_graph/models/artifacts.py`
@@ -1506,7 +1510,7 @@ Expected: PASS and all commands load without optional ML imports.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add aquillm/apps/knowledge_graph/management aquillm/apps/knowledge_graph/migrations/0004_graph_rebuild_request.py aquillm/apps/knowledge_graph/models/artifacts.py aquillm/apps/knowledge_graph/services/builds.py aquillm/apps/knowledge_graph/services/inspection.py aquillm/apps/knowledge_graph/services/pruning.py aquillm/apps/knowledge_graph/tasks.py aquillm/apps/knowledge_graph/tests/test_management_commands.py aquillm/apps/knowledge_graph/tests/test_pruning.py aquillm/apps/knowledge_graph/tests/test_tasks.py aquillm/apps/knowledge_graph/tests/test_build_idempotency.py aquillm/lib/knowledge_graph/config.py aquillm/aquillm/settings.py
+git add aquillm/apps/knowledge_graph/management aquillm/apps/knowledge_graph/migrations/0005_graph_rebuild_request.py aquillm/apps/knowledge_graph/models/artifacts.py aquillm/apps/knowledge_graph/services/builds.py aquillm/apps/knowledge_graph/services/inspection.py aquillm/apps/knowledge_graph/services/pruning.py aquillm/apps/knowledge_graph/tasks.py aquillm/apps/knowledge_graph/tests/test_management_commands.py aquillm/apps/knowledge_graph/tests/test_pruning.py aquillm/apps/knowledge_graph/tests/test_tasks.py aquillm/apps/knowledge_graph/tests/test_build_idempotency.py aquillm/lib/knowledge_graph/config.py aquillm/aquillm/settings.py
 git commit -m "feat(kg): add graph operations and retention"
 ```
 

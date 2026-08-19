@@ -13,6 +13,10 @@ class KnowledgeGraphConfig(AppConfig):
             register_collection_lifecycle_signals,
             register_document_lifecycle_signals,
         )
+        from apps.knowledge_graph.resolution.canonical import (
+            register_canonical_lifecycle_signals,
+        )
 
         register_document_lifecycle_signals(DESCENDED_FROM_DOCUMENT)
         register_collection_lifecycle_signals(Collection)
+        register_canonical_lifecycle_signals()

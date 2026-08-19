@@ -3070,6 +3070,15 @@ def _swap_active_collection_artifact(
             "lease_expires_at",
         ]
     )
+    # Canonical identity is a derived, cross-collection projection.  Register
+    # reconciliation only after a real activation swap; the scheduler itself
+    # defers work until this transaction commits, so a rollback cannot expose
+    # identities derived from an artifact that never became active.
+    from apps.knowledge_graph.resolution.canonical import (
+        schedule_canonical_rebuild,
+    )
+
+    schedule_canonical_rebuild()
 
 
 __all__ = [
