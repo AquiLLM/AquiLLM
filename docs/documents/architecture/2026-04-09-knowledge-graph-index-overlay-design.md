@@ -1,240 +1,299 @@
 # Knowledge Graph Index Overlay Design
 
-**Date:** 2026-04-09  
-**Status:** Draft  
-**Goal:** Add a graph-as-index overlay over AquiLLM's current chunk/vector retrieval so document, figure, collection, and cross-collection relationships improve RAG quality without replacing the existing vector pipeline.
+**Originally proposed:** 2026-04-09
 
-## Overview
+**Updated:** 2026-08-18
 
-AquiLLM already has the right substrate:
+**Status:** implemented behind disabled rollout flags; measured gates pending
 
-- documents and figures in `apps.documents`
-- collections in `apps.collections`
-- chunking in `apps.documents.tasks.chunking`
-- hybrid retrieval in `apps.documents.services.chunk_search`
+**Goal:** improve relationship-heavy RAG with a provenance-first collection
+graph and permission-safe cross-collection identity spine, without replacing
+AquiLLM's hybrid retrieval or changing its public evidence contract.
 
-The new graph system should sit on top of that substrate asynchronously. The graph is an overlay, not a second ingestion pipeline and not a separate source of truth.
+## Decision summary
 
-The approved shape is hybrid:
+The overlay is a rebuildable PostgreSQL index over existing documents,
+`TextChunk` rows, figures, and collections. It has four layers:
 
-- each document gets a local document graph
-- each figure gets a local figure graph
-- each collection gets a collection graph that merges repeated concepts within that collection
-- a larger meta graph promotes high-confidence canonical concepts across collections
+1. immutable entity and relation mentions tied to exact chunk spans;
+2. versioned document artifacts that resolve local mention identity;
+3. versioned collection graphs that promote supported entities and relations;
+4. a deployment-wide canonical identity registry that links equivalent
+   collection entities without moving their claims or permissions.
 
-Every promoted node and edge keeps provenance links back to local graph evidence such as chunk IDs, figure IDs, captions, OCR text, and collection context.
+Existing vector, trigram, and exact retrieval remains primary. Its ranked chunks
+form a deterministic reciprocal-rank-fusion restart vector. A bounded
+personalized PageRank (`ppr_v1`) runs only over the caller's already-authorized
+active graph slice, projects support back to real chunks, and adds those chunks
+to the existing candidate pool before the existing reranker.
 
-## Principles
+This design supersedes the earlier “meta graph” proposal. There is no promoted
+deployment-wide claims graph in v1. The cross-collection spine contains identity
+only; relation claims and evidence remain collection-owned.
 
-1. Graph-as-index overlay: vector retrieval stays primary and graph logic improves ranking, expansion, deduplication, and pruning.
-2. Async by default: graph construction runs after chunking completes.
-3. Local-first, meta-second: local graphs produce evidence; collection and meta graphs only promote supported concepts.
-4. Provenance required: graph facts must always trace back to source evidence.
-5. Rebuildable lifecycle: re-ingest, delete, move, and collection changes must invalidate and rebuild safely.
-6. Fail-open retrieval: if graph state is unavailable, current retrieval still works.
-
-## Goals
-
-1. Build a complete lifecycle for association, promotion, deduplication, pruning, and rebuild.
-2. Improve retrieval for multi-hop, synonym-heavy, and figure-grounded questions.
-3. Keep the current chunk search and tool interfaces compatible.
-4. Respect collection scoping and existing permissions.
-5. Provide operator-visible state for build runs, stale graphs, and pruning behavior.
-
-## Non-Goals
-
-1. Replacing `TextChunk` vector retrieval.
-2. Adding an external graph database in the first pass.
-3. Shipping graph visualization UI in the first pass.
-
-## Runtime Model
+## Architecture
 
 ```mermaid
-flowchart TD
-    A["Ingest + Chunking"] --> B["Async Local Graph Builders"]
-    B --> C["Document Graphs"]
-    B --> D["Figure Graphs"]
-    C --> E["Collection Graph Aggregator"]
-    D --> E
-    E --> F["Meta Graph Promoter"]
-    A --> G["Vector / Trigram Retrieval"]
-    C --> H["Graph Overlay Retrieval"]
+flowchart LR
+    A["Ingest + TextChunk activation"] --> B["Dedicated optional GLiNER2 worker"]
+    B --> C["Immutable document artifact<br/>mentions + local resolution"]
+    C --> D["Versioned collection graph<br/>entities + relations + evidence"]
+    D --> E["Internal canonical identity registry<br/>zero-hop equivalence only"]
+
+    F["Authorized vector / trigram / exact search"] --> G["RRF-weighted seed chunks"]
+    G --> H["Read-only permission-scoped graph snapshot"]
     D --> H
     E --> H
-    F --> H
-    G --> H
-    H --> I["Fused Retrieval Bundle"]
+    H --> I["Bounded personalized PageRank"]
+    I --> J["Novel real TextChunk candidates"]
+    F --> K["Baseline candidate pool"]
+    J --> K
+    K --> L["Existing reranker + evidence budgets + citations"]
 ```
 
-Retrieval remains chunk-centric:
+The graph is asynchronous and fail-open. Extraction or graph availability never
+blocks chunk activation, baseline search, reranking, or answer generation.
 
-1. vector/trigram search finds seed chunks
-2. graph overlay maps those chunks to graph evidence
-3. bounded expansion walks local, collection, and meta relations
-4. scoring fuses vector rank with graph support
-5. weak, stale, or duplicate paths are pruned
-6. the result stays compatible with the current answer pipeline
+## Design principles
 
-## Persistence Model
+1. **Graph as index, not source of truth.** Documents and chunks remain the
+   authoritative corpus. Every graph artifact can be rebuilt from them.
+2. **Provenance before promotion.** Promoted entities and relations retain exact
+   active mention/document/chunk evidence and immutable build identities.
+3. **Collection-owned claims.** Canonical identity never creates a global claim,
+   relation, chunk, label listing, or access grant.
+4. **Permission first.** Retrieval starts from the exact authorized document and
+   collection tuples and repeats those predicates on every endpoint/evidence
+   query. Hidden nodes are never loaded and filtered later.
+5. **Deterministic versions.** Ontology, extractor, resolver, filter, assembly,
+   embedding, and retrieval-algorithm identities are checksum-addressed.
+6. **Atomic lifecycle.** Build outputs are immutable, activation swaps are
+   atomic, and readers see one repeatable-read snapshot or a graph miss.
+7. **Bounded inference.** Scope, seeds, nodes, edges, evidence, mentions, hops,
+   fan-out, candidates, iterations, and total time have explicit ceilings.
+8. **Public compatibility.** Only real, authorized chunks enter existing
+   reranking/evidence/citation paths. Graph internals are never citable rows.
 
-The first pass should live in the existing Django/Postgres stack beside `TextChunk`, with a dedicated app:
+## Persistence model
 
-- `aquillm/apps/knowledge_graph/`
+All state lives in `apps.knowledge_graph` in the existing Django/PostgreSQL
+database. No external graph database is required.
 
-Recommended core models:
+### Lifecycle and immutable inputs
 
-1. `GraphArtifact`
-   Represents one graph scope and version.
-   Fields should include `scope_type`, `scope_id`, nullable `collection`, `status`, `source_hash`, and `version`.
+- `GraphArtifact` identifies one document or collection build occurrence and
+  pins source, ontology, extractor, resolver, filter, assembly, and embedding
+  identities plus lifecycle timestamps.
+- `GraphBuildRun` records leased staged execution, terminal outcomes, and bounded
+  operational audit without storing sensitive extraction output in logs.
+- `GraphRebuildRequest` provides durable, idempotent document, collection, and
+  operator-wide rebuild orchestration. Terminal success keeps an immutable
+  scalar artifact/run occurrence audit without an artifact foreign key, so
+  retention can prune the terminal occurrence without erasing the audit.
+  Concurrent scope drift is reconciled under the same request identity; bounded
+  partial outcomes remain explicitly resumable instead of silently widening the
+  captured scope.
+- `CollectionArtifactInput` is the exact manifest of document artifacts used to
+  assemble a collection artifact.
+- `OntologyVersion` stores checksum-addressed provider-neutral YAML. Draft or
+  rejected versions cannot become build inputs.
 
-2. `GraphNode`
-   Stores local and canonical nodes.
-   Fields should include `artifact`, `node_key`, `kind`, `label`, `normalized_label`, `summary`, `confidence`, `metadata`, and optional `embedding`.
+### Extraction and local resolution
 
-3. `GraphEdge`
-   Stores directional relations.
-   Fields should include `artifact`, `source_node`, `target_node`, `relation`, `normalized_relation`, `weight`, `confidence`, `status`, and `metadata`.
+- `EntityMention` stores validated half-open spans and extraction evidence.
+- `RelationMention` stores typed, directed mention evidence with exact head/tail
+  endpoints and chunk provenance.
+- `DocumentEntity` resolves local coreference/identity without automatically
+  merging pronoun-only references.
+- `DocumentEntityMention` binds resolved document entities to their mentions and
+  records structured alias/acronym provenance.
 
-4. `GraphEvidence`
-   Connects nodes and edges to source evidence.
-   Fields should include `artifact`, nullable `node`, nullable `edge`, `document_id`, nullable `figure_id`, nullable `chunk_id`, `evidence_text`, `evidence_kind`, `confidence`, and `metadata`.
+Raw evidence is retained when a candidate is suppressed or rejected. Provider
+objects and mutable model payloads are not persistence contracts.
 
-5. `GraphAssociation`
-   Connects local nodes to collection or meta canonical nodes.
-   Fields should include `source_node`, `target_node`, `association_type`, `score`, and `metadata`.
+### Collection graph
 
-6. `GraphBuildRun`
-   Tracks async work and operator visibility.
-   Fields should include `artifact`, `trigger`, `status`, `started_at`, `finished_at`, `stats`, and `error`.
+- `CollectionEntity` is the collection-owned promoted identity.
+- `CollectionEntityDocumentLink` proves the active automatic document membership
+  that gives a collection entity its permission-bearing source boundary.
+- `CollectionRelation` stores collection-owned semantic relations.
+- `CollectionRelationEvidence` binds a relation to active authorized source
+  provenance. Support and confidence are recomputed from selected evidence at
+  retrieval time rather than trusting a wider aggregate.
 
-## Lifecycle
+A collection graph is assembled from one exact pinned document manifest. It
+merges repeated concepts conservatively within that collection and never copies
+claims into another collection.
 
-### Local builds
+### Cross-collection canonical spine
 
-After `create_chunks` succeeds for a document:
+- `CanonicalEntity` is an internal stable registry identity with no documents,
+  chunks, relations, claims, labels exposed to users, or permission grants.
+- `CanonicalEntityLink` is an audited collection-entity-to-canonical decision
+  containing method, score, resolver version, outcome/reason, and checksum.
 
-1. queue a document graph build
-2. queue figure graph builds for related `DocumentFigure` artifacts when applicable
-3. activate the new local artifact and supersede older ones
+Automatic cross-collection identity is allowed only for:
+
+- identical canonical stable identifiers with exact compatible type/version;
+- an exact normalized name or proven declared alias with no conflicting stable
+  identifiers or versions;
+- a resolver-proven defined acronym whose unique local full form is identical.
+
+Whole-component conflict checks prevent a transitive identifier, type, version,
+or acronym bridge. Embedding similarity may propose a reviewable candidate but
+is never automatic. Corrected resolution supersedes audited decisions and
+reconciles the whole affected component so a removed bridge can split unchanged
+peers without recreating stable registry primary keys.
+
+Canonical links are zero-semantic-hop equivalence bridges. During retrieval,
+authorized linked copies collapse into one private identity supernode so copies
+do not multiply restart mass or relation weight. Unauthorized copies never
+enter the snapshot and cannot affect counts, diagnostics, or rank.
+
+## Build and invalidation lifecycle
+
+### Document build
+
+After chunk replacement commits:
+
+1. ingestion publishes a document build only after the complete new chunk set
+   is active;
+2. the optional worker extracts bounded entity/relation mentions;
+3. local coreference, entity resolution, and policy filtering run as separate
+   versioned stages;
+4. the immutable document artifact activates atomically;
+5. affected collection refresh requests publish after commit.
+
+Figures use typed database-backed ownership and participate as document-scoped
+source artifacts. v1 does not add a separate figure/meta graph layer.
 
 ### Collection refresh
 
-When a local graph becomes active:
+The collection builder:
 
-1. mark the owning collection graph stale
-2. rebuild the collection graph asynchronously
-3. merge repeated concepts inside that collection while keeping explicit provenance links
+1. selects the exact active document-artifact manifest available for the
+   collection;
+2. pins that manifest, ontology, resolver/filter configuration, embedding
+   identity, and source hash;
+3. assembles entities, memberships, relations, and evidence in a building
+   artifact;
+4. atomically activates the complete collection artifact and supersedes the old
+   occurrence;
+5. schedules canonical-registry reconciliation after commit.
 
-### Meta promotion
+An active collection artifact remains readable through its exact pinned
+document manifest while a replacement document/collection build is in flight.
+New collection assembly still selects current active document inputs only.
 
-When a collection graph becomes active:
+### Content, move, and deletion
 
-1. evaluate candidate nodes and edges for promotion
-2. promote only sufficiently supported concepts
-3. persist canonical nodes and edges in the meta artifact
-4. preserve `GraphAssociation` links back to collection and local concepts
+Rechunking, document move, typed figure ownership changes, and document or
+collection deletion use one lifecycle lock order. Obsolete permission-bearing
+graph rows are synchronously terminalized or removed where database integrity
+requires it; rebuild publication happens after commit. Moving a document
+refreshes both old and new collection scopes. Source deletion can cascade only
+through derived graph provenance and cannot leave active evidence.
 
-### Invalidation and rebuild
+## Retrieval overlay
 
-If a document changes, moves collections, or is deleted:
+### Seed acquisition
 
-1. local artifacts become `stale` or `superseded`
-2. affected collection graphs are queued for refresh
-3. dependent meta associations are re-evaluated
-4. retrieval automatically ignores superseded artifacts
+`collect_hybrid_candidate_snapshot` is the single vector/trigram/exact
+acquisition seam used by production and evaluation. It preserves baseline
+first-occurrence ordering and produces normalized positive restart weights:
 
-## Deduplication and Pruning
+```text
+seed_weight(chunk) = sum(1 / (RRF_K + one_based_source_rank))
+```
 
-Deduplication should happen in layers:
+Raw vector distance, trigram similarity, and exact-match flags are not mixed
+because their scales are provider-specific. The already-authorized document
+snapshot supplies both baseline queries and the graph request.
 
-1. deterministic local dedupe
-   Normalize labels and relations, collapse exact duplicates, reject self-loops and empty relations.
+### Authorized graph snapshot
 
-2. collection-level semantic dedupe
-   Merge naming variants and repeated concepts inside one collection with bounded similarity rules.
+The loader opens one new PostgreSQL read-only repeatable-read transaction with a
+transaction-local timeout. It validates exact authorized document/collection
+tuples, real seed chunks, current artifacts, pinned manifests, active mappings,
+canonical links, relations, and evidence. Every query is bounded before Python
+materialization and repeats authorization predicates on both endpoints.
 
-3. conservative meta canonicalization
-   Promote aliases and stable canonical nodes without over-merging distinct concepts.
+Cross-collection traversal occurs only by collapsing currently authorized
+collection entities connected to the same active canonical registry row.
+Canonical crossing consumes zero semantic hops but grants no new scope.
 
-Pruning should be routine lifecycle maintenance:
+### Personalized PageRank
 
-- remove unsupported edges
-- remove orphan nodes created by pruned edges
-- suppress degenerate hub nodes
-- retire superseded artifacts beyond retention policy
-- keep everything rebuildable from source evidence
+For the bounded induced graph:
 
-## Retrieval Overlay
+1. seed weights are split across distinct mapped identity supernodes and
+   normalized once;
+2. each physical relation derives weight from its own active authorized
+   confidence, support, destination utility, and direction factor;
+3. canonical copies are grouped by maximum physical weight, not summed;
+4. fan-out and global node/edge caps apply in stable hop order;
+5. `ppr_v1` runs a fixed eight iterations with restart `0.20`;
+6. selected relation evidence and bounded fallback mentions project scores back
+   to real chunks;
+7. seed chunks and duplicates are removed before per-document/total candidate
+   caps;
+8. novel chunks join the baseline pool before the existing reranker.
 
-The overlay should run inside `apps.documents.services.chunk_search` after the current seed retrieval:
+Directed claims receive a full forward retrieval transition and a lower-weight
+reverse retrieval transition; the latter helps discovery but does not assert an
+inverse fact. Ontology-declared undirected relations use equal reciprocal
+transitions. The exact ontology version/checksum pinned by each artifact
+determines direction.
 
-1. map seed chunks to `GraphEvidence`
-2. expand through active graph nodes and associations with hard hop and fan-out limits
-3. score graph-supported chunks, figures, and documents
-4. fuse graph support with existing vector/trigram rank
-5. fail open to current behavior if overlay work errors or times out
+The overlay emits only privacy-safe internal diagnostics: timing, seed/candidate
+counts, `hit|miss|timeout|error`, and opaque lowercase SHA-256 algorithm/version
+signatures. Public tool payloads strip those fields and retain existing real
+chunk citation shapes.
 
-The first pass can remain backward-compatible with current tool payloads and optionally attach graph-support metadata for debugging.
+## Operations and rollout
 
-## Async Tasks and Operations
+Builds and retrieval ship independently disabled. The required immutable model
+check, representative collection backfill, inspection commands, one-snapshot
+vector/one-hop/PPR comparison, numeric gates, staged enablement, rollback order,
+retention exceptions, and ownership rules are defined in the
+[knowledge graph overlay runbook](../operations/knowledge-graph-overlay-runbook.md).
 
-Recommended Celery tasks:
+No production enablement is valid while a measured gate is pending or failing.
+Effective RRF/PPR/cap/version changes alter the algorithm signature and require a
+new comparison and approval.
 
-- `build_document_graph`
-- `build_figure_graph`
-- `refresh_collection_graph`
-- `refresh_meta_graph`
-- `prune_graph_overlay`
-- `rebuild_graph_overlay`
+## Mem0 boundary
 
-Recommended operator controls:
+Mem0 remains focused on conversation and user-memory use cases. This overlay is
+corpus- and retrieval-oriented. They may share an embedding endpoint or future
+provider-neutral heuristics, but they do not share identity, permissions,
+storage, lifecycle, canonical claims, or automatic promotion in v1.
 
-- management command to rebuild one document, one collection, or the whole overlay
-- management command to prune stale or weak graph state
-- durable `GraphBuildRun` rows for debugging failed or stale work
+## v1 non-goals
 
-## Suggested Config
+- replacing vector/trigram/exact retrieval or the existing reranker;
+- an external graph database or shared retrieval cache;
+- user-visible graph browsing or visualization;
+- a user-enumerable global canonical graph;
+- automatic ontology generation or activation;
+- pronoun-only automatic identity merging;
+- embedding-similarity automatic canonical linking;
+- extraction, LLM calls, or network access at inference time;
+- graph triples, scores, or pseudo-evidence in tool payloads or citations;
+- automatic promotion between the corpus overlay and Mem0.
 
-- `KG_OVERLAY_ENABLED`
-- `KG_OVERLAY_LOCAL_ENABLED`
-- `KG_OVERLAY_COLLECTION_ENABLED`
-- `KG_OVERLAY_META_ENABLED`
-- `KG_OVERLAY_MAX_HOPS`
-- `KG_OVERLAY_MAX_EXPANSIONS`
-- `KG_OVERLAY_PROMOTION_MIN_SCORE`
-- `KG_OVERLAY_DEDUPE_MIN_SCORE`
-- `KG_OVERLAY_PRUNE_ENABLED`
-- `KG_OVERLAY_FAIL_OPEN`
+## Success criteria
 
-## Mem0 Integration Notes
+The v1 design succeeds when:
 
-This overlay should be designed to coexist with the current Mem0 integration rather than compete with it.
-
-Possible integration paths to explore:
-
-1. keep Mem0 focused on episodic and user-memory use cases, while the new overlay handles document, figure, collection, and meta knowledge over the RAG corpus
-2. reuse normalization, relation filtering, and graph-quality heuristics already developed for Mem0 graph memory where those rules also improve document-graph quality
-3. expose graph-overlay evidence as an optional retrieval input to Mem0-backed workflows, rather than duplicating the same graph extraction logic in both systems
-4. compare whether canonical entity matching or graph-quality filters belong in a shared library under `aquillm/lib/memory` or in a new shared graph utility layer that both Mem0 and the overlay can call
-5. keep storage and lifecycle boundaries explicit: Mem0 remains conversation and memory oriented, while the overlay remains corpus and retrieval oriented unless later evidence supports deeper convergence
-6. explore a promotion path where stable, repeatedly supported corpus facts from the overlay can inform Mem0 durable memory, so the system's total usable knowledge can grow over time instead of being limited to one retrieval pass
-
-If this promotion path is explored later, it should be conservative and evidence-driven:
-
-- only promote facts that survive deduplication and pruning
-- require repeated support across documents, figures, collections, or time
-- preserve provenance back to overlay evidence
-- avoid polluting Mem0 with transient, low-confidence, or corpus-local noise
-
-The first implementation pass should avoid tightly coupling the two systems. A better near-term goal is compatibility, shared heuristics where useful, and clear boundaries so future convergence is possible without forcing it early.
-
-## Success Criteria
-
-The overlay is successful when:
-
-1. document and figure graphs build automatically after ingest
-2. collection and meta graphs stay traceable to source evidence
-3. duplicate concepts are merged more cleanly within collections
-4. stale or weak relations are pruned without breaking retrieval
-5. graph-assisted retrieval improves relationship-heavy search quality
-6. vector retrieval keeps working when graph state is missing or rebuilding
+1. graph building is asynchronous, idempotent, versioned, and independently
+   switchable from retrieval;
+2. every active entity/relation and returned chunk has exact source provenance;
+3. collection claims stay collection-owned while authorized canonical peers can
+   support cross-collection retrieval;
+4. deterministic bounded PPR improves approved relationship, alias,
+   cross-document, and cross-collection cases over the same baseline snapshot;
+5. no inaccessible chunk or hidden graph state affects results or diagnostics;
+6. graph miss/error/timeout preserves baseline retrieval and public citations;
+7. lifecycle inspection, rollback, and conservative pruning are operator-safe;
+8. all measured gates pass before production retrieval is enabled.

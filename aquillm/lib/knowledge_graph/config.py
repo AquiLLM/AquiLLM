@@ -22,14 +22,44 @@ DEFAULT_GLINER2_MAX_BATCH_CHARACTERS = 64_000
 DEFAULT_GLINER2_CACHE_DIR = Path("/root/.cache/huggingface")
 DEFAULT_ARTIFACT_RETENTION_DAYS = 30
 DEFAULT_ARTIFACT_KEEP_SUPERSEDED = 2
+DEFAULT_EXTRACTION_QUEUE = "knowledge-graph-extraction"
+INVALID_EXTRACTION_QUEUE = "invalid-knowledge-graph-extraction"
+MAX_EXTRACTION_QUEUE_LENGTH = 64
+RESERVED_NON_GRAPH_QUEUES = frozenset({"celery", "memory-promotion"})
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 _IMMUTABLE_REVISION = re.compile(r"^[0-9a-fA-F]{40}$")
+_EXTRACTION_QUEUE = re.compile(
+    rf"^[A-Za-z0-9][A-Za-z0-9._-]{{0,{MAX_EXTRACTION_QUEUE_LENGTH - 1}}}$"
+)
 
 
 class KnowledgeGraphConfigError(ValueError):
     """Raised when enabled graph extraction would use unsafe configuration."""
+
+
+def validate_extraction_queue(value: object) -> str:
+    """Return one bounded literal Celery queue token or fail closed."""
+
+    if (
+        type(value) is not str
+        or _EXTRACTION_QUEUE.fullmatch(value) is None
+        or value in RESERVED_NON_GRAPH_QUEUES
+    ):
+        raise KnowledgeGraphConfigError(
+            "KG_EXTRACTION_QUEUE must be one bounded literal queue token"
+        )
+    return value
+
+
+def load_extraction_queue(source: Mapping[str, str] | None = None) -> str:
+    """Load the exact producer/consumer queue without normalizing bad input."""
+
+    values = process_environ if source is None else source
+    return validate_extraction_queue(
+        values.get("KG_EXTRACTION_QUEUE", DEFAULT_EXTRACTION_QUEUE)
+    )
 
 
 @dataclass(frozen=True, slots=True)

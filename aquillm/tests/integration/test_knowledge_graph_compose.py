@@ -22,7 +22,10 @@ COMPOSE_FILES = tuple(
 )
 GRAPH_WORKER = "worker_knowledge_graph"
 GRAPH_QUEUE = "knowledge-graph-extraction"
+GRAPH_QUEUE_ENVIRONMENT = "${KG_EXTRACTION_QUEUE-knowledge-graph-extraction}"
+GRAPH_QUEUE_COMMAND = "$${KG_EXTRACTION_QUEUE}"
 GRAPH_DOCKERFILE = "deploy/docker/knowledge-graph/Dockerfile"
+CACHE_DIR_ENVIRONMENT = "${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}"
 GRAPH_FLAGS = {
     "DJANGO_DEBUG": "${DJANGO_DEBUG:-0}",
     "KG_BUILD_ENABLED": "${KG_BUILD_ENABLED:-0}",
@@ -35,7 +38,7 @@ CONTAINER_PATH = (
 )
 HF_CACHE_VOLUME = (
     "${KG_HF_CACHE_HOST_PATH:-../../data/hf_knowledge_graph}:"
-    "${KG_HF_HOME:-/root/.cache/huggingface}"
+    "${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}"
 )
 ARTIFACT_VOLUME = "../../artifacts:/app/artifacts"
 PYTORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
@@ -58,7 +61,12 @@ def _environment_map(raw: object) -> dict[str, object]:
     raise AssertionError("service environment must be a mapping or assignment list")
 
 
-def _resolved_compose(override: Path) -> dict[str, object]:
+def _resolved_compose(
+    override: Path,
+    *,
+    include_base: bool = True,
+    environment_overrides: dict[str, str] | None = None,
+) -> dict[str, object]:
     docker = shutil.which("docker")
     if docker is None:
         pytest.skip("Docker Compose is unavailable")
@@ -81,21 +89,23 @@ def _resolved_compose(override: Path) -> dict[str, object]:
             "STORAGE_SECRET_KEY": "compose-test",
         }
     )
-    result = subprocess.run(
-        [
-            docker,
-            "compose",
-            "-f",
-            str(COMPOSE_FILES[0]),
-            "-f",
-            str(override),
+    environment.update(environment_overrides or {})
+    compose_files = (COMPOSE_FILES[0], override) if include_base else (override,)
+    compose_arguments = [docker, "compose"]
+    for compose_file in compose_files:
+        compose_arguments.extend(("-f", str(compose_file)))
+    compose_arguments.extend(
+        (
             "--profile",
             "knowledge-graph",
             "config",
             "--format",
             "json",
             "--no-env-resolution",
-        ],
+        )
+    )
+    result = subprocess.run(
+        compose_arguments,
         cwd=REPOSITORY_ROOT,
         env=environment,
         check=False,
@@ -114,8 +124,9 @@ def test_graph_worker_is_an_optional_isolated_cpu_worker(compose_file: Path) -> 
 
     assert worker["profiles"] == ["knowledge-graph"]
     assert worker["build"]["dockerfile"] == GRAPH_DOCKERFILE
-    assert f"--queues={GRAPH_QUEUE} --concurrency=1 --prefetch-multiplier=1" in command
-    assert command.startswith("/opt/venv/bin/celery ")
+    assert f'--queues="{GRAPH_QUEUE_COMMAND}"' in command
+    assert command.index("load_extraction_queue") < command.index("exec ")
+    assert command.startswith("/bin/sh -c ")
     assert "nvidia" not in repr(worker).lower()
     assert "gpu" not in repr(worker).lower()
 
@@ -128,6 +139,7 @@ def test_graph_worker_flags_and_dependencies_fail_closed(compose_file: Path) -> 
 
     for variable, default in GRAPH_FLAGS.items():
         assert environment[variable] == default
+    assert environment["KG_EXTRACTION_QUEUE"] == GRAPH_QUEUE_ENVIRONMENT
     assert environment["C_FORCE_ROOT"] == 1
     assert environment["RUN_CELERY_IN_WEB"] == 0
     assert worker["depends_on"]["db"]["condition"] == "service_healthy"
@@ -143,7 +155,7 @@ def test_graph_worker_has_a_persistent_configurable_hf_cache(
     worker = _compose(compose_file)["services"][GRAPH_WORKER]
     environment = _environment_map(worker["environment"])
 
-    assert environment["HF_HOME"] == "${KG_HF_HOME:-/root/.cache/huggingface}"
+    assert environment["HF_HOME"] == CACHE_DIR_ENVIRONMENT
     assert environment["KG_GLINER2_CACHE_DIR"] == environment["HF_HOME"]
     assert environment["KG_GLINER2_DEVICE"] == "cpu"
     assert HF_CACHE_VOLUME in worker["volumes"]
@@ -239,6 +251,70 @@ def test_ordinary_worker_is_pinned_to_the_default_queue(compose_file: Path) -> N
     assert "--queues=celery" in worker["command"]
 
 
+@pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
+def test_every_django_producer_uses_the_same_resolved_graph_queue(
+    compose_file: Path,
+) -> None:
+    services = _compose(compose_file)["services"]
+
+    for service_name in ("web", "worker", "worker_memory_promotion"):
+        if service_name in services:
+            environment = _environment_map(services[service_name]["environment"])
+            assert environment["KG_EXTRACTION_QUEUE"] == GRAPH_QUEUE_ENVIRONMENT
+
+
+@pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
+def test_rendered_compose_preserves_one_custom_queue_and_cache_contract(
+    compose_file: Path,
+) -> None:
+    queue_name = "isolated-graph.release_1"
+    cache_dir = "/var/cache/aquillm-graph-test"
+    services = _resolved_compose(
+        compose_file,
+        include_base=False,
+        environment_overrides={
+            "KG_EXTRACTION_QUEUE": queue_name,
+            "KG_GLINER2_CACHE_DIR": cache_dir,
+        },
+    )["services"]
+
+    for service_name in ("web", "worker", "worker_memory_promotion"):
+        if service_name in services:
+            environment = _environment_map(services[service_name]["environment"])
+            assert environment["KG_EXTRACTION_QUEUE"] == queue_name
+    graph_worker = services[GRAPH_WORKER]
+    graph_environment = _environment_map(graph_worker["environment"])
+    assert graph_environment["KG_EXTRACTION_QUEUE"] == queue_name
+    assert graph_environment["KG_GLINER2_CACHE_DIR"] == cache_dir
+    assert graph_environment["HF_HOME"] == cache_dir
+    assert cache_dir in {
+        volume["target"]
+        for volume in graph_worker["volumes"]
+        if isinstance(volume, dict)
+    }
+
+
+@pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
+def test_rendered_compose_preserves_an_explicitly_empty_queue_for_validation(
+    compose_file: Path,
+) -> None:
+    services = _resolved_compose(
+        compose_file,
+        include_base=False,
+        environment_overrides={"KG_EXTRACTION_QUEUE": ""},
+    )["services"]
+
+    for service_name in (
+        "web",
+        "worker",
+        "worker_memory_promotion",
+        GRAPH_WORKER,
+    ):
+        if service_name in services:
+            environment = _environment_map(services[service_name]["environment"])
+            assert environment["KG_EXTRACTION_QUEUE"] == ""
+
+
 def test_only_graph_worker_image_installs_the_optional_ml_extra() -> None:
     graph_dockerfile = REPOSITORY_ROOT / GRAPH_DOCKERFILE
     graph_contents = graph_dockerfile.read_text(encoding="utf-8")
@@ -248,6 +324,11 @@ def test_only_graph_worker_image_installs_the_optional_ml_extra() -> None:
     assert "ENV VIRTUAL_ENV=/opt/venv" in graph_contents
     assert "ENV PATH=/opt/venv/bin:$PATH" in graph_contents
     assert "WORKDIR /app/aquillm" in graph_contents
+    assert f"ENV KG_EXTRACTION_QUEUE={GRAPH_QUEUE}" in graph_contents
+    assert "$KG_EXTRACTION_QUEUE" in graph_contents
+    assert graph_contents.index("load_extraction_queue") < graph_contents.index(
+        "exec celery"
+    )
     assert "torch.version.cuda is None" in graph_contents
     assert graph_contents.index("torch.version.cuda is None") > graph_contents.index(
         "uv sync --frozen --no-dev --extra knowledge-graph-local"
@@ -271,7 +352,76 @@ def test_graph_worker_docker_context_excludes_environment_secret_files() -> None
 
     assert ".env" in patterns
     assert ".env.*" in patterns
+    assert "/artifacts/" in patterns
     assert all(not pattern.startswith("!.env") for pattern in patterns)
+
+    git = shutil.which("git")
+    assert git is not None
+    ignored_report = subprocess.run(
+        [git, "check-ignore", "--verbose", "artifacts/kg-eval-comparison.json"],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert ignored_report.returncode == 0, ignored_report.stderr
+    assert "/artifacts/" in ignored_report.stdout
+
+
+def test_runbook_uses_compose_network_and_an_isolated_eval_worker() -> None:
+    runbook = (
+        REPOSITORY_ROOT
+        / "docs"
+        / "documents"
+        / "operations"
+        / "knowledge-graph-overlay-runbook.md"
+    ).read_text(encoding="utf-8")
+    normal_prefix = (
+        "docker compose --env-file .env "
+        "-f deploy/compose/development.yml exec web "
+        "/opt/venv/bin/python manage.py"
+    )
+
+    host_python_commands = (
+        "python aquillm/manage.py",
+        "python manage.py",
+    )
+    assert not any(
+        line.strip().startswith(host_python_commands) for line in runbook.splitlines()
+    )
+    assert f"{normal_prefix} rebuild_knowledge_graph" in runbook
+    assert f"{normal_prefix} inspect_knowledge_graph" in runbook
+    assert f"{normal_prefix} prune_knowledge_graph" in runbook
+    assert 'KG_EVAL_QUEUE="knowledge-graph-eval-$(date +%s)-$$"' in runbook
+    assert "trap - EXIT INT TERM" in runbook
+    assert "trap 'status=$?; cleanup_kg_eval; exit \"$status\"' EXIT" in runbook
+    assert "trap 'cleanup_kg_eval; exit 130' INT" in runbook
+    assert "trap 'cleanup_kg_eval; exit 143' TERM" in runbook
+    assert "trap cleanup_kg_eval EXIT INT TERM" not in runbook
+    assert 'docker rm -f "$KG_EVAL_WORKER_NAME"' in runbook
+    assert '-e KG_EXTRACTION_QUEUE="$KG_EVAL_QUEUE"' in runbook
+    assert "-e DJANGO_DEBUG=1" in runbook
+    assert "-e KG_EVAL_BYPASS_ALLOWED=1" in runbook
+    assert "-e KG_BUILD_ENABLED=0" in runbook
+    assert "-e KG_OVERLAY_ENABLED=0" in runbook
+    assert '--user "$(id -u):$(id -g)"' in runbook
+    assert "kg_eval_python manage.py rebuild_knowledge_graph" in runbook
+    assert "kg_eval_python manage.py inspect_knowledge_graph" in runbook
+    assert "kg_eval_python -m apps.knowledge_graph.evals.run_kg_eval" in runbook
+    assert "/app/artifacts/kg-eval-comparison.json" in runbook
+    assert "Never enable the evaluation bypass on the deployed graph worker" in runbook
+    assert "restricted operator-only output" in runbook
+    for gate_name in (
+        "Permission isolation",
+        "Fail-open parity",
+        "Identity precision",
+        "Retrieval quality",
+        "Multi-hop value",
+        "Latency",
+        "Determinism",
+        "Citations",
+    ):
+        assert runbook.count(f"| {gate_name} |") == 1
 
 
 def test_graph_extra_pins_torch_to_the_linux_cpu_index() -> None:

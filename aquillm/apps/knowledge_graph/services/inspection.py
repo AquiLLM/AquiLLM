@@ -22,6 +22,17 @@ def _private_code(value: object) -> str:
     return value if type(value) is str and _SAFE_CODE.fullmatch(value) else "invalid"
 
 
+def _request_summary(request: object | None) -> dict[str, str | None]:
+    return {
+        "status": getattr(request, "status", None),
+        "request_error_code": (
+            _private_code(getattr(request, "error_code", ""))
+            if request is not None
+            else ""
+        ),
+    }
+
+
 def _validate_filters(
     document_id: uuid.UUID | None,
     collection_id: int | None,
@@ -352,7 +363,7 @@ def inspect_graph_state(
         "effective_request_id": (
             str(effective_request.pk) if effective_request is not None else None
         ),
-        "status": effective_request.status if effective_request is not None else None,
+        **_request_summary(effective_request),
         "artifact_count": artifact_count,
         "build_count": build_count,
         "stale_count": stale_count,

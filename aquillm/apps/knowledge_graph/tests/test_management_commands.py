@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import os
 import socket
 import subprocess
@@ -258,6 +259,42 @@ def test_rebuild_requires_extraction_queue_worker_before_request_mutation() -> N
     create.assert_not_called()
 
 
+@override_settings(KG_EXTRACTION_QUEUE="isolated-graph-test")
+def test_worker_probe_uses_the_configured_extraction_queue() -> None:
+    command = importlib.import_module(
+        "apps.knowledge_graph.management.commands.rebuild_knowledge_graph"
+    )
+    inspector = SimpleNamespace(
+        active_queues=lambda: {
+            "worker": [{"name": "isolated-graph-test"}],
+        }
+    )
+
+    with patch.object(command.current_app.control, "inspect", return_value=inspector):
+        assert command._extraction_worker_available() is True
+
+    inspector.active_queues = lambda: {
+        "worker": [{"name": "knowledge-graph-extraction"}],
+    }
+    with patch.object(command.current_app.control, "inspect", return_value=inspector):
+        assert command._extraction_worker_available() is False
+
+
+@override_settings(
+    KG_EXTRACTION_QUEUE="invalid-knowledge-graph-extraction",
+    KG_EXTRACTION_QUEUE_VALID=False,
+)
+def test_worker_probe_fails_closed_before_inspection_for_invalid_queue() -> None:
+    command = importlib.import_module(
+        "apps.knowledge_graph.management.commands.rebuild_knowledge_graph"
+    )
+
+    with patch.object(command.current_app.control, "inspect") as inspect:
+        assert command._extraction_worker_available() is False
+
+    inspect.assert_not_called()
+
+
 def test_generated_request_uuid_is_printed_on_publication_failure() -> None:
     from apps.knowledge_graph.services.builds import RebuildPublicationError
 
@@ -301,6 +338,7 @@ def test_inspection_command_delegates_to_bounded_service() -> None:
     report = {
         "request_id": str(REQUEST_ID),
         "status": "succeeded",
+        "request_error_code": "",
         "artifact_count": 1,
         "build_count": 1,
         "stale_count": 0,
@@ -320,6 +358,37 @@ def test_inspection_command_delegates_to_bounded_service() -> None:
     inspect_graph.assert_called_once()
     assert "succeeded" in output.getvalue()
     assert "request_id" in output.getvalue()
+    assert json.loads(output.getvalue())["request_error_code"] == ""
+
+
+@pytest.mark.parametrize(
+    ("error_code", "expected"),
+    (
+        ("", ""),
+        ("resnapshot_pending", "resnapshot_pending"),
+        ("resnapshot_churn", "resnapshot_churn"),
+        ("scope_deleted", "scope_deleted"),
+        ("scope_ineligible", "scope_ineligible"),
+        ("unsafe error text", "invalid"),
+        ("x" * 129, "invalid"),
+    ),
+)
+def test_request_inspection_exposes_only_one_bounded_private_code(
+    error_code: str,
+    expected: str,
+) -> None:
+    from apps.knowledge_graph.services.inspection import _request_summary
+
+    request = SimpleNamespace(status="partial", error_code=error_code)
+
+    assert _request_summary(request) == {
+        "status": "partial",
+        "request_error_code": expected,
+    }
+    assert _request_summary(None) == {
+        "status": None,
+        "request_error_code": "",
+    }
 
 
 @pytest.mark.django_db(transaction=True)

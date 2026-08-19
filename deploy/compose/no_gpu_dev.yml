@@ -22,6 +22,7 @@ x-common-env: &common-env
   DJANGO_DEBUG: 1
   C_FORCE_ROOT: 1
   RUN_CELERY_IN_WEB: 0
+  KG_EXTRACTION_QUEUE: ${KG_EXTRACTION_QUEUE-knowledge-graph-extraction}
   # LLM — OpenAI
   LLM_CHOICE: OPENAI
   # OCR — OpenAI vision (GPT-4o)
@@ -126,9 +127,10 @@ services:
       KG_BUILD_ENABLED: ${KG_BUILD_ENABLED:-0}
       KG_OVERLAY_ENABLED: ${KG_OVERLAY_ENABLED:-0}
       KG_EVAL_BYPASS_ALLOWED: ${KG_EVAL_BYPASS_ALLOWED:-0}
+      KG_EXTRACTION_QUEUE: ${KG_EXTRACTION_QUEUE-knowledge-graph-extraction}
       KG_GLINER2_DEVICE: cpu
-      HF_HOME: ${KG_HF_HOME:-/root/.cache/huggingface}
-      KG_GLINER2_CACHE_DIR: ${KG_HF_HOME:-/root/.cache/huggingface}
+      HF_HOME: ${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}
+      KG_GLINER2_CACHE_DIR: ${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}
       UV_PROJECT_ENVIRONMENT: /opt/venv
       VIRTUAL_ENV: /opt/venv
       PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -140,8 +142,8 @@ services:
     volumes:
       - ../..:/app
       - /app/.venv
-      - "${KG_HF_CACHE_HOST_PATH:-../../data/hf_knowledge_graph}:${KG_HF_HOME:-/root/.cache/huggingface}"
-    command: /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues=knowledge-graph-extraction --concurrency=1 --prefetch-multiplier=1 --hostname=worker-knowledge-graph@%h
+      - "${KG_HF_CACHE_HOST_PATH:-../../data/hf_knowledge_graph}:${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}"
+    command: /bin/sh -c 'python -c "from lib.knowledge_graph.config import load_extraction_queue; load_extraction_queue()" && exec /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues="$${KG_EXTRACTION_QUEUE}" --concurrency=1 --prefetch-multiplier=1 --hostname=worker-knowledge-graph@%h'
 
   db:
     image: pgvector/pgvector:0.8.0-pg17

@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from celery import current_app
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.knowledge_graph.services.builds import (
@@ -11,14 +12,22 @@ from apps.knowledge_graph.services.builds import (
     create_rebuild_request,
     preview_rebuild,
 )
-from lib.knowledge_graph.config import get_build_enabled
-
-_EXTRACTION_QUEUE = "knowledge-graph-extraction"
+from lib.knowledge_graph.config import (
+    KnowledgeGraphConfigError,
+    get_build_enabled,
+    validate_extraction_queue,
+)
 
 
 def _extraction_worker_available() -> bool:
     """Check queue capability without importing or initializing extractor ML."""
 
+    if getattr(settings, "KG_EXTRACTION_QUEUE_VALID", False) is not True:
+        return False
+    try:
+        queue_name = validate_extraction_queue(settings.KG_EXTRACTION_QUEUE)
+    except KnowledgeGraphConfigError:
+        return False
     try:
         replies = current_app.control.inspect(timeout=1.0).active_queues()
     except Exception:
@@ -26,7 +35,7 @@ def _extraction_worker_available() -> bool:
     if type(replies) is not dict:
         return False
     return any(
-        type(queue) is dict and queue.get("name") == _EXTRACTION_QUEUE
+        type(queue) is dict and queue.get("name") == queue_name
         for queues in replies.values()
         if type(queues) is list
         for queue in queues

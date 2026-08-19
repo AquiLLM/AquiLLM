@@ -13,13 +13,18 @@ from typing import Any
 
 import structlog
 from celery import shared_task
+from django.conf import settings
 from django.db import InterfaceError as DjangoInterfaceError
 from django.db import OperationalError as DjangoOperationalError
 from kombu.exceptions import OperationalError as KombuOperationalError
 
-from lib.knowledge_graph.config import get_build_enabled
+from lib.knowledge_graph.config import (
+    KnowledgeGraphConfigError,
+    get_build_enabled,
+    validate_extraction_queue,
+)
 
-GRAPH_EXTRACTION_QUEUE = "knowledge-graph-extraction"
+GRAPH_EXTRACTION_QUEUE = settings.KG_EXTRACTION_QUEUE
 MAX_BUILD_RETRIES = 3
 _TRANSIENT_RETRY_BASE_SECONDS = 30
 _TRANSIENT_RETRY_MAX_SECONDS = 60
@@ -56,6 +61,16 @@ _BOTOCORE_TRANSIENT_ERROR_CODES = frozenset(
 )
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+def _task_extraction_queue_is_valid() -> bool:
+    if getattr(settings, "KG_EXTRACTION_QUEUE_VALID", False) is not True:
+        return False
+    try:
+        configured_queue = validate_extraction_queue(settings.KG_EXTRACTION_QUEUE)
+    except KnowledgeGraphConfigError:
+        return False
+    return configured_queue == GRAPH_EXTRACTION_QUEUE
 
 
 def _canonical_document_id(value: object) -> uuid.UUID:
@@ -362,6 +377,8 @@ def build_document_graph_task(
 ) -> int | None:
     """Build one exact document snapshot from a JSON-safe request."""
 
+    if not _task_extraction_queue_is_valid():
+        return None
     scope_id = _INVALID_SCOPE_ID
     resolved_request_id = None
     resolved_document_id = None
@@ -475,6 +492,8 @@ def refresh_collection_graph_task(
 ) -> int | None:
     """Refresh one exact collection snapshot from JSON-safe values."""
 
+    if not _task_extraction_queue_is_valid():
+        return None
     scope_id = _INVALID_SCOPE_ID
     resolved_request_id = None
     resolved_collection_id = None
@@ -582,6 +601,8 @@ def refresh_collection_graph_task(
 def prune_graph_artifacts_task():
     """Run Task 18's pruning service; intentionally absent from beat schedules."""
 
+    if not _task_extraction_queue_is_valid():
+        return None
     from apps.knowledge_graph.services.pruning import prune_graph_artifacts
 
     return prune_graph_artifacts(execute=True)

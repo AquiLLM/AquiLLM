@@ -14,6 +14,12 @@ import os
 import sys
 from pathlib import Path
 
+from lib.knowledge_graph.config import (
+    INVALID_EXTRACTION_QUEUE,
+    KnowledgeGraphConfigError,
+    load_extraction_queue,
+)
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -48,6 +54,32 @@ def env_float(key: str, default: float) -> float:
     return value if value >= 0 else default
 
 
+def env_kg_int(key: str, default: int) -> int | str:
+    """Preserve invalid KG values so the bounded retrieval seam can reject them."""
+
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    value = raw.strip()
+    try:
+        return int(value, 10)
+    except ValueError:
+        return value
+
+
+def env_kg_float(key: str, default: float) -> float | str:
+    """Parse numeric KG values without hiding malformed or non-finite input."""
+
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    value = raw.strip()
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
 # RAG retrieval caches (fail-open; disabled unless RAG_CACHE_ENABLED=1)
 RAG_CACHE_ENABLED = env_bool("RAG_CACHE_ENABLED", False)
 RAG_QUERY_EMBED_TTL_SECONDS = env_int("RAG_QUERY_EMBED_TTL_SECONDS", 300)
@@ -70,6 +102,43 @@ RAG_LONG_QUERY_CANDIDATE_SCALE = env_float("RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1
 KG_EVAL_BYPASS_ALLOWED = env_bool("KG_EVAL_BYPASS_ALLOWED", False)
 KG_ARTIFACT_RETENTION_DAYS = env_int("KG_ARTIFACT_RETENTION_DAYS", 30) or 30
 KG_ARTIFACT_KEEP_SUPERSEDED = env_int("KG_ARTIFACT_KEEP_SUPERSEDED", 2)
+try:
+    KG_EXTRACTION_QUEUE = load_extraction_queue(os.environ)
+except KnowledgeGraphConfigError:
+    KG_EXTRACTION_QUEUE = INVALID_EXTRACTION_QUEUE
+    KG_EXTRACTION_QUEUE_VALID = False
+else:
+    KG_EXTRACTION_QUEUE_VALID = True
+KG_OVERLAY_ENABLED = env_bool("KG_OVERLAY_ENABLED", False)
+KG_OVERLAY_ALGORITHM = os.environ.get("KG_OVERLAY_ALGORITHM", "ppr_v1").strip()
+KG_OVERLAY_RRF_K = env_kg_int("KG_OVERLAY_RRF_K", 60)
+KG_OVERLAY_MAX_SEEDS = env_kg_int("KG_OVERLAY_MAX_SEEDS", 64)
+KG_OVERLAY_MAX_SCOPE_DOCUMENTS = env_kg_int(
+    "KG_OVERLAY_MAX_SCOPE_DOCUMENTS",
+    10_000,
+)
+KG_OVERLAY_MAX_SCOPE_COLLECTIONS = env_kg_int(
+    "KG_OVERLAY_MAX_SCOPE_COLLECTIONS",
+    128,
+)
+KG_OVERLAY_MAX_HOPS = env_kg_int("KG_OVERLAY_MAX_HOPS", 2)
+KG_OVERLAY_MAX_FANOUT = env_kg_int("KG_OVERLAY_MAX_FANOUT", 10)
+KG_OVERLAY_MAX_NODES = env_kg_int("KG_OVERLAY_MAX_NODES", 200)
+KG_OVERLAY_MAX_EDGES = env_kg_int("KG_OVERLAY_MAX_EDGES", 1_000)
+KG_OVERLAY_MAX_EVIDENCE_ROWS = env_kg_int("KG_OVERLAY_MAX_EVIDENCE_ROWS", 3_000)
+KG_OVERLAY_MAX_EVIDENCE_PER_EDGE = env_kg_int(
+    "KG_OVERLAY_MAX_EVIDENCE_PER_EDGE",
+    3,
+)
+KG_OVERLAY_MAX_MENTIONS_PER_ENTITY = env_kg_int(
+    "KG_OVERLAY_MAX_MENTIONS_PER_ENTITY",
+    2,
+)
+KG_OVERLAY_PPR_RESTART = env_kg_float("KG_OVERLAY_PPR_RESTART", 0.20)
+KG_OVERLAY_PPR_ITERATIONS = env_kg_int("KG_OVERLAY_PPR_ITERATIONS", 8)
+KG_OVERLAY_MAX_CANDIDATES = env_kg_int("KG_OVERLAY_MAX_CANDIDATES", 20)
+KG_OVERLAY_MAX_PER_DOCUMENT = env_kg_int("KG_OVERLAY_MAX_PER_DOCUMENT", 3)
+KG_OVERLAY_TIMEOUT_MS = env_kg_int("KG_OVERLAY_TIMEOUT_MS", 150)
 TESTING = (
     env_bool("DJANGO_TESTING", False)
     or "pytest" in sys.modules
@@ -403,13 +472,13 @@ CELERY_TASK_PUBLISH_RETRY_POLICY = {
 }
 CELERY_TASK_ROUTES = {
     "apps.knowledge_graph.tasks.build_document_graph_task": {
-        "queue": "knowledge-graph-extraction",
+        "queue": KG_EXTRACTION_QUEUE,
     },
     "apps.knowledge_graph.tasks.refresh_collection_graph_task": {
-        "queue": "knowledge-graph-extraction",
+        "queue": KG_EXTRACTION_QUEUE,
     },
     "apps.knowledge_graph.tasks.prune_graph_artifacts_task": {
-        "queue": "knowledge-graph-extraction",
+        "queue": KG_EXTRACTION_QUEUE,
         "priority": 9,
     },
 }

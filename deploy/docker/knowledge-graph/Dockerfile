@@ -4,7 +4,9 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 ENV HF_HOME=/root/.cache/huggingface
+ENV KG_GLINER2_CACHE_DIR=/root/.cache/huggingface
 ENV KG_GLINER2_DEVICE=cpu
+ENV KG_EXTRACTION_QUEUE=knowledge-graph-extraction
 
 WORKDIR /app
 
@@ -16,4 +18,4 @@ COPY . .
 
 WORKDIR /app/aquillm
 
-CMD ["celery", "-A", "aquillm", "worker", "--loglevel=info", "--queues=knowledge-graph-extraction", "--concurrency=1", "--prefetch-multiplier=1", "--hostname=worker-knowledge-graph@%h"]
+CMD ["sh", "-c", "export HF_HOME=\"$KG_GLINER2_CACHE_DIR\" && python -c \"from lib.knowledge_graph.config import load_extraction_queue; load_extraction_queue()\" && exec celery -A aquillm worker --loglevel=info --queues=\"$KG_EXTRACTION_QUEUE\" --concurrency=1 --prefetch-multiplier=1 --hostname=worker-knowledge-graph@%h"]

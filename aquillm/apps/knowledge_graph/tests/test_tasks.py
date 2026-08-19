@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import os
 import subprocess
 import sys
@@ -156,7 +157,9 @@ def test_task_entry_points_expose_json_scalar_signatures_only() -> None:
 
 def test_extraction_tasks_are_routed_to_the_isolated_queue() -> None:
     tasks = _tasks_module()
-    expected_queue = "knowledge-graph-extraction"
+    expected_queue = settings.KG_EXTRACTION_QUEUE
+
+    assert expected_queue == "knowledge-graph-extraction"
 
     for task in (
         tasks.build_document_graph_task,
@@ -171,6 +174,148 @@ def test_extraction_tasks_are_routed_to_the_isolated_queue() -> None:
     }
     assert settings.CELERY_TASK_PUBLISH_RETRY is True
     assert 0 < settings.CELERY_TASK_PUBLISH_RETRY_POLICY["max_retries"] <= 5
+
+
+def test_configured_extraction_queue_drives_task_decorators_and_routes() -> None:
+    repository_root = Path(__file__).resolve().parents[4]
+    script = textwrap.dedent(
+        """
+        import json
+        import django
+
+        django.setup()
+        from aquillm import settings
+        from apps.knowledge_graph import tasks
+
+        print(json.dumps({
+            "setting": settings.KG_EXTRACTION_QUEUE,
+            "document": tasks.build_document_graph_task.queue,
+            "collection": tasks.refresh_collection_graph_task.queue,
+            "prune": tasks.prune_graph_artifacts_task.queue,
+            "routes": settings.CELERY_TASK_ROUTES,
+        }, sort_keys=True))
+        """
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "DJANGO_DEBUG": "1",
+            "DJANGO_SETTINGS_MODULE": "aquillm.settings",
+            "KG_EXTRACTION_QUEUE": "isolated-graph-test",
+            "PYTHONPATH": str(repository_root / "aquillm"),
+        }
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repository_root / "aquillm",
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    observed = json.loads(completed.stdout)
+    assert observed["setting"] == "isolated-graph-test"
+    assert {
+        observed["document"],
+        observed["collection"],
+        observed["prune"],
+    } == {"isolated-graph-test"}
+    assert {route["queue"] for route in observed["routes"].values()} == {
+        "isolated-graph-test"
+    }
+
+
+@pytest.mark.parametrize(
+    "queue_name",
+    (
+        "",
+        " leading",
+        "trailing ",
+        "contains space",
+        "celery,knowledge-graph-extraction",
+        "line\nbreak",
+        "shell;command",
+        "$EXPANSION",
+        ".leading-dot",
+        "celery",
+        "memory-promotion",
+        "a" * 65,
+    ),
+)
+def test_extraction_queue_is_one_bounded_shell_safe_token(queue_name: str) -> None:
+    from lib.knowledge_graph.config import (
+        KnowledgeGraphConfigError,
+        validate_extraction_queue,
+    )
+
+    with pytest.raises(KnowledgeGraphConfigError, match="KG_EXTRACTION_QUEUE"):
+        validate_extraction_queue(queue_name)
+
+
+@pytest.mark.parametrize(
+    "invalid_queue",
+    ("celery,knowledge-graph-extraction", "celery", "memory-promotion"),
+)
+def test_invalid_extraction_queue_preserves_startup_and_blocks_graph_execution(
+    invalid_queue: str,
+) -> None:
+    repository_root = Path(__file__).resolve().parents[4]
+    script = textwrap.dedent(
+        """
+        import json
+        import django
+
+        django.setup()
+        from aquillm.celery import app
+        from aquillm import settings
+        app.autodiscover_tasks(['apps.knowledge_graph'], force=True)
+        from apps.knowledge_graph import tasks
+
+        print(json.dumps({
+            "queue": settings.KG_EXTRACTION_QUEUE,
+            "queue_valid": settings.KG_EXTRACTION_QUEUE_VALID,
+            "routes": settings.CELERY_TASK_ROUTES,
+            "document_queue": tasks.build_document_graph_task.queue,
+            "document_result": tasks.build_document_graph_task.run(
+                "invalid", "invalid", "invalid"
+            ),
+            "prune_result": tasks.prune_graph_artifacts_task.run(),
+        }, sort_keys=True))
+        """
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "DJANGO_DEBUG": "1",
+            "DJANGO_SETTINGS_MODULE": "aquillm.settings",
+            "KG_EXTRACTION_QUEUE": invalid_queue,
+            "PYTHONPATH": str(repository_root / "aquillm"),
+        }
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repository_root / "aquillm",
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    observed = json.loads(completed.stdout)
+    invalid_queue = "invalid-knowledge-graph-extraction"
+    assert observed["queue"] == invalid_queue
+    assert observed["queue_valid"] is False
+    assert observed["document_queue"] == invalid_queue
+    assert observed["document_result"] is None
+    assert observed["prune_result"] is None
+    assert {route["queue"] for route in observed["routes"].values()} == {invalid_queue}
 
 
 def test_extraction_tasks_use_crash_safe_delivery_options() -> None:
@@ -1171,7 +1316,7 @@ def test_pruning_task_is_low_priority_lazy_and_unscheduled() -> None:
     sys.modules.pop("apps.knowledge_graph.services.pruning", None)
     tasks = _tasks_module()
 
-    assert tasks.prune_graph_artifacts_task.queue == "knowledge-graph-extraction"
+    assert tasks.prune_graph_artifacts_task.queue == settings.KG_EXTRACTION_QUEUE
     assert tasks.prune_graph_artifacts_task.priority == 9
     assert tasks.prune_graph_artifacts_task.acks_late is True
     assert tasks.prune_graph_artifacts_task.reject_on_worker_lost is True
