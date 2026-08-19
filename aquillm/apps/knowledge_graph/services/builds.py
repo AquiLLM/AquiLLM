@@ -1526,15 +1526,15 @@ def _lock_rebuild_request_prefix(request_id: uuid.UUID):
     hierarchy_parent = None
     parent_id = root_metadata["parent_request_id"]
     if parent_id is not None:
-        hierarchy_parent = GraphRebuildRequest.objects.select_for_update().get(
-            pk=parent_id
-        )
-    current = GraphRebuildRequest.objects.select_for_update().get(pk=root_id)
+        hierarchy_parent = GraphRebuildRequest.objects.select_for_update(
+            no_key=True
+        ).get(pk=parent_id)
+    current = GraphRebuildRequest.objects.select_for_update(no_key=True).get(pk=root_id)
     for _ in range(_MAX_REBUILD_LINEAGE_DEPTH):
         if current.pk == request_id:
             return hierarchy_parent, current
         successor = (
-            GraphRebuildRequest.objects.select_for_update()
+            GraphRebuildRequest.objects.select_for_update(no_key=True)
             .filter(predecessor_request_id=current.pk)
             .first()
         )
@@ -1870,7 +1870,7 @@ def _lock_request_completion_snapshot(
         _lock_document_scope(document_id)
 
     artifact_rows = tuple(
-        GraphArtifact.objects.select_for_update()
+        GraphArtifact.objects.select_for_update(no_key=True)
         .filter(
             rebuild_request_id=request.pk,
             scope_type=GraphArtifact.ScopeType.DOCUMENT,
