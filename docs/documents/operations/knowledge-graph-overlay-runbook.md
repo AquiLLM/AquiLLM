@@ -464,8 +464,8 @@ Do not skip or reorder these steps.
            "--quantization", "bitsandbytes",
            "--load-format", "bitsandbytes",
            "--model-loader-extra-config",
-           '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}',
-           "--hf-overrides", '{"matryoshka_dimensions":[1024]}',
+           "{\"load_in_4bit\":true,\"bnb_4bit_compute_dtype\":\"float16\",\"bnb_4bit_quant_type\":\"nf4\",\"bnb_4bit_use_double_quant\":true}",
+           "--hf-overrides", "{\"matryoshka_dimensions\":[1024]}",
        ]
    else:
        assert service == "vllm_rerank"
@@ -489,7 +489,7 @@ Do not skip or reorder these steps.
        expected_extra_args = [
            "--chat-template", "/templates/qwen3_vl_reranker.jinja",
            "--hf-overrides",
-           '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}',
+           "{\"architectures\":[\"Qwen3VLForSequenceClassification\"],\"classifier_from_token\":[\"no\",\"yes\"],\"is_original_qwen3_reranker\":true}",
        ]
    assert shlex.split(os.environ["VLLM_EXTRA_ARGS"]) == expected_extra_args
    print(f"{service}_provenance=ok")'
