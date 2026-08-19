@@ -5114,6 +5114,15 @@ def _thaw(value: Any) -> Any:
     return value
 
 
+def _initialize_django_for_comparison() -> None:
+    """Initialize Django only for the live ORM-backed comparison path."""
+
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aquillm.settings")
+    import django
+
+    django.setup()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Offline knowledge-graph evaluation runner"
@@ -5223,6 +5232,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.mode == "comparison":
+            _initialize_django_for_comparison()
             debug, environment = _runtime_eval_context()
             validate_eval_bypass(
                 eval_only=args.eval_only,

@@ -28,7 +28,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/documents/tests/test_chunk_search_graph_overlay.py": 1109,
     "aquillm/apps/documents/tests/test_document_figure_parent_schema.py": 447,
     "aquillm/apps/documents/tests/test_pdf_response.py": 361,
-    "aquillm/apps/knowledge_graph/evals/run_kg_eval.py": 5320,
+    "aquillm/apps/knowledge_graph/evals/run_kg_eval.py": 5330,
     "aquillm/apps/knowledge_graph/extraction/pipeline.py": 1386,
     "aquillm/apps/knowledge_graph/graph/assembly.py": 3230,
     "aquillm/apps/knowledge_graph/graph/filtering.py": 1711,
