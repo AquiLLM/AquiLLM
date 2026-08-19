@@ -222,7 +222,8 @@ def test_optional_dependency_is_exact_and_not_in_default_dependencies() -> None:
     )["project"]
 
     assert project["optional-dependencies"]["knowledge-graph-local"] == [
-        "gliner2[local]==1.3.2"
+        "gliner2[local]==1.3.2",
+        "torch==2.11.0",
     ]
     assert all(
         "gliner2" not in dependency.lower() for dependency in project["dependencies"]

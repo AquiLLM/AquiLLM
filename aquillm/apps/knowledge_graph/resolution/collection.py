@@ -2666,13 +2666,26 @@ def build_collection_snapshot(
             )
             if latest_run_id is not None:
                 scope_run_ids.add(latest_run_id)
+        latest_scope_run_id = (
+            GraphBuildRun.objects.filter(
+                build_kind=GraphBuildRun.BuildKind.COLLECTION,
+                scope_type=GraphBuildRun.BuildKind.COLLECTION,
+                scope_id=str(collection.pk),
+                orchestration_version=(GraphArtifact.OrchestrationVersion.SCOPED_V1),
+            )
+            .order_by("-build_generation", "-pk")
+            .values_list("pk", flat=True)
+            .first()
+        )
+        if latest_scope_run_id is not None:
+            scope_run_ids.add(latest_scope_run_id)
         _scope_runs = tuple(
             GraphBuildRun.objects.select_for_update()
             .filter(pk__in=tuple(sorted(scope_run_ids)))
             .order_by("pk")
         )
         latest_generation = max(
-            (row.build_generation for row in scope_artifacts),
+            (row.build_generation for row in (*scope_artifacts, *_scope_runs)),
             default=0,
         )
         expected_generation = (latest_generation or 0) + 1
@@ -2872,9 +2885,7 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
     if artifact.scope_type != GraphArtifact.ScopeType.COLLECTION:
         raise CollectionResolutionPersistenceError("manifest owner is not a collection")
     locked_manifest = (
-        manifest_rows
-        if isinstance(manifest_rows, LockedCollectionManifest)
-        else None
+        manifest_rows if isinstance(manifest_rows, LockedCollectionManifest) else None
     )
     rows = _bounded_query_rows(
         manifest_rows,
@@ -2909,9 +2920,7 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
         )
     source_by_id = {row.pk: row for row in locked_sources}
     document_by_id = (
-        None
-        if locked_documents is None
-        else {row.id: row for row in locked_documents}
+        None if locked_documents is None else {row.id: row for row in locked_documents}
     )
     if document_by_id is not None and len(document_by_id) != len(locked_documents):
         raise CollectionResolutionPersistenceError(

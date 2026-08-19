@@ -653,6 +653,7 @@ def test_postgres_loader_maps_nonrepresentative_seed_and_loads_authorized_edge()
                 fixture.document_artifact.pk,
             )
         ),
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
         ontology_version=definition.version,
         ontology_checksum=definition.checksum,
     )

@@ -1172,9 +1172,26 @@ def _migrate_empty_registry_to_0003(connection):
     return executor.loader.project_state(before).apps
 
 
+@pytest.fixture
+def _restore_latest_knowledge_graph_schema(request):
+    from django.db import connection
+    from django.db.migrations.executor import MigrationExecutor
+
+    def restore_latest() -> None:
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes("apps_knowledge_graph"))
+        from apps.knowledge_graph.models import GraphRebuildRequest
+
+        GraphRebuildRequest.objects.exists()
+
+    request.addfinalizer(restore_latest)
+
+
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_0004_migrates_legacy_audits_with_checksum_parity_and_is_irreversible():
+def test_0004_migrates_legacy_audits_with_checksum_parity_and_is_irreversible(
+    _restore_latest_knowledge_graph_schema,
+):
     from django.db import connection
     from django.db.migrations.exceptions import IrreversibleError
     from django.db.migrations.executor import MigrationExecutor
@@ -1234,7 +1251,10 @@ def test_0004_migrates_legacy_audits_with_checksum_parity_and_is_irreversible():
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_0004_fails_closed_for_multiple_legacy_active_targets():
+def test_0004_fails_closed_for_multiple_legacy_active_targets(
+    request,
+    _restore_latest_knowledge_graph_schema,
+):
     from django.db import connection
     from django.db.migrations.executor import MigrationExecutor
 
@@ -1262,6 +1282,7 @@ def test_0004_fails_closed_for_multiple_legacy_active_targets():
         reason="legacy conflict",
         metadata={},
     )
+    request.addfinalizer(lambda: LegacyLink.objects.filter(pk=conflicting.pk).delete())
 
     with pytest.raises(RuntimeError, match="multiple active canonical targets"):
         MigrationExecutor(connection).migrate(after)

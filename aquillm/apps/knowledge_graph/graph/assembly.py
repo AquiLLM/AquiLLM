@@ -2540,6 +2540,8 @@ def _locked_candidate(
     lease_owner=None,
     lease_generation=None,
 ):
+    from django.db.models import Q
+
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
     collection = lock_collection_graph_scope(collection_id)
@@ -2554,7 +2556,12 @@ def _locked_candidate(
     )
     candidate_reference = (
         scope_query.filter(pk=run_reference.artifact_id)
-        .values("pk", "build_generation")
+        .values(
+            "pk",
+            "build_generation",
+            "evaluation_only",
+            "rebuild_request_id",
+        )
         .first()
     )
     if candidate_reference is None:
@@ -2567,16 +2574,26 @@ def _locked_candidate(
         .order_by("pk")
         .values_list("pk", flat=True)[:2]
     )
-    artifact_ids.update(
-        scope_query.filter(
-            build_generation__gt=candidate_reference["build_generation"],
+    newer_scope_query = scope_query.filter(
+        build_generation__gt=candidate_reference["build_generation"],
+        evaluation_only=candidate_reference["evaluation_only"],
+    ).filter(
+        Q(
             status__in=(
                 GraphArtifact.Status.BUILDING,
                 GraphArtifact.Status.ACTIVE,
-            ),
+            )
         )
-        .order_by("build_generation", "pk")
-        .values_list("pk", flat=True)[:2]
+        | Q(activated_at__isnull=False)
+    )
+    if candidate_reference["evaluation_only"]:
+        newer_scope_query = newer_scope_query.filter(
+            rebuild_request_id=candidate_reference["rebuild_request_id"]
+        )
+    artifact_ids.update(
+        newer_scope_query.order_by("build_generation", "pk").values_list(
+            "pk", flat=True
+        )[:2]
     )
     artifact_ids = tuple(sorted(artifact_ids))
     scope_artifacts = tuple(
@@ -2854,7 +2871,10 @@ def _newer_activation_exists(
     candidate_request_id = getattr(candidate_artifact, "rebuild_request_id", None)
     return any(
         row.build_generation > candidate_artifact.build_generation
-        and row.status in {"building", "active"}
+        and (
+            row.status in {"building", "active"}
+            or getattr(row, "activated_at", None) is not None
+        )
         and getattr(row, "evaluation_only", False) is candidate_evaluation
         and (
             not candidate_evaluation

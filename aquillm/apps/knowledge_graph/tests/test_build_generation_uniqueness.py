@@ -238,9 +238,11 @@ def test_legacy_rows_can_reuse_a_generation_across_different_keys():
 @pytest.mark.django_db(transaction=True)
 @database_required
 def test_distinct_scoped_generations_allocate_and_activate_in_order():
+    from apps.collections.models import Collection
     from apps.knowledge_graph.graph.assembly import _swap_active_collection_artifact
     from apps.knowledge_graph.services.builds import _next_build_generation
 
+    Collection.objects.create(pk=COLLECTION_ID, name=f"generation {uuid.uuid4()}")
     prior = _artifact(
         build_key="a" * 64,
         build_generation=1,

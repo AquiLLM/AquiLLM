@@ -4,6 +4,7 @@ import inspect
 import os
 import socket
 import uuid
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,11 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.knowledge_graph.graph import assembly
-from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+from apps.knowledge_graph.models import (
+    GraphArtifact,
+    GraphBuildRun,
+    GraphRebuildRequest,
+)
 from apps.knowledge_graph.models.inputs import collection_input_source_signature
 
 
@@ -46,6 +51,10 @@ def _collection_artifact(
     *,
     source_digit: str,
     status: str,
+    build_generation: int = 1,
+    orchestration_version: int = GraphArtifact.OrchestrationVersion.LEGACY,
+    rebuild_request=None,
+    evaluation_only: bool = False,
     activated_at=None,
     completed_at=None,
     superseded_at=None,
@@ -54,6 +63,10 @@ def _collection_artifact(
         scope_type=GraphArtifact.ScopeType.COLLECTION,
         scope_id=collection.pk,
         status=status,
+        build_generation=build_generation,
+        orchestration_version=orchestration_version,
+        rebuild_request=rebuild_request,
+        evaluation_only=evaluation_only,
         source_hash=source_digit * 64,
         ontology_version="ontology-v1",
         extractor_version="extractor-v1",
@@ -243,6 +256,7 @@ def test_stale_or_superseded_document_contributor_is_rejected(source_status):
             SimpleNamespace(),
             manifest,
             "a" * 64,
+            assembly.AssemblyConfig(),
         )
 
 
@@ -288,6 +302,7 @@ def test_document_moved_to_another_collection_is_rejected_as_a_contributor():
             SimpleNamespace(),
             manifest,
             "a" * 64,
+            assembly.AssemblyConfig(),
         )
 
 
@@ -356,18 +371,22 @@ def test_older_candidate_cannot_activate_after_a_newer_winner():
         collection,
         source_digit="1",
         status=GraphArtifact.Status.BUILDING,
+        build_generation=1,
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
     )
     won_at = timezone.now()
     newer = _collection_artifact(
         collection,
         source_digit="2",
         status=GraphArtifact.Status.SUPERSEDED,
+        build_generation=2,
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
         activated_at=won_at,
         completed_at=won_at,
     )
     run = GraphBuildRun.objects.create(
         artifact=candidate,
-        stage=GraphBuildRun.Stage.PERSISTENCE,
+        stage=GraphBuildRun.Stage.VALIDATING,
         status=GraphBuildRun.Status.RUNNING,
     )
 
@@ -379,6 +398,67 @@ def test_older_candidate_cannot_activate_after_a_newer_winner():
 
     candidate.refresh_from_db()
     assert candidate.status == GraphArtifact.Status.BUILDING
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_candidate_fence_cannot_be_crowded_by_evaluation_occurrences():
+    from apps.collections.models import Collection
+
+    collection = Collection.objects.create(name="evaluation does not crowd production")
+    candidate = _collection_artifact(
+        collection,
+        source_digit="1",
+        status=GraphArtifact.Status.BUILDING,
+        build_generation=1,
+    )
+    run = GraphBuildRun.objects.create(
+        artifact=candidate,
+        stage=GraphBuildRun.Stage.PERSISTENCE,
+        status=GraphBuildRun.Status.RUNNING,
+    )
+    for generation, digit in ((2, "2"), (3, "3")):
+        request = GraphRebuildRequest.objects.create(
+            scope_type=GraphRebuildRequest.ScopeType.COLLECTION,
+            scope_id=str(collection.pk),
+            requested_documents=[],
+            expected_aggregate_signature=digit * 64,
+            evaluation_only=True,
+            collection_count=1,
+        )
+        _collection_artifact(
+            collection,
+            source_digit=digit,
+            status=GraphArtifact.Status.BUILDING,
+            build_generation=generation,
+            rebuild_request=request,
+            evaluation_only=True,
+        )
+    won_at = timezone.now()
+    blocker = _collection_artifact(
+        collection,
+        source_digit="4",
+        status=GraphArtifact.Status.SUPERSEDED,
+        build_generation=4,
+        activated_at=won_at,
+        completed_at=won_at,
+    )
+    failed = _collection_artifact(
+        collection,
+        source_digit="5",
+        status=GraphArtifact.Status.FAILED,
+        build_generation=5,
+    )
+
+    with transaction.atomic():
+        _collection, locked_candidate, _run, scope_artifacts = (
+            assembly._locked_candidate(collection.pk, run.pk)
+        )
+
+    assert locked_candidate.pk == candidate.pk
+    assert tuple(row.pk for row in scope_artifacts) == (candidate.pk, blocker.pk)
+    assert assembly._newer_activation_exists(locked_candidate, scope_artifacts)
+    assert not assembly._newer_activation_exists(locked_candidate, (failed,))
 
 
 @pytest.mark.django_db(transaction=True)
@@ -396,17 +476,24 @@ def test_concurrent_older_and_newer_candidates_leave_the_newer_active(monkeypatc
         collection,
         source_digit="1",
         status=GraphArtifact.Status.BUILDING,
+        build_generation=1,
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
     )
     newer = _collection_artifact(
         collection,
         source_digit="2",
         status=GraphArtifact.Status.BUILDING,
+        build_generation=2,
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
     )
     runs = tuple(
         GraphBuildRun.objects.create(
             artifact=artifact,
-            stage=GraphBuildRun.Stage.PERSISTENCE,
+            stage=GraphBuildRun.Stage.VALIDATING,
             status=GraphBuildRun.Status.RUNNING,
+            lease_owner=f"activation-worker-{artifact.pk}",
+            lease_generation=1,
+            lease_expires_at=timezone.now() + timedelta(minutes=5),
         )
         for artifact in (older, newer)
     )
@@ -418,14 +505,16 @@ def test_concurrent_older_and_newer_candidates_leave_the_newer_active(monkeypatc
         lambda **_kwargs: object(),
     )
 
-    def activate(run_id, source_hash):
+    def activate(run, source_hash):
         close_old_connections()
         try:
             barrier.wait(timeout=10)
             assembly.activate_collection_graph(
                 collection.pk,
-                run_id,
+                run.pk,
                 source_hash,
+                lease_owner=run.lease_owner,
+                lease_generation=run.lease_generation,
             )
             return "activated"
         except assembly.CollectionGraphAssemblyError:
@@ -435,7 +524,7 @@ def test_concurrent_older_and_newer_candidates_leave_the_newer_active(monkeypatc
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = tuple(
-            executor.submit(activate, run.pk, artifact.source_hash)
+            executor.submit(activate, run, artifact.source_hash)
             for run, artifact in zip(runs, (older, newer), strict=True)
         )
         outcomes = tuple(future.result(timeout=30) for future in futures)

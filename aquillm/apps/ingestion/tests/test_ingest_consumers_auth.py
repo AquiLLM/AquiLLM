@@ -1,12 +1,13 @@
 """Websocket auth: unauthenticated clients must not join channel groups."""
+
 import uuid
 from unittest.mock import AsyncMock
 
 import pytest
-from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 
-from ingest.consumers import IngestMonitorConsumer, IngestionDashboardConsumer
+from ingest.consumers import IngestionDashboardConsumer, IngestMonitorConsumer
 
 User = get_user_model()
 
@@ -32,7 +33,7 @@ async def test_monitor_consumer_unauthenticated_skips_group_add():
 @pytest.mark.asyncio
 @pytest.mark.django_db
 async def test_monitor_consumer_authenticated_joins_group():
-    user = User.objects.create_user(username="ingest_mon", password="pw")
+    user = await User.objects.acreate(username="ingest_mon")
     consumer = IngestMonitorConsumer()
     consumer.base_send = AsyncMock()
     doc_id = str(uuid.uuid4())
@@ -69,7 +70,7 @@ async def test_dashboard_consumer_unauthenticated_skips_group_add():
 @pytest.mark.asyncio
 @pytest.mark.django_db
 async def test_dashboard_consumer_authenticated_joins_group():
-    user = User.objects.create_user(username="dashauth", password="pw")
+    user = await User.objects.acreate(username="dashauth")
     consumer = IngestionDashboardConsumer()
     consumer.base_send = AsyncMock()
     consumer.scope = {"user": user}

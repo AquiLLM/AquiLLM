@@ -965,26 +965,19 @@ def _load_storage_scope(
                 field: row[f"document_artifact__{field}"]
                 for field in _EVALUATION_IDENTITY_FIELDS
             }
-            _validate_evaluation_identity_row(document_identity)
+            _validate_evaluation_identity_row(
+                document_identity,
+                scope_type="document",
+            )
             collection_artifact = artifact_rows_by_id[int(row["artifact_id"])]
             if (
                 row["document_artifact__status"] != GraphArtifact.Status.SUPERSEDED
                 or row["document_artifact__evaluation_only"] is not True
                 or row["document_artifact__rebuild_request_id"]
                 != collection_artifact["rebuild_request_id"]
-                or any(
-                    row[f"document_artifact__{field}"] != collection_artifact[field]
-                    for field in (
-                        "orchestration_version",
-                        "extractor_version",
-                        "resolver_version",
-                        "resolution_config_checksum",
-                        "filter_policy_version",
-                        "filter_policy_checksum",
-                        "embedding_model_signature",
-                        "ontology_version",
-                        "ontology_checksum",
-                    )
+                or not _evaluation_document_identity_matches_collection(
+                    row,
+                    collection_artifact,
                 )
             ):
                 raise _SnapshotMiss
@@ -2180,7 +2173,6 @@ def authorized_retrieval_snapshot(
     timeout_ms: int,
 ) -> Iterator[_MonotonicDeadline]:
     """Open one outer PostgreSQL read-only repeatable-read graph snapshot."""
-
     if type(timeout_ms) is not int or not 1 <= timeout_ms <= 150:
         raise ValueError("timeout_ms must be an exact integer in [1, 150]")
     if _ACTIVE_RETRIEVAL_SNAPSHOT.get() is not None:
@@ -2203,6 +2195,7 @@ def authorized_retrieval_snapshot(
         with connection.cursor() as cursor:
             cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             cursor.execute("SET LOCAL statement_timeout = %s", [timeout_ms])
+            cursor.execute("SET LOCAL join_collapse_limit = 1")
         state = _RetrievalSnapshotState(
             config=config,
             deadline=deadline,
@@ -2329,7 +2322,13 @@ def _require_bounded_identity_string(value: object, field_name: str) -> str:
     return value
 
 
-def _validate_evaluation_identity_row(row: dict[str, object]) -> None:
+def _validate_evaluation_identity_row(
+    row: dict[str, object],
+    *,
+    scope_type: object,
+) -> None:
+    if type(scope_type) is not str or scope_type not in {"collection", "document"}:
+        raise _SnapshotMiss
     for field_name in _EVALUATION_IDENTITY_FIELDS:
         value = row.get(field_name)
         if field_name in _EVALUATION_HASH_FIELDS:
@@ -2345,8 +2344,34 @@ def _validate_evaluation_identity_row(row: dict[str, object]) -> None:
         elif field_name == "orchestration_version":
             if type(value) is not int or value != 1:
                 raise _SnapshotMiss
+        elif field_name == "embedding_model_signature" and scope_type == "document":
+            if value != "":
+                raise _SnapshotMiss
         else:
             _require_bounded_identity_string(value, field_name)
+
+
+_EVALUATION_DOCUMENT_COLLECTION_SHARED_IDENTITY_FIELDS = (
+    "orchestration_version",
+    "extractor_version",
+    "resolver_version",
+    "resolution_config_checksum",
+    "filter_policy_version",
+    "filter_policy_checksum",
+    "ontology_version",
+    "ontology_checksum",
+)
+
+
+def _evaluation_document_identity_matches_collection(
+    document_row: dict[str, object],
+    collection_artifact: dict[str, object],
+) -> bool:
+    return all(
+        document_row.get(f"document_artifact__{field}")
+        == collection_artifact.get(field)
+        for field in _EVALUATION_DOCUMENT_COLLECTION_SHARED_IDENTITY_FIELDS
+    )
 
 
 def _select_evaluation_artifact_occurrences(
@@ -2402,7 +2427,10 @@ def _select_evaluation_artifact_occurrences(
             artifact_id = _positive_database_int(artifact.get("id"), "artifact id")
         except ValueError as error:
             raise _SnapshotMiss from error
-        _validate_evaluation_identity_row(artifact)
+        _validate_evaluation_identity_row(
+            artifact,
+            scope_type=artifact.get("scope_type"),
+        )
 
         matching_runs = tuple(
             row
@@ -2417,7 +2445,10 @@ def _select_evaluation_artifact_occurrences(
             run_id = _positive_database_int(run.get("id"), "run id")
         except ValueError as error:
             raise _SnapshotMiss from error
-        _validate_evaluation_identity_row(run)
+        _validate_evaluation_identity_row(
+            run,
+            scope_type=run.get("scope_type"),
+        )
         marker = run.get("stage_marker")
         if (
             run.get("evaluation_only") is not True
@@ -2715,7 +2746,10 @@ class AuthorizedArtifactProvenance:
             field: getattr(self, field) for field in _EVALUATION_IDENTITY_FIELDS
         }
         try:
-            _validate_evaluation_identity_row(identity)
+            _validate_evaluation_identity_row(
+                identity,
+                scope_type=self.scope_type,
+            )
         except _SnapshotMiss as error:
             raise ValueError("artifact provenance identity is invalid") from error
 

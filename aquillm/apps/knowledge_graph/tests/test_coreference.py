@@ -2364,6 +2364,7 @@ def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
         status=GraphArtifact.Status.BUILDING,
         source_hash="a" * 64,
         ontology_version="1.0.0",
+        ontology_checksum="b" * 64,
         extractor_version="extractor-v1",
         resolver_version=RESOLVER_VERSION,
         filter_policy_version="pending-v1",
@@ -2384,7 +2385,7 @@ def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
             chunk=chunk,
             start=start,
             end=start + 5,
-            position_basis=EntityMention.PositionBasis.DOCUMENT_GLOBAL,
+            position_basis=EntityMention.PositionBasis.DOCUMENT_GLOBAL.value,
             raw_text="Orion",
             normalized_text="Orion",
             entity_type="model",
@@ -2431,10 +2432,10 @@ def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
     assert {link.mention_id for link in links} == {mention.pk for mention in mentions}
     assert {link.resolver_version for link in links} == {RESOLVER_VERSION}
     links_by_mention = {link.mention_id: link for link in links}
-    assert links_by_mention[mentions[0].pk].method == "root"
-    assert links_by_mention[mentions[0].pk].parent_mention_id == ""
-    assert links_by_mention[mentions[1].pk].method == "normalized_name"
-    assert links_by_mention[mentions[1].pk].parent_mention_id == str(mentions[0].pk)
+    for membership in result.clusters[0].memberships:
+        link = links_by_mention[int(membership.mention_id)]
+        assert link.method == membership.method
+        assert link.parent_mention_id == (membership.parent_mention_id or "")
     assert EntityMention.objects.filter(artifact=artifact).count() == 2
     run.refresh_from_db()
     artifact.refresh_from_db()

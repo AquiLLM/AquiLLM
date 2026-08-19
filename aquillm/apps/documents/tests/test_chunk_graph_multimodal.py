@@ -14,6 +14,10 @@ from ._chunk_graph_lifecycle_support import (
 )
 
 
+def _embedding_values(embedding):
+    return tuple(float(value) for value in embedding)
+
+
 @pytest.mark.django_db(transaction=True)
 @database_required
 def test_duplicate_content_copy_commits_target_chunks_before_early_return_enqueue(
@@ -72,10 +76,12 @@ def test_duplicate_content_copy_commits_target_chunks_before_early_return_enqueu
     copied = TextChunk.objects.get(doc_id=target.id)
     assert target.ingestion_complete is True
     assert copied.pk not in {source_chunk.pk, obsolete.pk}
-    assert (copied.content, copied.metadata, copied.embedding) == (
+    assert (copied.content, copied.metadata) == (
         source_chunk.content,
         source_chunk.metadata,
-        source_chunk.embedding,
+    )
+    assert _embedding_values(copied.embedding) == _embedding_values(
+        source_chunk.embedding
     )
     assert observed == [(False, True, target.id, target.full_text_hash)]
 
@@ -120,7 +126,9 @@ def test_empty_duplicate_donor_falls_back_to_normal_chunk_generation(monkeypatch
     monkeypatch.setattr(
         builds,
         "enqueue_document_build",
-        lambda document_id, source_hash: publications.append((document_id, source_hash)),
+        lambda document_id, source_hash: publications.append(
+            (document_id, source_hash)
+        ),
     )
 
     run_chunk_task(chunking, target)
@@ -129,7 +137,8 @@ def test_empty_duplicate_donor_falls_back_to_normal_chunk_generation(monkeypatch
     generated = TextChunk.objects.get(doc_id=target.id)
     assert target.ingestion_complete is True
     assert generated.pk != obsolete.pk
-    assert (generated.content, generated.embedding) == (text, [3.0] * 1024)
+    assert generated.content == text
+    assert _embedding_values(generated.embedding) == (3.0,) * 1024
     assert embedded_texts == [[text]]
     assert publications == [(target.id, target.full_text_hash)]
 
@@ -154,7 +163,9 @@ def test_duplicate_text_reuses_only_text_and_embeds_target_multimodal_media(
 
     chunking = configure_chunking_runtime(monkeypatch)
     document_type = getattr(document_models, document_type_name)
-    user = User.objects.create_user(username=f"copy-{document_type_name}-{uuid.uuid4()}")
+    user = User.objects.create_user(
+        username=f"copy-{document_type_name}-{uuid.uuid4()}"
+    )
     source_collection = Collection.objects.create(name=f"media source {uuid.uuid4()}")
     target_collection = Collection.objects.create(name=f"media target {uuid.uuid4()}")
     text = "Duplicate OCR text does not mean duplicate image evidence."
@@ -212,7 +223,9 @@ def test_duplicate_text_reuses_only_text_and_embeds_target_multimodal_media(
     monkeypatch.setattr(
         builds,
         "enqueue_document_build",
-        lambda document_id, source_hash: publications.append((document_id, source_hash)),
+        lambda document_id, source_hash: publications.append(
+            (document_id, source_hash)
+        ),
     )
 
     run_chunk_task(chunking, target)
@@ -223,14 +236,16 @@ def test_duplicate_text_reuses_only_text_and_embeds_target_multimodal_media(
     )
     assert target.ingestion_complete is True
     assert copied_text.modality == TextChunk.Modality.TEXT
-    assert (copied_text.content, copied_text.embedding) == (
-        source_text.content,
-        source_text.embedding,
+    assert copied_text.content == source_text.content
+    assert _embedding_values(copied_text.embedding) == _embedding_values(
+        source_text.embedding
     )
     assert target_image.modality == TextChunk.Modality.IMAGE
     assert target_image.content == text != source_image.content
     assert target_image.metadata == {"image_name": target_name}
-    assert target_image.embedding == [2.0] * 1024
-    assert target_image.embedding != source_image.embedding
+    assert _embedding_values(target_image.embedding) == (2.0,) * 1024
+    assert _embedding_values(target_image.embedding) != _embedding_values(
+        source_image.embedding
+    )
     assert embedded_images == [(text, {"image_name": target_name})]
     assert publications == [(target.id, target.full_text_hash)]

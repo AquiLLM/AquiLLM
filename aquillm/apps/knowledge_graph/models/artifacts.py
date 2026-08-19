@@ -9,6 +9,8 @@ from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from django.db.models import Q
 
+from .vector_validation import django_safe_vector_values, immutable_field_value
+
 _DOCUMENT_SCOPE_PATTERN = (
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -575,6 +577,14 @@ class ValidatedGraphModel(models.Model):
     def _raw_validation_errors(self) -> dict[str, str]:
         return {}
 
+    def clean_fields(self, exclude=None):
+        with django_safe_vector_values(self):
+            return super().clean_fields(exclude=exclude)
+
+    def validate_constraints(self, exclude=None):
+        with django_safe_vector_values(self):
+            return super().validate_constraints(exclude=exclude)
+
     def validate_for_persistence(self) -> None:
         """Validate one instance before any SQL is attempted."""
         self.prepare_for_persistence()
@@ -593,7 +603,7 @@ class ValidatedGraphModel(models.Model):
     def _validate_immutable_fields(self) -> None:
         if not self.pk or not self._IMMUTABLE_FIELDS:
             return
-        comparisons: dict[str, str] = {}
+        comparisons: dict[str, tuple[str, models.Field]] = {}
         for name in self._IMMUTABLE_FIELDS:
             try:
                 field = self._meta.get_field(name)
@@ -602,15 +612,16 @@ class ValidatedGraphModel(models.Model):
                     raise
                 field = self._meta.get_field(name.removesuffix("_id"))
             lookup = field.attname if field.is_relation else field.name
-            comparisons.setdefault(lookup, field.name)
+            comparisons.setdefault(lookup, (field.name, field))
         previous = type(self).objects.filter(pk=self.pk).values(*comparisons).first()
         if previous is None:
             return
-        changed = {
-            error_field
-            for lookup, error_field in comparisons.items()
-            if previous[lookup] != getattr(self, lookup)
-        }
+        changed = set()
+        for lookup, (error_field, field) in comparisons.items():
+            previous_value = immutable_field_value(field, previous[lookup])
+            current_value = immutable_field_value(field, getattr(self, lookup))
+            if previous_value != current_value:
+                changed.add(error_field)
         if changed:
             raise ValidationError(
                 {field: "Graph field is immutable." for field in sorted(changed)}
