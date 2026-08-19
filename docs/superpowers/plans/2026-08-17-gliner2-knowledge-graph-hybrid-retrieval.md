@@ -1195,7 +1195,7 @@ Only actual `TextChunk` IDs may be returned. After the final iteration, score ea
 Test that:
 
 - both `allowed_doc_ids` and `allowed_collection_ids` are required nonempty fields on `GraphExpansionRequest`; the initial scope query proves that the collection tuple is exactly the set represented by those authorized documents, so an extra collection ID with no authorized document cannot widen traversal;
-- request construction rejects duplicate seed IDs/ranks; every otherwise valid seed chunk must be a real row inside the explicit authorized-document snapshot, and missing, stale, or out-of-scope seed IDs fail open to an empty expansion rather than being silently replaced;
+- request construction rejects duplicate seed IDs/ranks; every seed chunk must be a real row inside the explicit authorized-document snapshot, and a missing, stale, or out-of-scope seed ID fails open to an empty expansion rather than being silently replaced. A verified in-scope seed with no active graph entity mapping contributes no restart mass; normalize across the remaining mapped seeds, and return a miss only when none map. This graph-only omission never changes the baseline candidate pool or consumes an overlay slot;
 - unselected or inaccessible documents are excluded in the initial scope validation and in every subsequent graph/evidence query, not filtered after traversal;
 - raw `CollectionsRef` IDs are never accepted by this service;
 - parent/child collection selection tests pin the current `Collection.get_user_accessible_documents` behavior, including the existing difference between recursive `user_can_view` and direct-row `filter_by_user_perm`; this KG feature must neither widen nor silently "fix" that separate permission contract;

@@ -14,6 +14,7 @@ from apps.knowledge_graph.retrieval.types import (
     GraphExpansionDiagnostics,
     GraphExpansionRequest,
     GraphExpansionResult,
+    GraphExpansionSeed,
 )
 from lib.knowledge_graph.types import (
     EntityCandidate,
@@ -63,16 +64,19 @@ def _batch() -> ExtractionBatchResult:
 
 def _request() -> GraphExpansionRequest:
     return GraphExpansionRequest(
-        query="Which model uses MMLU?",
-        seed_chunk_ids=(1,),
+        seeds=(GraphExpansionSeed(chunk_id=1, rank=1, restart_weight=1.0),),
         allowed_doc_ids=(UUID("11111111-1111-4111-8111-111111111111"),),
-        allowed_collection_ids=(UUID("22222222-2222-4222-8222-222222222222"),),
+        allowed_collection_ids=(1,),
     )
 
 
 def _result() -> GraphExpansionResult:
     return GraphExpansionResult(
-        chunk_ids=(2,), diagnostics=GraphExpansionDiagnostics(status="hit")
+        chunk_ids=(2,),
+        diagnostics=GraphExpansionDiagnostics(
+            status="hit", seed_count=1, candidate_count=1
+        ),
+        seed_chunk_ids=(1,),
     )
 
 
@@ -97,7 +101,7 @@ def test_extraction_contracts_are_equal_value_objects() -> None:
         (_relation(), "head_text", "other"),
         (_diagnostic(), "code", "other"),
         (_batch(), "entities", ()),
-        (_request(), "query", "other"),
+        (_request(), "seeds", ()),
         (GraphExpansionDiagnostics(status="hit"), "status", "miss"),
         (_result(), "chunk_ids", (3,)),
     ],
@@ -180,7 +184,9 @@ if blocked_attempts:
         ({"text": ""}, "text"),
     ],
 )
-def test_entity_candidate_rejects_invalid_fields(kwargs: dict[str, object], field: str) -> None:
+def test_entity_candidate_rejects_invalid_fields(
+    kwargs: dict[str, object], field: str
+) -> None:
     values: dict[str, object] = {
         "entity_type": "model",
         "text": "Qwen3",
@@ -207,7 +213,9 @@ def test_entity_candidate_rejects_invalid_fields(kwargs: dict[str, object], fiel
         ({"tail_text": ""}, "tail_text"),
     ],
 )
-def test_relation_candidate_rejects_invalid_fields(kwargs: dict[str, object], field: str) -> None:
+def test_relation_candidate_rejects_invalid_fields(
+    kwargs: dict[str, object], field: str
+) -> None:
     values: dict[str, object] = {
         "relation_type": "evaluates_on",
         "head_text": "Qwen3",
@@ -227,7 +235,10 @@ def test_relation_candidate_rejects_invalid_fields(kwargs: dict[str, object], fi
 def test_extraction_diagnostic_is_provider_neutral_and_validates_details() -> None:
     diagnostic = _diagnostic()
 
-    assert diagnostic.details == (("relation_type", "evaluates_on"), ("head_text", "Qwen3"))
+    assert diagnostic.details == (
+        ("relation_type", "evaluates_on"),
+        ("head_text", "Qwen3"),
+    )
     assert isinstance(diagnostic.details, tuple)
     with pytest.raises(ValueError, match="details"):
         ExtractionDiagnostic("invalid", "relation", 0, [("key", "value")])  # type: ignore[arg-type]
@@ -247,46 +258,60 @@ def test_extraction_batch_requires_tuples_of_contract_candidates() -> None:
     with pytest.raises(ValueError, match="diagnostics"):
         ExtractionBatchResult(entities=(), relations=(), diagnostics=[_diagnostic()])  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="entities"):
-        ExtractionBatchResult(entities=("not an entity",), relations=(), diagnostics=())  # type: ignore[arg-type]
+        ExtractionBatchResult(
+            entities=("not an entity",), relations=(), diagnostics=()
+        )  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="relations"):
-        ExtractionBatchResult(entities=(), relations=("not a relation",), diagnostics=())  # type: ignore[arg-type]
+        ExtractionBatchResult(
+            entities=(), relations=("not a relation",), diagnostics=()
+        )  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="diagnostics"):
-        ExtractionBatchResult(entities=(), relations=(), diagnostics=("not a diagnostic",))  # type: ignore[arg-type]
+        ExtractionBatchResult(
+            entities=(), relations=(), diagnostics=("not a diagnostic",)
+        )  # type: ignore[arg-type]
 
 
 def test_graph_expansion_contracts_are_equal_immutable_value_objects() -> None:
     document_id = UUID("11111111-1111-4111-8111-111111111111")
-    collection_id = UUID("22222222-2222-4222-8222-222222222222")
+    seed = GraphExpansionSeed(chunk_id=1, rank=1, restart_weight=1.0)
     request = GraphExpansionRequest(
-        query="Which model uses MMLU?",
-        seed_chunk_ids=(1,),
+        seeds=(seed,),
         allowed_doc_ids=(document_id,),
-        allowed_collection_ids=(collection_id,),
+        allowed_collection_ids=(1,),
     )
     result = GraphExpansionResult(
-        chunk_ids=(2,), diagnostics=GraphExpansionDiagnostics(status="hit")
+        chunk_ids=(2,),
+        diagnostics=GraphExpansionDiagnostics(
+            status="hit", seed_count=1, candidate_count=1
+        ),
+        seed_chunk_ids=(1,),
     )
 
     assert request == GraphExpansionRequest(
-        query="Which model uses MMLU?",
-        seed_chunk_ids=(1,),
+        seeds=(seed,),
         allowed_doc_ids=(document_id,),
-        allowed_collection_ids=(collection_id,),
+        allowed_collection_ids=(1,),
     )
     assert result == GraphExpansionResult(
-        chunk_ids=(2,), diagnostics=GraphExpansionDiagnostics(status="hit")
+        chunk_ids=(2,),
+        diagnostics=GraphExpansionDiagnostics(
+            status="hit", seed_count=1, candidate_count=1
+        ),
+        seed_chunk_ids=(1,),
     )
     with pytest.raises(FrozenInstanceError):
-        request.query = "other"  # type: ignore[misc]
+        request.seeds = ()  # type: ignore[misc]
 
 
-@pytest.mark.parametrize("status", ["disabled", "miss", "hit", "timeout", "error"])
+@pytest.mark.parametrize("status", ["miss", "hit", "timeout", "error"])
 def test_graph_expansion_diagnostics_supports_safe_statuses(status: str) -> None:
     diagnostics = GraphExpansionDiagnostics(
         status=status,
+        seed_count=1,
         candidate_count=2,
         elapsed_ms=12.5,
-        version_signature="graph-v1",
+        algorithm_signature="a" * 64,
+        graph_version_signature="b" * 64,
     )
 
     assert diagnostics.status == status
@@ -295,41 +320,50 @@ def test_graph_expansion_diagnostics_supports_safe_statuses(status: str) -> None
 
 def test_graph_expansion_contracts_reject_invalid_or_mutable_boundaries() -> None:
     document_id = UUID("11111111-1111-4111-8111-111111111111")
-    collection_id = UUID("22222222-2222-4222-8222-222222222222")
+    seed = GraphExpansionSeed(chunk_id=1, rank=1, restart_weight=1.0)
     valid = {
-        "query": "Which model uses MMLU?",
-        "seed_chunk_ids": (1,),
+        "seeds": (seed,),
         "allowed_doc_ids": (document_id,),
-        "allowed_collection_ids": (collection_id,),
+        "allowed_collection_ids": (1,),
     }
 
     for field, value in (
-        ("seed_chunk_ids", []),
-        ("allowed_doc_ids", []),
-        ("allowed_collection_ids", []),
-        ("seed_chunk_ids", ()),
+        ("seeds", ()),
         ("allowed_doc_ids", ()),
         ("allowed_collection_ids", ()),
-        ("seed_chunk_ids", (0,)),
-        ("seed_chunk_ids", (True,)),
+        ("seeds", ("not a seed",)),
         ("allowed_doc_ids", (str(document_id),)),
-        ("allowed_collection_ids", (str(collection_id),)),
+        ("allowed_collection_ids", ("1",)),
+        ("allowed_collection_ids", (True,)),
     ):
         values = dict(valid)
         values[field] = value
         with pytest.raises(ValueError, match=field):
             GraphExpansionRequest(**values)  # type: ignore[arg-type]
 
+    diagnostics = GraphExpansionDiagnostics(
+        status="hit", seed_count=1, candidate_count=1
+    )
     with pytest.raises(ValueError, match="chunk_ids"):
-        GraphExpansionResult(chunk_ids=[2], diagnostics=GraphExpansionDiagnostics(status="hit"))  # type: ignore[arg-type]
+        GraphExpansionResult(
+            chunk_ids=(0,), diagnostics=diagnostics, seed_chunk_ids=(1,)
+        )
     with pytest.raises(ValueError, match="chunk_ids"):
-        GraphExpansionResult(chunk_ids=(0,), diagnostics=GraphExpansionDiagnostics(status="hit"))
+        GraphExpansionResult(
+            chunk_ids=(True,), diagnostics=diagnostics, seed_chunk_ids=(1,)
+        )
     with pytest.raises(ValueError, match="chunk_ids"):
-        GraphExpansionResult(chunk_ids=(True,), diagnostics=GraphExpansionDiagnostics(status="hit"))
-    with pytest.raises(ValueError, match="chunk_ids"):
-        GraphExpansionResult(chunk_ids=("2",), diagnostics=GraphExpansionDiagnostics(status="hit"))  # type: ignore[arg-type]
+        GraphExpansionResult(
+            chunk_ids=("2",),  # type: ignore[arg-type]
+            diagnostics=diagnostics,
+            seed_chunk_ids=(1,),
+        )
     with pytest.raises(ValueError, match="diagnostics"):
-        GraphExpansionResult(chunk_ids=(2,), diagnostics="not diagnostics")  # type: ignore[arg-type]
+        GraphExpansionResult(
+            chunk_ids=(2,),
+            diagnostics="not diagnostics",  # type: ignore[arg-type]
+            seed_chunk_ids=(1,),
+        )
     with pytest.raises(ValueError, match="status"):
         GraphExpansionDiagnostics(status="unknown")
     with pytest.raises(ValueError, match="candidate_count"):
@@ -342,7 +376,9 @@ def test_graph_expansion_contracts_reject_invalid_or_mutable_boundaries() -> Non
     "elapsed_ms",
     [True, -1, math.nan, math.inf, -math.inf, 10**1000, -(10**1000)],
 )
-def test_graph_expansion_diagnostics_rejects_invalid_elapsed_ms(elapsed_ms: object) -> None:
+def test_graph_expansion_diagnostics_rejects_invalid_elapsed_ms(
+    elapsed_ms: object,
+) -> None:
     with pytest.raises(ValueError, match="elapsed_ms"):
         GraphExpansionDiagnostics(status="hit", elapsed_ms=elapsed_ms)  # type: ignore[arg-type]
 
