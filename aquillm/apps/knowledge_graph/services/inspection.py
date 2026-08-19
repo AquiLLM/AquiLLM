@@ -339,18 +339,13 @@ def inspect_graph_state(
             "evaluation_only",
         )[: _MAX_INSPECTION_ROWS + 1]
     )
-    build_rows = tuple(
-        build_query.values(
-            "pk",
-            "artifact_id",
-            "scope_type",
-            "scope_id",
-            "stage",
-            "status",
-            "error_code",
-            "rebuild_request_id",
-            "evaluation_only",
-        )[: _MAX_INSPECTION_ROWS + 1]
+    from apps.knowledge_graph.services.inspection_rows import (
+        bounded_build_inspection_rows,
+    )
+
+    build_rows = bounded_build_inspection_rows(
+        build_query,
+        maximum=_MAX_INSPECTION_ROWS,
     )
     truncated = (
         artifact_count > _MAX_INSPECTION_ROWS or build_count > _MAX_INSPECTION_ROWS

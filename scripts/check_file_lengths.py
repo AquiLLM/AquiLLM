@@ -46,7 +46,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/knowledge_graph/retrieval/expansion.py": 4099,
     "aquillm/apps/knowledge_graph/retrieval/ppr.py": 555,
     "aquillm/apps/knowledge_graph/services/builds.py": 5236,
-    "aquillm/apps/knowledge_graph/services/inspection.py": 421,
+    "aquillm/apps/knowledge_graph/services/inspection.py": 416,
     "aquillm/apps/knowledge_graph/services/ontology.py": 825,
     "aquillm/apps/knowledge_graph/services/pruning.py": 834,
     "aquillm/apps/knowledge_graph/tasks.py": 615,

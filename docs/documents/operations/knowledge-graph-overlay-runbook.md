@@ -585,11 +585,20 @@ Do not skip or reorder these steps.
    assert report["request_error_code"] == ""
    assert report["failure_count"] == 0 and report["truncated"] is False
    assert report["artifacts"] and report["builds"]
-   assert all(row["evaluation_only"] is True for row in report["artifacts"])
+   artifact_ids = tuple(report["artifact_ids"])
+   build_ids = tuple(report["build_ids"])
+   assert len(artifact_ids) == report["artifact_count"] == len(set(artifact_ids))
+   assert len(build_ids) == report["build_count"] == len(set(build_ids))
+   assert report["build_count"] == report["artifact_count"]
+   assert len(report["artifacts"]) == report["artifact_count"]
+   assert len(report["builds"]) == report["build_count"]
+   assert {row["pk"] for row in report["artifacts"]} == set(artifact_ids)
+   assert {row["pk"] for row in report["builds"]} == set(build_ids)
+   assert {row["artifact_id"] for row in report["builds"]} == set(artifact_ids)
+   assert all(row["evaluation_only"] is True and row["status"] == "superseded" for row in report["artifacts"])
    assert all(row["rebuild_request_id"] == sys.argv[2] for row in report["artifacts"])
-   assert all(row["evaluation_only"] is True for row in report["builds"])
+   assert all(row["evaluation_only"] is True and row["stage"] == "superseded" and row["status"] == "cancelled" and row["error_code"] == "" and row["evaluation_completed"] is True for row in report["builds"])
    assert all(row["rebuild_request_id"] == sys.argv[2] for row in report["builds"])
-   assert all(row["status"] == "succeeded" for row in report["builds"])
    ' "$inspection" "$request_id"
    done
 
