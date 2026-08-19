@@ -227,7 +227,9 @@ Do not skip or reorder these steps.
    bounded Hugging Face repository ID. Both sidecars must set their strict
    protected-argument fence to `1`, tokenizer/code revisions explicitly,
    `VLLM_TRUST_REMOTE_CODE=1`, tensor parallelism `1`, and the reviewed
-   runner/dtype/resource envelope. The reranker task is exactly `score`.
+   runner/dtype/resource envelope. The resolved reranker pooling task is
+   `classify`, inferred from the exact `Qwen3VLForSequenceClassification`
+   override; both strict sidecar argument vectors omit the removed `--task`.
    `VLLM_EXTRA_ARGS` contains only the reviewed non-protected canonical
    payload; `LMCACHE_ENABLED=0`. Before deploying the strict shipping
    embed/rerank services, migrate any legacy operator environment by removing
@@ -473,8 +475,8 @@ Do not skip or reorder these steps.
        assert revision == os.environ["APP_RERANK_MODEL_REVISION"]
        assert revision == os.environ["APP_RERANK_TOKENIZER_REVISION"]
        assert revision == os.environ["APP_RERANK_CODE_REVISION"]
-       assert flag("--task") == "score"
-       assert flag("--gpu-memory-utilization") == "0.25"
+       assert "--task" not in argv
+       assert flag("--gpu-memory-utilization") == "0.30"
        assert flag("--max-model-len") == "1024"
        assert flag("--chat-template") == "/templates/qwen3_vl_reranker.jinja"
        overrides = json.loads(flag("--hf-overrides"))

@@ -172,7 +172,7 @@ def reviewed_env(tmp_path: Path, overrides: dict[str, str] | None = None) -> Pat
         "MEM0_EMBED_MAX_MODEL_LEN": "2048",
         "APP_RERANK_VLLM_EXTRA_ARGS": RERANK_EXTRA_ARGS,
         "APP_RERANK_TENSOR_PARALLEL_SIZE": "1",
-        "APP_RERANK_GPU_MEMORY_UTILIZATION": "0.25",
+        "APP_RERANK_GPU_MEMORY_UTILIZATION": "0.30",
         "APP_RERANK_MAX_MODEL_LEN": "1024",
         "LMCACHE_ENABLED": "0",
         "LMCACHE_EXTRA_ARGS": "",

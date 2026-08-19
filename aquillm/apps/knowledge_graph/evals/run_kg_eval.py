@@ -411,13 +411,13 @@ def _validate_live_reranker_contract(
         )
     if configured_runner != "pooling":
         raise ComparisonAborted("strict local reranker runner is invalid")
-    if configured_task != "score":
+    if configured_task:
         raise ComparisonAborted("strict local reranker task is invalid")
     if configured_dtype != "float16":
         raise ComparisonAborted("strict local reranker dtype is invalid")
     if configured_tensor_parallel_size != "1":
         raise ComparisonAborted("strict local reranker tensor parallel size is invalid")
-    if configured_gpu_memory_utilization != "0.25":
+    if configured_gpu_memory_utilization != "0.30":
         raise ComparisonAborted(
             "strict local reranker GPU memory utilization is invalid"
         )
@@ -458,10 +458,10 @@ def _validate_live_reranker_contract(
         ).hexdigest(),
         "trust_remote_code": True,
         "runner": configured_runner,
-        "task": configured_task,
+        "task": "classify",
         "dtype": configured_dtype,
         "tensor_parallel_size": 1,
-        "gpu_memory_utilization": 0.25,
+        "gpu_memory_utilization": 0.30,
         "max_model_len": 1024,
         "strict_protected_args": True,
         "api_key_signature": sha256(b"EMPTY").hexdigest(),
@@ -3464,7 +3464,7 @@ def validate_comparison_bundle(bundle: Any) -> Mapping[str, Any]:
         raise ComparisonValidationError("reranker remote code configuration is invalid")
     if reranker.get("runner") != "pooling":
         raise ComparisonValidationError("reranker runner is invalid")
-    if reranker.get("task") != "score":
+    if reranker.get("task") != "classify":
         raise ComparisonValidationError("reranker task is invalid")
     if reranker.get("dtype") != "float16":
         raise ComparisonValidationError("reranker dtype is invalid")
@@ -3475,7 +3475,7 @@ def validate_comparison_bundle(bundle: Any) -> Mapping[str, Any]:
         raise ComparisonValidationError("reranker tensor parallel size is invalid")
     if (
         type(reranker.get("gpu_memory_utilization")) is not float
-        or reranker["gpu_memory_utilization"] != 0.25
+        or reranker["gpu_memory_utilization"] != 0.30
     ):
         raise ComparisonValidationError("reranker GPU memory utilization is invalid")
     if (

@@ -84,11 +84,11 @@ def test_eval_render_ignores_hostile_ambient_interpolation(
     assert rerank["VLLM_DOWNLOAD_DIR"] == "/root/.cache/huggingface/hub"
     assert rerank["VLLM_PYTHON_BIN"] == "python3"
     assert worker["APP_RERANK_VLLM_STRICT_PROTECTED_ARGS"] == "1"
-    assert worker["APP_RERANK_VLLM_TASK"] == "score"
+    assert worker["APP_RERANK_VLLM_TASK"] == ""
     assert worker["APP_RERANK_VLLM_DOWNLOAD_DIR"] == ("/root/.cache/huggingface/hub")
     assert worker["APP_RERANK_VLLM_PYTHON_BIN"] == "python3"
     assert rerank["VLLM_STRICT_PROTECTED_ARGS"] == "1"
-    assert rerank["VLLM_TASK"] == "score"
+    assert rerank["VLLM_TASK"] == ""
     assert embed["VLLM_TRUST_REMOTE_CODE"] == "1"
     assert rerank["VLLM_TRUST_REMOTE_CODE"] == "1"
     assert worker["KG_GLINER2_MODEL"] == GLINER_MODEL

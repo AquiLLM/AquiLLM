@@ -52,6 +52,7 @@ if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
 fi
 if [ -z "${VLLM_EXTRA_ARGS// }" ] && [ "${VLLM_RUNNER:-}" = "pooling" ] && [ -z "${VLLM_TASK:-}" ]; then
   case "${VLLM_MODEL:-}" in
+    *Reranker*|*reranker*) export VLLM_EXTRA_ARGS="${APP_RERANK_VLLM_EXTRA_ARGS:-}" ;;
     *Embedding*|*embedding*) export VLLM_EXTRA_ARGS="${MEM0_EMBED_VLLM_EXTRA_ARGS:-}" ;;
   esac
 fi
@@ -250,13 +251,8 @@ validate_strict_service_contract() {
     strict_contract_error "extra arguments must be the canonical service payload"
     return
   fi
-  if [[ "${model}" == *[Rr]eranker* ]]; then
-    if [ "${VLLM_TASK:-}" != "score" ]; then
-      strict_contract_error "reranker task must be score"
-      return
-    fi
-  elif [ -n "${VLLM_TASK:-}" ]; then
-    strict_contract_error "non-reranker strict services must not set a scoring task"
+  if [ -n "${VLLM_TASK:-}" ]; then
+    strict_contract_error "strict vLLM 0.21 services must not set the removed task option"
     return
   fi
   if ! [[ "${VLLM_TENSOR_PARALLEL_SIZE:-}" =~ ^[1-9][0-9]*$ ]] \
@@ -285,9 +281,6 @@ validate_strict_service_contract() {
     --api-key
     --download-dir
   )
-  if [ -n "${VLLM_TASK:-}" ]; then
-    required_args+=(--task)
-  fi
   for required_arg in "${required_args[@]}"; do
     if ! supports_arg "${required_arg}"; then
       strict_contract_error "required option ${required_arg} is unsupported"

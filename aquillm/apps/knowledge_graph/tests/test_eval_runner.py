@@ -1476,12 +1476,12 @@ def test_eval_runbook_attests_strict_reranker_and_hands_off_neutral_cache():
     assert '"matryoshka_dimensions": [1024]' in procedure
     assert 'flag("--tensor-parallel-size") == "1"' in procedure
     assert 'flag("--gpu-memory-utilization") == "0.20"' in procedure
-    assert 'flag("--gpu-memory-utilization") == "0.25"' in procedure
+    assert 'flag("--gpu-memory-utilization") == "0.30"' in procedure
     assert 'flag("--max-model-len") == "2048"' in procedure
     assert 'flag("--max-model-len") == "1024"' in procedure
     assert 'flag("--runner") == "pooling"' in procedure
     assert 'flag("--dtype") == "float16"' in procedure
-    assert 'flag("--task") == "score"' in procedure
+    assert procedure.count('assert "--task" not in argv') == 2
     assert 'argv.count("--trust-remote-code") == 1' in procedure
     assert 'os.environ["VLLM_STRICT_PROTECTED_ARGS"] == "1"' in procedure
     assert 'os.environ["VLLM_API_KEY"] == "EMPTY"' in procedure
@@ -2058,10 +2058,10 @@ def _passing_comparison_bundle():
         "extra_args_signature": sha256(RERANK_EXTRA_ARGS.encode("utf-8")).hexdigest(),
         "trust_remote_code": True,
         "runner": "pooling",
-        "task": "score",
+        "task": "classify",
         "dtype": "float16",
         "tensor_parallel_size": 1,
-        "gpu_memory_utilization": 0.25,
+        "gpu_memory_utilization": 0.30,
         "max_model_len": 1024,
         "strict_protected_args": True,
         "api_key_signature": sha256(b"EMPTY").hexdigest(),
@@ -2531,7 +2531,7 @@ def test_human_comparison_table_contains_each_arm_and_required_metrics():
     assert "Embedding runner/dtype: pooling / float16" in table
     assert "Reranker runner/dtype: pooling / float16" in table
     assert "Embedding resources: TP=1 GPU=0.2 max_len=2048" in table
-    assert "Reranker resources: TP=1 GPU=0.25 max_len=1024" in table
+    assert "Reranker resources: TP=1 GPU=0.3 max_len=1024" in table
     assert "Reranker cache enabled: false" in table
     assert "Extractor device: cpu" in table
     assert "Extractor batch envelope: count=8 characters=64000" in table
@@ -2726,6 +2726,10 @@ def test_comparison_bundle_binds_exact_extraction_runtime(field, value):
             "reranker runner",
         ),
         (
+            lambda bundle: bundle["reranker"].update(task="score"),
+            "reranker task",
+        ),
+        (
             lambda bundle: bundle["reranker"].update(dtype="auto"),
             "reranker dtype",
         ),
@@ -2821,10 +2825,10 @@ def test_comparison_bundle_rejects_changed_checked_in_reranker_template(
         ({"configured_extra_args": "--dtype auto"}, "extra arguments"),
         ({"configured_trust_remote_code": "0"}, "remote code"),
         ({"configured_runner": "generate"}, "runner"),
-        ({"configured_task": "embed"}, "task"),
+        ({"configured_task": "score"}, "task"),
         ({"configured_dtype": "auto"}, "dtype"),
         ({"configured_tensor_parallel_size": "2"}, "tensor parallel"),
-        ({"configured_gpu_memory_utilization": "0.08"}, "GPU memory"),
+        ({"configured_gpu_memory_utilization": "0.25"}, "GPU memory"),
         ({"configured_max_model_len": "8192"}, "maximum model length"),
         ({"configured_strict_protected_args": "0"}, "protected-argument"),
         ({"configured_download_dir": "/tmp/models"}, "download directory"),
@@ -2851,10 +2855,10 @@ def test_live_reranker_contract_rejects_non_attested_local_configuration(
         "configured_extra_args": RERANK_EXTRA_ARGS,
         "configured_trust_remote_code": "1",
         "configured_runner": "pooling",
-        "configured_task": "score",
+        "configured_task": "",
         "configured_dtype": "float16",
         "configured_tensor_parallel_size": "1",
-        "configured_gpu_memory_utilization": "0.25",
+        "configured_gpu_memory_utilization": "0.30",
         "configured_max_model_len": "1024",
         "configured_strict_protected_args": "1",
         "configured_download_dir": "/root/.cache/huggingface/hub",
@@ -2884,10 +2888,10 @@ def test_live_reranker_contract_is_bound_into_live_suite_and_strict_seam():
         configured_extra_args=RERANK_EXTRA_ARGS,
         configured_trust_remote_code="1",
         configured_runner="pooling",
-        configured_task="score",
+        configured_task="",
         configured_dtype="float16",
         configured_tensor_parallel_size="1",
-        configured_gpu_memory_utilization="0.25",
+        configured_gpu_memory_utilization="0.30",
         configured_max_model_len="1024",
         configured_strict_protected_args="1",
         configured_download_dir="/root/.cache/huggingface/hub",

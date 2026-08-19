@@ -63,7 +63,7 @@ def _run_vllm_start(
         "printf 'help\\n' >> \"$FAKE_HELP_COUNT_FILE\"; "
         'for item in ${FAKE_VLLM_HELP_ARGS:-"--model '
         "--served-model-name --tokenizer --revision --tokenizer-revision "
-        "--code-revision --runner --dtype --trust-remote-code --task "
+        "--code-revision --runner --dtype --trust-remote-code "
         "--tensor-parallel-size --gpu-memory-utilization --max-model-len "
         '--api-key --download-dir"}; do '
         "printf '%s\\n' \"$item\"; done; exit 0 ;;\n"
@@ -125,11 +125,11 @@ def _strict_reranker_environment(**overrides: str) -> dict[str, str]:
         "VLLM_TOKENIZER_REVISION": _REVISION,
         "VLLM_CODE_REVISION": _REVISION,
         "VLLM_RUNNER": "pooling",
-        "VLLM_TASK": "score",
+        "VLLM_TASK": "",
         "VLLM_DTYPE": "float16",
         "VLLM_TRUST_REMOTE_CODE": "1",
         "VLLM_TENSOR_PARALLEL_SIZE": "1",
-        "VLLM_GPU_MEMORY_UTILIZATION": "0.25",
+        "VLLM_GPU_MEMORY_UTILIZATION": "0.30",
         "VLLM_MAX_MODEL_LEN": "1024",
         "VLLM_STRICT_PROTECTED_ARGS": "1",
         "VLLM_API_KEY": "EMPTY",
@@ -277,6 +277,7 @@ def test_vllm_start_forwards_model_tokenizer_and_code_revisions(tmp_path: Path):
     assert final_args.count("--code-revision") == 1
     assert final_args.count("--runner") == 1
     assert final_args.count("--dtype") == 1
+    assert "--task" not in final_args
     assert final_args[final_args.index("--revision") + 1] == _REVISION
     assert final_args[final_args.index("--tokenizer-revision") + 1] == _REVISION
     assert final_args[final_args.index("--code-revision") + 1] == _REVISION
@@ -293,7 +294,7 @@ def test_vllm_start_forwards_model_tokenizer_and_code_revisions(tmp_path: Path):
         {"VLLM_CODE_REVISION": "A" * 40},
         {"VLLM_RUNNER": ""},
         {"VLLM_DTYPE": ""},
-        {"VLLM_TASK": "generate"},
+        {"VLLM_TASK": "score"},
         {"VLLM_TRUST_REMOTE_CODE": "0"},
         {"VLLM_TENSOR_PARALLEL_SIZE": "0"},
         {"VLLM_GPU_MEMORY_UTILIZATION": "1.01"},
@@ -314,7 +315,7 @@ def test_strict_vllm_start_rejects_mutable_or_incomplete_contract(
 def test_strict_vllm_start_rejects_unsupported_required_flag(tmp_path: Path):
     supported_without_code_revision = (
         "--model --served-model-name --tokenizer --revision "
-        "--tokenizer-revision --runner --dtype --trust-remote-code --task "
+        "--tokenizer-revision --runner --dtype --trust-remote-code "
         "--tensor-parallel-size --gpu-memory-utilization --max-model-len "
         "--api-key --download-dir"
     )

@@ -45,7 +45,7 @@ def test_shipping_compose_variants_wire_sidecar_revisions(tmp_path) -> None:
         assert rerank_env["VLLM_API_KEY"] == "EMPTY"
         assert rerank_env["VLLM_DOWNLOAD_DIR"] == "/root/.cache/huggingface/hub"
         assert rerank_env["VLLM_PYTHON_BIN"] == "python3"
-        assert rerank_env["VLLM_TASK"] == "score"
+        assert rerank_env["VLLM_TASK"] == ""
         embed = compose_service_source(compose_file, "vllm_embed")
         rerank = compose_service_source(compose_file, "vllm_rerank")
         assert embed.count("VLLM_REVISION=${APP_EMBED_MODEL_REVISION:-}") == 1
@@ -84,7 +84,7 @@ def test_shipping_compose_variants_wire_sidecar_revisions(tmp_path) -> None:
         assert rerank.count("VLLM_API_KEY=EMPTY") == 1
         assert rerank.count("VLLM_DOWNLOAD_DIR=/root/.cache/huggingface/hub") == 1
         assert rerank.count("VLLM_PYTHON_BIN=python3") == 1
-        assert rerank.count("VLLM_TASK=score") == 1
+        assert rerank.count("VLLM_TASK=") == 1
         assert "APP_RERANK_VLLM_TASK" not in rerank
         for ordinary_service in ("vllm", "vllm_ocr", "vllm_transcribe"):
             ordinary = compose_service_source(compose_file, ordinary_service)
@@ -105,7 +105,7 @@ def test_shipping_compose_variants_wire_sidecar_revisions(tmp_path) -> None:
                 "VLLM_TOKENIZER=${APP_RERANK_TOKENIZER:-Qwen/Qwen3-VL-Reranker-2B}"
             ) in rerank
             assert (
-                "VLLM_GPU_MEMORY_UTILIZATION=${APP_RERANK_GPU_MEMORY_UTILIZATION:-0.25}"
+                "VLLM_GPU_MEMORY_UTILIZATION=${APP_RERANK_GPU_MEMORY_UTILIZATION:-0.30}"
             ) in rerank
             assert "VLLM_MAX_MODEL_LEN=${APP_RERANK_MAX_MODEL_LEN:-1024}" in rerank
             assert "Qwen/Qwen3-Reranker-4B" not in rerank
@@ -126,7 +126,8 @@ def test_env_example_declares_reranker_revision() -> None:
     assert lines.count("APP_EMBED_VLLM_DTYPE=float16") == 1
     assert lines.count("APP_RERANK_VLLM_RUNNER=pooling") == 1
     assert lines.count("APP_RERANK_VLLM_DTYPE=float16") == 1
-    assert lines.count("APP_RERANK_GPU_MEMORY_UTILIZATION=0.25") == 1
+    assert lines.count("APP_RERANK_VLLM_TASK=") == 1
+    assert lines.count("APP_RERANK_GPU_MEMORY_UTILIZATION=0.30") == 1
     rerank_extra_args = next(
         line for line in lines if line.startswith("APP_RERANK_VLLM_EXTRA_ARGS=")
     )

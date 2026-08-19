@@ -111,7 +111,7 @@ def test_eval_override_renders_isolated_local_contract(tmp_path) -> None:
     assert worker_env["APP_RERANK_VLLM_RUNNER"] == "pooling"
     assert worker_env["APP_RERANK_VLLM_DTYPE"] == "float16"
     assert worker_env["APP_RERANK_VLLM_STRICT_PROTECTED_ARGS"] == "1"
-    assert worker_env["APP_RERANK_VLLM_TASK"] == "score"
+    assert worker_env["APP_RERANK_VLLM_TASK"] == ""
     assert worker_env["APP_RERANK_VLLM_DOWNLOAD_DIR"] == (
         "/root/.cache/huggingface/hub"
     )
@@ -119,7 +119,7 @@ def test_eval_override_renders_isolated_local_contract(tmp_path) -> None:
     assert worker_env["APP_RERANK_VLLM_EXTRA_ARGS"] == RERANK_EXTRA_ARGS
     assert worker_env["APP_RERANK_VLLM_TRUST_REMOTE_CODE"] == "1"
     assert worker_env["APP_RERANK_TENSOR_PARALLEL_SIZE"] == "1"
-    assert worker_env["APP_RERANK_GPU_MEMORY_UTILIZATION"] == "0.25"
+    assert worker_env["APP_RERANK_GPU_MEMORY_UTILIZATION"] == "0.30"
     assert worker_env["APP_RERANK_MAX_MODEL_LEN"] == "1024"
     assert worker_env["KG_EXTRACTOR_PROVIDER"] == "gliner2_local"
     assert worker_env["KG_EXTRACTOR_FAIL_OPEN"] == "0"
@@ -169,12 +169,12 @@ def test_eval_override_renders_isolated_local_contract(tmp_path) -> None:
     assert rerank["environment"]["VLLM_CODE_REVISION"] == RERANK_REVISION
     assert rerank["environment"]["VLLM_RUNNER"] == "pooling"
     assert rerank["environment"]["VLLM_DTYPE"] == "float16"
-    assert rerank["environment"]["VLLM_TASK"] == "score"
+    assert rerank["environment"]["VLLM_TASK"] == ""
     assert embed["environment"]["VLLM_TENSOR_PARALLEL_SIZE"] == "1"
     assert embed["environment"]["VLLM_GPU_MEMORY_UTILIZATION"] == "0.20"
     assert embed["environment"]["VLLM_MAX_MODEL_LEN"] == "2048"
     assert rerank["environment"]["VLLM_TENSOR_PARALLEL_SIZE"] == "1"
-    assert rerank["environment"]["VLLM_GPU_MEMORY_UTILIZATION"] == "0.25"
+    assert rerank["environment"]["VLLM_GPU_MEMORY_UTILIZATION"] == "0.30"
     assert rerank["environment"]["VLLM_MAX_MODEL_LEN"] == "1024"
     assert embed["environment"]["VLLM_EXTRA_ARGS"] == EMBED_EXTRA_ARGS
     assert rerank["environment"]["VLLM_EXTRA_ARGS"] == RERANK_EXTRA_ARGS
