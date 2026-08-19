@@ -20,7 +20,9 @@ EMBED_EXTRA_ARGS = (
     "--quantization bitsandbytes --load-format bitsandbytes "
     "--model-loader-extra-config "
     '\'{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16",'
-    '"bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\''
+    '"bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\' '
+    "--hf-overrides "
+    "'{\"matryoshka_dimensions\":[1024]}'"
 )
 RERANK_EXTRA_ARGS = (
     "--chat-template /templates/qwen3_vl_reranker.jinja --hf-overrides "
@@ -166,7 +168,7 @@ def reviewed_env(tmp_path: Path, overrides: dict[str, str] | None = None) -> Pat
         "KG_GLINER2_CACHE_DIR": "/must-not-win",
         "MEM0_EMBED_VLLM_EXTRA_ARGS": EMBED_EXTRA_ARGS,
         "MEM0_EMBED_TENSOR_PARALLEL_SIZE": "1",
-        "MEM0_EMBED_GPU_MEMORY_UTILIZATION": "0.12",
+        "MEM0_EMBED_GPU_MEMORY_UTILIZATION": "0.20",
         "MEM0_EMBED_MAX_MODEL_LEN": "2048",
         "APP_RERANK_VLLM_EXTRA_ARGS": RERANK_EXTRA_ARGS,
         "APP_RERANK_TENSOR_PARALLEL_SIZE": "1",

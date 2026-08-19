@@ -92,7 +92,7 @@ def test_shipping_compose_variants_wire_sidecar_revisions(tmp_path) -> None:
             assert "VLLM_PYTHON_BIN" not in ordinary
         if name == "base.yml":
             assert (
-                "VLLM_GPU_MEMORY_UTILIZATION=${MEM0_EMBED_GPU_MEMORY_UTILIZATION:-0.12}"
+                "VLLM_GPU_MEMORY_UTILIZATION=${MEM0_EMBED_GPU_MEMORY_UTILIZATION:-0.20}"
             ) in embed
             assert "VLLM_MAX_MODEL_LEN=${MEM0_EMBED_MAX_MODEL_LEN:-2048}" in embed
             assert (

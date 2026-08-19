@@ -95,7 +95,7 @@ def test_eval_override_renders_isolated_local_contract(tmp_path) -> None:
     assert worker_env["MEM0_EMBED_VLLM_EXTRA_ARGS"] == EMBED_EXTRA_ARGS
     assert worker_env["MEM0_EMBED_VLLM_TRUST_REMOTE_CODE"] == "1"
     assert worker_env["MEM0_EMBED_TENSOR_PARALLEL_SIZE"] == "1"
-    assert worker_env["MEM0_EMBED_GPU_MEMORY_UTILIZATION"] == "0.12"
+    assert worker_env["MEM0_EMBED_GPU_MEMORY_UTILIZATION"] == "0.20"
     assert worker_env["MEM0_EMBED_MAX_MODEL_LEN"] == "2048"
     assert worker_env["APP_EMBED_DIMS"] == "1024"
     assert worker_env["APP_EMBED_ALLOW_DIMENSIONS_OVERRIDE"] == "0"
@@ -171,7 +171,7 @@ def test_eval_override_renders_isolated_local_contract(tmp_path) -> None:
     assert rerank["environment"]["VLLM_DTYPE"] == "float16"
     assert rerank["environment"]["VLLM_TASK"] == "score"
     assert embed["environment"]["VLLM_TENSOR_PARALLEL_SIZE"] == "1"
-    assert embed["environment"]["VLLM_GPU_MEMORY_UTILIZATION"] == "0.12"
+    assert embed["environment"]["VLLM_GPU_MEMORY_UTILIZATION"] == "0.20"
     assert embed["environment"]["VLLM_MAX_MODEL_LEN"] == "2048"
     assert rerank["environment"]["VLLM_TENSOR_PARALLEL_SIZE"] == "1"
     assert rerank["environment"]["VLLM_GPU_MEMORY_UTILIZATION"] == "0.25"

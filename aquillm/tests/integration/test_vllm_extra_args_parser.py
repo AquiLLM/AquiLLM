@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -109,7 +110,9 @@ _EMBED_EXTRA_ARGS = (
     "--quantization bitsandbytes --load-format bitsandbytes "
     "--model-loader-extra-config "
     '\'{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16",'
-    '"bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\''
+    '"bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\' '
+    "--hf-overrides "
+    "'{\"matryoshka_dimensions\":[1024]}'"
 )
 
 
@@ -488,6 +491,9 @@ def test_embedding_pooling_preserves_canonical_bitsandbytes_payload(tmp_path: Pa
     assert (
         final_args[final_args.index("--model-loader-extra-config") + 1] == loader_config
     )
+    assert json.loads(final_args[final_args.index("--hf-overrides") + 1]) == {
+        "matryoshka_dimensions": [1024]
+    }
     assert final_args.count("--dtype") == 1
 
 

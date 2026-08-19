@@ -49,9 +49,10 @@ services:
         --quantization bitsandbytes --load-format bitsandbytes
         --model-loader-extra-config
         '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}'
+        --hf-overrides '{"matryoshka_dimensions":[1024]}'
       MEM0_EMBED_VLLM_TRUST_REMOTE_CODE: "1"
       MEM0_EMBED_TENSOR_PARALLEL_SIZE: "1"
-      MEM0_EMBED_GPU_MEMORY_UTILIZATION: "0.12"
+      MEM0_EMBED_GPU_MEMORY_UTILIZATION: "0.20"
       MEM0_EMBED_MAX_MODEL_LEN: "2048"
       APP_EMBED_DIMS: "1024"
       APP_EMBED_ALLOW_DIMENSIONS_OVERRIDE: "0"
@@ -146,6 +147,7 @@ services:
         --quantization bitsandbytes --load-format bitsandbytes
         --model-loader-extra-config
         '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}'
+        --hf-overrides '{"matryoshka_dimensions":[1024]}'
       LMCACHE_ENABLED: "0"
       LMCACHE_EXTRA_ARGS: ""
       VLLM_MODEL: ${APP_EMBED_MODEL:?APP_EMBED_MODEL is required}
@@ -159,7 +161,7 @@ services:
       VLLM_STRICT_PROTECTED_ARGS: "1"
       VLLM_TRUST_REMOTE_CODE: "1"
       VLLM_TENSOR_PARALLEL_SIZE: "1"
-      VLLM_GPU_MEMORY_UTILIZATION: "0.12"
+      VLLM_GPU_MEMORY_UTILIZATION: "0.20"
       VLLM_MAX_MODEL_LEN: "2048"
     volumes: !override
       - kg_eval_vllm_cache:/root/.cache/huggingface

@@ -41,7 +41,9 @@ EMBED_EXTRA_ARGS = (
     "--quantization bitsandbytes --load-format bitsandbytes "
     "--model-loader-extra-config "
     '\'{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16",'
-    '"bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\''
+    '"bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\' '
+    "--hf-overrides "
+    "'{\"matryoshka_dimensions\":[1024]}'"
 )
 
 
@@ -1471,8 +1473,9 @@ def test_eval_runbook_attests_strict_reranker_and_hands_off_neutral_cache():
     assert "qwen3_vl_reranker.jinja" in procedure
     assert "Qwen3VLForSequenceClassification" in procedure
     assert "bnb_4bit_quant_type" in procedure
+    assert '"matryoshka_dimensions": [1024]' in procedure
     assert 'flag("--tensor-parallel-size") == "1"' in procedure
-    assert 'flag("--gpu-memory-utilization") == "0.12"' in procedure
+    assert 'flag("--gpu-memory-utilization") == "0.20"' in procedure
     assert 'flag("--gpu-memory-utilization") == "0.25"' in procedure
     assert 'flag("--max-model-len") == "2048"' in procedure
     assert 'flag("--max-model-len") == "1024"' in procedure
@@ -1570,7 +1573,7 @@ def test_live_embedding_contract_accepts_exact_local_model_revision_and_shape():
         configured_runner="pooling",
         configured_dtype="float16",
         configured_tensor_parallel_size="1",
-        configured_gpu_memory_utilization="0.12",
+        configured_gpu_memory_utilization="0.20",
         configured_max_model_len="2048",
         configured_strict_protected_args="1",
         configured_download_dir="/root/.cache/huggingface/hub",
@@ -1600,7 +1603,7 @@ def test_live_embedding_contract_rejects_mutable_or_noncanonical_revision(
             configured_runner="pooling",
             configured_dtype="float16",
             configured_tensor_parallel_size="1",
-            configured_gpu_memory_utilization="0.12",
+            configured_gpu_memory_utilization="0.20",
             configured_max_model_len="2048",
             configured_strict_protected_args="1",
             configured_download_dir="/root/.cache/huggingface/hub",
@@ -1636,7 +1639,7 @@ def test_live_embedding_contract_rejects_unpinned_tokenizer_or_code_revision(
             configured_runner="pooling",
             configured_dtype="float16",
             configured_tensor_parallel_size="1",
-            configured_gpu_memory_utilization="0.12",
+            configured_gpu_memory_utilization="0.20",
             configured_max_model_len="2048",
             configured_strict_protected_args="1",
             configured_download_dir="/root/.cache/huggingface/hub",
@@ -1672,7 +1675,7 @@ def test_live_embedding_contract_rejects_unattested_runtime_configuration(
             configured_runner="pooling",
             configured_dtype="float16",
             configured_tensor_parallel_size="1",
-            configured_gpu_memory_utilization="0.12",
+            configured_gpu_memory_utilization="0.20",
             configured_max_model_len="2048",
             configured_strict_protected_args="1",
             configured_download_dir="/root/.cache/huggingface/hub",
@@ -1687,7 +1690,7 @@ def test_live_embedding_contract_rejects_unattested_runtime_configuration(
         ({"configured_runner": "generate"}, "runner"),
         ({"configured_dtype": "auto"}, "dtype"),
         ({"configured_tensor_parallel_size": "2"}, "tensor parallel"),
-        ({"configured_gpu_memory_utilization": "0.2"}, "GPU memory"),
+        ({"configured_gpu_memory_utilization": "0.12"}, "GPU memory"),
         ({"configured_max_model_len": "8192"}, "maximum model length"),
         ({"configured_strict_protected_args": "0"}, "protected-argument"),
         ({"api_key": "secret"}, "API key"),
@@ -1714,7 +1717,7 @@ def test_live_embedding_contract_rejects_unattested_resource_envelope(
         "configured_runner": "pooling",
         "configured_dtype": "float16",
         "configured_tensor_parallel_size": "1",
-        "configured_gpu_memory_utilization": "0.12",
+        "configured_gpu_memory_utilization": "0.20",
         "configured_max_model_len": "2048",
         "configured_strict_protected_args": "1",
         "configured_download_dir": "/root/.cache/huggingface/hub",
@@ -1757,7 +1760,7 @@ def test_live_embedding_contract_requires_huggingface_repo_id(unsafe_model):
             configured_runner="pooling",
             configured_dtype="float16",
             configured_tensor_parallel_size="1",
-            configured_gpu_memory_utilization="0.12",
+            configured_gpu_memory_utilization="0.20",
             configured_max_model_len="2048",
             configured_strict_protected_args="1",
             configured_download_dir="/root/.cache/huggingface/hub",
@@ -1822,7 +1825,7 @@ def test_live_embedding_contract_rejects_any_provenance_mismatch(
             configured_runner="pooling",
             configured_dtype="float16",
             configured_tensor_parallel_size="1",
-            configured_gpu_memory_utilization="0.12",
+            configured_gpu_memory_utilization="0.20",
             configured_max_model_len="2048",
             configured_strict_protected_args="1",
             configured_download_dir="/root/.cache/huggingface/hub",
@@ -2034,7 +2037,7 @@ def _passing_comparison_bundle():
         "runner": "pooling",
         "dtype": "float16",
         "tensor_parallel_size": 1,
-        "gpu_memory_utilization": 0.12,
+        "gpu_memory_utilization": 0.2,
         "max_model_len": 2048,
         "strict_protected_args": True,
         "api_key_signature": sha256(b"EMPTY").hexdigest(),
@@ -2527,7 +2530,7 @@ def test_human_comparison_table_contains_each_arm_and_required_metrics():
     assert "Reranker chat-template SHA-256:" in table
     assert "Embedding runner/dtype: pooling / float16" in table
     assert "Reranker runner/dtype: pooling / float16" in table
-    assert "Embedding resources: TP=1 GPU=0.12 max_len=2048" in table
+    assert "Embedding resources: TP=1 GPU=0.2 max_len=2048" in table
     assert "Reranker resources: TP=1 GPU=0.25 max_len=1024" in table
     assert "Reranker cache enabled: false" in table
     assert "Extractor device: cpu" in table
@@ -2628,7 +2631,7 @@ def test_human_comparison_table_contains_each_arm_and_required_metrics():
             "embedding tensor parallel",
         ),
         (
-            lambda bundle: bundle["embedding"].update(gpu_memory_utilization=0.2),
+            lambda bundle: bundle["embedding"].update(gpu_memory_utilization=0.12),
             "embedding GPU memory",
         ),
         (

@@ -85,7 +85,9 @@ _STRICT_EMBED_EXTRA_ARGS = (
     "--quantization bitsandbytes --load-format bitsandbytes "
     "--model-loader-extra-config "
     '\'{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16",'
-    '"bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\''
+    '"bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}\' '
+    "--hf-overrides "
+    "'{\"matryoshka_dimensions\":[1024]}'"
 )
 _STRICT_RERANK_EXTRA_ARGS = (
     "--chat-template /templates/qwen3_vl_reranker.jinja "
@@ -281,7 +283,7 @@ def _validate_live_embedding_contract(
         raise ComparisonAborted(
             "strict local embedding tensor parallel size is invalid"
         )
-    if configured_gpu_memory_utilization != "0.12":
+    if configured_gpu_memory_utilization != "0.20":
         raise ComparisonAborted(
             "strict local embedding GPU memory utilization is invalid"
         )
@@ -312,7 +314,7 @@ def _validate_live_embedding_contract(
         "runner": configured_runner,
         "dtype": configured_dtype,
         "tensor_parallel_size": 1,
-        "gpu_memory_utilization": 0.12,
+        "gpu_memory_utilization": 0.2,
         "max_model_len": 2048,
         "strict_protected_args": True,
         "api_key_signature": sha256(b"EMPTY").hexdigest(),
@@ -3351,7 +3353,7 @@ def validate_comparison_bundle(bundle: Any) -> Mapping[str, Any]:
         raise ComparisonValidationError("embedding tensor parallel size is invalid")
     if (
         type(embedding.get("gpu_memory_utilization")) is not float
-        or embedding["gpu_memory_utilization"] != 0.12
+        or embedding["gpu_memory_utilization"] != 0.2
     ):
         raise ComparisonValidationError("embedding GPU memory utilization is invalid")
     if (

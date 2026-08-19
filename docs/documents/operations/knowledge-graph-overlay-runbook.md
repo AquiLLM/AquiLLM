@@ -444,7 +444,7 @@ Do not skip or reorder these steps.
        assert revision == os.environ["APP_EMBED_MODEL_REVISION"]
        assert revision == os.environ["APP_EMBED_TOKENIZER_REVISION"]
        assert revision == os.environ["APP_EMBED_CODE_REVISION"]
-       assert flag("--gpu-memory-utilization") == "0.12"
+       assert flag("--gpu-memory-utilization") == "0.20"
        assert flag("--max-model-len") == "2048"
        assert "--task" not in argv
        assert flag("--quantization") == "bitsandbytes"
@@ -456,11 +456,14 @@ Do not skip or reorder these steps.
            "bnb_4bit_quant_type": "nf4",
            "bnb_4bit_use_double_quant": True,
        }
+       hf_overrides = json.loads(flag("--hf-overrides"))
+       assert hf_overrides == {"matryoshka_dimensions": [1024]}
        expected_extra_args = [
            "--quantization", "bitsandbytes",
            "--load-format", "bitsandbytes",
            "--model-loader-extra-config",
            '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}',
+           "--hf-overrides", '{"matryoshka_dimensions":[1024]}',
        ]
    else:
        assert service == "vllm_rerank"

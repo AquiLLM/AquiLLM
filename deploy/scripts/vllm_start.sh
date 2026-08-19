@@ -315,6 +315,8 @@ validate_strict_extra_args() {
       bitsandbytes
       --model-loader-extra-config
       '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true}'
+      --hf-overrides
+      '{"matryoshka_dimensions":[1024]}'
     )
   else
     strict_contract_error "strict service must be the pinned embedding or reranker role"
