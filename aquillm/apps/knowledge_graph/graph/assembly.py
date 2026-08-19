@@ -1671,13 +1671,13 @@ def _validate_locked_manifest(
         raise CollectionGraphAssemblyError(
             "collection manifest exceeds the assembly document-input cap"
         )
-    _documents, active_sources = _lock_current_contributors(collection, config)
-    manifest_source_ids = tuple(sorted(row.document_artifact_id for row in manifest))
-    current_source_ids = tuple(sorted(row.pk for row in active_sources))
-    if manifest_source_ids != current_source_ids:
-        raise CollectionGraphSourceStaleError(
-            "collection active document artifact snapshot changed"
-        )
+    from apps.knowledge_graph.graph.contributor_validation import (
+        validate_collection_contributors,
+    )
+
+    active_sources = validate_collection_contributors(
+        collection, artifact, manifest, config
+    )
     try:
         snapshot = _snapshot_from_locked_manifest(artifact, manifest)
     except (TypeError, ValueError, RuntimeError) as exc:

@@ -2728,7 +2728,10 @@ def record_rebuild_failure(
         or any(value in error_code for value in "\x00\r\n")
     ):
         error_code = "graph_rebuild_failed"
-    from apps.knowledge_graph.models import GraphArtifact, GraphRebuildRequest
+    from apps.knowledge_graph.models import GraphRebuildRequest
+    from apps.knowledge_graph.services.rebuild_failure_locking import (
+        locked_completed_document_count,
+    )
 
     with transaction.atomic():
         hierarchy_parent, request = _lock_rebuild_request_prefix(resolved_id)
@@ -2738,27 +2741,24 @@ def record_rebuild_failure(
             GraphRebuildRequest.Status.PARTIAL,
         }:
             return
-        completed = GraphArtifact.objects.filter(
-            rebuild_request_id=request.pk,
-            scope_type=GraphArtifact.ScopeType.DOCUMENT,
-            status=GraphArtifact.Status.ACTIVE,
-        ).count()
-        request.completed_document_count = min(completed, request.document_count)
-        request.terminal_failure_count = min(
-            max(1, request.terminal_failure_count), request.document_count or 1
+        # Fence artifacts NO KEY then runs UPDATE before exact lifecycle reads.
+        # This remains compatible with deferred FK checks at worker COMMIT.
+        completed = locked_completed_document_count(request)
+        request.completed_document_count = min(
+            max(request.completed_document_count, completed), request.document_count
         )
+        remaining = request.document_count - request.completed_document_count
+        if remaining > 0 and request.terminal_failure_count == 0:
+            request.terminal_failure_count = 1
         if request.scope_type == GraphRebuildRequest.ScopeType.COLLECTION:
             request.failed_collection_count = 1
         request.status = (
             GraphRebuildRequest.Status.PARTIAL
-            if completed or resnapshot
+            if request.completed_document_count or resnapshot
             else GraphRebuildRequest.Status.FAILED
         )
         request.error_code = error_code
         request.completed_at = timezone.now()
-        # document_count=0 cannot satisfy a positive bounded failure count.
-        if request.document_count == 0:
-            request.terminal_failure_count = 0
         if resnapshot:
             _schedule_rebuild_resnapshot(request)
         request.save(
