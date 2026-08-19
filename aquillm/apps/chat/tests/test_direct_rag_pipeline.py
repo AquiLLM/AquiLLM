@@ -4,13 +4,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from lib.llm.types.conversation import Conversation
-from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
-
 from apps.chat.refs import CollectionsRef
-from apps.chat.services import rag_pipeline
+from apps.chat.services import rag_metrics, rag_pipeline
 from apps.chat.services.rag_pipeline import run_direct_rag_turn
 from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
+from lib.llm.types.conversation import Conversation
+from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
 
 
@@ -114,6 +113,100 @@ async def test_handled_retrieves_before_llm(monkeypatch):
     assert order == ["retrieval", "synthesis"]
     llm_if.get_message.assert_not_called()
     assert "Answer" in consumer.convo[-1].content
+
+
+async def test_graph_overlay_failure_keeps_direct_rag_on_vector_evidence(monkeypatch):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    raw = _results_payload()
+    # Task 16 fails graph work open to this unchanged baseline payload.
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", lambda *_args: raw)
+
+    async def fake_synth(llm_if, convo, packet, *, stream_func=None):
+        assert packet.citation_tokens == ["[doc:doc-a chunk:1]"]
+        return convo + [
+            AssistantMessage(
+                content="Vector evidence remains usable [doc:doc-a chunk:1].",
+                stop_reason="end_turn",
+            )
+        ]
+
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", fake_synth)
+    convo = _user_convo("search the selected documents for calibration")
+    consumer = _consumer(convo, [1])
+
+    outcome = await run_direct_rag_turn(
+        consumer,
+        SimpleNamespace(get_message=AsyncMock()),
+        convo,
+        stream_func=None,
+    )
+
+    assert outcome == "handled"
+    assert "Vector evidence remains usable" in consumer.convo[-1].content
+
+
+def test_direct_rag_metrics_accept_safe_optional_graph_fields(monkeypatch):
+    captured: dict = {}
+
+    def capture(event, **fields):
+        captured["event"] = event
+        captured.update(fields)
+
+    monkeypatch.setattr(rag_metrics.logger, "info", capture)
+
+    rag_metrics.log_direct_rag_turn(
+        intent_ms=1.1,
+        query_ms=2.2,
+        retrieval_ms=3.3,
+        evidence_ms=4.4,
+        synthesis_ms=5.5,
+        total_ms=16.5,
+        retrieved_count=2,
+        retrieval_status="results_found",
+        graph_ms=0.7,
+        graph_seed_count=3,
+        graph_candidate_count=1,
+        graph_status="hit",
+        graph_algorithm_signature="a" * 64,
+        graph_version_signature="b" * 64,
+    )
+
+    assert captured["event"] == "rag_direct_turn"
+    assert captured["graph_status"] == "hit"
+    assert captured["graph_seed_count"] == 3
+    assert captured["graph_candidate_count"] == 1
+    assert captured["graph_algorithm_signature"] == "a" * 64
+    assert captured["graph_version_signature"] == "b" * 64
+
+
+def test_direct_rag_metrics_omit_poisoned_graph_fields(monkeypatch):
+    captured: dict = {}
+
+    def capture(event, **fields):
+        captured["event"] = event
+        captured.update(fields)
+
+    monkeypatch.setattr(rag_metrics.logger, "info", capture)
+
+    rag_metrics.log_direct_rag_turn(
+        intent_ms=1.0,
+        query_ms=1.0,
+        retrieval_ms=1.0,
+        evidence_ms=1.0,
+        synthesis_ms=1.0,
+        total_ms=5.0,
+        retrieved_count=1,
+        retrieval_status="results_found",
+        graph_ms=float("nan"),
+        graph_seed_count=True,
+        graph_candidate_count=21,
+        graph_status="query=private text",
+        graph_algorithm_signature="PRIVATE-LABEL" * 6,
+        graph_version_signature="A" * 64,
+    )
+
+    assert captured["event"] == "rag_direct_turn"
+    assert not any(key.startswith("graph_") for key in captured)
 
 
 async def test_handled_appends_synthetic_tool_messages(monkeypatch):
@@ -247,6 +340,10 @@ async def test_direct_rag_no_results_returns_notice_without_llm(monkeypatch):
             'I searched the selected documents for "dark matter", '
             "but retrieval returned no relevant passages."
         ),
+        "retrieval_diagnostics": {
+            "doc_count": 1,
+            "vector_error": None,
+        },
     }
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", lambda c, q, k: raw)
 

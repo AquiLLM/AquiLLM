@@ -41,6 +41,18 @@ def _retrieval_message(*, search_string: str | None, search_scope: str) -> str:
     return f"I searched {scope}, but retrieval returned no relevant passages."
 
 
+def _sanitize_retrieval_diagnostics(
+    diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    """Copy public diagnostics without internal graph-overlay fields."""
+
+    return {
+        key: value
+        for key, value in diagnostics.items()
+        if type(key) is str and not key.startswith("graph_")
+    }
+
+
 def pack_chunk_search_results(
     results: Sequence[Any],
     *,
@@ -153,7 +165,9 @@ def pack_chunk_search_results(
             ),
         }
         if retrieval_diagnostics is not None:
-            no_results["retrieval_diagnostics"] = retrieval_diagnostics
+            no_results["retrieval_diagnostics"] = _sanitize_retrieval_diagnostics(
+                retrieval_diagnostics
+            )
         return no_results
 
     retrieved_documents = sorted(

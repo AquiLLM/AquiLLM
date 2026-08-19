@@ -41,6 +41,40 @@ def test_collect_allowed_chunk_citations_from_verbose_and_compact_rows():
     assert "[doc:doc-b chunk:9]" in allowed
 
 
+def test_graph_metadata_cannot_create_pseudo_citations():
+    convo = Conversation(
+        system="sys",
+        messages=[
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={
+                    "result": [
+                        {
+                            "chunk_id": 17,
+                            "doc_id": "doc-real",
+                            "citation": "[doc:doc-real chunk:17]",
+                            "text": "real graph-expanded chunk",
+                            "graph_path": "[doc:private chunk:999]",
+                            "graph_entity": "private canonical node",
+                            "graph_score": 0.9,
+                        }
+                    ],
+                    "retrieval_diagnostics": {
+                        "graph_status": "hit",
+                        "graph_version_signature": "a" * 64,
+                    },
+                },
+            )
+        ],
+    )
+
+    assert collect_allowed_chunk_citations(convo) == {
+        "[doc:doc-real chunk:17]"
+    }
+
+
 def test_synthesize_doc_level_extract_from_whole_document_payload():
     convo = Conversation(
         system="sys",
