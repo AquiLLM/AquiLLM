@@ -8,14 +8,18 @@ from pgvector.django import VectorField
 
 @contextmanager
 def django_safe_vector_values(instance):
-    """Temporarily replace pgvector arrays that Django 6 truth-tests."""
+    """Temporarily adapt exact vectors for Django and pgvector validation."""
 
-    restored: dict[str, np.ndarray] = {}
+    restored: dict[str, object] = {}
     for field in instance._meta.local_fields:
         value = getattr(instance, field.attname)
-        if isinstance(field, VectorField) and isinstance(value, np.ndarray):
+        if isinstance(field, VectorField) and isinstance(value, (np.ndarray, tuple)):
             restored[field.attname] = value
-            setattr(instance, field.attname, value.tolist())
+            setattr(
+                instance,
+                field.attname,
+                value.tolist() if isinstance(value, np.ndarray) else list(value),
+            )
     try:
         yield
     finally:

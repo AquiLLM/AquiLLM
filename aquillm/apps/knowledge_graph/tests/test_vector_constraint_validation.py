@@ -126,6 +126,20 @@ def test_collection_vector_constraint_validation_restores_pgvector_array():
 
 @pytest.mark.django_db(transaction=True)
 @database_required
+def test_collection_vector_bulk_create_accepts_resolution_tuple():
+    Collection.objects.create(pk=COLLECTION_ID, name="vector tuple validation")
+    supplied_vector = tuple(0.0 for _ in range(1024))
+    entity = _entity(_artifact(), embedding=supplied_vector)
+
+    CollectionEntity.objects.bulk_create([entity])
+
+    assert entity.embedding is supplied_vector
+    stored = CollectionEntity.objects.get(pk=entity.pk)
+    assert tuple(float(value) for value in stored.embedding) == supplied_vector
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
 def test_collection_vector_immutable_comparison_is_exact_and_unambiguous():
     Collection.objects.create(pk=COLLECTION_ID, name="vector immutable comparison")
     artifact = _artifact()
@@ -190,9 +204,14 @@ def test_canonical_vector_constraint_validation_preserves_null_only_constraint()
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_collection_vector_validation_still_rejects_wrong_dimensions():
+@pytest.mark.parametrize(
+    "embedding",
+    ([0.0] * 1023, tuple(0.0 for _ in range(1023))),
+    ids=("list", "tuple"),
+)
+def test_collection_vector_validation_still_rejects_wrong_dimensions(embedding):
     Collection.objects.create(pk=COLLECTION_ID, name="invalid vector dimensions")
-    entity = _entity(_artifact(), embedding=[0.0] * 1023)
+    entity = _entity(_artifact(), embedding=embedding)
 
     with pytest.raises(ValidationError) as exc_info:
         entity.validate_for_persistence()
