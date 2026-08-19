@@ -67,6 +67,44 @@ def _optional_sha256(value: object, field_name: str) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphExpansionConfig:
+    """Narrow immutable acquisition settings shared with baseline RAG fusion."""
+
+    rrf_k: int
+    max_seeds: int
+    max_scope_documents: int
+    max_scope_collections: int
+    max_candidates: int
+    algorithm_signature: str
+
+    def __post_init__(self) -> None:
+        limits = {
+            "rrf_k": 1_000,
+            "max_seeds": _LIMITS.max_seeds,
+            "max_scope_documents": _LIMITS.max_scope_documents,
+            "max_scope_collections": _LIMITS.max_scope_collections,
+            "max_candidates": _LIMITS.max_candidates,
+        }
+        for field_name, maximum in limits.items():
+            value = getattr(self, field_name)
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(
+                    f"{field_name} must be an exact integer in [1, {maximum}]"
+                )
+        if self.max_scope_collections > self.max_scope_documents:
+            raise ValueError(
+                "max_scope_collections must not exceed max_scope_documents"
+            )
+        signature = _optional_sha256(
+            self.algorithm_signature,
+            "algorithm_signature",
+        )
+        if signature is None:
+            raise ValueError("algorithm_signature must be an exact SHA-256 digest")
+        object.__setattr__(self, "algorithm_signature", signature)
+
+
+@dataclass(frozen=True, slots=True)
 class GraphExpansionSeed:
     """One ranked baseline-RAG chunk contributing personalized restart mass."""
 
@@ -195,9 +233,7 @@ class GraphExpansionDiagnostics:
         object.__setattr__(
             self,
             "graph_version_signature",
-            _optional_sha256(
-                self.graph_version_signature, "graph_version_signature"
-            ),
+            _optional_sha256(self.graph_version_signature, "graph_version_signature"),
         )
 
 
@@ -251,6 +287,7 @@ class GraphExpansionResult:
 
 
 __all__ = [
+    "GraphExpansionConfig",
     "GraphExpansionDiagnostics",
     "GraphExpansionRequest",
     "GraphExpansionResult",

@@ -27,6 +27,7 @@ from .ppr import (
     raw_edge_weight,
 )
 from .types import (
+    GraphExpansionConfig,
     GraphExpansionDiagnostics,
     GraphExpansionRequest,
     GraphExpansionResult,
@@ -180,6 +181,20 @@ def _load_algorithm_config() -> PPRAlgorithmConfig:
     return PPRAlgorithmConfig(**values)
 
 
+def get_graph_expansion_config() -> GraphExpansionConfig:
+    """Return the validated acquisition-facing subset of the shipping config."""
+
+    config = _load_algorithm_config()
+    return GraphExpansionConfig(
+        rrf_k=config.rrf_k,
+        max_seeds=config.max_seeds,
+        max_scope_documents=config.max_scope_documents,
+        max_scope_collections=config.max_scope_collections,
+        max_candidates=config.max_candidates,
+        algorithm_signature=graph_algorithm_signature(config),
+    )
+
+
 def _query_batches(values: Sequence[object]) -> Iterator[tuple[object, ...]]:
     for start in range(0, len(values), _QUERY_PREDICATE_BATCH_SIZE):
         yield tuple(values[start : start + _QUERY_PREDICATE_BATCH_SIZE])
@@ -278,9 +293,7 @@ def _directions_from_frontier(
         raise ValueError("frontier must be an exact identity-key frozenset")
     if ontology_direction not in {"directed", "undirected"}:
         raise _SnapshotMiss
-    directions: list[
-        tuple[StableNodeKey, StableNodeKey, RetrievalDirection]
-    ] = []
+    directions: list[tuple[StableNodeKey, StableNodeKey, RetrievalDirection]] = []
     if source in frontier:
         directions.append(
             (
@@ -511,18 +524,15 @@ def _load_storage_scope(
     ):
         raise _SnapshotMiss
     artifact_by_collection = {
-        int(row["collection_scope_id"]): int(row["id"])
-        for row in collection_artifacts
+        int(row["collection_scope_id"]): int(row["id"]) for row in collection_artifacts
     }
     if any(
-        artifact_by_collection.get(int(row["collection_id"]))
-        != int(row["artifact_id"])
+        artifact_by_collection.get(int(row["collection_id"])) != int(row["artifact_id"])
         for row in manifest_rows
     ):
         raise _SnapshotMiss
     if any(
-        cast(str, row["document_artifact__scope_id"])
-        != str(row["document_id"])
+        cast(str, row["document_artifact__scope_id"]) != str(row["document_id"])
         for row in manifest_rows
     ):
         raise _SnapshotMiss
@@ -589,8 +599,7 @@ def _load_storage_scope(
         state=state,
     )
     if {
-        (cast(str, row["version"]), cast(str, row["checksum"]))
-        for row in ontology_rows
+        (cast(str, row["version"]), cast(str, row["checksum"])) for row in ontology_rows
     } != set(ontology_keys):
         raise _SnapshotMiss
     for row in ontology_rows:
@@ -702,20 +711,20 @@ def _load_seed_collection_entity_ids(
         WITH seed_scope(seed_chunk_id, document_id) AS (VALUES {seed_values})
         SELECT seed_scope.seed_chunk_id, link.collection_entity_id,
                link.id, document_entity_mention.id, entity_mention.id
-        FROM {tables['link']} AS link
-        JOIN {tables['artifact']} AS collection_artifact
+        FROM {tables["link"]} AS link
+        JOIN {tables["artifact"]} AS collection_artifact
           ON collection_artifact.id = link.artifact_id
-        JOIN {tables['manifest']} AS manifest_input
+        JOIN {tables["manifest"]} AS manifest_input
           ON manifest_input.id = link.manifest_input_id
-        JOIN {tables['artifact']} AS document_artifact
+        JOIN {tables["artifact"]} AS document_artifact
           ON document_artifact.id = manifest_input.document_artifact_id
-        JOIN {tables['document_entity']} AS document_entity
+        JOIN {tables["document_entity"]} AS document_entity
           ON document_entity.id = link.document_entity_id
-        JOIN {tables['document_link']} AS document_entity_mention
+        JOIN {tables["document_link"]} AS document_entity_mention
           ON document_entity_mention.document_entity_id = document_entity.id
-        JOIN {tables['mention']} AS entity_mention
+        JOIN {tables["mention"]} AS entity_mention
           ON entity_mention.id = document_entity_mention.mention_id
-        JOIN {tables['entity']} AS collection_entity
+        JOIN {tables["entity"]} AS collection_entity
           ON collection_entity.id = link.collection_entity_id
         JOIN seed_scope
           ON seed_scope.document_id = entity_mention.document_id
@@ -783,10 +792,14 @@ def _permission_membership_subquery(
 
     from apps.knowledge_graph.models import CollectionEntityDocumentLink
 
-    query = CollectionEntityDocumentLink.objects.using(state.using).current().filter(
-        collection_entity_id=OuterRef(collection_entity_outer_ref),
-        artifact_id__in=scope.collection_artifact_ids,
-        manifest_input__collection_id__in=request.allowed_collection_ids,
+    query = (
+        CollectionEntityDocumentLink.objects.using(state.using)
+        .current()
+        .filter(
+            collection_entity_id=OuterRef(collection_entity_outer_ref),
+            artifact_id__in=scope.collection_artifact_ids,
+            manifest_input__collection_id__in=request.allowed_collection_ids,
+        )
     )
     return query.filter(
         _batched_in_q("manifest_input_id", scope.manifest_ids),
@@ -1027,9 +1040,7 @@ def _extend_identity_registry(
                 peer["decision_checksum"],
                 peer["resolver_version"],
             )
-            previous_audit = canonical_audit.setdefault(
-                int(peer["id"]), audit_value
-            )
+            previous_audit = canonical_audit.setdefault(int(peer["id"]), audit_value)
             if previous_audit[1:] != audit_value[1:]:
                 raise _SnapshotMiss
 
@@ -1064,114 +1075,107 @@ def _authorized_evidence_queryset(
     from apps.knowledge_graph.models.associations import _current_link_filters
     from apps.knowledge_graph.models.entities import ResolutionStatus
 
-    query = CollectionRelationEvidence.objects.using(state.using).filter(
-        artifact_id__in=scope.collection_artifact_ids,
-        artifact__status=GraphArtifact.Status.ACTIVE,
-        status=CollectionRelationEvidence.Status.ACTIVE,
-        relation__isnull=False,
-        relation__artifact_id=F("artifact_id"),
-        relation__status=ResolutionStatus.ACTIVE,
-        relation__source__status=ResolutionStatus.ACTIVE,
-        relation__target__status=ResolutionStatus.ACTIVE,
-        relation__source__artifact_id=F("artifact_id"),
-        relation__target__artifact_id=F("artifact_id"),
-        ontology_checksum=F("artifact__ontology_checksum"),
-        assembly_config_checksum=F("artifact__assembly_config_checksum"),
-        relation_mention__artifact__status__in=(
-            GraphArtifact.Status.ACTIVE,
-            GraphArtifact.Status.SUPERSEDED,
-        ),
-        relation_mention__artifact__evaluation_only=False,
-        relation_mention__artifact__scope_type=GraphArtifact.ScopeType.DOCUMENT,
-        relation_mention__relation_type=F("relation__relation_type"),
-        relation_mention__chunk__doc_id=F("relation_mention__document_id"),
-        relation_mention__head__artifact_id=F("relation_mention__artifact_id"),
-        relation_mention__tail__artifact_id=F("relation_mention__artifact_id"),
-        relation_mention__head__document_id=F("relation_mention__document_id"),
-        relation_mention__tail__document_id=F("relation_mention__document_id"),
-        head_mapping__document_entity__mention_links__status=ResolutionStatus.ACTIVE,
-        tail_mapping__document_entity__mention_links__status=ResolutionStatus.ACTIVE,
-        head_mapping__document_entity__mention_links__mention_id=F(
-            "relation_mention__head_id"
-        ),
-        tail_mapping__document_entity__mention_links__mention_id=F(
-            "relation_mention__tail_id"
-        ),
-        head_mapping__document_entity__mention_links__resolver_version=F(
-            "head_mapping__document_entity__artifact__resolver_version"
-        ),
-        tail_mapping__document_entity__mention_links__resolver_version=F(
-            "tail_mapping__document_entity__artifact__resolver_version"
-        ),
-        **_current_link_filters("head_mapping"),
-        **_current_link_filters("tail_mapping"),
-    ).filter(
-        Q(
-            relation__source__collection_id=F(
-                "relation__target__collection_id"
-            )
-        ),
-        Q(
-            relation__source__collection_id=F(
-                "artifact__collection_scope_id"
-            )
-        ),
-        Q(
-            head_mapping__manifest_input__document_artifact_id=F(
-                "relation_mention__artifact_id"
-            )
-        ),
-        Q(
-            tail_mapping__manifest_input__document_artifact_id=F(
-                "relation_mention__artifact_id"
-            )
-        ),
-        Q(
-            head_mapping__manifest_input__document_id=F(
-                "relation_mention__document_id"
-            )
-        ),
-        Q(
-            tail_mapping__manifest_input__document_id=F(
-                "relation_mention__document_id"
-            )
-        ),
-        _batched_in_q(
-            "relation_mention__artifact_id",
-            scope.document_artifact_ids,
-        ),
-        _batched_in_q("head_mapping__manifest_input_id", scope.manifest_ids),
-        _batched_in_q("tail_mapping__manifest_input_id", scope.manifest_ids),
-        _batched_in_q(
-            "head_mapping__manifest_input__document_id",
-            request.allowed_doc_ids,
-        ),
-        _batched_in_q(
-            "tail_mapping__manifest_input__document_id",
-            request.allowed_doc_ids,
-        ),
-        Q(
-            head_mapping__manifest_input__collection_id__in=(
-                request.allowed_collection_ids
+    query = (
+        CollectionRelationEvidence.objects.using(state.using)
+        .filter(
+            artifact_id__in=scope.collection_artifact_ids,
+            artifact__status=GraphArtifact.Status.ACTIVE,
+            status=CollectionRelationEvidence.Status.ACTIVE,
+            relation__isnull=False,
+            relation__artifact_id=F("artifact_id"),
+            relation__status=ResolutionStatus.ACTIVE,
+            relation__source__status=ResolutionStatus.ACTIVE,
+            relation__target__status=ResolutionStatus.ACTIVE,
+            relation__source__artifact_id=F("artifact_id"),
+            relation__target__artifact_id=F("artifact_id"),
+            ontology_checksum=F("artifact__ontology_checksum"),
+            assembly_config_checksum=F("artifact__assembly_config_checksum"),
+            relation_mention__artifact__status__in=(
+                GraphArtifact.Status.ACTIVE,
+                GraphArtifact.Status.SUPERSEDED,
             ),
-            tail_mapping__manifest_input__collection_id__in=(
-                request.allowed_collection_ids
+            relation_mention__artifact__evaluation_only=False,
+            relation_mention__artifact__scope_type=GraphArtifact.ScopeType.DOCUMENT,
+            relation_mention__relation_type=F("relation__relation_type"),
+            relation_mention__chunk__doc_id=F("relation_mention__document_id"),
+            relation_mention__head__artifact_id=F("relation_mention__artifact_id"),
+            relation_mention__tail__artifact_id=F("relation_mention__artifact_id"),
+            relation_mention__head__document_id=F("relation_mention__document_id"),
+            relation_mention__tail__document_id=F("relation_mention__document_id"),
+            head_mapping__document_entity__mention_links__status=ResolutionStatus.ACTIVE,
+            tail_mapping__document_entity__mention_links__status=ResolutionStatus.ACTIVE,
+            head_mapping__document_entity__mention_links__mention_id=F(
+                "relation_mention__head_id"
             ),
-        ),
+            tail_mapping__document_entity__mention_links__mention_id=F(
+                "relation_mention__tail_id"
+            ),
+            head_mapping__document_entity__mention_links__resolver_version=F(
+                "head_mapping__document_entity__artifact__resolver_version"
+            ),
+            tail_mapping__document_entity__mention_links__resolver_version=F(
+                "tail_mapping__document_entity__artifact__resolver_version"
+            ),
+            **_current_link_filters("head_mapping"),
+            **_current_link_filters("tail_mapping"),
+        )
+        .filter(
+            Q(relation__source__collection_id=F("relation__target__collection_id")),
+            Q(relation__source__collection_id=F("artifact__collection_scope_id")),
+            Q(
+                head_mapping__manifest_input__document_artifact_id=F(
+                    "relation_mention__artifact_id"
+                )
+            ),
+            Q(
+                tail_mapping__manifest_input__document_artifact_id=F(
+                    "relation_mention__artifact_id"
+                )
+            ),
+            Q(
+                head_mapping__manifest_input__document_id=F(
+                    "relation_mention__document_id"
+                )
+            ),
+            Q(
+                tail_mapping__manifest_input__document_id=F(
+                    "relation_mention__document_id"
+                )
+            ),
+            _batched_in_q(
+                "relation_mention__artifact_id",
+                scope.document_artifact_ids,
+            ),
+            _batched_in_q("head_mapping__manifest_input_id", scope.manifest_ids),
+            _batched_in_q("tail_mapping__manifest_input_id", scope.manifest_ids),
+            _batched_in_q(
+                "head_mapping__manifest_input__document_id",
+                request.allowed_doc_ids,
+            ),
+            _batched_in_q(
+                "tail_mapping__manifest_input__document_id",
+                request.allowed_doc_ids,
+            ),
+            Q(
+                head_mapping__manifest_input__collection_id__in=(
+                    request.allowed_collection_ids
+                ),
+                tail_mapping__manifest_input__collection_id__in=(
+                    request.allowed_collection_ids
+                ),
+            ),
+        )
     )
     if relation_id is not None:
         query = query.filter(relation_id=relation_id)
-    orientation = (
-        Q(
-            orientation=CollectionRelationEvidence.Orientation.HEAD_TO_TAIL,
-            head_mapping__collection_entity_id=F("relation__source_id"),
-            tail_mapping__collection_entity_id=F("relation__target_id"),
-        )
-        | Q(
-            orientation=CollectionRelationEvidence.Orientation.TAIL_TO_HEAD,
-            head_mapping__collection_entity_id=F("relation__target_id"),
-            tail_mapping__collection_entity_id=F("relation__source_id"),
-        )
+    orientation = Q(
+        orientation=CollectionRelationEvidence.Orientation.HEAD_TO_TAIL,
+        head_mapping__collection_entity_id=F("relation__source_id"),
+        tail_mapping__collection_entity_id=F("relation__target_id"),
+    ) | Q(
+        orientation=CollectionRelationEvidence.Orientation.TAIL_TO_HEAD,
+        head_mapping__collection_entity_id=F("relation__target_id"),
+        tail_mapping__collection_entity_id=F("relation__source_id"),
     )
     return query.filter(orientation).distinct()
 
@@ -1203,20 +1207,23 @@ def _load_physical_relations(
         state=state,
         relation_id=OuterRef("pk"),
     )
-    query = CollectionRelation.objects.using(state.using).filter(
-        Exists(evidence_exists),
-        artifact_id__in=scope.collection_artifact_ids,
-        artifact__status=GraphArtifact.Status.ACTIVE,
-        status=ResolutionStatus.ACTIVE,
-        source__status=ResolutionStatus.ACTIVE,
-        target__status=ResolutionStatus.ACTIVE,
-        source__artifact_id=F("artifact_id"),
-        target__artifact_id=F("artifact_id"),
-    ).filter(
-        Q(source__collection_id=F("target__collection_id")),
-        Q(source__collection_id=F("artifact__collection_scope_id")),
-        Q(source_id__in=frontier_entity_ids)
-        | Q(target_id__in=frontier_entity_ids)
+    query = (
+        CollectionRelation.objects.using(state.using)
+        .filter(
+            Exists(evidence_exists),
+            artifact_id__in=scope.collection_artifact_ids,
+            artifact__status=GraphArtifact.Status.ACTIVE,
+            status=ResolutionStatus.ACTIVE,
+            source__status=ResolutionStatus.ACTIVE,
+            target__status=ResolutionStatus.ACTIVE,
+            source__artifact_id=F("artifact_id"),
+            target__artifact_id=F("artifact_id"),
+        )
+        .filter(
+            Q(source__collection_id=F("target__collection_id")),
+            Q(source__collection_id=F("artifact__collection_scope_id")),
+            Q(source_id__in=frontier_entity_ids) | Q(target_id__in=frontier_entity_ids),
+        )
     )
     if loaded_relation_ids:
         query = query.exclude(pk__in=loaded_relation_ids)
@@ -1406,25 +1413,25 @@ def _load_authorized_identity_mentions(
                        MAX(entity_mention.extraction_confidence) AS confidence,
                        MIN(entity_mention.id) AS mention_id
                 FROM identity_scope
-                JOIN {tables['entity']} AS collection_entity
+                JOIN {tables["entity"]} AS collection_entity
                   ON collection_entity.id = identity_scope.collection_entity_id
-                JOIN {tables['link']} AS link
+                JOIN {tables["link"]} AS link
                   ON link.collection_entity_id = collection_entity.id
-                JOIN {tables['artifact']} AS collection_artifact
+                JOIN {tables["artifact"]} AS collection_artifact
                   ON collection_artifact.id = link.artifact_id
-                JOIN {tables['manifest']} AS manifest_input
+                JOIN {tables["manifest"]} AS manifest_input
                   ON manifest_input.id = link.manifest_input_id
                 JOIN selected_manifests
                   ON selected_manifests.manifest_id = manifest_input.id
                 JOIN authorized_documents
                   ON authorized_documents.document_id = manifest_input.document_id
-                JOIN {tables['artifact']} AS document_artifact
+                JOIN {tables["artifact"]} AS document_artifact
                   ON document_artifact.id = manifest_input.document_artifact_id
-                JOIN {tables['document_entity']} AS document_entity
+                JOIN {tables["document_entity"]} AS document_entity
                   ON document_entity.id = link.document_entity_id
-                JOIN {tables['document_link']} AS document_entity_mention
+                JOIN {tables["document_link"]} AS document_entity_mention
                   ON document_entity_mention.document_entity_id = document_entity.id
-                JOIN {tables['mention']} AS entity_mention
+                JOIN {tables["mention"]} AS entity_mention
                   ON entity_mention.id = document_entity_mention.mention_id
                 CROSS JOIN LATERAL (
                     SELECT entity_mention.chunk_id::bigint AS chunk_id
@@ -1451,7 +1458,7 @@ def _load_authorized_identity_mentions(
                         END
                     ) AS observation(value)
                 ) AS observed
-                JOIN {tables['chunk']} AS chunk
+                JOIN {tables["chunk"]} AS chunk
                   ON chunk.id = observed.chunk_id
                  AND chunk.doc_id = entity_mention.document_id
                 WHERE link.artifact_id = ANY(%s::bigint[])
@@ -1587,9 +1594,7 @@ def authorized_retrieval_snapshot(
     deadline = _MonotonicDeadline.after_ms(timeout_ms)
     with transaction.atomic():
         with connection.cursor() as cursor:
-            cursor.execute(
-                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
-            )
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             cursor.execute("SET LOCAL statement_timeout = %s", [timeout_ms])
         state = _RetrievalSnapshotState(
             config=config,
@@ -1628,9 +1633,7 @@ def _unit_float(value: object, field_name: str) -> float:
     try:
         number = float(value)
     except OverflowError as error:
-        raise ValueError(
-            f"{field_name} must be a finite number in [0, 1]"
-        ) from error
+        raise ValueError(f"{field_name} must be a finite number in [0, 1]") from error
     if not isfinite(number) or not 0.0 <= number <= 1.0:
         raise ValueError(f"{field_name} must be a finite number in [0, 1]")
     return number
@@ -1810,10 +1813,7 @@ class AuthorizedRelationGroup:
             "raw_weight",
             _positive_float(self.raw_weight, "raw_weight"),
         )
-        if (
-            type(self.admission_hop) is not int
-            or not 1 <= self.admission_hop <= 2
-        ):
+        if type(self.admission_hop) is not int or not 1 <= self.admission_hop <= 2:
             raise ValueError("admission_hop must be an exact integer in [1, 2]")
         evidence = _exact_tuple(
             self.evidence,
@@ -1844,9 +1844,7 @@ class AuthorizedIdentityMention:
             _identity_key(self.identity_key),
         )
         if type(self.evidence) is not AuthorizedChunkEvidence:
-            raise ValueError(
-                "evidence must be an exact AuthorizedChunkEvidence value"
-            )
+            raise ValueError("evidence must be an exact AuthorizedChunkEvidence value")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1935,9 +1933,7 @@ class AuthorizedGraphSnapshot:
         groups = _exact_tuple(
             self.relation_groups,
             "relation_groups",
-            maximum=(
-                self.config.max_edges * _MAX_RETRIEVAL_DIRECTIONS_PER_RELATION
-            ),
+            maximum=(self.config.max_edges * _MAX_RETRIEVAL_DIRECTIONS_PER_RELATION),
         )
         if any(type(item) is not AuthorizedRelationGroup for item in groups):
             raise ValueError(
@@ -1947,8 +1943,7 @@ class AuthorizedGraphSnapshot:
         if len(set(group_keys)) != len(group_keys):
             raise ValueError("relation_groups must have unique semantic keys")
         if any(
-            group.source_key not in identity_set
-            or group.target_key not in identity_set
+            group.source_key not in identity_set or group.target_key not in identity_set
             for group in groups
         ):
             raise ValueError("relation_groups must reference identity_keys")
@@ -1956,13 +1951,10 @@ class AuthorizedGraphSnapshot:
             raise ValueError("relation_groups exceed load_max_hops")
         evidence_reference_count = sum(len(group.evidence) for group in groups)
         if evidence_reference_count > (
-            self.config.max_evidence_rows
-            * _MAX_RETRIEVAL_DIRECTIONS_PER_RELATION
+            self.config.max_evidence_rows * _MAX_RETRIEVAL_DIRECTIONS_PER_RELATION
         ):
             raise ValueError("relation evidence exceeds its directional hard cap")
-        evidence_by_provenance: dict[
-            str, tuple[int, UUID, int, float]
-        ] = {}
+        evidence_by_provenance: dict[str, tuple[int, UUID, int, float]] = {}
         provenance_reference_counts: dict[str, int] = defaultdict(int)
         for group in groups:
             for evidence in group.evidence:
@@ -1994,9 +1986,7 @@ class AuthorizedGraphSnapshot:
         mentions = _exact_tuple(
             self.mentions,
             "mentions",
-            maximum=(
-                self.config.max_nodes * self.config.max_mentions_per_entity
-            ),
+            maximum=(self.config.max_nodes * self.config.max_mentions_per_entity),
         )
         if any(type(item) is not AuthorizedIdentityMention for item in mentions):
             raise ValueError(
@@ -2114,8 +2104,7 @@ def _compose_authorized_relation_groups(
             if not row.evidence:
                 raise _SnapshotMiss
             physical_evidence = {
-                item.evidence.provenance_key: item.evidence
-                for item in row.evidence
+                item.evidence.provenance_key: item.evidence for item in row.evidence
             }
             physical_weights.append(
                 raw_edge_weight(
@@ -2124,9 +2113,7 @@ def _compose_authorized_relation_groups(
                         item.confidence for item in physical_evidence.values()
                     ),
                     support_count=len(physical_evidence),
-                    destination_retrieval_utility=(
-                        row.destination_retrieval_utility
-                    ),
+                    destination_retrieval_utility=(row.destination_retrieval_utility),
                 )
             )
             for projection in row.evidence:
@@ -2137,9 +2124,7 @@ def _compose_authorized_relation_groups(
                 )
                 if previous != evidence:
                     raise _SnapshotMiss
-        evidence = tuple(
-            sorted(evidence_by_provenance.values(), key=_evidence_order)
-        )
+        evidence = tuple(sorted(evidence_by_provenance.values(), key=_evidence_order))
         if not evidence:
             raise _SnapshotMiss
         weight = max(physical_weights)
@@ -2227,10 +2212,7 @@ def _build_restart_vector(
 
     canonical_mappings = tuple(
         sorted(
-            {
-                (row.seed_chunk_id, row.identity_key)
-                for row in snapshot.seed_identities
-            }
+            {(row.seed_chunk_id, row.identity_key) for row in snapshot.seed_identities}
         )
     )
     identities_by_seed: dict[int, list[StableNodeKey]] = defaultdict(list)
@@ -2302,11 +2284,7 @@ def _replay_groups(
     cap_reached = False
     for hop in range(1, effective_max_hops + 1):
         frontier = sorted(
-            (
-                group
-                for group in fanout_selected
-                if group.admission_hop == hop
-            ),
+            (group for group in fanout_selected if group.admission_hop == hop),
             key=_group_selection_key,
         )
         for group in frontier:
@@ -2333,9 +2311,9 @@ def _replay_groups(
             break
 
     retained_tuple = tuple(retained)
-    retained_by_source: dict[
-        StableNodeKey, list[AuthorizedRelationGroup]
-    ] = defaultdict(list)
+    retained_by_source: dict[StableNodeKey, list[AuthorizedRelationGroup]] = (
+        defaultdict(list)
+    )
     for group in retained_tuple:
         retained_by_source[group.source_key].append(group)
     shares: dict[AuthorizedRelationGroup, float] = {}
@@ -2396,15 +2374,14 @@ def _project_candidates(
             key = (group.target_key, evidence.chunk_id)
             identity_chunk[key] = max(identity_chunk.get(key, 0.0), contribution)
 
-    mentions_by_identity: dict[
-        StableNodeKey, list[AuthorizedChunkEvidence]
-    ] = defaultdict(list)
+    mentions_by_identity: dict[StableNodeKey, list[AuthorizedChunkEvidence]] = (
+        defaultdict(list)
+    )
     admitted_set = set(admitted)
     for mention in snapshot.mentions:
         if (
             mention.identity_key in admitted_set
-            and mention.identity_key
-            not in identities_with_selected_relation_evidence
+            and mention.identity_key not in identities_with_selected_relation_evidence
         ):
             mentions_by_identity[mention.identity_key].append(mention.evidence)
     for identity in sorted(mentions_by_identity):
@@ -2425,9 +2402,9 @@ def _project_candidates(
             key = (identity, evidence.chunk_id)
             identity_chunk[key] = max(identity_chunk.get(key, 0.0), contribution)
 
-    contributions_by_chunk: dict[
-        int, list[tuple[StableNodeKey, float]]
-    ] = defaultdict(list)
+    contributions_by_chunk: dict[int, list[tuple[StableNodeKey, float]]] = defaultdict(
+        list
+    )
     for (identity, chunk_id), contribution in identity_chunk.items():
         if contribution > 0.0:
             contributions_by_chunk[chunk_id].append((identity, contribution))
@@ -2586,8 +2563,7 @@ def _trace_bytes(
         "effective_max_hops": effective_max_hops,
         "graph_version_signature": graph_version_signature,
         "ppr_scores": [
-            [list(identity), scores[identity].hex()]
-            for identity in sorted(scores)
+            [list(identity), scores[identity].hex()] for identity in sorted(scores)
         ],
         "restart_vector": [
             [list(identity), (restart[identity] / restart_total).hex()]
@@ -2687,9 +2663,9 @@ def rank_authorized_graph_snapshot(
         transition_rows: dict[
             StableNodeKey, tuple[tuple[StableNodeKey, float], ...]
         ] = {}
-        groups_by_source: dict[
-            StableNodeKey, list[AuthorizedRelationGroup]
-        ] = defaultdict(list)
+        groups_by_source: dict[StableNodeKey, list[AuthorizedRelationGroup]] = (
+            defaultdict(list)
+        )
         for group in retained:
             groups_by_source[group.source_key].append(group)
         for source in sorted(groups_by_source):
@@ -2864,9 +2840,7 @@ def load_authorized_graph_snapshot(
         canonical_audit=canonical_audit,
         discovery_hop=0,
     )
-    identity_discovery_hop = {
-        identity: 0 for identity in identity_by_entity.values()
-    }
+    identity_discovery_hop = {identity: 0 for identity in identity_by_entity.values()}
     seed_identities = tuple(
         sorted(
             {
@@ -2947,9 +2921,7 @@ def load_authorized_graph_snapshot(
             )
 
         next_frontier: set[StableNodeKey] = set()
-        for relation in sorted(
-            physical_relations.values(), key=lambda value: value.pk
-        ):
+        for relation in sorted(physical_relations.values(), key=lambda value: value.pk):
             source_key = identity_by_entity[relation.source_id]
             target_key = identity_by_entity[relation.target_id]
             ontology_direction = scope.ontology_directions.get(
@@ -2967,9 +2939,7 @@ def load_authorized_graph_snapshot(
                 if source == target:
                     continue
                 destination_entity_id = (
-                    relation.target_id
-                    if source == source_key
-                    else relation.source_id
+                    relation.target_id if source == source_key else relation.source_id
                 )
                 directional_rows.append(
                     _DirectionalPhysicalProjection(
@@ -3033,9 +3003,7 @@ def load_authorized_graph_snapshot(
                     "relation_evidence",
                     cast(
                         tuple[object, ...],
-                        _canonical_audit_value(
-                            evidence_row.semantic_signature
-                        ),
+                        _canonical_audit_value(evidence_row.semantic_signature),
                     ),
                 )
             )
@@ -3128,4 +3096,4 @@ def expand_chunk_candidates(request: GraphExpansionRequest) -> GraphExpansionRes
         )
 
 
-__all__ = ["expand_chunk_candidates"]
+__all__ = ["expand_chunk_candidates", "get_graph_expansion_config"]

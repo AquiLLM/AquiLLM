@@ -38,8 +38,7 @@ def _database_is_reachable() -> bool:
 
 
 database_required = pytest.mark.skipif(
-    not _database_is_reachable()
-    and os.environ.get("KG_REQUIRE_POSTGRES_TESTS") != "1",
+    not _database_is_reachable() and os.environ.get("KG_REQUIRE_POSTGRES_TESTS") != "1",
     reason="configured PostgreSQL database is not reachable",
 )
 
@@ -63,12 +62,15 @@ def test_snapshot_seams_exist_but_only_composition_is_public() -> None:
     assert callable(expansion.load_authorized_graph_snapshot)
     assert callable(expansion.expand_chunk_candidates)
     assert retrieval.expand_chunk_candidates is expansion.expand_chunk_candidates
+    assert retrieval.get_graph_expansion_config is expansion.get_graph_expansion_config
     assert set(retrieval.__all__) == {
+        "GraphExpansionConfig",
         "GraphExpansionDiagnostics",
         "GraphExpansionRequest",
         "GraphExpansionResult",
         "GraphExpansionSeed",
         "expand_chunk_candidates",
+        "get_graph_expansion_config",
     }
     assert not hasattr(retrieval, "AuthorizedGraphSnapshot")
     assert not hasattr(retrieval, "rank_authorized_graph_snapshot")
