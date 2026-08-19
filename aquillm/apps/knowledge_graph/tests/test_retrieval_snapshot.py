@@ -324,6 +324,9 @@ def test_loader_source_pins_permission_first_caps_and_exact_evidence_fences() ->
         "OntologyVersion.Status.SUPERSEDED",
         "ROW_NUMBER",
         "seed_chunk_ids",
+        "document_artifact__status__in",
+        "document_artifact.status IN ('active', 'superseded')",
+        "document_artifact.evaluation_only = FALSE",
     ):
         assert required in source
     assert "authorized_canonical_lookup" not in source

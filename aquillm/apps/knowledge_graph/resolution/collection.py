@@ -2497,6 +2497,8 @@ def build_collection_snapshot(
     build_key: str | None = None,
     build_generation: int | None = None,
     orchestration_version: int = 0,
+    rebuild_request=None,
+    evaluation_only: bool = False,
 ):
     """Create a building collection artifact and its immutable source manifest."""
 
@@ -2549,6 +2551,17 @@ def build_collection_snapshot(
     if orchestration_version not in GraphArtifact.OrchestrationVersion.values:
         raise CollectionResolutionPersistenceError(
             "collection orchestration version is invalid"
+        )
+    if type(evaluation_only) is not bool:
+        raise CollectionResolutionPersistenceError(
+            "collection evaluation marker must be an exact boolean"
+        )
+    if evaluation_only and (
+        getattr(rebuild_request, "pk", None) is None
+        or getattr(rebuild_request, "evaluation_only", None) is not True
+    ):
+        raise CollectionResolutionPersistenceError(
+            "evaluation collection snapshot requires its exact rebuild request"
         )
     if type(filter_policy) is not FilterPolicy:
         raise CollectionResolutionPersistenceError(
@@ -2686,12 +2699,19 @@ def build_collection_snapshot(
             )
         source_rows: list[tuple[GraphArtifact, uuid.UUID, str, str]] = []
         for source in sources:
-            if (
-                source.scope_type != GraphArtifact.ScopeType.DOCUMENT
-                or source.status != GraphArtifact.Status.ACTIVE
+            source_eligible = (
+                source.status == GraphArtifact.Status.SUPERSEDED
+                and source.evaluation_only is True
+                and source.rebuild_request_id == rebuild_request.pk
+                if evaluation_only
+                else source.status == GraphArtifact.Status.ACTIVE
+                and source.evaluation_only is False
+            )
+            if source.scope_type != GraphArtifact.ScopeType.DOCUMENT or not (
+                source_eligible
             ):
                 raise CollectionResolutionPersistenceError(
-                    "collection inputs must be active document artifacts"
+                    "collection inputs are not eligible document artifacts"
                 )
             try:
                 document_id = uuid.UUID(source.scope_id)
@@ -2735,6 +2755,8 @@ def build_collection_snapshot(
             build_key=build_key or "",
             build_generation=build_generation,
             orchestration_version=orchestration_version,
+            rebuild_request=rebuild_request,
+            evaluation_only=evaluation_only,
             source_hash=source_hash,
             ontology_version=_bounded_text(
                 ontology_version, "ontology version", maximum=128
@@ -2840,6 +2862,7 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
     from apps.knowledge_graph.graph.manifest_locking import LockedCollectionManifest
     from apps.knowledge_graph.models import GraphArtifact
     from apps.knowledge_graph.models.inputs import (
+        _manifest_source_is_eligible,
         collection_input_build_signature,
         collection_input_source_signature,
         collection_manifest_source_hash,
@@ -2902,12 +2925,12 @@ def _snapshot_from_locked_manifest(artifact, manifest_rows) -> CollectionBuildSn
             row.artifact_id != artifact.pk
             or row.collection_id != int(artifact.scope_id)
             or source.scope_type != GraphArtifact.ScopeType.DOCUMENT
-            or source.status != GraphArtifact.Status.ACTIVE
+            or not _manifest_source_is_eligible(artifact, source)
             or source.scope_id != str(row.document_id)
             or source.ontology_checksum != artifact.ontology_checksum
         ):
             raise CollectionResolutionPersistenceError(
-                "collection manifest ownership or active source changed"
+                "collection manifest ownership or eligible source changed"
             )
         if document_by_id is None:
             document = Document.get_by_id(row.document_id)

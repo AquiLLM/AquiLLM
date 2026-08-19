@@ -1497,7 +1497,10 @@ def _lock_current_contributors(collection: object, config: AssemblyConfig):
         sorted(DESCENDED_FROM_DOCUMENT, key=lambda value: value._meta.label)
     )
     document_count = sum(
-        model.objects.filter(collection_id=collection.pk).count()
+        model.objects.filter(
+            collection_id=collection.pk,
+            ingestion_complete=True,
+        ).count()
         for model in document_models
     )
     if document_count > config.max_document_inputs:
@@ -1516,7 +1519,10 @@ def _lock_current_contributors(collection: object, config: AssemblyConfig):
         model_by_identity: dict[str, object] = {}
         for model in document_models:
             rows = bounded_rows(
-                model.objects.filter(collection_id=collection.pk)
+                model.objects.filter(
+                    collection_id=collection.pk,
+                    ingestion_complete=True,
+                )
                 .order_by("id")
                 .values_list("id", flat=True),
                 config.max_document_inputs - len(identities),
@@ -1584,6 +1590,7 @@ def _lock_current_contributors(collection: object, config: AssemblyConfig):
         if (
             str(document.id) != source.scope_id
             or document.collection_id != collection.pk
+            or document.ingestion_complete is not True
         ):
             raise CollectionGraphSourceStaleError(
                 "contributing document moved during collection locking"
@@ -1832,6 +1839,7 @@ def _load_assembly_evidence(
         DocumentEntityMention,
         RelationMention,
     )
+    from apps.knowledge_graph.models.inputs import _manifest_source_is_eligible
 
     source_artifact_ids = {row.document_artifact_id for row in manifest}
     manifest_by_artifact = {row.document_artifact_id: row for row in manifest}
@@ -1904,7 +1912,7 @@ def _load_assembly_evidence(
         manifest_input = manifest_by_artifact.get(mention.artifact_id)
         if (
             manifest_input is None
-            or mention.artifact.status != mention.artifact.Status.ACTIVE
+            or not _manifest_source_is_eligible(artifact, mention.artifact)
             or mention.chunk_id is None
             or mention.document_id != manifest_input.document_id
             or mention.chunk.doc_id != manifest_input.document_id
@@ -2842,9 +2850,16 @@ def _newer_activation_exists(
             row.pk > candidate_artifact and row.activated_at is not None
             for row in scope_artifacts
         )
+    candidate_evaluation = getattr(candidate_artifact, "evaluation_only", False)
+    candidate_request_id = getattr(candidate_artifact, "rebuild_request_id", None)
     return any(
         row.build_generation > candidate_artifact.build_generation
         and row.status in {"building", "active"}
+        and getattr(row, "evaluation_only", False) is candidate_evaluation
+        and (
+            not candidate_evaluation
+            or getattr(row, "rebuild_request_id", None) == candidate_request_id
+        )
         for row in scope_artifacts
     )
 
@@ -2983,8 +2998,52 @@ def _swap_active_collection_artifact(
 
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
 
+    if artifact.evaluation_only:
+        if (
+            run.evaluation_only is not True
+            or artifact.rebuild_request_id is None
+            or run.rebuild_request_id != artifact.rebuild_request_id
+            or artifact.status != GraphArtifact.Status.BUILDING
+            or run.stage != GraphBuildRun.Stage.VALIDATING
+            or run.status != GraphBuildRun.Status.RUNNING
+        ):
+            raise CollectionGraphAssemblyError(
+                "evaluation completion does not own an exact validating occurrence"
+            )
+        completed_at = timezone.now()
+        artifact.status = GraphArtifact.Status.SUPERSEDED
+        artifact.completed_at = completed_at
+        artifact.superseded_at = completed_at
+        artifact.save(update_fields=["status", "completed_at", "superseded_at"])
+        marker = dict(run.stage_marker) if type(run.stage_marker) is dict else {}
+        sequence = marker.get("stage_sequence", [])
+        sequence = list(sequence[-31:]) if type(sequence) is list else []
+        sequence.append(GraphBuildRun.Stage.SUPERSEDED)
+        marker["stage_sequence"] = sequence[-32:]
+        marker["last_stage"] = GraphBuildRun.Stage.SUPERSEDED
+        marker["evaluation_completed"] = True
+        run.stage_marker = marker
+        run.stage = GraphBuildRun.Stage.SUPERSEDED
+        run.status = GraphBuildRun.Status.CANCELLED
+        run.finished_at = completed_at
+        run.lease_owner = ""
+        run.lease_expires_at = None
+        run.save(
+            update_fields=[
+                "stage",
+                "status",
+                "stage_marker",
+                "finished_at",
+                "lease_owner",
+                "lease_expires_at",
+            ]
+        )
+        return
+
     active = tuple(
-        row for row in scope_artifacts if row.status == GraphArtifact.Status.ACTIVE
+        row
+        for row in scope_artifacts
+        if row.status == GraphArtifact.Status.ACTIVE and not row.evaluation_only
     )
     if _newer_activation_exists(artifact, scope_artifacts):
         raise CollectionGraphAssemblyError(
@@ -3004,6 +3063,13 @@ def _swap_active_collection_artifact(
             run.stage = active_stage
             run.status = GraphBuildRun.Status.SUCCEEDED
             run.finished_at = timezone.now()
+            marker = dict(run.stage_marker) if type(run.stage_marker) is dict else {}
+            sequence = marker.get("stage_sequence", [])
+            sequence = list(sequence[-31:]) if type(sequence) is list else []
+            sequence.append(active_stage)
+            marker["stage_sequence"] = sequence[-32:]
+            marker["last_stage"] = active_stage
+            run.stage_marker = marker
             if (
                 run.orchestration_version
                 == GraphArtifact.OrchestrationVersion.SCOPED_V1
@@ -3015,6 +3081,7 @@ def _swap_active_collection_artifact(
                     "stage",
                     "status",
                     "finished_at",
+                    "stage_marker",
                     "lease_owner",
                     "lease_expires_at",
                 ]
@@ -3045,7 +3112,30 @@ def _swap_active_collection_artifact(
         if previous_run is not None:
             previous_run.stage = GraphBuildRun.Stage.SUPERSEDED
             previous_run.status = GraphBuildRun.Status.CANCELLED
-            previous_run.save(update_fields=["stage", "status"])
+            previous_run.finished_at = superseded_at
+            previous_run.lease_owner = ""
+            previous_run.lease_expires_at = None
+            marker = (
+                dict(previous_run.stage_marker)
+                if type(previous_run.stage_marker) is dict
+                else {}
+            )
+            sequence = marker.get("stage_sequence", [])
+            sequence = list(sequence[-31:]) if type(sequence) is list else []
+            sequence.append(GraphBuildRun.Stage.SUPERSEDED)
+            marker["stage_sequence"] = sequence[-32:]
+            marker["last_stage"] = GraphBuildRun.Stage.SUPERSEDED
+            previous_run.stage_marker = marker
+            previous_run.save(
+                update_fields=[
+                    "stage",
+                    "status",
+                    "finished_at",
+                    "lease_owner",
+                    "lease_expires_at",
+                    "stage_marker",
+                ]
+            )
     activated_at = timezone.now()
     artifact.status = GraphArtifact.Status.ACTIVE
     artifact.activated_at = activated_at
@@ -3058,6 +3148,13 @@ def _swap_active_collection_artifact(
     )
     run.status = GraphBuildRun.Status.SUCCEEDED
     run.finished_at = activated_at
+    marker = dict(run.stage_marker) if type(run.stage_marker) is dict else {}
+    sequence = marker.get("stage_sequence", [])
+    sequence = list(sequence[-31:]) if type(sequence) is list else []
+    sequence.append(run.stage)
+    marker["stage_sequence"] = sequence[-32:]
+    marker["last_stage"] = run.stage
+    run.stage_marker = marker
     if run.orchestration_version == GraphArtifact.OrchestrationVersion.SCOPED_V1:
         run.lease_owner = ""
         run.lease_expires_at = None
@@ -3066,6 +3163,7 @@ def _swap_active_collection_artifact(
             "stage",
             "status",
             "finished_at",
+            "stage_marker",
             "lease_owner",
             "lease_expires_at",
         ]

@@ -20,6 +20,8 @@ DEFAULT_GLINER2_DEVICE = "cpu"
 DEFAULT_GLINER2_BATCH_SIZE = 8
 DEFAULT_GLINER2_MAX_BATCH_CHARACTERS = 64_000
 DEFAULT_GLINER2_CACHE_DIR = Path("/root/.cache/huggingface")
+DEFAULT_ARTIFACT_RETENTION_DAYS = 30
+DEFAULT_ARTIFACT_KEEP_SUPERSEDED = 2
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
@@ -55,6 +57,20 @@ class ExtractionSettings:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class RetentionSettings:
+    """Conservative graph-artifact retention settings."""
+
+    retention_days: int = DEFAULT_ARTIFACT_RETENTION_DAYS
+    keep_superseded: int = DEFAULT_ARTIFACT_KEEP_SUPERSEDED
+
+    def __post_init__(self) -> None:
+        if type(self.retention_days) is not int or self.retention_days < 1:
+            raise KnowledgeGraphConfigError("retention_days must be positive")
+        if type(self.keep_superseded) is not int or self.keep_superseded < 0:
+            raise KnowledgeGraphConfigError("keep_superseded must be nonnegative")
+
+
 def _parse_bool(source: Mapping[str, str], key: str, *, default: bool) -> bool:
     raw_value = source.get(key)
     if raw_value is None:
@@ -76,6 +92,17 @@ def _parse_positive_int(source: Mapping[str, str], key: str, *, default: int) ->
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _parse_nonnegative_int(source: Mapping[str, str], key: str, *, default: int) -> int:
+    raw_value = source.get(key)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value.strip())
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
 
 
 def _text_or_default(source: Mapping[str, str], key: str, default: str) -> str:
@@ -182,3 +209,28 @@ def get_extractor_local_files_only(source: Mapping[str, str] | None = None) -> b
 
 def get_extractor_fail_open(source: Mapping[str, str] | None = None) -> bool:
     return load_extraction_settings(source).fail_open
+
+
+def get_eval_bypass_allowed(source: Mapping[str, str] | None = None) -> bool:
+    """Fail-closed parse of the explicit evaluation-only bypass switch."""
+
+    values = process_environ if source is None else source
+    return _parse_bool(values, "KG_EVAL_BYPASS_ALLOWED", default=False)
+
+
+def load_retention_settings(
+    source: Mapping[str, str] | None = None,
+) -> RetentionSettings:
+    values = process_environ if source is None else source
+    return RetentionSettings(
+        retention_days=_parse_positive_int(
+            values,
+            "KG_ARTIFACT_RETENTION_DAYS",
+            default=DEFAULT_ARTIFACT_RETENTION_DAYS,
+        ),
+        keep_superseded=_parse_nonnegative_int(
+            values,
+            "KG_ARTIFACT_KEEP_SUPERSEDED",
+            default=DEFAULT_ARTIFACT_KEEP_SUPERSEDED,
+        ),
+    )

@@ -15,6 +15,13 @@ _DOCUMENT_SCOPE_PATTERN = (
 )
 _COLLECTION_SCOPE_PATTERN = r"^[1-9][0-9]*$"
 _CHECKSUM_PATTERN = r"^[0-9a-f]{64}$"
+_ERROR_CODE_PATTERN = r"^[a-z][a-z0-9_]{0,127}$"
+_RESNAPSHOT_RECONCILING_ERROR_CODES = frozenset(
+    {"resnapshot_pending", "resnapshot_churn"}
+)
+_RESNAPSHOT_FINAL_ERROR_CODES = frozenset(
+    {"resnapshot_churn", "scope_deleted", "scope_ineligible"}
+)
 
 
 def graph_identity_checksum(namespace: object, value: object) -> str:
@@ -30,6 +37,91 @@ def graph_identity_checksum(namespace: object, value: object) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return sha256(payload).hexdigest()
+
+
+def _activation_audit_values(artifact: object, run: object) -> dict[str, object]:
+    """Freeze one exact terminal occurrence before its graph rows may be removed."""
+
+    artifact_fields = (
+        "pk",
+        "rebuild_request_id",
+        "evaluation_only",
+        "build_key",
+        "build_generation",
+        "orchestration_version",
+        "scope_type",
+        "scope_id",
+        "source_hash",
+        "ontology_version",
+        "extractor_version",
+        "resolver_version",
+        "filter_policy_version",
+        "embedding_model_signature",
+        "ontology_checksum",
+        "filter_policy_checksum",
+        "resolution_config_checksum",
+        "assembly_version",
+        "assembly_config_checksum",
+        "status",
+        "activated_at",
+        "completed_at",
+        "superseded_at",
+    )
+    run_fields = (
+        "pk",
+        "artifact_id",
+        "rebuild_request_id",
+        "evaluation_only",
+        "build_kind",
+        "build_key",
+        "build_generation",
+        "orchestration_version",
+        "scope_type",
+        "scope_id",
+        "source_hash",
+        "ontology_version",
+        "extractor_version",
+        "resolver_version",
+        "filter_policy_version",
+        "embedding_model_signature",
+        "ontology_checksum",
+        "filter_policy_checksum",
+        "resolution_config_checksum",
+        "assembly_version",
+        "assembly_config_checksum",
+        "status",
+        "stage",
+        "stage_marker",
+        "started_at",
+        "finished_at",
+    )
+    payload = {
+        "namespace": "graph-rebuild-activation-audit-v1",
+        "artifact": {
+            field: getattr(artifact, field, None) for field in artifact_fields
+        },
+        "run": {field: getattr(run, field, None) for field in run_fields},
+    }
+    signature = sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "activated_artifact_pk": getattr(artifact, "pk", None),
+        "activated_run_pk": getattr(run, "pk", None),
+        "activated_build_key": getattr(artifact, "build_key", ""),
+        "activated_build_generation": getattr(
+            artifact,
+            "build_generation",
+            None,
+        ),
+        "activated_source_hash": getattr(artifact, "source_hash", ""),
+        "activated_occurrence_signature": signature,
+    }
 
 
 def legacy_graph_artifact_build_key(instance: object) -> str:
@@ -188,6 +280,76 @@ def canonical_graph_scope_id(scope_type: object, value: object) -> str:
     raise ValidationError({"scope_type": "Graph scope type is invalid."})
 
 
+def _cached_or_persisted_rebuild_request(instance: object):
+    request_id = getattr(instance, "rebuild_request_id", None)
+    evaluation_only = getattr(instance, "evaluation_only", None)
+    if request_id is None:
+        if evaluation_only is True:
+            raise ValidationError(
+                {"rebuild_request": "Evaluation occurrences require a request."}
+            )
+        return None
+    cached = getattr(instance, "_state", None)
+    fields_cache = getattr(cached, "fields_cache", {})
+    request = fields_cache.get("rebuild_request")
+    if request is None:
+        request = GraphRebuildRequest.objects.filter(pk=request_id).first()
+    if request is None:
+        raise ValidationError({"rebuild_request": "Rebuild request does not exist."})
+    return request
+
+
+def _validate_rebuild_occurrence_correlation(instance: object) -> None:
+    """Validate the cross-row request marker and exact immutable scope snapshot."""
+
+    request = _cached_or_persisted_rebuild_request(instance)
+    if request is None:
+        return
+    if request.evaluation_only is not getattr(instance, "evaluation_only", None):
+        raise ValidationError(
+            {"evaluation_only": "Occurrence marker must match its rebuild request."}
+        )
+    scope_type = getattr(instance, "scope_type", None)
+    scope_id = getattr(instance, "scope_id", None)
+    source_hash = getattr(instance, "source_hash", None)
+    if request.scope_type == GraphRebuildRequest.ScopeType.ALL:
+        raise ValidationError(
+            {"rebuild_request": "Operator parent requests cannot own occurrences."}
+        )
+    if scope_type == GraphArtifact.ScopeType.COLLECTION:
+        if (
+            request.scope_type != GraphRebuildRequest.ScopeType.COLLECTION
+            or request.scope_id != scope_id
+            or request.expected_aggregate_signature != source_hash
+        ):
+            raise ValidationError(
+                {"rebuild_request": "Collection occurrence is outside its request."}
+            )
+        return
+    if scope_type != GraphArtifact.ScopeType.DOCUMENT:
+        raise ValidationError({"scope_type": "Graph occurrence scope is invalid."})
+    matching = tuple(
+        row
+        for row in request.requested_documents
+        if row.get("document_id") == scope_id and row.get("source_hash") == source_hash
+    )
+    if len(matching) != 1:
+        raise ValidationError(
+            {"rebuild_request": "Document occurrence is outside its request snapshot."}
+        )
+    if request.scope_type == GraphRebuildRequest.ScopeType.DOCUMENT:
+        valid_scope = request.scope_id == scope_id
+    else:
+        valid_scope = (
+            request.scope_type == GraphRebuildRequest.ScopeType.COLLECTION
+            and matching[0].get("collection_id") == int(request.scope_id)
+        )
+    if not valid_scope:
+        raise ValidationError(
+            {"rebuild_request": "Document occurrence is outside its request scope."}
+        )
+
+
 def _validate_embedding_model_signature(scope_type: object, value: object) -> str:
     if type(value) is not str:
         raise ValidationError(
@@ -340,6 +502,62 @@ class GraphArtifactQuerySet(ImmutableGraphQuerySet):
         return super(GraphArtifactQuerySet, document_rows).delete()
 
 
+class GraphRebuildRequestQuerySet(ImmutableGraphQuerySet):
+    """Append-retain durable operator request and lineage audit rows."""
+
+    def delete(self):
+        raise ValidationError(
+            {"id": "Graph rebuild request audit rows cannot be deleted."}
+        )
+
+    def _terminalize_operator_parent(
+        self,
+        *,
+        request_id: uuid.UUID,
+        status: str,
+        successes: int,
+        failures: int,
+        expected_children: int,
+        error_code: str,
+        completed_at: object,
+    ) -> int:
+        """Apply one exact set-wise ALL aggregation under the caller's row lock."""
+
+        expected_status = (
+            "succeeded" if failures == 0 else "failed" if successes == 0 else "partial"
+        )
+        if (
+            type(request_id) is not uuid.UUID
+            or type(successes) is not int
+            or type(failures) is not int
+            or type(expected_children) is not int
+            or min(successes, failures, expected_children) < 0
+            or successes + failures != expected_children
+            or status != expected_status
+            or error_code != ("" if failures == 0 else "child_rebuild_failed")
+            or completed_at is None
+        ):
+            raise ValidationError(
+                {"status": "Operator terminal aggregation is not exact."}
+            )
+        queryset = self.filter(
+            pk=request_id,
+            scope_type="all",
+            status="running",
+            enumeration_complete=True,
+            expected_child_count=expected_children,
+        )
+        return models.QuerySet.update(
+            queryset,
+            status=status,
+            completed_collection_count=successes,
+            failed_collection_count=failures,
+            error_code=error_code,
+            completed_at=completed_at,
+            updated_at=completed_at,
+        )
+
+
 class ValidatedGraphModel(models.Model):
     """Explicit validation path used by save(), create(), and bulk_create()."""
 
@@ -437,6 +655,15 @@ class GraphArtifact(ValidatedGraphModel):
         related_name="knowledge_graph_artifacts",
         editable=False,
     )
+    rebuild_request = models.ForeignKey(
+        "apps_knowledge_graph.GraphRebuildRequest",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="artifacts",
+        editable=False,
+    )
+    evaluation_only = models.BooleanField(default=False, editable=False)
     build_key = models.CharField(max_length=64, default="", editable=False)
     build_generation = models.PositiveBigIntegerField(default=1, editable=False)
     orchestration_version = models.PositiveSmallIntegerField(
@@ -484,6 +711,9 @@ class GraphArtifact(ValidatedGraphModel):
         "scope_id",
         "collection_scope",
         "collection_scope_id",
+        "rebuild_request",
+        "rebuild_request_id",
+        "evaluation_only",
         "build_key",
         "build_generation",
         "orchestration_version",
@@ -618,6 +848,13 @@ class GraphArtifact(ValidatedGraphModel):
                 condition=~Q(filter_policy_version=""),
                 name="kg_artifact_filter_ver_nonempty",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(evaluation_only=False)
+                    | (Q(rebuild_request__isnull=False) & ~Q(status="active"))
+                ),
+                name="kg_artifact_eval_noncurrent",
+            ),
             models.UniqueConstraint(
                 fields=["scope_type", "scope_id"],
                 condition=Q(status="active"),
@@ -637,6 +874,11 @@ class GraphArtifact(ValidatedGraphModel):
                 condition=Q(orchestration_version=1),
                 name="kg_artifact_scope_generation_unique",
             ),
+            models.UniqueConstraint(
+                fields=["rebuild_request", "scope_type", "scope_id"],
+                condition=Q(rebuild_request__isnull=False),
+                name="kg_artifact_request_scope_unique",
+            ),
         ]
         indexes = [
             models.Index(
@@ -644,6 +886,14 @@ class GraphArtifact(ValidatedGraphModel):
                 name="kg_art_scope_status_idx",
             ),
             models.Index(fields=["source_hash"], name="kg_art_source_hash_idx"),
+            models.Index(
+                fields=["status", "completed_at", "id"],
+                name="kg_art_terminal_idx",
+            ),
+            models.Index(
+                fields=["status", "superseded_at", "id"],
+                name="kg_art_superseded_idx",
+            ),
         ]
 
     def prepare_for_persistence(self) -> None:
@@ -738,6 +988,13 @@ class GraphArtifact(ValidatedGraphModel):
             raise ValidationError(
                 {"build_key": "Build key must be a lowercase SHA-256 digest."}
             )
+        if self.evaluation_only and (
+            self.rebuild_request_id is None or self.status == self.Status.ACTIVE
+        ):
+            raise ValidationError(
+                {"evaluation_only": "Evaluation artifacts cannot become current."}
+            )
+        _validate_rebuild_occurrence_correlation(self)
 
     def delete(self, *args, **kwargs):
         persisted_scope = None
@@ -802,6 +1059,15 @@ class GraphBuildRun(ValidatedGraphModel):
         on_delete=models.SET_NULL,
         related_name="build_runs",
     )
+    rebuild_request = models.ForeignKey(
+        "apps_knowledge_graph.GraphRebuildRequest",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="build_runs",
+        editable=False,
+    )
+    evaluation_only = models.BooleanField(default=False, editable=False)
     build_key = models.CharField(max_length=64, default="", editable=False)
     build_generation = models.PositiveBigIntegerField(default=1, editable=False)
     orchestration_version = models.PositiveSmallIntegerField(
@@ -863,6 +1129,9 @@ class GraphBuildRun(ValidatedGraphModel):
     _IMMUTABLE_FIELDS = (
         "artifact",
         "artifact_id",
+        "rebuild_request",
+        "rebuild_request_id",
+        "evaluation_only",
         "build_key",
         "build_generation",
         "orchestration_version",
@@ -1102,6 +1371,17 @@ class GraphBuildRun(ValidatedGraphModel):
                 ),
                 name="kg_build_terminal_lease_clear",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(evaluation_only=False)
+                    | (
+                        Q(rebuild_request__isnull=False)
+                        & ~Q(stage="active")
+                        & ~Q(status="succeeded")
+                    )
+                ),
+                name="kg_build_eval_noncurrent",
+            ),
             models.UniqueConstraint(
                 fields=[
                     "build_kind",
@@ -1128,6 +1408,11 @@ class GraphBuildRun(ValidatedGraphModel):
                 condition=Q(orchestration_version=1),
                 name="kg_run_artifact_occurrence_unique",
             ),
+            models.UniqueConstraint(
+                fields=["rebuild_request", "scope_type", "scope_id"],
+                condition=Q(rebuild_request__isnull=False),
+                name="kg_run_request_scope_unique",
+            ),
         ]
         indexes = [
             models.Index(fields=["artifact", "status"], name="kg_run_art_status_idx"),
@@ -1140,6 +1425,19 @@ class GraphBuildRun(ValidatedGraphModel):
                 fields=["status", "lease_expires_at"],
                 name="kg_run_status_lease_idx",
             ),
+            models.Index(
+                fields=["status", "stage", "finished_at", "id"],
+                name="kg_run_terminal_idx",
+            ),
+            models.Index(
+                fields=[
+                    "build_kind",
+                    "scope_type",
+                    "scope_id",
+                    "build_generation",
+                ],
+                name="kg_run_scope_gen_idx",
+            ),
         ]
 
     def populate_artifact_snapshot(self) -> None:
@@ -1148,6 +1446,8 @@ class GraphBuildRun(ValidatedGraphModel):
         artifact = GraphArtifact.objects.get(pk=self.artifact_id)
         self.build_kind = artifact.scope_type
         for field in (
+            "rebuild_request_id",
+            "evaluation_only",
             "build_key",
             "build_generation",
             "orchestration_version",
@@ -1219,6 +1519,14 @@ class GraphBuildRun(ValidatedGraphModel):
             raise ValidationError(
                 {"build_key": "Build key must be a lowercase SHA-256 digest."}
             )
+        if self.evaluation_only and (
+            self.rebuild_request_id is None
+            or self.stage == self.Stage.ACTIVE
+            or self.status == self.Status.SUCCEEDED
+        ):
+            raise ValidationError(
+                {"evaluation_only": "Evaluation runs cannot become current."}
+            )
         if self.orchestration_version == GraphArtifact.OrchestrationVersion.SCOPED_V1:
             from apps.knowledge_graph.services.builds import (
                 validate_orchestration_stage,
@@ -1257,3 +1565,795 @@ class GraphBuildRun(ValidatedGraphModel):
                         for field in mismatched
                     }
                 )
+        _validate_rebuild_occurrence_correlation(self)
+
+
+class GraphRebuildRequest(ValidatedGraphModel):
+    """Durable operator request spanning forced document and collection builds."""
+
+    class ScopeType(models.TextChoices):
+        DOCUMENT = "document", "Document"
+        COLLECTION = "collection", "Collection"
+        ALL = "all", "All"
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        PARTIAL = "partial", "Partial"
+
+    class PublicationState(models.TextChoices):
+        NOT_APPLICABLE = "not_applicable", "Not applicable"
+        PENDING = "pending", "Pending"
+        PUBLISHED = "published", "Published"
+        FAILED = "failed", "Failed"
+
+    _ACTIVATION_AUDIT_FIELDS = (
+        "activated_artifact_pk",
+        "activated_run_pk",
+        "activated_build_key",
+        "activated_build_generation",
+        "activated_source_hash",
+        "activated_occurrence_signature",
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    parent_request = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="child_requests",
+        editable=False,
+    )
+    predecessor_request = models.OneToOneField(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="successor_request",
+        editable=False,
+    )
+    lineage_root = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="replacement_requests",
+        editable=False,
+    )
+    scope_type = models.CharField(max_length=16, choices=ScopeType.choices)
+    scope_id = models.CharField(max_length=64, blank=True, default="")
+    requested_documents = models.JSONField(default=list, blank=True)
+    expected_aggregate_signature = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.QUEUED
+    )
+    evaluation_only = models.BooleanField(default=False, editable=False)
+    document_count = models.PositiveIntegerField(default=0, editable=False)
+    completed_document_count = models.PositiveIntegerField(default=0)
+    terminal_failure_count = models.PositiveIntegerField(default=0)
+    collection_count = models.PositiveIntegerField(default=0)
+    completed_collection_count = models.PositiveIntegerField(default=0)
+    failed_collection_count = models.PositiveIntegerField(default=0)
+    enumeration_high_water = models.PositiveBigIntegerField(null=True, blank=True)
+    enumeration_cursor = models.PositiveBigIntegerField(default=0)
+    enumeration_complete = models.BooleanField(default=False)
+    expected_child_count = models.PositiveIntegerField(default=0)
+    document_publish_cursor = models.PositiveIntegerField(default=0)
+    document_publication_state = models.CharField(
+        max_length=16,
+        choices=PublicationState.choices,
+        default=PublicationState.PENDING,
+    )
+    collection_build_key = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
+    collection_publication_state = models.CharField(
+        max_length=16,
+        choices=PublicationState.choices,
+        default=PublicationState.NOT_APPLICABLE,
+    )
+    activated_artifact_pk = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        editable=False,
+    )
+    activated_run_pk = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        editable=False,
+    )
+    activated_build_key = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        editable=False,
+    )
+    activated_build_generation = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        editable=False,
+    )
+    activated_source_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        editable=False,
+    )
+    activated_occurrence_signature = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        editable=False,
+    )
+    error_code = models.CharField(max_length=128, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    collection_refresh_enqueued_at = models.DateTimeField(null=True, blank=True)
+    collection_refresh_published_at = models.DateTimeField(null=True, blank=True)
+
+    _IMMUTABLE_FIELDS = (
+        "id",
+        "parent_request",
+        "parent_request_id",
+        "predecessor_request",
+        "predecessor_request_id",
+        "lineage_root",
+        "lineage_root_id",
+        "scope_type",
+        "scope_id",
+        "requested_documents",
+        "evaluation_only",
+        "document_count",
+        "enumeration_high_water",
+        "created_at",
+    )
+    _QUERYSET_IMMUTABLE_FIELDS = (
+        *_IMMUTABLE_FIELDS,
+        "expected_aggregate_signature",
+        "status",
+        "completed_document_count",
+        "terminal_failure_count",
+        "collection_count",
+        "completed_collection_count",
+        "failed_collection_count",
+        "enumeration_cursor",
+        "enumeration_complete",
+        "expected_child_count",
+        "document_publish_cursor",
+        "document_publication_state",
+        "collection_build_key",
+        "collection_publication_state",
+        "activated_artifact_pk",
+        "activated_run_pk",
+        "activated_build_key",
+        "activated_build_generation",
+        "activated_source_hash",
+        "activated_occurrence_signature",
+        "error_code",
+        "started_at",
+        "completed_at",
+        "collection_refresh_enqueued_at",
+        "collection_refresh_published_at",
+    )
+
+    objects = models.Manager.from_queryset(GraphRebuildRequestQuerySet)()
+
+    class Meta:
+        app_label = "apps_knowledge_graph"
+        indexes = [
+            models.Index(fields=["status", "created_at"], name="kg_rebuild_status_idx"),
+            models.Index(
+                fields=["scope_type", "scope_id", "created_at"],
+                name="kg_rebuild_scope_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(scope_type__in=("document", "collection", "all")),
+                name="kg_rebuild_scope_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(scope_type="all", scope_id="")
+                    | Q(scope_type="document", scope_id__regex=_DOCUMENT_SCOPE_PATTERN)
+                    | Q(
+                        scope_type="collection",
+                        scope_id__regex=_COLLECTION_SCOPE_PATTERN,
+                    )
+                ),
+                name="kg_rebuild_typed_scope",
+            ),
+            models.CheckConstraint(
+                condition=Q(expected_aggregate_signature="")
+                | Q(expected_aggregate_signature__regex=_CHECKSUM_PATTERN),
+                name="kg_rebuild_expected_hash",
+            ),
+            models.CheckConstraint(
+                condition=Q(completed_document_count__lte=models.F("document_count")),
+                name="kg_rebuild_completed_bounded",
+            ),
+            models.CheckConstraint(
+                condition=Q(terminal_failure_count__lte=models.F("document_count")),
+                name="kg_rebuild_failures_bounded",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    completed_document_count__lte=(
+                        models.F("document_count") - models.F("terminal_failure_count")
+                    )
+                ),
+                name="kg_rebuild_outcomes_bounded",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    completed_collection_count__lte=models.F("collection_count")
+                ),
+                name="kg_rebuild_collections_completed_bounded",
+            ),
+            models.CheckConstraint(
+                condition=Q(failed_collection_count__lte=models.F("collection_count")),
+                name="kg_rebuild_collections_failed_bounded",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    completed_collection_count__lte=(
+                        models.F("collection_count")
+                        - models.F("failed_collection_count")
+                    )
+                ),
+                name="kg_rebuild_collection_outcomes_bounded",
+            ),
+            models.CheckConstraint(
+                condition=Q(document_publish_cursor__lte=models.F("document_count")),
+                name="kg_rebuild_publish_cursor_bounded",
+            ),
+            models.CheckConstraint(
+                condition=Q(enumeration_cursor__lte=models.F("enumeration_high_water"))
+                | Q(enumeration_high_water__isnull=True, enumeration_cursor=0),
+                name="kg_rebuild_enumeration_cursor_bounded",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    status__in=(
+                        "queued",
+                        "running",
+                        "succeeded",
+                        "failed",
+                        "partial",
+                    )
+                ),
+                name="kg_rebuild_status_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(evaluation_only=False) | Q(scope_type="collection"),
+                name="kg_rebuild_eval_collection",
+            ),
+            models.CheckConstraint(
+                condition=Q(scope_type="collection")
+                | Q(expected_aggregate_signature=""),
+                name="kg_rebuild_expected_scope",
+            ),
+            models.CheckConstraint(
+                condition=Q(collection_refresh_enqueued_at__isnull=True)
+                | Q(scope_type="collection"),
+                name="kg_rebuild_refresh_scope",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        status__in=("succeeded", "failed", "partial"),
+                        completed_at__isnull=False,
+                    )
+                    | Q(
+                        status__in=("queued", "running"),
+                        completed_at__isnull=True,
+                    )
+                ),
+                name="kg_rebuild_terminal_time",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status="succeeded")
+                    | Q(
+                        activated_artifact_pk__isnull=True,
+                        activated_run_pk__isnull=True,
+                        activated_build_key="",
+                        activated_build_generation__isnull=True,
+                        activated_source_hash="",
+                        activated_occurrence_signature="",
+                    )
+                ),
+                name="kg_rebuild_activation_terminal",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(scope_type="all")
+                    | ~Q(status="succeeded")
+                    | Q(
+                        activated_artifact_pk__isnull=False,
+                        activated_run_pk__isnull=False,
+                        activated_build_key__regex=_CHECKSUM_PATTERN,
+                        activated_build_generation__isnull=False,
+                        activated_source_hash__regex=_CHECKSUM_PATTERN,
+                        activated_occurrence_signature__regex=_CHECKSUM_PATTERN,
+                    )
+                ),
+                name="kg_rebuild_scoped_success_artifact",
+            ),
+            models.CheckConstraint(
+                condition=Q(error_code="") | Q(error_code__regex=_ERROR_CODE_PATTERN),
+                name="kg_rebuild_error_code_safe",
+            ),
+        ]
+
+    def prepare_for_persistence(self) -> None:
+        if self.scope_type == self.ScopeType.ALL:
+            self.scope_id = ""
+        else:
+            self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
+        if type(self.requested_documents) is not list:
+            raise ValidationError(
+                {
+                    "requested_documents": (
+                        "Requested documents must be a bounded JSON list."
+                    )
+                }
+            )
+        if len(self.requested_documents) > 10_000:
+            raise ValidationError(
+                {"requested_documents": "Requested document snapshot exceeds its cap."}
+            )
+        required = {
+            "document_id",
+            "document_pkid",
+            "model_label",
+            "collection_id",
+            "source_hash",
+        }
+        from apps.documents.models import DESCENDED_FROM_DOCUMENT
+
+        allowed_model_labels = {
+            model._meta.label_lower for model in DESCENDED_FROM_DOCUMENT
+        }
+        canonical_rows = []
+        for row in self.requested_documents:
+            if type(row) is not dict or set(row) != required:
+                raise ValidationError(
+                    {
+                        "requested_documents": (
+                            "Requested documents must contain exact scalar snapshots."
+                        )
+                    }
+                )
+            try:
+                document_id = str(uuid.UUID(row["document_id"]))
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValidationError(
+                    {"requested_documents": "Document snapshot UUID is invalid."}
+                ) from exc
+            if document_id != row["document_id"]:
+                raise ValidationError(
+                    {"requested_documents": "Document snapshot UUID is not canonical."}
+                )
+            if (
+                type(row["document_pkid"]) is not int
+                or row["document_pkid"] <= 0
+                or type(row["collection_id"]) is not int
+                or row["collection_id"] <= 0
+                or type(row["model_label"]) is not str
+                or row["model_label"] not in allowed_model_labels
+                or type(row["source_hash"]) is not str
+                or not re.fullmatch(_CHECKSUM_PATTERN, row["source_hash"])
+            ):
+                raise ValidationError(
+                    {"requested_documents": "Document snapshot scalar is invalid."}
+                )
+            canonical_rows.append(
+                (
+                    row["model_label"],
+                    row["document_id"],
+                    row["document_pkid"],
+                )
+            )
+        if canonical_rows != sorted(canonical_rows) or len(canonical_rows) != len(
+            set(row[1] for row in canonical_rows)
+        ):
+            raise ValidationError(
+                {
+                    "requested_documents": (
+                        "Requested document snapshots must be ordered and UUID-unique."
+                    )
+                }
+            )
+        if self.document_count != len(self.requested_documents):
+            raise ValidationError(
+                {"document_count": "Document count must match the request snapshot."}
+            )
+        if self.scope_type == self.ScopeType.ALL and self.requested_documents:
+            raise ValidationError(
+                {"requested_documents": "Operator parent requests use child snapshots."}
+            )
+        if self.scope_type == self.ScopeType.DOCUMENT and self.document_count != 1:
+            raise ValidationError(
+                {"document_count": "Document rebuild requests require one snapshot."}
+            )
+        if self.scope_type == self.ScopeType.DOCUMENT and self.collection_count != 0:
+            raise ValidationError(
+                {"collection_count": "Document requests have no collection unit."}
+            )
+        if self.scope_type == self.ScopeType.COLLECTION and self.collection_count != 1:
+            raise ValidationError(
+                {"collection_count": "Collection requests require one collection unit."}
+            )
+        if self.scope_type == self.ScopeType.ALL:
+            if (
+                type(self.enumeration_high_water) is not int
+                or self.enumeration_high_water < 0
+                or self.collection_count != self.expected_child_count
+            ):
+                raise ValidationError(
+                    {"enumeration_high_water": "Operator enumeration state is invalid."}
+                )
+        elif (
+            self.enumeration_high_water is not None
+            or self.enumeration_cursor != 0
+            or self.enumeration_complete
+            or self.expected_child_count != 0
+        ):
+            raise ValidationError(
+                {"enumeration_cursor": "Scoped requests cannot enumerate children."}
+            )
+        if self.scope_type == self.ScopeType.DOCUMENT and (
+            self.requested_documents[0]["document_id"] != self.scope_id
+        ):
+            raise ValidationError(
+                {"requested_documents": "Document snapshot must match request scope."}
+            )
+        if self.scope_type == self.ScopeType.COLLECTION and any(
+            row["collection_id"] != int(self.scope_id)
+            for row in self.requested_documents
+        ):
+            raise ValidationError(
+                {
+                    "requested_documents": (
+                        "Document snapshots must match collection scope."
+                    )
+                }
+            )
+        if self.expected_aggregate_signature:
+            _validate_identity_checksum(
+                self.expected_aggregate_signature, "expected_aggregate_signature"
+            )
+        if self.error_code and not re.fullmatch(_ERROR_CODE_PATTERN, self.error_code):
+            raise ValidationError(
+                {"error_code": "Error code must be a bounded private identifier."}
+            )
+        if self.collection_build_key:
+            _validate_identity_checksum(
+                self.collection_build_key,
+                "collection_build_key",
+            )
+        if (
+            self.completed_document_count + self.terminal_failure_count
+            > self.document_count
+        ):
+            raise ValidationError(
+                {"completed_document_count": "Document outcomes exceed the snapshot."}
+            )
+        if (
+            self.completed_collection_count + self.failed_collection_count
+            > self.collection_count
+        ):
+            raise ValidationError(
+                {"completed_collection_count": "Collection outcomes exceed scope."}
+            )
+        if self.document_publish_cursor > self.document_count:
+            raise ValidationError(
+                {"document_publish_cursor": "Publication cursor exceeds snapshot."}
+            )
+        self._validate_lineage_shape()
+
+    def clean(self):
+        super().clean()
+        self._validate_success_activation()
+        if not self.pk:
+            return
+        previous = (
+            type(self)
+            .objects.filter(pk=self.pk)
+            .values(
+                "status",
+                "expected_aggregate_signature",
+                "completed_document_count",
+                "terminal_failure_count",
+                "collection_count",
+                "completed_collection_count",
+                "failed_collection_count",
+                "enumeration_cursor",
+                "enumeration_complete",
+                "expected_child_count",
+                "document_publish_cursor",
+                "document_publication_state",
+                "collection_build_key",
+                "collection_publication_state",
+                *self._ACTIVATION_AUDIT_FIELDS,
+                "error_code",
+                "started_at",
+                "completed_at",
+                "collection_refresh_enqueued_at",
+                "collection_refresh_published_at",
+            )
+            .first()
+        )
+        if previous is None:
+            return
+        allowed = {
+            self.Status.QUEUED: {
+                self.Status.QUEUED,
+                self.Status.RUNNING,
+                self.Status.FAILED,
+            },
+            self.Status.RUNNING: {
+                self.Status.RUNNING,
+                self.Status.SUCCEEDED,
+                self.Status.FAILED,
+                self.Status.PARTIAL,
+            },
+            self.Status.SUCCEEDED: {self.Status.SUCCEEDED},
+            self.Status.FAILED: {self.Status.FAILED},
+            self.Status.PARTIAL: {self.Status.PARTIAL},
+        }
+        if self.status not in allowed.get(previous["status"], set()):
+            raise ValidationError({"status": "Rebuild request transition is invalid."})
+        terminal = {
+            self.Status.SUCCEEDED,
+            self.Status.FAILED,
+            self.Status.PARTIAL,
+        }
+        mutable_fields = (
+            "expected_aggregate_signature",
+            "completed_document_count",
+            "terminal_failure_count",
+            "collection_count",
+            "completed_collection_count",
+            "failed_collection_count",
+            "enumeration_cursor",
+            "enumeration_complete",
+            "expected_child_count",
+            "document_publish_cursor",
+            "document_publication_state",
+            "collection_build_key",
+            "collection_publication_state",
+            *self._ACTIVATION_AUDIT_FIELDS,
+            "error_code",
+            "started_at",
+            "completed_at",
+            "collection_refresh_enqueued_at",
+            "collection_refresh_published_at",
+        )
+        if previous["status"] in terminal:
+            changed = {
+                field
+                for field in mutable_fields
+                if previous[field] != getattr(self, field)
+            }
+            if (
+                changed == {"error_code"}
+                and previous["error_code"] in _RESNAPSHOT_RECONCILING_ERROR_CODES
+                and self.error_code in _RESNAPSHOT_FINAL_ERROR_CODES
+            ):
+                return
+            if changed:
+                raise ValidationError(
+                    {field: "Terminal rebuild state is immutable." for field in changed}
+                )
+            return
+        prior_signature = previous["expected_aggregate_signature"]
+        if prior_signature and self.expected_aggregate_signature != prior_signature:
+            raise ValidationError(
+                {
+                    "expected_aggregate_signature": (
+                        "Expected aggregate signature is immutable once assigned."
+                    )
+                }
+            )
+        for field in (
+            "completed_document_count",
+            "terminal_failure_count",
+            "collection_count",
+            "completed_collection_count",
+            "failed_collection_count",
+            "enumeration_cursor",
+            "expected_child_count",
+            "document_publish_cursor",
+        ):
+            if getattr(self, field) < previous[field]:
+                raise ValidationError({field: "Rebuild counters cannot decrease."})
+        for field in (
+            *self._ACTIVATION_AUDIT_FIELDS,
+            "started_at",
+            "completed_at",
+        ):
+            if previous[field] not in (None, "") and (
+                getattr(self, field) != previous[field]
+            ):
+                raise ValidationError({field: "Rebuild lifecycle value is immutable."})
+
+    def _validate_lineage_shape(self) -> None:
+        predecessor = self._state.fields_cache.get("predecessor_request")
+        root = self._state.fields_cache.get("lineage_root")
+        if self.predecessor_request_id is None:
+            if self.lineage_root_id is not None:
+                raise ValidationError(
+                    {"lineage_root": "Original requests cannot name a lineage root."}
+                )
+            return
+        if self.lineage_root_id is None or self.parent_request_id is not None:
+            raise ValidationError(
+                {"predecessor_request": "Successor lineage shape is invalid."}
+            )
+        if predecessor is None:
+            predecessor = (
+                type(self).objects.filter(pk=self.predecessor_request_id).first()
+            )
+        if root is None:
+            root = type(self).objects.filter(pk=self.lineage_root_id).first()
+        if predecessor is None or root is None:
+            raise ValidationError(
+                {"predecessor_request": "Successor lineage rows must exist."}
+            )
+        expected_root_id = predecessor.lineage_root_id or predecessor.pk
+        if (
+            root.pk != expected_root_id
+            or self.scope_type != predecessor.scope_type
+            or self.scope_id != predecessor.scope_id
+            or self.evaluation_only is not predecessor.evaluation_only
+        ):
+            raise ValidationError(
+                {"lineage_root": "Successor must preserve its immutable scope."}
+            )
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(
+            {"id": "Graph rebuild request audit rows cannot be deleted."}
+        )
+
+    def _activation_audit_is_complete(self) -> bool:
+        return (
+            type(self.activated_artifact_pk) is int
+            and self.activated_artifact_pk > 0
+            and type(self.activated_run_pk) is int
+            and self.activated_run_pk > 0
+            and type(self.activated_build_generation) is int
+            and self.activated_build_generation > 0
+            and type(self.activated_build_key) is str
+            and re.fullmatch(_CHECKSUM_PATTERN, self.activated_build_key) is not None
+            and type(self.activated_source_hash) is str
+            and re.fullmatch(_CHECKSUM_PATTERN, self.activated_source_hash) is not None
+            and type(self.activated_occurrence_signature) is str
+            and re.fullmatch(
+                _CHECKSUM_PATTERN,
+                self.activated_occurrence_signature,
+            )
+            is not None
+        )
+
+    def _validate_success_activation(self) -> None:
+        if (
+            self.status != self.Status.SUCCEEDED
+            or self.scope_type == self.ScopeType.ALL
+        ):
+            return
+        if not self._activation_audit_is_complete():
+            raise ValidationError(
+                {
+                    "activated_occurrence_signature": (
+                        "Successful scoped requests require an exact activation audit."
+                    )
+                }
+            )
+        artifact = GraphArtifact.objects.filter(pk=self.activated_artifact_pk).first()
+        if artifact is None:
+            previous = (
+                type(self)
+                .objects.filter(pk=self.pk, status=self.Status.SUCCEEDED)
+                .values(*self._ACTIVATION_AUDIT_FIELDS)
+                .first()
+            )
+            if previous is not None and all(
+                previous[field] == getattr(self, field)
+                for field in self._ACTIVATION_AUDIT_FIELDS
+            ):
+                return
+            raise ValidationError(
+                {"activated_artifact_pk": "Activated artifact does not exist."}
+            )
+        expected_scope = (
+            GraphArtifact.ScopeType.DOCUMENT
+            if self.scope_type == self.ScopeType.DOCUMENT
+            else GraphArtifact.ScopeType.COLLECTION
+        )
+        if (
+            artifact.rebuild_request_id != self.pk
+            or artifact.scope_type != expected_scope
+            or artifact.scope_id != self.scope_id
+            or artifact.evaluation_only is not self.evaluation_only
+        ):
+            raise ValidationError(
+                {"activated_artifact_pk": "Activation is outside the exact request."}
+            )
+        if self.scope_type == self.ScopeType.DOCUMENT:
+            source_matches = len(
+                self.requested_documents
+            ) == 1 and artifact.source_hash == self.requested_documents[0].get(
+                "source_hash"
+            )
+            build_kind = GraphBuildRun.BuildKind.DOCUMENT
+        else:
+            source_matches = (
+                bool(self.expected_aggregate_signature)
+                and artifact.source_hash == self.expected_aggregate_signature
+            )
+            build_kind = GraphBuildRun.BuildKind.COLLECTION
+        if not source_matches:
+            raise ValidationError(
+                {"activated_artifact_pk": "Activation source differs from the request."}
+            )
+        runs = tuple(
+            GraphBuildRun.objects.filter(
+                artifact_id=artifact.pk,
+                rebuild_request_id=self.pk,
+                build_kind=build_kind,
+            ).order_by("pk")[:2]
+        )
+        if len(runs) != 1:
+            raise ValidationError(
+                {"activated_run_pk": "Activation requires one exact terminal run."}
+            )
+        if runs[0].pk != self.activated_run_pk:
+            raise ValidationError(
+                {"activated_run_pk": "Activation run identity differs from its audit."}
+            )
+        from apps.knowledge_graph.services.builds import (
+            _evaluation_occurrence_completed,
+            _production_occurrence_completed,
+        )
+
+        completed = (
+            _evaluation_occurrence_completed(
+                artifact,
+                runs[0],
+                build_kind=build_kind,
+            )
+            if self.evaluation_only
+            else _production_occurrence_completed(
+                artifact,
+                runs[0],
+                build_kind=build_kind,
+                allow_historical=True,
+            )
+        )
+        if not completed:
+            raise ValidationError(
+                {"activated_run_pk": "Activation run is not exact and terminal."}
+            )
+        expected_audit = _activation_audit_values(artifact, runs[0])
+        mismatched_audit = {
+            field
+            for field, value in expected_audit.items()
+            if getattr(self, field) != value
+        }
+        if mismatched_audit:
+            raise ValidationError(
+                {
+                    field: "Activation audit differs from the exact occurrence."
+                    for field in sorted(mismatched_audit)
+                }
+            )

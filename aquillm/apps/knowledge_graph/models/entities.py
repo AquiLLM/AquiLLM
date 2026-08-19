@@ -507,6 +507,7 @@ class CollectionEntityQuerySet(CollectionArtifactChildQuerySet):
     def current(self):
         return self.filter(
             artifact__status=GraphArtifact.Status.ACTIVE,
+            artifact__evaluation_only=False,
             status=ResolutionStatus.ACTIVE,
         )
 

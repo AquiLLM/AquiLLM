@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 from django.conf import settings
 from django.db import close_old_connections, connection, transaction
+from django.test.utils import CaptureQueriesContext
 
 
 def _database_is_reachable() -> bool:
@@ -482,10 +483,11 @@ def test_collection_return_active_rejects_document_activation_that_wins_lock_rac
     )
     assert completed is False
     now = timezone.now()
-    GraphArtifact.objects.filter(pk=collection_artifact.pk).update(
-        status=GraphArtifact.Status.ACTIVE,
-        activated_at=now,
-        completed_at=now,
+    collection_artifact.status = GraphArtifact.Status.ACTIVE
+    collection_artifact.activated_at = now
+    collection_artifact.completed_at = now
+    collection_artifact.save(
+        update_fields=["status", "activated_at", "completed_at"],
     )
     GraphBuildRun.objects.filter(pk=collection_run.pk).update(
         stage=GraphBuildRun.Stage.ACTIVE,
@@ -1177,7 +1179,11 @@ def test_post_resolution_resume_skips_providers_and_activates_same_document(
     run.stats = {"fixture_commit_state": "validated_by_injected_inspectors"}
     run.save(update_fields=["stats"])
     _patch_document_activation(monkeypatch, lambda: context)
-    monkeypatch.setattr(builds, "_document_context", lambda *_args: context)
+    monkeypatch.setattr(
+        builds,
+        "_document_context",
+        lambda *_args, **_kwargs: context,
+    )
     monkeypatch.setattr(
         builds,
         "_bootstrap_document_build",
@@ -1365,6 +1371,471 @@ def test_collection_lock_paths_complete_without_a_deadlock():
     assert artifact.pk in coordinator_ids[0]
     assert run.pk in coordinator_ids[1]
     assert assembly_ids == (artifact.pk, run.pk)
+
+
+def test_operator_page_takes_collection_advisory_before_its_row_lock(monkeypatch):
+    from django.utils import timezone
+
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.graph import assembly
+    from apps.knowledge_graph.models import GraphRebuildRequest
+    from apps.knowledge_graph.services import builds
+
+    collection = Collection.objects.create(name=f"operator lock {uuid.uuid4().hex}")
+    parent = GraphRebuildRequest.objects.create(
+        id=uuid.uuid4(),
+        scope_type=GraphRebuildRequest.ScopeType.ALL,
+        scope_id="",
+        requested_documents=[],
+        document_count=0,
+        status=GraphRebuildRequest.Status.RUNNING,
+        started_at=timezone.now(),
+        enumeration_high_water=collection.pk,
+        document_publication_state=(
+            GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+        ),
+        collection_publication_state=(
+            GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+        ),
+    )
+    real_advisory = assembly.lock_collection_graph_advisory_scope
+    holder_has_advisory = Event()
+    page_reached_advisory = Event()
+    holder_has_row = Event()
+    release_holder = Event()
+
+    def observed_page_advisory(collection_id):
+        page_reached_advisory.set()
+        return real_advisory(collection_id)
+
+    monkeypatch.setattr(
+        assembly,
+        "lock_collection_graph_advisory_scope",
+        observed_page_advisory,
+    )
+
+    def hold_normal_collection_prefix():
+        close_old_connections()
+        try:
+            with transaction.atomic():
+                real_advisory(collection.pk)
+                holder_has_advisory.set()
+                assert page_reached_advisory.wait(timeout=10)
+                Collection.objects.select_for_update().get(pk=collection.pk)
+                holder_has_row.set()
+                assert release_holder.wait(timeout=10)
+        finally:
+            close_old_connections()
+
+    def enumerate_page():
+        close_old_connections()
+        try:
+            assert holder_has_advisory.wait(timeout=10)
+            return builds._enumerate_operator_rebuild_page(parent.pk)
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        holder = executor.submit(hold_normal_collection_prefix)
+        page = executor.submit(enumerate_page)
+        assert holder_has_row.wait(timeout=10)
+        release_holder.set()
+        holder.result(timeout=20)
+        child_ids = page.result(timeout=20)
+
+    assert child_ids == (uuid.uuid5(parent.pk, f"collection:{collection.pk}"),)
+
+
+def test_resnapshot_reconciles_collection_deleted_while_waiting_for_advisory(
+    monkeypatch,
+):
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.graph import assembly
+    from apps.knowledge_graph.models import GraphRebuildRequest
+    from apps.knowledge_graph.services import builds
+
+    collection, _document, _chunk = _persist_document(label="resnapshot-delete")
+    monkeypatch.setattr(
+        builds,
+        "enqueue_document_build",
+        lambda *_args, **_kwargs: None,
+    )
+    request = builds.create_rebuild_request(
+        scope_type=GraphRebuildRequest.ScopeType.COLLECTION,
+        scope_id=collection.pk,
+        request_id=uuid.uuid4(),
+    )
+    real_advisory = assembly.lock_collection_graph_advisory_scope
+    deleted_uncommitted = Event()
+    resnapshot_reached_advisory = Event()
+
+    def observed_advisory(collection_id):
+        if collection_id == collection.pk:
+            resnapshot_reached_advisory.set()
+        return real_advisory(collection_id)
+
+    monkeypatch.setattr(
+        assembly,
+        "lock_collection_graph_advisory_scope",
+        observed_advisory,
+    )
+
+    def delete_scope():
+        close_old_connections()
+        try:
+            with transaction.atomic():
+                real_advisory(collection.pk)
+                Collection.objects.get(pk=collection.pk).delete()
+                deleted_uncommitted.set()
+                assert resnapshot_reached_advisory.wait(timeout=10)
+        finally:
+            close_old_connections()
+
+    def resnapshot():
+        close_old_connections()
+        try:
+            assert deleted_uncommitted.wait(timeout=10)
+            builds.record_rebuild_failure(
+                request.pk,
+                error_code="request_snapshot_changed",
+                resnapshot=True,
+            )
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        deleting = executor.submit(delete_scope)
+        reconciling = executor.submit(resnapshot)
+        deleting.result(timeout=30)
+        reconciling.result(timeout=30)
+
+    request.refresh_from_db()
+    assert request.status == GraphRebuildRequest.Status.PARTIAL
+    assert request.error_code == "scope_deleted"
+    assert not GraphRebuildRequest.objects.filter(
+        predecessor_request_id=request.pk
+    ).exists()
+
+
+def test_resnapshot_retries_document_move_from_a_fresh_advisory_prefix(monkeypatch):
+    from apps.collections.models import Collection
+    from apps.documents.models import RawTextDocument
+    from apps.knowledge_graph.graph import assembly
+    from apps.knowledge_graph.models import GraphRebuildRequest
+    from apps.knowledge_graph.services import builds
+
+    source, document, _chunk = _persist_document(label="resnapshot-move")
+    target = Collection.objects.create(name=f"resnapshot target {uuid.uuid4().hex}")
+    monkeypatch.setattr(
+        builds,
+        "enqueue_document_build",
+        lambda *_args, **_kwargs: None,
+    )
+    request = builds.create_rebuild_request(
+        scope_type=GraphRebuildRequest.ScopeType.DOCUMENT,
+        scope_id=document.id,
+        request_id=uuid.uuid4(),
+    )
+    real_advisory = assembly.lock_collection_graph_advisory_scope
+    moved_uncommitted = Event()
+    resnapshot_reached_source_advisory = Event()
+
+    def observed_advisory(collection_id):
+        if collection_id == source.pk:
+            resnapshot_reached_source_advisory.set()
+        return real_advisory(collection_id)
+
+    monkeypatch.setattr(
+        assembly,
+        "lock_collection_graph_advisory_scope",
+        observed_advisory,
+    )
+
+    def move_document():
+        close_old_connections()
+        try:
+            with transaction.atomic():
+                for collection_id in sorted((source.pk, target.pk)):
+                    real_advisory(collection_id)
+                RawTextDocument.objects.filter(pkid=document.pkid).update(
+                    collection_id=target.pk
+                )
+                moved_uncommitted.set()
+                assert resnapshot_reached_source_advisory.wait(timeout=10)
+        finally:
+            close_old_connections()
+
+    def resnapshot():
+        close_old_connections()
+        try:
+            assert moved_uncommitted.wait(timeout=10)
+            builds.record_rebuild_failure(
+                request.pk,
+                error_code="request_snapshot_changed",
+                resnapshot=True,
+            )
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        moving = executor.submit(move_document)
+        reconciling = executor.submit(resnapshot)
+        moving.result(timeout=30)
+        reconciling.result(timeout=30)
+
+    request.refresh_from_db()
+    successor = GraphRebuildRequest.objects.get(predecessor_request_id=request.pk)
+    assert request.status == GraphRebuildRequest.Status.PARTIAL
+    assert successor.requested_documents[0]["collection_id"] == target.pk
+    assert successor.status == GraphRebuildRequest.Status.RUNNING
+
+
+def test_operator_parent_aggregates_over_one_effective_leaf_query_envelope():
+    from django.utils import timezone
+
+    from apps.knowledge_graph.models import GraphRebuildRequest
+    from apps.knowledge_graph.services import builds
+
+    child_count = 101
+    parent = GraphRebuildRequest.objects.create(
+        id=uuid.uuid4(),
+        scope_type=GraphRebuildRequest.ScopeType.ALL,
+        scope_id="",
+        requested_documents=[],
+        document_count=0,
+        collection_count=child_count,
+        status=GraphRebuildRequest.Status.RUNNING,
+        started_at=timezone.now(),
+        enumeration_high_water=child_count,
+        enumeration_cursor=child_count,
+        enumeration_complete=True,
+        expected_child_count=child_count,
+        document_publication_state=(
+            GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+        ),
+        collection_publication_state=(
+            GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+        ),
+    )
+    GraphRebuildRequest.objects.bulk_create(
+        [
+            GraphRebuildRequest(
+                id=uuid.uuid5(parent.pk, f"collection:{index}"),
+                parent_request=parent,
+                scope_type=GraphRebuildRequest.ScopeType.COLLECTION,
+                scope_id=str(index),
+                requested_documents=[],
+                document_count=0,
+                collection_count=1,
+                failed_collection_count=1,
+                status=GraphRebuildRequest.Status.FAILED,
+                error_code="document_rebuild_failed",
+                started_at=timezone.now(),
+                completed_at=timezone.now(),
+                document_publication_state=(
+                    GraphRebuildRequest.PublicationState.PUBLISHED
+                ),
+                collection_publication_state=(
+                    GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+                ),
+            )
+            for index in range(1, child_count + 1)
+        ]
+    )
+
+    with CaptureQueriesContext(connection) as captured:
+        with transaction.atomic():
+            builds._advance_parent_rebuild_request(parent.pk)
+        with transaction.atomic():
+            builds._advance_parent_rebuild_request(parent.pk)
+
+    parent.refresh_from_db()
+    assert parent.status == GraphRebuildRequest.Status.FAILED
+    assert parent.failed_collection_count == child_count
+    assert len(captured) <= 12
+
+
+def test_operator_parent_waits_for_reconcilable_churn_leaf(monkeypatch):
+    from django.utils import timezone
+
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.models import GraphRebuildRequest
+    from apps.knowledge_graph.services import builds
+
+    collection = Collection.objects.create(name=f"churn leaf {uuid.uuid4().hex}")
+    _persist_active_ontology()
+    collection_context = _collection_context(collection)
+    parent = GraphRebuildRequest.objects.create(
+        id=uuid.uuid4(),
+        scope_type=GraphRebuildRequest.ScopeType.ALL,
+        scope_id="",
+        requested_documents=[],
+        document_count=0,
+        collection_count=1,
+        status=GraphRebuildRequest.Status.RUNNING,
+        started_at=timezone.now(),
+        enumeration_high_water=collection.pk,
+        enumeration_cursor=collection.pk,
+        enumeration_complete=True,
+        expected_child_count=1,
+        document_publication_state=(
+            GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+        ),
+        collection_publication_state=(
+            GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+        ),
+    )
+    child = GraphRebuildRequest.objects.create(
+        id=uuid.uuid5(parent.pk, f"collection:{collection.pk}"),
+        parent_request=parent,
+        scope_type=GraphRebuildRequest.ScopeType.COLLECTION,
+        scope_id=str(collection.pk),
+        requested_documents=[],
+        document_count=0,
+        collection_count=1,
+        failed_collection_count=1,
+        status=GraphRebuildRequest.Status.PARTIAL,
+        error_code="resnapshot_churn",
+        started_at=timezone.now(),
+        completed_at=timezone.now(),
+        document_publication_state=(GraphRebuildRequest.PublicationState.PUBLISHED),
+        collection_publication_state=(
+            GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+        ),
+    )
+    monkeypatch.setattr(
+        builds,
+        "enqueue_collection_refresh",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        builds,
+        "_collection_context",
+        lambda *_args, **_kwargs: collection_context,
+    )
+
+    with transaction.atomic():
+        builds._advance_parent_rebuild_request(parent.pk)
+    parent.refresh_from_db()
+    assert parent.status == GraphRebuildRequest.Status.RUNNING
+
+    builds.resume_rebuild_request(child.pk)
+
+    successor = GraphRebuildRequest.objects.get(predecessor_request_id=child.pk)
+    parent.refresh_from_db()
+    assert successor.status == GraphRebuildRequest.Status.RUNNING
+    assert parent.status == GraphRebuildRequest.Status.RUNNING
+
+    successor.status = GraphRebuildRequest.Status.FAILED
+    successor.failed_collection_count = 1
+    successor.error_code = "collection_rebuild_failed"
+    successor.completed_at = timezone.now()
+    successor.save(
+        update_fields=[
+            "status",
+            "failed_collection_count",
+            "error_code",
+            "completed_at",
+            "updated_at",
+        ]
+    )
+    with transaction.atomic():
+        builds._advance_parent_rebuild_request(parent.pk)
+
+    parent.refresh_from_db()
+    assert parent.status == GraphRebuildRequest.Status.FAILED
+    assert parent.failed_collection_count == 1
+
+
+def test_operator_wait_pages_pruned_success_audits_in_a_bounded_query_envelope(
+    monkeypatch,
+):
+    from django.utils import timezone
+
+    from apps.knowledge_graph.models import GraphRebuildRequest
+    from apps.knowledge_graph.services import inspection
+
+    child_count = 101
+    parent = GraphRebuildRequest.objects.create(
+        id=uuid.uuid4(),
+        scope_type=GraphRebuildRequest.ScopeType.ALL,
+        scope_id="",
+        requested_documents=[],
+        document_count=0,
+        collection_count=child_count,
+        completed_collection_count=child_count,
+        status=GraphRebuildRequest.Status.SUCCEEDED,
+        started_at=timezone.now(),
+        completed_at=timezone.now(),
+        enumeration_high_water=child_count,
+        enumeration_cursor=child_count,
+        enumeration_complete=True,
+        expected_child_count=child_count,
+        document_publication_state=(
+            GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+        ),
+        collection_publication_state=(
+            GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+        ),
+    )
+    children = [
+        GraphRebuildRequest(
+            id=uuid.uuid5(parent.pk, f"collection:{index}"),
+            parent_request=parent,
+            scope_type=GraphRebuildRequest.ScopeType.COLLECTION,
+            scope_id=str(index),
+            requested_documents=[],
+            document_count=0,
+            collection_count=1,
+            failed_collection_count=1,
+            status=GraphRebuildRequest.Status.FAILED,
+            error_code="document_rebuild_failed",
+            started_at=timezone.now(),
+            completed_at=timezone.now(),
+            document_publication_state=(GraphRebuildRequest.PublicationState.PUBLISHED),
+            collection_publication_state=(
+                GraphRebuildRequest.PublicationState.NOT_APPLICABLE
+            ),
+        )
+        for index in range(1, child_count + 1)
+    ]
+    GraphRebuildRequest.objects.bulk_create(children)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE apps_knowledge_graph_graphrebuildrequest "
+            "SET status = 'succeeded', error_code = '', "
+            "completed_collection_count = 1, failed_collection_count = 0, "
+            "activated_artifact_pk = 1000000 + scope_id::bigint, "
+            "activated_run_pk = 2000000 + scope_id::bigint, "
+            "activated_build_key = %s, activated_build_generation = 1, "
+            "activated_source_hash = %s, activated_occurrence_signature = %s "
+            "WHERE parent_request_id = %s",
+            ["a" * 64, "b" * 64, "c" * 64, parent.pk],
+        )
+
+    with CaptureQueriesContext(connection) as captured:
+        observed = inspection._wait_for_request(parent.pk, 5.0)
+
+    assert observed.pk == parent.pk
+    assert len(captured) <= 15
+
+    real_validate_page = inspection._validate_success_activation_page
+    validated_pages = 0
+
+    def expire_after_first_page(requests, *, deadline):
+        nonlocal validated_pages
+        real_validate_page(requests, deadline=deadline)
+        validated_pages += 1
+        monkeypatch.setattr(inspection, "monotonic", lambda: deadline + 1.0)
+
+    monkeypatch.setattr(
+        inspection,
+        "_validate_success_activation_page",
+        expire_after_first_page,
+    )
+    with pytest.raises(TimeoutError, match="validating rebuild request"):
+        inspection._wait_for_request(parent.pk, 5.0)
+    assert validated_pages == 1
 
 
 def test_database_clock_takeover_heartbeat_and_lost_token_ignore_app_clock(

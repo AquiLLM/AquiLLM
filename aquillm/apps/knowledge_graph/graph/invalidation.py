@@ -2406,7 +2406,12 @@ def document_pre_delete(
     alias = _database_alias(using)
     context = _ensure_origin_delete_scope_locked(origin, using=alias)
     delete_snapshot = _delete_document_snapshot_from_row(sender, instance)
-    _assert_document_delete_scope(context, delete_snapshot)
+    try:
+        _assert_document_delete_scope(context, delete_snapshot)
+    except RuntimeError as exc:
+        if str(exc) == "document is not part of the locked delete scope":
+            raise RuntimeError("document changed during lifecycle deletion") from exc
+        raise
     document = delete_snapshot.document
     # This is deliberately synchronous inside the source deletion transaction:
     # DO_NOTHING graph ownership FKs make cleanup failure abort deletion.
@@ -2455,7 +2460,12 @@ def collection_pre_delete(
     **_kwargs,
 ) -> None:
     context = _ensure_origin_delete_scope_locked(origin, using=using)
-    _assert_collection_delete_scope(context, (instance.pk, instance.parent_id))
+    try:
+        _assert_collection_delete_scope(context, (instance.pk, instance.parent_id))
+    except RuntimeError as exc:
+        if str(exc) == "collection is not part of the locked delete scope":
+            raise RuntimeError("collection changed during lifecycle deletion") from exc
+        raise
     cleanup_collection_graph_state(
         (instance.pk,),
         reason="collection_deleted",

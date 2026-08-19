@@ -1874,11 +1874,16 @@ def _load_locked_canonical_inputs(
     for artifact in locked_document_artifacts:
         if (
             artifact.scope_type != GraphArtifact.ScopeType.DOCUMENT
-            or artifact.status != GraphArtifact.Status.ACTIVE
+            or artifact.status
+            not in {
+                GraphArtifact.Status.ACTIVE,
+                GraphArtifact.Status.SUPERSEDED,
+            }
+            or artifact.evaluation_only
             or artifact.scope_id != str(document_by_artifact[artifact.pk])
         ):
             raise _CanonicalSnapshotChanged(
-                "canonical source artifact is no longer exact and active"
+                "canonical source artifact is no longer exact and pinned"
             )
 
     document_entity_ids = tuple(sorted(document_entity_scope))
@@ -1919,8 +1924,16 @@ def _load_locked_canonical_inputs(
                 document_entity_id__in=entity_batch,
                 status=DocumentEntityMention.Status.ACTIVE,
                 document_entity__status=DocumentEntity.Status.ACTIVE,
-                document_entity__artifact__status=GraphArtifact.Status.ACTIVE,
-                mention__artifact__status=GraphArtifact.Status.ACTIVE,
+                document_entity__artifact__status__in=(
+                    GraphArtifact.Status.ACTIVE,
+                    GraphArtifact.Status.SUPERSEDED,
+                ),
+                document_entity__artifact__evaluation_only=False,
+                mention__artifact__status__in=(
+                    GraphArtifact.Status.ACTIVE,
+                    GraphArtifact.Status.SUPERSEDED,
+                ),
+                mention__artifact__evaluation_only=False,
                 resolver_version=F("document_entity__artifact__resolver_version"),
                 mention__artifact_id=F("document_entity__artifact_id"),
                 mention__document_id=F("document_entity__document_id"),

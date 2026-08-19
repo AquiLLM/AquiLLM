@@ -53,6 +53,16 @@ def _exact_filters(queryset, model, field_name):
     )
 
 
+def _in_filters(queryset, model, field_name):
+    return tuple(
+        (lookup.lhs.alias, tuple(lookup.rhs))
+        for lookup in _where_lookups(queryset.query.where)
+        if lookup.lookup_name == "in"
+        and lookup.lhs.target.model is model
+        and lookup.lhs.target.name == field_name
+    )
+
+
 def test_current_collection_entities_require_active_row_and_artifact():
     current = CollectionEntity.objects.current()
 
@@ -67,12 +77,10 @@ def test_current_collection_entities_require_active_row_and_artifact():
 def test_current_collection_links_require_live_automatic_end_to_end_path():
     current = CollectionEntityDocumentLink.objects.current()
 
-    assert _exact_filters(
-        current, CollectionEntityDocumentLink, "status"
-    ) == ((CollectionEntityDocumentLink._meta.db_table, ResolutionStatus.ACTIVE),)
-    assert _exact_filters(
-        current, CollectionEntityDocumentLink, "outcome"
-    ) == (
+    assert _exact_filters(current, CollectionEntityDocumentLink, "status") == (
+        (CollectionEntityDocumentLink._meta.db_table, ResolutionStatus.ACTIVE),
+    )
+    assert _exact_filters(current, CollectionEntityDocumentLink, "outcome") == (
         (
             CollectionEntityDocumentLink._meta.db_table,
             CollectionEntityDocumentLink.Outcome.AUTOMATIC,
@@ -82,10 +90,14 @@ def test_current_collection_links_require_live_automatic_end_to_end_path():
     assert len(_exact_filters(current, CollectionEntity, "status")) == 1
 
     artifact_filters = _exact_filters(current, GraphArtifact, "status")
-    assert len({alias for alias, _value in artifact_filters}) == 2
-    assert {value for _alias, value in artifact_filters} == {
-        GraphArtifact.Status.ACTIVE
-    }
+    assert len(artifact_filters) == 1
+    assert artifact_filters[0][1] == GraphArtifact.Status.ACTIVE
+    document_artifact_filters = _in_filters(current, GraphArtifact, "status")
+    assert len(document_artifact_filters) == 1
+    assert document_artifact_filters[0][1] == (
+        GraphArtifact.Status.ACTIVE,
+        GraphArtifact.Status.SUPERSEDED,
+    )
 
 
 def test_current_relation_evidence_requires_active_current_relation():
@@ -183,12 +195,16 @@ def test_current_managers_expose_only_live_graph_state_but_keep_audit_rows():
     assert CollectionEntityDocumentLink.objects.filter(artifact=artifact).count() == 2
     assert CollectionRelationEvidence.objects.filter(artifact=artifact).count() == 3
     assert not CollectionEntity.objects.current().filter(artifact=artifact).exists()
-    assert not CollectionEntityDocumentLink.objects.current().filter(
-        artifact=artifact
-    ).exists()
-    assert not CollectionRelationEvidence.objects.current().filter(
-        artifact=artifact
-    ).exists()
+    assert (
+        not CollectionEntityDocumentLink.objects.current()
+        .filter(artifact=artifact)
+        .exists()
+    )
+    assert (
+        not CollectionRelationEvidence.objects.current()
+        .filter(artifact=artifact)
+        .exists()
+    )
 
     artifact.status = GraphArtifact.Status.ACTIVE
     artifact.save(update_fields=["status"])
@@ -217,21 +233,39 @@ def test_current_managers_expose_only_live_graph_state_but_keep_audit_rows():
         ).values_list("pk", flat=True)
     ) == {item.pk for item in hidden_evidence}
 
+    document_artifact.status = GraphArtifact.Status.SUPERSEDED
+    document_artifact.save(update_fields=["status"])
+    assert (
+        CollectionEntityDocumentLink.objects.current()
+        .filter(artifact=artifact)
+        .exists()
+    )
+    assert CollectionRelation.objects.current().filter(artifact=artifact).exists()
+    assert (
+        CollectionRelationEvidence.objects.current().filter(artifact=artifact).exists()
+    )
+
     document_artifact.status = GraphArtifact.Status.STALE
     document_artifact.save(update_fields=["status"])
-    assert not CollectionEntityDocumentLink.objects.current().filter(
-        artifact=artifact
-    ).exists()
+    assert (
+        not CollectionEntityDocumentLink.objects.current()
+        .filter(artifact=artifact)
+        .exists()
+    )
     assert CollectionEntity.objects.current().filter(artifact=artifact).exists()
     assert not CollectionRelation.objects.current().filter(artifact=artifact).exists()
-    assert not CollectionRelationEvidence.objects.current().filter(
-        artifact=artifact
-    ).exists()
+    assert (
+        not CollectionRelationEvidence.objects.current()
+        .filter(artifact=artifact)
+        .exists()
+    )
 
     artifact.status = GraphArtifact.Status.SUPERSEDED
     artifact.save(update_fields=["status"])
     assert not CollectionEntity.objects.current().filter(artifact=artifact).exists()
-    assert not CollectionRelationEvidence.objects.current().filter(
-        artifact=artifact
-    ).exists()
+    assert (
+        not CollectionRelationEvidence.objects.current()
+        .filter(artifact=artifact)
+        .exists()
+    )
     assert CollectionRelationEvidence.objects.filter(artifact=artifact).count() == 3

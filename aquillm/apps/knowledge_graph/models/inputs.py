@@ -25,6 +25,41 @@ from .artifacts import (
 _HASH_PATTERN = r"^[0-9a-f]{64}$"
 
 
+def _manifest_source_is_eligible(destination: object, source: object) -> bool:
+    """Validate one exact source without collapsing production and eval lifecycles."""
+
+    destination_evaluation = getattr(destination, "evaluation_only", None)
+    source_evaluation = getattr(source, "evaluation_only", None)
+    if type(destination_evaluation) is not bool or type(source_evaluation) is not bool:
+        return False
+    destination_status = getattr(destination, "status", None)
+    source_status = getattr(source, "status", None)
+    if destination_evaluation:
+        request_id = getattr(destination, "rebuild_request_id", None)
+        return (
+            request_id is not None
+            and source_evaluation
+            and getattr(source, "rebuild_request_id", None) == request_id
+            and destination_status
+            in {GraphArtifact.Status.BUILDING, GraphArtifact.Status.SUPERSEDED}
+            and source_status == GraphArtifact.Status.SUPERSEDED
+        )
+    if source_evaluation:
+        return False
+    if destination_status in {
+        GraphArtifact.Status.ACTIVE,
+        GraphArtifact.Status.SUPERSEDED,
+    }:
+        return source_status in {
+            GraphArtifact.Status.ACTIVE,
+            GraphArtifact.Status.SUPERSEDED,
+        }
+    return (
+        destination_status == GraphArtifact.Status.BUILDING
+        and source_status == GraphArtifact.Status.ACTIVE
+    )
+
+
 def _hash_payload(payload: object) -> str:
     encoded = json.dumps(
         payload,
@@ -248,8 +283,10 @@ class CollectionArtifactInput(CollectionArtifactChildModelMixin, ValidatedGraphM
             )
         if source.scope_type != GraphArtifact.ScopeType.DOCUMENT:
             errors["document_artifact"] = "Manifest source must be a document artifact."
-        elif source.status != GraphArtifact.Status.ACTIVE:
-            errors["document_artifact"] = "Manifest source artifact must be active."
+        elif not _manifest_source_is_eligible(destination, source):
+            errors["document_artifact"] = (
+                "Manifest source artifact is not eligible for this destination."
+            )
         elif source.scope_id != str(self.document_id):
             errors["document_id"] = (
                 "Manifest document must match source artifact scope."

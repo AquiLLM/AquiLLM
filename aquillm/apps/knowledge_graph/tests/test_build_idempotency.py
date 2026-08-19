@@ -36,6 +36,52 @@ database_required = pytest.mark.skipif(
 )
 
 
+def test_evaluation_document_completion_is_terminal_but_never_current():
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.builds import (
+        _complete_evaluation_document_occurrence,
+    )
+
+    request_id = uuid.uuid4()
+    artifact_saves = []
+    run_saves = []
+    artifact = SimpleNamespace(
+        evaluation_only=True,
+        rebuild_request_id=request_id,
+        status=GraphArtifact.Status.BUILDING,
+        completed_at=None,
+        superseded_at=None,
+        activated_at=None,
+        save=lambda **kwargs: artifact_saves.append(kwargs),
+    )
+    run = SimpleNamespace(
+        evaluation_only=True,
+        rebuild_request_id=request_id,
+        stage=GraphBuildRun.Stage.VALIDATING,
+        status=GraphBuildRun.Status.RUNNING,
+        stage_marker={"stage_sequence": [GraphBuildRun.Stage.VALIDATING]},
+        error_code="",
+        error_message="",
+        finished_at=None,
+        lease_owner="owner",
+        lease_expires_at=object(),
+        save=lambda **kwargs: run_saves.append(kwargs),
+    )
+
+    _complete_evaluation_document_occurrence(artifact, run)
+
+    assert artifact.status == GraphArtifact.Status.SUPERSEDED
+    assert artifact.activated_at is None
+    assert artifact.completed_at == artifact.superseded_at
+    assert artifact_saves
+    assert run.stage == GraphBuildRun.Stage.SUPERSEDED
+    assert run.status == GraphBuildRun.Status.CANCELLED
+    assert run.stage_marker["evaluation_completed"] is True
+    assert run.lease_owner == ""
+    assert run.lease_expires_at is None
+    assert run_saves
+
+
 def _document_identity():
     from apps.knowledge_graph.services.builds import DocumentBuildIdentity
 
@@ -90,11 +136,15 @@ def test_public_build_entrypoints_keep_the_task_contract_narrow():
         "document_id",
         "expected_source_hash",
         "document_build_key",
+        "request_id",
+        "eval_only",
     )
     assert tuple(inspect.signature(refresh_collection_graph).parameters) == (
         "collection_id",
         "aggregate_source_signature",
         "collection_build_key",
+        "request_id",
+        "eval_only",
     )
 
 
@@ -186,6 +236,12 @@ def test_document_and_collection_transitions_are_separate_and_cannot_skip():
         validate_stage_transition(GraphBuildRun.BuildKind.DOCUMENT, left, right)
     for left, right in zip(collection_path, collection_path[1:], strict=False):
         validate_stage_transition(GraphBuildRun.BuildKind.COLLECTION, left, right)
+    for build_kind in GraphBuildRun.BuildKind.values:
+        validate_stage_transition(
+            build_kind,
+            GraphBuildRun.Stage.VALIDATING,
+            GraphBuildRun.Stage.SUPERSEDED,
+        )
 
     with pytest.raises(ValidationError, match="transition"):
         validate_stage_transition(

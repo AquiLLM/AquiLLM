@@ -22,18 +22,27 @@ from .entities import (
 )
 from .inputs import CollectionArtifactInput
 
+_PINNED_DOCUMENT_ARTIFACT_STATUSES = (
+    GraphArtifact.Status.ACTIVE,
+    GraphArtifact.Status.SUPERSEDED,
+)
+
 
 def _current_link_filters(prefix: str = "") -> dict[str, object]:
-    """Return one fail-closed automatic mapping path for current-state reads."""
+    """Return one fail-closed mapping path pinned by an active collection graph."""
 
     path = f"{prefix}__" if prefix else ""
     return {
         f"{path}artifact__status": GraphArtifact.Status.ACTIVE,
+        f"{path}artifact__evaluation_only": False,
         f"{path}status": ResolutionStatus.ACTIVE,
         f"{path}outcome": "automatic",
         f"{path}resolver_version": F(f"{path}artifact__resolver_version"),
         f"{path}document_entity__status": ResolutionStatus.ACTIVE,
-        f"{path}document_entity__artifact__status": GraphArtifact.Status.ACTIVE,
+        f"{path}document_entity__artifact__status__in": (
+            _PINNED_DOCUMENT_ARTIFACT_STATUSES
+        ),
+        f"{path}document_entity__artifact__evaluation_only": False,
         f"{path}collection_entity__status": ResolutionStatus.ACTIVE,
         f"{path}collection_entity__artifact_id": F(f"{path}artifact_id"),
         f"{path}manifest_input__artifact_id": F(f"{path}artifact_id"),

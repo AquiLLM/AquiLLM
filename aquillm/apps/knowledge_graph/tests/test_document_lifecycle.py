@@ -61,11 +61,80 @@ def _cleanup_result(
     )
 
 
+def _persist_successful_document_rebuild_audit():
+    from django.utils import timezone
+
+    from apps.documents.models import RawTextDocument
+    from apps.knowledge_graph.models import (
+        GraphArtifact,
+        GraphBuildRun,
+        GraphRebuildRequest,
+    )
+    from apps.knowledge_graph.models.artifacts import _activation_audit_values
+    from apps.knowledge_graph.tests.test_models import DOCUMENT_ID
+
+    document = RawTextDocument.objects.get(id=DOCUMENT_ID)
+    now = timezone.now()
+    request = GraphRebuildRequest.objects.create(
+        id=uuid.uuid4(),
+        scope_type=GraphRebuildRequest.ScopeType.DOCUMENT,
+        scope_id=str(document.id),
+        requested_documents=[
+            {
+                "document_id": str(document.id),
+                "document_pkid": document.pkid,
+                "model_label": RawTextDocument._meta.label_lower,
+                "collection_id": document.collection_id,
+                "source_hash": document.full_text_hash,
+            }
+        ],
+        document_count=1,
+        status=GraphRebuildRequest.Status.RUNNING,
+        started_at=now,
+        document_publication_state=GraphRebuildRequest.PublicationState.PUBLISHED,
+    )
+    artifact = GraphArtifact.objects.create(
+        scope_type=GraphArtifact.ScopeType.DOCUMENT,
+        scope_id=str(document.id),
+        status=GraphArtifact.Status.SUPERSEDED,
+        source_hash=document.full_text_hash,
+        ontology_version="ontology-v1",
+        extractor_version="extractor-v1",
+        resolver_version="resolver-v1",
+        filter_policy_version="filter-v1",
+        build_key="d" * 64,
+        build_generation=1,
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
+        rebuild_request=request,
+        activated_at=now,
+        completed_at=now,
+        superseded_at=now,
+    )
+    run = GraphBuildRun.objects.create(
+        artifact=artifact,
+        rebuild_request=request,
+        stage=GraphBuildRun.Stage.SUPERSEDED,
+        status=GraphBuildRun.Status.CANCELLED,
+        attempt=1,
+        stage_marker={"stage_sequence": ["active", "superseded"]},
+        finished_at=now,
+    )
+    request.status = GraphRebuildRequest.Status.SUCCEEDED
+    request.completed_document_count = 1
+    request.completed_at = now
+    for field, value in _activation_audit_values(artifact, run).items():
+        setattr(request, field, value)
+    request.save()
+    return request, artifact
+
+
 def test_content_change_invalidation_is_deferred_and_refreshes_collection(monkeypatch):
     from apps.knowledge_graph.graph import invalidation
     from apps.knowledge_graph.services import builds
 
-    callbacks, robust_flags, database_aliases = _capture_on_commit(monkeypatch, invalidation)
+    callbacks, robust_flags, database_aliases = _capture_on_commit(
+        monkeypatch, invalidation
+    )
     actions = []
     monkeypatch.setattr(
         invalidation,
@@ -126,11 +195,11 @@ def test_content_change_invalidation_is_deferred_and_refreshes_collection(monkey
         (
             "cleanup",
             event.document,
-                (17,),
-                "document_content_changed",
-                "default",
-                "b" * 64,
-            ),
+            (17,),
+            "document_content_changed",
+            "default",
+            "b" * 64,
+        ),
         ("publish_chunks",),
     ]
 
@@ -139,7 +208,9 @@ def test_move_reuses_document_graph_and_refreshes_old_and_new_collections(monkey
     from apps.knowledge_graph.graph import invalidation
     from apps.knowledge_graph.services import builds
 
-    callbacks, robust_flags, database_aliases = _capture_on_commit(monkeypatch, invalidation)
+    callbacks, robust_flags, database_aliases = _capture_on_commit(
+        monkeypatch, invalidation
+    )
     actions = []
     monkeypatch.setattr(
         invalidation,
@@ -195,7 +266,14 @@ def test_move_reuses_document_graph_and_refreshes_old_and_new_collections(monkey
     assert database_aliases == ["default"]
     callbacks[0]()
     assert actions == [
-        ("collections", event.document, (19, 23), "document_moved", "default", "a" * 64),
+        (
+            "collections",
+            event.document,
+            (19, 23),
+            "document_moved",
+            "default",
+            "a" * 64,
+        ),
         ("refresh", 19),
         ("refresh", 23),
     ]
@@ -205,7 +283,9 @@ def test_delete_signal_defers_chunk_and_graph_cleanup(monkeypatch):
     from apps.knowledge_graph.graph import invalidation
     from apps.knowledge_graph.services import builds
 
-    callbacks, robust_flags, database_aliases = _capture_on_commit(monkeypatch, invalidation)
+    callbacks, robust_flags, database_aliases = _capture_on_commit(
+        monkeypatch, invalidation
+    )
     actions = []
     document_id = uuid.uuid4()
     sender = type("ConcreteDocument", (), {})
@@ -793,7 +873,9 @@ def test_move_api_checks_the_request_actor_on_source_and_destination(client):
     )
     source = Collection.objects.create(name=f"source {uuid.uuid4()}")
     destination = Collection.objects.create(name=f"private {uuid.uuid4()}")
-    CollectionPermission.objects.create(user=actor, collection=source, permission="EDIT")
+    CollectionPermission.objects.create(
+        user=actor, collection=source, permission="EDIT"
+    )
     CollectionPermission.objects.create(
         user=owner, collection=destination, permission="MANAGE"
     )
@@ -836,8 +918,12 @@ def test_cached_access_refs_fail_closed_after_document_moves_private(settings):
     )
     shared = Collection.objects.create(name=f"shared {uuid.uuid4()}")
     private = Collection.objects.create(name=f"private {uuid.uuid4()}")
-    CollectionPermission.objects.create(user=viewer, collection=shared, permission="VIEW")
-    CollectionPermission.objects.create(user=owner, collection=private, permission="MANAGE")
+    CollectionPermission.objects.create(
+        user=viewer, collection=shared, permission="VIEW"
+    )
+    CollectionPermission.objects.create(
+        user=owner, collection=private, permission="MANAGE"
+    )
     document = RawTextDocument(
         title="cached document",
         full_text="cached shared content",
@@ -902,6 +988,7 @@ def test_instance_delete_cleans_active_cross_artifact_evidence_and_keeps_audit()
     )
 
     fixture = _persist_collection_relation_fixture()
+    request, request_artifact = _persist_successful_document_rebuild_audit()
     fixture.collection_artifact.status = GraphArtifact.Status.ACTIVE
     fixture.collection_artifact.save(update_fields=["status"])
     audit = GraphBuildRun.objects.create(
@@ -917,7 +1004,14 @@ def test_instance_delete_cleans_active_cross_artifact_evidence_and_keeps_audit()
     assert not GraphArtifact.objects.filter(pk=fixture.document_artifact.pk).exists()
     assert not GraphArtifact.objects.filter(pk=fixture.collection_artifact.pk).exists()
     assert not TextChunk.objects.filter(doc_id=DOCUMENT_ID).exists()
-    assert not CollectionRelationEvidence.objects.filter(pk=fixture.evidence.pk).exists()
+    assert not CollectionRelationEvidence.objects.filter(
+        pk=fixture.evidence.pk
+    ).exists()
+    assert not GraphArtifact.objects.filter(pk=request_artifact.pk).exists()
+    request.refresh_from_db()
+    assert request.status == request.Status.SUCCEEDED
+    assert request.activated_artifact_pk == request_artifact.pk
+    request._validate_success_activation()
     audit.refresh_from_db()
     assert audit.artifact_id is None
     assert audit.stage == GraphBuildRun.Stage.STALE
@@ -936,6 +1030,7 @@ def test_queryset_delete_runs_the_same_graph_cleanup_path():
     )
 
     fixture = _persist_collection_relation_fixture()
+    request, request_artifact = _persist_successful_document_rebuild_audit()
     fixture.collection_artifact.status = GraphArtifact.Status.ACTIVE
     fixture.collection_artifact.save(update_fields=["status"])
 
@@ -944,7 +1039,13 @@ def test_queryset_delete_runs_the_same_graph_cleanup_path():
     assert not GraphArtifact.objects.filter(pk=fixture.document_artifact.pk).exists()
     assert not GraphArtifact.objects.filter(pk=fixture.collection_artifact.pk).exists()
     assert not TextChunk.objects.filter(doc_id=DOCUMENT_ID).exists()
-    assert not CollectionRelationEvidence.objects.filter(pk=fixture.evidence.pk).exists()
+    assert not CollectionRelationEvidence.objects.filter(
+        pk=fixture.evidence.pk
+    ).exists()
+    assert not GraphArtifact.objects.filter(pk=request_artifact.pk).exists()
+    request.refresh_from_db()
+    assert request.activated_artifact_pk == request_artifact.pk
+    request._validate_success_activation()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -962,6 +1063,7 @@ def test_collection_cascade_is_not_blocked_by_graph_manifest_or_evidence():
     )
 
     fixture = _persist_collection_relation_fixture()
+    request, request_artifact = _persist_successful_document_rebuild_audit()
     fixture.collection_artifact.status = GraphArtifact.Status.ACTIVE
     fixture.collection_artifact.save(update_fields=["status"])
 
@@ -974,6 +1076,44 @@ def test_collection_cascade_is_not_blocked_by_graph_manifest_or_evidence():
     assert not CollectionRelationEvidence.objects.filter(
         artifact=fixture.collection_artifact
     ).exists()
+    assert not GraphArtifact.objects.filter(pk=request_artifact.pk).exists()
+    request.refresh_from_db()
+    assert request.activated_artifact_pk == request_artifact.pk
+    request._validate_success_activation()
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_content_invalidation_keeps_successful_rebuild_scalar_audit(monkeypatch):
+    from apps.documents.models import RawTextDocument
+    from apps.knowledge_graph.models import GraphArtifact
+    from apps.knowledge_graph.services import builds
+    from apps.knowledge_graph.tests.test_models import (
+        DOCUMENT_ID,
+        _persist_collection_relation_fixture,
+    )
+
+    _persist_collection_relation_fixture()
+    request, request_artifact = _persist_successful_document_rebuild_audit()
+    monkeypatch.setattr(
+        builds,
+        "enqueue_current_collection_refresh",
+        lambda *_args, **_kwargs: None,
+    )
+    document = RawTextDocument.objects.get(id=DOCUMENT_ID)
+    replacement = "Aquilla evaluates a changed benchmark."
+    document.full_text = replacement
+    document.full_text_hash = RawTextDocument.hash_fn(replacement)
+    document.save(
+        dont_rechunk=True,
+        update_fields=["full_text", "full_text_hash"],
+    )
+
+    assert not GraphArtifact.objects.filter(pk=request_artifact.pk).exists()
+    request.refresh_from_db()
+    assert request.status == request.Status.SUCCEEDED
+    assert request.activated_artifact_pk == request_artifact.pk
+    request._validate_success_activation()
 
 
 @pytest.mark.django_db(transaction=True)

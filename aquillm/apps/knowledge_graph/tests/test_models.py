@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import inspect
 import os
 import socket
 import uuid
 from datetime import timedelta
+from io import StringIO
 from math import inf, nan
 from types import SimpleNamespace
 
@@ -13,13 +15,14 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.core.management import call_command
+from django.db import migrations, models, transaction
 from django.db.models import CheckConstraint, UniqueConstraint
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from pgvector.django import VectorField
 
-from apps.documents.models import TextChunk
+from apps.documents.models import DESCENDED_FROM_DOCUMENT, TextChunk
 from apps.knowledge_graph.models import (
     CanonicalEntity,
     CanonicalEntityLink,
@@ -33,6 +36,7 @@ from apps.knowledge_graph.models import (
     EntityMention,
     GraphArtifact,
     GraphBuildRun,
+    GraphRebuildRequest,
     OntologyVersion,
     RelationMention,
 )
@@ -43,6 +47,251 @@ COLLECTION_EMBEDDING_SIGNATURE = (
     f"test-local:model@rev:endpoint={'e' * 64}:dims=1024:"
     "prep=kg-entity-v1:max_chars=8192:batch=64"
 )
+
+
+def _request_snapshot(
+    *,
+    document_id: uuid.UUID = DOCUMENT_ID,
+    collection_id: int = COLLECTION_ID,
+    source_hash: str = "a" * 64,
+    model_label: str | None = None,
+) -> dict[str, object]:
+    return {
+        "document_id": str(document_id),
+        "document_pkid": 1,
+        "model_label": model_label or DESCENDED_FROM_DOCUMENT[0]._meta.label_lower,
+        "collection_id": collection_id,
+        "source_hash": source_hash,
+    }
+
+
+def _rebuild_request(**overrides) -> GraphRebuildRequest:
+    values = {
+        "id": uuid.uuid4(),
+        "scope_type": GraphRebuildRequest.ScopeType.DOCUMENT,
+        "scope_id": str(DOCUMENT_ID),
+        "requested_documents": [_request_snapshot()],
+        "document_count": 1,
+        "status": GraphRebuildRequest.Status.RUNNING,
+    }
+    values.update(overrides)
+    values.setdefault(
+        "collection_count",
+        1 if values["scope_type"] == GraphRebuildRequest.ScopeType.COLLECTION else 0,
+    )
+    return GraphRebuildRequest(**values)
+
+
+def test_rebuild_request_snapshot_requires_exact_scope_and_concrete_model() -> None:
+    wrong_document = _rebuild_request(scope_id=str(uuid.uuid4()))
+    with pytest.raises(ValidationError, match="match request scope"):
+        wrong_document.prepare_for_persistence()
+
+    wrong_collection = _rebuild_request(
+        scope_type=GraphRebuildRequest.ScopeType.COLLECTION,
+        scope_id=str(COLLECTION_ID + 1),
+    )
+    with pytest.raises(ValidationError, match="match collection scope"):
+        wrong_collection.prepare_for_persistence()
+
+    unsupported = _rebuild_request(
+        requested_documents=[_request_snapshot(model_label="apps_documents.document")]
+    )
+    with pytest.raises(ValidationError, match="scalar is invalid"):
+        unsupported.prepare_for_persistence()
+
+
+def test_rebuild_request_outcomes_and_error_code_are_private_and_bounded() -> None:
+    request = _rebuild_request(
+        completed_document_count=1,
+        terminal_failure_count=1,
+    )
+    with pytest.raises(ValidationError, match="outcomes exceed"):
+        request.prepare_for_persistence()
+
+    request = _rebuild_request(error_code="forged\nprivate")
+    with pytest.raises(ValidationError, match="private identifier"):
+        request.prepare_for_persistence()
+
+
+def test_rebuild_request_queryset_rejects_lifecycle_and_snapshot_rewrites() -> None:
+    for update in (
+        {"scope_id": str(uuid.uuid4())},
+        {"status": GraphRebuildRequest.Status.SUCCEEDED},
+        {"terminal_failure_count": 1},
+    ):
+        with pytest.raises(ValidationError, match="immutable"):
+            GraphRebuildRequest.objects.all().update(**update)
+
+
+@pytest.mark.django_db
+def test_terminal_resnapshot_marker_only_resolves_to_bounded_final_codes() -> None:
+    request = _rebuild_request(
+        status=GraphRebuildRequest.Status.PARTIAL,
+        error_code="resnapshot_pending",
+        completed_at=timezone.now(),
+    )
+    request.save()
+
+    request.error_code = "scope_deleted"
+    request.save(update_fields=["error_code", "updated_at"])
+
+    request.refresh_from_db()
+    request.error_code = "forged_terminal_rewrite"
+    with pytest.raises(ValidationError, match="Terminal rebuild state is immutable"):
+        request.save(update_fields=["error_code", "updated_at"])
+
+
+def test_rebuild_occurrences_require_exact_request_marker_and_scope() -> None:
+    request = _rebuild_request()
+    artifact = _artifact(
+        rebuild_request=request,
+        evaluation_only=False,
+    )
+    artifact.clean()
+
+    artifact.scope_id = str(uuid.uuid4())
+    with pytest.raises(ValidationError, match="outside its request"):
+        artifact.clean()
+
+    evaluation = _rebuild_request(
+        scope_type=GraphRebuildRequest.ScopeType.COLLECTION,
+        scope_id=str(COLLECTION_ID),
+        requested_documents=[_request_snapshot()],
+        evaluation_only=True,
+        expected_aggregate_signature="b" * 64,
+    )
+    eval_artifact = _artifact(
+        scope_type=GraphArtifact.ScopeType.COLLECTION,
+        scope_id=str(COLLECTION_ID),
+        source_hash="b" * 64,
+        status=GraphArtifact.Status.ACTIVE,
+        rebuild_request=evaluation,
+        evaluation_only=True,
+    )
+    with pytest.raises(ValidationError, match="cannot become current"):
+        eval_artifact.clean()
+
+
+def test_task18_request_constraints_cover_eval_and_exact_occurrences() -> None:
+    artifact_constraints = {item.name for item in GraphArtifact._meta.constraints}
+    run_constraints = {item.name for item in GraphBuildRun._meta.constraints}
+    request_constraints = {item.name for item in GraphRebuildRequest._meta.constraints}
+
+    assert {
+        "kg_artifact_eval_noncurrent",
+        "kg_artifact_request_scope_unique",
+    } <= artifact_constraints
+    assert {"kg_build_eval_noncurrent", "kg_run_request_scope_unique"} <= (
+        run_constraints
+    )
+    assert {
+        "kg_rebuild_outcomes_bounded",
+        "kg_rebuild_scoped_success_artifact",
+        "kg_rebuild_error_code_safe",
+    } <= request_constraints
+
+
+def test_task18_migrations_separate_atomic_schema_from_retryable_live_changes() -> None:
+    schema_migration = importlib.import_module(
+        "apps.knowledge_graph.migrations.0005_graph_rebuild_request"
+    )
+    live_migration = importlib.import_module(
+        "apps.knowledge_graph.migrations.0006_graph_rebuild_live_indexes"
+    )
+
+    assert schema_migration.Migration.atomic is True
+    assert live_migration.Migration.atomic is False
+    assert live_migration.Migration.dependencies == [
+        ("apps_knowledge_graph", "0005_graph_rebuild_request")
+    ]
+    assert all(
+        isinstance(operation, migrations.SeparateDatabaseAndState)
+        for operation in live_migration.Migration.operations
+    )
+
+    live_request_fields = []
+    for operation in schema_migration.Migration.operations:
+        if not isinstance(operation, migrations.SeparateDatabaseAndState):
+            continue
+        for database_operation in operation.database_operations:
+            if (
+                isinstance(database_operation, migrations.AddField)
+                and database_operation.name == "rebuild_request"
+            ):
+                live_request_fields.append(database_operation.field)
+    assert len(live_request_fields) == 2
+    assert all(
+        not isinstance(field, models.ForeignKey) and field.db_index is False
+        for field in live_request_fields
+    )
+
+    install_source = inspect.getsource(live_migration._install_check_constraint)
+    foreign_key_source = inspect.getsource(live_migration._install_foreign_key)
+    index_source = inspect.getsource(live_migration._create_index)
+    assert {
+        "kg_art_rebuild_req_idx",
+        "kg_run_rebuild_req_idx",
+        "kg_art_terminal_idx",
+        "kg_art_superseded_idx",
+        "kg_run_terminal_idx",
+        "kg_run_scope_gen_idx",
+        "kg_artifact_request_scope_unique",
+        "kg_run_request_scope_unique",
+    } == {row[1] for row in live_migration._LIVE_INDEXES}
+    assert "NOT VALID" in install_source
+    assert "VALIDATE CONSTRAINT" in install_source
+    assert "FOREIGN KEY" in foreign_key_source
+    assert "NOT VALID" in foreign_key_source
+    assert "VALIDATE CONSTRAINT" in foreign_key_source
+    assert "indisvalid" in index_source
+    assert "CONCURRENTLY" in index_source
+
+
+def test_manifest_source_status_is_owner_and_evaluation_partition_aware():
+    from apps.knowledge_graph.models.inputs import _manifest_source_is_eligible
+
+    production_request = uuid.uuid4()
+    evaluation_request = uuid.uuid4()
+    production_build = SimpleNamespace(
+        status=GraphArtifact.Status.BUILDING,
+        evaluation_only=False,
+        rebuild_request_id=production_request,
+    )
+    production_active = SimpleNamespace(
+        status=GraphArtifact.Status.ACTIVE,
+        evaluation_only=False,
+        rebuild_request_id=production_request,
+    )
+    evaluation_build = SimpleNamespace(
+        status=GraphArtifact.Status.BUILDING,
+        evaluation_only=True,
+        rebuild_request_id=evaluation_request,
+    )
+    active_source = SimpleNamespace(
+        status=GraphArtifact.Status.ACTIVE,
+        evaluation_only=False,
+        rebuild_request_id=production_request,
+    )
+    superseded_source = SimpleNamespace(
+        status=GraphArtifact.Status.SUPERSEDED,
+        evaluation_only=False,
+        rebuild_request_id=production_request,
+    )
+    evaluation_source = SimpleNamespace(
+        status=GraphArtifact.Status.SUPERSEDED,
+        evaluation_only=True,
+        rebuild_request_id=evaluation_request,
+    )
+
+    assert _manifest_source_is_eligible(production_build, active_source)
+    assert not _manifest_source_is_eligible(production_build, superseded_source)
+    assert _manifest_source_is_eligible(production_active, active_source)
+    assert _manifest_source_is_eligible(production_active, superseded_source)
+    assert not _manifest_source_is_eligible(production_active, evaluation_source)
+    assert _manifest_source_is_eligible(evaluation_build, evaluation_source)
+    evaluation_source.rebuild_request_id = uuid.uuid4()
+    assert not _manifest_source_is_eligible(evaluation_build, evaluation_source)
 
 
 def _database_is_reachable():
@@ -95,6 +344,97 @@ database_required = pytest.mark.skipif(
     == "skip",
     reason="configured PostgreSQL database is not reachable",
 )
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_task18_live_table_sql_is_deferred_to_online_migration() -> None:
+    schema_output = StringIO()
+    call_command(
+        "sqlmigrate",
+        "apps_knowledge_graph",
+        "0005",
+        stdout=schema_output,
+    )
+    schema_statements = tuple(
+        statement.strip() for statement in schema_output.getvalue().split(";")
+    )
+    for table_name in (
+        "apps_knowledge_graph_graphartifact",
+        "apps_knowledge_graph_graphbuildrun",
+    ):
+        live_statements = tuple(
+            statement for statement in schema_statements if table_name in statement
+        )
+        assert any(
+            'ADD COLUMN "rebuild_request_id" uuid NULL' in statement
+            for statement in live_statements
+        )
+        assert not any(
+            "FOREIGN KEY" in statement and "rebuild_request_id" in statement
+            for statement in live_statements
+        )
+        assert not any(
+            "CREATE INDEX" in statement and "rebuild_request" in statement
+            for statement in live_statements
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+@database_required
+def test_success_activation_audit_survives_document_artifact_deletion() -> None:
+    from apps.knowledge_graph.models.artifacts import _activation_audit_values
+
+    completed_at = timezone.now() - timedelta(days=31)
+    request = _rebuild_request()
+    request.save()
+    artifact = _artifact(
+        rebuild_request=request,
+        build_key="b" * 64,
+        build_generation=1,
+        orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
+        status=GraphArtifact.Status.SUPERSEDED,
+        activated_at=completed_at,
+        completed_at=completed_at,
+        superseded_at=completed_at,
+    )
+    artifact.save()
+    run = GraphBuildRun.objects.create(
+        artifact=artifact,
+        rebuild_request=request,
+        stage=GraphBuildRun.Stage.SUPERSEDED,
+        status=GraphBuildRun.Status.CANCELLED,
+        attempt=1,
+        stage_marker={"stage_sequence": ["active", "superseded"]},
+        finished_at=completed_at,
+    )
+    request.status = GraphRebuildRequest.Status.SUCCEEDED
+    request.completed_document_count = 1
+    for field, value in _activation_audit_values(artifact, run).items():
+        setattr(request, field, value)
+    request.completed_at = completed_at
+    request.save()
+    expected_audit = (
+        artifact.pk,
+        run.pk,
+        artifact.build_key,
+        artifact.build_generation,
+        artifact.source_hash,
+        request.activated_occurrence_signature,
+    )
+
+    GraphArtifact.objects.filter(pk=artifact.pk).delete()
+
+    request.refresh_from_db()
+    assert (
+        request.activated_artifact_pk,
+        request.activated_run_pk,
+        request.activated_build_key,
+        request.activated_build_generation,
+        request.activated_source_hash,
+        request.activated_occurrence_signature,
+    ) == expected_audit
+    request._validate_success_activation()
 
 
 def _constraint(model, name, constraint_type):
@@ -241,6 +581,12 @@ def test_activated_collection_artifact_history_cannot_be_rewritten_or_deleted():
 @pytest.mark.django_db(transaction=True)
 @database_required
 def test_explicit_pk_instance_cannot_clear_persisted_activation_history():
+    from apps.collections.models import Collection
+
+    Collection.objects.create(
+        pk=COLLECTION_ID,
+        name=f"activation-history-{uuid.uuid4()}",
+    )
     artifact = _artifact(
         scope_type=GraphArtifact.ScopeType.COLLECTION,
         scope_id=COLLECTION_ID,
@@ -1859,7 +2205,9 @@ def test_relation_evidence_preserves_each_unique_support_and_protects_raw_mentio
     with pytest.raises(ValidationError, match="active"):
         evidence.clean()
     head_mapping.refresh_from_db()
-    with django_assert_num_queries(2):
+    # Refreshing the mapping deliberately clears its three cached FK inputs;
+    # validation reloads those plus immutable state and two endpoint memberships.
+    with django_assert_num_queries(6):
         evidence.clean()
     evidence.save()
 

@@ -195,7 +195,7 @@ def isolate_legacy_canonical_registry(apps, schema_editor):
             canonical_target_count=models.Count("canonical_entity_id", distinct=True)
         )
         .filter(canonical_target_count__gt=1)
-        .order_by()
+        .order_by("collection_entity_id")
         .values_list("collection_entity_id", flat=True)
         .first()
     )

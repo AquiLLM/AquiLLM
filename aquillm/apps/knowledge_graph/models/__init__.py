@@ -5,6 +5,7 @@ from .artifacts import (
     ASSEMBLY_NOT_APPLICABLE_VERSION,
     GraphArtifact,
     GraphBuildRun,
+    GraphRebuildRequest,
     graph_identity_checksum,
 )
 from .associations import CanonicalEntityLink, CollectionEntityDocumentLink
@@ -43,6 +44,7 @@ __all__ = [
     "EntityMention",
     "GraphArtifact",
     "GraphBuildRun",
+    "GraphRebuildRequest",
     "graph_identity_checksum",
     "OntologyVersion",
     "RelationMention",

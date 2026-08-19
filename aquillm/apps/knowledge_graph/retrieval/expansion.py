@@ -485,7 +485,10 @@ def _load_storage_scope(
                 collection_id__in=request.allowed_collection_ids,
                 document_id__in=cast(tuple[UUID, ...], raw_batch),
                 artifact__collection_scope_id=F("collection_id"),
-                document_artifact__status=GraphArtifact.Status.ACTIVE,
+                document_artifact__status__in=(
+                    GraphArtifact.Status.ACTIVE,
+                    GraphArtifact.Status.SUPERSEDED,
+                ),
                 document_artifact__scope_type=GraphArtifact.ScopeType.DOCUMENT,
                 document_artifact__evaluation_only=False,
             ),
@@ -739,7 +742,8 @@ def _load_seed_collection_entity_ids(
           AND link.artifact_id = collection_entity.artifact_id
           AND collection_entity.status = 'active'
           AND collection_entity.collection_id = manifest_input.collection_id
-          AND document_artifact.status = 'active'
+          AND document_artifact.status IN ('active', 'superseded')
+          AND document_artifact.evaluation_only = FALSE
           AND document_artifact.scope_type = 'document'
           AND document_artifact.scope_id = manifest_input.document_id::text
           AND document_entity.status = 'active'
@@ -1073,7 +1077,11 @@ def _authorized_evidence_queryset(
         relation__target__artifact_id=F("artifact_id"),
         ontology_checksum=F("artifact__ontology_checksum"),
         assembly_config_checksum=F("artifact__assembly_config_checksum"),
-        relation_mention__artifact__status=GraphArtifact.Status.ACTIVE,
+        relation_mention__artifact__status__in=(
+            GraphArtifact.Status.ACTIVE,
+            GraphArtifact.Status.SUPERSEDED,
+        ),
+        relation_mention__artifact__evaluation_only=False,
         relation_mention__artifact__scope_type=GraphArtifact.ScopeType.DOCUMENT,
         relation_mention__relation_type=F("relation__relation_type"),
         relation_mention__chunk__doc_id=F("relation_mention__document_id"),
@@ -1460,7 +1468,8 @@ def _load_authorized_identity_mentions(
                   AND link.outcome = 'automatic'
                   AND link.resolver_version = collection_artifact.resolver_version
                   AND manifest_input.artifact_id = collection_artifact.id
-                  AND document_artifact.status = 'active'
+                  AND document_artifact.status IN ('active', 'superseded')
+                  AND document_artifact.evaluation_only = FALSE
                   AND document_artifact.scope_type = 'document'
                   AND document_artifact.scope_id = manifest_input.document_id::text
                   AND document_entity.status = 'active'

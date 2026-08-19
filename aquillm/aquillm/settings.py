@@ -10,8 +10,9 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.0/ref/settings/
 """
 
-from pathlib import Path
 import os
+import sys
+from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -64,6 +65,17 @@ RAG_QUERY_SHORT_LEN = env_int("RAG_QUERY_SHORT_LEN", 48)
 RAG_QUERY_LONG_LEN = env_int("RAG_QUERY_LONG_LEN", 160)
 RAG_SHORT_QUERY_CANDIDATE_SCALE = env_float("RAG_SHORT_QUERY_CANDIDATE_SCALE", 0.9)
 RAG_LONG_QUERY_CANDIDATE_SCALE = env_float("RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1)
+
+# Knowledge-graph operations. All mutation/build controls are off by default.
+KG_EVAL_BYPASS_ALLOWED = env_bool("KG_EVAL_BYPASS_ALLOWED", False)
+KG_ARTIFACT_RETENTION_DAYS = env_int("KG_ARTIFACT_RETENTION_DAYS", 30) or 30
+KG_ARTIFACT_KEEP_SUPERSEDED = env_int("KG_ARTIFACT_KEEP_SUPERSEDED", 2)
+TESTING = (
+    env_bool("DJANGO_TESTING", False)
+    or "pytest" in sys.modules
+    or Path(sys.argv[0]).stem.lower() in {"pytest", "py.test"}
+    or (len(sys.argv) > 1 and sys.argv[1] == "test")
+)
 
 # Cross-provider prompt token efficiency (Claude/Gemini mirror OpenAI-style preflight trim)
 TOKEN_EFFICIENCY_ENABLED = env_bool("TOKEN_EFFICIENCY_ENABLED", False)
@@ -229,6 +241,9 @@ POSTGRES_USER = os.environ.get("POSTGRES_USER", "aquillm")
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "db")
 POSTGRES_NAME = os.environ.get("POSTGRES_NAME", "aquillm")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "aquillm")
+POSTGRES_PORT = env_int("POSTGRES_PORT", 5432)
+if not 1 <= POSTGRES_PORT <= 65_535:
+    POSTGRES_PORT = 5432
 
 DATABASES = {
     "default": {
@@ -237,7 +252,7 @@ DATABASES = {
         "USER": POSTGRES_USER,
         "PASSWORD": POSTGRES_PASSWORD,
         "HOST": POSTGRES_HOST,
-        "PORT": "5432",
+        "PORT": str(POSTGRES_PORT),
         "TEST": {
             'NAME': 'test'
         }

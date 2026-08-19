@@ -15,7 +15,11 @@ from .artifacts import (
     ImmutableGraphQuerySet,
     ValidatedGraphModel,
 )
-from .associations import CollectionEntityDocumentLink, _current_link_filters
+from .associations import (
+    _PINNED_DOCUMENT_ARTIFACT_STATUSES,
+    CollectionEntityDocumentLink,
+    _current_link_filters,
+)
 from .entities import (
     CollectionEntity,
     DocumentEntityMention,
@@ -185,13 +189,16 @@ class CollectionRelationQuerySet(CollectionArtifactChildQuerySet):
         active_evidence = CollectionRelationEvidence.objects.filter(
             relation_id=OuterRef("pk"),
             status=CollectionRelationEvidence.Status.ACTIVE,
-            relation_mention__artifact__status=GraphArtifact.Status.ACTIVE,
+            relation_mention__artifact__status__in=(
+                _PINNED_DOCUMENT_ARTIFACT_STATUSES
+            ),
             **_current_link_filters("head_mapping"),
             **_current_link_filters("tail_mapping"),
         )
         return self.filter(
             Exists(active_evidence),
             artifact__status=GraphArtifact.Status.ACTIVE,
+            artifact__evaluation_only=False,
             status=ResolutionStatus.ACTIVE,
             source__status=ResolutionStatus.ACTIVE,
             target__status=ResolutionStatus.ACTIVE,
@@ -337,7 +344,9 @@ class CollectionRelationEvidenceQuerySet(CollectionArtifactChildQuerySet):
         return self.filter(
             Exists(current_relation),
             status="active",
-            relation_mention__artifact__status=GraphArtifact.Status.ACTIVE,
+            relation_mention__artifact__status__in=(
+                _PINNED_DOCUMENT_ARTIFACT_STATUSES
+            ),
             **_current_link_filters("head_mapping"),
             **_current_link_filters("tail_mapping"),
         )

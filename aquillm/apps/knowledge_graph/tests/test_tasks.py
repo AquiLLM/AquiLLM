@@ -23,6 +23,7 @@ DOCUMENT_BUILD_KEY = "b" * 64
 COLLECTION_ID = 17
 AGGREGATE_SOURCE_SIGNATURE = "c" * 64
 COLLECTION_BUILD_KEY = "d" * 64
+REQUEST_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 
 def _tasks_module():
@@ -91,6 +92,40 @@ def test_collection_task_passes_only_the_exact_scalar_build_identity(
     ]
 
 
+def test_correlated_task_propagates_request_and_evaluation_marker(monkeypatch) -> None:
+    monkeypatch.setenv("KG_BUILD_ENABLED", "1")
+    tasks = _tasks_module()
+    builds = _builds_module()
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def fake_build(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(pk=43)
+
+    monkeypatch.setattr(builds, "build_document_graph", fake_build)
+    monkeypatch.setattr(
+        builds,
+        "validate_rebuild_task_request_metadata",
+        Mock(return_value=object()),
+    )
+
+    result = tasks.build_document_graph_task.run(
+        DOCUMENT_ID,
+        SOURCE_HASH,
+        DOCUMENT_BUILD_KEY,
+        REQUEST_ID,
+        False,
+    )
+
+    assert result == 43
+    assert calls == [
+        (
+            (uuid.UUID(DOCUMENT_ID), SOURCE_HASH, DOCUMENT_BUILD_KEY),
+            {"request_id": REQUEST_ID, "eval_only": False},
+        )
+    ]
+
+
 def test_task_entry_points_expose_json_scalar_signatures_only() -> None:
     tasks = _tasks_module()
 
@@ -105,11 +140,15 @@ def test_task_entry_points_expose_json_scalar_signatures_only() -> None:
         "document_id",
         "expected_source_hash",
         "document_build_key",
+        "request_id",
+        "eval_only",
     )
     assert tuple(collection_parameters) == (
         "collection_id",
         "aggregate_source_signature",
         "collection_build_key",
+        "request_id",
+        "eval_only",
     )
     assert "gliner" not in repr(document_parameters).lower()
     assert "gliner" not in repr(collection_parameters).lower()
@@ -177,6 +216,120 @@ def test_disabled_collection_refresh_short_circuits_before_service_import(
 
     assert result is None
     assert "apps.knowledge_graph.services.builds" not in sys.modules
+
+
+@pytest.mark.parametrize(
+    ("task_name", "args"),
+    (
+        (
+            "build_document_graph_task",
+            (DOCUMENT_ID, SOURCE_HASH, DOCUMENT_BUILD_KEY),
+        ),
+        (
+            "refresh_collection_graph_task",
+            (COLLECTION_ID, AGGREGATE_SOURCE_SIGNATURE, COLLECTION_BUILD_KEY),
+        ),
+    ),
+)
+def test_disabled_correlated_task_durably_fails_request(
+    monkeypatch,
+    task_name: str,
+    args: tuple[object, ...],
+) -> None:
+    tasks = _tasks_module()
+    builds = _builds_module()
+    record_failure = Mock()
+    validate_request = Mock(return_value=object())
+    monkeypatch.setenv("KG_BUILD_ENABLED", "0")
+    monkeypatch.setattr(builds, "record_rebuild_failure", record_failure)
+    monkeypatch.setattr(
+        builds,
+        "validate_rebuild_task_request_metadata",
+        validate_request,
+    )
+
+    result = getattr(tasks, task_name).run(*args, REQUEST_ID, False)
+
+    assert result is None
+    record_failure.assert_called_once_with(
+        REQUEST_ID,
+        error_code="task_build_disabled",
+    )
+    assert validate_request.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("task_name", "args"),
+    (
+        (
+            "build_document_graph_task",
+            (DOCUMENT_ID, SOURCE_HASH, DOCUMENT_BUILD_KEY),
+        ),
+        (
+            "refresh_collection_graph_task",
+            (COLLECTION_ID, AGGREGATE_SOURCE_SIGNATURE, COLLECTION_BUILD_KEY),
+        ),
+    ),
+)
+def test_invalid_eval_marker_cannot_terminalize_named_request(
+    monkeypatch,
+    task_name: str,
+    args: tuple[object, ...],
+) -> None:
+    tasks = _tasks_module()
+    builds = _builds_module()
+    record_failure = Mock()
+    validate_request = Mock(return_value=object())
+    monkeypatch.setenv("KG_BUILD_ENABLED", "1")
+    monkeypatch.setattr(builds, "record_rebuild_failure", record_failure)
+    monkeypatch.setattr(
+        builds,
+        "validate_rebuild_task_request_metadata",
+        validate_request,
+    )
+
+    with pytest.raises(ValueError, match="evaluation marker"):
+        getattr(tasks, task_name).run(*args, REQUEST_ID, "false")
+
+    validate_request.assert_not_called()
+    record_failure.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("task_name", "args"),
+    (
+        (
+            "build_document_graph_task",
+            (DOCUMENT_ID, SOURCE_HASH, DOCUMENT_BUILD_KEY),
+        ),
+        (
+            "refresh_collection_graph_task",
+            (COLLECTION_ID, AGGREGATE_SOURCE_SIGNATURE, COLLECTION_BUILD_KEY),
+        ),
+    ),
+)
+def test_disabled_cross_scope_task_cannot_terminalize_named_request(
+    monkeypatch,
+    task_name: str,
+    args: tuple[object, ...],
+) -> None:
+    tasks = _tasks_module()
+    builds = _builds_module()
+    record_failure = Mock()
+    validate_request = Mock(side_effect=builds.StaleBuildError("outside request scope"))
+    monkeypatch.setenv("KG_BUILD_ENABLED", "0")
+    monkeypatch.setattr(builds, "record_rebuild_failure", record_failure)
+    monkeypatch.setattr(
+        builds,
+        "validate_rebuild_task_request_metadata",
+        validate_request,
+    )
+
+    result = getattr(tasks, task_name).run(*args, REQUEST_ID, False)
+
+    assert result is None
+    validate_request.assert_called_once()
+    record_failure.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -286,7 +439,7 @@ def test_invalid_enabled_config_is_terminally_logged_without_config_value(
 
     logger.error.assert_called_once()
     task_log = logger.error.call_args
-    assert task_log.kwargs["scope_id"] == "invalid"
+    assert task_log.kwargs["scope_id"] == DOCUMENT_ID
     assert task_log.kwargs["terminal"] is True
     assert invalid_revision not in repr(task_log)
 
@@ -392,6 +545,74 @@ def test_transient_build_failure_requests_a_bounded_retry(monkeypatch) -> None:
     assert len(retry_calls) == 1
     assert retry_calls[0]["exc"] is failure
     assert 0 < retry_calls[0]["countdown"] <= 60
+
+
+def test_transient_correlated_failure_does_not_terminalize_request(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KG_BUILD_ENABLED", "1")
+    tasks = _tasks_module()
+    builds = _builds_module()
+    failure = OperationalError("database temporarily unavailable")
+    retry_calls: list[dict[str, object]] = []
+    record_failure = Mock()
+
+    def fail_build(*_args, **_kwargs):
+        raise failure
+
+    def fake_retry(**kwargs):
+        retry_calls.append(kwargs)
+        raise Retry(exc=kwargs["exc"])
+
+    monkeypatch.setattr(builds, "build_document_graph", fail_build)
+    monkeypatch.setattr(builds, "record_rebuild_failure", record_failure)
+    monkeypatch.setattr(
+        builds,
+        "validate_rebuild_task_request_metadata",
+        Mock(return_value=object()),
+    )
+    monkeypatch.setattr(tasks.build_document_graph_task, "retry", fake_retry)
+
+    with pytest.raises(Retry):
+        tasks.build_document_graph_task.run(
+            DOCUMENT_ID,
+            SOURCE_HASH,
+            DOCUMENT_BUILD_KEY,
+            REQUEST_ID,
+            False,
+        )
+
+    assert retry_calls[0]["exc"] is failure
+    record_failure.assert_not_called()
+
+
+def test_enabled_wrong_scope_request_never_terminalizes_named_request(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KG_BUILD_ENABLED", "1")
+    tasks = _tasks_module()
+    builds = _builds_module()
+    service = Mock(side_effect=AssertionError("wrong request reached service"))
+    record_failure = Mock()
+    monkeypatch.setattr(builds, "build_document_graph", service)
+    monkeypatch.setattr(builds, "record_rebuild_failure", record_failure)
+    monkeypatch.setattr(
+        builds,
+        "validate_rebuild_task_request_metadata",
+        Mock(side_effect=builds.StaleBuildError("outside request scope")),
+    )
+
+    with pytest.raises(builds.StaleBuildError, match="outside request scope"):
+        tasks.build_document_graph_task.run(
+            DOCUMENT_ID,
+            SOURCE_HASH,
+            DOCUMENT_BUILD_KEY,
+            REQUEST_ID,
+            False,
+        )
+
+    service.assert_not_called()
+    record_failure.assert_not_called()
 
 
 def test_live_build_lease_retries_after_the_lease_expiry_window(monkeypatch) -> None:
@@ -782,6 +1003,33 @@ def test_document_enqueue_routes_only_canonical_json_scalars(monkeypatch) -> Non
     assert 0 < options["retry_policy"]["max_retries"] <= 5
 
 
+def test_correlated_document_enqueue_routes_request_as_json_scalar(monkeypatch) -> None:
+    monkeypatch.setenv("KG_BUILD_ENABLED", "1")
+    tasks = _tasks_module()
+    builds = _builds_module()
+    apply_async = Mock()
+    monkeypatch.setattr(tasks.build_document_graph_task, "apply_async", apply_async)
+    monkeypatch.setattr(
+        builds,
+        "derive_current_document_build_key",
+        Mock(return_value=DOCUMENT_BUILD_KEY),
+    )
+
+    builds.enqueue_document_build(
+        uuid.UUID(DOCUMENT_ID),
+        SOURCE_HASH,
+        request_id=uuid.UUID(REQUEST_ID),
+    )
+
+    assert apply_async.call_args.kwargs["kwargs"] == {
+        "document_id": DOCUMENT_ID,
+        "expected_source_hash": SOURCE_HASH,
+        "document_build_key": DOCUMENT_BUILD_KEY,
+        "request_id": REQUEST_ID,
+        "eval_only": False,
+    }
+
+
 def test_disabled_document_producer_does_not_derive_or_publish(monkeypatch) -> None:
     monkeypatch.setenv("KG_BUILD_ENABLED", "0")
     tasks = _tasks_module()
@@ -937,14 +1185,21 @@ def test_pruning_task_is_low_priority_lazy_and_unscheduled() -> None:
     )
 
 
-def test_disabled_build_short_circuits_before_pruning_service_import(
+def test_pruning_runs_independently_when_graph_builds_are_disabled(
     monkeypatch,
 ) -> None:
     tasks = _tasks_module()
     monkeypatch.setenv("KG_BUILD_ENABLED", "0")
-    sys.modules.pop("apps.knowledge_graph.services.pruning", None)
+    pruning = importlib.import_module("apps.knowledge_graph.services.pruning")
+
+    calls = []
+    monkeypatch.setattr(
+        pruning,
+        "prune_graph_artifacts",
+        lambda **kwargs: calls.append(kwargs) or {"artifact_count": 0},
+    )
 
     result = tasks.prune_graph_artifacts_task.run()
 
-    assert result is None
-    assert "apps.knowledge_graph.services.pruning" not in sys.modules
+    assert result == {"artifact_count": 0}
+    assert calls == [{"execute": True}]
