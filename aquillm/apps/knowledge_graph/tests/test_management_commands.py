@@ -647,20 +647,20 @@ def test_explicit_extractor_check_validates_fixture_and_prints_identity() -> Non
         RelationCandidate,
     )
 
+    fixture = "The Atlas model uses the Northstar dataset for retrieval training."
+    head, tail = "Atlas model", "Northstar dataset"
+    relation = ("uses_dataset", head, tail, 4, 15, 25, 42, 0.9)
+
     class Backend:
         def extract_batch(self, texts, *, ontology):
-            assert texts == ("Qwen3 uses MMLU.",)
+            assert texts == (fixture,)
             return (
                 ExtractionBatchResult(
                     entities=(
-                        EntityCandidate("model", "Qwen3", 0, 5, 0.9),
-                        EntityCandidate("dataset", "MMLU", 11, 15, 0.9),
+                        EntityCandidate("model", head, 4, 15, 0.9),
+                        EntityCandidate("dataset", tail, 25, 42, 0.9),
                     ),
-                    relations=(
-                        RelationCandidate(
-                            "uses_dataset", "Qwen3", "MMLU", 0, 5, 11, 15, 0.9
-                        ),
-                    ),
+                    relations=(RelationCandidate(*relation),),
                     diagnostics=(),
                 ),
             )
