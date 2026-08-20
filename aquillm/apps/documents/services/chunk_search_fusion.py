@@ -131,6 +131,14 @@ class FusionDiagnostics:
             raise ValueError("failure diagnostics disagree")
         if self.graph_only_considered != self.graph_only_selected + self.graph_only_dropped:
             raise ValueError("graph-only diagnostics disagree")
+        if self.malformed_provenance:
+            if any((self.baseline_duplicate_count, self.cross_branch_duplicate_count, self.graph_only_considered, self.graph_only_selected, self.graph_only_dropped)):
+                raise ValueError("malformed diagnostics must not claim graph output")
+        elif self.baseline_duplicate_count > self.direct_input_count + self.extended_input_count or self.cross_branch_duplicate_count > min(self.direct_input_count, self.extended_input_count) or self.graph_only_considered != self.direct_input_count + self.extended_input_count - self.baseline_duplicate_count - self.cross_branch_duplicate_count:
+            raise ValueError("fusion diagnostic counts are incoherent")
+def _graph_sort_key(row: FusedCandidate) -> tuple:
+    best_rank = min(rank for rank in (row.direct_rank, row.extended_rank) if rank is not None)
+    return -row.rrf_score, -len(row.sources), best_rank, row.document_uuid.int, row.chunk_number, row.integer_chunk_pk
 
 @final
 @dataclass(frozen=True, slots=True)
@@ -140,7 +148,7 @@ class FusionResult:
     def __post_init__(self) -> None:
         if type(self.candidates) is not tuple or any(type(row) is not FusedCandidate for row in self.candidates):
             raise TypeError("candidates must contain exact FusedCandidate values")
-        if len(self.candidates) > 626 or len({row.integer_chunk_pk for row in self.candidates}) != len(self.candidates):
+        if len(self.candidates) > 626 or len({row.integer_chunk_pk for row in self.candidates}) != len(self.candidates) or len({(row.document_uuid, row.chunk_number) for row in self.candidates}) != len(self.candidates):
             raise ValueError("fused candidates exceed bounds or contain duplicates")
         if type(self.rerank_candidates) is not tuple or len(self.rerank_candidates) != len(self.candidates):
             raise TypeError("rerank_candidates must be one exact tuple")
@@ -150,6 +158,21 @@ class FusionResult:
             raise TypeError("diagnostics must be exact")
         if len(self.candidates) != self.diagnostics.baseline_count + self.diagnostics.graph_only_selected:
             raise ValueError("candidate count disagrees with diagnostics")
+        baseline = self.candidates[:self.diagnostics.baseline_count]
+        graph = self.candidates[self.diagnostics.baseline_count:]
+        if tuple(row.baseline_rank for row in baseline) != tuple(range(1, len(baseline) + 1)) or any(CandidateSource.BASELINE not in row.sources for row in baseline):
+            raise ValueError("baseline prefix is invalid")
+        if any(CandidateSource.BASELINE in row.sources or row.baseline_rank is not None for row in graph) or tuple(sorted(graph, key=_graph_sort_key)) != graph:
+            raise ValueError("graph suffix is invalid")
+        direct_count = sum(CandidateSource.DIRECT in row.sources for row in self.candidates)
+        extended_count = sum(CandidateSource.EXTENDED in row.sources for row in self.candidates)
+        direct_ranks = tuple(row.direct_rank for row in self.candidates if row.direct_rank is not None)
+        extended_ranks = tuple(row.extended_rank for row in self.candidates if row.extended_rank is not None)
+        baseline_duplicates = sum(CandidateSource.DIRECT in row.sources for row in baseline) + sum(CandidateSource.EXTENDED in row.sources for row in baseline)
+        if direct_count > self.diagnostics.direct_input_count or extended_count > self.diagnostics.extended_input_count or baseline_duplicates != self.diagnostics.baseline_duplicate_count or any(rank > self.diagnostics.direct_input_count for rank in direct_ranks) or any(rank > self.diagnostics.extended_input_count for rank in extended_ranks) or len(set(direct_ranks)) != len(direct_ranks) or len(set(extended_ranks)) != len(extended_ranks):
+            raise ValueError("candidate memberships disagree with diagnostics")
+        if self.diagnostics.malformed_provenance and (direct_count or extended_count or graph):
+            raise ValueError("malformed result must contain plain baseline candidates only")
 
 def _valid_branch(branch: object, expected: CandidateSource, ready: str) -> bool:
     if type(branch) is not GraphBranchInput or branch.source is not expected:
@@ -172,6 +195,7 @@ def _rrf(direct_rank: int | None, extended_rank: int | None) -> float:
     return fsum(1.0 / (RRF_K + rank) for rank in (direct_rank, extended_rank) if rank is not None)
 def _complete_mapping_valid(baseline: tuple[BaselineCandidate, ...], direct: GraphBranchInput | None, extended: GraphBranchInput | None) -> bool:
     pk_coordinates = {row.integer_chunk_pk: (row.document_uuid, row.chunk_number) for row in baseline}
+    coordinate_identities: dict[tuple[UUID, int], tuple[int, str | None]] = {(row.document_uuid, row.chunk_number): (row.integer_chunk_pk, None) for row in baseline}
     key_identities: dict[str, tuple[int, UUID, int]] = {}
     identity_keys: dict[tuple[int, UUID, int], str] = {}
     for branch in (direct, extended):
@@ -180,11 +204,15 @@ def _complete_mapping_valid(baseline: tuple[BaselineCandidate, ...], direct: Gra
             identity = row.integer_chunk_pk, *coordinate
             if pk_coordinates.get(row.integer_chunk_pk, coordinate) != coordinate:
                 return False
+            coordinate_identity = coordinate_identities.get(coordinate)
+            if coordinate_identity is not None and (coordinate_identity[0] != row.integer_chunk_pk or coordinate_identity[1] not in (None, row.chunk_key)):
+                return False
             if key_identities.get(row.chunk_key, identity) != identity:
                 return False
             if identity_keys.get(identity, row.chunk_key) != row.chunk_key:
                 return False
             pk_coordinates[row.integer_chunk_pk] = coordinate
+            coordinate_identities[coordinate] = row.integer_chunk_pk, row.chunk_key
             key_identities[row.chunk_key] = identity
             identity_keys[identity] = row.chunk_key
     return True
@@ -202,7 +230,7 @@ def fuse_candidates(
             raise ValueError
     except (TypeError, ValueError) as error:
         raise ValueError(_INVALID_CAPS) from error
-    if type(baseline) is not tuple or len(baseline) > 606 or any(type(row) is not BaselineCandidate for row in baseline) or len({row.integer_chunk_pk for row in baseline}) != len(baseline):
+    if type(baseline) is not tuple or len(baseline) > 606 or any(type(row) is not BaselineCandidate for row in baseline) or len({row.integer_chunk_pk for row in baseline}) != len(baseline) or len({(row.document_uuid, row.chunk_number) for row in baseline}) != len(baseline):
         raise ValueError(_INVALID_BASELINE)
     full_baseline = baseline
     baseline = full_baseline[:baseline_cap]
@@ -225,7 +253,7 @@ def fuse_candidates(
     for source, rows in ((CandidateSource.DIRECT, selected_direct), (CandidateSource.EXTENDED, selected_extended)):
         for row in rows:
             pk = row.integer_chunk_pk
-            if source is CandidateSource.EXTENDED and pk in direct_pks:
+            if source is CandidateSource.EXTENDED and pk in direct_pks and pk not in baseline_by_pk:
                 cross_duplicates += 1
             existing = baseline_by_pk.get(pk) or graph_rows.get(pk)
             if existing is not None and (existing.document_uuid != row.document_uuid or existing.chunk_number != row.chunk_number):
@@ -247,10 +275,10 @@ def fuse_candidates(
         direct_rank, extended_rank = memberships.get(CandidateSource.DIRECT), memberships.get(CandidateSource.EXTENDED)
         sources = tuple(source for source in (CandidateSource.DIRECT, CandidateSource.EXTENDED) if source in memberships)
         graph_only.append(FusedCandidate(pk, row.document_uuid, row.chunk_number, row.candidate_object, sources, None, direct_rank, extended_rank, _rrf(direct_rank, extended_rank)))
-    graph_only.sort(key=lambda row: (-row.rrf_score, -len(row.sources), min(rank for rank in (row.direct_rank, row.extended_rank) if rank is not None), row.document_uuid.int, row.chunk_number, row.integer_chunk_pk))
+    graph_only.sort(key=_graph_sort_key)
     selected_graph = tuple(graph_only[:graph_cap])
     candidates = (*fused_baseline, *selected_graph)
-    diagnostics = FusionDiagnostics(len(baseline), direct_count, extended_count, baseline_duplicates, cross_duplicates, len(graph_only), len(selected_graph), len(graph_only) - len(selected_graph), False, None)
+    diagnostics = FusionDiagnostics(len(baseline), len(selected_direct), len(selected_extended), baseline_duplicates, cross_duplicates, len(graph_only), len(selected_graph), len(graph_only) - len(selected_graph), False, None)
     return _result(candidates, diagnostics)
 
 __all__ = ["BaselineCandidate", "CandidateSource", "FusedCandidate", "FusionDiagnostics", "FusionFailureReason", "FusionResult", "GraphBranchInput", "GraphCandidate", "fuse_candidates", "graph_candidate_order_checksum"]
