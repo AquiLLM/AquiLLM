@@ -176,3 +176,34 @@ def test_checker_rejects_direct_functions_imported_from_standard_logging() -> No
     )
     assert len(violations) == 1
     assert violations[0].line == 2
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        'getattr(logger, "info")("obs.rag.search", query=query)',
+        'emit = getattr(logger, "info")\nemit("obs.rag.search", query=query)',
+        'level = "info"\ngetattr(logger, level)("obs.rag.search", query=query)',
+    ),
+)
+def test_checker_rejects_static_and_dynamic_getattr_log_dispatch(source: str) -> None:
+    assert len(_scan(source)) == 1
+
+
+def test_checker_propagates_payload_taint_through_transformations() -> None:
+    source = """
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+prompt = query
+count = ord(prompt[0]) + 1
+logger.info(
+    "obs.rag.search",
+    **retrieval_log_fields(
+        reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0
+    ),
+)
+"""
+    assert len(_scan(source)) == 1
+
+
+def test_checker_allows_unrelated_info_methods() -> None:
+    assert _scan('catalog.info("record", query=query)') == ()

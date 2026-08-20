@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ruff: noqa: E501
+# ruff: noqa: E501,E701
 """Fail closed on payload-bearing log calls in the retrieval feature lane."""
 
 from __future__ import annotations
@@ -23,6 +23,9 @@ _EVENT = re.compile(r"^obs\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 _LOG_LEVELS = frozenset(
     {"debug", "info", "warning", "error", "critical", "exception", "log"}
 )
+_LOGGER_NAMES = frozenset({"logger", "log", "audit_logger", "logging", "structlog"})
+_LOGGER_ATTRIBUTES = frozenset({"logger", "log", "audit", "audit_logger"})
+_LOGGER_FACTORIES = frozenset({"getLogger", "get_logger", "LoggerAdapter"})
 _FIELDS = frozenset({"reason", "count", "elapsed_ms"})
 _VALUE_ASSIGNMENTS = (ast.AnnAssign, ast.NamedExpr)
 # fmt: off
@@ -60,66 +63,61 @@ def _assignments(tree: ast.AST) -> tuple[tuple[str, ast.AST], ...]:
     return tuple(assignments)
 
 
-def _is_logging_binding(value: ast.AST, names: set[str]) -> bool:
-    return any(
-        (isinstance(candidate, ast.Attribute) and candidate.attr in _LOG_LEVELS)
-        or (isinstance(candidate, ast.Name) and candidate.id in names)
-        for candidate in ast.walk(value)
-    )
+# fmt: off
+def _logger_expression(node: ast.AST, names: set[str]) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in names
+    if isinstance(node, ast.Attribute):
+        return node.attr in _LOGGER_ATTRIBUTES and isinstance(node.value, ast.Name) and node.value.id == "self"
+    if not isinstance(node, ast.Call): return False
+    function = node.func
+    return (isinstance(function, ast.Name) and function.id in _LOGGER_FACTORIES) or (isinstance(function, ast.Attribute) and function.attr in _LOGGER_FACTORIES)
 
+def _getattr_level(node: ast.AST, logger_names: set[str] | frozenset[str]) -> str | None:
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr" and len(node.args) >= 2 and _logger_expression(node.args[0], set(logger_names))): return None
+    level = node.args[1]
+    if isinstance(level, ast.Constant) and type(level.value) is str: return level.value if level.value in _LOG_LEVELS else None
+    return "dynamic"
 
-def _logging_functions(tree: ast.AST) -> frozenset[str]:
-    names = set(
-        alias.asname or alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "logging"
-        for alias in node.names
-        if alias.name in _LOG_LEVELS
-    )
+def _logging_function_expression(node: ast.AST, logger_names: set[str], functions: set[str]) -> bool:
+    return any((isinstance(candidate, ast.Name) and candidate.id in functions) or (isinstance(candidate, ast.Attribute) and candidate.attr in _LOG_LEVELS and _logger_expression(candidate.value, logger_names)) or _getattr_level(candidate, logger_names) is not None for candidate in ast.walk(node))
+
+def _logging_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
+    functions = set(alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module == "logging" for alias in node.names if alias.name in _LOG_LEVELS)
+    logger_names = set(_LOGGER_NAMES)
+    logger_names.update(alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names if alias.name in {"logging", "structlog"})
     aliases = _assignments(tree)
     changed = True
     while changed:
-        before = len(names)
-        names.update(
-            name for name, value in aliases if _is_logging_binding(value, names)
-        )
-        changed = len(names) != before
-    return frozenset(names)
-
+        before = len(functions), len(logger_names)
+        logger_names.update(name for name, value in aliases if _logger_expression(value, logger_names))
+        functions.update(name for name, value in aliases if _logging_function_expression(value, logger_names, functions))
+        changed = before != (len(functions), len(logger_names))
+    return frozenset(functions), frozenset(logger_names)
 
 def _redaction_helpers(tree: ast.AST) -> frozenset[str]:
-    imported = {
-        alias.asname or alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "lib.retrieval_redaction"
-        for alias in node.names
-        if alias.name == "retrieval_log_fields"
-    }
-    rebound = {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
-    }
-    rebound.update(
-        node.arg if isinstance(node, ast.arg) else node.name
-        for node in ast.walk(tree)
-        if isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.arg)
-        )
-    )
+    imported = {alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module == "lib.retrieval_redaction" for alias in node.names if alias.name == "retrieval_log_fields"}
+    rebound = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
+    rebound.update(node.arg if isinstance(node, ast.arg) else node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.arg)))
     return frozenset(imported - rebound)
+# fmt: on
 
 
 def _log_call(
     node: ast.Call,
     logging_functions: frozenset[str],
+    logger_names: frozenset[str],
 ) -> str | None:
     function = node.func
     if isinstance(function, ast.Name) and function.id in logging_functions:
         return function.id
-    if not isinstance(function, ast.Attribute) or function.attr not in _LOG_LEVELS:
-        return None
-    return function.attr
+    if (
+        isinstance(function, ast.Attribute)
+        and function.attr in _LOG_LEVELS
+        and _logger_expression(function.value, set(logger_names))
+    ):
+        return function.attr
+    return _getattr_level(function, logger_names)
 
 
 def _fixed_reason(node: ast.AST) -> bool:
@@ -230,14 +228,14 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
         tree = ast.parse(source, filename=str(path))
     except (SyntaxError, ValueError):
         return (LoggingViolation(path, 0, "invalid_python_source"),)
-    functions = _logging_functions(tree)
+    functions, logger_names = _logging_bindings(tree)
     helpers = _redaction_helpers(tree)
     tainted = _tainted_names(tree)
     findings: list[LoggingViolation] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        level = _log_call(node, functions)
+        level = _log_call(node, functions, logger_names)
         if level is None:
             continue
         if level == "exception":
