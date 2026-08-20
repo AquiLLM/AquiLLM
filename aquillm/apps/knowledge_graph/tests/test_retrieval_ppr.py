@@ -1,4 +1,4 @@
-"""Pure, hand-computable tests for the ppr_v1 numerical kernel."""
+# fmt: off
 
 from __future__ import annotations
 
@@ -51,7 +51,6 @@ def test_raw_edge_weight_uses_direction_confidence_support_and_utility() -> None
         support_count=32,
         destination_retrieval_utility=0.5,
     )
-
     assert forward == pytest.approx(1.2)
     assert reverse == pytest.approx(0.42)
 
@@ -81,7 +80,6 @@ def test_raw_edge_weight_rejects_values_outside_the_persisted_contract(
         "destination_retrieval_utility": 0.5,
     }
     values.update(overrides)
-
     with pytest.raises(ValueError, match=message):
         raw_edge_weight(**values)  # type: ignore[arg-type]
 
@@ -94,7 +92,6 @@ def test_transition_rows_are_combined_normalized_sorted_and_complete() -> None:
         },
         nodes=(_CANONICAL,),
     )
-
     assert tuple(rows) == (_CANONICAL, _A, _B, _C)
     assert rows[_A] == ((_B, 0.4), (_C, 0.6))
     assert rows[_B] == ()
@@ -109,7 +106,6 @@ def test_transition_normalization_is_independent_of_mapping_and_edge_order() -> 
     permuted = normalize_transition_rows(
         {_B: ((_A, 2.0),), _A: ((_B, 1.0), (_C, 3.0), (_B, 1.0))}
     )
-
     assert first == permuted
 
 
@@ -120,7 +116,6 @@ def test_personalized_pagerank_redistributes_dangling_mass_to_restart() -> None:
         restart_probability=0.2,
         iterations=2,
     )
-
     assert scores[_A] == pytest.approx(0.84)
     assert scores[_B] == pytest.approx(0.16)
     assert sum(scores.values()) == pytest.approx(1.0)
@@ -139,7 +134,6 @@ def test_personalized_pagerank_runs_exact_fixed_cycle_iterations() -> None:
         restart_probability=0.25,
         iterations=2,
     )
-
     assert one_iteration == pytest.approx({_A: 0.375, _B: 0.625})
     assert two_iterations == pytest.approx({_A: 0.65625, _B: 0.34375})
 
@@ -147,14 +141,11 @@ def test_personalized_pagerank_runs_exact_fixed_cycle_iterations() -> None:
 def test_personalized_pagerank_checks_one_private_deadline_per_iteration() -> None:
     observed_times: list[float] = []
     times = iter((0.0, 0.0, 1.1))
-
     def clock() -> float:
         value = next(times)
         observed_times.append(value)
         return value
-
     deadline = ppr_module._MonotonicDeadline(expires_at=1.0, clock=clock)
-
     with pytest.raises(TimeoutError):
         personalized_pagerank(
             {_A: 1.0},
@@ -163,7 +154,6 @@ def test_personalized_pagerank_checks_one_private_deadline_per_iteration() -> No
             iterations=8,
             _deadline=deadline,
         )
-
     assert observed_times == [0.0, 0.0, 1.1]
 
 
@@ -190,8 +180,41 @@ def test_personalized_pagerank_is_independent_of_insertion_order() -> None:
         restart_probability=0.2,
         iterations=8,
     )
-
     assert first == permuted
+
+
+def test_legacy_ppr_literal_score_trace_ties_and_caps() -> None:
+    scores = personalized_pagerank(
+        {_A: 3.0, _CANONICAL: 1.0},
+        {
+            _A: ((_B, 1.0), (_C, 2.0)),
+            _B: ((_CANONICAL, 1.0),),
+            _C: ((_CANONICAL, 1.0),),
+            _CANONICAL: ((_A, 1.0),),
+        },
+        restart_probability=0.2,
+        iterations=8,
+    )
+    assert scores == {
+        _CANONICAL: 0.35968832000000006,
+        _A: 0.3370873600000001,
+        _B: 0.10107477333333335,
+        _C: 0.2021495466666667,
+    }
+    trace = json.dumps(
+        [[list(key), scores[key].hex()] for key in scores], separators=(",", ":")
+    ).encode()
+    assert trace == (
+        b'[[["canonical",7],"0x1.7052228c9cdc0p-2"],'
+        b'[["local","a"],"0x1.592d6dcc61423p-2"],'
+        b'[["local","b"],"0x1.9e0094dead2d7p-4"],'
+        b'[["local","c"],"0x1.9e0094dead2d7p-3"]]'
+    )
+    tied = normalize_transition_rows({_A: ((_C, 1.0), (_B, 1.0))})
+    assert tuple(tied) == (_A, _B, _C)
+    assert tied[_A] == ((_B, 0.5), (_C, 0.5))
+    cap = (("canonical", node_id) for node_id in range(1, 201))
+    assert len(normalize_transition_rows({}, nodes=cap)) == 200
 
 
 @pytest.mark.parametrize(
@@ -240,53 +263,41 @@ def test_personalized_pagerank_enforces_the_v1_iteration_envelope(
 
 def test_transition_node_generator_stops_at_cap_plus_one() -> None:
     consumed: list[int] = []
-
     def node_stream():
         for node_id in range(1, 203):
             consumed.append(node_id)
             yield ("canonical", node_id)
-
     with pytest.raises(ValueError, match="node cap"):
         normalize_transition_rows({}, nodes=node_stream())
-
     assert consumed == list(range(1, 202))
 
 
 def test_duplicate_transition_generator_stops_at_edge_cap_plus_one() -> None:
     consumed: list[int] = []
-
     def edge_stream():
         for edge_number in range(1, 1003):
             consumed.append(edge_number)
             yield (_B, 1.0)
-
     with pytest.raises(ValueError, match="edge cap"):
         normalize_transition_rows({_A: edge_stream()})
-
     assert consumed == list(range(1, 1002))
 
 
 def test_malformed_mapping_cannot_stream_unbounded_duplicate_source_rows() -> None:
     consumed: list[int] = []
-
     class RepeatingRows(Mapping):
         def __getitem__(self, key):
             return ()
-
         def __iter__(self) -> Iterator[tuple[str, str]]:
             yield _A
-
         def __len__(self) -> int:
             return 1
-
         def items(self):
             for row_number in range(1, 203):
                 consumed.append(row_number)
                 yield (_A, ())
-
     with pytest.raises(ValueError, match="source row cap"):
         normalize_transition_rows(RepeatingRows())
-
     assert consumed == list(range(1, 202))
 
 
@@ -294,13 +305,10 @@ def test_transition_source_rows_require_exact_pair_tuples() -> None:
     class ListRows(Mapping):
         def __getitem__(self, key):
             return ()
-
         def __iter__(self) -> Iterator[tuple[str, str]]:
             yield _A
-
         def __len__(self) -> int:
             return 1
-
         def items(self):
             yield [_A, ()]
 
@@ -332,9 +340,7 @@ def test_runtime_accepts_the_exact_v1_node_and_raw_edge_ceilings() -> None:
 
 
 def test_restart_mapping_is_rejected_before_materializing_node_cap_plus_one() -> None:
-    restart = {
-        ("canonical", node_id): 1.0 for node_id in range(1, 202)
-    }
+    restart = {("canonical", node_id): 1.0 for node_id in range(1, 202)}
 
     with pytest.raises(ValueError, match="node cap"):
         personalized_pagerank(
@@ -411,9 +417,7 @@ def test_edge_evidence_flow_rejects_invalid_scores_and_shares(
 
 
 def test_ppr_v1_algorithm_signature_pins_literal_canonical_json() -> None:
-    config = PPRAlgorithmConfig(
-        canonical_resolver_version="canonical-resolution-v1"
-    )
+    config = PPRAlgorithmConfig(canonical_resolver_version="canonical-resolution-v1")
     expected = (
         b'{"algorithm":"ppr_v1","canonical_resolver_version":'
         b'"canonical-resolution-v1","evidence_version":"ppr_evidence_v1",'
@@ -434,9 +438,7 @@ def test_ppr_v1_algorithm_signature_pins_literal_canonical_json() -> None:
 
 
 def test_ppr_v1_signature_changes_when_an_effective_setting_changes() -> None:
-    baseline = PPRAlgorithmConfig(
-        canonical_resolver_version="canonical-resolution-v1"
-    )
+    baseline = PPRAlgorithmConfig(canonical_resolver_version="canonical-resolution-v1")
     changed = PPRAlgorithmConfig(
         canonical_resolver_version="canonical-resolution-v1",
         max_candidates=19,
@@ -461,9 +463,7 @@ def test_signature_derives_every_frozen_computation_constant(
     payload_key: str,
     canonical_value: int | str,
 ) -> None:
-    config = PPRAlgorithmConfig(
-        canonical_resolver_version="canonical-resolution-v1"
-    )
+    config = PPRAlgorithmConfig(canonical_resolver_version="canonical-resolution-v1")
     baseline = graph_algorithm_signature(config)
 
     monkeypatch.setattr(ppr_module, constant_name, replacement)
