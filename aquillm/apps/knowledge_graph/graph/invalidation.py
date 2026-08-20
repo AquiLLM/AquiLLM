@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import islice
-from typing import Iterable
 
 import structlog
 from django.apps import apps as django_apps
@@ -1428,7 +1428,7 @@ def _runs_for_artifacts(
 def _delete_artifacts(artifacts: tuple[object, ...], *, using: str) -> None:
     if not artifacts:
         return
-    collector = Collector(using=using)
+    collection_artifact_ids = tuple(sorted(artifact.pk for artifact in artifacts if artifact.scope_type == "collection")); collection_artifact_ids and __import__("apps.knowledge_graph.projection.lifecycle", fromlist=["supersede_artifact_projections_locked"]).supersede_artifact_projections_locked(artifact_ids=collection_artifact_ids, now=timezone.now(), using=using); collector = Collector(using=using)  # noqa: E501, E702
     collector.collect(artifacts)
     collector.delete()
 
@@ -2474,7 +2474,7 @@ def collection_pre_delete(
         expected_parent_id=instance.parent_id,
         _origin_context=context,
     )
-
+    __import__("apps.knowledge_graph.projection.lifecycle", fromlist=["tombstone_collection_projections_locked"]).tombstone_collection_projections_locked(collection_id=instance.pk, now=timezone.now(), using=using)  # noqa: E501
 
 def collection_post_delete(sender, instance, **_kwargs) -> None:
     """Stable signal endpoint; deleted collections intentionally are not refreshed."""

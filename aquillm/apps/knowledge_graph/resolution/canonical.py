@@ -2341,7 +2341,7 @@ def _reconcile_locked_registry(
         )
         if changed != len(supersede_entity_ids):
             raise RuntimeError("canonical registry supersession changed concurrently")
-
+    changed_collection_ids = tuple(sorted({source_entities_by_id[row.collection_entity_id].collection_id for row in links_to_create if row.outcome == CanonicalEntityLink.Outcome.AUTOMATIC} | {source_entities_by_id[row.collection_entity_id].collection_id for row in link_rows if row.pk in supersede_link_ids and row.outcome == CanonicalEntityLink.Outcome.AUTOMATIC})); changed_collection_ids and __import__("apps.knowledge_graph.projection.lifecycle", fromlist=["enqueue_automatic_membership_changes_locked"]).enqueue_automatic_membership_changes_locked(collection_ids=changed_collection_ids, using=using)  # noqa: E501, E702
     return CanonicalRebuildResult(
         resolver_version=resolution.resolver_version,
         resolution_checksum=resolution.checksum,
