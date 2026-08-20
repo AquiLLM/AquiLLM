@@ -130,14 +130,14 @@ def test_literal_manifest_lifecycle_lease_failure_and_full_bundle_vectors() -> N
         b'gy_version":"ontology-v1","orchestration_version":4,"rebuild_request_key":nu'
         b'll,"resolution_config_checksum":"<F>","resolver_version":"resolver-v1","scop'
         b'e_key":"<COL>","scope_type":"collection","source_hash":"<F>"},{"artifact_key'
-        b'":"<F>","assembly_config_checksum":"<F>","assembly_version":"assembly-v1","b'
-        b'uild_generation":3,"build_key":"<BUILD>","collection_key":"<COL>","embedding'
-        b'_model_signature":"embed-v1","evaluation_only":false,"extractor_version":"ex'
-        b'tractor-v1","filter_policy_checksum":"<F>","filter_policy_version":"filter-v'
-        b'1","ontology_checksum":"<F>","ontology_version":"ontology-v1","orchestration'
-        b'_version":4,"rebuild_request_key":null,"resolution_config_checksum":"<F>","r'
-        b'esolver_version":"resolver-v1","scope_key":"<DOC>","scope_type":"document","'
-        b'source_hash":"<F>"}],"automatic_memberships":[{"automatic_membership_key":nu'
+        b'":"<F>","assembly_config_checksum":"<REBUILD>","assembly_version":"not-appli'
+        b'cable","build_generation":3,"build_key":"<BUILD>","collection_key":"<COL>","'
+        b'embedding_model_signature":"","evaluation_only":false,"extractor_version":"e'
+        b'xtractor-v1","filter_policy_checksum":"<F>","filter_policy_version":"filter-'
+        b'v1","ontology_checksum":"<F>","ontology_version":"ontology-v1","orchestratio'
+        b'n_version":4,"rebuild_request_key":null,"resolution_config_checksum":"<F>","'
+        b'resolver_version":"resolver-v1","scope_key":"<DOC>","scope_type":"document",'
+        b'"source_hash":"<F>"}],"automatic_memberships":[{"automatic_membership_key":nu'
         b'll,"decision_checksum":"<F>","entity_key":"<EA>","resolution_config_checksum'
         b'":"<F>","resolver_version":"resolver-v1"},{"automatic_membership_key":"<AUTO'
         b'>","decision_checksum":"<F>","entity_key":"<EB>","resolution_config_checksum'
@@ -184,7 +184,7 @@ def test_literal_manifest_lifecycle_lease_failure_and_full_bundle_vectors() -> N
         "fb2726d5a09eace760030057ae523923ff0fb355e64ce4fbc90330c75a40a367",
         "dbe87cb726e6db021d018061ddf1eee20f192c7fcf13b72242aabc06f2a8229d",
         "63a322de2d531a1ed7ab3dd19baa7cb907fa1eebf969fc93a19d8ce7b81bc7db",
-        "57f1b5b280554d3c94b1ef4caf258633516c6c25bd420d7add66d9b5ec2376a2",
+        "5cedd6e208d90b355cfe6c5a239e24b43153c42662b04e07341e80171a6f7dcb",
     )
     assert " ".join(state.value for state in ProjectionLifecycleState) == (
         "pending building ready failed superseded"

@@ -33,6 +33,11 @@ class _ValidatedRecord:
                 "semantic_signature",
             }:
                 _key(value, field.name)
+            elif field.name == "embedding_model_signature":
+                if type(value) is not str:
+                    raise TypeError(f"{field.name} must be a built-in str")
+                if value:
+                    _token(value, field.name)
             elif type(value) is str:
                 _token(value, field.name)
             elif type(value) is int:
@@ -177,6 +182,8 @@ class ProjectedArtifactProvenanceV1(_ValidatedRecord):
             _key(self.rebuild_request_key, "rebuild_request_key")
         if self.scope_type not in {"collection", "document"}:
             raise ValueError("scope_type is invalid")
+        if self.scope_type == "collection" and not self.embedding_model_signature:
+            raise ValueError("collection embedding_model_signature must be nonempty")
         if type(self.evaluation_only) is not bool:
             raise TypeError("evaluation_only must be a bool")
 

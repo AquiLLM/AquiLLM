@@ -214,7 +214,7 @@ def _validate_bundle(bundle: object) -> None:
     shared = (
         "resolver_version resolution_config_checksum ontology_version "
         "ontology_checksum filter_policy_version filter_policy_checksum "
-        "orchestration_version"
+        "extractor_version orchestration_version"
     ).split()
     if any(len({getattr(row, name) for row in provenance}) != 1 for name in shared):
         raise ValueError("shared provenance identity is inconsistent")
@@ -235,10 +235,9 @@ def _validate_bundle(bundle: object) -> None:
         or row.relation_type != relations[row.relation_key].relation_type
         or row.document_key not in documents_by_scope
         or row.artifact_key != documents_by_scope[row.document_key].artifact_key
-        or row.ontology_checksum
-        != documents_by_scope[row.document_key].ontology_checksum
+        or row.ontology_checksum != collection_provenance.ontology_checksum
         or row.assembly_config_checksum
-        != documents_by_scope[row.document_key].assembly_config_checksum
+        != collection_provenance.assembly_config_checksum
         for row in bundle.evidence
     ):
         raise ValueError("evidence coherence is broken")

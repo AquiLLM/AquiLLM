@@ -136,6 +136,9 @@ def _bundle() -> CollectionGraphProjectionBundleV1:
             artifact_key=K["document_artifact"],
             scope_type="document",
             scope_key=K["document"],
+            embedding_model_signature="",
+            assembly_version="not-applicable",
+            assembly_config_checksum="e" * 64,
         ),
     )
     counts = ProjectionCountsV1(2, 2, 1, 1, 1, 1, 2)
@@ -165,27 +168,22 @@ def _replace_row(rows, index=0, **changes):
     return rows[:index] + (replace(rows[index], **changes),) + rows[index + 1 :]
 
 
+def _row_mutation(name, index=0, **changes):
+    def mutate(bundle):
+        rows = _replace_row(getattr(bundle, name), index, **changes)
+        return replace(bundle, **{name: rows})
+
+    return mutate
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
         (lambda b: replace(b, entities=tuple(reversed(b.entities))), "sorted"),
         (lambda b: replace(b, entities=(b.entities[0],) * 2), "unique"),
-        (
-            lambda b: replace(
-                b, relations=_replace_row(b.relations, target_entity_key="e" * 64)
-            ),
-            "endpoint",
-        ),
-        (
-            lambda b: replace(b, evidence=_replace_row(b.evidence, chunk_number=3)),
-            "evidence",
-        ),
-        (
-            lambda b: replace(
-                b, evidence=_replace_row(b.evidence, source_document_key="e" * 64)
-            ),
-            "evidence",
-        ),
+        (_row_mutation("relations", target_entity_key="e" * 64), "endpoint"),
+        (_row_mutation("evidence", chunk_number=3), "evidence"),
+        (_row_mutation("evidence", source_document_key="e" * 64), "evidence"),
         (
             lambda b: replace(b, counts=replace(b.counts, entity_count=3)),
             "count",
@@ -199,21 +197,11 @@ def _replace_row(rows, index=0, **changes):
             "membership",
         ),
         (
-            lambda b: replace(
-                b,
-                automatic_memberships=_replace_row(
-                    b.automatic_memberships, decision_checksum="e" * 64
-                ),
-            ),
+            _row_mutation("automatic_memberships", decision_checksum="e" * 64),
             "membership",
         ),
         (
-            lambda b: replace(
-                b,
-                automatic_memberships=_replace_row(
-                    b.automatic_memberships, resolver_version="resolver-v2"
-                ),
-            ),
+            _row_mutation("automatic_memberships", resolver_version="resolver-v2"),
             "membership",
         ),
         (
@@ -224,28 +212,16 @@ def _replace_row(rows, index=0, **changes):
             ),
             "collection provenance",
         ),
+        (_row_mutation("evidence", artifact_key="e" * 64), "evidence"),
+        (_row_mutation("evidence", relation_type="likes"), "evidence"),
+        (_row_mutation("evidence", ontology_checksum="e" * 64), "evidence"),
+        (_row_mutation("evidence", assembly_config_checksum="e" * 64), "evidence"),
         (
             lambda b: replace(
                 b,
-                evidence=_replace_row(b.evidence, artifact_key="e" * 64),
-            ),
-            "evidence",
-        ),
-        (
-            lambda b: replace(
-                b, evidence=_replace_row(b.evidence, relation_type="likes")
-            ),
-            "evidence",
-        ),
-        (
-            lambda b: replace(
-                b, evidence=_replace_row(b.evidence, ontology_checksum="e" * 64)
-            ),
-            "evidence",
-        ),
-        (
-            lambda b: replace(
-                b,
+                artifact_provenance=_replace_row(
+                    b.artifact_provenance, 1, assembly_config_checksum="e" * 64
+                ),
                 evidence=_replace_row(b.evidence, assembly_config_checksum="e" * 64),
             ),
             "evidence",
@@ -268,6 +244,7 @@ def test_bundle_rejects_membership_provenance_and_evidence_incoherence(
         {"ontology_checksum": "e" * 64},
         {"filter_policy_version": "filter-v2"},
         {"filter_policy_checksum": "e" * 64},
+        {"extractor_version": "extractor-v2"},
         {"orchestration_version": 5},
     ],
 )
@@ -276,6 +253,31 @@ def test_bundle_rejects_shared_provenance_identity_drift(changes) -> None:
     rows = _replace_row(bundle.artifact_provenance, 1, **changes)
     with pytest.raises(ValueError, match="shared provenance"):
         replace(bundle, artifact_provenance=rows)
+
+
+def test_document_provenance_allows_empty_embedding_signature() -> None:
+    document = _bundle().artifact_provenance[1]
+    assert document.embedding_model_signature == ""
+    with pytest.raises(ValueError, match="collection embedding"):
+        replace(_bundle().artifact_provenance[0], embedding_model_signature="")
+    with pytest.raises(TypeError, match="built-in str"):
+        replace(
+            document,
+            embedding_model_signature=type("_SignatureSubclass", (str,), {})(""),
+        )
+
+
+def test_evidence_assembly_uses_collection_not_document_provenance() -> None:
+    bundle = _bundle()
+    evidence = bundle.evidence[0]
+    assert (
+        evidence.assembly_config_checksum
+        == bundle.artifact_provenance[0].assembly_config_checksum
+    )
+    assert (
+        evidence.assembly_config_checksum
+        != bundle.artifact_provenance[1].assembly_config_checksum
+    )
 
 
 def test_bundle_rejects_chunk_key_and_coordinate_conflicts_independently() -> None:
