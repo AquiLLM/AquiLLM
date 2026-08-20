@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -221,3 +222,29 @@ def test_memgraph_loader_rejects_snapshot_scope_or_endpoint_tampering() -> None:
             caps=TopologyCapsV1(HybridBranchKind.DIRECT, 32, 2, 200, 1_000, 20),
             deadline=42.5,
         )
+
+
+@pytest.mark.parametrize(
+    ("loaded_depth", "requested_depth", "rejected"),
+    ((2, 1, True), (1, 2, False)),
+)
+def test_memgraph_loader_enforces_requested_depth_cap(
+    loaded_depth: int, requested_depth: int, rejected: bool
+) -> None:
+    driver = Driver(replace(snapshot(), load_max_hops=loaded_depth))
+
+    def load():
+        return MemgraphProjectedTopologyLoader(driver).load(
+            ready=ready(),
+            seeds=(ProjectedSeedV1(K[4], 1.0),),
+            caps=TopologyCapsV1(
+                HybridBranchKind.DIRECT, 32, requested_depth, 200, 1_000, 20
+            ),
+            deadline=42.5,
+        )
+
+    if rejected:
+        with pytest.raises(TopologyLoadError, match="direct_topology_invalid"):
+            load()
+    else:
+        assert load().load_max_hops == loaded_depth

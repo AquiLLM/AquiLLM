@@ -6,17 +6,8 @@ from math import isfinite
 
 from .. import projected_types as t
 from . import contracts as c
+from .failures import TopologyLoadError
 from .projected_codec import compose_projected_snapshot_families
-
-
-class TopologyLoadError(RuntimeError):
-    """Safe fixed-reason topology failure."""
-
-    def __init__(self, reason: c.TopologyFailureReason):
-        if type(reason) is not c.TopologyFailureReason:
-            raise TypeError("reason must be an exact TopologyFailureReason")
-        self.reason = reason
-        super().__init__(reason.value)
 
 
 def _parameters(ready, seeds) -> dict[str, str]:
@@ -109,6 +100,8 @@ class MemgraphProjectedTopologyLoader:
                     deadline=deadline,
                     max_records=maximum,
                 )
+        except TopologyLoadError:
+            raise
         except TimeoutError as error:
             reason = (
                 c.TopologyFailureReason.DIRECT_TOPOLOGY_TIMEOUT
@@ -146,7 +139,7 @@ class MemgraphProjectedTopologyLoader:
                 or snapshot.allowed_scope.collection_keys != expected_collections
                 or len(snapshot.identity_keys) > caps.max_nodes
                 or len(snapshot.relation_groups) > caps.max_edges
-                or caps.max_depth > snapshot.load_max_hops
+                or snapshot.load_max_hops > caps.max_depth
             ):
                 raise ValueError("snapshot scope or caps disagree with request")
             return snapshot

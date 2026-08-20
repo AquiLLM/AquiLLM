@@ -5,7 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..projected_types import ProjectedAuthorizedGraphSnapshotV1
-from .contracts import ProjectedSeedV1, ReadyGenerationBundleV1, TopologyCapsV1
+from .contracts import (
+    HybridBranchKind,
+    ProjectedSeedV1,
+    ReadyGenerationBundleV1,
+    TopologyCapsV1,
+    TopologyFailureReason,
+)
+from .failures import TopologyLoadError
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -45,11 +52,30 @@ class PostgresProjectedTopologyLoader:
     ) -> ProjectedAuthorizedGraphSnapshotV1:
         if capability is not self._capability:
             raise ValueError("postgres parity requires the exact private capability")
-        snapshot = self.source.load(
-            ready=ready, seeds=seeds, caps=caps, deadline=deadline
+        invalid = (
+            TopologyFailureReason.DIRECT_TOPOLOGY_INVALID
+            if caps.branch_kind is HybridBranchKind.DIRECT
+            else TopologyFailureReason.EXTENDED_TOPOLOGY_INVALID
         )
+        timeout = (
+            TopologyFailureReason.DIRECT_TOPOLOGY_TIMEOUT
+            if caps.branch_kind is HybridBranchKind.DIRECT
+            else TopologyFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
+        )
+        try:
+            snapshot = self.source.load(
+                ready=ready, seeds=seeds, caps=caps, deadline=deadline
+            )
+        except TopologyLoadError:
+            raise
+        except TimeoutError as error:
+            raise TopologyLoadError(timeout) from error
+        except Exception as error:
+            raise TopologyLoadError(
+                TopologyFailureReason.BACKEND_UNAVAILABLE
+            ) from error
         if type(snapshot) is not ProjectedAuthorizedGraphSnapshotV1:
-            raise ValueError("postgres parity source returned an invalid snapshot")
+            raise TopologyLoadError(invalid)
         documents = tuple(
             sorted(row.document_key for row in ready.authorized_documents)
         )
@@ -59,8 +85,9 @@ class PostgresProjectedTopologyLoader:
             or snapshot.allowed_scope.collection_keys != collections
             or len(snapshot.identity_keys) > caps.max_nodes
             or len(snapshot.relation_groups) > caps.max_edges
+            or snapshot.load_max_hops > caps.max_depth
         ):
-            raise ValueError("postgres parity snapshot disagrees with exact scope/caps")
+            raise TopologyLoadError(invalid)
         return snapshot
 
 
