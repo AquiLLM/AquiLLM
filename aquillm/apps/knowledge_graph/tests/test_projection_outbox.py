@@ -70,3 +70,28 @@ def test_outbox_fanout_and_limit_are_bounded_before_query(monkeypatch):
 
     assert observed == [5000]
     assert summary.attempted_count == 0
+
+
+def test_outbox_dispatches_exact_project_and_prune_tasks(monkeypatch):
+    from apps.knowledge_graph.projection import tasks
+
+    projection_id = uuid4()
+    dispatched = []
+    monkeypatch.setattr(
+        tasks.project_knowledge_graph_projection,
+        "delay",
+        lambda value: dispatched.append(("project", value)),
+    )
+    monkeypatch.setattr(
+        tasks.prune_knowledge_graph_projection,
+        "delay",
+        lambda value: dispatched.append(("prune", value)),
+    )
+
+    outbox._publish(projection_id, "project")
+    outbox._publish(projection_id, "prune")
+
+    assert dispatched == [
+        ("project", str(projection_id)),
+        ("prune", str(projection_id)),
+    ]

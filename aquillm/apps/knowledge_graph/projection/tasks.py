@@ -3,14 +3,18 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 from celery import shared_task
+from django.utils import timezone
 
+from .outbox import publish_projection_outbox
 from .reconciler import (
-    project_generation,
     prune_graph_projection_generations,
     reconcile_graph_projections,
 )
+from .runtime import load_projection_runtime_settings
+from .worker import project_generation
 
 _TRANSIENT = (ConnectionError, TimeoutError)
+_TASK_QUEUE = load_projection_runtime_settings().projection_queue
 
 
 def _run_redacted(task, operation):
@@ -40,6 +44,7 @@ def _uuid(value: object) -> UUID:
     bind=True,
     name="apps.knowledge_graph.projection.tasks.project_knowledge_graph_projection",
     max_retries=3,
+    queue=_TASK_QUEUE,
     acks_late=True,
     reject_on_worker_lost=True,
 )
@@ -59,6 +64,7 @@ def project_knowledge_graph_projection(self, projection_id: str):
     bind=True,
     name="apps.knowledge_graph.projection.tasks.reconcile_knowledge_graph_projections",
     max_retries=3,
+    queue=_TASK_QUEUE,
     acks_late=True,
 )
 def reconcile_knowledge_graph_projections(
@@ -68,9 +74,46 @@ def reconcile_knowledge_graph_projections(
         self,
         lambda: reconcile_graph_projections(page_size=page_size, dry_run=dry_run),
     )
+    published = (
+        None
+        if dry_run
+        else _run_redacted(
+            self,
+            lambda: publish_projection_outbox(
+                limit=page_size,
+                now=timezone.now(),
+                using="default",
+            ),
+        )
+    )
     return {
         "examined_count": summary.examined_count,
         "enqueued_count": summary.enqueued_count,
+        "published_count": 0 if published is None else published.published_count,
+    }
+
+
+@shared_task(
+    bind=True,
+    name="apps.knowledge_graph.projection.tasks.publish_knowledge_graph_projection_outbox",
+    max_retries=3,
+    queue=_TASK_QUEUE,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def publish_knowledge_graph_projection_outbox(self, limit: int = 500):
+    summary = _run_redacted(
+        self,
+        lambda: publish_projection_outbox(
+            limit=limit,
+            now=timezone.now(),
+            using="default",
+        ),
+    )
+    return {
+        "attempted_count": summary.attempted_count,
+        "published_count": summary.published_count,
+        "failed_count": summary.failed_count,
     }
 
 
@@ -78,6 +121,7 @@ def reconcile_knowledge_graph_projections(
     bind=True,
     name="apps.knowledge_graph.projection.tasks.prune_knowledge_graph_projection",
     max_retries=3,
+    queue=_TASK_QUEUE,
     acks_late=True,
 )
 def prune_knowledge_graph_projection(
@@ -102,6 +146,7 @@ def prune_knowledge_graph_projection(
 
 
 __all__ = [
+    "publish_knowledge_graph_projection_outbox",
     "project_knowledge_graph_projection",
     "prune_knowledge_graph_projection",
     "reconcile_knowledge_graph_projections",

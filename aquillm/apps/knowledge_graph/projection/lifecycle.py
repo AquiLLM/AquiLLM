@@ -13,10 +13,8 @@ from apps.knowledge_graph.models import CollectionGraphMembershipState, Collecti
 from .memberships import advance_membership_state_locked
 from .memgraph_repository import ProjectionValidationV1
 from .records import ProjectionFailureCode, ProjectionLeaseV1
+from .runtime import load_projection_runtime_settings
 
-SCHEMA_VERSION = "memgraph-schema-v1"
-PROJECTION_VERSION = "projection-v1"
-IDENTIFIER_KEY_VERSION = "key-v1"
 _EMPTY_MAPPING_CHECKSUM = sha256(b"[]").hexdigest()
 _MAX_ROWS = 5_000
 _READY_LOCK_ORDER = ("collection", "active_artifact", "membership_state", "projection")
@@ -43,6 +41,12 @@ def _owner(value: object) -> str:
 def _atomic(using: str): return transaction.atomic(using=using)
 def _locked_projection(projection_id: UUID, using: str): return CollectionGraphProjection.objects.using(using).select_for_update().get(pk=projection_id)
 def _save(row: object, fields: list[str], using: str) -> None: row.save(using=using, update_fields=fields)
+def _projection_versions() -> tuple[str, str, str]:
+    settings = load_projection_runtime_settings()
+    return settings.projection_schema_version, settings.projection_format_version, settings.projection_identifier_key_version
+def _checksum(value: object) -> str:
+    if type(value) is not str or len(value) != 64 or any(character not in "0123456789abcdef" for character in value): raise ValueError("checksum must be lowercase SHA-256 hexadecimal")
+    return value
 
 def _supersede(row: object, now: datetime, using: str) -> None:
     if row.state == CollectionGraphProjection.State.SUPERSEDED: return
@@ -52,7 +56,10 @@ def _supersede(row: object, now: datetime, using: str) -> None:
     _save(row, ["state", "lease_owner", "lease_expires_at", "failure_code", "superseded_at", "updated_at"], using)
 
 def _enqueue_outbox(row: object, operation: str, now: datetime, using: str) -> None:
-    GraphProjectionOutbox.objects.using(using).get_or_create(projection_id=row.id, operation=operation, defaults={"state": GraphProjectionOutbox.State.PENDING, "next_attempt_at": now})
+    entry, created = GraphProjectionOutbox.objects.using(using).get_or_create(projection_id=row.id, operation=operation, defaults={"state": GraphProjectionOutbox.State.PENDING, "next_attempt_at": now})
+    if not created:
+        entry.state, entry.published_at, entry.next_attempt_at, entry.last_failure_code = GraphProjectionOutbox.State.PENDING, None, now, ""
+        entry.save(using=using, update_fields=["state", "published_at", "next_attempt_at", "last_failure_code"])
 
 def enqueue_collection_projection_locked(*, collection_id: int, artifact_id: int, using: str) -> CollectionGraphProjection:
     if type(collection_id) is not int or collection_id < 1 or type(artifact_id) is not int or artifact_id < 1: raise ValueError("collection_id and artifact_id must be positive integers")
@@ -62,13 +69,14 @@ def enqueue_collection_projection_locked(*, collection_id: int, artifact_id: int
         membership = advance_membership_state_locked(collection_id=collection_id, using=using, expected_artifact_id=artifact_id)
         rows = tuple(CollectionGraphProjection.objects.using(using).select_for_update().filter(collection_id=collection_id, state__in=("pending", "building", "ready")).order_by("id")[: _MAX_ROWS + 1])
         if len(rows) > _MAX_ROWS: raise RuntimeError("projection fanout exceeds the bounded row limit")
-        identity = (artifact_id, membership.registry_epoch, membership.membership_checksum, SCHEMA_VERSION, PROJECTION_VERSION, IDENTIFIER_KEY_VERSION)
+        schema_version, projection_version, identifier_key_version = _projection_versions()
+        identity = (artifact_id, membership.registry_epoch, membership.membership_checksum, schema_version, projection_version, identifier_key_version)
         current = next((row for row in rows if (row.artifact_id, row.membership_epoch, row.membership_checksum, row.schema_version, row.projection_version, row.identifier_key_version) == identity), None)
         for row in rows:
             if row is not current:
                 instant = timezone.now(); _supersede(row, instant, using); _enqueue_outbox(row, GraphProjectionOutbox.Operation.PRUNE, instant, using)
         if current is None:
-            current = CollectionGraphProjection.objects.using(using).create(collection_id=collection_id, collection_pk_snapshot=collection_id, artifact_id=artifact_id, artifact_pk_snapshot=artifact_id, schema_version=SCHEMA_VERSION, projection_version=PROJECTION_VERSION, identifier_key_version=IDENTIFIER_KEY_VERSION, membership_epoch=membership.registry_epoch, membership_checksum=membership.membership_checksum, private_mapping_checksum=_EMPTY_MAPPING_CHECKSUM)
+            current = CollectionGraphProjection.objects.using(using).create(collection_id=collection_id, collection_pk_snapshot=collection_id, artifact_id=artifact_id, artifact_pk_snapshot=artifact_id, schema_version=schema_version, projection_version=projection_version, identifier_key_version=identifier_key_version, membership_epoch=membership.registry_epoch, membership_checksum=membership.membership_checksum, private_mapping_checksum=_EMPTY_MAPPING_CHECKSUM)
         _enqueue_outbox(current, GraphProjectionOutbox.Operation.PROJECT, timezone.now(), using)
         return current
 
@@ -105,6 +113,14 @@ def renew_projection_lease(*, projection_id: UUID, owner: str, now: datetime, le
         row.lease_expires_at = instant + timedelta(seconds=lease_seconds); _save(row, ["lease_expires_at", "updated_at"], using)
         return ProjectionLeaseV1(str(row.id), lease_owner, row.lease_expires_at, row.attempt_count)
 
+def record_projection_private_mapping_checksum(*, projection_id: UUID, owner: str, checksum: str, now: datetime, using: str) -> None:
+    identifier, lease_owner, instant, value = _identifier(projection_id), _owner(owner), _instant(now), _checksum(checksum)
+    with _atomic(using):
+        row = _locked_projection(identifier, using)
+        if row.state != "building" or row.lease_owner != lease_owner or row.lease_expires_at <= instant: raise RuntimeError("projection lease was lost")
+        row.private_mapping_checksum = value
+        _save(row, ["private_mapping_checksum", "updated_at"], using)
+
 def mark_projection_failed(*, projection_id: UUID, owner: str, failure_code: ProjectionFailureCode, now: datetime, using: str) -> None:
     identifier, lease_owner, instant = _identifier(projection_id), _owner(owner), _instant(now)
     if type(failure_code) is not ProjectionFailureCode: raise TypeError("failure_code must be exact")
@@ -121,17 +137,18 @@ def _locked_ready_context(projection_id: UUID, using: str):
     membership = CollectionGraphMembershipState.objects.using(using).select_for_update().filter(collection_id=snapshot.collection_id).first()
     return collection, artifact, membership, _locked_projection(projection_id, using)
 
-def publish_projection_ready_compare_and_set(*, projection_id: UUID, owner: str, validation: ProjectionValidationV1, now: datetime, using: str) -> ProjectionReadyOutcomeV1:
+def publish_projection_ready_compare_and_set(*, projection_id: UUID, owner: str, validation: ProjectionValidationV1, expected_generation_key: str, expected_graph_checksum: str, expected_private_mapping_checksum: str, now: datetime, using: str) -> ProjectionReadyOutcomeV1:
     identifier, lease_owner, instant = _identifier(projection_id), _owner(owner), _instant(now)
+    generation_key, graph_checksum, private_checksum = _checksum(expected_generation_key), _checksum(expected_graph_checksum), _checksum(expected_private_mapping_checksum)
     if type(validation) is not ProjectionValidationV1: raise TypeError("validation must be exact")
     with _atomic(using):
         collection, artifact, membership, row = _locked_ready_context(identifier, using)
-        stable = collection is not None and artifact is not None and membership is not None and artifact.pk == row.artifact_id and artifact.status == "active" and membership.active_artifact_id == row.artifact_id and membership.registry_epoch == row.membership_epoch and membership.membership_checksum == row.membership_checksum and membership.resolver_version == artifact.resolver_version and membership.resolution_config_checksum == artifact.resolution_config_checksum and row.collection_id == collection.pk and (row.schema_version, row.projection_version, row.identifier_key_version) == (SCHEMA_VERSION, PROJECTION_VERSION, IDENTIFIER_KEY_VERSION) and row.state == "building" and row.lease_owner == lease_owner and row.lease_expires_at > instant and validation.valid
+        stable = collection is not None and artifact is not None and membership is not None and artifact.pk == row.artifact_id and artifact.status == "active" and getattr(artifact, "evaluation_only", False) is False and membership.active_artifact_id == row.artifact_id and membership.registry_epoch == row.membership_epoch and membership.membership_checksum == row.membership_checksum and membership.resolver_version == artifact.resolver_version and membership.resolution_config_checksum == artifact.resolution_config_checksum and row.collection_id == collection.pk and (row.schema_version, row.projection_version, row.identifier_key_version) == _projection_versions() and row.private_mapping_checksum == private_checksum and row.state == "building" and row.lease_owner == lease_owner and row.lease_expires_at > instant and validation.valid and validation.generation_key == generation_key and validation.validation_checksum == graph_checksum
         if not stable:
             if row.state == "building" and row.lease_owner == lease_owner:
-                row.state, row.failure_code, row.lease_owner, row.lease_expires_at = "failed", "source_changed", "", None; _save(row, ["state", "failure_code", "lease_owner", "lease_expires_at", "updated_at"], using)
+                _supersede(row, instant, using); _enqueue_outbox(row, GraphProjectionOutbox.Operation.PRUNE, instant, using)
             return ProjectionReadyOutcomeV1(identifier, False, row.state, "source_changed")
-        counts = validation.counts; row.graph_checksum = row.snapshot_checksum = validation.validation_checksum
+        counts = validation.counts; row.graph_checksum = row.snapshot_checksum = graph_checksum
         row.entity_count, row.relation_count, row.evidence_count, row.chunk_count = counts.entity_count, counts.relation_count, counts.evidence_count, counts.chunk_count
         row.state, row.ready_at, row.lease_owner, row.lease_expires_at = "ready", instant, "", None
         _save(row, ["graph_checksum", "snapshot_checksum", "entity_count", "relation_count", "evidence_count", "chunk_count", "state", "ready_at", "lease_owner", "lease_expires_at", "updated_at"], using)

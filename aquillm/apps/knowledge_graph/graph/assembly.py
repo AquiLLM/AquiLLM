@@ -3003,7 +3003,7 @@ def activate_collection_graph(
             run=run,
             scope_artifacts=scope_artifacts,
         )
-        __import__("apps.knowledge_graph.projection.lifecycle", fromlist=["enqueue_collection_projection_locked"]).enqueue_collection_projection_locked(collection_id=collection_id, artifact_id=artifact.pk, using="default")  # noqa: E501
+        artifact.evaluation_only or __import__("apps.knowledge_graph.projection.lifecycle", fromlist=["enqueue_collection_projection_locked"]).enqueue_collection_projection_locked(collection_id=collection_id, artifact_id=artifact.pk, using="default")  # noqa: E501
         return result
 
 def _swap_active_collection_artifact(
