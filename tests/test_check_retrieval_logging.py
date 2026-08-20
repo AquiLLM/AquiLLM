@@ -93,6 +93,28 @@ def test_checker_rejects_taint_aliases_dynamic_receivers_and_nonhelper_shape(
     assert len(_scan(source)) == 1
 
 
+@pytest.mark.parametrize(
+    "binding",
+    (
+        "emit, other = (logger.info, safe)",
+        "for emit in (logger.info,): pass",
+    ),
+)
+def test_checker_rejects_destructured_and_loop_logger_aliases(binding: str) -> None:
+    source = f'{binding}\nemit("obs.rag.search", query=query)'
+    violations = _scan(source)
+    assert len(violations) == 1
+    assert violations[0].line == 2
+
+
+def test_checker_does_not_taint_safe_destructuring_sibling() -> None:
+    source = (
+        "emit, callback = (logger.info, worker)\n"
+        'callback("obs.rag.search", query=query)'
+    )
+    assert _scan(source) == ()
+
+
 def test_review_regressions_live_only_in_planned_test_modules() -> None:
     extra = (
         REPO

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501
 """Fail closed on payload-bearing log calls in the retrieval feature lane."""
 
 from __future__ import annotations
@@ -24,27 +25,23 @@ _LOG_LEVELS = frozenset(
 )
 _FIELDS = frozenset({"reason", "count", "elapsed_ms"})
 _VALUE_ASSIGNMENTS = (ast.AnnAssign, ast.NamedExpr)
-_REASONS = frozenset(
-    {
-        "completed",
-        "invalid_request",
-        "authentication_failed",
-        "payload_too_large",
-        "upstream_unavailable",
-        "provenance_mismatch",
-        "mixed_ontology",
-        "embedding_unavailable",
-        "no_seeds",
-        "ambiguous",
-        "internal_failure",
-    }
-)
+# fmt: off
+_REASONS = frozenset({"completed", "invalid_request", "authentication_failed", "payload_too_large", "upstream_unavailable", "provenance_mismatch", "mixed_ontology", "embedding_unavailable", "no_seeds", "ambiguous", "internal_failure"})
+# fmt: on
 
 
 class LoggingViolation(NamedTuple):
     path: Path
     line: int
     reason: str
+
+
+# fmt: off
+def _bindings(target: ast.AST, value: ast.AST) -> tuple[tuple[str, ast.AST], ...]:
+    if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)) and len(target.elts) == len(value.elts):
+        return tuple(binding for target_item, value_item in zip(target.elts, value.elts, strict=True) for binding in _bindings(target_item, value_item))
+    return tuple((name.id, value) for name in ast.walk(target) if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store))
+# fmt: on
 
 
 def _assignments(tree: ast.AST) -> tuple[tuple[str, ast.AST], ...]:
@@ -58,13 +55,17 @@ def _assignments(tree: ast.AST) -> tuple[tuple[str, ast.AST], ...]:
             targets, value = (node.target,), node.iter
         else:
             continue
-        assignments.extend(
-            (name.id, value)
-            for target in targets
-            for name in ast.walk(target)
-            if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store)
-        )
+        for target in targets:
+            assignments.extend(_bindings(target, value))
     return tuple(assignments)
+
+
+def _is_logging_binding(value: ast.AST, names: set[str]) -> bool:
+    return any(
+        (isinstance(candidate, ast.Attribute) and candidate.attr in _LOG_LEVELS)
+        or (isinstance(candidate, ast.Name) and candidate.id in names)
+        for candidate in ast.walk(value)
+    )
 
 
 def _logging_functions(tree: ast.AST) -> frozenset[str]:
@@ -80,10 +81,7 @@ def _logging_functions(tree: ast.AST) -> frozenset[str]:
     while changed:
         before = len(names)
         names.update(
-            name
-            for name, value in aliases
-            if (isinstance(value, ast.Attribute) and value.attr in _LOG_LEVELS)
-            or (isinstance(value, ast.Name) and value.id in names)
+            name for name, value in aliases if _is_logging_binding(value, names)
         )
         changed = len(names) != before
     return frozenset(names)
