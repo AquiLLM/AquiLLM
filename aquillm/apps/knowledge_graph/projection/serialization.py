@@ -75,9 +75,8 @@ def _provider_types() -> tuple[frozenset[type[object]], type[object]]:
         "ProjectionCountsV1 ProjectionGenerationManifestV1 ProjectionLeaseV1 "
         "ProjectionFailureStateV1"
     ).split()
-    return frozenset(getattr(records, name) for name in names), (
-        records.CollectionGraphProjectionBundleV1
-    )
+    bundle_type = records.CollectionGraphProjectionBundleV1
+    return frozenset(getattr(records, name) for name in names), bundle_type
 
 
 def _validate_top_level_records(
@@ -108,8 +107,7 @@ def _validate_top_level_records(
 def _encode(value: object, provider_types: frozenset[type[object]]) -> object:
     from .records import CollectionGraphProjectionBundleV1
 
-    supported_types = provider_types | {CollectionGraphProjectionBundleV1}
-    if type(value) in supported_types:
+    if type(value) in provider_types | {CollectionGraphProjectionBundleV1}:
         return {
             field.name: _encode(getattr(value, field.name), provider_types)
             for field in fields(value)
@@ -191,10 +189,17 @@ def _validate_bundle(bundle: object) -> None:
     if any(
         row.source_entity_key not in entities
         or row.target_entity_key not in entities
+        or row.source_entity_key == row.target_entity_key
         or row.artifact_key != marker.artifact_key
         for row in bundle.relations
     ):
-        raise ValueError("relation endpoint closure is broken")
+        raise ValueError("relation endpoint/self-loop closure is broken")
+    semantic_relations = tuple(
+        (r.artifact_key, r.source_entity_key, r.relation_type, r.target_entity_key)
+        for r in bundle.relations
+    )
+    if len(set(semantic_relations)) != len(semantic_relations):
+        raise ValueError("relation semantic tuples must be unique")
     provenance = bundle.artifact_provenance
     collection_rows = tuple(row for row in provenance if row.scope_type == "collection")
     document_rows = tuple(row for row in provenance if row.scope_type == "document")
@@ -266,6 +271,8 @@ def _token(value: object, name: str, maximum: int = 512) -> None:
         raise TypeError(f"{name} must be a built-in str")
     if not value or value != value.strip() or len(value) > maximum:
         raise ValueError(f"{name} must be a bounded canonical token")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"{name} must not contain control characters")
     try:
         value.encode("utf-8")
     except UnicodeEncodeError as error:
@@ -279,13 +286,6 @@ def _count(
         raise TypeError(f"{name} must be a built-in int")
     if not minimum <= value <= maximum:
         raise ValueError(f"{name} is outside its bounded range")
-
-
-def _finite_float(value: object, name: str) -> None:
-    if type(value) is not float:
-        raise TypeError(f"{name} must be a built-in float")
-    if not isfinite(value):
-        raise ValueError(f"{name} must be finite")
 
 
 def _uuid(value: object, name: str) -> None:

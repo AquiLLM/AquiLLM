@@ -157,7 +157,6 @@ def _bundle() -> CollectionGraphProjectionBundleV1:
 
 def test_records_are_immutable_slotted_and_bundle_is_closed() -> None:
     bundle = _bundle()
-    assert bundle.counts.evidence_count == 1
     assert bundle.automatic_memberships[0].automatic_membership_key is None
     assert not hasattr(bundle.entities[0], "__dict__")
     with pytest.raises(FrozenInstanceError):
@@ -176,12 +175,21 @@ def _row_mutation(name, index=0, **changes):
     return mutate
 
 
+def _duplicate_relation(bundle):
+    relation = bundle.relations[0]
+    duplicate = replace(relation, relation_key=K["scope"])
+    counts = replace(bundle.counts, relation_count=2)
+    return replace(bundle, relations=(relation, duplicate), counts=counts)
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
         (lambda b: replace(b, entities=tuple(reversed(b.entities))), "sorted"),
         (lambda b: replace(b, entities=(b.entities[0],) * 2), "unique"),
         (_row_mutation("relations", target_entity_key="e" * 64), "endpoint"),
+        (_row_mutation("relations", target_entity_key=K["entity_a"]), "self-loop"),
+        (_duplicate_relation, "semantic"),
         (_row_mutation("evidence", chunk_number=3), "evidence"),
         (_row_mutation("evidence", source_document_key="e" * 64), "evidence"),
         (
@@ -262,24 +270,17 @@ def test_document_provenance_allows_empty_embedding_signature() -> None:
         replace(document, embedding_model_signature="embed-v1")
     with pytest.raises(ValueError, match="collection embedding"):
         replace(_bundle().artifact_provenance[0], embedding_model_signature="")
+    subclass = type("_SignatureSubclass", (str,), {})("")
     with pytest.raises(TypeError, match="built-in str"):
-        replace(
-            document,
-            embedding_model_signature=type("_SignatureSubclass", (str,), {})(""),
-        )
+        replace(document, embedding_model_signature=subclass)
 
 
 def test_evidence_assembly_uses_collection_not_document_provenance() -> None:
     bundle = _bundle()
     evidence = bundle.evidence[0]
-    assert (
-        evidence.assembly_config_checksum
-        == bundle.artifact_provenance[0].assembly_config_checksum
-    )
-    assert (
-        evidence.assembly_config_checksum
-        != bundle.artifact_provenance[1].assembly_config_checksum
-    )
+    collection, document = bundle.artifact_provenance
+    assert collection.assembly_config_checksum == evidence.assembly_config_checksum
+    assert evidence.assembly_config_checksum != document.assembly_config_checksum
 
 
 def test_bundle_rejects_chunk_key_and_coordinate_conflicts_independently() -> None:

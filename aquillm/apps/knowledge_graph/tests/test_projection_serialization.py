@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import astuple, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 
@@ -21,11 +21,9 @@ from apps.knowledge_graph.projection.serialization import (
 )
 from apps.knowledge_graph.tests.test_projection_records import _bundle
 
-GENERATION = "0" * 64
-COLLECTION = "1" * 64
-ARTIFACT = "2" * 64
-ENTITY_A = "3" * 64
-ENTITY_B = "4" * 64
+GENERATION, COLLECTION, ARTIFACT, ENTITY_A, ENTITY_B = (
+    character * 64 for character in "01234"
+)
 CLUSTER = "a" * 64
 DOCUMENT_UUID = "12345678-1234-5678-9234-567812345678"
 ZERO_COUNTS = ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0)
@@ -43,19 +41,19 @@ def _entity(key: str, utility: float) -> ProjectedEntityV1:
     )
 
 
+def _lease(owner="worker-a") -> ProjectionLeaseV1:
+    return ProjectionLeaseV1(
+        DOCUMENT_UUID, owner, datetime(2026, 8, 20, 12, tzinfo=UTC), 2
+    )
+
+
+def _private(key="5", pk=19, uuid=DOCUMENT_UUID, chunk=2):
+    return PrivateProjectionChunkReferenceV1(key * 64, pk, uuid, chunk)
+
+
 def test_private_mapping_literal_checksum_and_order_are_separate() -> None:
-    first = PrivateProjectionChunkReferenceV1(
-        projection_chunk_key="5" * 64,
-        integer_chunk_pk=19,
-        document_uuid=DOCUMENT_UUID,
-        chunk_number=2,
-    )
-    second = PrivateProjectionChunkReferenceV1(
-        projection_chunk_key="6" * 64,
-        integer_chunk_pk=23,
-        document_uuid="22345678-1234-5678-9234-567812345678",
-        chunk_number=0,
-    )
+    first = _private()
+    second = _private("6", 23, "22345678-1234-5678-9234-567812345678", 0)
     assert private_chunk_mapping_checksum((first, second)) == (
         "7e80265013215298d1c86019f83c556c2a92d3825446edd046a65e5346c208cf"
     )
@@ -70,17 +68,7 @@ def test_private_mapping_literal_checksum_and_order_are_separate() -> None:
         replace(second, document_uuid=DOCUMENT_UUID, chunk_number=2),
     )
     for conflict in conflicts:
-        rows = tuple(
-            sorted(
-                (first, conflict),
-                key=lambda row: (
-                    row.projection_chunk_key,
-                    row.integer_chunk_pk,
-                    row.document_uuid,
-                    row.chunk_number,
-                ),
-            )
-        )
+        rows = tuple(sorted((first, conflict), key=astuple))
         with pytest.raises(ValueError, match="unique"):
             private_chunk_mapping_checksum(rows)
 
@@ -97,12 +85,7 @@ def test_literal_manifest_lifecycle_lease_failure_and_full_bundle_vectors() -> N
         counts=ZERO_COUNTS,
         state=ProjectionLifecycleState.READY,
     )
-    lease = ProjectionLeaseV1(
-        projection_id=DOCUMENT_UUID,
-        owner="worker-a",
-        expires_at=datetime(2026, 8, 20, 12, tzinfo=UTC),
-        attempt_count=2,
-    )
+    lease = _lease()
     failure = ProjectionFailureStateV1(
         state=ProjectionLifecycleState.FAILED,
         failure_code=ProjectionFailureCode.CHECKSUM_MISMATCH,
@@ -200,12 +183,7 @@ def test_literal_manifest_lifecycle_lease_failure_and_full_bundle_vectors() -> N
 
 
 def test_private_integer_pk_cannot_enter_provider_neutral_bytes() -> None:
-    private = PrivateProjectionChunkReferenceV1(
-        projection_chunk_key="5" * 64,
-        integer_chunk_pk=19,
-        document_uuid=DOCUMENT_UUID,
-        chunk_number=2,
-    )
+    private = _private()
     with pytest.raises(TypeError, match="provider-neutral"):
         canonical_projection_bytes(private)
     with pytest.raises(TypeError):
@@ -237,11 +215,12 @@ def test_evidence_orientation_and_relation_type_are_strict(field, value) -> None
         (lambda: replace(_bundle().generation, schema_version=""), ValueError),
         (lambda: replace(_bundle().entities[0], entity_key=None), TypeError),
         (
-            lambda: PrivateProjectionChunkReferenceV1(
-                "5" * 64, 1, "AAAAAAAA-1234-5678-9234-567812345678", 2
-            ),
+            lambda: replace(_bundle().entities[0], ontology_type="per\x00son"),
             ValueError,
         ),
+        (lambda: replace(_bundle().relations[0], relation_type="know\ns"), ValueError),
+        (lambda: _lease("worker\x7f"), ValueError),
+        (lambda: _private(uuid="AAAAAAAA-1234-5678-9234-567812345678"), ValueError),
         (
             lambda: replace(
                 _bundle().artifact_provenance[0],
@@ -254,18 +233,42 @@ def test_evidence_orientation_and_relation_type_are_strict(field, value) -> None
 def test_records_reject_exact_type_bounds_digest_token_and_uuid(factory, error):
     with pytest.raises(error):
         factory()
+    assert (
+        replace(_bundle().entities[0], ontology_type="pérson").ontology_type == "pérson"
+    )
 
 
 @pytest.mark.parametrize(("integer_pk", "error"), [(True, TypeError), (0, ValueError)])
 def test_private_reference_integer_pk_is_exact_and_positive(integer_pk, error) -> None:
     with pytest.raises(error):
-        PrivateProjectionChunkReferenceV1("5" * 64, integer_pk, DOCUMENT_UUID, 2)
+        _private(pk=integer_pk)
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
-def test_nonfinite_numeric_values_are_rejected(value: float) -> None:
-    with pytest.raises(ValueError, match="finite"):
-        _entity(ENTITY_A, value)
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [
+        (0.0, None),
+        (1.0, None),
+        (-0.01, ValueError),
+        (1.01, ValueError),
+        (float("nan"), ValueError),
+        (float("inf"), ValueError),
+        (float("-inf"), ValueError),
+        (True, TypeError),
+        (0, TypeError),
+    ],
+)
+def test_projection_scores_are_exact_finite_unit_interval_floats(value, error) -> None:
+    records = (
+        (_entity(ENTITY_A, 0.5), "retrieval_utility"),
+        (_bundle().evidence[0], "confidence"),
+    )
+    for record, field in records:
+        if error is None:
+            assert getattr(replace(record, **{field: value}), field) == value
+        else:
+            with pytest.raises(error, match=field):
+                replace(record, **{field: value})
 
 
 def test_float_byte_and_record_order_mutations_change_or_fail_contract() -> None:

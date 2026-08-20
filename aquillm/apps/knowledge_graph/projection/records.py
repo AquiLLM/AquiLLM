@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from enum import StrEnum
+from math import isfinite
 
 from .serialization import (
     _count,
-    _finite_float,
     _key,
     _token,
     _uuid,
@@ -15,6 +15,13 @@ from .serialization import (
 
 _MAX_PRIVATE_PK = 2**63 - 1
 _MAX_ATTEMPTS = 32767
+
+
+def _finite_float(value: object, name: str) -> None:
+    if type(value) is not float:
+        raise TypeError(f"{name} must be a built-in float")
+    if not isfinite(value):
+        raise ValueError(f"{name} must be finite")
 
 
 class _ValidatedRecord:
@@ -33,6 +40,10 @@ class _ValidatedRecord:
                 "semantic_signature",
             }:
                 _key(value, field.name)
+            elif field.name in {"retrieval_utility", "confidence"}:
+                _finite_float(value, field.name)
+                if not 0.0 <= value <= 1.0:
+                    raise ValueError(f"{field.name} must be in the unit interval")
             elif field.name == "embedding_model_signature":
                 if type(value) is not str:
                     raise TypeError(f"{field.name} must be a built-in str")
