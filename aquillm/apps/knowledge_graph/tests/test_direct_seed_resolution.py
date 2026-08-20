@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 from __future__ import annotations
 
 from dataclasses import replace
@@ -45,66 +46,47 @@ def _ready() -> ReadyGenerationBundleV1:
     return ReadyGenerationBundleV1((generation,), documents, K[9], checksum)
 
 
-def _settings(*, embedding: bool = False):
+def _settings(*, embedding: bool = False, max_seeds: int = 32):
     return replace(
         load_hybrid_retrieval_settings({}),
         direct_embedding_enabled=embedding,
         direct_min_similarity=0.8,
         direct_winner_margin=0.05,
+        graph_direct_max_seeds=max_seeds,
     )
 
 
-def _match(
-    *,
-    span: int,
-    entity: str,
-    component: str,
-    tier: DirectResolutionTier,
-    confidence: float = 1.0,
-    similarity: float = 1.0,
-) -> DirectEntityMatchV1:
-    factor = {
-        DirectResolutionTier.IDENTIFIER: 1.0,
-        DirectResolutionTier.NAME: 0.95,
-        DirectResolutionTier.ALIAS: 0.9,
-        DirectResolutionTier.EMBEDDING: 0.8,
-    }[tier]
-    return DirectEntityMatchV1(
-        span,
-        entity,
-        component,
-        "model",
-        tier,
-        confidence,
-        similarity,
-        confidence
-        * factor
-        * (similarity if tier is DirectResolutionTier.EMBEDDING else 1.0),
-    )
+# fmt: off
+def _match(*, span: int, entity: str, component: str, tier: DirectResolutionTier, confidence: float = 1.0, similarity: float = 1.0) -> DirectEntityMatchV1:
+    factor = {DirectResolutionTier.IDENTIFIER: 1.0, DirectResolutionTier.NAME: 0.95, DirectResolutionTier.ALIAS: 0.9, DirectResolutionTier.EMBEDDING: 0.8}[tier]
+    return DirectEntityMatchV1(span, entity, component, "model", tier, confidence, similarity, confidence * factor * (similarity if tier is DirectResolutionTier.EMBEDDING else 1.0))
+# fmt: on
 
 
 class Repository:
     def __init__(self, tiers):
         self.tiers = tiers
         self.calls: list[tuple[str, int]] = []
+        self.limits: list[int] = []
 
-    def _get(self, name, span):
+    def _get(self, name, span, limit):
         self.calls.append((name, span.start))
-        return self.tiers.get((name, span.start), ())
+        self.limits.append(limit)
+        return self.tiers.get((name, span.start), ())[:limit]
 
     def exact_identifier_matches(self, *, span, ready, limit):
-        return self._get("identifier", span)
+        return self._get("identifier", span, limit)
 
     def canonical_name_matches(self, *, span, ready, limit):
-        return self._get("name", span)
+        return self._get("name", span, limit)
 
     def indexed_alias_matches(self, *, span, ready, limit):
-        return self._get("alias", span)
+        return self._get("alias", span, limit)
 
     def embedding_matches(
         self, *, embedding, span, ontology_type, model_signature, ready, limit
     ):
-        return self._get("embedding", span)
+        return self._get("embedding", span, limit)
 
     def span_text(self, span):
         return f"model-{span.start}"
@@ -181,12 +163,13 @@ def test_automatic_component_ambiguity_and_same_component_best_member() -> None:
         spans=spans,
         repository=repository,
         ready=_ready(),
-        settings=_settings(),
+        settings=_settings(max_seeds=1),
         deadline=10.0,
     )
     assert outcome.ambiguities[0].component_count == 2
     assert outcome.matches[0].entity_key == K[2]
     assert outcome.matches[0].span_index == 1
+    assert min(repository.limits) > 1
 
 
 def test_uses_fsum_normalized_component_mass_and_opaque_tie_order() -> None:
@@ -294,3 +277,13 @@ def test_embedding_failure_preserves_exact_matches_and_disables_only_fallback(
     assert tuple(row.span_index for row in outcome.matches) == (0, 2)
     assert outcome.diagnostics.embedding_attempt_count == 1
     assert ("name", 12) in repository.calls
+
+
+# fmt: off
+def test_applies_configured_seed_cap_globally_after_resolution() -> None:
+    spans = tuple(QueryEntitySpanV1("model", index * 2, index * 2 + 1, 1.0) for index in range(65))
+    tiers = {("identifier", span.start): (_match(span=index, entity=f"{index + 1:064x}", component=f"{index + 1:064x}", tier=DirectResolutionTier.IDENTIFIER),) for index, span in enumerate(spans)}
+    outcome = direct_seed_resolution.resolve_direct_seed_components(spans=spans, repository=Repository(tiers), ready=_ready(), settings=_settings(max_seeds=3), deadline=10.0)
+    assert tuple(seed.component_key for seed in outcome.seeds) == tuple(f"{index:064x}" for index in range(1, 4))
+    assert len(outcome.matches) == outcome.diagnostics.resolved_span_count == 3
+    assert outcome.diagnostics.unresolved_span_count == 62

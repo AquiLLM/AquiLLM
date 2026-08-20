@@ -18,6 +18,8 @@ from apps.knowledge_graph.retrieval.direct_seed_contracts import (
 from apps.knowledge_graph.retrieval.query_embedding import embed_unresolved_query_span
 from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 
+_CANDIDATE_HARD_CAP = 128
+
 
 def _deduplicate(
     spans: tuple[QueryEntitySpanV1, ...], repository
@@ -115,6 +117,25 @@ def _failure(
     return DirectSeedOutcomeV1((), (), (), diagnostics, reason)
 
 
+def _globally_bounded_matches(
+    matches: list[DirectEntityMatchV1], maximum: int
+) -> list[DirectEntityMatchV1]:
+    weights: dict[str, list[float]] = {}
+    members: dict[str, set[str]] = {}
+    for row in matches:
+        weights.setdefault(row.component_key, []).append(row.match_weight)
+        members.setdefault(row.component_key, set()).add(row.entity_key)
+    ordered = sorted(
+        weights,
+        key=lambda component: (
+            -fsum(weights[component]),
+            min(members[component]),
+        ),
+    )
+    selected = frozenset(ordered[:maximum])
+    return [row for row in matches if row.component_key in selected]
+
+
 def resolve_direct_seed_components(
     *,
     spans: tuple[QueryEntitySpanV1, ...],
@@ -141,12 +162,11 @@ def resolve_direct_seed_components(
         (DirectResolutionTier.NAME, repository.canonical_name_matches),
         (DirectResolutionTier.ALIAS, repository.indexed_alias_matches),
     )
-    limit = settings.graph_direct_max_seeds
     for span_index, span in enumerate(deduplicated):
         selected: DirectEntityMatchV1 | None = None
         ambiguity: DirectSeedAmbiguityV1 | None = None
         for _tier, lookup in exact_tiers:
-            rows = lookup(span=span, ready=ready, limit=limit)
+            rows = lookup(span=span, ready=ready, limit=_CANDIDATE_HARD_CAP)
             if rows:
                 selected, ambiguity = _best_exact(rows, span_index)
                 break
@@ -175,7 +195,7 @@ def resolve_direct_seed_components(
                     ontology_type=span.ontology_type,
                     model_signature=signature,
                     ready=ready,
-                    limit=limit,
+                    limit=_CANDIDATE_HARD_CAP,
                 )
             except (RuntimeError, TimeoutError, TypeError, ValueError):
                 embedding_available = False
@@ -201,7 +221,11 @@ def resolve_direct_seed_components(
             row.entity_key,
         )
     )
+    matches = _globally_bounded_matches(matches, settings.graph_direct_max_seeds)
     ambiguities.sort(key=lambda row: row.span_index)
+    embedding_matches = sum(
+        row.tier is DirectResolutionTier.EMBEDDING for row in (*matches, *ambiguities)
+    )
     diagnostics = _diagnostics(
         total=len(spans),
         deduplicated=len(deduplicated),

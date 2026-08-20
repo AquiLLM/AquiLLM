@@ -22,12 +22,9 @@ from apps.knowledge_graph.retrieval.direct_seed_contracts import (
 from apps.knowledge_graph.retrieval.topology.contracts import ReadyGenerationBundleV1
 from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 
-_FACTORS = {
-    DirectResolutionTier.IDENTIFIER: 1.0,
-    DirectResolutionTier.NAME: 0.95,
-    DirectResolutionTier.ALIAS: 0.90,
-    DirectResolutionTier.EMBEDDING: 0.80,
-}
+# fmt: off
+_FACTORS = {DirectResolutionTier.IDENTIFIER: 1.0, DirectResolutionTier.NAME: 0.95, DirectResolutionTier.ALIAS: 0.90, DirectResolutionTier.EMBEDDING: 0.80}
+# fmt: on
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -293,7 +290,9 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
         if tier is not DirectResolutionTier.ALIAS:
             query = query.filter(**{str(options["lookup_field"]): options["lookup"]})
         query = query.annotate(similarity=Value(1.0, output_field=FloatField()))
-    rows = query.distinct().order_by("-similarity", "pk").values("id", "artifact_id", "entity_type", "automatic_identity_key", "similarity")[: int(options["limit"])]
+    rows = tuple(query.distinct().order_by("-similarity", "pk").values("id", "artifact_id", "entity_type", "automatic_identity_key", "similarity")[: int(options["limit"]) + 1])
+    if len(rows) > int(options["limit"]):
+        raise ValueError("candidate result exceeds its hard cap")
     return tuple(DirectSeedCandidateRow(int(row["id"]), int(row["artifact_id"]), str(row["entity_type"]), row["automatic_identity_key"], float(row["similarity"])) for row in rows)
 
 __all__ = ["DirectSeedCandidateRow", "DirectSeedRepository", "DirectSeedScopeV1", "repository_predicates"]
