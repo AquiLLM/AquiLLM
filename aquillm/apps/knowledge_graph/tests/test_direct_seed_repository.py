@@ -56,17 +56,10 @@ def _ready() -> ReadyGenerationBundleV1:
     return ReadyGenerationBundleV1((generation,), documents, K[9], checksum)
 
 
+# fmt: off
 def _scope(ready: ReadyGenerationBundleV1) -> DirectSeedScopeV1:
-    return DirectSeedScopeV1(
-        ready_bundle_checksum=ready.bundle_checksum,
-        selected_collection_ids=(3,),
-        selected_artifact_ids=(11,),
-        selected_document_ids=(DOCUMENT_ID,),
-        selected_document_artifact_ids=(22,),
-        generation_keys_by_artifact=((11, K[1]),),
-        ontology_checksum=K[7],
-        resolver_version="resolver-v1",
-    )
+    return DirectSeedScopeV1(ready_bundle_checksum=ready.bundle_checksum, selected_collection_ids=(3,), selected_artifact_ids=(11,), selected_document_ids=(DOCUMENT_ID,), selected_document_artifact_ids=(22,), generation_keys_by_artifact=((11, K[1]),), ontology_checksum=K[7], resolver_version="resolver-v1")
+# fmt: on
 
 
 def _membership_state(
@@ -294,3 +287,14 @@ def test_automatic_components_cross_generations_and_singletons_do_not() -> None:
     assert tuple(match.entity_key for match in matches) == tuple(
         sorted(match.entity_key for match in matches)
     )
+
+
+# fmt: off
+def test_embedding_filters_below_threshold_before_dto_and_clamps_epsilon() -> None:
+    ready, span = _ready(), QueryEntitySpanV1("model", 0, 5, 1.0)
+    def rows(**options):
+        assert options["minimum_similarity"] == 0.8
+        return (DirectSeedCandidateRow(7, 11, "model", None, 0.9), DirectSeedCandidateRow(8, 11, "model", None, -0.2), DirectSeedCandidateRow(9, 11, "model", None, 1.0 + 5e-13))
+    repository = DirectSeedRepository(scope=_scope(ready), codec=HmacSha256ProjectionIdentifierCodec(b"key", key_version="key-v1"), span_inputs=(DirectResolutionSpanInputV1(span, "model"),), row_loader=rows, membership_state_loader=lambda **_options: _membership_state(ready))
+    matches = repository.embedding_matches(embedding=(0.0,) * 1024, span=span, ontology_type="model", model_signature="embed-v1", ready=ready, limit=4, minimum_similarity=0.8)
+    assert sorted(row.similarity for row in matches) == [0.9, 1.0]

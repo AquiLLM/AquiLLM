@@ -84,7 +84,15 @@ class Repository:
         return self._get("alias", span, limit)
 
     def embedding_matches(
-        self, *, embedding, span, ontology_type, model_signature, ready, limit
+        self,
+        *,
+        embedding,
+        span,
+        ontology_type,
+        model_signature,
+        ready,
+        limit,
+        minimum_similarity,
     ):
         return self._get("embedding", span, limit)
 

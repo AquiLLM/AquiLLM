@@ -1,4 +1,4 @@
-# ruff: noqa: E501
+# ruff: noqa: E501,E701,E702
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -22,9 +22,8 @@ from apps.knowledge_graph.retrieval.direct_seed_contracts import (
 from apps.knowledge_graph.retrieval.topology.contracts import ReadyGenerationBundleV1
 from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 
-# fmt: off
-_FACTORS = {DirectResolutionTier.IDENTIFIER: 1.0, DirectResolutionTier.NAME: 0.95, DirectResolutionTier.ALIAS: 0.90, DirectResolutionTier.EMBEDDING: 0.80}
-# fmt: on
+_FACTORS = {DirectResolutionTier.IDENTIFIER: 1.0, DirectResolutionTier.NAME: 0.95, DirectResolutionTier.ALIAS: 0.90, DirectResolutionTier.EMBEDDING: 0.80}  # fmt: skip
+_SIMILARITY_EPSILON = 1e-12
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -67,17 +66,13 @@ class DirectSeedScopeV1:
             raise ValueError("generation mapping must cover selected artifacts")
 
 
+# fmt: off
 @dataclass(frozen=True, slots=True)
 class DirectSeedCandidateRow:
-    entity_id: int
-    artifact_id: int
-    ontology_type: str
-    automatic_identity_key: str | None
-    similarity: float
+    entity_id: int; artifact_id: int; ontology_type: str; automatic_identity_key: str | None; similarity: float
     link_outcome: str = "automatic"
 
 
-# fmt: off
 def repository_predicates(scope: DirectSeedScopeV1, tier: DirectResolutionTier) -> tuple[str, ...]:
     base = ("selected_collection_ids", "selected_artifact_ids", "selected_document_ids", "selected_document_artifact_ids", "artifact.status=active", "document_artifact.status=active|superseded", "entity.status=active", "ontology_checksum", "canonical_link.outcome=automatic", "document_link.outcome=automatic")
     return (*base, "EntityMention.normalized_text=indexed") if tier is DirectResolutionTier.ALIAS else base
@@ -143,6 +138,7 @@ class DirectSeedRepository:
         lookup: str | None = None,
         embedding: tuple[float, ...] | None = None,
         model_signature: str = "",
+        minimum_similarity: float = 0.0,
     ) -> tuple[DirectEntityMatchV1, ...]:
         if ready.bundle_checksum != self._scope.ready_bundle_checksum:
             raise ValueError("ready bundle does not match the repository scope")
@@ -164,6 +160,7 @@ class DirectSeedRepository:
             lookup_field=lookup_field,
             embedding=embedding,
             model_signature=model_signature,
+            minimum_similarity=minimum_similarity,
             ontology_type=span.ontology_type,
             membership_states=membership_states,
             automatic_only=True,
@@ -192,6 +189,10 @@ class DirectSeedRepository:
             similarity = (
                 row.similarity if tier is DirectResolutionTier.EMBEDDING else 1.0
             )
+            if tier is DirectResolutionTier.EMBEDDING and similarity < minimum_similarity: continue
+            if similarity > 1.0:
+                if similarity > 1.0 + _SIMILARITY_EPSILON: raise ValueError("embedding similarity exceeds its unit bound")
+                similarity = 1.0
             weight = span.confidence * _FACTORS[tier] * similarity
             matches.append(
                 DirectEntityMatchV1(
@@ -222,12 +223,12 @@ class DirectSeedRepository:
         lookup = normalize_entity_label(self.span_text(span)).key
         return self._matches(span=span, ready=ready, limit=limit, tier=DirectResolutionTier.ALIAS, lookup=lookup)
 
-    def embedding_matches(self, *, embedding, span, ontology_type, model_signature, ready, limit):
+    def embedding_matches(self, *, embedding, span, ontology_type, model_signature, ready, limit, minimum_similarity):
         if ontology_type != span.ontology_type or model_signature != self._scope.expected_embedding_signature:
             raise ValueError("embedding provenance does not match repository scope")
         if type(embedding) is not tuple or len(embedding) != 1024 or any(type(value) is not float or not isfinite(value) for value in embedding):
             raise ValueError("embedding must be an exact finite 1024-vector")
-        return self._matches(span=span, ready=ready, limit=limit, tier=DirectResolutionTier.EMBEDDING, embedding=embedding, model_signature=model_signature)
+        return self._matches(span=span, ready=ready, limit=limit, tier=DirectResolutionTier.EMBEDDING, embedding=embedding, model_signature=model_signature, minimum_similarity=minimum_similarity)
 
 
 # fmt: off
@@ -285,7 +286,7 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
             Value(1.0) - CosineDistance("embedding", options["embedding"]),
             output_field=FloatField(),
         )
-        query = query.filter(embedding__isnull=False, embedding_model_signature=options["model_signature"]).annotate(similarity=similarity)
+        query = query.filter(embedding__isnull=False, embedding_model_signature=options["model_signature"]).annotate(similarity=similarity).filter(similarity__gte=options["minimum_similarity"])
     else:
         if tier is not DirectResolutionTier.ALIAS:
             query = query.filter(**{str(options["lookup_field"]): options["lookup"]})

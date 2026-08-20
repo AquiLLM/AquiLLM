@@ -196,6 +196,7 @@ def resolve_direct_seed_components(
                     model_signature=signature,
                     ready=ready,
                     limit=_CANDIDATE_HARD_CAP,
+                    minimum_similarity=settings.direct_min_similarity,
                 )
             except (RuntimeError, TimeoutError, TypeError, ValueError):
                 embedding_available = False
