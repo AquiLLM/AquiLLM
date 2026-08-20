@@ -7,10 +7,11 @@ import textwrap
 from pathlib import Path
 
 
-def test_disabled_graph_imports_do_not_load_optional_ml_runtime() -> None:
+def test_disabled_graph_imports_do_not_load_optional_runtimes() -> None:
     repository_root = Path(__file__).resolve().parents[3]
     blocked_modules = {
         "gliner2",
+        "neo4j",
         "torch",
         "transformers",
         "peft",
@@ -28,7 +29,9 @@ def test_disabled_graph_imports_do_not_load_optional_ml_runtime() -> None:
         class BlockOptionalRuntime(importlib.abc.MetaPathFinder):
             def find_spec(self, fullname, path=None, target=None):
                 if fullname.partition('.')[0] in BLOCKED:
-                    raise AssertionError(f'optional ML import attempted: {{fullname}}')
+                    raise AssertionError(
+                        f'optional runtime import attempted: {{fullname}}'
+                    )
                 return None
 
         sys.meta_path.insert(0, BlockOptionalRuntime())
@@ -36,9 +39,20 @@ def test_disabled_graph_imports_do_not_load_optional_ml_runtime() -> None:
 
         import lib.knowledge_graph.config
         import lib.knowledge_graph.extractors
+        import lib.knowledge_graph.query_extractor.contracts
+        import lib.knowledge_graph.retrieval_config
         import aquillm.settings
         import aquillm.asgi
         import apps.knowledge_graph.models
+        import apps.knowledge_graph.projection.identifiers
+        import apps.knowledge_graph.projection.records
+        import apps.knowledge_graph.projection.serialization
+        import apps.knowledge_graph.retrieval.branch_contracts
+        import apps.knowledge_graph.retrieval.direct_seed_contracts
+        import apps.knowledge_graph.retrieval.expansion
+        import apps.knowledge_graph.retrieval.ppr
+        import apps.knowledge_graph.retrieval.projected_types
+        import apps.knowledge_graph.retrieval.topology.contracts
         from aquillm.celery import app
 
         app.autodiscover_tasks(['apps.knowledge_graph'], force=True)
