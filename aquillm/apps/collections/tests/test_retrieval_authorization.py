@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import pickle
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from uuid import UUID
 
 import pytest
@@ -82,6 +82,14 @@ def test_freeze_and_current_revalidation_intersect_only_selected_scope() -> None
     revoked = revalidate_retrieval_authorization_context(context=context)
     assert revoked.collection_ids == ()
     assert revoked.document_ids == ()
+
+
+def test_revalidation_recomputes_the_frozen_context_signature() -> None:
+    context = _context(Policy())
+    tampered = replace(context, selected_document_ids=frozenset((A,)))
+
+    with pytest.raises(ValueError, match="context signature"):
+        revalidate_retrieval_authorization_context(context=tampered)
 
 
 @pytest.mark.parametrize(

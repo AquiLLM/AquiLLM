@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 from uuid import UUID
@@ -25,12 +25,17 @@ class PrivateChunkMapRepository(Protocol):
         *,
         projection_id: UUID,
         chunk_keys: tuple[str, ...],
+        expected_private_mapping_checksum: str,
         database_alias: str,
-    ) -> tuple[PrivateProjectionChunkReferenceV1, ...]: ...
+    ) -> tuple[str, tuple[PrivateProjectionChunkReferenceV1, ...]]: ...
 
     def load_chunk_objects(
-        self, *, integer_chunk_pks: tuple[int, ...], database_alias: str
-    ) -> Mapping[int, object]: ...
+        self,
+        *,
+        chunk_predicates: tuple[tuple[int, UUID, int], ...],
+        authorized_document_ids: tuple[UUID, ...],
+        database_alias: str,
+    ) -> tuple[object, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +77,18 @@ def _requested_keys(
 
 
 def _private_rows(
-    rows: object, requested: tuple[str, ...]
+    loaded: object, requested: tuple[str, ...], expected_checksum: str
 ) -> dict[str, PrivateProjectionChunkReferenceV1]:
+    if (
+        type(loaded) is not tuple
+        or len(loaded) != 2
+        or type(loaded[0]) is not str
+        or type(loaded[1]) is not tuple
+    ):
+        raise TypeError("private chunk map load envelope is not exact")
+    checksum, rows = loaded
+    if checksum != expected_checksum:
+        raise ValueError("private mapping checksum mismatch")
     if type(rows) is not tuple or any(
         type(row) is not PrivateProjectionChunkReferenceV1 for row in rows
     ):
@@ -97,9 +112,35 @@ def _private_rows(
     return by_key
 
 
+def _chunk_objects(
+    objects: object, predicates: tuple[tuple[int, UUID, int], ...]
+) -> dict[int, object]:
+    if type(objects) is not tuple:
+        raise TypeError("chunk object materialization must be an exact tuple")
+    expected = {pk: (document_id, number) for pk, document_id, number in predicates}
+    by_pk: dict[int, object] = {}
+    for candidate in objects:
+        pk = getattr(candidate, "pk", None)
+        document_id = getattr(candidate, "doc_id", None)
+        chunk_number = getattr(candidate, "chunk_number", None)
+        if type(pk) is not int or pk not in expected:
+            raise ValueError("corrupt chunk object pk")
+        if pk in by_pk:
+            raise ValueError("duplicate chunk object materialization")
+        if type(document_id) is not UUID or document_id != expected[pk][0]:
+            raise ValueError("corrupt chunk object document")
+        if type(chunk_number) is not int or chunk_number != expected[pk][1]:
+            raise ValueError("corrupt chunk object chunk_number")
+        by_pk[pk] = candidate
+    if set(by_pk) != set(expected):
+        raise ValueError("missing chunk object materialization")
+    return by_pk
+
+
 def materialize_projected_chunks(
     *,
     projection_id: UUID,
+    expected_private_mapping_checksum: str,
     chunk_keys: tuple[OpaqueProjectionKey, ...],
     authorization: RetrievalAuthorizationContext,
     repository: PrivateChunkMapRepository,
@@ -108,33 +149,48 @@ def materialize_projected_chunks(
 
     if type(projection_id) is not UUID:
         raise TypeError("projection_id must be an exact UUID")
+    if (
+        type(expected_private_mapping_checksum) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", expected_private_mapping_checksum) is None
+    ):
+        raise ValueError("expected private mapping checksum must be lowercase SHA-256")
     if type(authorization) is not RetrievalAuthorizationContext:
         raise TypeError("authorization must be an exact retrieval context")
     if not isinstance(repository, PrivateChunkMapRepository):
         raise TypeError("repository must implement PrivateChunkMapRepository")
     requested = _requested_keys(chunk_keys)
+    current = revalidate_retrieval_authorization_context(context=authorization)
+    if (
+        frozenset(current.collection_ids) != authorization.selected_collection_ids
+        or frozenset(current.document_ids) != authorization.selected_document_ids
+    ):
+        return ()
     by_key = _private_rows(
         repository.load_private_chunk_map(
             projection_id=projection_id,
             chunk_keys=requested,
+            expected_private_mapping_checksum=expected_private_mapping_checksum,
             database_alias=authorization.database_alias,
         ),
         requested,
+        expected_private_mapping_checksum,
     )
-    current = revalidate_retrieval_authorization_context(context=authorization)
     allowed = set(current.document_ids)
-    retained = tuple(
-        by_key[key] for key in requested if UUID(by_key[key].document_uuid) in allowed
+    retained = tuple(by_key[key] for key in requested)
+    if any(UUID(row.document_uuid) not in allowed for row in retained):
+        raise ValueError("private chunk map contains an unauthorized document")
+    predicates = tuple(
+        (row.integer_chunk_pk, UUID(row.document_uuid), row.chunk_number)
+        for row in retained
     )
-    pks = tuple(row.integer_chunk_pk for row in retained)
-    objects = repository.load_chunk_objects(
-        integer_chunk_pks=pks,
-        database_alias=authorization.database_alias,
+    objects = _chunk_objects(
+        repository.load_chunk_objects(
+            chunk_predicates=predicates,
+            authorized_document_ids=current.document_ids,
+            database_alias=authorization.database_alias,
+        ),
+        predicates,
     )
-    if not isinstance(objects, Mapping) or set(objects) != set(pks):
-        raise ValueError("stale chunk object materialization")
-    if any(type(pk) is not int or objects[pk] is None for pk in objects):
-        raise ValueError("conflict in chunk object materialization")
     return tuple(
         MaterializedGraphChunkV1(
             row.projection_chunk_key,
