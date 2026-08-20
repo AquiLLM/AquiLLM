@@ -1,8 +1,7 @@
 """Thin Celery boundaries for isolated knowledge-graph work.
 
-Provider and build-service imports stay inside task execution so Django, web,
-and ordinary Celery workers can register these tasks without the optional ML
-runtime installed.
+Provider and build-service imports stay inside task execution so ordinary
+workers can register these tasks without the optional ML runtime installed.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from django.db import InterfaceError as DjangoInterfaceError
 from django.db import OperationalError as DjangoOperationalError
 from kombu.exceptions import OperationalError as KombuOperationalError
 
+from apps.knowledge_graph.projection import tasks as projection_tasks  # noqa: F401
 from lib.knowledge_graph.config import (
     KnowledgeGraphConfigError,
     get_build_enabled,
