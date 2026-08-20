@@ -39,6 +39,9 @@ def test_checker_allows_only_fixed_event_and_redacted_structured_fields() -> Non
 import structlog
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 logger = structlog.stdlib.get_logger(__name__)
+rows = ()
+result_count = len(rows)
+elapsed_ms = 2.5
 logger.info(
     "obs.rag.extract_failed",
     **retrieval_log_fields(
@@ -207,3 +210,42 @@ logger.info(
 
 def test_checker_allows_unrelated_info_methods() -> None:
     assert _scan('catalog.info("record", query=query)') == ()
+
+
+def _structured_count_source(assignment: str) -> str:
+    return f"""
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+def record(prompt):
+    {assignment}
+    logger.info(
+        "obs.rag.search",
+        **retrieval_log_fields(
+            reason=RetrievalLogReason.COMPLETED,
+            count=count,
+            elapsed_ms=1.0,
+        ),
+    )
+"""
+
+
+def test_checker_resolves_transformed_count_assignment_before_allowing_name() -> None:
+    assert len(_scan(_structured_count_source("count = ord(prompt[0])"))) == 1
+
+
+@pytest.mark.parametrize("assignment", ("count = 0", "count = len(())", "count = +2"))
+def test_checker_allows_positively_proven_count_sources(assignment: str) -> None:
+    assert _scan(_structured_count_source(assignment)) == ()
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    (
+        "count = unknown",
+        "count = True",
+        "count = -1",
+        "count = 1.5",
+        "count = measure()",
+    ),
+)
+def test_checker_rejects_unresolved_or_imprecise_count_sources(assignment: str) -> None:
+    assert len(_scan(_structured_count_source(assignment))) == 1

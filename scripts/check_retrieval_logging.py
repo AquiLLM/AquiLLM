@@ -160,13 +160,18 @@ def _tainted_names(tree: ast.AST) -> frozenset[str]:
     return frozenset(tainted)
 
 
-def _safe_count(node: ast.AST, tainted: frozenset[str]) -> bool:
-    if _expression_is_tainted(node, tainted):
-        return False
-    if isinstance(node, ast.Constant):
-        return type(node.value) is int and node.value >= 0
+# fmt: off
+def _assigned_value(name: str, assignments: tuple[tuple[str, ast.AST], ...]) -> ast.AST | None:
+    values = tuple(value for candidate, value in assignments if candidate == name)
+    return values[0] if len(values) == 1 else None
+def _safe_count(node: ast.AST, tainted: frozenset[str], assignments: tuple[tuple[str, ast.AST], ...], seen: frozenset[str] = frozenset()) -> bool:
+    if _expression_is_tainted(node, tainted): return False
+    if isinstance(node, ast.Constant): return type(node.value) is int and node.value >= 0
     if isinstance(node, ast.Name):
-        return node.id == "count" or node.id.endswith("_count")
+        if node.id in seen: return False
+        value = _assigned_value(node.id, assignments)
+        return value is not None and _safe_count(value, tainted, assignments, seen | {node.id})
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd): return _safe_count(node.operand, tainted, assignments, seen)
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
@@ -174,6 +179,7 @@ def _safe_count(node: ast.AST, tainted: frozenset[str]) -> bool:
         and len(node.args) == 1
         and not node.keywords
     )
+# fmt: on
 
 
 def _safe_elapsed(node: ast.AST, tainted: frozenset[str]) -> bool:
@@ -198,6 +204,7 @@ def _safe_fields(
     keywords: list[ast.keyword],
     tainted: frozenset[str],
     helpers: frozenset[str],
+    assignments: tuple[tuple[str, ast.AST], ...],
 ) -> bool:
     if len(keywords) != 1 or keywords[0].arg is not None:
         return False
@@ -216,20 +223,19 @@ def _safe_fields(
         len(values) == len(keywords)
         and values.keys() == _FIELDS
         and _fixed_reason(values["reason"])
-        and _safe_count(values["count"], tainted)
+        and _safe_count(values["count"], tainted, assignments)
         and _safe_elapsed(values["elapsed_ms"], tainted)
     )
 
 
 def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
-    """Return content-free findings for retrieval logger calls in one source."""
-
     try:
         tree = ast.parse(source, filename=str(path))
     except (SyntaxError, ValueError):
         return (LoggingViolation(path, 0, "invalid_python_source"),)
     functions, logger_names = _logging_bindings(tree)
     helpers = _redaction_helpers(tree)
+    assignments = _assignments(tree)
     tainted = _tainted_names(tree)
     findings: list[LoggingViolation] = []
     for node in ast.walk(tree):
@@ -247,7 +253,7 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
             or _EVENT.fullmatch(node.args[0].value) is None
         ):
             reason = "dynamic_or_invalid_event"
-        elif not _safe_fields(node.keywords, tainted, helpers):
+        elif not _safe_fields(node.keywords, tainted, helpers, assignments):
             reason = "unknown_or_payload_field_shape"
         else:
             continue
@@ -256,8 +262,6 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
 
 
 def find_violations(repo: Path = REPO) -> tuple[LoggingViolation, ...]:
-    """Scan the exact reviewed lane; missing or unreadable paths are violations."""
-
     findings: list[LoggingViolation] = []
     for relative in LANE_PATHS:
         path = repo / relative
