@@ -159,6 +159,8 @@ def _validate_closure(s) -> None:
     if len(documents) > s.caps.max_scope_documents or len(collections) > s.caps.max_scope_collections: raise ValueError("scope exceeds caps")
     memberships = [row for row in s.audit_rows if type(row) is ProjectedAutomaticMembershipAuditV1]; members = {row.entity_key: row.automatic_membership_key for row in memberships}
     if len(members) != len(memberships) or set(members.values()) != set(s.identity_keys): raise ValueError("automatic membership/identity closure is broken")
+    identity_hops: dict[str, int] = {}
+    for row in memberships: identity_hops[row.automatic_membership_key] = min(row.discovery_hop, identity_hops.get(row.automatic_membership_key, row.discovery_hop))
     if any(row.discovery_hop > s.load_max_hops for row in s.audit_rows): raise ValueError("audit rows exceed load_max_hops")
     if any(row.identity_key not in s.identity_keys for row in s.seed_identities): raise ValueError("seed identity closure is broken")
     artifacts = {row.artifact_key: row for row in s.artifact_provenance}
@@ -168,6 +170,7 @@ def _validate_closure(s) -> None:
     if any(row.collection_key not in collections or (row in collection_rows and row.scope_key != row.collection_key) for row in s.artifact_provenance): raise ValueError("artifact provenance collection closure is broken")
     physical_rows = [row for row in s.audit_rows if type(row) is ProjectedPhysicalRelationAuditV1]; physical = {row.relation_key: row for row in physical_rows}
     if len(physical) != len(physical_rows) or any(row.source_entity_key not in members or row.target_entity_key not in members or row.artifact_key not in collection_artifacts for row in physical.values()): raise ValueError("physical relation/member closure is broken")
+    if any(row.discovery_hop != min(identity_hops[members[row.source_entity_key]], identity_hops[members[row.target_entity_key]]) + 1 for row in physical.values()): raise ValueError("physical relation discovery hop is incoherent")
     evidence_audits = [row for row in s.audit_rows if type(row) is ProjectedRelationEvidenceAuditV1]; signature_rows = [row.signature for row in evidence_audits]; signatures = {row.evidence_key: row for row in signature_rows}
     if len(signatures) != len(signature_rows) or len(signatures) > s.caps.max_evidence_rows: raise ValueError("evidence keys/cap are invalid")
     if any(sig.relation_key not in physical or sig.document_key not in documents or sig.artifact_key not in document_artifacts or document_artifacts[sig.artifact_key].scope_key != sig.document_key for sig in signatures.values()): raise ValueError("relation evidence closure is broken")
@@ -178,6 +181,7 @@ def _validate_closure(s) -> None:
     if set(physical) != {row.relation_key for row in signatures.values()}: raise ValueError("physical relation/evidence coverage is broken")
     observed: set[str] = set(); references: dict[str, list[ProjectedRetrievalDirectionV1]] = {}; coordinates: dict[str, tuple[str, int]] = {}
     for group in s.relation_groups:
+        if group.admission_hop != identity_hops[group.source_identity_key] + 1: raise ValueError("relation group admission hop is incoherent")
         relation_keys = _group_relations(group, semantic, s)
         for evidence in group.evidence:
             signature = signatures.get(evidence.provenance_key); actual = (evidence.chunk_key, evidence.document_key, evidence.chunk_number, evidence.confidence)
@@ -190,8 +194,6 @@ def _validate_closure(s) -> None:
         if len(directions) > 2 or (ProjectedRetrievalDirectionV1.UNDIRECTED in directions and any(item is not ProjectedRetrievalDirectionV1.UNDIRECTED for item in directions)): raise ValueError("evidence reference direction set is incoherent")
     fallback_rows = [row for row in s.audit_rows if type(row) is ProjectedFallbackMentionAuditV1]; fallback_keys = [(row.identity_key, row.evidence.provenance_key) for row in fallback_rows]
     if len(set(fallback_keys)) != len(fallback_keys): raise ValueError("fallback semantic key is duplicated")
-    identity_hops: dict[str, int] = {}
-    for row in memberships: identity_hops[row.automatic_membership_key] = min(row.discovery_hop, identity_hops.get(row.automatic_membership_key, row.discovery_hop))
     if any(identity_hops.get(row.identity_key) != row.discovery_hop for row in fallback_rows): raise ValueError("fallback discovery hop is incoherent")
     fallback = {key: row.evidence for key, row in zip(fallback_keys, fallback_rows, strict=True)}; mentions = {(row.identity_key, row.evidence.provenance_key): row.evidence for row in s.mentions}
     if mentions != fallback: raise ValueError("fallback mention closure is broken")
