@@ -259,6 +259,8 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
         canonical_entity__resolver_version=scope.resolver_version, canonical_entity__entity_type=OuterRef("entity_type"),
         canonical_entity__version_signature=OuterRef("version_signature"),
     ).values("canonical_entity__identity_key")[:1]
+    tier = options["tier"]
+    alias_filters = {"document_links__document_entity__mention_links__status": "active", "document_links__document_entity__mention_links__resolver_version": scope.resolver_version, "document_links__document_entity__mention_links__mention__artifact_id__in": scope.selected_document_artifact_ids, "document_links__document_entity__mention_links__mention__document_id__in": scope.selected_document_ids, "document_links__document_entity__mention_links__mention__artifact__status__in": ("active", "superseded"), "document_links__document_entity__mention_links__mention__artifact__evaluation_only": False, "document_links__document_entity__mention_links__mention__artifact__ontology_checksum": scope.ontology_checksum, "document_links__document_entity__mention_links__mention__entity_type": options["ontology_type"], str(options["lookup_field"]): options["lookup"]} if tier is DirectResolutionTier.ALIAS else {}
     query = (
         CollectionEntity.objects.using(options["using"])
         .filter(
@@ -277,10 +279,10 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
             document_links__manifest_input__document_artifact_id=F("document_links__document_entity__artifact_id"), document_links__manifest_input__document_id=F("document_links__document_entity__document_id"),
             document_links__document_entity__status="active", document_links__document_entity__artifact__status__in=("active", "superseded"), document_links__document_entity__artifact__evaluation_only=False,
             document_links__document_entity__artifact__ontology_checksum=scope.ontology_checksum,
+            **alias_filters,
         )
         .annotate(automatic_identity_key=Subquery(automatic))
     )
-    tier = options["tier"]
     if tier is DirectResolutionTier.EMBEDDING:
         similarity = ExpressionWrapper(
             Value(1.0) - CosineDistance("embedding", options["embedding"]),
@@ -288,12 +290,11 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
         )
         query = query.filter(embedding__isnull=False, embedding_model_signature=options["model_signature"]).annotate(similarity=similarity)
     else:
-        if tier is DirectResolutionTier.ALIAS:
-            query = query.filter(document_links__document_entity__mention_links__status="active", document_links__document_entity__mention_links__resolver_version=scope.resolver_version, document_links__document_entity__mention_links__mention__artifact_id__in=scope.selected_document_artifact_ids, document_links__document_entity__mention_links__mention__document_id__in=scope.selected_document_ids, document_links__document_entity__mention_links__mention__artifact__status__in=("active", "superseded"), document_links__document_entity__mention_links__mention__artifact__evaluation_only=False, document_links__document_entity__mention_links__mention__artifact__ontology_checksum=scope.ontology_checksum, document_links__document_entity__mention_links__mention__entity_type=options["ontology_type"])
-        query = query.filter(**{str(options["lookup_field"]): options["lookup"]}).annotate(similarity=Value(1.0, output_field=FloatField()))
+        if tier is not DirectResolutionTier.ALIAS:
+            query = query.filter(**{str(options["lookup_field"]): options["lookup"]})
+        query = query.annotate(similarity=Value(1.0, output_field=FloatField()))
     rows = query.distinct().order_by("-similarity", "pk").values("id", "artifact_id", "entity_type", "automatic_identity_key", "similarity")[: int(options["limit"])]
     return tuple(DirectSeedCandidateRow(int(row["id"]), int(row["artifact_id"]), str(row["entity_type"]), row["automatic_identity_key"], float(row["similarity"])) for row in rows)
-
 
 __all__ = ["DirectSeedCandidateRow", "DirectSeedRepository", "DirectSeedScopeV1", "repository_predicates"]
 # fmt: on

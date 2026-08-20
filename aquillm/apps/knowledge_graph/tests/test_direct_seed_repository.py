@@ -1,7 +1,9 @@
+# ruff: noqa: E501
 from __future__ import annotations
 
 import inspect
 from dataclasses import replace
+from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
@@ -19,7 +21,6 @@ from apps.knowledge_graph.retrieval.direct_seed_repository import (
     DirectSeedCandidateRow,
     DirectSeedRepository,
     DirectSeedScopeV1,
-    repository_predicates,
 )
 from apps.knowledge_graph.retrieval.topology.contracts import (
     AuthorizedProjectedDocumentV1,
@@ -126,19 +127,33 @@ def test_identifier_name_and_indexed_alias_use_bounded_scoped_predicates() -> No
     assert name[0].tier is DirectResolutionTier.NAME
     assert alias[0].tier is DirectResolutionTier.ALIAS
 
-    predicates = repository_predicates(_scope(ready), DirectResolutionTier.ALIAS)
-    joined = " ".join(predicates)
-    for token in (
-        "selected_collection_ids",
-        "selected_artifact_ids",
-        "selected_document_ids",
-        "selected_document_artifact_ids",
-        "status",
-        "ontology_checksum",
-        "outcome=automatic",
-    ):
-        assert token in joined
-    assert "metadata" not in joined
+
+# fmt: off
+def test_alias_query_binds_scope_provenance_and_text_to_one_join(monkeypatch) -> None:
+    from django.db import models
+
+    from apps.knowledge_graph.models import CanonicalEntityLink, CollectionEntity
+
+    ready = _ready()
+    query, automatic = MagicMock(), MagicMock()
+    for chain in (query, automatic):
+        chain.using.return_value = chain
+        chain.filter.return_value = chain
+        chain.annotate.return_value = chain
+        chain.distinct.return_value = chain
+        chain.order_by.return_value = chain
+        chain.values.return_value = chain
+    automatic.__getitem__.return_value = automatic
+    required = {"document_links__manifest_input__document_id__in", "document_links__document_entity__mention_links__mention__normalized_text"}
+    query.__getitem__.side_effect = lambda _slice: ([{"id": 7, "artifact_id": 11, "entity_type": "paper", "automatic_identity_key": None, "similarity": 1.0}] if any(required <= set(call.kwargs) for call in query.filter.call_args_list) else [])
+    monkeypatch.setattr(CanonicalEntityLink, "objects", automatic)
+    monkeypatch.setattr(CollectionEntity, "objects", query)
+    monkeypatch.setattr(models, "Subquery", lambda value: value)
+
+    rows = direct_seed_repository._load_candidate_rows(tier=DirectResolutionTier.ALIAS, lookup="doi:10.1234/x", lookup_field="document_links__document_entity__mention_links__mention__normalized_text", embedding=None, model_signature="", ontology_type="paper", membership_states=_membership_state(ready), automatic_only=True, scope=_scope(ready), using="default", limit=4)
+
+    assert tuple(row.entity_id for row in rows) == (7,)
+# fmt: on
 
 
 def test_matching_current_membership_admits_automatic_link_and_excludes_candidate() -> (
