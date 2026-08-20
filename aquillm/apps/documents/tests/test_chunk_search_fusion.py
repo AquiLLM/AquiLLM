@@ -145,7 +145,7 @@ def test_duplicate_baseline_keeps_position_object_and_adds_provenance() -> None:
     assert fused.sources == tuple(CandidateSource)
     assert (fused.baseline_rank, fused.direct_rank, fused.extended_rank) == (2, 1, 1)
     assert fused.rrf_score == fsum((1.0 / 61, 1.0 / 61))
-    assert result.diagnostics.baseline_duplicate_count == 2
+    assert result.diagnostics == FusionDiagnostics(2, 1, 1, 2, 1, 0, 0, 0, False, None)
 def test_graph_rrf_dedupe_order_caps_and_exact_float_vector() -> None:
     direct = _branch(
         CandidateSource.DIRECT,
@@ -153,7 +153,7 @@ def test_graph_rrf_dedupe_order_caps_and_exact_float_vector() -> None:
     )
     extended = _branch(
         CandidateSource.EXTENDED,
-        (_graph(30, 1, doc=3), _graph(50, 2, doc=5), _graph(60, 3, doc=6)),
+        (_graph(30, 1, doc=3), _graph(50, 2, doc=5), _graph(40, 3, doc=4)),
     )
     result = _fuse(
         (_baseline(10),),
@@ -169,7 +169,7 @@ def test_graph_rrf_dedupe_order_caps_and_exact_float_vector() -> None:
     assert overlap.rrf_score == expected
     assert overlap.rrf_score.hex() == expected.hex()
     assert overlap.sources == (CandidateSource.DIRECT, CandidateSource.EXTENDED)
-    assert result.diagnostics == FusionDiagnostics(1, 3, 2, 0, 1, 4, 3, 1, False, None)
+    assert result.diagnostics == FusionDiagnostics(1, 3, 3, 0, 1, 4, 3, 1, False, None)
 @pytest.mark.parametrize(
     ("left", "right", "expected"),
     [
@@ -191,18 +191,17 @@ def test_independent_branch_caps_and_graph_cap() -> None:
     capped = _fuse(direct=direct, extended=extended, graph_cap=1)
     assert len(capped.candidates) == 1
     assert capped.diagnostics.graph_only_dropped == 3
+    three_rows = _branch(CandidateSource.EXTENDED, (_graph(3, 1),))
+    valid = _fuse(direct=direct, extended=three_rows, direct_cap=1, extended_cap=1); malformed = _fuse(direct=replace(direct, candidate_count=1), extended=three_rows, direct_cap=1, extended_cap=1)
+    assert (valid.diagnostics.direct_input_count, valid.diagnostics.extended_input_count) == (malformed.diagnostics.direct_input_count, malformed.diagnostics.extended_input_count) == (2, 1)
 @pytest.mark.parametrize(
     "direct",
     [
         lambda rows: _branch(CandidateSource.EXTENDED, rows),
         lambda rows: _branch(CandidateSource.DIRECT, rows, checksum="b" * 64),
         lambda rows: _branch(CandidateSource.DIRECT, rows, count=1),
-        lambda rows: _branch(
-            CandidateSource.DIRECT, (rows[0], replace(rows[0], rank=2))
-        ),
-        lambda rows: _branch(
-            CandidateSource.DIRECT, (rows[0], replace(rows[1], rank=3))
-        ),
+        lambda rows: _branch(CandidateSource.DIRECT, (rows[0], replace(rows[0], rank=2))),
+        lambda rows: _branch(CandidateSource.DIRECT, (rows[0], replace(rows[1], rank=3))),
         lambda rows: _branch(CandidateSource.DIRECT, rows, ready="c" * 64),
     ],
 )
@@ -284,9 +283,10 @@ class IntSubclass(int):
         lambda: GraphCandidate(1, UUID(int=1), 0, object(), "a" * 64, True, 0.5),
         lambda: GraphCandidate(1, UUID(int=1), 0, object(), "A" * 64, 1, 0.5),
         lambda: GraphCandidate(1, UUID(int=1), 0, object(), "a" * 64, 1, float("nan")),
-        lambda: FusionDiagnostics(0, 0, 0, 1, 0, 0, 0, 0, False, None),
-        lambda: FusionDiagnostics(0, 1, 0, 0, 1, 0, 0, 0, False, None),
-        lambda: FusionDiagnostics(0, 1, 0, 0, 0, 0, 0, 0, False, None),
+        lambda: FusionDiagnostics(0, 1, 0, 1, 0, 0, 0, 0, False, None),
+        lambda: FusionDiagnostics(1, 1, 1, 1, 1, 0, 0, 0, False, None),
+        lambda: FusionDiagnostics(1, 2, 1, 3, 0, 0, 0, 0, False, None),
+        lambda: FusionDiagnostics(1, 0, 0, 1, 0, 0, 0, 0, False, None), lambda: FusionDiagnostics(1, 1, 0, 0, 1, 0, 0, 0, False, None),
         lambda: FusionDiagnostics(0, 1, 0, 1, 0, 0, 0, 0, True, FusionFailureReason.GRAPH_PROVENANCE_INVALID),
     ],
 )

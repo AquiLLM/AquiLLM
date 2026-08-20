@@ -134,7 +134,7 @@ class FusionDiagnostics:
         if self.malformed_provenance:
             if any((self.baseline_duplicate_count, self.cross_branch_duplicate_count, self.graph_only_considered, self.graph_only_selected, self.graph_only_dropped)):
                 raise ValueError("malformed diagnostics must not claim graph output")
-        elif self.baseline_duplicate_count > self.direct_input_count + self.extended_input_count or self.cross_branch_duplicate_count > min(self.direct_input_count, self.extended_input_count) or self.graph_only_considered != self.direct_input_count + self.extended_input_count - self.baseline_duplicate_count - self.cross_branch_duplicate_count:
+        elif self.baseline_duplicate_count > self.direct_input_count + self.extended_input_count or self.baseline_duplicate_count > 2 * self.baseline_count or self.cross_branch_duplicate_count > min(self.direct_input_count, self.extended_input_count) or self.cross_branch_duplicate_count > self.graph_only_considered + self.baseline_duplicate_count // 2 or self.graph_only_considered > self.direct_input_count + self.extended_input_count - self.baseline_duplicate_count:
             raise ValueError("fusion diagnostic counts are incoherent")
 def _graph_sort_key(row: FusedCandidate) -> tuple:
     best_rank = min(rank for rank in (row.direct_rank, row.extended_rank) if rank is not None)
@@ -253,7 +253,7 @@ def fuse_candidates(
     for source, rows in ((CandidateSource.DIRECT, selected_direct), (CandidateSource.EXTENDED, selected_extended)):
         for row in rows:
             pk = row.integer_chunk_pk
-            if source is CandidateSource.EXTENDED and pk in direct_pks and pk not in baseline_by_pk:
+            if source is CandidateSource.EXTENDED and pk in direct_pks:
                 cross_duplicates += 1
             existing = baseline_by_pk.get(pk) or graph_rows.get(pk)
             if existing is not None and (existing.document_uuid != row.document_uuid or existing.chunk_number != row.chunk_number):
@@ -278,7 +278,7 @@ def fuse_candidates(
     graph_only.sort(key=_graph_sort_key)
     selected_graph = tuple(graph_only[:graph_cap])
     candidates = (*fused_baseline, *selected_graph)
-    diagnostics = FusionDiagnostics(len(baseline), len(selected_direct), len(selected_extended), baseline_duplicates, cross_duplicates, len(graph_only), len(selected_graph), len(graph_only) - len(selected_graph), False, None)
+    diagnostics = FusionDiagnostics(len(baseline), direct_count, extended_count, baseline_duplicates, cross_duplicates, len(graph_only), len(selected_graph), len(graph_only) - len(selected_graph), False, None)
     return _result(candidates, diagnostics)
 
 __all__ = ["BaselineCandidate", "CandidateSource", "FusedCandidate", "FusionDiagnostics", "FusionFailureReason", "FusionResult", "GraphBranchInput", "GraphCandidate", "fuse_candidates", "graph_candidate_order_checksum"]
