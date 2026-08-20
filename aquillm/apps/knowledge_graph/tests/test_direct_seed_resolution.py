@@ -110,23 +110,36 @@ class Repository:
         return f"model-{span.start}"
 
 
-def test_deduplicates_spans_and_short_circuits_at_first_nonempty_tier() -> None:
-    span = QueryEntitySpanV1("model", 0, 5, 0.8)
-    repository = Repository(
+class TextRepository(Repository):
+    def __init__(self, tiers, texts):
+        super().__init__(tiers)
+        self.texts = texts
+
+    def span_text(self, span):
+        return self.texts[span.start]
+
+
+def test_deduplicates_normalized_surface_and_short_circuits_highest_confidence() -> (
+    None
+):
+    lower = QueryEntitySpanV1("model", 0, 5, 0.4)
+    higher = QueryEntitySpanV1("model", 10, 15, 0.9)
+    repository = TextRepository(
         {
-            ("identifier", 0): (
+            ("name", 10): (
                 _match(
                     span=0,
                     entity=K[0],
                     component=K[1],
-                    tier=DirectResolutionTier.IDENTIFIER,
-                    confidence=0.8,
+                    tier=DirectResolutionTier.NAME,
+                    confidence=0.9,
                 ),
             )
-        }
+        },
+        {0: "Alpha", 10: "alpha"},
     )
     outcome = direct_seed_resolution.resolve_direct_seed_components(
-        spans=(span, span),
+        spans=(lower, higher),
         repository=repository,
         ready=_ready(),
         settings=_settings(),
@@ -135,7 +148,8 @@ def test_deduplicates_spans_and_short_circuits_at_first_nonempty_tier() -> None:
     assert outcome.failure_reason is None
     assert outcome.diagnostics.input_span_count == 2
     assert outcome.diagnostics.deduplicated_span_count == 1
-    assert repository.calls == [("identifier", 0)]
+    assert outcome.matches[0].extraction_confidence == 0.9
+    assert repository.calls == [("identifier", 10), ("name", 10)]
 
 
 def test_automatic_component_ambiguity_and_same_component_best_member() -> None:
@@ -240,3 +254,43 @@ def test_embedding_threshold_margin_and_transient_fallback(
     assert outcome.failure_reason is (
         None if resolved else DirectFailureReason.DIRECT_NO_SEEDS
     )
+
+
+def test_embedding_failure_preserves_exact_matches_and_disables_only_fallback(
+    monkeypatch,
+) -> None:
+    spans = tuple(
+        QueryEntitySpanV1("model", start, start + 5, 1.0) for start in (0, 6, 12)
+    )
+    repository = TextRepository(
+        {
+            ("name", start): (
+                _match(
+                    span=index,
+                    entity=K[index],
+                    component=K[index + 3],
+                    tier=DirectResolutionTier.NAME,
+                ),
+            )
+            for index, start in ((0, 0), (2, 12))
+        },
+        {0: "alpha", 6: "beta", 12: "gamma"},
+    )
+    monkeypatch.setattr(
+        direct_seed_resolution,
+        "embed_unresolved_query_span",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable")),
+    )
+
+    outcome = direct_seed_resolution.resolve_direct_seed_components(
+        spans=spans,
+        repository=repository,
+        ready=_ready(),
+        settings=_settings(embedding=True),
+        deadline=10.0,
+    )
+
+    assert outcome.failure_reason is None
+    assert tuple(row.span_index for row in outcome.matches) == (0, 2)
+    assert outcome.diagnostics.embedding_attempt_count == 1
+    assert ("name", 12) in repository.calls

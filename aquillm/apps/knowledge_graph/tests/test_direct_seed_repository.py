@@ -68,6 +68,22 @@ def _scope(ready: ReadyGenerationBundleV1) -> DirectSeedScopeV1:
     )
 
 
+def _membership_state(
+    ready: ReadyGenerationBundleV1, **changes: object
+) -> tuple[dict[str, object], ...]:
+    generation = ready.selected_generations[0]
+    state = {
+        "collection_id": 3,
+        "active_artifact_id": 11,
+        "registry_epoch": generation.membership_epoch,
+        "membership_checksum": generation.membership_checksum,
+        "resolver_version": generation.resolver_version,
+        "resolution_config_checksum": generation.resolution_config_checksum,
+    }
+    state.update(changes)
+    return (state,)
+
+
 def test_identifier_name_and_indexed_alias_use_bounded_scoped_predicates() -> None:
     ready = _ready()
     span = QueryEntitySpanV1("paper", 0, 13, 0.8)
@@ -91,6 +107,7 @@ def test_identifier_name_and_indexed_alias_use_bounded_scoped_predicates() -> No
         codec=HmacSha256ProjectionIdentifierCodec(b"key", key_version="key-v1"),
         span_inputs=(local,),
         row_loader=rows,
+        membership_state_loader=lambda **_options: _membership_state(ready),
     )
     identifier = repository.exact_identifier_matches(span=span, ready=ready, limit=4)
     name = repository.canonical_name_matches(span=span, ready=ready, limit=4)
@@ -124,22 +141,63 @@ def test_identifier_name_and_indexed_alias_use_bounded_scoped_predicates() -> No
     assert "metadata" not in joined
 
 
-def test_repository_binds_automatic_components_to_ready_membership_checksum() -> None:
+def test_matching_current_membership_admits_automatic_link_and_excludes_candidate() -> (
+    None
+):
     ready = _ready()
     span = QueryEntitySpanV1("model", 0, 5, 1.0)
     calls: list[dict[str, object]] = []
+
+    def rows(**options):
+        calls.append(options)
+        assert options["automatic_only"] is True
+        return (
+            DirectSeedCandidateRow(9, 11, "model", "automatic-a", 1.0),
+            DirectSeedCandidateRow(7, 11, "model", None, 1.0),
+            DirectSeedCandidateRow(8, 11, "model", "candidate-a", 1.0, "candidate"),
+        )
+
     repository = DirectSeedRepository(
         scope=_scope(ready),
         codec=HmacSha256ProjectionIdentifierCodec(b"key", key_version="key-v1"),
         span_inputs=(DirectResolutionSpanInputV1(span, "model"),),
-        row_loader=lambda **options: calls.append(options) or (),
+        row_loader=rows,
+        membership_state_loader=lambda **_options: _membership_state(ready),
     )
 
-    repository.canonical_name_matches(span=span, ready=ready, limit=4)
+    matches = repository.canonical_name_matches(span=span, ready=ready, limit=4)
 
-    assert calls[0]["membership_checksums_by_artifact"] == ((11, K[5]),)
+    assert calls[0]["membership_states"] == _membership_state(ready)
+    assert sum(row.entity_key != row.component_key for row in matches) == 1
+    assert sum(row.entity_key == row.component_key for row in matches) == 2
     source = inspect.getsource(direct_seed_repository._load_candidate_rows)
-    assert "decision_checksum" in source
+    assert "decision_checksum" not in source
+
+
+@pytest.mark.parametrize(
+    "change",
+    (
+        {"registry_epoch": 2},
+        {"membership_checksum": K[10]},
+        {"resolver_version": "resolver-v2"},
+        {"resolution_config_checksum": K[10]},
+    ),
+)
+def test_stale_current_membership_rejects_mapping_before_candidate_query(
+    change: dict[str, object],
+) -> None:
+    ready = _ready()
+    span = QueryEntitySpanV1("model", 0, 5, 1.0)
+    repository = DirectSeedRepository(
+        scope=_scope(ready),
+        codec=HmacSha256ProjectionIdentifierCodec(b"key", key_version="key-v1"),
+        span_inputs=(DirectResolutionSpanInputV1(span, "model"),),
+        row_loader=lambda **_options: pytest.fail("stale mapping reached candidates"),
+        membership_state_loader=lambda **_options: _membership_state(ready, **change),
+    )
+
+    with pytest.raises(ValueError, match="current membership"):
+        repository.canonical_name_matches(span=span, ready=ready, limit=4)
 
 
 def test_repository_deduplicates_entities_before_applying_the_result_cap() -> None:
@@ -173,6 +231,7 @@ def test_repository_rejects_scope_that_omits_a_selected_ready_generation() -> No
         codec=HmacSha256ProjectionIdentifierCodec(b"key", key_version="key-v1"),
         span_inputs=(DirectResolutionSpanInputV1(span, "model"),),
         row_loader=lambda **_options: (),
+        membership_state_loader=lambda **_options: _membership_state(expanded),
     )
 
     with pytest.raises(ValueError, match="membership scope"):
@@ -192,6 +251,7 @@ def test_automatic_components_cross_generations_and_singletons_do_not() -> None:
         codec=codec,
         span_inputs=(DirectResolutionSpanInputV1(span, "model"),),
         row_loader=lambda **_kwargs: rows,
+        membership_state_loader=lambda **_options: _membership_state(ready),
     )
 
     matches = repository.canonical_name_matches(span=span, ready=ready, limit=4)

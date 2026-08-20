@@ -77,33 +77,15 @@ class DirectSeedCandidateRow:
     ontology_type: str
     automatic_identity_key: str | None
     similarity: float
+    link_outcome: str = "automatic"
 
 
-def repository_predicates(
-    scope: DirectSeedScopeV1, tier: DirectResolutionTier
-) -> tuple[str, ...]:
-    base = (
-        "selected_collection_ids",
-        "selected_artifact_ids",
-        "selected_document_ids",
-        "selected_document_artifact_ids",
-        "artifact.status=active",
-        "document_artifact.status=active|superseded",
-        "entity.status=active",
-        "ontology_checksum",
-        "canonical_link.outcome=automatic",
-        "document_link.outcome=automatic",
-    )
-    return (
-        (*base, "EntityMention.normalized_text=indexed")
-        if tier is DirectResolutionTier.ALIAS
-        else base
-    )
-
-
+# fmt: off
+def repository_predicates(scope: DirectSeedScopeV1, tier: DirectResolutionTier) -> tuple[str, ...]:
+    base = ("selected_collection_ids", "selected_artifact_ids", "selected_document_ids", "selected_document_artifact_ids", "artifact.status=active", "document_artifact.status=active|superseded", "entity.status=active", "ontology_checksum", "canonical_link.outcome=automatic", "document_link.outcome=automatic")
+    return (*base, "EntityMention.normalized_text=indexed") if tier is DirectResolutionTier.ALIAS else base
 RowLoader = Callable[..., tuple[DirectSeedCandidateRow, ...]]
-
-
+MembershipStateLoader = Callable[..., tuple[dict[str, object], ...]]
 class DirectSeedRepository:
     def __init__(
         self,
@@ -112,12 +94,14 @@ class DirectSeedRepository:
         codec: ProjectionIdentifierCodec,
         span_inputs: tuple[DirectResolutionSpanInputV1, ...],
         row_loader: RowLoader | None = None,
+        membership_state_loader: MembershipStateLoader | None = None,
         using: str = "default",
     ) -> None:
         self._scope = scope
         self._codec = codec
         self._using = using
         self._row_loader = _load_candidate_rows if row_loader is None else row_loader
+        self._membership_state_loader = _load_membership_states if membership_state_loader is None else membership_state_loader
         self._spans = {
             (item.span.start, item.span.end, item.span.ontology_type): (
                 index,
@@ -139,6 +123,19 @@ class DirectSeedRepository:
         except KeyError:
             raise ValueError("span is not bound to transient local text") from None
 
+    def _current_membership_states(self, ready: ReadyGenerationBundleV1) -> tuple[dict[str, object], ...]:
+        ready_by_generation = {row.generation_key: row for row in ready.selected_generations}
+        if set(ready_by_generation) != {generation for _, generation in self._scope.generation_keys_by_artifact}:
+            raise ValueError("ready membership scope is incomplete")
+        expected = {artifact_id: (ready_by_generation[generation].membership_epoch, ready_by_generation[generation].membership_checksum, ready_by_generation[generation].resolver_version, ready_by_generation[generation].resolution_config_checksum) for artifact_id, generation in self._scope.generation_keys_by_artifact}
+        states = self._membership_state_loader(collection_ids=self._scope.selected_collection_ids, using=self._using)
+        keys = {"collection_id", "active_artifact_id", "registry_epoch", "membership_checksum", "resolver_version", "resolution_config_checksum"}
+        if type(states) is not tuple or len(states) != len(self._scope.selected_collection_ids) or any(type(row) is not dict or set(row) != keys for row in states):
+            raise ValueError("current membership state is invalid")
+        actual = {row["active_artifact_id"]: (row["registry_epoch"], row["membership_checksum"], row["resolver_version"], row["resolution_config_checksum"]) for row in states}
+        if tuple(sorted(row["collection_id"] for row in states)) != self._scope.selected_collection_ids or tuple(sorted(actual)) != self._scope.selected_artifact_ids or len(actual) != len(states) or actual != expected:
+            raise ValueError("current membership state does not match ready projection")
+        return states
     def _matches(
         self,
         *,
@@ -163,12 +160,7 @@ class DirectSeedRepository:
             ),
         }.get(tier, "")
         # fmt: off
-        if {generation for _, generation in self._scope.generation_keys_by_artifact} != {row.generation_key for row in ready.selected_generations}:
-            raise ValueError("ready membership scope is incomplete")
-        try:
-            membership_checksums = tuple((artifact_id, next(row.membership_checksum for row in ready.selected_generations if row.generation_key == generation_key)) for artifact_id, generation_key in self._scope.generation_keys_by_artifact)
-        except StopIteration:
-            raise ValueError("ready membership scope is incomplete") from None
+        membership_states = self._current_membership_states(ready)
         rows = self._row_loader(
             tier=tier,
             lookup=lookup,
@@ -176,7 +168,8 @@ class DirectSeedRepository:
             embedding=embedding,
             model_signature=model_signature,
             ontology_type=span.ontology_type,
-            membership_checksums_by_artifact=membership_checksums,
+            membership_states=membership_states,
+            automatic_only=True,
             scope=self._scope,
             using=self._using,
             limit=limit,
@@ -192,7 +185,7 @@ class DirectSeedRepository:
                 )
             )
             component_key = entity_key
-            if row.automatic_identity_key is not None:
+            if row.automatic_identity_key is not None and row.link_outcome == "automatic":
                 component_key = str(
                     self._codec.encode(
                         ProjectionIdentifierDomain.AUTOMATIC_CANONICAL_IDENTITY,
@@ -241,6 +234,12 @@ class DirectSeedRepository:
 
 
 # fmt: off
+def _load_membership_states(**options: object) -> tuple[dict[str, object], ...]:
+    from apps.knowledge_graph.models import CollectionGraphMembershipState
+    fields = ("collection_id", "active_artifact_id", "registry_epoch", "membership_checksum", "resolver_version", "resolution_config_checksum")
+    return tuple(CollectionGraphMembershipState.objects.using(options["using"]).filter(collection_id__in=options["collection_ids"]).order_by("collection_id").values(*fields))
+
+
 def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...]:
     from django.db.models import F, FloatField, OuterRef, Q, Subquery, Value
     from django.db.models.expressions import ExpressionWrapper
@@ -251,10 +250,10 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
     scope = options["scope"]
     assert type(scope) is DirectSeedScopeV1
     membership_scope = Q()
-    for artifact_id, checksum in options["membership_checksums_by_artifact"]:
-        membership_scope |= Q(collection_entity__artifact_id=artifact_id, decision_checksum=checksum)
+    for state in options["membership_states"]:
+        membership_scope |= Q(collection_id=state["collection_id"], artifact_id=state["active_artifact_id"], collection__graph_membership_state__active_artifact_id=state["active_artifact_id"], collection__graph_membership_state__registry_epoch=state["registry_epoch"], collection__graph_membership_state__membership_checksum=state["membership_checksum"], collection__graph_membership_state__resolver_version=state["resolver_version"], collection__graph_membership_state__resolution_config_checksum=state["resolution_config_checksum"])
+    assert options["automatic_only"] is True
     automatic = CanonicalEntityLink.objects.using(options["using"]).filter(
-        membership_scope,
         collection_entity_id=OuterRef("pk"), status="active", outcome="automatic",
         resolver_version=scope.resolver_version, canonical_entity__status="active",
         canonical_entity__resolver_version=scope.resolver_version, canonical_entity__entity_type=OuterRef("entity_type"),
@@ -263,6 +262,7 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
     query = (
         CollectionEntity.objects.using(options["using"])
         .filter(
+            membership_scope,
             artifact_id__in=scope.selected_artifact_ids, collection_id__in=scope.selected_collection_ids,
             artifact__status="active", artifact__evaluation_only=False,
             artifact__ontology_checksum=scope.ontology_checksum, status="active", entity_type=options["ontology_type"],

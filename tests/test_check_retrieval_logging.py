@@ -49,12 +49,56 @@ logger.info(
 )
 logger.info(
     "obs.rag.extract_completed",
-    reason=RetrievalLogReason.COMPLETED,
-    count=len(rows),
-    elapsed_ms=2.5,
+    **retrieval_log_fields(
+        reason=RetrievalLogReason.COMPLETED,
+        count=len(rows),
+        elapsed_ms=2.5,
+    ),
 )
 """
     assert _scan(source) == ()
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "from lib.retrieval_redaction import retrieval_log_fields\ncount = query\n"
+        'logger.info("obs.rag.search", **retrieval_log_fields('
+        "reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1))",
+        "from lib.retrieval_redaction import retrieval_log_fields\n"
+        "count, other = (query, safe)\n"
+        'logger.info("obs.rag.search", **retrieval_log_fields('
+        "reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1))",
+        "from lib.retrieval_redaction import retrieval_log_fields\n"
+        "for count in query: pass\n"
+        'logger.info("obs.rag.search", **retrieval_log_fields('
+        "reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1))",
+        'log.info("obs.rag.search", query=query)',
+        'self.audit.info("obs.rag.search", body=body)',
+        'logger.info("obs.rag.search", reason=RetrievalLogReason.COMPLETED, '
+        "count=count, elapsed_ms=1)",
+        "def retrieval_log_fields(**fields): return fields\n"
+        'log.info("obs.rag.search", **retrieval_log_fields('
+        "reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1))",
+        "from lib.retrieval_redaction import retrieval_log_fields\n"
+        "retrieval_log_fields = fake\n"
+        'log.info("obs.rag.search", **retrieval_log_fields('
+        "reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1))",
+        'emit = logger.info\nemit("obs.rag.search", query=query)',
+    ),
+)
+def test_checker_rejects_taint_aliases_dynamic_receivers_and_nonhelper_shape(
+    source: str,
+) -> None:
+    assert len(_scan(source)) == 1
+
+
+def test_review_regressions_live_only_in_planned_test_modules() -> None:
+    extra = (
+        REPO
+        / "aquillm/apps/knowledge_graph/tests/test_direct_seed_review_regressions.py"
+    )
+    assert not extra.exists()
 
 
 @pytest.mark.parametrize(

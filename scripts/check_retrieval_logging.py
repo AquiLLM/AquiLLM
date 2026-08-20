@@ -23,6 +23,7 @@ _LOG_LEVELS = frozenset(
     {"debug", "info", "warning", "error", "critical", "exception", "log"}
 )
 _FIELDS = frozenset({"reason", "count", "elapsed_ms"})
+_VALUE_ASSIGNMENTS = (ast.AnnAssign, ast.NamedExpr)
 _REASONS = frozenset(
     {
         "completed",
@@ -46,40 +47,73 @@ class LoggingViolation(NamedTuple):
     reason: str
 
 
-def _logger_names(tree: ast.AST) -> frozenset[str]:
-    names = {"logger", "_logger", "logging"}
+def _assignments(tree: ast.AST) -> tuple[tuple[str, ast.AST], ...]:
+    assignments: list[tuple[str, ast.AST]] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if alias.name == "logging"
-            )
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, _VALUE_ASSIGNMENTS) and node.value is not None:
+            targets, value = (node.target,), node.value
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            targets, value = (node.target,), node.iter
+        else:
             continue
-        value = node.value
-        if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute):
-            continue
-        if value.func.attr not in {"getLogger", "get_logger"}:
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
-        names.update(target.id for target in targets if isinstance(target, ast.Name))
-    return frozenset(names)
+        assignments.extend(
+            (name.id, value)
+            for target in targets
+            for name in ast.walk(target)
+            if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store)
+        )
+    return tuple(assignments)
 
 
 def _logging_functions(tree: ast.AST) -> frozenset[str]:
-    return frozenset(
+    names = set(
         alias.asname or alias.name
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and node.module == "logging"
         for alias in node.names
         if alias.name in _LOG_LEVELS
     )
+    aliases = _assignments(tree)
+    changed = True
+    while changed:
+        before = len(names)
+        names.update(
+            name
+            for name, value in aliases
+            if (isinstance(value, ast.Attribute) and value.attr in _LOG_LEVELS)
+            or (isinstance(value, ast.Name) and value.id in names)
+        )
+        changed = len(names) != before
+    return frozenset(names)
+
+
+def _redaction_helpers(tree: ast.AST) -> frozenset[str]:
+    imported = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "lib.retrieval_redaction"
+        for alias in node.names
+        if alias.name == "retrieval_log_fields"
+    }
+    rebound = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    }
+    rebound.update(
+        node.arg if isinstance(node, ast.arg) else node.name
+        for node in ast.walk(tree)
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.arg)
+        )
+    )
+    return frozenset(imported - rebound)
 
 
 def _log_call(
     node: ast.Call,
-    logger_names: frozenset[str],
     logging_functions: frozenset[str],
 ) -> str | None:
     function = node.func
@@ -87,18 +121,7 @@ def _log_call(
         return function.id
     if not isinstance(function, ast.Attribute) or function.attr not in _LOG_LEVELS:
         return None
-    receiver = function.value
-    if isinstance(receiver, ast.Name) and (
-        receiver.id in logger_names or receiver.id.casefold().endswith("logger")
-    ):
-        return function.attr
-    if isinstance(receiver, ast.Call):
-        return function.attr
-    if isinstance(receiver, ast.Attribute) and receiver.attr.casefold().endswith(
-        "logger"
-    ):
-        return function.attr
-    return None
+    return function.attr
 
 
 def _fixed_reason(node: ast.AST) -> bool:
@@ -112,7 +135,38 @@ def _fixed_reason(node: ast.AST) -> bool:
     )
 
 
-def _safe_count(node: ast.AST) -> bool:
+def _expression_is_tainted(node: ast.AST, tainted: frozenset[str]) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in tainted or node.id in {"query", "body", "exact_terms"}
+    if isinstance(node, ast.Attribute) and node.attr in {"body", "text"}:
+        return True
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id == "str" and node.args:
+            return True
+    return any(
+        _expression_is_tainted(child, tainted)
+        for child in ast.iter_child_nodes(node)
+        if isinstance(child, ast.expr)
+    )
+
+
+def _tainted_names(tree: ast.AST) -> frozenset[str]:
+    tainted: set[str] = set()
+    assignments = _assignments(tree)
+    changed = True
+    while changed:
+        changed = False
+        frozen = frozenset(tainted)
+        for name, value in assignments:
+            if name not in tainted and _expression_is_tainted(value, frozen):
+                tainted.add(name)
+                changed = True
+    return frozenset(tainted)
+
+
+def _safe_count(node: ast.AST, tainted: frozenset[str]) -> bool:
+    if _expression_is_tainted(node, tainted):
+        return False
     if isinstance(node, ast.Constant):
         return type(node.value) is int and node.value >= 0
     if isinstance(node, ast.Name):
@@ -126,7 +180,9 @@ def _safe_count(node: ast.AST) -> bool:
     )
 
 
-def _safe_elapsed(node: ast.AST) -> bool:
+def _safe_elapsed(node: ast.AST, tainted: frozenset[str]) -> bool:
+    if _expression_is_tainted(node, tainted):
+        return False
     if isinstance(node, ast.Constant):
         return (
             type(node.value) in {int, float}
@@ -136,33 +192,36 @@ def _safe_elapsed(node: ast.AST) -> bool:
     if isinstance(node, ast.Name):
         return node.id in {"elapsed_ms", "duration_ms"} or node.id.endswith("_ms")
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
-        return _safe_elapsed(node.operand)
+        return _safe_elapsed(node.operand, tainted)
     if isinstance(node, ast.BinOp):
-        return _safe_elapsed(node.left) and _safe_elapsed(node.right)
+        return _safe_elapsed(node.left, tainted) and _safe_elapsed(node.right, tainted)
     return False
 
 
-def _safe_fields(keywords: list[ast.keyword]) -> bool:
-    if len(keywords) == 1 and keywords[0].arg is None:
-        value = keywords[0].value
-        if not (
-            isinstance(value, ast.Call)
-            and isinstance(value.func, ast.Name)
-            and value.func.id == "retrieval_log_fields"
-        ):
-            return False
-        if value.args or any(keyword.arg is None for keyword in value.keywords):
-            return False
-        keywords = value.keywords
-    elif any(keyword.arg is None for keyword in keywords):
+def _safe_fields(
+    keywords: list[ast.keyword],
+    tainted: frozenset[str],
+    helpers: frozenset[str],
+) -> bool:
+    if len(keywords) != 1 or keywords[0].arg is not None:
         return False
+    value = keywords[0].value
+    if not (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id in helpers
+    ):
+        return False
+    if value.args or any(keyword.arg is None for keyword in value.keywords):
+        return False
+    keywords = value.keywords
     values = {keyword.arg: keyword.value for keyword in keywords}
     return (
         len(values) == len(keywords)
         and values.keys() == _FIELDS
         and _fixed_reason(values["reason"])
-        and _safe_count(values["count"])
-        and _safe_elapsed(values["elapsed_ms"])
+        and _safe_count(values["count"], tainted)
+        and _safe_elapsed(values["elapsed_ms"], tainted)
     )
 
 
@@ -173,13 +232,14 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
         tree = ast.parse(source, filename=str(path))
     except (SyntaxError, ValueError):
         return (LoggingViolation(path, 0, "invalid_python_source"),)
-    names = _logger_names(tree)
     functions = _logging_functions(tree)
+    helpers = _redaction_helpers(tree)
+    tainted = _tainted_names(tree)
     findings: list[LoggingViolation] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        level = _log_call(node, names, functions)
+        level = _log_call(node, functions)
         if level is None:
             continue
         if level == "exception":
@@ -191,7 +251,7 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
             or _EVENT.fullmatch(node.args[0].value) is None
         ):
             reason = "dynamic_or_invalid_event"
-        elif not _safe_fields(node.keywords):
+        elif not _safe_fields(node.keywords, tainted, helpers):
             reason = "unknown_or_payload_field_shape"
         else:
             continue
