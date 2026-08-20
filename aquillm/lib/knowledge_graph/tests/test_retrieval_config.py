@@ -219,7 +219,6 @@ def test_source_shape_and_unknown_graph_keys_fail_closed() -> None:
     original = {"UNRELATED": "kept"}
     assert config.load_hybrid_retrieval_settings(original)
     assert original == {"UNRELATED": "kept"}
-
 def test_secrets_are_redacted_from_repr_and_errors_but_affect_equality() -> None:
     canary = "DO-NOT-LOG-CANARY"
     valid = {**_projection(), "KG_MEMGRAPH_PROJECTION_PASSWORD": canary}
@@ -233,7 +232,6 @@ def test_secrets_are_redacted_from_repr_and_errors_but_affect_equality() -> None
     assert all(value not in repr(settings) for key, value in valid.items() if "PASSWORD" in key or "DSN" in key or "HMAC" in key)
     direct = config.load_hybrid_retrieval_settings({**_direct(), "KG_MEMGRAPH_QUERY_PASSWORD": canary, "KG_QUERY_EXTRACTOR_BEARER_TOKEN": canary})
     assert canary not in repr(direct)
-
 def test_evaluation_backend_requires_exact_private_capability() -> None:
     settings = config.load_hybrid_retrieval_settings({})
     assert config.select_evaluation_topology_backend(settings, capability=config._EVALUATION_BACKEND_CAPABILITY) == "postgres"
@@ -241,7 +239,6 @@ def test_evaluation_backend_requires_exact_private_capability() -> None:
         with pytest.raises(config.HybridRetrievalConfigError, match="capability"):
             config.select_evaluation_topology_backend(settings, capability=capability)
     assert settings.graph_topology_backend == "memgraph"
-
 def test_settings_are_frozen_slotted_and_import_isolated() -> None:
     settings = config.load_hybrid_retrieval_settings({})
     assert not hasattr(settings, "__dict__")
@@ -251,7 +248,6 @@ def test_settings_are_frozen_slotted_and_import_isolated() -> None:
     completed = subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "0"
-
 def test_secret_wrapper_survives_dataclass_traversal_and_is_immutable() -> None:
     raw = {**_projection(), **_direct()}
     settings = config.load_hybrid_retrieval_settings(raw)
@@ -268,28 +264,37 @@ def test_secret_wrapper_survives_dataclass_traversal_and_is_immutable() -> None:
     assert not dataclasses.is_dataclass(first)
     with pytest.raises(AttributeError):
         first._value = "changed"  # type: ignore[misc]
-
 @pytest.mark.parametrize("value", ("host=db dbname=x", "postgres://u@host/db", "POSTGRESQL://u@host/db", "postgresql:///db", "postgresql://host:/db", "postgresql://host:0/db", "postgresql://host:65536/db", "postgresql://host/", "postgresql://host/a/b", "postgresql://%65xample.com/db", "postgresql://host/db?ssl=1", "postgresql://host/db#fragment", "postgresql://host\\evil/db", "postgresql://u:bad://pw@host/db"))
 def test_projection_dsns_are_canonical_postgresql_uris(value: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_SOURCE_DSN") as caught:
         config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": value})
     assert value not in str(caught.value)
-
 def test_projection_dsns_accept_supported_hosts_and_credentials() -> None:
     settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://reader@db.example.com/source_db", "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://cas:secret@[::1]:5432/state_db"})
     assert settings.projection_postgres_source_dsn.get_secret_value().endswith("/source_db")
-
 @pytest.mark.parametrize(("key", "value"), (("KG_MEMGRAPH_URI", "bolt://."), ("KG_MEMGRAPH_URI", "bolt://example.com:"), ("KG_MEMGRAPH_URI", "bolt://%65xample.com"), ("KG_MEMGRAPH_URI", "bolt://example..com"), ("KG_MEMGRAPH_URI", "bolt://Example.com"), ("KG_MEMGRAPH_URI", "BOLT://example.com"), ("KG_MEMGRAPH_URI", "bolt://host:65536"), ("KG_MEMGRAPH_URI", "bolt://host:" + "9" * 5000), ("KG_QUERY_EXTRACTOR_URL", "https://. /v1"), ("KG_QUERY_EXTRACTOR_URL", "https://example.com:")))
 def test_service_urls_reject_noncanonical_authorities(key: str, value: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match=key):
         config.load_hybrid_retrieval_settings({key: value})
-
 def test_service_urls_accept_dns_ip_ipv6_and_localhost() -> None:
     for key, value in (("KG_MEMGRAPH_URI", "bolt://localhost:7687"), ("KG_MEMGRAPH_URI", "bolt://127.0.0.1"), ("KG_MEMGRAPH_URI", "bolt://[::1]:7687"), ("KG_QUERY_EXTRACTOR_URL", "https://extractor.example.com/v1/entities"), ("KG_QUERY_EXTRACTOR_URL", "https://[::1]:8443/v1")):
         config.load_hybrid_retrieval_settings({key: value})
-
 def test_oversized_integer_is_a_fixed_configuration_error() -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_BATCH_SIZE") as caught:
         config.load_hybrid_retrieval_settings({"KG_PROJECTION_BATCH_SIZE": "9" * 5000})
     assert "999999" not in str(caught.value)
+@pytest.mark.parametrize("value", ("postgresql://u:p@evil@trusted/db", "postgresql://host/db", "postgresql://:p@host/db", "postgresql://BadRole@host/db", "postgresql://role:%00@host/db", "postgresql://role:%ZZ@host/db", "postgresql://role:%FF@host/db", "postgresql://role@host/%00", "postgresql://role@host/db%2Fother"))
+def test_projection_dsn_roles_and_escapes_fail_closed(value: str) -> None:
+    with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_SOURCE_DSN"):
+        config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": value})
+@pytest.mark.parametrize(("source", "state"), (("postgresql://same@host/source", "postgresql://same@host/state"), ("postgresql://same@host/db", "postgresql://same@host:5432/db"), ("postgresql://same@[0:0:0:0:0:0:0:1]/db", "postgresql://same@[::1]:5432/db")))
+def test_projection_roles_and_canonical_identities_are_separate(source: str, state: str) -> None:
+    with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_STATE_DSN"):
+        config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": source, "KG_PROJECTION_POSTGRES_STATE_DSN": state})
+def test_postgres_identity_normalizes_percent_encoding_host_and_port() -> None:
+    identity = config._postgres_identity
+    assert identity("KG_PROJECTION_POSTGRES_SOURCE_DSN", "postgresql://%72eader@DB.EXAMPLE.com/%64b") == identity("KG_PROJECTION_POSTGRES_STATE_DSN", "postgresql://reader@db.example.com:5432/db")
+def test_projection_accepts_distinct_canonical_roles() -> None:
+    settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://source_role:p%3Ass@db.example.com/source", "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://state_role@127.0.0.1:5432/state"})
+    assert settings.memgraph_projection_enabled
 # fmt: on

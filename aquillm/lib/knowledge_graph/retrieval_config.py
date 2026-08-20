@@ -1,4 +1,4 @@
-# ruff: noqa: E501,E702
+# ruff: noqa: E501,E701,E702
 """Pure, provider-neutral configuration for hybrid graph retrieval."""
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from ipaddress import ip_address
-from urllib.parse import SplitResult, urlsplit
+from urllib.parse import unquote_to_bytes, urlsplit
 
 __all__ = ("HybridRetrievalConfigError", "HybridRetrievalSettings", "SecretSetting", "QUERY_EXTRACTOR_MODEL", "QUERY_EXTRACTOR_MODEL_REVISION", "QUERY_SCHEMA_CHECKSUM", "QUERY_SCHEMA_VERSION", "load_hybrid_retrieval_settings", "select_evaluation_topology_backend")  # fmt: skip
 
@@ -24,7 +24,9 @@ _TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _LOWER_TOKEN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$")
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
-_DB_PATH = re.compile(r"^/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_ROLE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
+_DB_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 class HybridRetrievalConfigError(ValueError):
@@ -56,32 +58,19 @@ class SecretSetting:
         return self.__value
 @dataclass(frozen=True, slots=True)
 class HybridRetrievalSettings:
-    memgraph_projection_enabled: bool; memgraph_traversal_enabled: bool
-    graph_direct_enabled: bool; graph_extended_enabled: bool
-    graph_topology_backend: str; graph_algorithm: str
-    memgraph_image: str; memgraph_uri: str = field(repr=False)
-    memgraph_database: str; memgraph_query_username: str
-    memgraph_query_password: SecretSetting = field(repr=False); memgraph_projection_username: str
-    memgraph_projection_password: SecretSetting = field(repr=False)
-    projection_postgres_source_dsn: SecretSetting = field(repr=False); projection_postgres_state_dsn: SecretSetting = field(repr=False)
-    projection_queue: str; projection_schema_version: str
-    projection_format_version: str; projection_identifier_hmac_key: SecretSetting = field(repr=False)
-    projection_identifier_key_version: str; projection_batch_size: int
-    projection_lease_seconds: int; projection_max_attempts: int
-    projection_retention: int; projection_max_lag_seconds: int
-    query_extractor_url: str = field(repr=False); query_extractor_bearer_token: SecretSetting = field(repr=False)
-    query_extractor_model: str; query_extractor_model_revision: str
-    query_extractor_expected_schema_version: str; query_extractor_expected_schema_checksum: str
-    query_extractor_timeout_ms: int; query_max_bytes: int
-    query_max_codepoints: int; query_max_spans: int
-    graph_overall_timeout_ms: int; graph_direct_timeout_ms: int
-    graph_extended_timeout_ms: int; graph_direct_max_seeds: int
-    graph_direct_max_depth: int; graph_direct_max_nodes: int
-    graph_direct_max_edges: int; graph_direct_max_candidates: int
-    graph_extended_max_seeds: int; graph_extended_max_depth: int
-    graph_extended_max_nodes: int; graph_extended_max_edges: int
-    graph_extended_max_candidates: int; graph_fusion_rrf_k: int
-    direct_embedding_enabled: bool; direct_min_similarity: float
+    memgraph_projection_enabled: bool; memgraph_traversal_enabled: bool; graph_direct_enabled: bool; graph_extended_enabled: bool
+    graph_topology_backend: str; graph_algorithm: str; memgraph_image: str; memgraph_uri: str = field(repr=False)
+    memgraph_database: str; memgraph_query_username: str; memgraph_query_password: SecretSetting = field(repr=False); memgraph_projection_username: str
+    memgraph_projection_password: SecretSetting = field(repr=False); projection_postgres_source_dsn: SecretSetting = field(repr=False); projection_postgres_state_dsn: SecretSetting = field(repr=False)
+    projection_queue: str; projection_schema_version: str; projection_format_version: str; projection_identifier_hmac_key: SecretSetting = field(repr=False)
+    projection_identifier_key_version: str; projection_batch_size: int; projection_lease_seconds: int; projection_max_attempts: int; projection_retention: int
+    projection_max_lag_seconds: int; query_extractor_url: str = field(repr=False); query_extractor_bearer_token: SecretSetting = field(repr=False)
+    query_extractor_model: str; query_extractor_model_revision: str; query_extractor_expected_schema_version: str; query_extractor_expected_schema_checksum: str
+    query_extractor_timeout_ms: int; query_max_bytes: int; query_max_codepoints: int; query_max_spans: int
+    graph_overall_timeout_ms: int; graph_direct_timeout_ms: int; graph_extended_timeout_ms: int; graph_direct_max_seeds: int
+    graph_direct_max_depth: int; graph_direct_max_nodes: int; graph_direct_max_edges: int; graph_direct_max_candidates: int
+    graph_extended_max_seeds: int; graph_extended_max_depth: int; graph_extended_max_nodes: int; graph_extended_max_edges: int
+    graph_extended_max_candidates: int; graph_fusion_rrf_k: int; direct_embedding_enabled: bool; direct_min_similarity: float
     direct_winner_margin: float; graph_eval_parity_backend: str
 _BOOL_DEFAULTS = dict.fromkeys((
     "KG_MEMGRAPH_PROJECTION_ENABLED", "KG_MEMGRAPH_TRAVERSAL_ENABLED",
@@ -148,41 +137,36 @@ def _parse_float(source: Mapping[str, str], key: str, rule: tuple[str, float, fl
     if not rule[1] <= value <= rule[2]:
         raise _error(key, "is outside the supported range")
     return value
-def _valid_host(host: str) -> bool:
-    if host == "localhost":
-        return True
+def _decoded_uri_part(key: str, raw: str, forbidden: str) -> str:
+    if _BAD_ESCAPE.search(raw): raise _error(key, "contains an invalid percent escape")
     try:
-        ip_address(host)
-        return True
-    except ValueError:
-        pass
-    return len(host) <= 253 and host == host.lower() and not host.startswith(".") and not host.endswith(".") and all(_DNS_LABEL.fullmatch(label) for label in host.split("."))
-def _valid_authority(parsed: SplitResult, *, allow_userinfo: bool) -> bool:
-    authority = parsed.netloc
-    userinfo, separator, host_port = authority.rpartition("@")
-    port_text: str | None
-    if separator and (not allow_userinfo or not parsed.username or _TOKEN.fullmatch(parsed.username) is None or (":" in userinfo and not parsed.password) or (parsed.password is not None and "://" in parsed.password)):
-        return False
-    if not separator:
-        host_port = authority
-    if host_port.startswith("["):
+        decoded = unquote_to_bytes(raw).decode("utf-8", errors="strict")
+    except UnicodeError: raise _error(key, "contains invalid UTF-8") from None
+    if any(ord(char) < 32 or ord(char) == 127 or char in forbidden for char in decoded): raise _error(key, "contains a forbidden decoded delimiter")
+    return decoded
+def _host_port_identity(host_port: str) -> tuple[str, int] | None:
+    bracketed = host_port.startswith("[")
+    if bracketed:
         closing = host_port.find("]")
-        if closing < 0:
-            return False
-        host_text, port_text = host_port[1:closing], host_port[closing + 1:]
-        port_text = port_text[1:] if port_text.startswith(":") else None if not port_text else ""
+        if closing < 0: return None
+        host_text, tail = host_port[1:closing], host_port[closing + 1:]
+        port_text = tail[1:] if tail.startswith(":") else None if not tail else ""
     else:
-        if host_port.count(":") > 1:
-            return False
+        if host_port.count(":") > 1: return None
         host_text, delimiter, port_text = host_port.partition(":")
         port_text = port_text if delimiter else None
-    if not host_text or host_text != host_text.lower() or "%" in host_text or "\\" in host_text or parsed.hostname is None or not _valid_host(parsed.hostname):
-        return False
-    if port_text is None:
-        return True
-    if len(port_text) > 5 or not port_text.isascii() or not port_text.isdecimal() or (len(port_text) > 1 and port_text[0] == "0"):
-        return False
-    return 1 <= int(port_text) <= 65535
+    if not host_text or "%" in host_text or "\\" in host_text: return None
+    try:
+        address = ip_address(host_text)
+        normalized_host = address.compressed
+        if (address.version == 6) != bracketed: return None
+    except ValueError:
+        normalized_host = host_text.lower()
+        if bracketed or len(normalized_host) > 253 or normalized_host.startswith(".") or normalized_host.endswith(".") or not all(_DNS_LABEL.fullmatch(label) for label in normalized_host.split(".")): return None
+    if port_text is None: return normalized_host, 5432
+    if len(port_text) > 5 or not port_text.isascii() or not port_text.isdecimal() or (len(port_text) > 1 and port_text[0] == "0"): return None
+    port = int(port_text)
+    return (normalized_host, port) if 1 <= port <= 65535 else None
 def _validate_url(key: str, value: str, schemes: frozenset[str]) -> None:
     if not value:
         return
@@ -190,20 +174,32 @@ def _validate_url(key: str, value: str, schemes: frozenset[str]) -> None:
         parsed = urlsplit(value)
     except ValueError:
         raise _error(key, "must be a canonical service URL") from None
-    invalid = not value.isascii() or len(value) > 2048 or any(char.isspace() for char in value) or parsed.scheme not in schemes or not any(value.startswith(f"{scheme}://") for scheme in schemes) or not _valid_authority(parsed, allow_userinfo=False) or parsed.query or parsed.fragment or "\\" in parsed.path
+    invalid = not value.isascii() or len(value) > 2048 or any(char.isspace() for char in value) or parsed.scheme not in schemes or not any(value.startswith(f"{scheme}://") for scheme in schemes) or "@" in parsed.netloc or _host_port_identity(parsed.netloc) is None or parsed.netloc != parsed.netloc.lower() or parsed.query or parsed.fragment or "\\" in parsed.path
     if key == "KG_MEMGRAPH_URI":
         invalid = invalid or parsed.path not in {"", "/"}
     if invalid:
         raise _error(key, "must be a canonical service URL")
-def _validate_dsn(key: str, value: str) -> None:
-    if not value:
-        return
+def _postgres_identity(key: str, value: str) -> tuple[str, str, int, str]:
+    if not value.startswith("postgresql://") or not value.isascii() or any(char.isspace() for char in value) or "\\" in value or value.count("@") != 1:
+        raise _error(key, "must be a canonical PostgreSQL URI")
     try:
         parsed = urlsplit(value)
     except ValueError:
         raise _error(key, "must be a canonical PostgreSQL URI") from None
-    if not value.startswith("postgresql://") or not value.isascii() or any(char.isspace() for char in value) or "\\" in value or not _valid_authority(parsed, allow_userinfo=True) or _DB_PATH.fullmatch(parsed.path) is None or parsed.query or parsed.fragment:
+    if parsed.netloc.count("@") != 1 or parsed.query or parsed.fragment or parsed.path.count("/") != 1 or not parsed.path.startswith("/"):
         raise _error(key, "must be a canonical PostgreSQL URI")
+    userinfo, host_port = parsed.netloc.split("@")
+    raw_username, password_separator, raw_password = userinfo.partition(":")
+    username = _decoded_uri_part(key, raw_username, ":/@?#\\")
+    if _ROLE.fullmatch(username) is None:
+        raise _error(key, "must contain a canonical PostgreSQL role")
+    if password_separator:
+        _decoded_uri_part(key, raw_password, "/@?#\\")
+    database = _decoded_uri_part(key, parsed.path[1:], "/@?#\\")
+    host_identity = _host_port_identity(host_port)
+    if host_identity is None or _DB_NAME.fullmatch(database) is None:
+        raise _error(key, "must contain a canonical host and database")
+    return username, host_identity[0], host_identity[1], database
 def _require(settings: HybridRetrievalSettings, keys: str) -> None:
     for required_key in keys.split():
         if not getattr(settings, required_key[3:].lower()):
@@ -223,8 +219,6 @@ def _validate_settings(settings: HybridRetrievalSettings) -> None:
         raise _error("KG_DIRECT_WINNER_MARGIN", "must not exceed minimum similarity")
     if settings.memgraph_projection_enabled:
         _require(settings, "KG_MEMGRAPH_URI KG_MEMGRAPH_DATABASE KG_MEMGRAPH_PROJECTION_USERNAME KG_MEMGRAPH_PROJECTION_PASSWORD KG_PROJECTION_POSTGRES_SOURCE_DSN KG_PROJECTION_POSTGRES_STATE_DSN KG_PROJECTION_IDENTIFIER_HMAC_KEY KG_PROJECTION_IDENTIFIER_KEY_VERSION")
-        if settings.projection_postgres_source_dsn == settings.projection_postgres_state_dsn:
-            raise _error("KG_PROJECTION_POSTGRES_STATE_DSN", "must differ from source DSN")
     if settings.memgraph_traversal_enabled:
         _require(settings, "KG_MEMGRAPH_URI KG_MEMGRAPH_DATABASE KG_MEMGRAPH_QUERY_USERNAME KG_MEMGRAPH_QUERY_PASSWORD")
     if settings.graph_direct_enabled:
@@ -265,8 +259,14 @@ def load_hybrid_retrieval_settings(source: Mapping[str, str]) -> HybridRetrieval
     settings = HybridRetrievalSettings(**values)  # type: ignore[arg-type]
     _validate_url("KG_MEMGRAPH_URI", settings.memgraph_uri, frozenset({"bolt", "bolt+s", "neo4j", "neo4j+s"}))
     _validate_url("KG_QUERY_EXTRACTOR_URL", settings.query_extractor_url, frozenset({"http", "https"}))
-    _validate_dsn("KG_PROJECTION_POSTGRES_SOURCE_DSN", settings.projection_postgres_source_dsn.get_secret_value())
-    _validate_dsn("KG_PROJECTION_POSTGRES_STATE_DSN", settings.projection_postgres_state_dsn.get_secret_value())
+    source_dsn = settings.projection_postgres_source_dsn.get_secret_value(); state_dsn = settings.projection_postgres_state_dsn.get_secret_value()
+    source_identity = _postgres_identity("KG_PROJECTION_POSTGRES_SOURCE_DSN", source_dsn) if source_dsn else None
+    state_identity = _postgres_identity("KG_PROJECTION_POSTGRES_STATE_DSN", state_dsn) if state_dsn else None
+    if source_identity is not None and state_identity is not None:
+        if source_identity == state_identity:
+            raise _error("KG_PROJECTION_POSTGRES_STATE_DSN", "must use a distinct canonical database identity")
+        if source_identity[0] == state_identity[0]:
+            raise _error("KG_PROJECTION_POSTGRES_STATE_DSN", "must use a distinct PostgreSQL role")
     if _TOKEN.fullmatch(settings.projection_queue) is None:
         raise _error("KG_PROJECTION_QUEUE", "must be a bounded token")
     if settings.memgraph_database and _TOKEN.fullmatch(settings.memgraph_database) is None:
