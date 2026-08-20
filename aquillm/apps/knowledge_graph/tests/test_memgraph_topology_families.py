@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from hashlib import sha256
 
 import pytest
@@ -96,6 +97,17 @@ def _load(driver):
 
 def test_memgraph_loader_constructs_graph_from_all_response_families() -> None:
     graph = graph_snapshot()
+    assert _load(Driver(graph)) == graph
+
+
+def test_memgraph_loader_accepts_canonical_literal_utf8_families() -> None:
+    graph = graph_snapshot()
+    provenance = (
+        replace(graph.artifact_provenance[0], ontology_version="ontología-v1"),
+        *graph.artifact_provenance[1:],
+    )
+    graph = replace(graph, artifact_provenance=provenance)
+
     assert _load(Driver(graph)) == graph
 
 

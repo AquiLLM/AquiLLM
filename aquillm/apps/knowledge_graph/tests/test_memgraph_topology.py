@@ -124,7 +124,7 @@ class Driver:
             ]
             return {
                 "snapshot_json": json.dumps(
-                    value, sort_keys=True, separators=(",", ":")
+                    value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
                 )
             }
         if query is TopologyQueryName.RELATION_TOPOLOGY:
@@ -144,7 +144,9 @@ class Driver:
                 ],
             }
         return {
-            "section_json": json.dumps(section, sort_keys=True, separators=(",", ":"))
+            "section_json": json.dumps(
+                section, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
         }
 
     def execute_read(self, *, query, parameters, deadline, max_records):

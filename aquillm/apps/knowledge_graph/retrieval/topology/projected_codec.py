@@ -172,7 +172,10 @@ def _one_json(rows, field: str, expected: frozenset[str]):
     value = json.loads(raw)
     if type(value) is not dict or set(value) != expected:
         raise ValueError("topology response family is partial or malformed")
-    if json.dumps(value, sort_keys=True, separators=(",", ":")) != raw:
+    if (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        != raw
+    ):
         raise ValueError("topology response family is not canonical JSON")
     return value
 
@@ -221,10 +224,10 @@ def compose_projected_snapshot_families(
         key=lambda row: (
             row["discovery_hop"],
             row["kind"],
-            json.dumps(row, sort_keys=True, separators=(",", ":")),
+            json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         ),
     )
-    raw = json.dumps(base, sort_keys=True, separators=(",", ":"))
+    raw = json.dumps(base, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if len(raw.encode("utf-8")) > _MAX_JSON_BYTES:
         raise ValueError("composed topology snapshot exceeds its byte cap")
     return decode_projected_snapshot_json(raw)

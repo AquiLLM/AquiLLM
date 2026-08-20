@@ -5,8 +5,15 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from dataclasses import dataclass
+from hashlib import sha256
 
-from .ppr import PPRAlgorithmConfig
+from .ppr import (
+    EVIDENCE_VERSION,
+    SEED_VERSION,
+    TRANSITION_VERSION,
+    PPRAlgorithmConfig,
+    canonical_algorithm_json,
+)
 from .ppr_kernel import WeightedEdge, run_ppr_kernel
 from .projected_types import (
     ProjectedAuthorizedGraphSnapshotV1,
@@ -97,6 +104,25 @@ def _validate_config(
     )
     if observed != expected:
         raise ValueError("config does not match the projected snapshot caps")
+    algorithm = snapshot.algorithm
+    expected_signature = sha256(
+        b"ppr_projected_v1\0" + canonical_algorithm_json(config)
+    ).hexdigest()
+    observed_algorithm = (
+        algorithm.algorithm_version,
+        algorithm.transition_version,
+        algorithm.evidence_version,
+        algorithm.seed_version,
+        algorithm.algorithm_signature,
+    )
+    if observed_algorithm != (
+        "ppr_projected_v1",
+        TRANSITION_VERSION,
+        EVIDENCE_VERSION,
+        SEED_VERSION,
+        expected_signature,
+    ):
+        raise ValueError("projected algorithm signature does not match config")
 
 
 def _selection_key(group) -> tuple[object, ...]:
