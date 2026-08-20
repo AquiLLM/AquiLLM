@@ -20,9 +20,11 @@ _RELATION_TYPE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,127}")
 _ALGORITHM_TAGS = {"algorithm_version": "ppr_projected_v1", "transition_version": "ppr_transition_v1", "evidence_version": "ppr_evidence_v1", "seed_version": "rrf_seed_v1"}
 
 def _rows(value: object, kind: type, name: str, cap: int, order) -> tuple:
-    if type(value) is not tuple or any(type(row) is not kind for row in value): raise TypeError(f"{name} must contain exact {kind.__name__} values")
+    if type(value) is not tuple: raise TypeError(f"{name} must be an exact tuple")
+    if len(value) > cap: raise ValueError(f"{name} exceeds its cap")
+    if any(type(row) is not kind for row in value): raise TypeError(f"{name} must contain exact {kind.__name__} values")
     keys = tuple(order(row) for row in value)
-    if len(value) > cap or len(set(keys)) != len(keys): raise ValueError(f"{name} exceeds its cap or contains duplicates")
+    if len(set(keys)) != len(keys): raise ValueError(f"{name} contains duplicates")
     if keys != tuple(sorted(keys)): raise ValueError(f"{name} must be canonically sorted")
     return value
 
@@ -51,7 +53,7 @@ class _Record:
             elif item.name in {"confidence", "raw_weight"}:
                 if type(value) is not float or not isfinite(value): raise TypeError(f"{item.name} must be a finite built-in float")
                 if item.name == "confidence" and not 0.0 <= value <= 1.0: raise ValueError("confidence must be in [0, 1]")
-                if item.name == "raw_weight" and value <= 0.0: raise ValueError("raw_weight must be positive")
+                if item.name == "raw_weight" and not 0.0 < value <= 2.0: raise ValueError("raw_weight must be in (0, 2]")
             elif type(value) is str: _token(value, item.name)
             elif item.name not in _NESTED: raise TypeError(f"{item.name} has an unsupported exact type")
         _SPECIAL.get(type(self), _noop)(self)
@@ -169,6 +171,8 @@ def _validate_closure(s) -> None:
     if len(artifacts) != len(s.artifact_provenance) or len(collection_rows) != len(collections) or len(document_rows) != len(documents) or {row.scope_key for row in collection_rows} != collections or {row.scope_key for row in document_rows} != documents: raise ValueError("artifact provenance scope closure is broken")
     if any(row.collection_key not in collections or (row in collection_rows and row.scope_key != row.collection_key) for row in s.artifact_provenance): raise ValueError("artifact provenance collection closure is broken")
     physical_rows = [row for row in s.audit_rows if type(row) is ProjectedPhysicalRelationAuditV1]; physical = {row.relation_key: row for row in physical_rows}
+    physical_semantics = [(row.artifact_key, row.source_entity_key, row.relation_type, row.target_entity_key) for row in physical_rows]
+    if len(set(physical_semantics)) != len(physical_semantics): raise ValueError("physical semantic tuple is duplicated")
     if len(physical) != len(physical_rows) or any(row.source_entity_key not in members or row.target_entity_key not in members or row.artifact_key not in collection_artifacts for row in physical.values()): raise ValueError("physical relation/member closure is broken")
     if any(row.discovery_hop != min(identity_hops[members[row.source_entity_key]], identity_hops[members[row.target_entity_key]]) + 1 for row in physical.values()): raise ValueError("physical relation discovery hop is incoherent")
     evidence_audits = [row for row in s.audit_rows if type(row) is ProjectedRelationEvidenceAuditV1]; signature_rows = [row.signature for row in evidence_audits]; signatures = {row.evidence_key: row for row in signature_rows}
