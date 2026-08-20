@@ -1,21 +1,25 @@
 from dataclasses import replace
+from datetime import UTC, datetime
 from hashlib import sha256
 
 import pytest
 
 from apps.knowledge_graph.projection.records import (
-    AutomaticCanonicalMembershipV1,
-    CollectionGraphProjectionBundleV1,
     PrivateProjectionChunkReferenceV1,
     ProjectedEntityV1,
     ProjectionCountsV1,
-    ProjectionGenerationMarkerV1,
+    ProjectionFailureCode,
+    ProjectionFailureStateV1,
+    ProjectionGenerationManifestV1,
+    ProjectionLeaseV1,
+    ProjectionLifecycleState,
 )
 from apps.knowledge_graph.projection.serialization import (
     canonical_projection_bytes,
     private_chunk_mapping_checksum,
     projection_checksum,
 )
+from apps.knowledge_graph.tests.test_projection_records import _bundle
 
 GENERATION = "0" * 64
 COLLECTION = "1" * 64
@@ -23,8 +27,8 @@ ARTIFACT = "2" * 64
 ENTITY_A = "3" * 64
 ENTITY_B = "4" * 64
 CLUSTER = "a" * 64
-DIGEST = "f" * 64
 DOCUMENT_UUID = "12345678-1234-5678-9234-567812345678"
+ZERO_COUNTS = ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0)
 
 
 def _entity(key: str, utility: float) -> ProjectedEntityV1:
@@ -37,113 +41,6 @@ def _entity(key: str, utility: float) -> ProjectedEntityV1:
         cluster_key=CLUSTER,
         retrieval_utility=utility,
     )
-
-
-def _empty_bundle() -> CollectionGraphProjectionBundleV1:
-    return CollectionGraphProjectionBundleV1(
-        generation=ProjectionGenerationMarkerV1(
-            generation_key=GENERATION,
-            collection_key=COLLECTION,
-            artifact_key=ARTIFACT,
-            schema_version="schema-v1",
-            projection_version="projection-v1",
-            identifier_key_version="key-v1",
-            membership_epoch=0,
-            membership_checksum=DIGEST,
-        ),
-        entities=(),
-        automatic_memberships=(),
-        documents=(),
-        chunks=(),
-        relations=(),
-        evidence=(),
-        artifact_provenance=(),
-        counts=ProjectionCountsV1(
-            entity_count=0,
-            automatic_membership_count=0,
-            document_count=0,
-            chunk_count=0,
-            relation_count=0,
-            evidence_count=0,
-            artifact_provenance_count=0,
-        ),
-    )
-
-
-def test_literal_entity_array_uses_sorted_keys_utf8_and_float_hex() -> None:
-    records = (_entity(ENTITY_A, 0.5), _entity(ENTITY_B, 0.25))
-    expected = (
-        '[{"artifact_key":"'
-        + ARTIFACT
-        + '","cluster_key":"'
-        + CLUSTER
-        + '","collection_key":"'
-        + COLLECTION
-        + '","entity_key":"'
-        + ENTITY_A
-        + '","generation_key":"'
-        + GENERATION
-        + '","ontology_type":"person","retrieval_utility":"0x1.0000000000000p-1"},'
-        + '{"artifact_key":"'
-        + ARTIFACT
-        + '","cluster_key":"'
-        + CLUSTER
-        + '","collection_key":"'
-        + COLLECTION
-        + '","entity_key":"'
-        + ENTITY_B
-        + '","generation_key":"'
-        + GENERATION
-        + '","ontology_type":"person","retrieval_utility":"0x1.0000000000000p-2"}]'
-    ).encode()
-    assert canonical_projection_bytes(records) == expected
-    assert projection_checksum(records) == (
-        "e4969a0ca5bd06de66b4b703ded731d20abbca108d6b45f6f512e25ea62e1bb6"
-    )
-
-
-def test_literal_null_membership_is_explicit() -> None:
-    record = AutomaticCanonicalMembershipV1(
-        entity_key=ENTITY_A,
-        automatic_membership_key=None,
-        decision_checksum=DIGEST,
-        resolver_version="résolver-v1",
-        resolution_config_checksum=DIGEST,
-    )
-    expected = (
-        '{"automatic_membership_key":null,"decision_checksum":"'
-        + DIGEST
-        + '","entity_key":"'
-        + ENTITY_A
-        + '","resolution_config_checksum":"'
-        + DIGEST
-        + '","resolver_version":"résolver-v1"}'
-    ).encode()
-    assert canonical_projection_bytes(record) == expected
-
-
-def test_literal_empty_bundle_and_checksum_pin_versions_counts_and_arrays() -> None:
-    expected = (
-        '{"artifact_provenance":[],"automatic_memberships":[],"chunks":[],'
-        '"counts":{"artifact_provenance_count":0,"automatic_membership_count":0,'
-        '"chunk_count":0,"document_count":0,"entity_count":0,"evidence_count":0,'
-        '"relation_count":0},"documents":[],"entities":[],"evidence":[],'
-        '"generation":{"artifact_key":"'
-        + ARTIFACT
-        + '","collection_key":"'
-        + COLLECTION
-        + '","generation_key":"'
-        + GENERATION
-        + '","identifier_key_version":"key-v1","membership_checksum":"'
-        + DIGEST
-        + '","membership_epoch":0,"projection_version":"projection-v1",'
-        '"schema_version":"schema-v1"},"relations":[]}'
-    ).encode()
-    assert canonical_projection_bytes(_empty_bundle()) == expected
-    assert projection_checksum(_empty_bundle()) == (
-        "4b5121f7b5c7e9a667aa03eb84966212554fa6892e6acc6b7dddfb84af1ea325"
-    )
-    assert sha256(expected + b"x").hexdigest() != projection_checksum(_empty_bundle())
 
 
 def test_private_mapping_literal_checksum_and_order_are_separate() -> None:
@@ -167,6 +64,140 @@ def test_private_mapping_literal_checksum_and_order_are_separate() -> None:
     with pytest.raises(ValueError, match="unique"):
         private_chunk_mapping_checksum((first, first))
 
+    conflicts = (
+        replace(first, integer_chunk_pk=20),
+        replace(second, integer_chunk_pk=19),
+        replace(second, document_uuid=DOCUMENT_UUID, chunk_number=2),
+    )
+    for conflict in conflicts:
+        rows = tuple(
+            sorted(
+                (first, conflict),
+                key=lambda row: (
+                    row.projection_chunk_key,
+                    row.integer_chunk_pk,
+                    row.document_uuid,
+                    row.chunk_number,
+                ),
+            )
+        )
+        with pytest.raises(ValueError, match="unique"):
+            private_chunk_mapping_checksum(rows)
+
+
+def test_literal_manifest_lifecycle_lease_failure_and_full_bundle_vectors() -> None:
+    manifest = ProjectionGenerationManifestV1(
+        generation_key=GENERATION,
+        schema_version="schema-v1",
+        projection_version="projection-v1",
+        identifier_key_version="key-v1",
+        graph_checksum="a" * 64,
+        snapshot_checksum="b" * 64,
+        private_mapping_checksum="c" * 64,
+        counts=ZERO_COUNTS,
+        state=ProjectionLifecycleState.READY,
+    )
+    lease = ProjectionLeaseV1(
+        projection_id=DOCUMENT_UUID,
+        owner="worker-a",
+        expires_at=datetime(2026, 8, 20, 12, tzinfo=UTC),
+        attempt_count=2,
+    )
+    failure = ProjectionFailureStateV1(
+        state=ProjectionLifecycleState.FAILED,
+        failure_code=ProjectionFailureCode.CHECKSUM_MISMATCH,
+        attempt_count=2,
+    )
+    expected_manifest = (
+        b'{"counts":{"artifact_provenance_count":0,"automatic_membership_count":0,"chu'
+        b'nk_count":0,"document_count":0,"entity_count":0,"evidence_count":0,"relation'
+        b'_count":0},"generation_key":"<GEN>","graph_checksum":"<GRAPH>","identifier_k'
+        b'ey_version":"key-v1","private_mapping_checksum":"<PRIVATE>","projection_vers'
+        b'ion":"projection-v1","schema_version":"schema-v1","snapshot_checksum":"<SNAP'
+        b'>","state":"ready"}'
+    )
+    replacements = (("GEN", "0"), ("GRAPH", "a"), ("SNAP", "b"), ("PRIVATE", "c"))
+    for marker, character in replacements:
+        expected_manifest = expected_manifest.replace(
+            f"<{marker}>".encode(), (character * 64).encode()
+        )
+    expected_bundle = (
+        b'{"artifact_provenance":[{"artifact_key":"<ART>","assembly_config_checksum":"'
+        b'<F>","assembly_version":"assembly-v1","build_generation":3,"build_key":"<BUI'
+        b'LD>","collection_key":"<COL>","embedding_model_signature":"embed-v1","evalua'
+        b'tion_only":false,"extractor_version":"extractor-v1","filter_policy_checksum"'
+        b':"<F>","filter_policy_version":"filter-v1","ontology_checksum":"<F>","ontolo'
+        b'gy_version":"ontology-v1","orchestration_version":4,"rebuild_request_key":nu'
+        b'll,"resolution_config_checksum":"<F>","resolver_version":"resolver-v1","scop'
+        b'e_key":"<COL>","scope_type":"collection","source_hash":"<F>"},{"artifact_key'
+        b'":"<F>","assembly_config_checksum":"<F>","assembly_version":"assembly-v1","b'
+        b'uild_generation":3,"build_key":"<BUILD>","collection_key":"<COL>","embedding'
+        b'_model_signature":"embed-v1","evaluation_only":false,"extractor_version":"ex'
+        b'tractor-v1","filter_policy_checksum":"<F>","filter_policy_version":"filter-v'
+        b'1","ontology_checksum":"<F>","ontology_version":"ontology-v1","orchestration'
+        b'_version":4,"rebuild_request_key":null,"resolution_config_checksum":"<F>","r'
+        b'esolver_version":"resolver-v1","scope_key":"<DOC>","scope_type":"document","'
+        b'source_hash":"<F>"}],"automatic_memberships":[{"automatic_membership_key":nu'
+        b'll,"decision_checksum":"<F>","entity_key":"<EA>","resolution_config_checksum'
+        b'":"<F>","resolver_version":"resolver-v1"},{"automatic_membership_key":"<AUTO'
+        b'>","decision_checksum":"<F>","entity_key":"<EB>","resolution_config_checksum'
+        b'":"<F>","resolver_version":"resolver-v1"}],"chunks":[{"chunk_key":"<CHUNK>",'
+        b'"chunk_number":2,"document_key":"<DOC>"}],"counts":{"artifact_provenance_cou'
+        b'nt":2,"automatic_membership_count":2,"chunk_count":1,"document_count":1,"ent'
+        b'ity_count":2,"evidence_count":1,"relation_count":1},"documents":[{"document_'
+        b'key":"<DOC>","generation_key":"<GEN>"}],"entities":[{"artifact_key":"<ART>",'
+        b'"cluster_key":"<AUTO>","collection_key":"<COL>","entity_key":"<EA>","generat'
+        b'ion_key":"<GEN>","ontology_type":"person","retrieval_utility":"0x1.000000000'
+        b'0000p-1"},{"artifact_key":"<ART>","cluster_key":"<AUTO>","collection_key":"<'
+        b'COL>","entity_key":"<EB>","generation_key":"<GEN>","ontology_type":"person",'
+        b'"retrieval_utility":"0x1.0000000000000p-2"}],"evidence":[{"artifact_key":"<F'
+        b'>","assembly_config_checksum":"<F>","chunk_key":"<CHUNK>","chunk_number":2,"'
+        b'confidence":"0x1.8000000000000p-1","document_key":"<DOC>","evidence_key":"<E'
+        b'VID>","head_mapping_key":"<EA>","head_mention_key":"<MENT>","ontology_checks'
+        b'um":"<F>","orientation":"head_to_tail","provenance_key":"<PROV>","relation_k'
+        b'ey":"<REL>","relation_mention_key":"<MENT>","relation_type":"knows","semanti'
+        b'c_signature":"<F>","source_document_key":"<DOC>","tail_mapping_key":"<EB>","'
+        b'tail_mention_key":"<EVID>"}],"generation":{"artifact_key":"<ART>","collectio'
+        b'n_key":"<COL>","generation_key":"<GEN>","identifier_key_version":"key-v1","m'
+        b'embership_checksum":"<F>","membership_epoch":7,"projection_version":"project'
+        b'ion-v1","schema_version":"memgraph-schema-v1"},"relations":[{"artifact_key":'
+        b'"<ART>","relation_key":"<REL>","relation_type":"knows","source_entity_key":"'
+        b'<EA>","target_entity_key":"<EB>"}]}'
+    )
+    markers = (
+        "GEN COL ART EA EB DOC CHUNK REL EVID MENT PROV AUTO SCOPE BUILD REBUILD F"
+    ).split()
+    for marker, character in zip(markers, "0123456789abcdef", strict=True):
+        expected_bundle = expected_bundle.replace(
+            f"<{marker}>".encode(), (character * 64).encode()
+        )
+    assert canonical_projection_bytes(manifest) == expected_manifest
+    assert canonical_projection_bytes(lease) == (
+        b'{"attempt_count":2,"expires_at":"2026-08-20T12:00:00Z","owner":"worker-a","p'
+        b'rojection_id":"12345678-1234-5678-9234-567812345678"}'
+    )
+    assert canonical_projection_bytes(failure) == (
+        b'{"attempt_count":2,"failure_code":"checksum_mismatch","state":"failed"}'
+    )
+    assert canonical_projection_bytes(_bundle()) == expected_bundle
+    assert tuple(map(projection_checksum, (manifest, lease, failure, _bundle()))) == (
+        "fb2726d5a09eace760030057ae523923ff0fb355e64ce4fbc90330c75a40a367",
+        "dbe87cb726e6db021d018061ddf1eee20f192c7fcf13b72242aabc06f2a8229d",
+        "63a322de2d531a1ed7ab3dd19baa7cb907fa1eebf969fc93a19d8ce7b81bc7db",
+        "57f1b5b280554d3c94b1ef4caf258633516c6c25bd420d7add66d9b5ec2376a2",
+    )
+    assert " ".join(state.value for state in ProjectionLifecycleState) == (
+        "pending building ready failed superseded"
+    )
+    assert " ".join(code.value for code in ProjectionFailureCode) == (
+        "source_changed lease_lost graph_unavailable write_failed validation_failed "
+        "checksum_mismatch timeout internal_error"
+    )
+    for record in (lease, failure):
+        for attempt in (True, 32768):
+            with pytest.raises((TypeError, ValueError)):
+                replace(record, attempt_count=attempt)
+
 
 def test_private_integer_pk_cannot_enter_provider_neutral_bytes() -> None:
     private = PrivateProjectionChunkReferenceV1(
@@ -179,6 +210,56 @@ def test_private_integer_pk_cannot_enter_provider_neutral_bytes() -> None:
         canonical_projection_bytes(private)
     with pytest.raises(TypeError):
         canonical_projection_bytes({"integer_chunk_pk": 19})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("orientation", "forward"),
+        ("orientation", type("_StrSubclass", (str,), {})("head_to_tail")),
+        ("relation_type", ""),
+        ("relation_type", type("_StrSubclass", (str,), {})("knows")),
+    ],
+)
+def test_evidence_orientation_and_relation_type_are_strict(field, value) -> None:
+    with pytest.raises((TypeError, ValueError), match=field):
+        replace(_bundle().evidence[0], **{field: value})
+
+
+@pytest.mark.parametrize(
+    ("factory", "error"),
+    [
+        (lambda: replace(_bundle().counts, entity_count=True), TypeError),
+        (lambda: replace(_bundle().counts, entity_count=-1), ValueError),
+        (lambda: replace(_bundle().chunks[0], chunk_number=-1), ValueError),
+        (lambda: replace(_bundle().entities[0], entity_key="A" * 64), ValueError),
+        (lambda: replace(_bundle().entities[0], cluster_key="cluster-a"), ValueError),
+        (lambda: replace(_bundle().generation, schema_version=""), ValueError),
+        (lambda: replace(_bundle().entities[0], entity_key=None), TypeError),
+        (
+            lambda: PrivateProjectionChunkReferenceV1(
+                "5" * 64, 1, "AAAAAAAA-1234-5678-9234-567812345678", 2
+            ),
+            ValueError,
+        ),
+        (
+            lambda: replace(
+                _bundle().artifact_provenance[0],
+                scope_type=type("_StringSubclass", (str,), {})("collection"),
+            ),
+            TypeError,
+        ),
+    ],
+)
+def test_records_reject_exact_type_bounds_digest_token_and_uuid(factory, error):
+    with pytest.raises(error):
+        factory()
+
+
+@pytest.mark.parametrize(("integer_pk", "error"), [(True, TypeError), (0, ValueError)])
+def test_private_reference_integer_pk_is_exact_and_positive(integer_pk, error) -> None:
+    with pytest.raises(error):
+        PrivateProjectionChunkReferenceV1("5" * 64, integer_pk, DOCUMENT_UUID, 2)
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])

@@ -1,20 +1,50 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from enum import StrEnum
 
 from .serialization import (
     _count,
+    _finite_float,
     _key,
     _token,
     _uuid,
     _validate_bundle,
-    _ValidatedRecord,
 )
 
 _MAX_PRIVATE_PK = 2**63 - 1
 _MAX_ATTEMPTS = 32767
+
+
+class _ValidatedRecord:
+    __slots__ = ()
+
+    def __post_init__(self) -> None:
+        optional = {"automatic_membership_key", "rebuild_request_key"}
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if value is None:
+                if field.name not in optional:
+                    raise TypeError(f"{field.name} must not be null")
+                continue
+            if field.name.endswith(("_key", "_checksum")) or field.name in {
+                "source_hash",
+                "semantic_signature",
+            }:
+                _key(value, field.name)
+            elif type(value) is str:
+                _token(value, field.name)
+            elif type(value) is int:
+                _count(value, field.name)
+            elif type(value) is float:
+                _finite_float(value, field.name)
+            elif (type(value) is bool and field.name == "evaluation_only") or (
+                field.name in {"counts", "state"}
+            ):
+                continue
+            else:
+                raise TypeError(f"{field.name} has an unsupported exact type")
 
 
 class ProjectionLifecycleState(StrEnum):
@@ -47,12 +77,6 @@ class ProjectionGenerationMarkerV1(_ValidatedRecord):
     membership_epoch: int
     membership_checksum: str
 
-    _key_fields = (
-        "generation_key collection_key artifact_key membership_checksum".split()
-    )
-    _token_fields = "schema_version projection_version identifier_key_version".split()
-    _count_fields = ("membership_epoch",)
-
 
 @dataclass(frozen=True, slots=True)
 class ProjectedEntityV1(_ValidatedRecord):
@@ -64,12 +88,6 @@ class ProjectedEntityV1(_ValidatedRecord):
     cluster_key: str
     retrieval_utility: float
 
-    _key_fields = (
-        "entity_key generation_key artifact_key collection_key cluster_key"
-    ).split()
-    _token_fields = ("ontology_type",)
-    _float_fields = ("retrieval_utility",)
-
 
 @dataclass(frozen=True, slots=True)
 class AutomaticCanonicalMembershipV1(_ValidatedRecord):
@@ -79,21 +97,11 @@ class AutomaticCanonicalMembershipV1(_ValidatedRecord):
     resolver_version: str
     resolution_config_checksum: str
 
-    _key_fields = "entity_key decision_checksum resolution_config_checksum".split()
-    _token_fields = ("resolver_version",)
-
-    def __post_init__(self) -> None:
-        _ValidatedRecord.__post_init__(self)
-        if self.automatic_membership_key is not None:
-            _key(self.automatic_membership_key, "automatic_membership_key")
-
 
 @dataclass(frozen=True, slots=True)
 class ProjectedDocumentMembershipV1(_ValidatedRecord):
     document_key: str
     generation_key: str
-
-    _key_fields = "document_key generation_key".split()
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,9 +109,6 @@ class ProjectedChunkMembershipV1(_ValidatedRecord):
     chunk_key: str
     document_key: str
     chunk_number: int
-
-    _key_fields = "chunk_key document_key".split()
-    _count_fields = ("chunk_number",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,11 +118,6 @@ class ProjectedPhysicalRelationV1(_ValidatedRecord):
     source_entity_key: str
     relation_type: str
     target_entity_key: str
-
-    _key_fields = (
-        "relation_key artifact_key source_entity_key target_entity_key".split()
-    )
-    _token_fields = ("relation_type",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,26 +129,23 @@ class ProjectedRelationEvidenceV1(_ValidatedRecord):
     document_key: str
     chunk_number: int
     confidence: float
+    artifact_key: str
     source_document_key: str
     head_mention_key: str
     tail_mention_key: str
     head_mapping_key: str
     tail_mapping_key: str
     orientation: str
+    relation_type: str
     ontology_checksum: str
     assembly_config_checksum: str
     provenance_key: str
     semantic_signature: str
 
-    _key_fields = (
-        "evidence_key relation_key relation_mention_key chunk_key document_key "
-        "source_document_key head_mention_key tail_mention_key head_mapping_key "
-        "tail_mapping_key ontology_checksum assembly_config_checksum provenance_key "
-        "semantic_signature"
-    ).split()
-    _token_fields = ("orientation",)
-    _count_fields = ("chunk_number",)
-    _float_fields = ("confidence",)
+    def __post_init__(self) -> None:
+        _ValidatedRecord.__post_init__(self)
+        if self.orientation not in {"head_to_tail", "tail_to_head"}:
+            raise ValueError("orientation is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,17 +171,6 @@ class ProjectedArtifactProvenanceV1(_ValidatedRecord):
     assembly_version: str
     assembly_config_checksum: str
 
-    _key_fields = (
-        "artifact_key scope_key collection_key build_key source_hash "
-        "ontology_checksum resolution_config_checksum filter_policy_checksum "
-        "assembly_config_checksum"
-    ).split()
-    _token_fields = (
-        "scope_type ontology_version extractor_version resolver_version "
-        "filter_policy_version embedding_model_signature assembly_version"
-    ).split()
-    _count_fields = ("build_generation", "orchestration_version")
-
     def __post_init__(self) -> None:
         _ValidatedRecord.__post_init__(self)
         if self.rebuild_request_key is not None:
@@ -205,11 +191,6 @@ class ProjectionCountsV1(_ValidatedRecord):
     evidence_count: int
     artifact_provenance_count: int
 
-    _count_fields = (
-        "entity_count automatic_membership_count document_count chunk_count "
-        "relation_count evidence_count artifact_provenance_count"
-    ).split()
-
 
 @dataclass(frozen=True, slots=True)
 class ProjectionGenerationManifestV1(_ValidatedRecord):
@@ -222,11 +203,6 @@ class ProjectionGenerationManifestV1(_ValidatedRecord):
     private_mapping_checksum: str
     counts: ProjectionCountsV1
     state: ProjectionLifecycleState
-
-    _key_fields = (
-        "generation_key graph_checksum snapshot_checksum private_mapping_checksum"
-    ).split()
-    _token_fields = "schema_version projection_version identifier_key_version".split()
 
     def __post_init__(self) -> None:
         _ValidatedRecord.__post_init__(self)
