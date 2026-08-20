@@ -6,19 +6,19 @@ from typing import Literal, final
 
 @final
 class ProjectedEvidenceOrientationV1(StrEnum):
-    HEAD_TO_TAIL: Literal["head_to_tail"]
-    TAIL_TO_HEAD: Literal["tail_to_head"]
+    HEAD_TO_TAIL = "head_to_tail"
+    TAIL_TO_HEAD = "tail_to_head"
 
 @final
 class ProjectedRetrievalDirectionV1(StrEnum):
-    FORWARD: Literal["forward"]
-    REVERSE_DIRECTED: Literal["reverse_directed"]
-    UNDIRECTED: Literal["undirected"]
+    FORWARD = "forward"
+    REVERSE_DIRECTED = "reverse_directed"
+    UNDIRECTED = "undirected"
 
 @final
 class ProjectedScopeTypeV1(StrEnum):
-    COLLECTION: Literal["collection"]
-    DOCUMENT: Literal["document"]
+    COLLECTION = "collection"
+    DOCUMENT = "document"
 
 @final
 @dataclass(frozen=True, slots=True)
