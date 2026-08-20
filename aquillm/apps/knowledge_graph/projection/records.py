@@ -184,6 +184,8 @@ class ProjectedArtifactProvenanceV1(_ValidatedRecord):
             raise ValueError("scope_type is invalid")
         if self.scope_type == "collection" and not self.embedding_model_signature:
             raise ValueError("collection embedding_model_signature must be nonempty")
+        if self.scope_type == "document" and self.embedding_model_signature:
+            raise ValueError("document embedding_model_signature must be empty")
         if type(self.evaluation_only) is not bool:
             raise TypeError("evaluation_only must be a bool")
 

@@ -258,6 +258,8 @@ def test_bundle_rejects_shared_provenance_identity_drift(changes) -> None:
 def test_document_provenance_allows_empty_embedding_signature() -> None:
     document = _bundle().artifact_provenance[1]
     assert document.embedding_model_signature == ""
+    with pytest.raises(ValueError, match="document embedding"):
+        replace(document, embedding_model_signature="embed-v1")
     with pytest.raises(ValueError, match="collection embedding"):
         replace(_bundle().artifact_provenance[0], embedding_model_signature="")
     with pytest.raises(TypeError, match="built-in str"):
