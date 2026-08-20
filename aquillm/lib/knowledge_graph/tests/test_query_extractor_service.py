@@ -1,7 +1,11 @@
+# ruff: noqa: E501
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
+import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,6 +62,16 @@ class Backend:
         )
 
 
+class SlowBackend(Backend):
+    def __init__(self, delay: float) -> None:
+        self.delay = delay
+
+    def extract_batch(self, texts, *, ontology):
+        delay = self.delay
+        time.sleep(delay)
+        return super().extract_batch(texts, ontology=ontology)
+
+
 async def _call(
     *,
     path: str,
@@ -94,6 +108,7 @@ def _request(query: str | None = None) -> bytes:
     )
 
 
+# fmt: off
 @pytest.fixture(autouse=True)
 def runtime(monkeypatch):
     value = service.QueryExtractorRuntime(
@@ -105,6 +120,16 @@ def runtime(monkeypatch):
         service, "load_query_extractor_settings", lambda _environment: value.settings
     )
     monkeypatch.setattr(service, "_get_runtime", lambda *_args: value)
+
+    monkeypatch.setattr(service, "_inference_slots", asyncio.BoundedSemaphore(1), raising=False)
+
+
+def _use_backend(monkeypatch, backend, *, timeout_ms: int = 75) -> None:
+    settings = replace(_settings(), timeout_ms=timeout_ms)
+    value = service.QueryExtractorRuntime(settings, SimpleNamespace(checksum=DIGEST, entity_types={"model": object()}), backend)
+    monkeypatch.setattr(service, "load_query_extractor_settings", lambda _environment: settings)
+    monkeypatch.setattr(service, "_get_runtime", lambda *_args: value)
+# fmt: on
 
 
 @pytest.mark.asyncio
@@ -213,6 +238,42 @@ def test_launcher_actively_disables_uvicorn_access_logging(monkeypatch) -> None:
             {"access_log": False},
         )
     ]
+
+
+# fmt: off
+@pytest.mark.asyncio
+async def test_inference_runs_off_loop_and_rejects_concurrent_overload(monkeypatch) -> None:
+    _use_backend(monkeypatch, SlowBackend(0.05))
+    extraction = asyncio.create_task(_call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token"))
+    await asyncio.sleep(0.005)
+    assert not extraction.done()
+    health = await asyncio.wait_for(_call(path="/healthz", method="GET"), timeout=0.02)
+    overloaded = await _call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token")
+    assert health[0]["status"] == 200
+    assert overloaded[0]["status"] == 503
+    assert (await extraction)[0]["status"] == 200
+
+
+@pytest.mark.asyncio
+async def test_timeout_and_cancellation_hold_slot_until_worker_finishes(monkeypatch) -> None:
+    backend = SlowBackend(0.05)
+    _use_backend(monkeypatch, backend, timeout_ms=10)
+    timed_out = await _call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token")
+    assert timed_out[0]["status"] == 503
+    assert timed_out[1]["body"] == b'{"reason":"extractor_timeout"}'
+    assert (await _call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token"))[0]["status"] == 503
+    await asyncio.sleep(0.05)
+    backend.delay = 0.05
+    cancelled = asyncio.create_task(_call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token"))
+    await asyncio.sleep(0.005)
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    assert (await _call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token"))[0]["status"] == 503
+    await asyncio.sleep(0.05)
+    backend.delay = 0.0
+    assert (await _call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token"))[0]["status"] == 200
+# fmt: on
 
 
 def test_importing_service_does_not_import_ml_runtime() -> None:

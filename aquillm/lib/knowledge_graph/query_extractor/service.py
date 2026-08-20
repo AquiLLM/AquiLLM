@@ -1,5 +1,7 @@
+# ruff: noqa: E501,E701,E702
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
@@ -22,42 +24,34 @@ from .contracts import (
 )
 
 _JSON_HEADERS = [(b"content-type", b"application/json")]
+_inference_slots = asyncio.BoundedSemaphore(1)
 
 
+class _InferenceOverloaded(RuntimeError): pass  # fmt: skip
+
+
+# fmt: off
 @dataclass(frozen=True, slots=True)
-class QueryExtractorRuntime:
-    settings: QueryExtractorSettings
-    ontology: object
-    backend: object
-
-
+class QueryExtractorRuntime: settings: QueryExtractorSettings; ontology: object; backend: object
 _runtime: QueryExtractorRuntime | None = None
-
-
 @dataclass(frozen=True, slots=True)
-class _ActivatedOntology:
-    version: str
-    entity_types: object
-    relations: object
-    checksum: str
+class _ActivatedOntology: version: str; entity_types: object; relations: object; checksum: str
+# fmt: on
 
 
+# fmt: off
 def _records(value: object, name: str) -> list[dict[str, object]]:
-    if type(value) is not list or not value:
-        raise RuntimeError(f"activated ontology {name} must be a nonempty list")
+    if type(value) is not list or not value: raise RuntimeError(f"activated ontology {name} must be a nonempty list")
     records: list[dict[str, object]] = []
     for item in value:
-        if type(item) is not dict or type(item.get("name")) is not str:
-            raise RuntimeError(f"activated ontology {name} is invalid")
+        if type(item) is not dict or type(item.get("name")) is not str: raise RuntimeError(f"activated ontology {name} is invalid")
         records.append(item)
-    if len({row["name"] for row in records}) != len(records):
-        raise RuntimeError(f"activated ontology {name} contains duplicate names")
+    if len({row["name"] for row in records}) != len(records): raise RuntimeError(f"activated ontology {name} contains duplicate names")
     return records
+# fmt: on
 
 
 def _load_activated_ontology(path: Path) -> _ActivatedOntology:
-    """Load the immutable sidecar copy of the activated ontology YAML."""
-
     try:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as error:
@@ -72,38 +66,22 @@ def _load_activated_ontology(path: Path) -> _ActivatedOntology:
         raise RuntimeError("activated ontology version is invalid")
     entities = _records(document["entity_types"], "entity_types")
     relations = _records(document["relations"], "relations")
-    entity_content = []
+    # fmt: off
+    entity_content: list[dict[str, object]] = []
     for row in sorted(entities, key=lambda item: item["name"]):
-        entity_content.append(
-            {
-                "name": row["name"],
-                "description": row["description"],
-                "aliases": sorted(row["aliases"]),  # type: ignore[arg-type]
-                "default_retrieval_weight": float(
-                    row["default_retrieval_weight"]  # type: ignore[arg-type]
-                ),
-                "default_suppression_policy": row["default_suppression_policy"],
-                "default_suppression_threshold": float(
-                    row["default_suppression_threshold"]  # type: ignore[arg-type]
-                ),
-                "extension_enabled": row.get("extension_enabled", False),
-            }
-        )
-    relation_content = []
+        item = {key: row[key] for key in ("name", "description", "default_suppression_policy")}
+        item["aliases"] = sorted(row["aliases"])  # type: ignore[arg-type]
+        item["default_retrieval_weight"] = float(row["default_retrieval_weight"])  # type: ignore[arg-type]
+        item["default_suppression_threshold"] = float(row["default_suppression_threshold"])  # type: ignore[arg-type]
+        item["extension_enabled"] = row.get("extension_enabled", False)
+        entity_content.append(item)
+    relation_content: list[dict[str, object]] = []
     for row in sorted(relations, key=lambda item: item["name"]):
-        relation_content.append(
-            {
-                "name": row["name"],
-                "description": row["description"],
-                "direction": row["direction"],
-                "allowed_head_types": sorted(  # type: ignore[arg-type]
-                    row["allowed_head_types"]
-                ),
-                "allowed_tail_types": sorted(  # type: ignore[arg-type]
-                    row["allowed_tail_types"]
-                ),
-            }
-        )
+        item = {key: row[key] for key in ("name", "description", "direction")}
+        item["allowed_head_types"] = sorted(row["allowed_head_types"])  # type: ignore[arg-type]
+        item["allowed_tail_types"] = sorted(row["allowed_tail_types"])  # type: ignore[arg-type]
+        relation_content.append(item)
+    # fmt: on
     content = {
         "version": document["version"],
         "entity_types": entity_content,
@@ -214,6 +192,35 @@ def _canonical_spans(entities: object, maximum: int) -> tuple[QueryEntitySpanV1,
     return tuple(selected)
 
 
+# fmt: off
+def _release_worker(task: asyncio.Task[object], slots: asyncio.BoundedSemaphore) -> None:
+    try:
+        task.exception()
+    except (asyncio.CancelledError, Exception):
+        pass
+    slots.release()
+
+
+async def _extract_batch(runtime: QueryExtractorRuntime, query: str, timeout_ms: int):
+    slots = _inference_slots
+    if slots.locked():
+        raise _InferenceOverloaded
+    await slots.acquire()
+    worker = asyncio.create_task(asyncio.to_thread(runtime.backend.extract_batch, (query,), ontology=runtime.ontology))  # type: ignore[union-attr]
+    deferred_release = False
+    try:
+        async with asyncio.timeout(timeout_ms / 1000.0):
+            return await asyncio.shield(worker)
+    except (TimeoutError, asyncio.CancelledError):
+        worker.add_done_callback(lambda task: _release_worker(task, slots))
+        deferred_release = True
+        raise
+    finally:
+        if not deferred_release:
+            slots.release()
+# fmt: on
+
+
 async def healthz(scope, receive, send) -> None:
     del scope, receive
     await _respond(send, 200, b'{"status":"ok"}')
@@ -249,27 +256,22 @@ async def extract_v1(scope, receive, send) -> None:
             or request.max_spans != settings.max_spans
         ):
             raise ValueError("request provenance or caps mismatch")
-        result = runtime.backend.extract_batch(  # type: ignore[union-attr]
-            (request.query,), ontology=runtime.ontology
-        )
+        result = await _extract_batch(runtime, request.query, settings.timeout_ms)
         if type(result) is not tuple or len(result) != 1:
             raise ValueError("invalid extraction batch")
-        response = QueryExtractionResponseV1(
-            provenance=QueryExtractorProvenanceV1(
-                model_identifier=settings.model_identifier,
-                model_revision=settings.model_revision,
-                schema_version=settings.schema_version,
-                schema_checksum=settings.schema_checksum,
-                ontology_checksum=settings.ontology_checksum,
-                build_hash=settings.build_hash,
-            ),
-            query_utf8_bytes=len(request.query.encode()),
-            query_code_points=len(request.query),
-            spans=_canonical_spans(result[0].entities, settings.max_spans),
-        )
+        # fmt: off
+        provenance = QueryExtractorProvenanceV1(model_identifier=settings.model_identifier, model_revision=settings.model_revision, schema_version=settings.schema_version, schema_checksum=settings.schema_checksum, ontology_checksum=settings.ontology_checksum, build_hash=settings.build_hash)
+        response = QueryExtractionResponseV1(provenance=provenance, query_utf8_bytes=len(request.query.encode()), query_code_points=len(request.query), spans=_canonical_spans(result[0].entities, settings.max_spans))
+        # fmt: on
         payload = canonical_query_extraction_response_bytes(response)
         if len(payload) > settings.max_response_body_bytes:
             raise ValueError("response body exceeds cap")
+    except TimeoutError:
+        await _respond(send, 503, b'{"reason":"extractor_timeout"}')
+        return
+    except _InferenceOverloaded:
+        await _respond(send, 503, b'{"reason":"extractor_provenance"}')
+        return
     except Exception:
         await _respond(send, 422, b'{"reason":"extractor_provenance"}')
         return
