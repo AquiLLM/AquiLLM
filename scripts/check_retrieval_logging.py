@@ -164,15 +164,21 @@ def _tainted_names(tree: ast.AST) -> frozenset[str]:
 def _scope(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> ast.AST:
     while not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)): node = parents[node]
     return node
-def _branch_assignment(node: ast.AST, scope: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+def _binds(node: ast.AST, name: str) -> bool:
+    return (isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, (ast.Store, ast.Del))) or (isinstance(node, ast.arg) and node.arg == name) or (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name) or (isinstance(node, ast.alias) and (node.asname or node.name).split(".", 1)[0] == name) or (isinstance(node, ast.ExceptHandler) and node.name == name) or (isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name) or (isinstance(node, ast.MatchMapping) and node.rest == name) or (isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names)
+def _ordinary_binding(node: ast.AST, scope: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    ordinary = False
     while node is not scope:
-        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.Match, ast.BoolOp, ast.IfExp, ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp, ast.comprehension)): return True
+        if isinstance(node, (ast.NamedExpr, ast.AugAssign)): return False
+        if isinstance(node, (ast.Assign, ast.AnnAssign)): ordinary = True
+        elif isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.Match, ast.BoolOp, ast.IfExp, ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp, ast.comprehension)): return False
         node = parents[node]
-    return False
+    return ordinary
 def _assigned_value(name: str, assignments: tuple[tuple[str, ast.AST], ...], call: ast.Call, parents: dict[ast.AST, ast.AST]) -> ast.AST | None:
     scope = _scope(call, parents)
+    bindings = tuple(node for node in ast.walk(scope) if _binds(node, name) and _scope(parents[node], parents) is scope and (node.lineno, node.col_offset) < (call.lineno, call.col_offset))
     values = tuple(value for candidate, value in assignments if candidate == name and _scope(value, parents) is scope and (value.lineno, value.col_offset) < (call.lineno, call.col_offset))
-    return values[0] if len(values) == 1 and not _branch_assignment(values[0], scope, parents) else None
+    return values[0] if len(values) == len(bindings) == 1 and _ordinary_binding(bindings[0], scope, parents) else None
 def _safe_count(node: ast.AST, tainted: frozenset[str], assignments: tuple[tuple[str, ast.AST], ...], call: ast.Call, parents: dict[ast.AST, ast.AST], seen: frozenset[str] = frozenset()) -> bool:
     if _expression_is_tainted(node, tainted): return False
     if isinstance(node, ast.Constant): return type(node.value) is int and node.value >= 0
@@ -181,13 +187,7 @@ def _safe_count(node: ast.AST, tainted: frozenset[str], assignments: tuple[tuple
         value = _assigned_value(node.id, assignments, call, parents)
         return value is not None and _safe_count(value, tainted, assignments, call, parents, seen | {node.id})
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd): return _safe_count(node.operand, tainted, assignments, call, parents, seen)
-    return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "len"
-        and len(node.args) == 1
-        and not node.keywords
-    )
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "len" and len(node.args) == 1 and not node.keywords
 def _safe_elapsed(node: ast.AST, tainted: frozenset[str]) -> bool:
     if _expression_is_tainted(node, tainted): return False
     if isinstance(node, ast.Constant): return type(node.value) in {int, float} and not isinstance(node.value, bool) and node.value >= 0

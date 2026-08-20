@@ -232,7 +232,7 @@ def test_checker_resolves_transformed_count_assignment_before_allowing_name() ->
     assert len(_scan(_structured_count_source("count = ord(prompt[0])"))) == 1
 
 
-@pytest.mark.parametrize("assignment", ("count = 0", "count = len(())", "count = +2"))
+@pytest.mark.parametrize("assignment", ("count:int=0", "count = len(())", "count = +2"))
 def test_checker_allows_positively_proven_count_sources(assignment: str) -> None:
     assert _scan(_structured_count_source(assignment)) == ()
 
@@ -293,8 +293,8 @@ def record():
 
 
 # fmt: off
-@pytest.mark.parametrize("statement", ("enabled and (count := 0)", "None if enabled else (count := 0)", "pending = (count := 0 for _ in ())"))
+@pytest.mark.parametrize("statement", ("enabled and (count := 0)", "None if enabled else (count := 0)", "pending = (count := 0 for _ in ())", "count = 0; count += ord(prompt[0])", "assert (count := 0) == 0"))
 # fmt: on
-def test_checker_rejects_conditional_or_deferred_named_expression(statement: str) -> None:
+def test_checker_rejects_unsafe_count_bindings(statement: str) -> None:
     source = _structured_count_source(statement).replace("record(prompt)", "record(prompt, count)")
     assert len(_scan(source)) == 1
