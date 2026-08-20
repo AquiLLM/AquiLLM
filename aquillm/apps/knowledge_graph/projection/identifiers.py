@@ -7,6 +7,9 @@ from hmac import new as hmac_new
 from typing import Protocol
 from uuid import UUID
 
+_SIGNED_64_BIT_MIN = -(2**63)
+_SIGNED_64_BIT_MAX = 2**63 - 1
+
 
 class ProjectionIdentifierDomain(StrEnum):
     COLLECTION = "collection"
@@ -31,6 +34,8 @@ class OpaqueProjectionKey:
     def __post_init__(self) -> None:
         if type(self.domain) is not ProjectionIdentifierDomain:
             raise TypeError("domain must be a ProjectionIdentifierDomain")
+        if type(self.value) is not str:
+            raise TypeError("value must be a built-in str")
         if len(self.value) != 64 or any(
             character not in "0123456789abcdef" for character in self.value
         ):
@@ -180,6 +185,8 @@ def _canonical_generation(
 
 def _canonicalize_source(source: str | int | UUID) -> tuple[str, str]:
     if type(source) is int:
+        if not _SIGNED_64_BIT_MIN <= source <= _SIGNED_64_BIT_MAX:
+            raise ValueError("integer source must fit in the signed 64-bit range")
         return "integer", str(source)
     if type(source) is UUID:
         return "uuid", str(source)

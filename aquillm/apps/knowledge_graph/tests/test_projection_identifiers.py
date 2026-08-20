@@ -25,12 +25,36 @@ EXPECTED_DOMAINS = {
 }
 
 
+class _HostileDigest:
+    def __len__(self) -> int:
+        return 64
+
+    def __iter__(self):
+        return iter("0" * 64)
+
+
+class _DigestSubclass(str):
+    pass
+
+
 @pytest.fixture
 def codec() -> HmacSha256ProjectionIdentifierCodec:
     return HmacSha256ProjectionIdentifierCodec(
         key=TEST_KEY,
         key_version="test-key-v1",
     )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [_HostileDigest(), _DigestSubclass("0" * 64)],
+)
+def test_opaque_projection_key_requires_exact_builtin_string(value: object) -> None:
+    with pytest.raises(TypeError, match="built-in str"):
+        OpaqueProjectionKey(
+            domain=ProjectionIdentifierDomain.ENTITY,
+            value=value,  # type: ignore[arg-type]
+        )
 
 
 def test_domain_enum_is_closed_and_every_domain_encodes(
@@ -156,6 +180,33 @@ def test_supported_source_types_have_unambiguous_encodings(
         generation=generation,
         source=canonical_uuid,
     )
+
+
+@pytest.mark.parametrize("source", [-(2**63), 2**63 - 1])
+def test_integer_sources_accept_signed_64_bit_boundaries(
+    codec: HmacSha256ProjectionIdentifierCodec,
+    source: int,
+) -> None:
+    identifier = codec.encode(
+        ProjectionIdentifierDomain.ENTITY,
+        generation="generation-a",
+        source=source,
+    )
+
+    assert isinstance(identifier, OpaqueProjectionKey)
+
+
+@pytest.mark.parametrize("source", [-(2**63) - 1, 2**63])
+def test_integer_sources_reject_values_outside_signed_64_bit_range(
+    codec: HmacSha256ProjectionIdentifierCodec,
+    source: int,
+) -> None:
+    with pytest.raises(ValueError, match="signed 64-bit"):
+        codec.encode(
+            ProjectionIdentifierDomain.ENTITY,
+            generation="generation-a",
+            source=source,
+        )
 
 
 @pytest.mark.parametrize("source", [True, False, b"11", bytearray(b"11"), object()])
