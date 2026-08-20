@@ -4,16 +4,20 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from dataclasses import field, fields, make_dataclass
 from enum import StrEnum
 from hashlib import sha256
 from math import isfinite
+from typing import Literal
 
 from apps.knowledge_graph.projection.serialization import _count, _key, _token
 
 _INTS = frozenset("chunk_number admission_hop build_generation orchestration_version discovery_hop load_max_hops max_seeds max_scope_documents max_scope_collections max_hops max_nodes max_edges max_evidence_rows max_evidence_per_edge max_mentions_per_entity".split())
 _NESTED = frozenset("orientation direction scope_type evaluation_only evidence signature document_keys collection_keys algorithm caps allowed_scope identity_keys seed_identities relation_groups mentions artifact_provenance audit_rows".split())
+_RELATION_TYPE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,127}")
+_ALGORITHM_TAGS = {"algorithm_version": "ppr_projected_v1", "transition_version": "ppr_transition_v1", "evidence_version": "ppr_evidence_v1", "seed_version": "rrf_seed_v1"}
 
 def _rows(value: object, kind: type, name: str, cap: int, order) -> tuple:
     if type(value) is not tuple or any(type(row) is not kind for row in value): raise TypeError(f"{name} must contain exact {kind.__name__} values")
@@ -28,12 +32,20 @@ ProjectedScopeTypeV1 = StrEnum("ProjectedScopeTypeV1", {"COLLECTION": "collectio
 
 class _Record:
     __slots__ = ()
+    _finalized = False
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if getattr(cls, "_finalized", False): raise TypeError("projected DTO classes are final")
     def __post_init__(self) -> None:
         for item in fields(self):
             value = getattr(self, item.name)
             if value is None and item.name == "rebuild_request_key": continue
             if item.name == "embedding_model_signature":
+                if type(value) is not str: raise TypeError("embedding_model_signature must be an exact str")
                 if value: _token(value, item.name)
+            elif item.name == "relation_type":
+                if type(value) is not str: raise TypeError("relation_type must be an exact str")
+                if _RELATION_TYPE_PATTERN.fullmatch(value) is None: raise ValueError("relation_type must be an exact canonical token")
             elif item.name.endswith(("_key", "_checksum", "_signature")) or item.name == "source_hash": _key(value, item.name)
             elif item.name in _INTS: _count(value, item.name)
             elif item.name in {"confidence", "raw_weight"}:
@@ -46,8 +58,9 @@ class _Record:
 
 def _dto(name: str, names: str, overrides=None, tag: str | None = None):
     overrides = overrides or {}; definitions = [(item, overrides.get(item, str)) for item in names.split()]
-    if tag is not None: definitions.append(("kind", str, field(init=False, default=tag)))
-    return make_dataclass(name, definitions, bases=(_Record,), namespace={"__module__": __name__}, frozen=True, slots=True)
+    if tag is not None: definitions.append(("kind", Literal[tag], field(init=False, default=tag)))
+    result = make_dataclass(name, definitions, bases=(_Record,), namespace={"__module__": __name__}, frozen=True, slots=True); result._finalized = True
+    return result
 
 ProjectedEvidenceSignatureV1 = _dto(
     "ProjectedEvidenceSignatureV1",
@@ -80,7 +93,7 @@ _AUDITS = (ProjectedAutomaticMembershipAuditV1, ProjectedFallbackMentionAuditV1,
 ProjectedAuditRowV1 = ProjectedAutomaticMembershipAuditV1 | ProjectedFallbackMentionAuditV1 | ProjectedPhysicalRelationAuditV1 | ProjectedRelationEvidenceAuditV1
 ProjectedAuthorizedGraphSnapshotV1 = _dto(
     "ProjectedAuthorizedGraphSnapshotV1", "algorithm caps load_max_hops allowed_scope identity_keys seed_identities relation_groups mentions artifact_provenance audit_rows",
-    {"algorithm": ProjectedAlgorithmSignatureV1, "caps": ProjectedSnapshotCapsV1, "load_max_hops": int, "allowed_scope": ProjectedAllowedScopeV1, "identity_keys": tuple[str, ...], "seed_identities": tuple[ProjectedSeedIdentityV1, ...], "relation_groups": tuple[ProjectedRelationGroupV1, ...], "mentions": tuple[ProjectedIdentityMentionV1, ...], "artifact_provenance": tuple[ProjectedArtifactProvenanceV1, ...], "audit_rows": tuple},
+    {"algorithm": ProjectedAlgorithmSignatureV1, "caps": ProjectedSnapshotCapsV1, "load_max_hops": int, "allowed_scope": ProjectedAllowedScopeV1, "identity_keys": tuple[str, ...], "seed_identities": tuple[ProjectedSeedIdentityV1, ...], "relation_groups": tuple[ProjectedRelationGroupV1, ...], "mentions": tuple[ProjectedIdentityMentionV1, ...], "artifact_provenance": tuple[ProjectedArtifactProvenanceV1, ...], "audit_rows": tuple[ProjectedAuditRowV1, ...]},
 )
 
 def _noop(value) -> None: del value
@@ -105,6 +118,9 @@ def _scope(value) -> None:
 def _caps(value) -> None:
     for item, maximum in zip(fields(value), (64, 10_000, 128, 2, 200, 1_000, 3_000, 3, 2), strict=True): _count(getattr(value, item.name), item.name, 1, maximum)
     if value.max_scope_collections > value.max_scope_documents or value.max_evidence_per_edge > value.max_evidence_rows: raise ValueError("snapshot caps are incoherent")
+def _algorithm(value) -> None:
+    for name, expected in _ALGORITHM_TAGS.items():
+        if getattr(value, name) != expected: raise ValueError(f"{name} must be {expected}")
 def _audit(value) -> None:
     low = 1 if type(value) in {ProjectedPhysicalRelationAuditV1, ProjectedRelationEvidenceAuditV1} else 0; _count(value.discovery_hop, "discovery_hop", low, 2)
     if type(value) is ProjectedPhysicalRelationAuditV1 and value.source_entity_key == value.target_entity_key: raise ValueError("physical relation cannot be a self-loop")
@@ -115,7 +131,7 @@ _SPECIAL = {
     ProjectedEvidenceSignatureV1: _signature, ProjectedRelationGroupV1: _group,
     ProjectedIdentityMentionV1: lambda value: _exact(value.evidence, ProjectedChunkEvidenceV1, "evidence"),
     ProjectedArtifactProvenanceV1: _provenance, ProjectedAllowedScopeV1: _scope,
-    ProjectedSnapshotCapsV1: _caps, **{kind: _audit for kind in _AUDITS},
+    ProjectedAlgorithmSignatureV1: _algorithm, ProjectedSnapshotCapsV1: _caps, **{kind: _audit for kind in _AUDITS},
 }
 
 def _validate_snapshot(s) -> None:
@@ -131,6 +147,8 @@ def _validate_snapshot(s) -> None:
     for rows, kind, cap, order in specs: _rows(rows, kind, kind.__name__, cap, order)
     audit_cap = s.caps.max_nodes + s.caps.max_edges + s.caps.max_evidence_rows + s.caps.max_nodes * s.caps.max_mentions_per_entity
     if type(s.audit_rows) is not tuple or len(s.audit_rows) > audit_cap or any(type(row) not in _AUDITS for row in s.audit_rows): raise TypeError("audit_rows violate their closed union/cap")
+    family_caps = {ProjectedAutomaticMembershipAuditV1: s.caps.max_nodes, ProjectedPhysicalRelationAuditV1: s.caps.max_edges, ProjectedRelationEvidenceAuditV1: s.caps.max_evidence_rows, ProjectedFallbackMentionAuditV1: s.caps.max_nodes * s.caps.max_mentions_per_entity}
+    if any(sum(type(row) is kind for row in s.audit_rows) > cap for kind, cap in family_caps.items()): raise ValueError("audit family exceeds its hard cap")
     audit_keys = tuple((row.discovery_hop, row.kind, _canonical(row)) for row in s.audit_rows)
     if len(set(audit_keys)) != len(audit_keys) or audit_keys != tuple(sorted(audit_keys)): raise ValueError("audit_rows must be unique and canonically sorted")
     _validate_closure(s)
@@ -144,17 +162,19 @@ def _validate_closure(s) -> None:
     if any(row.identity_key not in s.identity_keys for row in s.seed_identities): raise ValueError("seed identity closure is broken")
     artifacts = {row.artifact_key: row for row in s.artifact_provenance}
     collection_rows = [row for row in s.artifact_provenance if row.scope_type is ProjectedScopeTypeV1.COLLECTION]; document_rows = [row for row in s.artifact_provenance if row.scope_type is ProjectedScopeTypeV1.DOCUMENT]
+    collection_artifacts = {row.artifact_key: row for row in collection_rows}; document_artifacts = {row.artifact_key: row for row in document_rows}
     if len(artifacts) != len(s.artifact_provenance) or {row.scope_key for row in collection_rows} != collections or {row.scope_key for row in document_rows} != documents: raise ValueError("artifact provenance scope closure is broken")
     if any(row.collection_key not in collections or (row in collection_rows and row.scope_key != row.collection_key) for row in s.artifact_provenance): raise ValueError("artifact provenance collection closure is broken")
     physical_rows = [row for row in s.audit_rows if type(row) is ProjectedPhysicalRelationAuditV1]; physical = {row.relation_key: row for row in physical_rows}
-    if len(physical) != len(physical_rows) or any(row.source_entity_key not in members or row.target_entity_key not in members or row.artifact_key not in artifacts for row in physical.values()): raise ValueError("physical relation/member closure is broken")
+    if len(physical) != len(physical_rows) or any(row.source_entity_key not in members or row.target_entity_key not in members or row.artifact_key not in collection_artifacts for row in physical.values()): raise ValueError("physical relation/member closure is broken")
     signature_rows = [row.signature for row in s.audit_rows if type(row) is ProjectedRelationEvidenceAuditV1]; signatures = {row.evidence_key: row for row in signature_rows}
     if len(signatures) != len(signature_rows) or len(signatures) > s.caps.max_evidence_rows: raise ValueError("evidence keys/cap are invalid")
-    if any(sig.relation_key not in physical or sig.document_key not in documents or sig.artifact_key not in artifacts or artifacts[sig.artifact_key].scope_key != sig.document_key for sig in signatures.values()): raise ValueError("relation evidence closure is broken")
+    if any(sig.relation_key not in physical or sig.document_key not in documents or sig.artifact_key not in document_artifacts or document_artifacts[sig.artifact_key].scope_key != sig.document_key for sig in signatures.values()): raise ValueError("relation evidence closure is broken")
+    if any(sig.relation_type != physical[sig.relation_key].relation_type or sig.ontology_checksum != collection_artifacts[physical[sig.relation_key].artifact_key].ontology_checksum or sig.assembly_config_checksum != collection_artifacts[physical[sig.relation_key].artifact_key].assembly_config_checksum for sig in signatures.values()): raise ValueError("relation evidence semantic/provenance closure is broken")
     semantic: dict[tuple[str, str, str], set[str]] = {}
     for row in physical.values(): semantic.setdefault((members[row.source_entity_key], row.relation_type, members[row.target_entity_key]), set()).add(row.relation_key)
     if set(physical) != {row.relation_key for row in signatures.values()}: raise ValueError("physical relation/evidence coverage is broken")
-    observed: set[str] = set(); coordinates: dict[str, tuple[str, int]] = {}
+    observed: set[str] = set(); references: dict[str, list[ProjectedRetrievalDirectionV1]] = {}; coordinates: dict[str, tuple[str, int]] = {}
     for group in s.relation_groups:
         relation_keys = _group_relations(group, semantic, s)
         for evidence in group.evidence:
@@ -162,9 +182,13 @@ def _validate_closure(s) -> None:
             if signature is None or signature.relation_key not in relation_keys or _signature_coordinate(signature) != actual: raise ValueError("group evidence/signature closure is broken")
             coordinate = actual[1:3]
             if coordinates.setdefault(evidence.chunk_key, coordinate) != coordinate: raise ValueError("chunk coordinate closure is broken")
-            observed.add(evidence.provenance_key)
+            observed.add(evidence.provenance_key); references.setdefault(evidence.provenance_key, []).append(group.direction)
     if observed != set(signatures): raise ValueError("relation evidence coverage is broken")
-    fallback = {(row.identity_key, row.evidence.provenance_key): row.evidence for row in s.audit_rows if type(row) is ProjectedFallbackMentionAuditV1}; mentions = {(row.identity_key, row.evidence.provenance_key): row.evidence for row in s.mentions}
+    for directions in references.values():
+        if len(directions) > 2 or (ProjectedRetrievalDirectionV1.UNDIRECTED in directions and any(item is not ProjectedRetrievalDirectionV1.UNDIRECTED for item in directions)): raise ValueError("evidence reference direction set is incoherent")
+    fallback_rows = [row for row in s.audit_rows if type(row) is ProjectedFallbackMentionAuditV1]; fallback_keys = [(row.identity_key, row.evidence.provenance_key) for row in fallback_rows]
+    if len(set(fallback_keys)) != len(fallback_keys): raise ValueError("fallback semantic key is duplicated")
+    fallback = {key: row.evidence for key, row in zip(fallback_keys, fallback_rows, strict=True)}; mentions = {(row.identity_key, row.evidence.provenance_key): row.evidence for row in s.mentions}
     if mentions != fallback: raise ValueError("fallback mention closure is broken")
     counts = Counter(row.identity_key for row in s.mentions)
     for mention in s.mentions:

@@ -1,6 +1,7 @@
-# ruff: noqa: E501
+# ruff: noqa: E501, E701, E702
 from dataclasses import FrozenInstanceError, fields, replace
 from hashlib import sha256
+from typing import Literal, get_type_hints
 
 import pytest
 
@@ -9,6 +10,7 @@ from apps.knowledge_graph.retrieval.projected_types import (
     ProjectedAlgorithmSignatureV1,
     ProjectedAllowedScopeV1,
     ProjectedArtifactProvenanceV1,
+    ProjectedAuditRowV1,
     ProjectedAuthorizedGraphSnapshotV1,
     ProjectedAutomaticMembershipAuditV1,
     ProjectedChunkEvidenceV1,
@@ -33,6 +35,7 @@ def _key(character: str) -> str:
 
 
 K = {character: _key(character) for character in "0123456789abcdef"}
+EXPECTED_SNAPSHOT_BYTES = b'{"algorithm":{"algorithm_signature":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","algorithm_version":"ppr_projected_v1","evidence_version":"ppr_evidence_v1","seed_version":"rrf_seed_v1","transition_version":"ppr_transition_v1"},"allowed_scope":{"collection_keys":["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],"document_keys":["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"],"scope_version_signature":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},"artifact_provenance":[{"artifact_key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","assembly_config_checksum":"4444444444444444444444444444444444444444444444444444444444444444","assembly_version":"assembly-v1","build_generation":3,"build_key":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","collection_key":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","embedding_model_signature":"embed-v1","evaluation_only":false,"extractor_version":"extractor-v1","filter_policy_checksum":"3333333333333333333333333333333333333333333333333333333333333333","filter_policy_version":"filter-v1","ontology_checksum":"1111111111111111111111111111111111111111111111111111111111111111","ontology_version":"ontology-v1","orchestration_version":1,"rebuild_request_key":null,"resolution_config_checksum":"2222222222222222222222222222222222222222222222222222222222222222","resolver_version":"resolver-v1","scope_key":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","scope_type":"collection","source_hash":"0000000000000000000000000000000000000000000000000000000000000000"},{"artifact_key":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","assembly_config_checksum":"4444444444444444444444444444444444444444444444444444444444444444","assembly_version":"assembly-v1","build_generation":3,"build_key":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","collection_key":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","embedding_model_signature":"","evaluation_only":false,"extractor_version":"extractor-v1","filter_policy_checksum":"3333333333333333333333333333333333333333333333333333333333333333","filter_policy_version":"filter-v1","ontology_checksum":"1111111111111111111111111111111111111111111111111111111111111111","ontology_version":"ontology-v1","orchestration_version":1,"rebuild_request_key":null,"resolution_config_checksum":"2222222222222222222222222222222222222222222222222222222222222222","resolver_version":"resolver-v1","scope_key":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","scope_type":"document","source_hash":"0000000000000000000000000000000000000000000000000000000000000000"}],"audit_rows":[{"automatic_membership_key":"1111111111111111111111111111111111111111111111111111111111111111","decision_checksum":"2222222222222222222222222222222222222222222222222222222222222222","discovery_hop":0,"entity_key":"9999999999999999999999999999999999999999999999999999999999999999","kind":"automatic_membership","resolver_version":"resolver-v1"},{"automatic_membership_key":"2222222222222222222222222222222222222222222222222222222222222222","decision_checksum":"2222222222222222222222222222222222222222222222222222222222222222","discovery_hop":0,"entity_key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","kind":"automatic_membership","resolver_version":"resolver-v1"}],"caps":{"max_edges":1000,"max_evidence_per_edge":3,"max_evidence_rows":3000,"max_hops":2,"max_mentions_per_entity":2,"max_nodes":200,"max_scope_collections":128,"max_scope_documents":10000,"max_seeds":64},"identity_keys":["1111111111111111111111111111111111111111111111111111111111111111","2222222222222222222222222222222222222222222222222222222222222222"],"load_max_hops":2,"mentions":[],"relation_groups":[],"seed_identities":[{"identity_key":"1111111111111111111111111111111111111111111111111111111111111111","seed_chunk_key":"8888888888888888888888888888888888888888888888888888888888888888"}]}'
 
 
 def _provenance(scope_type: ProjectedScopeTypeV1) -> ProjectedArtifactProvenanceV1:
@@ -142,76 +145,12 @@ def _snapshot(*, graph: bool = True) -> ProjectedAuthorizedGraphSnapshotV1:
 
 
 def test_exact_fields_and_closed_audit_tags_are_frozen() -> None:
-    assert tuple(field.name for field in fields(ProjectedEvidenceSignatureV1)) == (
-        "evidence_key",
-        "relation_key",
-        "relation_mention_key",
-        "chunk_key",
-        "document_key",
-        "chunk_number",
-        "confidence",
-        "artifact_key",
-        "source_document_key",
-        "head_mention_key",
-        "tail_mention_key",
-        "relation_type",
-        "head_mapping_key",
-        "tail_mapping_key",
-        "orientation",
-        "ontology_checksum",
-        "assembly_config_checksum",
-    )
-    assert tuple(field.name for field in fields(ProjectedArtifactProvenanceV1)) == (
-        "artifact_key",
-        "scope_type",
-        "scope_key",
-        "collection_key",
-        "rebuild_request_key",
-        "evaluation_only",
-        "build_key",
-        "build_generation",
-        "orchestration_version",
-        "source_hash",
-        "ontology_version",
-        "ontology_checksum",
-        "extractor_version",
-        "resolver_version",
-        "resolution_config_checksum",
-        "filter_policy_version",
-        "filter_policy_checksum",
-        "embedding_model_signature",
-        "assembly_version",
-        "assembly_config_checksum",
-    )
-    expected = {
-        ProjectedAutomaticMembershipAuditV1: (
-            "discovery_hop",
-            "entity_key",
-            "automatic_membership_key",
-            "decision_checksum",
-            "resolver_version",
-            "kind",
-        ),
-        ProjectedPhysicalRelationAuditV1: (
-            "discovery_hop",
-            "relation_key",
-            "artifact_key",
-            "source_entity_key",
-            "relation_type",
-            "target_entity_key",
-            "kind",
-        ),
-        ProjectedRelationEvidenceAuditV1: ("discovery_hop", "signature", "kind"),
-        ProjectedFallbackMentionAuditV1: (
-            "discovery_hop",
-            "identity_key",
-            "evidence",
-            "kind",
-        ),
-    }
+    # fmt: off
+    assert tuple(field.name for field in fields(ProjectedEvidenceSignatureV1)) == ("evidence_key", "relation_key", "relation_mention_key", "chunk_key", "document_key", "chunk_number", "confidence", "artifact_key", "source_document_key", "head_mention_key", "tail_mention_key", "relation_type", "head_mapping_key", "tail_mapping_key", "orientation", "ontology_checksum", "assembly_config_checksum")
+    assert tuple(field.name for field in fields(ProjectedArtifactProvenanceV1)) == ("artifact_key", "scope_type", "scope_key", "collection_key", "rebuild_request_key", "evaluation_only", "build_key", "build_generation", "orchestration_version", "source_hash", "ontology_version", "ontology_checksum", "extractor_version", "resolver_version", "resolution_config_checksum", "filter_policy_version", "filter_policy_checksum", "embedding_model_signature", "assembly_version", "assembly_config_checksum")
+    expected = {ProjectedAutomaticMembershipAuditV1: ("discovery_hop", "entity_key", "automatic_membership_key", "decision_checksum", "resolver_version", "kind"), ProjectedPhysicalRelationAuditV1: ("discovery_hop", "relation_key", "artifact_key", "source_entity_key", "relation_type", "target_entity_key", "kind"), ProjectedRelationEvidenceAuditV1: ("discovery_hop", "signature", "kind"), ProjectedFallbackMentionAuditV1: ("discovery_hop", "identity_key", "evidence", "kind")}
     for kind, names in expected.items():
         assert tuple(field.name for field in fields(kind)) == names
-    # fmt: off
     assert tuple(field.name for field in fields(ProjectedChunkEvidenceV1)) == ("chunk_key", "document_key", "chunk_number", "confidence", "provenance_key")
     assert tuple(field.name for field in fields(ProjectedSeedIdentityV1)) == ("seed_chunk_key", "identity_key")
     assert tuple(field.name for field in fields(ProjectedRelationGroupV1)) == ("source_identity_key", "relation_type", "target_identity_key", "direction", "raw_weight", "admission_hop", "evidence")
@@ -278,14 +217,63 @@ def test_order_caps_and_all_snapshot_closures_are_enforced() -> None:
         replace(snapshot, mentions=(mention,))
 
 
+# fmt: off
+def test_reviewed_audit_caps_and_provenance_roles_are_closed() -> None:
+    base = _snapshot(graph=False); collapsed = replace(base.audit_rows[1], automatic_membership_key=K["1"])
+    with pytest.raises(ValueError, match="automatic|audit"): replace(base, caps=replace(base.caps, max_nodes=1), identity_keys=(K["1"],), audit_rows=(base.audit_rows[0], collapsed))
+    snapshot = _snapshot(); physical = snapshot.audit_rows[2]; evidence = snapshot.audit_rows[3]
+    signature2 = replace(_signature(), evidence_key=K["0"], relation_key=K["7"], relation_mention_key=K["0"], chunk_key=K["0"]); evidence2 = ProjectedRelationEvidenceAuditV1(1, signature2)
+    physical2 = replace(physical, relation_key=K["7"]); chunk2 = replace(_chunk(), chunk_key=K["0"], provenance_key=K["0"]); group = replace(snapshot.relation_groups[0], evidence=(chunk2, _chunk()))
+    audits = (*snapshot.audit_rows[:2], physical, physical2, evidence2, evidence)
+    with pytest.raises(ValueError, match="physical|audit"): replace(snapshot, caps=replace(snapshot.caps, max_edges=1), relation_groups=(group,), audit_rows=audits)
+    reverse2 = replace(snapshot.relation_groups[0], source_identity_key=K["2"], target_identity_key=K["1"], direction=ProjectedRetrievalDirectionV1.REVERSE_DIRECTED, evidence=(chunk2,))
+    with pytest.raises(ValueError, match="evidence|audit"): replace(snapshot, caps=replace(snapshot.caps, max_evidence_rows=1, max_evidence_per_edge=1), relation_groups=(replace(snapshot.relation_groups[0], evidence=(_chunk(),)), reverse2), audit_rows=audits)
+    mutations = (replace(physical, artifact_key=K["b"]), replace(evidence, signature=replace(_signature(), artifact_key=K["a"])), replace(evidence, signature=replace(_signature(), relation_type="reports_to")), replace(evidence, signature=replace(_signature(), ontology_checksum=K["2"])), replace(evidence, signature=replace(_signature(), assembly_config_checksum=K["3"])))
+    for mutation in mutations:
+        with pytest.raises(ValueError): replace(snapshot, audit_rows=(*snapshot.audit_rows[:2], mutation if type(mutation) is ProjectedPhysicalRelationAuditV1 else physical, mutation) if type(mutation) is ProjectedRelationEvidenceAuditV1 else (*snapshot.audit_rows[:2], mutation, evidence))
+    distinct_document = replace(snapshot.artifact_provenance[1], ontology_checksum=K["5"], assembly_config_checksum=K["6"])
+    replace(snapshot, artifact_provenance=(snapshot.artifact_provenance[0], distinct_document))
+
+def test_reviewed_strict_values_public_types_and_runtime_finality() -> None:
+    class Text(str): pass
+    for value in (None, False, Text("")):
+        with pytest.raises((TypeError, ValueError)): replace(_provenance(ProjectedScopeTypeV1.DOCUMENT), embedding_model_signature=value)
+    for value in ("", None, False, Text("embed-v1")):
+        with pytest.raises((TypeError, ValueError)): replace(_provenance(ProjectedScopeTypeV1.COLLECTION), embedding_model_signature=value)
+    for value in ("WorksAt", "works-at", "a" * 129):
+        for row in (_signature(), _snapshot().relation_groups[0], _snapshot().audit_rows[2]):
+            with pytest.raises(ValueError, match="relation_type"): replace(row, relation_type=value)
+    algorithm = _snapshot().algorithm
+    for name in ("algorithm_version", "transition_version", "evidence_version", "seed_version"):
+        with pytest.raises(ValueError, match=name): replace(algorithm, **{name: "wrong-v1"})
+    assert get_type_hints(ProjectedAuthorizedGraphSnapshotV1)["audit_rows"] == tuple[ProjectedAuditRowV1, ...]
+    tags = ((ProjectedAutomaticMembershipAuditV1, "automatic_membership"), (ProjectedPhysicalRelationAuditV1, "physical_relation"), (ProjectedRelationEvidenceAuditV1, "relation_evidence"), (ProjectedFallbackMentionAuditV1, "fallback_mention"))
+    for kind, tag in tags: assert get_type_hints(kind)["kind"] == Literal[tag]
+    with pytest.raises(TypeError, match="final"):
+        class InvalidProjectedSubclass(ProjectedChunkEvidenceV1): pass
+
+def test_evidence_reference_directions_and_fallback_semantics_are_bounded() -> None:
+    snapshot = _snapshot(); forward = snapshot.relation_groups[0]
+    undirected = replace(forward, direction=ProjectedRetrievalDirectionV1.UNDIRECTED); reverse = replace(forward, source_identity_key=K["2"], target_identity_key=K["1"], direction=ProjectedRetrievalDirectionV1.REVERSE_DIRECTED)
+    with pytest.raises(ValueError, match="evidence.*reference|direction"): replace(snapshot, relation_groups=(forward, undirected, reverse))
+    with pytest.raises(ValueError, match="direction"): replace(snapshot, relation_groups=(forward, undirected))
+    replace(snapshot, relation_groups=(forward, reverse))
+    replace(snapshot, relation_groups=(undirected, replace(undirected, source_identity_key=K["2"], target_identity_key=K["1"])))
+    base = _snapshot(graph=False); first = replace(_chunk(), confidence=0.5); second = _chunk()
+    fallbacks = (ProjectedFallbackMentionAuditV1(0, K["1"], first), ProjectedFallbackMentionAuditV1(0, K["1"], second))
+    with pytest.raises(ValueError, match="fallback.*duplicate|semantic"): replace(base, mentions=(ProjectedIdentityMentionV1(K["1"], second),), audit_rows=(*base.audit_rows, *fallbacks))
+    conflict = replace(second, provenance_key=K["6"], chunk_number=3); conflict_rows = (ProjectedFallbackMentionAuditV1(0, K["1"], second), ProjectedFallbackMentionAuditV1(0, K["1"], conflict))
+    with pytest.raises(ValueError, match="coordinate"): replace(base, mentions=(ProjectedIdentityMentionV1(K["1"], second), ProjectedIdentityMentionV1(K["1"], conflict)), audit_rows=(*base.audit_rows, *conflict_rows))
+# fmt: on
+
+
 def test_canonical_snapshot_vector_and_private_integer_canary_exclusion() -> None:
     snapshot = _snapshot(graph=False)
     encoded = canonical_projected_snapshot_bytes(snapshot)
-    assert encoded.startswith(b'{"algorithm":{"algorithm_signature":"ffffffff')
+    assert encoded == EXPECTED_SNAPSHOT_BYTES
     assert b'"confidence":"0x1.8000000000000p-1"' in canonical_projected_snapshot_bytes(
         _snapshot()
     )
-    assert b'"audit_rows":[{"automatic_membership_key":"1111' in encoded
     assert projected_snapshot_checksum(snapshot) == sha256(encoded).hexdigest()
     assert projected_snapshot_checksum(snapshot) == (
         "8f2cbb9d65cd88971eb31c0787ab29201bd298df704eb310cf8d4fee38bfc277"
