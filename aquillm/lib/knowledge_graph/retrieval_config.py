@@ -142,7 +142,7 @@ def _decoded_uri_part(key: str, raw: str, forbidden: str) -> str:
     try:
         decoded = unquote_to_bytes(raw).decode("utf-8", errors="strict")
     except UnicodeError: raise _error(key, "contains invalid UTF-8") from None
-    if any(ord(char) < 32 or ord(char) == 127 or char in forbidden for char in decoded): raise _error(key, "contains a forbidden decoded delimiter")
+    if len(decoded) > 4096 or any(ord(char) < 32 or ord(char) == 127 or char in forbidden for char in decoded): raise _error(key, "contains invalid decoded text")
     return decoded
 def _host_port_identity(host_port: str) -> tuple[str, int] | None:
     bracketed = host_port.startswith("[")
@@ -194,7 +194,7 @@ def _postgres_identity(key: str, value: str) -> tuple[str, str, int, str]:
     if _ROLE.fullmatch(username) is None:
         raise _error(key, "must contain a canonical PostgreSQL role")
     if password_separator:
-        _decoded_uri_part(key, raw_password, "/@?#\\")
+        _decoded_uri_part(key, raw_password, "")
     database = _decoded_uri_part(key, parsed.path[1:], "/@?#\\")
     host_identity = _host_port_identity(host_port)
     if host_identity is None or _DB_NAME.fullmatch(database) is None:

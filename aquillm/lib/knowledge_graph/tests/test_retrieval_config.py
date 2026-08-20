@@ -170,43 +170,35 @@ def test_ratios_accept_strict_bounded_decimal_spellings(key: str, good: str) -> 
     elif float(good) < 0.05:
         overrides["KG_DIRECT_WINNER_MARGIN"] = "0"
     config.load_hybrid_retrieval_settings(overrides)
-
 @pytest.mark.parametrize("bad", ("-0.1", "1.1", ".8", "00.8", "+0.8", " 0.8", "0.8 ", "1e-1", "nan", "inf", True, 1.0))
 def test_ratios_reject_noncanonical_or_nonstring_values(bad: object) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_DIRECT_MIN_SIMILARITY"):
         config.load_hybrid_retrieval_settings(cast(dict[str, str], {"KG_DIRECT_MIN_SIMILARITY": bad}))
-
 @pytest.mark.parametrize("key", ("KG_MEMGRAPH_URI", "KG_MEMGRAPH_DATABASE", "KG_MEMGRAPH_PROJECTION_USERNAME", "KG_MEMGRAPH_PROJECTION_PASSWORD", "KG_PROJECTION_POSTGRES_SOURCE_DSN", "KG_PROJECTION_POSTGRES_STATE_DSN", "KG_PROJECTION_IDENTIFIER_HMAC_KEY", "KG_PROJECTION_IDENTIFIER_KEY_VERSION"))
 def test_projection_requires_each_connection_and_secret_independently(key: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match=key):
         config.load_hybrid_retrieval_settings({**_projection(), key: ""})
-
 @pytest.mark.parametrize("key", ("KG_MEMGRAPH_URI", "KG_MEMGRAPH_DATABASE", "KG_MEMGRAPH_QUERY_USERNAME", "KG_MEMGRAPH_QUERY_PASSWORD"))
 def test_traversal_requires_each_connection_and_secret_independently(key: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match=key):
         config.load_hybrid_retrieval_settings({**_traversal(), key: ""})
-
 @pytest.mark.parametrize(("key", "bad"), (("KG_MEMGRAPH_TRAVERSAL_ENABLED", "0"), ("KG_QUERY_EXTRACTOR_URL", ""), ("KG_QUERY_EXTRACTOR_BEARER_TOKEN", ""), ("KG_QUERY_EXTRACTOR_MODEL", "other/model"), ("KG_QUERY_EXTRACTOR_MODEL_REVISION", "a" * 40), ("KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION", "other-v1"), ("KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM", "b" * 64)))
 def test_direct_requires_exact_extractor_contract(key: str, bad: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match=key):
         config.load_hybrid_retrieval_settings({**_direct(), key: bad})
-
 def test_extended_and_embedding_dependencies_fail_closed() -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_MEMGRAPH_TRAVERSAL_ENABLED"):
         config.load_hybrid_retrieval_settings({"KG_GRAPH_EXTENDED_ENABLED": "1"})
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_GRAPH_DIRECT_ENABLED"):
         config.load_hybrid_retrieval_settings({"KG_DIRECT_EMBEDDING_ENABLED": "1"})
-
 def test_disabled_paths_allow_empty_connections_and_both_branches_enable_independently() -> None:
     assert config.load_hybrid_retrieval_settings({"KG_MEMGRAPH_DATABASE": ""}).memgraph_database == ""
     assert config.load_hybrid_retrieval_settings(_direct()).graph_direct_enabled
     assert config.load_hybrid_retrieval_settings({**_traversal(), "KG_GRAPH_EXTENDED_ENABLED": "1"}).graph_extended_enabled
-
 @pytest.mark.parametrize("overrides", ({"KG_GRAPH_DIRECT_TIMEOUT_MS": "301"}, {"KG_GRAPH_EXTENDED_TIMEOUT_MS": "301"}, {"KG_DIRECT_MIN_SIMILARITY": "0.4", "KG_DIRECT_WINNER_MARGIN": "0.5"}, {"KG_GRAPH_FUSION_RRF_K": "59"}, {"KG_GRAPH_FUSION_RRF_K": "61"}, {**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://same/db", "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://same/db"}))
 def test_cross_field_constraints(overrides: dict[str, str]) -> None:
     with pytest.raises(config.HybridRetrievalConfigError):
         config.load_hybrid_retrieval_settings(overrides)
-
 @pytest.mark.parametrize("overrides", ({"KG_GRAPH_TOPOLOGY_BACKEND": "postgres"}, {"KG_GRAPH_ALGORITHM": "ppr_v1"}, {"KG_GRAPH_EVAL_PARITY_BACKEND": "memgraph"}, {"KG_QUERY_EXTRACTOR_MODEL_REVISION": "A" * 40}, {"KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": "A" * 64}, {"KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION": "Bad Schema"}, {"KG_PROJECTION_IDENTIFIER_KEY_VERSION": "Bad Key"}, {"KG_PROJECTION_POSTGRES_SOURCE_DSN": "not-a-dsn"}, {"KG_PROJECTION_QUEUE": " bad"}, {"KG_PROJECTION_QUEUE": "bad\x7f"}, {"KG_PROJECTION_QUEUE": "bad\ud800"}, {"KG_MEMGRAPH_IMAGE": "bad image"}, {"KG_MEMGRAPH_QUERY_USERNAME": "bad user"}, {"KG_MEMGRAPH_URI": "http://graph"}, {"KG_MEMGRAPH_URI": "bolt://user:secret@graph"}, {"KG_QUERY_EXTRACTOR_URL": "file:///tmp/model"}))
 def test_tokens_urls_and_revisions_are_strict(overrides: dict[str, str]) -> None:
     with pytest.raises(config.HybridRetrievalConfigError):
@@ -297,4 +289,12 @@ def test_postgres_identity_normalizes_percent_encoding_host_and_port() -> None:
 def test_projection_accepts_distinct_canonical_roles() -> None:
     settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://source_role:p%3Ass@db.example.com/source", "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://state_role@127.0.0.1:5432/state"})
     assert settings.memgraph_projection_enabled
+@pytest.mark.parametrize("password", ("p%40ss", "p%2Fss", "p%3Fss", "p%23ss", "p%5Css"))
+def test_projection_dsn_accepts_percent_encoded_reserved_passwords(password: str) -> None:
+    settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": f"postgresql://source_role:{password}@host/source"})
+    assert settings.projection_postgres_source_dsn.get_secret_value().endswith("@host/source")
+@pytest.mark.parametrize("dsn", ("postgresql://role:p@ss@host/db", "postgresql://role:p%4@host/db", "postgresql://role:p%1F@host/db", "postgresql://role:p%7F@host/db", "postgresql://role:" + "p" * 4097 + "@host/db"))
+def test_projection_dsn_password_structure_and_controls_fail_closed(dsn: str) -> None:
+    with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_SOURCE_DSN"):
+        config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": dsn})
 # fmt: on
