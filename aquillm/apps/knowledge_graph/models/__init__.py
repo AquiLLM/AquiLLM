@@ -24,6 +24,12 @@ from .inputs import (
     document_membership_signature,
 )
 from .ontology import OntologyVersion
+from .projections import (
+    CollectionGraphMembershipState,
+    CollectionGraphProjection,
+    GraphProjectionOutbox,
+    ProjectionChunkReference,
+)
 from .relations import CollectionRelation, CollectionRelationEvidence, RelationMention
 
 __all__ = [
@@ -37,6 +43,8 @@ __all__ = [
     "collection_manifest_source_hash",
     "CollectionRelation",
     "CollectionRelationEvidence",
+    "CollectionGraphMembershipState",
+    "CollectionGraphProjection",
     "ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM",
     "ASSEMBLY_NOT_APPLICABLE_VERSION",
     "DocumentEntity",
@@ -45,8 +53,10 @@ __all__ = [
     "GraphArtifact",
     "GraphBuildRun",
     "GraphRebuildRequest",
+    "GraphProjectionOutbox",
     "graph_identity_checksum",
     "OntologyVersion",
+    "ProjectionChunkReference",
     "RelationMention",
     "document_membership_signature",
 ]
