@@ -189,7 +189,7 @@ class DirectSeedRepository:
             similarity = (
                 row.similarity if tier is DirectResolutionTier.EMBEDDING else 1.0
             )
-            if tier is DirectResolutionTier.EMBEDDING and similarity < minimum_similarity: continue
+            if tier is DirectResolutionTier.EMBEDDING and (similarity <= 0.0 or similarity < minimum_similarity): continue
             if similarity > 1.0:
                 if similarity > 1.0 + _SIMILARITY_EPSILON: raise ValueError("embedding similarity exceeds its unit bound")
                 similarity = 1.0
@@ -286,7 +286,7 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
             Value(1.0) - CosineDistance("embedding", options["embedding"]),
             output_field=FloatField(),
         )
-        query = query.filter(embedding__isnull=False, embedding_model_signature=options["model_signature"]).annotate(similarity=similarity).filter(similarity__gte=options["minimum_similarity"])
+        query = query.filter(embedding__isnull=False, embedding_model_signature=options["model_signature"]).annotate(similarity=similarity).filter(similarity__gt=0.0, similarity__gte=options["minimum_similarity"])
     else:
         if tier is not DirectResolutionTier.ALIAS:
             query = query.filter(**{str(options["lookup_field"]): options["lookup"]})
