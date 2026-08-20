@@ -130,7 +130,7 @@ def _direct() -> dict[str, str]:
 
 def test_defaults_and_fields_are_exact_and_off() -> None:
     settings = config.load_hybrid_retrieval_settings({})
-    assert {field.name: getattr(settings, field.name) for field in dataclasses.fields(settings)} == DEFAULTS
+    assert {field.name: (value.get_secret_value() if type(value) is config.SecretSetting else value) for field in dataclasses.fields(settings) for value in (getattr(settings, field.name),)} == DEFAULTS
     assert settings.graph_topology_backend == "memgraph"
 
 @pytest.mark.parametrize("key", ("KG_MEMGRAPH_PROJECTION_ENABLED", "KG_MEMGRAPH_TRAVERSAL_ENABLED", "KG_GRAPH_DIRECT_ENABLED", "KG_GRAPH_EXTENDED_ENABLED", "KG_DIRECT_EMBEDDING_ENABLED"))
@@ -251,4 +251,45 @@ def test_settings_are_frozen_slotted_and_import_isolated() -> None:
     completed = subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "0"
+
+def test_secret_wrapper_survives_dataclass_traversal_and_is_immutable() -> None:
+    raw = {**_projection(), **_direct()}
+    settings = config.load_hybrid_retrieval_settings(raw)
+    pairs = (("memgraph_query_password", "KG_MEMGRAPH_QUERY_PASSWORD"), ("memgraph_projection_password", "KG_MEMGRAPH_PROJECTION_PASSWORD"), ("projection_postgres_source_dsn", "KG_PROJECTION_POSTGRES_SOURCE_DSN"), ("projection_postgres_state_dsn", "KG_PROJECTION_POSTGRES_STATE_DSN"), ("projection_identifier_hmac_key", "KG_PROJECTION_IDENTIFIER_HMAC_KEY"), ("query_extractor_bearer_token", "KG_QUERY_EXTRACTOR_BEARER_TOKEN"))
+    copied, flattened = dataclasses.asdict(settings), dataclasses.astuple(settings)
+    for field_name, source_key in pairs:
+        secret = getattr(settings, field_name)
+        assert type(secret) is config.SecretSetting and type(copied[field_name]) is config.SecretSetting
+        assert secret.get_secret_value() == raw[source_key]
+        assert str(secret) == repr(secret) == "<redacted>"
+        assert raw[source_key] not in repr(settings) + repr(copied) + repr(flattened)
+    first = config.SecretSetting("fixed")
+    assert first == config.SecretSetting("fixed") and first != "fixed" and hash(first) == hash(config.SecretSetting("fixed"))
+    assert not dataclasses.is_dataclass(first)
+    with pytest.raises(AttributeError):
+        first._value = "changed"  # type: ignore[misc]
+
+@pytest.mark.parametrize("value", ("host=db dbname=x", "postgres://u@host/db", "POSTGRESQL://u@host/db", "postgresql:///db", "postgresql://host:/db", "postgresql://host:0/db", "postgresql://host:65536/db", "postgresql://host/", "postgresql://host/a/b", "postgresql://%65xample.com/db", "postgresql://host/db?ssl=1", "postgresql://host/db#fragment", "postgresql://host\\evil/db", "postgresql://u:bad://pw@host/db"))
+def test_projection_dsns_are_canonical_postgresql_uris(value: str) -> None:
+    with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_SOURCE_DSN") as caught:
+        config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": value})
+    assert value not in str(caught.value)
+
+def test_projection_dsns_accept_supported_hosts_and_credentials() -> None:
+    settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://reader@db.example.com/source_db", "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://cas:secret@[::1]:5432/state_db"})
+    assert settings.projection_postgres_source_dsn.get_secret_value().endswith("/source_db")
+
+@pytest.mark.parametrize(("key", "value"), (("KG_MEMGRAPH_URI", "bolt://."), ("KG_MEMGRAPH_URI", "bolt://example.com:"), ("KG_MEMGRAPH_URI", "bolt://%65xample.com"), ("KG_MEMGRAPH_URI", "bolt://example..com"), ("KG_MEMGRAPH_URI", "bolt://Example.com"), ("KG_MEMGRAPH_URI", "BOLT://example.com"), ("KG_MEMGRAPH_URI", "bolt://host:65536"), ("KG_MEMGRAPH_URI", "bolt://host:" + "9" * 5000), ("KG_QUERY_EXTRACTOR_URL", "https://. /v1"), ("KG_QUERY_EXTRACTOR_URL", "https://example.com:")))
+def test_service_urls_reject_noncanonical_authorities(key: str, value: str) -> None:
+    with pytest.raises(config.HybridRetrievalConfigError, match=key):
+        config.load_hybrid_retrieval_settings({key: value})
+
+def test_service_urls_accept_dns_ip_ipv6_and_localhost() -> None:
+    for key, value in (("KG_MEMGRAPH_URI", "bolt://localhost:7687"), ("KG_MEMGRAPH_URI", "bolt://127.0.0.1"), ("KG_MEMGRAPH_URI", "bolt://[::1]:7687"), ("KG_QUERY_EXTRACTOR_URL", "https://extractor.example.com/v1/entities"), ("KG_QUERY_EXTRACTOR_URL", "https://[::1]:8443/v1")):
+        config.load_hybrid_retrieval_settings({key: value})
+
+def test_oversized_integer_is_a_fixed_configuration_error() -> None:
+    with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_BATCH_SIZE") as caught:
+        config.load_hybrid_retrieval_settings({"KG_PROJECTION_BATCH_SIZE": "9" * 5000})
+    assert "999999" not in str(caught.value)
 # fmt: on
