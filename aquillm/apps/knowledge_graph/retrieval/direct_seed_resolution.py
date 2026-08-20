@@ -163,6 +163,8 @@ def resolve_direct_seed_components(
         (DirectResolutionTier.ALIAS, repository.indexed_alias_matches),
     )
     for span_index, span in enumerate(deduplicated):
+        if span.confidence == 0.0:
+            continue
         selected: DirectEntityMatchV1 | None = None
         ambiguity: DirectSeedAmbiguityV1 | None = None
         for _tier, lookup in exact_tiers:

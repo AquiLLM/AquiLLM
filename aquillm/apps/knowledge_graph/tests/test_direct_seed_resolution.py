@@ -114,6 +114,7 @@ def test_deduplicates_normalized_surface_and_short_circuits_highest_confidence()
 ):
     lower = QueryEntitySpanV1("model", 0, 5, 0.4)
     higher = QueryEntitySpanV1("model", 10, 15, 0.9)
+    zero = QueryEntitySpanV1("model", 20, 25, 0.0)
     repository = TextRepository(
         {
             ("name", 10): (
@@ -126,18 +127,19 @@ def test_deduplicates_normalized_surface_and_short_circuits_highest_confidence()
                 ),
             )
         },
-        {0: "Alpha", 10: "alpha"},
+        {0: "Alpha", 10: "alpha", 20: "zero!"},
     )
     outcome = direct_seed_resolution.resolve_direct_seed_components(
-        spans=(lower, higher),
+        spans=(lower, higher, zero),
         repository=repository,
         ready=_ready(),
         settings=_settings(),
         deadline=10.0,
     )
     assert outcome.failure_reason is None
-    assert outcome.diagnostics.input_span_count == 2
-    assert outcome.diagnostics.deduplicated_span_count == 1
+    assert outcome.diagnostics.input_span_count == 3
+    assert outcome.diagnostics.deduplicated_span_count == 2
+    assert outcome.diagnostics.unresolved_span_count == 1
     assert outcome.matches[0].extraction_confidence == 0.9
     assert repository.calls == [("identifier", 10), ("name", 10)]
 
