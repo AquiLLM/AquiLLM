@@ -62,9 +62,10 @@ It does not provide:
 6. **Direct-query and vector-seeded graph retrieval both run.** Direct extraction
    runs alongside the existing vector/trigram baseline; vector-seeded traversal
    begins after baseline candidates exist.
-7. **Memgraph loads topology; deterministic Python PPR scores it.** The direct
-   and extended branches perform independently capped topology loads against the
-   same immutable ready-generation set.
+7. **Memgraph loads topology; versioned deterministic Python PPR scores it.** The
+   projected scorer keeps the current PPR math but orders caps and ties by opaque
+   keys under a new algorithm version. The direct and extended branches perform
+   independently capped topology loads against the same immutable ready set.
 8. **One reranker chooses final chunks.** Baseline candidates are retained,
    graph-only candidates are selected by a deterministic reciprocal-rank rule,
    and the existing reranker scores the final deduplicated pool.
@@ -185,7 +186,10 @@ entity, relation, evidence, relation mention, entity mention/mapping, document,
 chunk, and canonical-link decision identities. The automatic canonical identity
 domain omits generation so selected nodes in different generations receive the
 same membership key. Both loaders receive the same key version and projection
-secret; a version change invalidates every projection.
+secret; a version change invalidates every projection. One
+`KG_PROJECTION_IDENTIFIER_HMAC_KEY` and explicit key-version setting cover every
+domain, including chunk keys stored by `ProjectionChunkReference`; there is no
+second chunk-key secret or derivation stage.
 
 `ProjectedAuthorizedGraphSnapshotV1` contains the same logical inputs represented
 today by `_AuthorizedEntityRow`, `_AuthorizedPhysicalRelation`,
@@ -201,10 +205,17 @@ and raw edge weight remain derived by the unchanged `PPRAlgorithmConfig`,
 
 The existing PostgreSQL loader remains behind the explicit parity backend and is
 normalized into the new DTO before comparison. The Memgraph shipping loader
-builds the DTO directly. The Python scorer consumes the new DTO while retaining
-the current numerical PPR, cap, zero-hop component, evidence-flow, and ordering
-rules. Contract tests prove that changing only identifier representation does not
-change ranked results or trace metrics.
+builds the DTO directly. Both feed `ppr_projected_v1`, which retains the current
+PPR equation, zero-hop component semantics, evidence flow, weights, and caps but
+uses canonical opaque keys for every admission and tie decision. Opaque HMAC keys
+are deliberately not assumed to preserve database-ID ordering.
+
+PostgreSQL-projected and Memgraph-projected DTOs must produce byte-identical
+snapshots, score maps, traces, and ranked output. Comparison with legacy
+`ppr_v1` instead requires equal authorized topology, evidence, weights, and score
+maps after logical-key mapping; tied groups may have a different but deterministic
+order and are reported explicitly. Shipping remains disabled until cloud quality,
+determinism, and latency gates are re-approved for `ppr_projected_v1`.
 
 `TextChunk` keeps its current integer primary key. Memgraph never stores that key
 directly. PostgreSQL stores a generation-local `ProjectionChunkReference` with a
@@ -441,9 +452,10 @@ There is no deployment-wide graph traversal for ordinary requests.
 
 ### PPR and Candidate Fusion
 
-Memgraph performs bounded topology loading only. The existing deterministic
-Python PPR implementation remains the v1 scorer. Automatic canonical membership
-is not an ordinary weighted transition: the adapter validates membership groups,
+Memgraph performs bounded topology loading only. The versioned
+`ppr_projected_v1` scorer reuses the existing deterministic Python PPR math while
+using opaque-key cap and tie ordering. Automatic canonical membership is not an
+ordinary weighted transition: the adapter validates membership groups,
 collapses selected eligible nodes into the zero-hop identity components used by
 the current scorer, and normalizes seed mass per component. Only
 collection-local relation groups form weighted, hop-counted transitions. The
@@ -588,6 +600,8 @@ The implementation requires:
 - independent branch cap/deadline/failure and sibling-preservation tests;
 - exact RRF fusion, deduplication, provenance, cap, tie, and reranker tests;
 - explicit PostgreSQL/Memgraph topology parity tests;
+- exact PostgreSQL-projected/Memgraph-projected score, trace, tie, and rank parity
+  tests plus legacy `ppr_v1` logical score-map/tied-group comparison tests;
 - vector-only, direct, extended, combined, and combined-plus-reranker eval arms;
   and
 - cloud gates for permission isolation, Recall@10, nDCG, multi-hop value,
@@ -634,7 +648,7 @@ parallel speed.
 - Merging claims or evidence across collections.
 - Projecting or traversing candidate canonical links in v1.
 - Allowing Memgraph to make authorization decisions.
-- Replacing the existing reranker or Python PPR scorer.
+- Replacing the existing reranker or the established PPR numerical equation.
 - Automatically falling back to the PostgreSQL graph loader in production.
 - Enabling shipping flags before cloud-measured approval.
 - Adding graph visualization UI in this phase.
