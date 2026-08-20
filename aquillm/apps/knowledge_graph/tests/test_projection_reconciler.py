@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from apps.knowledge_graph.projection import reconciler, worker
+from apps.knowledge_graph.projection.memgraph_driver import MemgraphDriverError
 
 
 def test_project_generation_replays_partial_staging_and_ready_cas(monkeypatch):
@@ -171,12 +172,98 @@ def test_project_generation_propagates_redacted_transient_for_celery_retry(
     assert "credential" not in repr(captured.value)
 
 
+def test_project_generation_retries_redacted_memgraph_driver_failures(monkeypatch):
+    projection_id = uuid4()
+    monkeypatch.setattr(
+        worker,
+        "_projection_settings",
+        lambda: SimpleNamespace(
+            projection_batch_size=10,
+            projection_lease_seconds=30,
+            graph_overall_timeout_ms=250,
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        "claim_projection_lease",
+        lambda **_kwargs: SimpleNamespace(projection_id=str(projection_id)),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_postgres_repository",
+        lambda: SimpleNamespace(
+            load_projection_bundle=lambda **_kwargs: object(),
+            load_private_chunk_references=lambda **_kwargs: (),
+            persist_chunk_references=lambda **_kwargs: "c" * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        "record_projection_private_mapping_checksum",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        worker,
+        "_memgraph_repository",
+        lambda: (_ for _ in ()).throw(MemgraphDriverError("memgraph_write_failed")),
+    )
+
+    with pytest.raises(TimeoutError, match="projection_backend_transient"):
+        worker.project_generation(
+            projection_id=projection_id,
+            lease_owner="worker-a",
+        )
+
+
+def test_project_generation_does_not_swallow_transient_failure_recording(monkeypatch):
+    projection_id = uuid4()
+    monkeypatch.setattr(
+        worker,
+        "claim_projection_lease",
+        lambda **_kwargs: SimpleNamespace(projection_id=str(projection_id)),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_postgres_repository",
+        lambda: SimpleNamespace(
+            load_projection_bundle=lambda **_kwargs: (_ for _ in ()).throw(
+                ValueError("invalid source")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        "mark_projection_failed",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ConnectionError("database credential detail")
+        ),
+    )
+
+    with pytest.raises(TimeoutError, match="projection_backend_transient") as captured:
+        worker.project_generation(
+            projection_id=projection_id,
+            lease_owner="worker-a",
+        )
+
+    assert "credential" not in repr(captured.value)
+
+
 def test_reconcile_handles_empty_store_drift_and_newer_artifact_in_pages(monkeypatch):
     pages = [((1, 11), (2, 22)), ((3, 33),), ()]
     monkeypatch.setattr(
         reconciler, "_active_artifact_page", lambda **_kwargs: pages.pop(0)
     )
     monkeypatch.setattr(reconciler, "_atomic", lambda _using: nullcontext())
+    monkeypatch.setattr(reconciler, "_projection_for_active", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        reconciler,
+        "_generation_audit",
+        lambda **_kwargs: SimpleNamespace(replay_reason="missing_authority"),
+    )
+    monkeypatch.setattr(reconciler, "_orphan_generation_keys", lambda **_kwargs: ())
+    monkeypatch.setattr(reconciler, "_projection_settings", lambda: object())
+    monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
+    monkeypatch.setattr(reconciler, "_memgraph_repository", lambda: object())
     enqueued = []
     monkeypatch.setattr(
         reconciler,
@@ -195,6 +282,10 @@ def test_reconcile_handles_empty_store_drift_and_newer_artifact_in_pages(monkeyp
 def test_pruning_is_bounded_and_dry_run_never_deletes(monkeypatch):
     rows = tuple(SimpleNamespace(id=uuid4()) for _ in range(3))
     monkeypatch.setattr(reconciler, "_prune_candidates", lambda **_kwargs: rows)
+    monkeypatch.setattr(reconciler, "_orphan_generation_keys", lambda **_kwargs: ())
+    monkeypatch.setattr(reconciler, "_projection_settings", lambda: object())
+    monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
+    monkeypatch.setattr(reconciler, "_memgraph_repository", lambda: object())
     deleted = []
     monkeypatch.setattr(
         reconciler, "_delete_projection_generation", lambda row: deleted.append(row.id)

@@ -11,6 +11,7 @@ from .lifecycle import (
     publish_projection_ready_compare_and_set,
     record_projection_private_mapping_checksum,
 )
+from .memgraph_driver import MemgraphDriverError
 from .memgraph_repository import MemgraphProjectionRepository
 from .postgres_repository import PostgresProjectionRepository
 from .records import (
@@ -48,6 +49,13 @@ def _projection_settings():
 
 def _memgraph_repository():
     return memgraph_projection_repository(_projection_settings())
+
+
+def _backend_transient(exc: BaseException) -> bool:
+    return isinstance(exc, (ConnectionError, TimeoutError)) or (
+        isinstance(exc, MemgraphDriverError)
+        and exc.code in {"memgraph_read_failed", "memgraph_write_failed"}
+    )
 
 
 def _expected_manifest(bundle, private_mapping_checksum: str):
@@ -138,9 +146,9 @@ def project_generation(
             outcome.published,
             outcome.failure_code,
         )
-    except (ConnectionError, TimeoutError):
-        raise TimeoutError("projection_backend_transient") from None
     except Exception as exc:
+        if _backend_transient(exc):
+            raise TimeoutError("projection_backend_transient") from None
         code = (
             ProjectionFailureCode.VALIDATION_FAILED
             if str(exc) == "projection_validation_failed"
@@ -154,8 +162,9 @@ def project_generation(
                 now=timezone.now(),
                 using="default",
             )
-        except Exception:
-            pass
+        except Exception as failure_exc:
+            if _backend_transient(failure_exc):
+                raise TimeoutError("projection_backend_transient") from None
         return ProjectionRunOutcomeV1(identifier, False, code.value)
 
 
