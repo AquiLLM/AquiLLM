@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+# fmt: off
 from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
@@ -120,6 +122,12 @@ def _success(kind: HybridBranchKind) -> BranchEnvelopeV1:
     )
 
 
+def _failed(kind, reason, **changes: int) -> BranchEnvelopeV1:
+    values = {"seed_count": 0, "node_count": 0, "edge_count": 0, "candidate_count": 0}
+    values.update(changes)
+    return BranchEnvelopeV1(kind, BranchStatusV1.FAILED, None, reason, _diagnostics(**values))
+
+
 def test_closed_shared_direct_extended_failure_values_and_status() -> None:
     assert tuple(SharedBranchFailureReason) == (
         "readiness_mismatch",
@@ -215,13 +223,7 @@ def test_candidates_and_provenance_pin_rank_order_checksum_and_safe_aggregates()
 def test_envelope_distinguishes_local_failures_and_preserves_successful_sibling() -> (
     None
 ):
-    direct_failure = BranchEnvelopeV1(
-        HybridBranchKind.DIRECT,
-        BranchStatusV1.FAILED,
-        None,
-        DirectBranchFailureReason.MIXED_ONTOLOGY,
-        _diagnostics(candidate_count=0),
-    )
+    direct_failure = _failed(HybridBranchKind.DIRECT, DirectBranchFailureReason.MIXED_ONTOLOGY)
     outcome = HybridBranchOutcomeV1(
         direct=direct_failure,
         extended=_success(HybridBranchKind.EXTENDED),
@@ -238,16 +240,33 @@ def test_envelope_distinguishes_local_failures_and_preserves_successful_sibling(
 
 def test_shared_failure_requires_both_branches_to_fail_with_same_reason() -> None:
     reason = SharedBranchFailureReason.BACKEND_UNAVAILABLE
-    direct = BranchEnvelopeV1(
-        HybridBranchKind.DIRECT,
-        BranchStatusV1.FAILED,
-        None,
-        reason,
-        _diagnostics(candidate_count=0),
-    )
+    direct = _failed(HybridBranchKind.DIRECT, reason)
     extended = replace(direct, branch_kind=HybridBranchKind.EXTENDED)
     HybridBranchOutcomeV1(direct, extended, reason)
     with pytest.raises(ValueError, match="shared"):
         HybridBranchOutcomeV1(direct, _success(HybridBranchKind.EXTENDED), reason)
     with pytest.raises(TypeError):
         HybridBranchOutcomeV1(direct, extended, "backend_unavailable")
+
+
+def test_failure_diagnostics_are_bound_to_branch_stage() -> None:
+    zero_reasons = tuple((HybridBranchKind.DIRECT, reason) for reason in DirectBranchFailureReason if "topology" not in reason and "ppr" not in reason) + tuple((HybridBranchKind.EXTENDED, reason) for reason in ExtendedBranchFailureReason if "topology" not in reason and "ppr" not in reason) + tuple((HybridBranchKind.DIRECT, reason) for reason in SharedBranchFailureReason if reason not in (SharedBranchFailureReason.OVERALL_DEADLINE, SharedBranchFailureReason.FUSION_INVALID))
+    for kind, reason in zero_reasons:
+        _failed(kind, reason)
+        for metric in ("seed_count", "node_count", "edge_count", "candidate_count"):
+            with pytest.raises(ValueError, match="diagnostic|zero|stage"):
+                _failed(kind, reason, **{metric: 1})
+    topology = tuple((HybridBranchKind.DIRECT, reason) for reason in DirectBranchFailureReason if "topology" in reason) + tuple((HybridBranchKind.EXTENDED, reason) for reason in ExtendedBranchFailureReason if "topology" in reason)
+    for kind, reason in topology:
+        _failed(kind, reason, seed_count=1)
+        with pytest.raises(ValueError, match="seed|stage"):
+            _failed(kind, reason)
+    for kind, reason in ((HybridBranchKind.DIRECT, DirectBranchFailureReason.DIRECT_PPR_INVALID), (HybridBranchKind.EXTENDED, ExtendedBranchFailureReason.EXTENDED_PPR_INVALID)):
+        _failed(kind, reason, seed_count=1, node_count=1)
+        for changes in ({"seed_count": 0, "node_count": 1}, {"seed_count": 1, "node_count": 0}):
+            with pytest.raises(ValueError, match="seed|node|stage"):
+                _failed(kind, reason, **changes)
+    for kind, reason in ((HybridBranchKind.DIRECT, SharedBranchFailureReason.OVERALL_DEADLINE), (HybridBranchKind.EXTENDED, SharedBranchFailureReason.FUSION_INVALID)):
+        _failed(kind, reason, seed_count=1, node_count=1, edge_count=1)
+        with pytest.raises(ValueError, match="candidate"):
+            _failed(kind, reason, candidate_count=1)

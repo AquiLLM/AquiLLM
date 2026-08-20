@@ -4,6 +4,7 @@ from enum import StrEnum
 
 import pytest
 
+from lib.knowledge_graph.query_extractor import contracts as extractor_contracts
 from lib.knowledge_graph.query_extractor.contracts import (
     MAX_QUERY_REQUEST_BODY_BYTES,
     QUERY_EXTRACTION_RESPONSE_SCHEMA_CHECKSUM,
@@ -124,6 +125,16 @@ def test_exact_builtin_types_tokens_revisions_digests_and_caps() -> None:
     for value in (REVISION.upper(), "f" * 39, Text(REVISION)):
         with pytest.raises((TypeError, ValueError)):
             replace(_provenance(), model_revision=value)
+    with pytest.raises(TypeError):
+        replace(_request(), schema_version=Text("query-request-v1"))
+    for changes in (
+        {"schema_version": Text(QUERY_EXTRACTION_RESPONSE_SCHEMA_VERSION)},
+        {"schema_checksum": Text(QUERY_EXTRACTION_RESPONSE_SCHEMA_CHECKSUM)},
+    ):
+        with pytest.raises(TypeError):
+            replace(_provenance(), **changes)
+    with pytest.raises(ValueError, match="UTF-8"):
+        QueryEntitySpanV1(chr(0xD800), 0, 1, 0.5)
     with pytest.raises(ValueError):
         _request("x" * 33)
     for character in ("\x00", "\t", "\n", "\x1f", "\x7f"):
@@ -181,6 +192,28 @@ def test_canonical_json_has_exact_fields_and_rejects_unknown_or_noncanonical() -
     ).encode()
     with pytest.raises(ValueError, match="canonical hexadecimal"):
         parse_query_extraction_response(overflow)
+    request_payload = json.loads(request_bytes)
+    request_payload["query"] = chr(0xD800)
+    escaped_surrogate = json.dumps(
+        request_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode()
+    with pytest.raises(ValueError, match="UTF-8"):
+        parse_query_extraction_request(escaped_surrogate)
+
+
+def test_response_parser_rejects_span_overflow_before_construction(monkeypatch) -> None:
+    payload = json.loads(canonical_query_extraction_response_bytes(_response()))
+    payload["spans"] *= 129
+    body = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    monkeypatch.setattr(
+        extractor_contracts,
+        "QueryEntitySpanV1",
+        lambda *args: pytest.fail("span constructed before cap check"),
+    )
+    with pytest.raises(ValueError, match="cap"):
+        parse_query_extraction_response(body)
 
 
 def test_contract_package_exports_data_only_without_optional_runtime() -> None:

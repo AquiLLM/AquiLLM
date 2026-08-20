@@ -231,6 +231,15 @@ class BranchEnvelopeV1:
                 raise TypeError("failure_reason is not valid for this branch")
             if self.diagnostics.candidate_count:
                 raise ValueError("failed diagnostics must not claim candidates")
+            reason = self.failure_reason
+            zero_stage = (type(reason) is SharedBranchFailureReason and reason not in (SharedBranchFailureReason.OVERALL_DEADLINE, SharedBranchFailureReason.FUSION_INVALID)) or (type(reason) is DirectBranchFailureReason and reason not in (DirectBranchFailureReason.DIRECT_TOPOLOGY_TIMEOUT, DirectBranchFailureReason.DIRECT_TOPOLOGY_INVALID, DirectBranchFailureReason.DIRECT_PPR_INVALID)) or (type(reason) is ExtendedBranchFailureReason and reason not in (ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT, ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_INVALID, ExtendedBranchFailureReason.EXTENDED_PPR_INVALID))
+            if zero_stage and any((self.diagnostics.seed_count, self.diagnostics.node_count, self.diagnostics.edge_count, self.diagnostics.candidate_count)):
+                raise ValueError("failure diagnostics must be zero before topology")
+            topology_reasons = (DirectBranchFailureReason.DIRECT_TOPOLOGY_TIMEOUT, DirectBranchFailureReason.DIRECT_TOPOLOGY_INVALID, ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT, ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_INVALID)
+            if reason in topology_reasons and self.diagnostics.seed_count < 1:
+                raise ValueError("topology failure diagnostics require a seed")
+            if reason in (DirectBranchFailureReason.DIRECT_PPR_INVALID, ExtendedBranchFailureReason.EXTENDED_PPR_INVALID) and (self.diagnostics.seed_count < 1 or self.diagnostics.node_count < 1):
+                raise ValueError("PPR failure diagnostics require a seed and node")
 @final
 @dataclass(frozen=True, slots=True)
 class HybridBranchOutcomeV1:

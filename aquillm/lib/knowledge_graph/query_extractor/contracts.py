@@ -34,6 +34,10 @@ def _int(value: object, name: str, minimum: int, maximum: int) -> None:
 def _token(value: object, name: str, maximum: int = 256) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact str")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError(f"{name} must be valid UTF-8") from error
     if not value or value != value.strip() or len(value) > maximum:
         raise ValueError(f"{name} must be a bounded canonical token")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
@@ -53,6 +57,8 @@ class QueryExtractionRequestV1:
     max_query_code_points: int
     max_spans: int
     def __post_init__(self) -> None:
+        if type(self.schema_version) is not str:
+            raise TypeError("schema_version must be an exact str")
         if self.schema_version != QUERY_EXTRACTION_REQUEST_SCHEMA_VERSION:
             raise ValueError("schema_version is not query-request-v1")
         if type(self.query) is not str:
@@ -86,6 +92,8 @@ class QueryExtractorProvenanceV1:
     ontology_checksum: str
     build_hash: str
     def __post_init__(self) -> None:
+        if type(self.schema_version) is not str or type(self.schema_checksum) is not str:
+            raise TypeError("schema_version and schema_checksum must be exact str values")
         _token(self.model_identifier, "model_identifier")
         _digest(self.model_revision, "model_revision", _REVISION)
         if self.schema_version != QUERY_EXTRACTION_RESPONSE_SCHEMA_VERSION:
@@ -205,7 +213,11 @@ def _payload(data: bytes, fields: frozenset[str], maximum: int) -> dict[str, obj
         raise ValueError("wire data must be valid JSON") from error
     if type(value) is not dict or set(value) != fields:
         raise ValueError("wire object has an invalid field set")
-    if data != _canonical(value):
+    try:
+        canonical = _canonical(value)
+    except UnicodeEncodeError as error:
+        raise ValueError("wire object must contain valid UTF-8") from error
+    if data != canonical:
         raise ValueError("wire object must use canonical JSON")
     return value
 def parse_query_extraction_request(data: bytes) -> QueryExtractionRequestV1:
@@ -243,6 +255,8 @@ def parse_query_extraction_response(data: bytes) -> QueryExtractionResponseV1:
         raise ValueError("provenance has an invalid field set")
     if type(spans) is not list:
         raise TypeError("spans must be a JSON array")
+    if len(spans) > MAX_QUERY_SPANS:
+        raise ValueError("spans exceed the hard cap")
     parsed_spans: list[QueryEntitySpanV1] = []
     for span in spans:
         if type(span) is not dict or set(span) != {

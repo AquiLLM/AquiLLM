@@ -63,35 +63,50 @@ def _key(value: object, name: str) -> None:
 def _token(value: object, name: str, maximum: int = 128) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact str")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError(f"{name} must be valid UTF-8") from error
     if not value or value != value.strip() or len(value) > maximum:
         raise ValueError(f"{name} must be a bounded canonical token")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise ValueError(f"{name} contains a forbidden control character")
 @final
-@dataclass(frozen=True, slots=True, repr=False)
 class DirectResolutionSpanInputV1:
-    span: QueryEntitySpanV1
-    text: str
-    def __post_init__(self) -> None:
-        if type(self.span) is not QueryEntitySpanV1:
+    __slots__ = ("_span", "_text")
+    def __init__(self, span: QueryEntitySpanV1, text: str) -> None:
+        if type(span) is not QueryEntitySpanV1:
             raise TypeError("span must be an exact QueryEntitySpanV1")
-        if type(self.text) is not str:
+        if type(text) is not str:
             raise TypeError("text must be an exact transient str")
         try:
-            encoded = self.text.encode("utf-8")
+            encoded = text.encode("utf-8")
         except UnicodeEncodeError as error:
             raise ValueError("text must be valid UTF-8") from error
         if len(encoded) > MAX_QUERY_UTF8_BYTES:
             raise ValueError("text exceeds its UTF-8 byte bound")
-        if any(ord(character) < 32 or ord(character) == 127 for character in self.text):
+        if any(ord(character) < 32 or ord(character) == 127 for character in text):
             raise ValueError("text contains a forbidden C0/DEL control character")
-        if len(self.text) != self.span.end - self.span.start:
+        if len(text) != span.end - span.start:
             raise ValueError("text length must equal the span code-point width")
+        object.__setattr__(self, "_span", span)
+        object.__setattr__(self, "_text", text)
+    @property
+    def span(self) -> QueryEntitySpanV1:
+        return self._span
+    @property
+    def text(self) -> str:
+        return self._text
+    def __setattr__(self, _name: str, _value: object) -> None:
+        raise AttributeError("transient direct-resolution input is immutable")
+    def __delattr__(self, _name: str) -> None:
+        raise AttributeError("transient direct-resolution input is immutable")
     def __repr__(self) -> str:
         return "<DirectResolutionSpanInputV1 redacted>"
     __str__ = __repr__
-    def __reduce__(self) -> object:
+    def _blocked(self, *_args: object) -> object:
         raise TypeError("transient direct-resolution input is not serializable")
+    __copy__ = __deepcopy__ = __reduce__ = __reduce_ex__ = _blocked
 @final
 @dataclass(frozen=True, slots=True)
 class DirectEntityMatchV1:
@@ -120,7 +135,9 @@ class DirectEntityMatchV1:
             * _TIER_FACTORS[self.tier]
             * (self.similarity if self.tier is DirectResolutionTier.EMBEDDING else 1.0)
         )
-        if not isclose(self.match_weight, expected, rel_tol=0.0, abs_tol=1e-12):
+        if expected <= 0.0:
+            raise ValueError("authoritative match_weight must be strictly positive")
+        if self.match_weight != expected:
             raise ValueError("match_weight disagrees with its tier semantics")
 @final
 @dataclass(frozen=True, slots=True)
@@ -206,6 +223,8 @@ class DirectSeedOutcomeV1:
             and type(self.failure_reason) is not DirectFailureReason
         ):
             raise TypeError("failure_reason must be an exact DirectFailureReason")
+        if self.failure_reason is not None and self.failure_reason not in (DirectFailureReason.EXTRACTOR_TIMEOUT, DirectFailureReason.EXTRACTOR_AUTH, DirectFailureReason.EXTRACTOR_PROVENANCE, DirectFailureReason.MIXED_ONTOLOGY, DirectFailureReason.DIRECT_SEED_INVALID, DirectFailureReason.DIRECT_NO_SEEDS, DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE):
+            raise ValueError("failure_reason is not valid at the direct-seed stage")
         match_keys = tuple(
             (row.span_index, row.tier.priority, row.component_key, row.entity_key)
             for row in self.matches
@@ -215,6 +234,8 @@ class DirectSeedOutcomeV1:
         _ordered_unique(match_keys, "matches")
         _ordered_unique(seed_keys, "seeds")
         _ordered_unique(ambiguity_keys, "ambiguities")
+        if any(row.span_index >= self.diagnostics.deduplicated_span_count for row in (*self.matches, *self.ambiguities)):
+            raise ValueError("outcome span index exceeds deduplicated span count")
         match_spans = {row.span_index for row in self.matches}
         if len(match_spans) != len(self.matches):
             raise ValueError("matches must retain one best component per span")
