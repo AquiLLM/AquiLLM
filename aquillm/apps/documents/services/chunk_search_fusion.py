@@ -204,7 +204,8 @@ def fuse_candidates(
         raise ValueError(_INVALID_CAPS) from error
     if type(baseline) is not tuple or len(baseline) > 606 or any(type(row) is not BaselineCandidate for row in baseline) or len({row.integer_chunk_pk for row in baseline}) != len(baseline):
         raise ValueError(_INVALID_BASELINE)
-    baseline = baseline[:baseline_cap]
+    full_baseline = baseline
+    baseline = full_baseline[:baseline_cap]
     plain = _plain_baseline(baseline)
     baseline_by_pk = {row.integer_chunk_pk: row for row in baseline}
     direct_count, extended_count = _safe_count(direct), _safe_count(extended)
@@ -213,7 +214,7 @@ def fuse_candidates(
     valid = (not graph_present or ready_valid) and (direct is None or _valid_branch(direct, CandidateSource.DIRECT, expected_ready_bundle_checksum)) and (extended is None or _valid_branch(extended, CandidateSource.EXTENDED, expected_ready_bundle_checksum))
     if not valid:
         return _invalid_graph(plain, direct_count, extended_count)
-    if not _complete_mapping_valid(baseline, direct, extended):
+    if not _complete_mapping_valid(full_baseline, direct, extended):
         return _invalid_graph(plain, direct_count, extended_count)
     selected_direct = direct.candidates[:direct_cap] if direct is not None else ()
     selected_extended = extended.candidates[:extended_cap] if extended is not None else ()

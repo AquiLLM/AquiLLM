@@ -179,7 +179,6 @@ def test_graph_rrf_dedupe_order_caps_and_exact_float_vector() -> None:
     assert overlap.sources == (CandidateSource.DIRECT, CandidateSource.EXTENDED)
     assert result.diagnostics == FusionDiagnostics(1, 3, 3, 0, 1, 4, 3, 1, False, None)
 
-
 @pytest.mark.parametrize(
     ("left", "right", "expected"),
     [
@@ -194,7 +193,6 @@ def test_ties_fall_through_to_document_chunk_and_pk(left, right, expected) -> No
         extended=_branch(CandidateSource.EXTENDED, (right,)),
     )
     assert [row.integer_chunk_pk for row in result.candidates] == expected
-
 
 def test_independent_branch_caps_and_graph_cap() -> None:
     direct = _branch(CandidateSource.DIRECT, (_graph(1, 1), _graph(2, 2)))
@@ -244,9 +242,8 @@ def test_cross_source_coordinate_mismatch_drops_graph() -> None:
     assert result.candidates == ()
     assert result.diagnostics.malformed_provenance
 
-
 def test_complete_uncapped_mapping_bijection_is_validated_before_branch_caps() -> None:
-    baseline = (_baseline(9, doc=1),)
+    baseline = (_baseline(1, doc=1), _baseline(9, doc=1))
     baseline_conflict = _branch(CandidateSource.DIRECT, (_graph(2, 1), _graph(9, 2, doc=2)))
     key = "f" * 64
     same_key_direct = _branch(CandidateSource.DIRECT, (_graph(2, 1), replace(_graph(3, 2), chunk_key=key)))
@@ -255,10 +252,13 @@ def test_complete_uncapped_mapping_bijection_is_validated_before_branch_caps() -
     same_pk_extended = _branch(CandidateSource.EXTENDED, (_graph(4, 1), replace(_graph(6, 2), chunk_key="e" * 64)))
     cases = ((baseline, baseline_conflict, None), ((), same_key_direct, same_key_extended), ((), same_pk_direct, same_pk_extended))
     for baseline_rows, direct, extended in cases:
-        result = _fuse(baseline_rows, direct, extended, direct_cap=1, extended_cap=1)
-        assert result.rerank_candidates == tuple(row.candidate_object for row in baseline_rows)
+        result = _fuse(baseline_rows, direct, extended, baseline_cap=1, direct_cap=1, extended_cap=1)
+        assert result.rerank_candidates == tuple(row.candidate_object for row in baseline_rows[:1])
         assert result.diagnostics.malformed_provenance
         assert result.diagnostics.failure_reason is FusionFailureReason.GRAPH_PROVENANCE_INVALID
+    valid_beyond_cap = _branch(CandidateSource.DIRECT, (_graph(9, 1, doc=1),))
+    retained = _fuse(baseline, valid_beyond_cap, baseline_cap=1)
+    assert [row.integer_chunk_pk for row in retained.candidates] == [1, 9]; assert retained.candidates[1].baseline_rank is None
 
 
 def test_randomized_construction_order_has_canonical_output() -> None:
