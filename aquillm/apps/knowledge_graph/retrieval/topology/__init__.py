@@ -1,6 +1,8 @@
 """Safe exports for provider-neutral projected-topology contracts."""
 
 from .contracts import (
+    PROJECTED_SEED_MASS_ABS_TOLERANCE,
+    PROJECTED_SEED_MASS_POLICY,
     AuthorizedProjectedDocumentV1,
     HybridBranchKind,
     ProjectedSeedV1,
@@ -17,9 +19,12 @@ from .contracts import (
     TopologyScalar,
     projected_seed_checksum,
     ready_generation_bundle_checksum,
+    validate_projected_seed_sequence,
 )
 
 __all__ = [
+    "PROJECTED_SEED_MASS_ABS_TOLERANCE",
+    "PROJECTED_SEED_MASS_POLICY",
     "AuthorizedProjectedDocumentV1",
     "HybridBranchKind",
     "ProjectedSeedV1",
@@ -36,4 +41,5 @@ __all__ = [
     "TopologyScalar",
     "projected_seed_checksum",
     "ready_generation_bundle_checksum",
+    "validate_projected_seed_sequence",
 ]

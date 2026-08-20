@@ -83,6 +83,7 @@ def test_unicode_code_point_spans_are_text_free_bounded_and_canonical() -> None:
     response = _response()
     assert not hasattr(response.spans[0], "text")
     assert "A😀B"[response.spans[0].start : response.spans[0].end] == "😀"
+    assert "😀".encode() not in canonical_query_extraction_response_bytes(response)
     with pytest.raises(FrozenInstanceError):
         response.query_code_points = 4  # type: ignore[misc]
     assert not hasattr(response, "__dict__")
@@ -125,6 +126,9 @@ def test_exact_builtin_types_tokens_revisions_digests_and_caps() -> None:
             replace(_provenance(), model_revision=value)
     with pytest.raises(ValueError):
         _request("x" * 33)
+    for character in ("\x00", "\t", "\n", "\x1f", "\x7f"):
+        with pytest.raises(ValueError, match="control"):
+            _request(f"a{character}b")
     with pytest.raises(ValueError, match="cap"):
         parse_query_extraction_request(b"x" * (MAX_QUERY_REQUEST_BODY_BYTES + 1))
     with pytest.raises(ValueError, match="cap"):
@@ -156,6 +160,16 @@ def test_canonical_json_has_exact_fields_and_rejects_unknown_or_noncanonical() -
         )
     with pytest.raises(ValueError, match="canonical"):
         parse_query_extraction_request(request_bytes.replace(b"{", b"{ ", 1))
+    response_payload = json.loads(response_bytes)
+    response_payload["spans"][0]["confidence"] = "0X1.8P-1"
+    alternate = json.dumps(
+        response_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    with pytest.raises(ValueError, match="canonical hexadecimal"):
+        parse_query_extraction_response(alternate)
 
 
 def test_contract_package_exports_data_only_without_optional_runtime() -> None:

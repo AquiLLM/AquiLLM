@@ -18,6 +18,7 @@ from apps.knowledge_graph.retrieval.topology.contracts import (
     TopologyLoadResultV1,
     projected_seed_checksum,
     ready_generation_bundle_checksum,
+    validate_projected_seed_sequence,
 )
 
 K = tuple(character * 64 for character in "123456789abcdef")
@@ -29,6 +30,7 @@ def _generation() -> SelectedCollectionGenerationV1:
         generation_key=K[1],
         active_artifact_key=K[2],
         projection_key=K[3],
+        graph_checksum=K[14],
         schema_version="memgraph-schema-v1",
         projection_version="projection-v1",
         identifier_key_version="key-v1",
@@ -49,7 +51,7 @@ def _ready() -> ReadyGenerationBundleV1:
         authorized_documents=documents,
         authorization_context_signature=K[8],
         bundle_checksum=(
-            "259d06f4403cf272b030255fb6b58ef76c0d6d55abd05b6626b3f4734755d4fc"
+            "0a72bdf2b473ddc41f32d9e218972355ba0e5e9041caca2c8df359d4d55f6d58"
         ),
     )
 
@@ -73,6 +75,15 @@ def test_ready_generation_checksum_vector_fields_and_scope_closure() -> None:
         == ready.bundle_checksum
     )
     assert ReadyGenerationBundleV1.__module__.endswith("topology.contracts")
+    assert tuple(field.name for field in fields(SelectedCollectionGenerationV1))[
+        :5
+    ] == (
+        "collection_key",
+        "generation_key",
+        "active_artifact_key",
+        "projection_key",
+        "graph_checksum",
+    )
     assert tuple(field.name for field in fields(ReadyGenerationBundleV1)) == (
         "selected_generations",
         "authorized_documents",
@@ -84,6 +95,15 @@ def test_ready_generation_checksum_vector_fields_and_scope_closure() -> None:
     assert not hasattr(ready, "__dict__")
     with pytest.raises(ValueError, match="checksum"):
         replace(ready, bundle_checksum=K[9])
+    changed = (replace(ready.selected_generations[0], graph_checksum=K[13]),)
+    assert (
+        ready_generation_bundle_checksum(
+            changed, ready.authorized_documents, ready.authorization_context_signature
+        )
+        != ready.bundle_checksum
+    )
+    with pytest.raises((TypeError, ValueError)):
+        replace(ready.selected_generations[0], graph_checksum=K[10].upper())
     with pytest.raises(ValueError, match="closure"):
         replace(
             ready,
@@ -120,6 +140,13 @@ def test_generation_document_order_uniqueness_and_exact_builtin_types() -> None:
             (ready.authorized_documents[0], document),
             ready.authorization_context_signature,
             checksum,
+        )
+    bad_mass = (ProjectedSeedV1(K[9], 0.6), ProjectedSeedV1(K[10], 0.5))
+    with pytest.raises(ValueError, match="mass"):
+        validate_projected_seed_sequence(
+            bad_mass,
+            maximum=2,
+            expected_checksum=projected_seed_checksum(bad_mass),
         )
     with pytest.raises(TypeError):
         replace(_generation(), membership_epoch=True)
@@ -242,6 +269,12 @@ def test_provider_neutral_protocols_and_safe_result_shape() -> None:
         failure_reason=TopologyFailureReason.BACKEND_UNAVAILABLE,
     )
     assert result.failure_reason is TopologyFailureReason.BACKEND_UNAVAILABLE
+    replace(result, failure_reason=TopologyFailureReason.DIRECT_TOPOLOGY_TIMEOUT)
+    replace(
+        result,
+        branch_kind=HybridBranchKind.EXTENDED,
+        failure_reason=TopologyFailureReason.EXTENDED_TOPOLOGY_INVALID,
+    )
     assert not {
         "query",
         "text",
@@ -250,3 +283,10 @@ def test_provider_neutral_protocols_and_safe_result_shape() -> None:
     } & {field.name for field in fields(TopologyLoadResultV1)}
     with pytest.raises(TypeError):
         replace(result, failure_reason="backend_unavailable")
+    replace(result, failure_reason=TopologyFailureReason.OVERALL_DEADLINE)
+    for kind, reason in (
+        (HybridBranchKind.DIRECT, TopologyFailureReason.EXTENDED_TOPOLOGY_TIMEOUT),
+        (HybridBranchKind.EXTENDED, TopologyFailureReason.DIRECT_TOPOLOGY_INVALID),
+    ):
+        with pytest.raises(ValueError, match="branch"):
+            replace(result, branch_kind=kind, failure_reason=reason)

@@ -39,6 +39,7 @@ def _ready() -> ReadyGenerationBundleV1:
         K[1],
         K[2],
         K[3],
+        K[14],
         "memgraph-schema-v1",
         "projection-v1",
         "key-v1",
@@ -169,6 +170,9 @@ def test_branch_requests_are_exact_kind_bound_and_text_free() -> None:
         replace(direct, seeds=list(direct.seeds))
     with pytest.raises(TypeError):
         replace(direct, caps="not-caps")
+    bad = (ProjectedSeedV1(K[9], 0.6), ProjectedSeedV1(K[10], 0.5))
+    with pytest.raises(ValueError, match="mass"):
+        replace(direct, seeds=bad, seed_checksum=projected_seed_checksum(bad))
 
 
 def test_candidates_and_provenance_pin_rank_order_checksum_and_safe_aggregates() -> (
@@ -184,6 +188,18 @@ def test_candidates_and_provenance_pin_rank_order_checksum_and_safe_aggregates()
     assert not hasattr(direct, "__dict__")
     with pytest.raises(ValueError, match="contiguous"):
         replace(direct, candidates=(replace(candidates[0], rank=2),))
+    for rows in (
+        (
+            GraphBranchCandidateV1("a" * 64, 1, 0.4),
+            GraphBranchCandidateV1("b" * 64, 2, 0.5),
+        ),
+        (
+            GraphBranchCandidateV1("b" * 64, 1, 0.5),
+            GraphBranchCandidateV1("a" * 64, 2, 0.5),
+        ),
+    ):
+        with pytest.raises(ValueError, match="score|order"):
+            replace(direct, candidates=rows)
     with pytest.raises(ValueError, match="checksum|count"):
         replace(direct, candidates=(replace(candidates[0], chunk_key="b" * 64),))
     with pytest.raises(TypeError):

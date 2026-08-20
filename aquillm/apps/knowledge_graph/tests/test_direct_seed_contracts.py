@@ -1,3 +1,5 @@
+import json
+import pickle
 from dataclasses import FrozenInstanceError, fields, replace
 from math import fsum
 
@@ -6,12 +8,14 @@ import pytest
 from apps.knowledge_graph.retrieval.direct_seed_contracts import (
     DirectEntityMatchV1,
     DirectFailureReason,
+    DirectResolutionSpanInputV1,
     DirectResolutionTier,
     DirectSeedAmbiguityV1,
     DirectSeedDiagnosticsV1,
     DirectSeedOutcomeV1,
     ResolvedDirectSeedV1,
 )
+from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 
 K = tuple(character * 64 for character in "123456789abcdef")
 
@@ -138,6 +142,28 @@ def test_seed_mass_member_order_best_match_and_diagnostic_coherence() -> None:
         replace(outcome, diagnostics=_diagnostics(resolved_span_count=0))
 
 
+def test_local_resolution_span_is_redacted_and_not_serializable() -> None:
+    class Text(str):
+        pass
+
+    span = QueryEntitySpanV1("person", 0, 6, 0.9)
+    local = DirectResolutionSpanInputV1(span, "Élodie", "élodie")
+    assert local.text == "Élodie"
+    assert "Élodie" not in repr(local) and "Élodie" not in str(local)
+    with pytest.raises(TypeError):
+        pickle.dumps(local)
+    with pytest.raises(TypeError):
+        json.dumps(local)
+    with pytest.raises(ValueError, match="length"):
+        replace(local, text="Élodi")
+    with pytest.raises(ValueError, match="normalized"):
+        replace(local, normalized_lookup_text="Élodie")
+    with pytest.raises(TypeError):
+        replace(local, text=Text("Élodie"))
+    with pytest.raises(ValueError, match="control"):
+        replace(local, text="a\nbcde", normalized_lookup_text="a bcde")
+
+
 def test_component_mass_is_the_normalized_fsum_of_best_match_weights() -> None:
     first = _match()
     second = replace(
@@ -168,6 +194,32 @@ def test_component_mass_is_the_normalized_fsum_of_best_match_weights() -> None:
         )
 
 
+def test_seed_rows_sort_by_descending_mass_then_smallest_member_key() -> None:
+    low = replace(_match(), extraction_confidence=0.4, match_weight=0.38)
+    high = replace(
+        _match(span_index=1, component_key=K[3]),
+        entity_key=K[2],
+    )
+    total = fsum((low.match_weight, high.match_weight))
+    seeds = (
+        ResolvedDirectSeedV1(K[3], (K[2],), high.match_weight / total),
+        ResolvedDirectSeedV1(K[1], (K[0],), low.match_weight / total),
+    )
+    outcome = DirectSeedOutcomeV1(
+        (low, high),
+        seeds,
+        (),
+        _diagnostics(
+            input_span_count=2,
+            deduplicated_span_count=2,
+            resolved_span_count=2,
+        ),
+        None,
+    )
+    with pytest.raises(ValueError, match="sorted"):
+        replace(outcome, seeds=tuple(reversed(seeds)))
+
+
 def test_ambiguities_are_bounded_safe_disjoint_and_failure_is_closed() -> None:
     ambiguity = DirectSeedAmbiguityV1(
         span_index=0,
@@ -196,3 +248,28 @@ def test_ambiguities_are_bounded_safe_disjoint_and_failure_is_closed() -> None:
         replace(_outcome(), ambiguities=(ambiguity,))
     with pytest.raises(ValueError, match="failure"):
         replace(_outcome(), failure_reason=DirectFailureReason.DIRECT_SEED_INVALID)
+    second_tier = replace(ambiguity, tier=DirectResolutionTier.NAME)
+    with pytest.raises(ValueError, match="span|ambigu"):
+        DirectSeedOutcomeV1(
+            (),
+            (),
+            (ambiguity, second_tier),
+            _diagnostics(
+                input_span_count=2,
+                deduplicated_span_count=2,
+                resolved_span_count=0,
+                ambiguous_span_count=2,
+            ),
+            DirectFailureReason.DIRECT_NO_SEEDS,
+        )
+    for changes in (
+        {"embedding_attempt_count": 2},
+        {
+            "input_span_count": 0,
+            "deduplicated_span_count": 0,
+            "resolved_span_count": 0,
+            "embedding_attempt_count": 1,
+        },
+    ):
+        with pytest.raises(ValueError, match="embedding"):
+            _diagnostics(**changes)

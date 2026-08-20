@@ -17,7 +17,7 @@ from .topology.contracts import (
     ReadyGenerationBundleV1,
     TopologyCapsV1,
     TopologyDeadlineV1,
-    projected_seed_checksum,
+    validate_projected_seed_sequence,
 )
 
 _KEY = re.compile(r"[0-9a-f]{64}")
@@ -138,18 +138,7 @@ def _validate_request(value: object, expected: HybridBranchKind) -> None:
         raise TypeError("ready must be exact")
     if type(value.caps) is not TopologyCapsV1 or type(value.deadline) is not TopologyDeadlineV1:
         raise TypeError("caps and deadline must be exact")
-    if type(value.seeds) is not tuple or any(
-        type(seed) is not ProjectedSeedV1 for seed in value.seeds
-    ):
-        raise TypeError("seeds must contain exact ProjectedSeedV1 values")
-    if not value.seeds or len(value.seeds) > value.caps.max_seeds:
-        raise ValueError("seeds are empty or exceed caps")
-    keys = tuple(seed.identity_key for seed in value.seeds)
-    if len(set(keys)) != len(keys) or keys != tuple(sorted(keys)):
-        raise ValueError("seeds must be unique and canonically sorted")
-    _key(value.seed_checksum, "seed_checksum")
-    if value.seed_checksum != projected_seed_checksum(value.seeds):
-        raise ValueError("seed_checksum does not bind seeds")
+    validate_projected_seed_sequence(seeds=value.seeds, maximum=value.caps.max_seeds, expected_checksum=value.seed_checksum)
     if (
         value.caps.branch_kind is not expected
         or value.deadline.branch_kind is not expected
@@ -282,5 +271,7 @@ def _candidates(value: object) -> None:
         raise ValueError("candidates exceed the hard cap")
     if tuple(row.rank for row in value) != tuple(range(1, len(value) + 1)):
         raise ValueError("candidate ranks must be contiguous and one-based")
+    if value != tuple(sorted(value, key=lambda row: (-row.score, row.chunk_key))):
+        raise ValueError("candidate rank must follow descending score and opaque-key tie order")
     if len({row.chunk_key for row in value}) != len(value):
         raise ValueError("candidate chunk keys must be unique")

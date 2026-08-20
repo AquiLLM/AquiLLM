@@ -18,8 +18,7 @@ from apps.knowledge_graph.retrieval.projected_types import (
     projected_snapshot_checksum,
 )
 
-_MAX_COLLECTIONS = 128
-_MAX_DOCUMENTS = 10_000
+PROJECTED_SEED_MASS_ABS_TOLERANCE, PROJECTED_SEED_MASS_POLICY = 1e-12, "projected-seed-mass-v1"
 class HybridBranchKind(StrEnum):
     DIRECT = "direct"
     EXTENDED = "extended"
@@ -40,6 +39,7 @@ class TopologyFailureReason(StrEnum):
     DIRECT_TOPOLOGY_INVALID = "direct_topology_invalid"
     EXTENDED_TOPOLOGY_TIMEOUT = "extended_topology_timeout"
     EXTENDED_TOPOLOGY_INVALID = "extended_topology_invalid"
+_SHARED_TOPOLOGY_FAILURES = frozenset((TopologyFailureReason.READINESS_MISMATCH, TopologyFailureReason.AUTHORIZATION_CONTEXT_INVALID, TopologyFailureReason.BACKEND_AUTHENTICATION, TopologyFailureReason.BACKEND_UNAVAILABLE, TopologyFailureReason.BACKEND_PROVENANCE_MISMATCH, TopologyFailureReason.BACKEND_SCHEMA_MISMATCH, TopologyFailureReason.OVERALL_DEADLINE))
 def _token(value: object, name: str) -> None:
     _projection_token(value, name, maximum=128)
 def _canonical(value: object) -> bytes:
@@ -51,6 +51,7 @@ class SelectedCollectionGenerationV1:
     generation_key: str
     active_artifact_key: str
     projection_key: str
+    graph_checksum: str
     schema_version: str
     projection_version: str
     identifier_key_version: str
@@ -66,6 +67,7 @@ class SelectedCollectionGenerationV1:
             "generation_key",
             "active_artifact_key",
             "projection_key",
+            "graph_checksum",
             "membership_checksum",
             "resolution_config_checksum",
             "ontology_checksum",
@@ -97,7 +99,7 @@ def ready_generation_bundle_checksum(
 ) -> str:
     _rows(selected_generations, SelectedCollectionGenerationV1, "selected_generations")
     _rows(authorized_documents, AuthorizedProjectedDocumentV1, "authorized_documents")
-    if len(selected_generations) > _MAX_COLLECTIONS or len(authorized_documents) > _MAX_DOCUMENTS:
+    if len(selected_generations) > 128 or len(authorized_documents) > 10_000:
         raise ValueError("ready bundle checksum input exceeds its hard cap")
     _key(authorization_context_signature, "authorization_context_signature")
     payload = {
@@ -118,9 +120,9 @@ class ReadyGenerationBundleV1:
         _rows(self.authorized_documents, AuthorizedProjectedDocumentV1, "authorized_documents")
         if not self.selected_generations:
             raise ValueError("selected_generations must not be empty")
-        if len(self.selected_generations) > _MAX_COLLECTIONS:
+        if len(self.selected_generations) > 128:
             raise ValueError("selected_generations exceed the hard cap")
-        if len(self.authorized_documents) > _MAX_DOCUMENTS:
+        if len(self.authorized_documents) > 10_000:
             raise ValueError("authorized_documents exceed the hard cap")
         generation_order = tuple(
             row.collection_key for row in self.selected_generations
@@ -178,6 +180,17 @@ def projected_seed_checksum(seeds: tuple[ProjectedSeedV1, ...]) -> str:
     if len(seeds) > 64:
         raise ValueError("seeds exceed the hard cap")
     return sha256(_canonical([{"identity_key": row.identity_key, "mass": row.mass.hex()} for row in seeds])).hexdigest()
+def validate_projected_seed_sequence(seeds: tuple[ProjectedSeedV1, ...], *, maximum: int, expected_checksum: str) -> None:
+    _count(maximum, "maximum", 1, 64)
+    _rows(seeds, ProjectedSeedV1, "seeds")
+    if not seeds or len(seeds) > maximum:
+        raise ValueError("seeds are empty or exceed branch caps")
+    _ordered_unique(tuple(row.identity_key for row in seeds), "seeds")
+    if not isclose(fsum(row.mass for row in seeds), 1.0, rel_tol=0.0, abs_tol=PROJECTED_SEED_MASS_ABS_TOLERANCE):
+        raise ValueError(f"seed mass must normalize to one under {PROJECTED_SEED_MASS_POLICY}")
+    _key(expected_checksum, "expected_checksum")
+    if expected_checksum != projected_seed_checksum(seeds):
+        raise ValueError("seed checksum does not bind the exact sequence")
 @final
 @dataclass(frozen=True, slots=True)
 class TopologyCapsV1:
@@ -228,18 +241,7 @@ class ProjectedTopologyRequestV1:
             raise TypeError("ready must be exact")
         if type(self.caps) is not TopologyCapsV1 or type(self.deadline) is not TopologyDeadlineV1:
             raise TypeError("caps and deadline must be exact")
-        _rows(self.seeds, ProjectedSeedV1, "seeds")
-        if not self.seeds or len(self.seeds) > self.caps.max_seeds:
-            raise ValueError("seeds are empty or exceed branch caps")
-        keys = tuple(row.identity_key for row in self.seeds)
-        _ordered_unique(keys, "seeds")
-        if not isclose(
-            fsum(row.mass for row in self.seeds), 1.0, rel_tol=0.0, abs_tol=1e-12
-        ):
-            raise ValueError("seed mass must normalize to one")
-        _key(self.seed_checksum, "seed_checksum")
-        if self.seed_checksum != projected_seed_checksum(self.seeds):
-            raise ValueError("seed_checksum does not bind the exact seeds")
+        validate_projected_seed_sequence(seeds=self.seeds, maximum=self.caps.max_seeds, expected_checksum=self.seed_checksum)
         if self.caps.branch_kind is not self.deadline.branch_kind:
             raise ValueError("branch kinds disagree across caps and deadline")
 type TopologyScalar = str | int | float | bool | None
@@ -283,6 +285,9 @@ class TopologyLoadResultV1:
         else:
             if type(self.failure_reason) is not TopologyFailureReason:
                 raise TypeError("failure_reason must be exact")
+            local = {TopologyFailureReason.DIRECT_TOPOLOGY_TIMEOUT, TopologyFailureReason.DIRECT_TOPOLOGY_INVALID} if self.branch_kind is HybridBranchKind.DIRECT else {TopologyFailureReason.EXTENDED_TOPOLOGY_TIMEOUT, TopologyFailureReason.EXTENDED_TOPOLOGY_INVALID}
+            if self.failure_reason not in _SHARED_TOPOLOGY_FAILURES | local:
+                raise ValueError("failure_reason is not compatible with branch kind")
             if self.snapshot is not None or self.snapshot_checksum is not None:
                 raise ValueError("failed result must not expose a snapshot")
             if self.node_count or self.edge_count:

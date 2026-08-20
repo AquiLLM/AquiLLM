@@ -1,39 +1,36 @@
+# ruff: noqa: E501
+# fmt: off
 """Closed, privacy-safe contracts for deterministic direct entity seeds."""
-
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from math import fsum, isclose, isfinite
 from typing import final
+
+from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 
 _KEY = re.compile(r"[0-9a-f]{64}")
 _MAX_SPANS = 128
 _MAX_SEEDS = 64
 _MAX_MATCHES = 128
 _TIER_FACTORS: dict[DirectResolutionTier, float]
-
-
 class DirectResolutionTier(StrEnum):
     IDENTIFIER = "identifier"
     NAME = "name"
     ALIAS = "alias"
     EMBEDDING = "embedding"
-
     @property
     def priority(self) -> int:
         return tuple(type(self)).index(self)
-
-
 _TIER_FACTORS = {
     DirectResolutionTier.IDENTIFIER: 1.0,
     DirectResolutionTier.NAME: 0.95,
     DirectResolutionTier.ALIAS: 0.90,
     DirectResolutionTier.EMBEDDING: 0.80,
 }
-
-
 class DirectFailureReason(StrEnum):
     EXTRACTOR_TIMEOUT = "extractor_timeout"
     EXTRACTOR_AUTH = "extractor_auth"
@@ -45,39 +42,57 @@ class DirectFailureReason(StrEnum):
     DIRECT_TOPOLOGY_TIMEOUT = "direct_topology_timeout"
     DIRECT_TOPOLOGY_INVALID = "direct_topology_invalid"
     DIRECT_PPR_INVALID = "direct_ppr_invalid"
-
-
 def _count(value: object, name: str, maximum: int = _MAX_SPANS) -> None:
     if type(value) is not int:
         raise TypeError(f"{name} must be an exact int")
     if not 0 <= value <= maximum:
         raise ValueError(f"{name} is outside its bound")
-
-
 def _unit(value: object, name: str, *, positive: bool = False) -> None:
     if type(value) is not float:
         raise TypeError(f"{name} must be an exact float")
     lower = 0.0 < value if positive else 0.0 <= value
     if not isfinite(value) or not lower or value > 1.0:
         raise ValueError(f"{name} must be finite and in its unit interval")
-
-
 def _key(value: object, name: str) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact str")
     if _KEY.fullmatch(value) is None:
         raise ValueError(f"{name} must be a lowercase 64-hex opaque key")
-
-
-def _token(value: object, name: str) -> None:
+def _token(value: object, name: str, maximum: int = 128) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact str")
-    if not value or value != value.strip() or len(value) > 128:
+    if not value or value != value.strip() or len(value) > maximum:
         raise ValueError(f"{name} must be a bounded canonical token")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise ValueError(f"{name} contains a forbidden control character")
-
-
+@final
+@dataclass(frozen=True, slots=True, repr=False)
+class DirectResolutionSpanInputV1:
+    span: QueryEntitySpanV1
+    text: str
+    normalized_lookup_text: str
+    def __post_init__(self) -> None:
+        if type(self.span) is not QueryEntitySpanV1:
+            raise TypeError("span must be an exact QueryEntitySpanV1")
+        if type(self.text) is not str:
+            raise TypeError("text must be an exact transient str")
+        try:
+            self.text.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise ValueError("text must be valid UTF-8") from error
+        if any(ord(character) < 32 or ord(character) == 127 for character in self.text):
+            raise ValueError("text contains a forbidden C0/DEL control character")
+        if len(self.text) != self.span.end - self.span.start:
+            raise ValueError("text length must equal the span code-point width")
+        _token(self.normalized_lookup_text, "normalized_lookup_text", 512)
+        expected = " ".join(unicodedata.normalize("NFKC", self.text).casefold().split())
+        if self.normalized_lookup_text != expected:
+            raise ValueError("normalized_lookup_text is not canonical for text")
+    def __repr__(self) -> str:
+        return "<DirectResolutionSpanInputV1 redacted>"
+    __str__ = __repr__
+    def __reduce__(self) -> object:
+        raise TypeError("transient direct-resolution input is not serializable")
 @final
 @dataclass(frozen=True, slots=True)
 class DirectEntityMatchV1:
@@ -89,7 +104,6 @@ class DirectEntityMatchV1:
     extraction_confidence: float
     similarity: float
     match_weight: float
-
     def __post_init__(self) -> None:
         _count(self.span_index, "span_index", _MAX_SPANS - 1)
         _key(self.entity_key, "entity_key")
@@ -109,15 +123,12 @@ class DirectEntityMatchV1:
         )
         if not isclose(self.match_weight, expected, rel_tol=0.0, abs_tol=1e-12):
             raise ValueError("match_weight disagrees with its tier semantics")
-
-
 @final
 @dataclass(frozen=True, slots=True)
 class ResolvedDirectSeedV1:
     component_key: str
     member_entity_keys: tuple[str, ...]
     mass: float
-
     def __post_init__(self) -> None:
         _key(self.component_key, "component_key")
         if type(self.member_entity_keys) is not tuple or not self.member_entity_keys:
@@ -131,8 +142,6 @@ class ResolvedDirectSeedV1:
         ) or self.member_entity_keys != tuple(sorted(self.member_entity_keys)):
             raise ValueError("member_entity_keys must be unique and sorted")
         _unit(self.mass, "mass", positive=True)
-
-
 @final
 @dataclass(frozen=True, slots=True)
 class DirectSeedAmbiguityV1:
@@ -140,7 +149,6 @@ class DirectSeedAmbiguityV1:
     tier: DirectResolutionTier
     component_count: int
     candidate_count: int
-
     def __post_init__(self) -> None:
         _count(self.span_index, "span_index", _MAX_SPANS - 1)
         if type(self.tier) is not DirectResolutionTier:
@@ -149,8 +157,6 @@ class DirectSeedAmbiguityV1:
         _count(self.candidate_count, "candidate_count", _MAX_MATCHES)
         if self.component_count < 2 or self.candidate_count < self.component_count:
             raise ValueError("ambiguity counts are incoherent")
-
-
 @final
 @dataclass(frozen=True, slots=True)
 class DirectSeedDiagnosticsV1:
@@ -161,7 +167,6 @@ class DirectSeedDiagnosticsV1:
     unresolved_span_count: int
     embedding_attempt_count: int
     embedding_match_count: int
-
     def __post_init__(self) -> None:
         for field in fields(self):
             _count(getattr(self, field.name), field.name)
@@ -176,8 +181,8 @@ class DirectSeedDiagnosticsV1:
             raise ValueError("diagnostic span counts are incoherent")
         if self.embedding_match_count > self.embedding_attempt_count:
             raise ValueError("embedding diagnostic counts are incoherent")
-
-
+        if self.embedding_attempt_count > self.deduplicated_span_count:
+            raise ValueError("embedding attempts exceed deduplicated spans")
 @final
 @dataclass(frozen=True, slots=True)
 class DirectSeedOutcomeV1:
@@ -186,7 +191,6 @@ class DirectSeedOutcomeV1:
     ambiguities: tuple[DirectSeedAmbiguityV1, ...]
     diagnostics: DirectSeedDiagnosticsV1
     failure_reason: DirectFailureReason | None
-
     def __post_init__(self) -> None:
         _typed_rows(self.matches, DirectEntityMatchV1, "matches", _MAX_MATCHES)
         _typed_rows(self.seeds, ResolvedDirectSeedV1, "seeds", _MAX_SEEDS)
@@ -207,10 +211,8 @@ class DirectSeedOutcomeV1:
             (row.span_index, row.tier.priority, row.component_key, row.entity_key)
             for row in self.matches
         )
-        seed_keys = tuple(row.member_entity_keys[0] for row in self.seeds)
-        ambiguity_keys = tuple(
-            (row.span_index, row.tier.priority) for row in self.ambiguities
-        )
+        seed_keys = tuple((-row.mass, row.member_entity_keys[0]) for row in self.seeds)
+        ambiguity_keys = tuple(row.span_index for row in self.ambiguities)
         _ordered_unique(match_keys, "matches")
         _ordered_unique(seed_keys, "seeds")
         _ordered_unique(ambiguity_keys, "ambiguities")
@@ -255,8 +257,6 @@ class DirectSeedOutcomeV1:
                 raise ValueError("successful outcome requires resolved seeds")
         elif self.matches or self.seeds:
             raise ValueError("failure outcome must not expose partial seeds")
-
-
 def _typed_rows(value: object, kind: type, name: str, cap: int) -> None:
     if type(value) is not tuple:
         raise TypeError(f"{name} must be an exact tuple")
@@ -264,8 +264,6 @@ def _typed_rows(value: object, kind: type, name: str, cap: int) -> None:
         raise ValueError(f"{name} exceed the hard cap")
     if any(type(row) is not kind for row in value):
         raise TypeError(f"{name} must contain exact {kind.__name__} values")
-
-
 def _ordered_unique(keys: tuple, name: str) -> None:
     if len(set(keys)) != len(keys) or keys != tuple(sorted(keys)):
         raise ValueError(f"{name} must be unique and canonically sorted")

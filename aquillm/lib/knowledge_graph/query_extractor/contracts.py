@@ -1,5 +1,6 @@
+# ruff: noqa: E501
+# fmt: off
 """Provider-neutral, text-minimizing query extraction wire contracts."""
-
 from __future__ import annotations
 
 import json
@@ -21,21 +22,15 @@ MAX_QUERY_REQUEST_BODY_BYTES = 32_768
 MAX_QUERY_RESPONSE_BODY_BYTES = 131_072
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
-
-
 class QueryExtractorFailureReason(StrEnum):
     EXTRACTOR_TIMEOUT = "extractor_timeout"
     EXTRACTOR_AUTH = "extractor_auth"
     EXTRACTOR_PROVENANCE = "extractor_provenance"
-
-
 def _int(value: object, name: str, minimum: int, maximum: int) -> None:
     if type(value) is not int:
         raise TypeError(f"{name} must be an exact int")
     if not minimum <= value <= maximum:
         raise ValueError(f"{name} is outside its bound")
-
-
 def _token(value: object, name: str, maximum: int = 256) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact str")
@@ -43,15 +38,11 @@ def _token(value: object, name: str, maximum: int = 256) -> None:
         raise ValueError(f"{name} must be a bounded canonical token")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise ValueError(f"{name} contains a forbidden control character")
-
-
 def _digest(value: object, name: str, pattern: re.Pattern[str] = _DIGEST) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact str")
     if pattern.fullmatch(value) is None:
         raise ValueError(f"{name} must use its lowercase hexadecimal encoding")
-
-
 @final
 @dataclass(frozen=True, slots=True)
 class QueryExtractionRequestV1:
@@ -61,7 +52,6 @@ class QueryExtractionRequestV1:
     max_query_utf8_bytes: int
     max_query_code_points: int
     max_spans: int
-
     def __post_init__(self) -> None:
         if self.schema_version != QUERY_EXTRACTION_REQUEST_SCHEMA_VERSION:
             raise ValueError("schema_version is not query-request-v1")
@@ -71,6 +61,8 @@ class QueryExtractionRequestV1:
             encoded = self.query.encode("utf-8")
         except UnicodeEncodeError as error:
             raise ValueError("query must be valid UTF-8") from error
+        if any(ord(character) < 32 or ord(character) == 127 for character in self.query):
+            raise ValueError("query contains a forbidden C0/DEL control character")
         _digest(self.ontology_checksum, "ontology_checksum")
         _int(self.max_query_utf8_bytes, "max_query_utf8_bytes", 1, MAX_QUERY_UTF8_BYTES)
         _int(
@@ -84,8 +76,6 @@ class QueryExtractionRequestV1:
             raise ValueError("query exceeds its UTF-8 byte bound")
         if len(self.query) > self.max_query_code_points:
             raise ValueError("query exceeds its code-point bound")
-
-
 @final
 @dataclass(frozen=True, slots=True)
 class QueryExtractorProvenanceV1:
@@ -95,7 +85,6 @@ class QueryExtractorProvenanceV1:
     schema_checksum: str
     ontology_checksum: str
     build_hash: str
-
     def __post_init__(self) -> None:
         _token(self.model_identifier, "model_identifier")
         _digest(self.model_revision, "model_revision", _REVISION)
@@ -105,8 +94,6 @@ class QueryExtractorProvenanceV1:
             raise ValueError("schema_checksum does not bind the frozen schema")
         _digest(self.ontology_checksum, "ontology_checksum")
         _digest(self.build_hash, "build_hash")
-
-
 @final
 @dataclass(frozen=True, slots=True)
 class QueryEntitySpanV1:
@@ -114,7 +101,6 @@ class QueryEntitySpanV1:
     start: int
     end: int
     confidence: float
-
     def __post_init__(self) -> None:
         _token(self.ontology_type, "ontology_type", 128)
         _int(self.start, "start", 0, MAX_QUERY_CODE_POINTS - 1)
@@ -125,8 +111,6 @@ class QueryEntitySpanV1:
             raise TypeError("confidence must be an exact float")
         if not isfinite(self.confidence) or not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be finite and in [0, 1]")
-
-
 @final
 @dataclass(frozen=True, slots=True)
 class QueryExtractionResponseV1:
@@ -134,7 +118,6 @@ class QueryExtractionResponseV1:
     query_utf8_bytes: int
     query_code_points: int
     spans: tuple[QueryEntitySpanV1, ...]
-
     def __post_init__(self) -> None:
         if type(self.provenance) is not QueryExtractorProvenanceV1:
             raise TypeError("provenance must be exact")
@@ -157,8 +140,6 @@ class QueryExtractionResponseV1:
             left.end > right.start for left, right in zip(self.spans, self.spans[1:])
         ):
             raise ValueError("spans must not overlap")
-
-
 def _canonical(payload: object) -> bytes:
     return json.dumps(
         payload,
@@ -167,8 +148,6 @@ def _canonical(payload: object) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-
-
 def canonical_query_extraction_request_bytes(value: QueryExtractionRequestV1) -> bytes:
     if type(value) is not QueryExtractionRequestV1:
         raise TypeError("value must be an exact QueryExtractionRequestV1")
@@ -182,8 +161,6 @@ def canonical_query_extraction_request_bytes(value: QueryExtractionRequestV1) ->
             "schema_version": value.schema_version,
         }
     )
-
-
 def canonical_query_extraction_response_bytes(
     value: QueryExtractionResponseV1,
 ) -> bytes:
@@ -217,8 +194,6 @@ def canonical_query_extraction_response_bytes(
             "spans": spans,
         }
     )
-
-
 def _payload(data: bytes, fields: frozenset[str], maximum: int) -> dict[str, object]:
     if type(data) is not bytes:
         raise TypeError("wire data must be exact bytes")
@@ -233,8 +208,6 @@ def _payload(data: bytes, fields: frozenset[str], maximum: int) -> dict[str, obj
     if data != _canonical(value):
         raise ValueError("wire object must use canonical JSON")
     return value
-
-
 def parse_query_extraction_request(data: bytes) -> QueryExtractionRequestV1:
     value = _payload(
         data,
@@ -251,8 +224,6 @@ def parse_query_extraction_request(data: bytes) -> QueryExtractionRequestV1:
         MAX_QUERY_REQUEST_BODY_BYTES,
     )
     return QueryExtractionRequestV1(**value)  # type: ignore[arg-type]
-
-
 def parse_query_extraction_response(data: bytes) -> QueryExtractionResponseV1:
     value = _payload(
         data,
@@ -284,12 +255,18 @@ def parse_query_extraction_response(data: bytes) -> QueryExtractionResponseV1:
         confidence = span["confidence"]
         if type(confidence) is not str:
             raise TypeError("confidence must use canonical hexadecimal text")
+        try:
+            parsed_confidence = float.fromhex(confidence)
+        except ValueError as error:
+            raise ValueError("confidence must use canonical hexadecimal text") from error
+        if confidence != parsed_confidence.hex():
+            raise ValueError("confidence must use canonical hexadecimal text")
         parsed_spans.append(
             QueryEntitySpanV1(
                 span["ontology_type"],  # type: ignore[arg-type]
                 span["start"],  # type: ignore[arg-type]
                 span["end"],  # type: ignore[arg-type]
-                float.fromhex(confidence),
+                parsed_confidence,
             )
         )
     return QueryExtractionResponseV1(
