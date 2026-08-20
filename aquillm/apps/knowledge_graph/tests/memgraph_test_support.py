@@ -77,9 +77,9 @@ def isolated_memgraph_container():
     name = f"aquillm-kg-projection-{run_label}"
     network = f"aquillm-kg-network-{run_label}"
     volume = f"aquillm-kg-volume-{run_label}"
-    _docker("network", "create", "--label", f"{LABEL}={run_label}", network)
-    _docker("volume", "create", "--label", f"{LABEL}={run_label}", volume)
     try:
+        _docker("network", "create", "--label", f"{LABEL}={run_label}", network)
+        _docker("volume", "create", "--label", f"{LABEL}={run_label}", volume)
         _docker(
             "run",
             "--detach",

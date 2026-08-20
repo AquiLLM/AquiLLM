@@ -20,7 +20,9 @@ HEX = "a" * 64
 def _projection(**overrides: object) -> CollectionGraphProjection:
     values: dict[str, object] = {
         "collection_pk_snapshot": 7,
+        "collection_id": 7,
         "artifact_pk_snapshot": 11,
+        "artifact_id": 11,
         "state": CollectionGraphProjection.State.PENDING,
         "schema_version": "schema-v1",
         "projection_version": "projection-v1",
@@ -142,3 +144,46 @@ def test_projection_primary_and_generation_keys_are_independent_uuids() -> None:
     assert isinstance(projection.id, uuid.UUID)
     assert isinstance(projection.generation_key, uuid.UUID)
     assert projection.id != projection.generation_key
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        CollectionGraphProjection.State.PENDING,
+        CollectionGraphProjection.State.BUILDING,
+        CollectionGraphProjection.State.READY,
+    ],
+)
+def test_active_projection_states_require_live_collection_and_artifact(
+    state: str,
+) -> None:
+    values: dict[str, object] = {"state": state, "collection_id": None}
+    if state == CollectionGraphProjection.State.BUILDING:
+        values.update(lease_owner="worker", lease_expires_at=datetime.now(UTC))
+    if state == CollectionGraphProjection.State.READY:
+        values.update(
+            graph_checksum=HEX,
+            snapshot_checksum=HEX,
+            ready_at=datetime.now(UTC),
+        )
+    with pytest.raises(ValidationError, match="collection"):
+        _projection(**values).clean()
+
+
+def test_terminal_projection_tombstones_may_retain_snapshots_with_null_fks() -> None:
+    failed = _projection(
+        state=CollectionGraphProjection.State.FAILED,
+        collection_id=None,
+        artifact_id=None,
+        failure_code="source_changed",
+    )
+    superseded = _projection(
+        state=CollectionGraphProjection.State.SUPERSEDED,
+        collection_id=None,
+        artifact_id=None,
+        superseded_at=datetime.now(UTC),
+    )
+
+    failed.clean()
+    superseded.clean()
+    assert (failed.collection_pk_snapshot, failed.artifact_pk_snapshot) == (7, 11)

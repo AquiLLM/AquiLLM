@@ -21,6 +21,7 @@ class _ChunkStore:
     def __init__(self) -> None:
         self.rows: dict[str, object] = {}
         self.created = 0
+        self.fenced: tuple[uuid.UUID, str, int] | None = None
 
     def load(self, *, projection_id, keys=None):
         values = self.rows.values()
@@ -43,6 +44,9 @@ class _ChunkStore:
                     chunk_number=row.chunk_number,
                 ),
             )
+
+    def fence(self, *, projection_id, checksum, row_count):
+        self.fenced = (projection_id, checksum, row_count)
 
 
 def _row() -> PrivateProjectionChunkReferenceV1:
@@ -74,6 +78,52 @@ def test_chunk_reference_persistence_is_idempotent_and_checksum_exact() -> None:
 
     assert first == second == private_chunk_mapping_checksum((row,))
     assert store.created == 1
+    assert store.fenced == (projection_id, first, 1)
+
+
+def test_chunk_reference_persistence_fails_closed_for_partial_or_stale_map() -> None:
+    class PartialStore(_ChunkStore):
+        def create(self, **_kwargs):
+            self.created += 1
+
+    partial = PartialStore()
+    repository = PostgresProjectionRepository(source=object(), chunk_store=partial)
+    with pytest.raises(ValueError, match="incomplete"):
+        repository.persist_chunk_references(
+            projection_id=uuid.uuid4(), rows=(_row(),), batch_size=10
+        )
+    assert partial.fenced is None
+
+    stale = _ChunkStore()
+    requested = _row()
+    stale.create(projection_id=uuid.uuid4(), rows=(requested,), batch_size=10)
+    extra = PrivateProjectionChunkReferenceV1("f" * 64, 102, str(uuid.UUID(int=3)), 4)
+    stale.create(projection_id=uuid.uuid4(), rows=(extra,), batch_size=10)
+    repository = PostgresProjectionRepository(source=object(), chunk_store=stale)
+    with pytest.raises(ValueError, match="incomplete"):
+        repository.persist_chunk_references(
+            projection_id=uuid.uuid4(), rows=(requested,), batch_size=10
+        )
+    assert stale.fenced is None
+
+
+def test_chunk_reference_persistence_rejects_a_stale_current_chunk() -> None:
+    store = _ChunkStore()
+    repository = PostgresProjectionRepository(source=object(), chunk_store=store)
+    row = _row()
+    projection_id = uuid.uuid4()
+    repository.persist_chunk_references(
+        projection_id=projection_id, rows=(row,), batch_size=10
+    )
+    store.fenced = None
+    store.rows[row.projection_chunk_key].chunk_id = None
+
+    with pytest.raises(ValueError, match="stale"):
+        repository.persist_chunk_references(
+            projection_id=projection_id, rows=(row,), batch_size=10
+        )
+
+    assert store.fenced is None
 
 
 def test_chunk_reference_resolution_rejects_deleted_stale_and_conflicting_rows() -> (

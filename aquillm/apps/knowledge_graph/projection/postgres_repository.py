@@ -4,10 +4,12 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 from uuid import UUID
 
-from django.db import transaction
-
-from apps.knowledge_graph.models import ProjectionChunkReference
-
+from .chunk_reference_store import (
+    DjangoChunkReferenceStore,
+    private_row,
+    validate_current_chunk_row,
+)
+from .django_projection_source import DjangoProjectionRowSource
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
 from .records import (
     CollectionGraphProjectionBundleV1,
@@ -35,6 +37,10 @@ class ProjectionRowSource(Protocol):
         self, *, projection_id: UUID, batch_size: int
     ) -> Mapping[str, object]: ...
 
+    def load_private_chunk_rows(
+        self, *, projection_id: UUID, batch_size: int
+    ) -> tuple[PrivateProjectionChunkReferenceV1, ...]: ...
+
 
 class ChunkReferenceStore(Protocol):
     def load(
@@ -49,64 +55,7 @@ class ChunkReferenceStore(Protocol):
         batch_size: int,
     ) -> None: ...
 
-
-class _DjangoChunkReferenceStore:
-    def __init__(self, using: str) -> None:
-        self.using = using
-
-    def load(
-        self, *, projection_id: UUID, keys: tuple[str, ...] | None = None
-    ) -> tuple[ProjectionChunkReference, ...]:
-        query = ProjectionChunkReference.objects.using(self.using).filter(
-            projection_id=projection_id
-        )
-        if keys is not None:
-            query = query.filter(projection_chunk_key__in=keys)
-        return tuple(
-            query.select_related("chunk")
-            .order_by("projection_chunk_key")
-            .iterator(chunk_size=_MAX_PAGE)
-        )
-
-    def create(
-        self,
-        *,
-        projection_id: UUID,
-        rows: tuple[PrivateProjectionChunkReferenceV1, ...],
-        batch_size: int,
-    ) -> None:
-        values = [
-            ProjectionChunkReference(
-                projection_id=projection_id,
-                projection_chunk_key=row.projection_chunk_key,
-                chunk_id=row.integer_chunk_pk,
-                integer_chunk_pk=row.integer_chunk_pk,
-                document_uuid=UUID(row.document_uuid),
-                chunk_number=row.chunk_number,
-            )
-            for row in rows
-        ]
-        with transaction.atomic(using=self.using):
-            ProjectionChunkReference.objects.using(self.using).bulk_create(
-                values, batch_size=batch_size, ignore_conflicts=True
-            )
-
-
-class _UnavailableProjectionSource:
-    def load_projection_rows(
-        self, *, projection_id: UUID, batch_size: int
-    ) -> Mapping[str, object]:
-        raise RuntimeError("PostgreSQL projection row source is not configured")
-
-
-def _private_row(row: object) -> PrivateProjectionChunkReferenceV1:
-    document_uuid = getattr(row, "document_uuid")
-    return PrivateProjectionChunkReferenceV1(
-        projection_chunk_key=getattr(row, "projection_chunk_key"),
-        integer_chunk_pk=getattr(row, "integer_chunk_pk"),
-        document_uuid=str(document_uuid),
-        chunk_number=getattr(row, "chunk_number"),
-    )
+    def fence(self, *, projection_id: UUID, checksum: str, row_count: int) -> None: ...
 
 
 def _requested_keys(chunk_keys: tuple[OpaqueProjectionKey, ...]) -> tuple[str, ...]:
@@ -132,11 +81,11 @@ class PostgresProjectionRepository:
     ) -> None:
         if type(using) is not str or not using:
             raise ValueError("using must be a nonempty database alias")
-        self._source = source if source is not None else _UnavailableProjectionSource()
+        self._source = (
+            source if source is not None else DjangoProjectionRowSource(using)
+        )
         self._chunk_store = (
-            chunk_store
-            if chunk_store is not None
-            else _DjangoChunkReferenceStore(using)
+            chunk_store if chunk_store is not None else DjangoChunkReferenceStore(using)
         )
 
     def load_projection_bundle(
@@ -189,8 +138,7 @@ class PostgresProjectionRepository:
         )
         expected_checksum = private_chunk_mapping_checksum(requested)
         existing = tuple(
-            _private_row(row)
-            for row in self._chunk_store.load(projection_id=identifier)
+            private_row(row) for row in self._chunk_store.load(projection_id=identifier)
         )
         by_key = {row.projection_chunk_key: row for row in existing}
         coordinates = {(row.document_uuid, row.chunk_number): row for row in existing}
@@ -214,12 +162,12 @@ class PostgresProjectionRepository:
                 rows=tuple(missing),
                 batch_size=size,
             )
+        persisted_objects = self._chunk_store.load(projection_id=identifier)
+        for row in persisted_objects:
+            validate_current_chunk_row(row)
         persisted = tuple(
             sorted(
-                (
-                    _private_row(row)
-                    for row in self._chunk_store.load(projection_id=identifier)
-                ),
+                (private_row(row) for row in persisted_objects),
                 key=lambda row: row.projection_chunk_key,
             )
         )
@@ -230,7 +178,27 @@ class PostgresProjectionRepository:
             raise ValueError(
                 "persisted private chunk mapping is incomplete or conflicting"
             )
+        self._chunk_store.fence(
+            projection_id=identifier,
+            checksum=expected_checksum,
+            row_count=len(requested),
+        )
         return expected_checksum
+
+    def load_private_chunk_references(
+        self, *, projection_id: UUID, batch_size: int
+    ) -> tuple[PrivateProjectionChunkReferenceV1, ...]:
+        identifier = _projection_id(projection_id)
+        size = _page_size(batch_size)
+        rows = self._source.load_private_chunk_rows(
+            projection_id=identifier, batch_size=size
+        )
+        if type(rows) is not tuple or any(
+            type(row) is not PrivateProjectionChunkReferenceV1 for row in rows
+        ):
+            raise TypeError("projection source returned invalid private chunk rows")
+        private_chunk_mapping_checksum(rows)
+        return rows
 
     def resolve_projection_chunk_references(
         self,
@@ -253,17 +221,7 @@ class PostgresProjectionRepository:
             raise ValueError("projection chunk mapping is stale or deleted")
         resolved = []
         for row in observed:
-            if getattr(row, "chunk_id") is None:
-                raise ValueError("projection chunk mapping is stale or deleted")
-            chunk = getattr(row, "chunk")
-            if (
-                chunk.pk != row.integer_chunk_pk
-                or chunk.doc_id != row.document_uuid
-                or chunk.chunk_number != row.chunk_number
-            ):
-                raise ValueError(
-                    "projection chunk mapping conflicts with current chunk"
-                )
+            validate_current_chunk_row(row)
             if row.document_uuid in authorized_document_ids:
-                resolved.append(_private_row(row))
+                resolved.append(private_row(row))
         return tuple(sorted(resolved, key=lambda row: row.projection_chunk_key))

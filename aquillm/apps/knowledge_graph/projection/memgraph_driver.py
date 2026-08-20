@@ -114,6 +114,16 @@ class Neo4jMemgraphDriver:
             self._client = GraphDatabase.driver(self._uri, auth=auth)
         return self._client
 
+    def _transaction_function(self, callback, *, timeout: float):
+        try:
+            from neo4j import unit_of_work
+        except ModuleNotFoundError:
+            if self._client is None:
+                raise
+            callback.timeout = timeout
+            return callback
+        return unit_of_work(timeout=timeout)(callback)
+
     def execute_read(
         self,
         cypher: str,
@@ -129,7 +139,7 @@ class Neo4jMemgraphDriver:
             raise ValueError("max_records must be an integer in 1..5000")
 
         def read(transaction):
-            result = transaction.run(query, values, timeout=timeout)
+            result = transaction.run(query, values)
             rows = []
             for record in result:
                 if len(rows) == max_records:
@@ -142,7 +152,9 @@ class Neo4jMemgraphDriver:
 
         try:
             with self._connection().session(database=self._database) as session:
-                return session.execute_read(read)
+                return session.execute_read(
+                    self._transaction_function(read, timeout=timeout)
+                )
         except MemgraphDriverError:
             raise
         except Exception:
@@ -160,7 +172,7 @@ class Neo4jMemgraphDriver:
         timeout = _timeout(timeout_seconds)
 
         def write(transaction):
-            result = transaction.run(query, values, timeout=timeout)
+            result = transaction.run(query, values)
             summary = result.consume()
             counters = getattr(summary, "counters", {})
             if type(counters) is dict:
@@ -180,7 +192,9 @@ class Neo4jMemgraphDriver:
 
         try:
             with self._connection().session(database=self._database) as session:
-                return session.execute_write(write)
+                return session.execute_write(
+                    self._transaction_function(write, timeout=timeout)
+                )
         except MemgraphDriverError:
             raise
         except Exception:

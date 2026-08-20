@@ -4,6 +4,8 @@ import importlib
 
 from django.db import migrations
 
+from apps.knowledge_graph.models import CollectionGraphProjection
+
 
 def test_projection_migration_uses_reserved_number_and_exact_dependency() -> None:
     migration = importlib.import_module(
@@ -62,3 +64,31 @@ def test_projection_migration_carries_required_constraints_and_indexes() -> None
         "kg_projection_lease_idx",
         "kg_projection_outbox_due_idx",
     } <= indexes
+
+
+def test_model_and_reserved_migration_have_exact_lifecycle_constraint_parity() -> None:
+    migration = importlib.import_module(
+        "apps.knowledge_graph.migrations.0007_memgraph_projection_authority"
+    )
+    operation = next(
+        item
+        for item in migration.Migration.operations
+        if item.name == "CollectionGraphProjection"
+    )
+    migrated = next(
+        item
+        for item in operation.options["constraints"]
+        if item.name == "kg_projection_lifecycle_valid"
+    )
+    modeled = next(
+        item
+        for item in CollectionGraphProjection._meta.constraints
+        if item.name == "kg_projection_lifecycle_valid"
+    )
+
+    assert migrated.condition == modeled.condition
+    rendered = repr(modeled.condition)
+    assert "collection__isnull" in rendered
+    assert "artifact__isnull" in rendered
+    assert "lease_owner" in rendered
+    assert "lease_expires_at__isnull" in rendered

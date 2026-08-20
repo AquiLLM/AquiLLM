@@ -4,6 +4,9 @@ import uuid
 
 import pytest
 
+from apps.knowledge_graph.projection.django_projection_source import (
+    DjangoProjectionRowSource,
+)
 from apps.knowledge_graph.projection.postgres_repository import (
     PostgresProjectionRepository,
 )
@@ -137,3 +140,29 @@ def test_bundle_loader_rejects_nonfinite_values_before_provider_write() -> None:
         PostgresProjectionRepository(source=source).load_projection_bundle(
             projection_id=uuid.uuid4(), batch_size=10
         )
+
+
+def test_default_repository_uses_live_django_projection_source() -> None:
+    repository = PostgresProjectionRepository(using="graph_reader")
+
+    assert type(repository._source) is DjangoProjectionRowSource
+    assert repository._source.using == "graph_reader"
+
+
+def test_private_row_loader_is_a_stable_bounded_repository_api() -> None:
+    row = object()
+
+    class Source(_BundleSource):
+        def load_private_chunk_rows(self, *, projection_id, batch_size):
+            self.calls.append((projection_id, batch_size))
+            return (row,)
+
+    source = Source()
+    repository = PostgresProjectionRepository(source=source)
+    projection_id = uuid.uuid4()
+
+    with pytest.raises(TypeError, match="private chunk"):
+        repository.load_private_chunk_references(
+            projection_id=projection_id, batch_size=23
+        )
+    assert source.calls == [(projection_id, 23)]

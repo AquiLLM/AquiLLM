@@ -12,12 +12,20 @@ from django.db.models import Q
 from apps.documents.models import TextChunk
 
 from .artifacts import GraphArtifact
+from .projection_lifecycle_validation import validate_projection_lifecycle
 
 _CHECKSUM = re.compile(r"^[0-9a-f]{64}$")
 _MAX_BIGINT = 2**63 - 1
 _FAILURE_CODES = ("source_changed", "lease_lost", "graph_unavailable", "write_failed", "validation_failed", "checksum_mismatch", "timeout", "internal_error")  # fmt: skip
 # fmt: off
-_PROJECTION_LIFECYCLE = (Q(state="pending", ready_at__isnull=True, superseded_at__isnull=True, failure_code="") | Q(state="building", ready_at__isnull=True, superseded_at__isnull=True, failure_code="") | Q(state="ready", graph_checksum__regex=r"^[0-9a-f]{64}$", snapshot_checksum__regex=r"^[0-9a-f]{64}$", private_mapping_checksum__regex=r"^[0-9a-f]{64}$", lease_owner="", lease_expires_at__isnull=True, failure_code="", ready_at__isnull=False, superseded_at__isnull=True) | Q(state="failed", failure_code__in=_FAILURE_CODES, lease_owner="", lease_expires_at__isnull=True, ready_at__isnull=True, superseded_at__isnull=True) | Q(state="superseded", lease_owner="", lease_expires_at__isnull=True, failure_code="", superseded_at__isnull=False))
+_EXACT_PROJECTION_CHECKSUMS = Q(graph_checksum__regex=r"^[0-9a-f]{64}$", snapshot_checksum__regex=r"^[0-9a-f]{64}$", private_mapping_checksum__regex=r"^[0-9a-f]{64}$")
+_PROJECTION_LIFECYCLE = (
+    Q(state="pending", collection__isnull=False, artifact__isnull=False, lease_owner="", lease_expires_at__isnull=True, failure_code="", ready_at__isnull=True, superseded_at__isnull=True)
+    | (Q(state="building", collection__isnull=False, artifact__isnull=False, lease_expires_at__isnull=False, failure_code="", ready_at__isnull=True, superseded_at__isnull=True) & ~Q(lease_owner=""))
+    | (Q(state="ready", collection__isnull=False, artifact__isnull=False, lease_owner="", lease_expires_at__isnull=True, failure_code="", ready_at__isnull=False, superseded_at__isnull=True) & _EXACT_PROJECTION_CHECKSUMS)
+    | Q(state="failed", failure_code__in=_FAILURE_CODES, lease_owner="", lease_expires_at__isnull=True, ready_at__isnull=True, superseded_at__isnull=True)
+    | (Q(state="superseded", lease_owner="", lease_expires_at__isnull=True, failure_code="", superseded_at__isnull=False) & (Q(ready_at__isnull=True) | _EXACT_PROJECTION_CHECKSUMS))
+)
 _OUTBOX_LIFECYCLE = Q(state="pending", published_at__isnull=True) | Q(state="published", published_at__isnull=False)
 _ACTIVE_IDENTITY_FIELDS = ("collection", "artifact", "schema_version", "projection_version", "identifier_key_version", "membership_epoch")
 _NONNEGATIVE_COUNTS = Q(entity_count__gte=0) & Q(relation_count__gte=0) & Q(evidence_count__gte=0) & Q(chunk_count__gte=0) & Q(attempt_count__gte=0)
@@ -175,42 +183,9 @@ class CollectionGraphProjection(ProjectionAuthorityModel):
         for name in ("entity_count", "relation_count", "evidence_count", "chunk_count"):
             if getattr(self, name) < 0:
                 errors[name] = "Projection counts must be nonnegative."
-        self._validate_lifecycle(errors)
+        validate_projection_lifecycle(self, errors, _FAILURE_CODES)
         if errors:
             raise ValidationError(errors)
-
-    def _validate_lifecycle(self, errors: dict[str, str]) -> None:
-        leased = bool(self.lease_owner) and self.lease_expires_at is not None
-        empty_lease = not self.lease_owner and self.lease_expires_at is None
-        if not leased and not empty_lease:
-            errors["lease_owner"] = "Projection lease fields must be paired."
-        if self.state == self.State.BUILDING and not leased:
-            errors["lease_owner"] = "Building projections require a lease."
-        if self.state != self.State.BUILDING and not empty_lease:
-            errors["lease_owner"] = "Only building projections may hold a lease."
-        if self.state == self.State.READY:
-            for name in (
-                "graph_checksum",
-                "snapshot_checksum",
-                "private_mapping_checksum",
-            ):
-                if not getattr(self, name):
-                    errors[name] = "Ready projections require all checksums."
-            if self.ready_at is None:
-                errors["ready_at"] = "Ready projections require ready_at."
-        elif self.ready_at is not None and self.state != self.State.SUPERSEDED:
-            errors["ready_at"] = "Only ready history may retain ready_at."
-        if self.state == self.State.FAILED and self.failure_code not in _FAILURE_CODES:
-            errors["failure_code"] = "Failed projections require a fixed failure code."
-        elif self.state != self.State.FAILED and self.failure_code:
-            errors["failure_code"] = "Only failed projections may have a failure code."
-        if self.state == self.State.SUPERSEDED:
-            if self.superseded_at is None:
-                errors["superseded_at"] = (
-                    "Superseded projections require superseded_at."
-                )
-        elif self.superseded_at is not None:
-            errors["superseded_at"] = "Only superseded projections use superseded_at."
 
 
 class ProjectionChunkReference(ProjectionAuthorityModel):

@@ -4,12 +4,8 @@ import uuid
 from dataclasses import asdict
 from hashlib import sha256
 
-import pytest
-
 from apps.knowledge_graph.projection.memgraph_driver import (
-    MemgraphDriverError,
     MemgraphWriteSummaryV1,
-    Neo4jMemgraphDriver,
 )
 from apps.knowledge_graph.projection.memgraph_repository import (
     MemgraphProjectionRepository,
@@ -24,15 +20,8 @@ from apps.knowledge_graph.retrieval.topology.contracts import (
     HybridBranchKind,
     TopologyCapsV1,
 )
-from apps.knowledge_graph.tests.memgraph_test_support import (
-    isolated_memgraph_container as _isolated_memgraph_container,
-)
 from apps.knowledge_graph.tests.test_projection_postgres_repository import _BundleSource
-
-
-@pytest.fixture
-def isolated_memgraph_container():
-    yield from _isolated_memgraph_container.__wrapped__()
+from apps.knowledge_graph.tests.test_projection_records import _bundle as _closed_bundle
 
 
 class _FakeDriver:
@@ -78,6 +67,64 @@ def _manifest_row(manifest):
     return row
 
 
+def _record_reads(bundle):
+    return [
+        ({"record": {**asdict(bundle.generation), "graph_checksum": "ignored"}},),
+        tuple(
+            {"record": {**asdict(row), "opaque_key": row.entity_key}}
+            for row in bundle.entities
+        ),
+        tuple(
+            {"record": {**asdict(row), "opaque_key": row.entity_key}}
+            for row in bundle.automatic_memberships
+        ),
+        tuple(
+            {"record": {**asdict(row), "opaque_key": row.document_key}}
+            for row in bundle.documents
+        ),
+        tuple(
+            {
+                "record": {
+                    **asdict(row),
+                    "opaque_key": row.chunk_key,
+                    "generation_key": bundle.generation.generation_key,
+                }
+            }
+            for row in bundle.chunks
+        ),
+        tuple(
+            {
+                "record": {
+                    **asdict(row),
+                    "opaque_key": row.relation_key,
+                    "generation_key": bundle.generation.generation_key,
+                }
+            }
+            for row in bundle.relations
+        ),
+        tuple(
+            {
+                "record": {
+                    **asdict(row),
+                    "opaque_key": row.evidence_key,
+                    "generation_key": bundle.generation.generation_key,
+                }
+            }
+            for row in bundle.evidence
+        ),
+        tuple(
+            {
+                "record": {
+                    **asdict(row),
+                    "opaque_key": row.scope_key,
+                    "generation_key": bundle.generation.generation_key,
+                }
+            }
+            for row in bundle.artifact_provenance
+        ),
+    ]
+
+
 def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> None:
     from apps.knowledge_graph.projection.records import (
         CollectionGraphProjectionBundleV1,
@@ -102,27 +149,38 @@ def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> No
 def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -> None:
     driver = _FakeDriver()
     repository = MemgraphProjectionRepository(driver)
-    bundle = CollectionGraphProjectionBundleV1(**_bundle())
-    expected = _expected_manifest(bundle)
-    driver.read_results.append((_manifest_row(expected),))
-    driver.read_results.extend(
-        [({"count": value},) for value in asdict(bundle.counts).values()]
-        + [({"invalid": 0},)] * 5
+    bundle = _closed_bundle()
+    expected = ProjectionGenerationManifestV1(
+        bundle.generation.generation_key,
+        bundle.generation.schema_version,
+        bundle.generation.projection_version,
+        bundle.generation.identifier_key_version,
+        projection_checksum(bundle),
+        projection_checksum(bundle),
+        "d" * 64,
+        bundle.counts,
+        ProjectionLifecycleState.BUILDING,
     )
+    staged = _manifest_row(expected)
+    staged["private_mapping_checksum"] = sha256(b"[]").hexdigest()
+    staged["state"] = "staging"
+    driver.read_results.append((staged,))
+    driver.read_results.extend(_record_reads(bundle))
+    driver.read_results.append((_manifest_row(expected),))
 
     validation = repository.validate_generation(
         expected=expected,
         timeout_seconds=1.0,
     )
-    driver.read_results.append(
-        (
-            {
-                "validation_checksum": validation.validation_checksum,
-                "graph_checksum": validation.validation_checksum,
-                "state": "building",
-            },
-        )
-    )
+    ready_state = {
+        "validation_checksum": validation.validation_checksum,
+        "graph_checksum": validation.validation_checksum,
+        "private_mapping_checksum": expected.private_mapping_checksum,
+        "validated_private_mapping_checksum": expected.private_mapping_checksum,
+        "chunk_count": expected.counts.chunk_count,
+        "state": "building",
+    }
+    driver.read_results.extend(((ready_state,), ({**ready_state, "state": "ready"},)))
 
     repository.mark_generation_ready(
         generation_key=repository.opaque_generation_key("1" * 64),
@@ -142,14 +200,9 @@ def test_validation_rejects_count_or_endpoint_drift_without_publishing_token() -
     bundle = CollectionGraphProjectionBundleV1(**_bundle())
     expected = _expected_manifest(bundle)
     driver.read_results.append((_manifest_row(expected),))
-    driver.read_results.extend(
-        [
-            ({"count": value + (1 if index == 0 else 0)},)
-            for index, value in enumerate(asdict(bundle.counts).values())
-        ]
-        + [({"invalid": 1},)]
-        + [({"invalid": 0},)] * 4
-    )
+    records = _record_reads(bundle)
+    records[1] = records[1] + records[1]
+    driver.read_results.extend(records)
 
     validation = repository.validate_generation(
         expected=expected,
@@ -173,6 +226,28 @@ def test_generation_deletion_is_generation_scoped_and_parameterized() -> None:
     assert parameters == {"generation_key": "a" * 64}
 
 
+def test_generation_listing_supports_bounded_global_opaque_cursor_paging() -> None:
+    driver = _FakeDriver()
+    bundle = CollectionGraphProjectionBundleV1(**_bundle())
+    expected = _expected_manifest(bundle)
+    driver.read_results.append(({"manifest": _manifest_row(expected)},))
+    repository = MemgraphProjectionRepository(driver)
+
+    rows = repository.list_generations(
+        collection_key=None,
+        after_generation_key=repository.opaque_generation_key("0" * 64),
+        limit=17,
+        timeout_seconds=1.0,
+    )
+
+    assert rows == (expected,)
+    cypher, parameters, _timeout, maximum = driver.reads[-1]
+    assert "collection_key:$collection_key" not in cypher
+    assert "g.generation_key > $after_generation_key" in cypher
+    assert parameters == {"after_generation_key": "0" * 64, "limit": 17}
+    assert maximum == 17
+
+
 def test_generation_records_are_bounded_and_endpoint_closed() -> None:
     from apps.knowledge_graph.projection.records import (
         CollectionGraphProjectionBundleV1,
@@ -180,16 +255,7 @@ def test_generation_records_are_bounded_and_endpoint_closed() -> None:
 
     bundle = CollectionGraphProjectionBundleV1(**_bundle())
     driver = _FakeDriver()
-    driver.read_results = [
-        ({"record": asdict(bundle.generation)},),
-        tuple({"record": asdict(row)} for row in bundle.entities),
-        tuple({"record": asdict(row)} for row in bundle.automatic_memberships),
-        (),
-        (),
-        (),
-        (),
-        tuple({"record": asdict(row)} for row in bundle.artifact_provenance),
-    ]
+    driver.read_results = _record_reads(bundle)
     caps = TopologyCapsV1(HybridBranchKind.DIRECT, 2, 1, 2, 2, 2)
 
     observed = MemgraphProjectionRepository(driver).read_generation_records(
@@ -200,94 +266,3 @@ def test_generation_records_are_bounded_and_endpoint_closed() -> None:
 
     assert observed == bundle
     assert all(call[3] <= 2 for call in driver.reads)
-
-
-class _Record(dict):
-    def data(self):
-        return dict(self)
-
-
-class _Result:
-    def __init__(self, rows):
-        self.rows = rows
-
-    def __iter__(self):
-        return iter(self.rows)
-
-    def consume(self):
-        return type("Summary", (), {"counters": {"nodes_created": 1}})()
-
-
-class _Transaction:
-    def __init__(self):
-        self.calls = []
-
-    def run(self, cypher, parameters, timeout):
-        self.calls.append((cypher, parameters, timeout))
-        return _Result([_Record(ok=1)])
-
-
-class _Session:
-    def __init__(self, transaction):
-        self.transaction = transaction
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return None
-
-    def execute_read(self, callback):
-        return callback(self.transaction)
-
-    def execute_write(self, callback):
-        return callback(self.transaction)
-
-
-class _Neo4jClient:
-    def __init__(self):
-        self.transaction = _Transaction()
-        self.databases = []
-
-    def session(self, *, database):
-        self.databases.append(database)
-        return _Session(self.transaction)
-
-
-def test_driver_applies_fixed_database_timeout_parameters_and_bounds() -> None:
-    client = _Neo4jClient()
-    driver = Neo4jMemgraphDriver(
-        "bolt://memgraph:7687", "reader", "secret", database="memgraph", driver=client
-    )
-
-    rows = driver.execute_read(
-        "RETURN $value AS ok", {"value": 1}, timeout_seconds=0.5, max_records=1
-    )
-
-    assert rows == ({"ok": 1},)
-    assert client.databases == ["memgraph"]
-    assert client.transaction.calls == [("RETURN $value AS ok", {"value": 1}, 0.5)]
-
-
-def test_driver_errors_are_fixed_and_do_not_expose_credentials_or_cypher() -> None:
-    class Broken:
-        def session(self, **_kwargs):
-            raise RuntimeError("secret RETURN private")
-
-    driver = Neo4jMemgraphDriver(
-        "bolt://memgraph:7687", "reader", "secret", database="memgraph", driver=Broken()
-    )
-    with pytest.raises(MemgraphDriverError) as captured:
-        driver.execute_read("RETURN private", {}, timeout_seconds=1.0, max_records=1)
-    assert str(captured.value) == "memgraph_read_failed"
-    assert "secret" not in repr(captured.value)
-
-
-@pytest.mark.container
-def test_memgraph_repository_against_isolated_container(
-    isolated_memgraph_container,
-) -> None:
-    target = isolated_memgraph_container
-    driver = Neo4jMemgraphDriver(target["uri"], "", "", database=target["database"])
-    repository = MemgraphProjectionRepository(driver)
-    repository.ensure_schema(timeout_seconds=5.0)

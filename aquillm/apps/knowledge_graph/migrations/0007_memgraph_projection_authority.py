@@ -10,7 +10,14 @@ from django.db import migrations, models
 _MAX_BIGINT = 9223372036854775807
 _FAILURE_CODES = ("source_changed", "lease_lost", "graph_unavailable", "write_failed", "validation_failed", "checksum_mismatch", "timeout", "internal_error")  # fmt: skip
 # fmt: off
-_PROJECTION_LIFECYCLE = (models.Q(state="pending", ready_at__isnull=True, superseded_at__isnull=True, failure_code="") | models.Q(state="building", ready_at__isnull=True, superseded_at__isnull=True, failure_code="") | models.Q(state="ready", graph_checksum__regex=r"^[0-9a-f]{64}$", snapshot_checksum__regex=r"^[0-9a-f]{64}$", private_mapping_checksum__regex=r"^[0-9a-f]{64}$", lease_owner="", lease_expires_at__isnull=True, failure_code="", ready_at__isnull=False, superseded_at__isnull=True) | models.Q(state="failed", failure_code__in=_FAILURE_CODES, lease_owner="", lease_expires_at__isnull=True, ready_at__isnull=True, superseded_at__isnull=True) | models.Q(state="superseded", lease_owner="", lease_expires_at__isnull=True, failure_code="", superseded_at__isnull=False))
+_EXACT_PROJECTION_CHECKSUMS = models.Q(graph_checksum__regex=r"^[0-9a-f]{64}$", snapshot_checksum__regex=r"^[0-9a-f]{64}$", private_mapping_checksum__regex=r"^[0-9a-f]{64}$")
+_PROJECTION_LIFECYCLE = (
+    models.Q(state="pending", collection__isnull=False, artifact__isnull=False, lease_owner="", lease_expires_at__isnull=True, failure_code="", ready_at__isnull=True, superseded_at__isnull=True)
+    | (models.Q(state="building", collection__isnull=False, artifact__isnull=False, lease_expires_at__isnull=False, failure_code="", ready_at__isnull=True, superseded_at__isnull=True) & ~models.Q(lease_owner=""))
+    | (models.Q(state="ready", collection__isnull=False, artifact__isnull=False, lease_owner="", lease_expires_at__isnull=True, failure_code="", ready_at__isnull=False, superseded_at__isnull=True) & _EXACT_PROJECTION_CHECKSUMS)
+    | models.Q(state="failed", failure_code__in=_FAILURE_CODES, lease_owner="", lease_expires_at__isnull=True, ready_at__isnull=True, superseded_at__isnull=True)
+    | (models.Q(state="superseded", lease_owner="", lease_expires_at__isnull=True, failure_code="", superseded_at__isnull=False) & (models.Q(ready_at__isnull=True) | _EXACT_PROJECTION_CHECKSUMS))
+)
 _OUTBOX_LIFECYCLE = models.Q(state="pending", published_at__isnull=True) | models.Q(state="published", published_at__isnull=False)
 _ACTIVE_IDENTITY_FIELDS = ("collection", "artifact", "schema_version", "projection_version", "identifier_key_version", "membership_epoch")
 _NONNEGATIVE_COUNTS = models.Q(entity_count__gte=0) & models.Q(relation_count__gte=0) & models.Q(evidence_count__gte=0) & models.Q(chunk_count__gte=0) & models.Q(attempt_count__gte=0)

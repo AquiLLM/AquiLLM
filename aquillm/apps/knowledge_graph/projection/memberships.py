@@ -4,6 +4,7 @@ import json
 from collections.abc import Sequence
 from hashlib import sha256
 
+from django.conf import settings
 from django.db import connections
 
 from apps.collections.models import Collection
@@ -14,10 +15,12 @@ from apps.knowledge_graph.models import (
     GraphArtifact,
 )
 
+from .identifiers import ProjectionIdentifierCodec, ProjectionIdentifierDomain
 from .records import AutomaticCanonicalMembershipV1
 from .serialization import projection_checksum
 
 _MAX_BATCH = 5_000
+MEMBERSHIP_REGISTRY_GENERATION = "membership-registry-v1"
 
 
 def _batch_size(value: object) -> int:
@@ -36,19 +39,36 @@ def _collection_ids(value: object) -> tuple[int, ...]:
     return value
 
 
-def _opaque_membership_key(primary_key: int) -> str:
-    return sha256(
-        f"automatic-canonical-identity-v1\0{primary_key}".encode()
-    ).hexdigest()
+def _opaque_membership_key(codec: ProjectionIdentifierCodec, primary_key: int) -> str:
+    return codec.encode(
+        ProjectionIdentifierDomain.AUTOMATIC_CANONICAL_IDENTITY,
+        source=primary_key,
+    ).value
 
 
-def _opaque_entity_key(primary_key: int) -> str:
-    return sha256(
-        f"membership-collection-entity-v1\0{primary_key}".encode()
-    ).hexdigest()
+def _opaque_entity_key(
+    codec: ProjectionIdentifierCodec, generation: object, primary_key: int
+) -> str:
+    return codec.encode(
+        ProjectionIdentifierDomain.ENTITY,
+        generation=generation,  # type: ignore[arg-type]
+        source=primary_key,
+    ).value
 
 
-def _null_decision_checksum(
+def _configured_codec() -> ProjectionIdentifierCodec:
+    from .identifiers import HmacSha256ProjectionIdentifierCodec
+
+    secret = getattr(settings, "KG_PROJECTION_IDENTIFIER_HMAC_KEY", "")
+    version = getattr(settings, "KG_PROJECTION_IDENTIFIER_KEY_VERSION", "")
+    if type(secret) is not str or not secret or type(version) is not str or not version:
+        raise RuntimeError("projection identifier codec is not configured")
+    return HmacSha256ProjectionIdentifierCodec(
+        secret.encode("utf-8"), key_version=version
+    )
+
+
+def null_membership_decision_checksum(
     entity_key: str, resolver_version: str, resolution_checksum: str
 ) -> str:
     payload = {
@@ -108,12 +128,18 @@ def _load_membership_source_rows(
 
 
 def load_automatic_membership_assignments(
-    *, collection_ids: tuple[int, ...], using: str, batch_size: int
+    *,
+    collection_ids: tuple[int, ...],
+    using: str,
+    batch_size: int,
+    codec: ProjectionIdentifierCodec | None = None,
+    generation: object = MEMBERSHIP_REGISTRY_GENERATION,
 ) -> tuple[AutomaticCanonicalMembershipV1, ...]:
     ids = _collection_ids(collection_ids)
     size = _batch_size(batch_size)
     if type(using) is not str or not using:
         raise ValueError("using must be a nonempty database alias")
+    encoder = codec if codec is not None else _configured_codec()
     assignments = []
     for (
         entity_id,
@@ -126,9 +152,11 @@ def load_automatic_membership_assignments(
         using=using,
         batch_size=size,
     ):
-        entity_key = _opaque_entity_key(entity_id)
+        entity_key = _opaque_entity_key(encoder, generation, entity_id)
         membership_key = (
-            None if canonical_id is None else _opaque_membership_key(canonical_id)
+            None
+            if canonical_id is None
+            else _opaque_membership_key(encoder, canonical_id)
         )
         assignments.append(
             AutomaticCanonicalMembershipV1(
@@ -137,7 +165,7 @@ def load_automatic_membership_assignments(
                 decision_checksum=(
                     decision
                     if decision is not None
-                    else _null_decision_checksum(
+                    else null_membership_decision_checksum(
                         entity_key, resolver, resolution_checksum
                     )
                 ),
