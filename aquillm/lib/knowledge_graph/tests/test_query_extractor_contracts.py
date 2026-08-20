@@ -170,6 +170,17 @@ def test_canonical_json_has_exact_fields_and_rejects_unknown_or_noncanonical() -
     ).encode()
     with pytest.raises(ValueError, match="canonical hexadecimal"):
         parse_query_extraction_response(alternate)
+    response_payload["spans"][0]["confidence"] = (
+        "0x1.0000000000000p+999999999999999999999"
+    )
+    overflow = json.dumps(
+        response_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    with pytest.raises(ValueError, match="canonical hexadecimal"):
+        parse_query_extraction_response(overflow)
 
 
 def test_contract_package_exports_data_only_without_optional_runtime() -> None:

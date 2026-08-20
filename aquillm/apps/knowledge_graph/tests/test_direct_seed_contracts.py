@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+# fmt: off
 import json
 import pickle
 from dataclasses import FrozenInstanceError, fields, replace
@@ -18,8 +20,6 @@ from apps.knowledge_graph.retrieval.direct_seed_contracts import (
 from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 
 K = tuple(character * 64 for character in "123456789abcdef")
-
-
 def _match(
     span_index: int = 0,
     component_key: str = K[1],
@@ -34,8 +34,6 @@ def _match(
         similarity=1.0,
         match_weight=0.76,
     )
-
-
 def _diagnostics(**changes: int) -> DirectSeedDiagnosticsV1:
     values = {
         "input_span_count": 1,
@@ -48,8 +46,6 @@ def _diagnostics(**changes: int) -> DirectSeedDiagnosticsV1:
     }
     values.update(changes)
     return DirectSeedDiagnosticsV1(**values)
-
-
 def _outcome() -> DirectSeedOutcomeV1:
     return DirectSeedOutcomeV1(
         matches=(_match(),),
@@ -58,8 +54,6 @@ def _outcome() -> DirectSeedOutcomeV1:
         diagnostics=_diagnostics(),
         failure_reason=None,
     )
-
-
 def test_resolution_tiers_priority_fields_and_exact_failure_values() -> None:
     assert tuple(DirectResolutionTier) == (
         "identifier",
@@ -90,7 +84,7 @@ def test_resolution_tiers_priority_fields_and_exact_failure_values() -> None:
         "similarity",
         "match_weight",
     )
-
+    assert tuple(field.name for field in fields(DirectResolutionSpanInputV1)) == ("span", "text")
 
 def test_matches_pin_tier_weights_exact_types_and_no_query_or_database_ids() -> None:
     expected = {
@@ -124,8 +118,6 @@ def test_matches_pin_tier_weights_exact_types_and_no_query_or_database_ids() -> 
         replace(_match(), tier=DirectResolutionTier.EMBEDDING)
     with pytest.raises((TypeError, ValueError)):
         replace(_match(), entity_key=K[10].upper())
-
-
 def test_seed_mass_member_order_best_match_and_diagnostic_coherence() -> None:
     outcome = _outcome()
     assert fsum(seed.mass for seed in outcome.seeds) == 1.0
@@ -147,7 +139,7 @@ def test_local_resolution_span_is_redacted_and_not_serializable() -> None:
         pass
 
     span = QueryEntitySpanV1("person", 0, 6, 0.9)
-    local = DirectResolutionSpanInputV1(span, "Élodie", "élodie")
+    local = DirectResolutionSpanInputV1(span, "Élodie")
     assert local.text == "Élodie"
     assert "Élodie" not in repr(local) and "Élodie" not in str(local)
     with pytest.raises(TypeError):
@@ -156,12 +148,16 @@ def test_local_resolution_span_is_redacted_and_not_serializable() -> None:
         json.dumps(local)
     with pytest.raises(ValueError, match="length"):
         replace(local, text="Élodi")
-    with pytest.raises(ValueError, match="normalized"):
-        replace(local, normalized_lookup_text="Élodie")
     with pytest.raises(TypeError):
         replace(local, text=Text("Élodie"))
-    with pytest.raises(ValueError, match="control"):
-        replace(local, text="a\nbcde", normalized_lookup_text="a bcde")
+    for text in ("a\nbcde", "a\x7fbcde"):
+        with pytest.raises(ValueError, match="control"):
+            replace(local, text=text)
+    with pytest.raises(ValueError, match="UTF-8"):
+        DirectResolutionSpanInputV1(QueryEntitySpanV1("person", 0, 1, 0.9), chr(0xD800))
+    oversized = "😀" * 8193
+    with pytest.raises(ValueError, match="bound"):
+        DirectResolutionSpanInputV1(QueryEntitySpanV1("person", 0, len(oversized), 0.9), oversized)
 
 
 def test_component_mass_is_the_normalized_fsum_of_best_match_weights() -> None:
@@ -192,6 +188,13 @@ def test_component_mass_is_the_normalized_fsum_of_best_match_weights() -> None:
                 replace(outcome.seeds[1], mass=0.4),
             ),
         )
+    with pytest.raises(ValueError, match="unique|partition"):
+        replace(
+            outcome,
+            seeds=(
+                replace(outcome.seeds[0], member_entity_keys=(K[0], K[4])),
+                replace(outcome.seeds[1], member_entity_keys=(K[2], K[4])),
+            ),)
 
 
 def test_seed_rows_sort_by_descending_mass_then_smallest_member_key() -> None:
@@ -273,3 +276,24 @@ def test_ambiguities_are_bounded_safe_disjoint_and_failure_is_closed() -> None:
     ):
         with pytest.raises(ValueError, match="embedding"):
             _diagnostics(**changes)
+
+
+def test_embedding_diagnostics_bind_authoritative_tier_outcomes() -> None:
+    with pytest.raises(ValueError, match="embedding"):
+        replace(_outcome(), diagnostics=_diagnostics(embedding_attempt_count=1, embedding_match_count=1))
+    embedding_match = replace(_match(), tier=DirectResolutionTier.EMBEDDING, similarity=0.8, match_weight=0.512)
+    DirectSeedOutcomeV1(
+        matches=(embedding_match,),
+        seeds=(ResolvedDirectSeedV1(K[1], (K[0],), 1.0),),
+        ambiguities=(),
+        diagnostics=_diagnostics(embedding_attempt_count=1, embedding_match_count=1),
+        failure_reason=None,
+    )
+    embedding_ambiguity = DirectSeedAmbiguityV1(0, DirectResolutionTier.EMBEDDING, 2, 2)
+    DirectSeedOutcomeV1(
+        matches=(),
+        seeds=(),
+        ambiguities=(embedding_ambiguity,),
+        diagnostics=_diagnostics(resolved_span_count=0, ambiguous_span_count=1, embedding_attempt_count=1, embedding_match_count=1),
+        failure_reason=DirectFailureReason.DIRECT_NO_SEEDS,
+    )

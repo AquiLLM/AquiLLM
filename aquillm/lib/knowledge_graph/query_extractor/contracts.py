@@ -257,7 +257,7 @@ def parse_query_extraction_response(data: bytes) -> QueryExtractionResponseV1:
             raise TypeError("confidence must use canonical hexadecimal text")
         try:
             parsed_confidence = float.fromhex(confidence)
-        except ValueError as error:
+        except (ValueError, OverflowError) as error:
             raise ValueError("confidence must use canonical hexadecimal text") from error
         if confidence != parsed_confidence.hex():
             raise ValueError("confidence must use canonical hexadecimal text")

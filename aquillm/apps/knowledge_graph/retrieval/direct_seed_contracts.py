@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from math import fsum, isclose, isfinite
@@ -70,24 +69,21 @@ def _token(value: object, name: str, maximum: int = 128) -> None:
 class DirectResolutionSpanInputV1:
     span: QueryEntitySpanV1
     text: str
-    normalized_lookup_text: str
     def __post_init__(self) -> None:
         if type(self.span) is not QueryEntitySpanV1:
             raise TypeError("span must be an exact QueryEntitySpanV1")
         if type(self.text) is not str:
             raise TypeError("text must be an exact transient str")
         try:
-            self.text.encode("utf-8")
+            encoded = self.text.encode("utf-8")
         except UnicodeEncodeError as error:
             raise ValueError("text must be valid UTF-8") from error
+        if len(encoded) > 32_768:
+            raise ValueError("text exceeds its UTF-8 byte bound")
         if any(ord(character) < 32 or ord(character) == 127 for character in self.text):
             raise ValueError("text contains a forbidden C0/DEL control character")
         if len(self.text) != self.span.end - self.span.start:
             raise ValueError("text length must equal the span code-point width")
-        _token(self.normalized_lookup_text, "normalized_lookup_text", 512)
-        expected = " ".join(unicodedata.normalize("NFKC", self.text).casefold().split())
-        if self.normalized_lookup_text != expected:
-            raise ValueError("normalized_lookup_text is not canonical for text")
     def __repr__(self) -> str:
         return "<DirectResolutionSpanInputV1 redacted>"
     __str__ = __repr__
@@ -223,6 +219,11 @@ class DirectSeedOutcomeV1:
             raise ValueError("resolved and ambiguous spans must be disjoint")
         components = {row.component_key: row for row in self.seeds}
         match_components = {row.component_key for row in self.matches}
+        member_keys = tuple(
+            key for row in self.seeds for key in row.member_entity_keys
+        )
+        if len(set(member_keys)) != len(member_keys):
+            raise ValueError("seed member entity keys must form a unique partition")
         if set(components) != match_components:
             raise ValueError("match/seed component closure is broken")
         if any(
@@ -252,6 +253,12 @@ class DirectSeedOutcomeV1:
             self.diagnostics.ambiguous_span_count != len(self.ambiguities)
         ):
             raise ValueError("diagnostics disagree with outcome rows")
+        embedding_outcomes = sum(
+            row.tier is DirectResolutionTier.EMBEDDING
+            for row in (*self.matches, *self.ambiguities)
+        )
+        if self.diagnostics.embedding_match_count != embedding_outcomes:
+            raise ValueError("embedding diagnostics disagree with tier outcomes")
         if self.failure_reason is None:
             if not self.matches or not self.seeds:
                 raise ValueError("successful outcome requires resolved seeds")
