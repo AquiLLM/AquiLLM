@@ -220,8 +220,9 @@ determinism, and latency gates are re-approved for `ppr_projected_v1`.
 `TextChunk` keeps its current integer primary key. Memgraph never stores that key
 directly. PostgreSQL stores a generation-local `ProjectionChunkReference` with a
 unique opaque key, chunk foreign key, document UUID, and chunk number. The opaque
-key is `HMAC-SHA256` over a versioned domain, generation key, and chunk PK using a
-dedicated projection-key secret. Key-version rotation forces projection rebuild.
+key is `HMAC-SHA256` over a versioned domain, generation key, and chunk PK using
+the shared `KG_PROJECTION_IDENTIFIER_HMAC_KEY`. Key-version rotation forces a
+projection rebuild.
 Memgraph returns the opaque key; PostgreSQL resolves it through this table and
 then applies current authorization. There is no `chunk_uuid` assumption or
 `TextChunk` schema migration.
