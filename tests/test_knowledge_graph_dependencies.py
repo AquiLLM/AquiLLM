@@ -3,14 +3,65 @@ from __future__ import annotations
 import re
 import tomllib
 from pathlib import Path
+from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 NEO4J_PIN = "neo4j==5.28.4"
 
 
 def _distribution_name(requirement: str) -> str:
-    name = re.split(r"[<>=!~;\[]", requirement, maxsplit=1)[0]
-    return re.sub(r"[-_.]+", "-", name.strip()).lower()
+    match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
+    if match is None:
+        raise ValueError(f"invalid dependency declaration: {requirement!r}")
+    return re.sub(r"[-_.]+", "-", match.group(1)).lower()
+
+
+def _manifest_distribution_names(
+    pyproject: dict[str, Any],
+    requirements: list[str],
+    lock: dict[str, Any],
+) -> set[str]:
+    requirement_declarations = [
+        declaration
+        for line in requirements
+        if (declaration := line.partition("#")[0].strip())
+    ]
+    names = {
+        _distribution_name(dependency)
+        for dependency in pyproject["project"]["dependencies"]
+    }
+    names.update(
+        _distribution_name(dependency) for dependency in requirement_declarations
+    )
+    names.update(_distribution_name(package["name"]) for package in lock["package"])
+    return names
+
+
+def test_manifest_distribution_names_are_semantic_and_normalized() -> None:
+    pyproject = {
+        "project": {"dependencies": ["neo4j==5.28.4"]},
+        "tool": {"notes": "neo4j-driver appears only as metadata"},
+    }
+    requirements = [
+        "neo4j==5.28.4 # exact runtime dependency",
+        "# neo4j-driver==1.7 is intentionally deprecated",
+    ]
+    lock = {
+        "package": [{"name": "neo4j"}, {"name": "pytz"}],
+        "metadata": {"notes": "neo4j-driver appears only as metadata"},
+    }
+
+    assert _manifest_distribution_names(pyproject, requirements, lock) == {
+        "neo4j",
+        "pytz",
+    }
+
+    pyproject["project"]["dependencies"].append("neo4j_driver==1.7")
+    assert "neo4j-driver" in _manifest_distribution_names(
+        pyproject,
+        requirements,
+        lock,
+    )
 
 
 def test_neo4j_bolt_dependency_is_pinned_consistently() -> None:
@@ -58,6 +109,14 @@ def test_neo4j_bolt_dependency_is_pinned_consistently() -> None:
 
 
 def test_legacy_neo4j_driver_distribution_is_not_declared_or_locked() -> None:
-    for filename in ("pyproject.toml", "requirements.txt", "uv.lock"):
-        contents = (REPOSITORY_ROOT / filename).read_text().lower()
-        assert "neo4j-driver" not in contents, filename
+    pyproject = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
+    requirements = (REPOSITORY_ROOT / "requirements.txt").read_text().splitlines()
+    lock = tomllib.loads((REPOSITORY_ROOT / "uv.lock").read_text())
+
+    distribution_names = _manifest_distribution_names(
+        pyproject,
+        requirements,
+        lock,
+    )
+
+    assert "neo4j-driver" not in distribution_names
