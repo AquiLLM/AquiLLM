@@ -155,7 +155,7 @@ def test_local_resolution_span_is_redacted_and_not_serializable() -> None:
             replace(local, text=text)
     with pytest.raises(ValueError, match="UTF-8"):
         DirectResolutionSpanInputV1(QueryEntitySpanV1("person", 0, 1, 0.9), chr(0xD800))
-    oversized = "😀" * 8193
+    oversized = "😀" * 4097
     with pytest.raises(ValueError, match="bound"):
         DirectResolutionSpanInputV1(QueryEntitySpanV1("person", 0, len(oversized), 0.9), oversized)
 

@@ -9,7 +9,10 @@ from enum import StrEnum
 from math import fsum, isclose, isfinite
 from typing import final
 
-from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
+from lib.knowledge_graph.query_extractor.contracts import (
+    MAX_QUERY_UTF8_BYTES,
+    QueryEntitySpanV1,
+)
 
 _KEY = re.compile(r"[0-9a-f]{64}")
 _MAX_SPANS = 128
@@ -78,7 +81,7 @@ class DirectResolutionSpanInputV1:
             encoded = self.text.encode("utf-8")
         except UnicodeEncodeError as error:
             raise ValueError("text must be valid UTF-8") from error
-        if len(encoded) > 32_768:
+        if len(encoded) > MAX_QUERY_UTF8_BYTES:
             raise ValueError("text exceeds its UTF-8 byte bound")
         if any(ord(character) < 32 or ord(character) == 127 for character in self.text):
             raise ValueError("text contains a forbidden C0/DEL control character")
