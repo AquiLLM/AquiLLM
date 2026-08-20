@@ -170,6 +170,24 @@ def _invalid_graph(baseline: tuple[FusedCandidate, ...], direct_count: int, exte
     return _result(baseline, diagnostics)
 def _rrf(direct_rank: int | None, extended_rank: int | None) -> float:
     return fsum(1.0 / (RRF_K + rank) for rank in (direct_rank, extended_rank) if rank is not None)
+def _complete_mapping_valid(baseline: tuple[BaselineCandidate, ...], direct: GraphBranchInput | None, extended: GraphBranchInput | None) -> bool:
+    pk_coordinates = {row.integer_chunk_pk: (row.document_uuid, row.chunk_number) for row in baseline}
+    key_identities: dict[str, tuple[int, UUID, int]] = {}
+    identity_keys: dict[tuple[int, UUID, int], str] = {}
+    for branch in (direct, extended):
+        for row in branch.candidates if branch is not None else ():
+            coordinate = row.document_uuid, row.chunk_number
+            identity = row.integer_chunk_pk, *coordinate
+            if pk_coordinates.get(row.integer_chunk_pk, coordinate) != coordinate:
+                return False
+            if key_identities.get(row.chunk_key, identity) != identity:
+                return False
+            if identity_keys.get(identity, row.chunk_key) != row.chunk_key:
+                return False
+            pk_coordinates[row.integer_chunk_pk] = coordinate
+            key_identities[row.chunk_key] = identity
+            identity_keys[identity] = row.chunk_key
+    return True
 
 def fuse_candidates(
     *, baseline: tuple[BaselineCandidate, ...], direct: GraphBranchInput | None = None,
@@ -194,6 +212,8 @@ def fuse_candidates(
     ready_valid = type(expected_ready_bundle_checksum) is str and _KEY.fullmatch(expected_ready_bundle_checksum) is not None
     valid = (not graph_present or ready_valid) and (direct is None or _valid_branch(direct, CandidateSource.DIRECT, expected_ready_bundle_checksum)) and (extended is None or _valid_branch(extended, CandidateSource.EXTENDED, expected_ready_bundle_checksum))
     if not valid:
+        return _invalid_graph(plain, direct_count, extended_count)
+    if not _complete_mapping_valid(baseline, direct, extended):
         return _invalid_graph(plain, direct_count, extended_count)
     selected_direct = direct.candidates[:direct_cap] if direct is not None else ()
     selected_extended = extended.candidates[:extended_cap] if extended is not None else ()

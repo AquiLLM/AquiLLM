@@ -1,4 +1,4 @@
-# ruff: noqa: E501
+# ruff: noqa: E501, E702
 # fmt: off
 import ast
 import random
@@ -24,10 +24,8 @@ from apps.documents.services.chunk_search_fusion import (
 
 READY = "a" * 64
 
-
 def _baseline(pk: int, *, doc: int = 1, chunk: int = 0) -> BaselineCandidate:
     return BaselineCandidate(pk, UUID(int=doc), chunk, object())
-
 
 def _graph(
     pk: int,
@@ -47,7 +45,6 @@ def _graph(
         score if score is not None else 1.0 / rank,
     )
 
-
 def _branch(
     source: CandidateSource,
     rows: tuple[GraphCandidate, ...],
@@ -64,7 +61,6 @@ def _branch(
         rows,
     )
 
-
 def _fuse(
     baseline: tuple[BaselineCandidate, ...] = (),
     direct: GraphBranchInput | None = None,
@@ -78,7 +74,6 @@ def _fuse(
         expected_ready_bundle_checksum=READY,
         **caps,
     )
-
 
 def test_contract_field_order_slots_immutability_and_pure_imports() -> None:
     assert tuple(CandidateSource) == ("baseline", "direct", "extended")
@@ -131,7 +126,6 @@ def test_contract_field_order_slots_immutability_and_pure_imports() -> None:
         for name in imports
     )
 
-
 def test_baseline_order_cap_and_fixed_fail_closed_validation() -> None:
     rows = (_baseline(3), _baseline(1), _baseline(2))
     result = _fuse(rows, baseline_cap=2)
@@ -143,7 +137,6 @@ def test_baseline_order_cap_and_fixed_fail_closed_validation() -> None:
         with pytest.raises(ValueError) as captured:
             _fuse(bad)  # type: ignore[arg-type]
         assert str(captured.value) == "invalid baseline candidates"
-
 
 def test_duplicate_baseline_keeps_position_object_and_adds_provenance() -> None:
     baseline = (_baseline(2, chunk=4), _baseline(1, chunk=3))
@@ -160,7 +153,6 @@ def test_duplicate_baseline_keeps_position_object_and_adds_provenance() -> None:
     assert (fused.baseline_rank, fused.direct_rank, fused.extended_rank) == (2, 1, 1)
     assert fused.rrf_score == fsum((1.0 / 61, 1.0 / 61))
     assert result.diagnostics.baseline_duplicate_count == 2
-
 
 def test_graph_rrf_dedupe_order_caps_and_exact_float_vector() -> None:
     direct = _branch(
@@ -253,23 +245,31 @@ def test_cross_source_coordinate_mismatch_drops_graph() -> None:
     assert result.diagnostics.malformed_provenance
 
 
+def test_complete_uncapped_mapping_bijection_is_validated_before_branch_caps() -> None:
+    baseline = (_baseline(9, doc=1),)
+    baseline_conflict = _branch(CandidateSource.DIRECT, (_graph(2, 1), _graph(9, 2, doc=2)))
+    key = "f" * 64
+    same_key_direct = _branch(CandidateSource.DIRECT, (_graph(2, 1), replace(_graph(3, 2), chunk_key=key)))
+    same_key_extended = _branch(CandidateSource.EXTENDED, (_graph(4, 1), replace(_graph(5, 2), chunk_key=key)))
+    same_pk_direct = _branch(CandidateSource.DIRECT, (_graph(2, 1), replace(_graph(6, 2), chunk_key="d" * 64)))
+    same_pk_extended = _branch(CandidateSource.EXTENDED, (_graph(4, 1), replace(_graph(6, 2), chunk_key="e" * 64)))
+    cases = ((baseline, baseline_conflict, None), ((), same_key_direct, same_key_extended), ((), same_pk_direct, same_pk_extended))
+    for baseline_rows, direct, extended in cases:
+        result = _fuse(baseline_rows, direct, extended, direct_cap=1, extended_cap=1)
+        assert result.rerank_candidates == tuple(row.candidate_object for row in baseline_rows)
+        assert result.diagnostics.malformed_provenance
+        assert result.diagnostics.failure_reason is FusionFailureReason.GRAPH_PROVENANCE_INVALID
+
+
 def test_randomized_construction_order_has_canonical_output() -> None:
-    expected = None
+    signatures = set()
     for seed in range(20):
         order = ["direct", "extended"]
         random.Random(seed).shuffle(order)
-        built = {}
-        for name in order:
-            source = CandidateSource(name)
-            rows = (_graph(5 if name == "direct" else 6, 1),)
-            built[name] = _branch(source, rows)
+        built = {name: _branch(CandidateSource(name), (_graph(5 if name == "direct" else 6, 1),)) for name in order}
         result = _fuse(direct=built["direct"], extended=built["extended"])
-        signature = tuple(
-            (row.integer_chunk_pk, row.sources, row.rrf_score.hex())
-            for row in result.candidates
-        )
-        expected = signature if expected is None else expected
-        assert signature == expected
+        signatures.add(tuple((row.integer_chunk_pk, row.sources, row.rrf_score.hex()) for row in result.candidates))
+    assert len(signatures) == 1
 
 
 class IntSubclass(int):
