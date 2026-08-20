@@ -6,6 +6,7 @@ from math import isfinite
 
 from .. import projected_types as t
 from . import contracts as c
+from .projected_codec import compose_projected_snapshot_families
 
 
 class TopologyLoadError(RuntimeError):
@@ -16,154 +17,6 @@ class TopologyLoadError(RuntimeError):
             raise TypeError("reason must be an exact TopologyFailureReason")
         self.reason = reason
         super().__init__(reason.value)
-
-
-def _evidence(value):
-    return t.ProjectedChunkEvidenceV1(
-        value["chunk_key"],
-        value["document_key"],
-        value["chunk_number"],
-        float.fromhex(value["confidence"]),
-        value["provenance_key"],
-    )
-
-
-def _signature(value):
-    return t.ProjectedEvidenceSignatureV1(
-        value["evidence_key"],
-        value["relation_key"],
-        value["relation_mention_key"],
-        value["chunk_key"],
-        value["document_key"],
-        value["chunk_number"],
-        float.fromhex(value["confidence"]),
-        value["artifact_key"],
-        value["source_document_key"],
-        value["head_mention_key"],
-        value["tail_mention_key"],
-        value["relation_type"],
-        value["head_mapping_key"],
-        value["tail_mapping_key"],
-        t.ProjectedEvidenceOrientationV1(value["orientation"]),
-        value["ontology_checksum"],
-        value["assembly_config_checksum"],
-    )
-
-
-def _provenance(value):
-    return t.ProjectedArtifactProvenanceV1(
-        value["artifact_key"],
-        t.ProjectedScopeTypeV1(value["scope_type"]),
-        value["scope_key"],
-        value["collection_key"],
-        value["rebuild_request_key"],
-        value["evaluation_only"],
-        value["build_key"],
-        value["build_generation"],
-        value["orchestration_version"],
-        value["source_hash"],
-        value["ontology_version"],
-        value["ontology_checksum"],
-        value["extractor_version"],
-        value["resolver_version"],
-        value["resolution_config_checksum"],
-        value["filter_policy_version"],
-        value["filter_policy_checksum"],
-        value["embedding_model_signature"],
-        value["assembly_version"],
-        value["assembly_config_checksum"],
-    )
-
-
-def _audit(value):
-    kind = value.get("kind")
-    if kind == "automatic_membership":
-        return t.ProjectedAutomaticMembershipAuditV1(
-            value["discovery_hop"],
-            value["entity_key"],
-            value["automatic_membership_key"],
-            value["decision_checksum"],
-            value["resolver_version"],
-        )
-    if kind == "physical_relation":
-        return t.ProjectedPhysicalRelationAuditV1(
-            value["discovery_hop"],
-            value["relation_key"],
-            value["artifact_key"],
-            value["source_entity_key"],
-            value["relation_type"],
-            value["target_entity_key"],
-        )
-    if kind == "relation_evidence":
-        return t.ProjectedRelationEvidenceAuditV1(
-            value["discovery_hop"], _signature(value["signature"])
-        )
-    if kind == "fallback_mention":
-        return t.ProjectedFallbackMentionAuditV1(
-            value["discovery_hop"], value["identity_key"], _evidence(value["evidence"])
-        )
-    raise ValueError("snapshot audit kind is not closed")
-
-
-def _decode_snapshot(raw: object) -> t.ProjectedAuthorizedGraphSnapshotV1:
-    if type(raw) is not str or len(raw.encode("utf-8")) > 2_000_000:
-        raise ValueError("snapshot_json is not a bounded exact string")
-    value = json.loads(raw)
-    algorithm, caps, scope = value["algorithm"], value["caps"], value["allowed_scope"]
-    snapshot = t.ProjectedAuthorizedGraphSnapshotV1(
-        t.ProjectedAlgorithmSignatureV1(
-            algorithm["algorithm_version"],
-            algorithm["transition_version"],
-            algorithm["evidence_version"],
-            algorithm["seed_version"],
-            algorithm["algorithm_signature"],
-        ),
-        t.ProjectedSnapshotCapsV1(
-            caps["max_seeds"],
-            caps["max_scope_documents"],
-            caps["max_scope_collections"],
-            caps["max_hops"],
-            caps["max_nodes"],
-            caps["max_edges"],
-            caps["max_evidence_rows"],
-            caps["max_evidence_per_edge"],
-            caps["max_mentions_per_entity"],
-        ),
-        value["load_max_hops"],
-        t.ProjectedAllowedScopeV1(
-            tuple(scope["document_keys"]),
-            tuple(scope["collection_keys"]),
-            scope["scope_version_signature"],
-        ),
-        tuple(value["identity_keys"]),
-        tuple(
-            t.ProjectedSeedIdentityV1(row["seed_chunk_key"], row["identity_key"])
-            for row in value["seed_identities"]
-        ),
-        tuple(
-            t.ProjectedRelationGroupV1(
-                row["source_identity_key"],
-                row["relation_type"],
-                row["target_identity_key"],
-                t.ProjectedRetrievalDirectionV1(row["direction"]),
-                float.fromhex(row["raw_weight"]),
-                row["admission_hop"],
-                tuple(_evidence(item) for item in row["evidence"]),
-            )
-            for row in value["relation_groups"]
-        ),
-        tuple(
-            t.ProjectedIdentityMentionV1(
-                row["identity_key"], _evidence(row["evidence"])
-            )
-            for row in value["mentions"]
-        ),
-        tuple(_provenance(row) for row in value["artifact_provenance"]),
-        tuple(_audit(row) for row in value["audit_rows"]),
-    )
-    if t.canonical_projected_snapshot_bytes(snapshot).decode() != raw:
-        raise ValueError("snapshot_json is not exact canonical projected bytes")
-    return snapshot
 
 
 def _parameters(ready, seeds) -> dict[str, str]:
@@ -277,10 +130,11 @@ class MemgraphProjectedTopologyLoader:
             else c.TopologyFailureReason.EXTENDED_TOPOLOGY_INVALID
         )
         try:
-            membership_rows = responses[c.TopologyQueryName.AUTOMATIC_MEMBERSHIPS]
-            if type(membership_rows) is not tuple or len(membership_rows) != 1:
-                raise ValueError("membership snapshot envelope is not exact")
-            snapshot = _decode_snapshot(membership_rows[0]["snapshot_json"])
+            snapshot = compose_projected_snapshot_families(
+                memberships=responses[c.TopologyQueryName.AUTOMATIC_MEMBERSHIPS],
+                relations=responses[c.TopologyQueryName.RELATION_TOPOLOGY],
+                evidence=responses[c.TopologyQueryName.EVIDENCE_MENTIONS],
+            )
             expected_documents = tuple(
                 sorted(row.document_key for row in ready.authorized_documents)
             )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from dataclasses import dataclass
 
 from .ppr import PPRAlgorithmConfig
@@ -98,6 +99,61 @@ def _validate_config(
         raise ValueError("config does not match the projected snapshot caps")
 
 
+def _selection_key(group) -> tuple[object, ...]:
+    return (
+        -group.raw_weight,
+        group.source_identity_key,
+        group.relation_type,
+        group.target_identity_key,
+        group.direction.value,
+    )
+
+
+def _replay_groups(snapshot, seeds, config):
+    eligible = tuple(
+        sorted(
+            (
+                group
+                for group in snapshot.relation_groups
+                if group.admission_hop <= config.max_hops
+            ),
+            key=_selection_key,
+        )
+    )
+    by_source = defaultdict(list)
+    for group in eligible:
+        by_source[group.source_identity_key].append(group)
+    fanout = tuple(
+        group
+        for source in sorted(by_source)
+        for group in sorted(by_source[source], key=_selection_key)[: config.max_fanout]
+    )
+    if len(fanout) <= config.max_edges:
+        return fanout
+    admitted = {seed.identity_key for seed in seeds}
+    retained = []
+    cap_reached = False
+    for hop in range(1, config.max_hops + 1):
+        frontier = sorted(
+            (group for group in fanout if group.admission_hop == hop),
+            key=_selection_key,
+        )
+        for group in frontier:
+            if group.source_identity_key not in admitted:
+                continue
+            target_is_new = group.target_identity_key not in admitted
+            if len(retained) >= config.max_edges or (
+                target_is_new and len(admitted) >= config.max_nodes
+            ):
+                cap_reached = True
+                break
+            retained.append(group)
+            admitted.add(group.target_identity_key)
+        if cap_reached:
+            break
+    return tuple(retained)
+
+
 def ppr_projected_v1(
     *,
     snapshot: ProjectedAuthorizedGraphSnapshotV1,
@@ -121,7 +177,7 @@ def ppr_projected_v1(
         WeightedEdge(
             group.source_identity_key, group.target_identity_key, group.raw_weight
         )
-        for group in snapshot.relation_groups
+        for group in _replay_groups(snapshot, seeds, config)
     )
     kernel = run_ppr_kernel(
         nodes=snapshot.identity_keys,

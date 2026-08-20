@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from apps.knowledge_graph.retrieval import projected_types as t
@@ -108,6 +110,41 @@ class Driver:
         self.calls = []
         self.manifest_override = None
         self.snapshot_json_override = None
+        self.section_overrides = {}
+
+    def _section(self, query):
+        value = json.loads(t.canonical_projected_snapshot_bytes(self.graph))
+        audits = value["audit_rows"]
+        if query is TopologyQueryName.AUTOMATIC_MEMBERSHIPS:
+            value["relation_groups"] = []
+            value["mentions"] = []
+            value["audit_rows"] = [
+                row for row in audits if row["kind"] == "automatic_membership"
+            ]
+            return {
+                "snapshot_json": json.dumps(
+                    value, sort_keys=True, separators=(",", ":")
+                )
+            }
+        if query is TopologyQueryName.RELATION_TOPOLOGY:
+            section = {
+                "relation_groups": value["relation_groups"],
+                "audit_rows": [
+                    row for row in audits if row["kind"] == "physical_relation"
+                ],
+            }
+        else:
+            section = {
+                "mentions": value["mentions"],
+                "audit_rows": [
+                    row
+                    for row in audits
+                    if row["kind"] in {"fallback_mention", "relation_evidence"}
+                ],
+            }
+        return {
+            "section_json": json.dumps(section, sort_keys=True, separators=(",", ":"))
+        }
 
     def execute_read(self, *, query, parameters, deadline, max_records):
         self.calls.append((query, parameters, deadline, max_records))
@@ -126,12 +163,11 @@ class Driver:
                 },
             )
         if query is TopologyQueryName.AUTOMATIC_MEMBERSHIPS:
-            value = (
-                self.snapshot_json_override
-                or t.canonical_projected_snapshot_bytes(self.graph).decode()
-            )
-            return ({"snapshot_json": value},)
-        return ()
+            row = self._section(query)
+            if self.snapshot_json_override is not None:
+                row["snapshot_json"] = self.snapshot_json_override
+            return (row,)
+        return (self.section_overrides.get(query, self._section(query)),)
 
 
 def test_memgraph_loader_uses_exact_parameterized_scope_deadline_and_caps() -> None:
