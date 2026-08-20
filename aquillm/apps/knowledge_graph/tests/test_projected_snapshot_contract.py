@@ -233,7 +233,6 @@ def test_reviewed_audit_caps_and_provenance_roles_are_closed() -> None:
         with pytest.raises(ValueError): replace(snapshot, audit_rows=(*snapshot.audit_rows[:2], mutation if type(mutation) is ProjectedPhysicalRelationAuditV1 else physical, mutation) if type(mutation) is ProjectedRelationEvidenceAuditV1 else (*snapshot.audit_rows[:2], mutation, evidence))
     distinct_document = replace(snapshot.artifact_provenance[1], ontology_checksum=K["5"], assembly_config_checksum=K["6"])
     replace(snapshot, artifact_provenance=(snapshot.artifact_provenance[0], distinct_document))
-
 def test_reviewed_strict_values_public_types_and_runtime_finality() -> None:
     class Text(str): pass
     for value in (None, False, Text("")):
@@ -251,7 +250,6 @@ def test_reviewed_strict_values_public_types_and_runtime_finality() -> None:
     for kind, tag in tags: assert get_type_hints(kind)["kind"] == Literal[tag]
     with pytest.raises(TypeError, match="final"):
         class InvalidProjectedSubclass(ProjectedChunkEvidenceV1): pass
-
 def test_evidence_reference_directions_and_fallback_semantics_are_bounded() -> None:
     snapshot = _snapshot(); forward = snapshot.relation_groups[0]
     undirected = replace(forward, direction=ProjectedRetrievalDirectionV1.UNDIRECTED); reverse = replace(forward, source_identity_key=K["2"], target_identity_key=K["1"], direction=ProjectedRetrievalDirectionV1.REVERSE_DIRECTED)
@@ -264,6 +262,20 @@ def test_evidence_reference_directions_and_fallback_semantics_are_bounded() -> N
     with pytest.raises(ValueError, match="fallback.*duplicate|semantic"): replace(base, mentions=(ProjectedIdentityMentionV1(K["1"], second),), audit_rows=(*base.audit_rows, *fallbacks))
     conflict = replace(second, provenance_key=K["6"], chunk_number=3); conflict_rows = (ProjectedFallbackMentionAuditV1(0, K["1"], second), ProjectedFallbackMentionAuditV1(0, K["1"], conflict))
     with pytest.raises(ValueError, match="coordinate"): replace(base, mentions=(ProjectedIdentityMentionV1(K["1"], second), ProjectedIdentityMentionV1(K["1"], conflict)), audit_rows=(*base.audit_rows, *conflict_rows))
+def test_scope_cardinality_discovery_hops_and_seed_caps_are_complete() -> None:
+    snapshot = _snapshot(); collection, document = snapshot.artifact_provenance
+    duplicate_collection = replace(collection, artifact_key=K["0"], build_key=K["0"]); duplicate_document = replace(document, artifact_key=K["0"], build_key=K["0"])
+    for rows in ((duplicate_collection, collection, document), (collection, duplicate_document, document)):
+        with pytest.raises(ValueError, match="scope|provenance"): replace(snapshot, artifact_provenance=rows)
+    collection2 = replace(collection, artifact_key=K["0"], scope_key=K["e"], collection_key=K["e"], build_key=K["0"]); document1 = replace(document, collection_key=K["e"]); document2 = replace(document, artifact_key=K["5"], scope_key=K["f"], collection_key=K["e"], build_key=K["5"])
+    with pytest.raises(ValueError, match="collection|provenance"): replace(snapshot, allowed_scope=ProjectedAllowedScopeV1((K["d"], K["f"]), (K["c"], K["e"]), K["e"]), artifact_provenance=(collection, collection2, document1, document2))
+    with pytest.raises(ValueError, match="hop"): replace(snapshot, audit_rows=(*snapshot.audit_rows[:3], replace(snapshot.audit_rows[3], discovery_hop=2)))
+    raw = _snapshot(graph=False); collapsed = replace(raw.audit_rows[1], automatic_membership_key=K["1"], discovery_hop=1)
+    base = replace(raw, identity_keys=(K["1"],), audit_rows=(raw.audit_rows[0], collapsed)); fallback = ProjectedFallbackMentionAuditV1(1, K["1"], _chunk())
+    with pytest.raises(ValueError, match="hop"): replace(base, mentions=(ProjectedIdentityMentionV1(K["1"], _chunk()),), audit_rows=(*base.audit_rows, fallback))
+    replace(snapshot, caps=replace(snapshot.caps, max_seeds=1), seed_identities=(ProjectedSeedIdentityV1(K["8"], K["1"]), ProjectedSeedIdentityV1(K["8"], K["2"])))
+    with pytest.raises(ValueError, match="seed"): replace(snapshot, caps=replace(snapshot.caps, max_seeds=1), seed_identities=(ProjectedSeedIdentityV1(K["7"], K["1"]), ProjectedSeedIdentityV1(K["8"], K["2"])))
+    with pytest.raises(ValueError, match="seed|cap"): replace(snapshot, caps=replace(snapshot.caps, max_seeds=2, max_nodes=2), seed_identities=(ProjectedSeedIdentityV1(K["7"], K["1"]), ProjectedSeedIdentityV1(K["8"], K["1"]), ProjectedSeedIdentityV1(K["8"], K["2"])))
 # fmt: on
 
 
