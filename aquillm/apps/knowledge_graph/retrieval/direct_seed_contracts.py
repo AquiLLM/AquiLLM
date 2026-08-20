@@ -1,0 +1,271 @@
+"""Closed, privacy-safe contracts for deterministic direct entity seeds."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, fields
+from enum import StrEnum
+from math import fsum, isclose, isfinite
+from typing import final
+
+_KEY = re.compile(r"[0-9a-f]{64}")
+_MAX_SPANS = 128
+_MAX_SEEDS = 64
+_MAX_MATCHES = 128
+_TIER_FACTORS: dict[DirectResolutionTier, float]
+
+
+class DirectResolutionTier(StrEnum):
+    IDENTIFIER = "identifier"
+    NAME = "name"
+    ALIAS = "alias"
+    EMBEDDING = "embedding"
+
+    @property
+    def priority(self) -> int:
+        return tuple(type(self)).index(self)
+
+
+_TIER_FACTORS = {
+    DirectResolutionTier.IDENTIFIER: 1.0,
+    DirectResolutionTier.NAME: 0.95,
+    DirectResolutionTier.ALIAS: 0.90,
+    DirectResolutionTier.EMBEDDING: 0.80,
+}
+
+
+class DirectFailureReason(StrEnum):
+    EXTRACTOR_TIMEOUT = "extractor_timeout"
+    EXTRACTOR_AUTH = "extractor_auth"
+    EXTRACTOR_PROVENANCE = "extractor_provenance"
+    MIXED_ONTOLOGY = "mixed_ontology"
+    DIRECT_SEED_INVALID = "direct_seed_invalid"
+    DIRECT_NO_SEEDS = "direct_no_seeds"
+    DIRECT_EMBEDDING_UNAVAILABLE = "direct_embedding_unavailable"
+    DIRECT_TOPOLOGY_TIMEOUT = "direct_topology_timeout"
+    DIRECT_TOPOLOGY_INVALID = "direct_topology_invalid"
+    DIRECT_PPR_INVALID = "direct_ppr_invalid"
+
+
+def _count(value: object, name: str, maximum: int = _MAX_SPANS) -> None:
+    if type(value) is not int:
+        raise TypeError(f"{name} must be an exact int")
+    if not 0 <= value <= maximum:
+        raise ValueError(f"{name} is outside its bound")
+
+
+def _unit(value: object, name: str, *, positive: bool = False) -> None:
+    if type(value) is not float:
+        raise TypeError(f"{name} must be an exact float")
+    lower = 0.0 < value if positive else 0.0 <= value
+    if not isfinite(value) or not lower or value > 1.0:
+        raise ValueError(f"{name} must be finite and in its unit interval")
+
+
+def _key(value: object, name: str) -> None:
+    if type(value) is not str:
+        raise TypeError(f"{name} must be an exact str")
+    if _KEY.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a lowercase 64-hex opaque key")
+
+
+def _token(value: object, name: str) -> None:
+    if type(value) is not str:
+        raise TypeError(f"{name} must be an exact str")
+    if not value or value != value.strip() or len(value) > 128:
+        raise ValueError(f"{name} must be a bounded canonical token")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"{name} contains a forbidden control character")
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class DirectEntityMatchV1:
+    span_index: int
+    entity_key: str
+    component_key: str
+    ontology_type: str
+    tier: DirectResolutionTier
+    extraction_confidence: float
+    similarity: float
+    match_weight: float
+
+    def __post_init__(self) -> None:
+        _count(self.span_index, "span_index", _MAX_SPANS - 1)
+        _key(self.entity_key, "entity_key")
+        _key(self.component_key, "component_key")
+        _token(self.ontology_type, "ontology_type")
+        if type(self.tier) is not DirectResolutionTier:
+            raise TypeError("tier must be an exact DirectResolutionTier")
+        _unit(self.extraction_confidence, "extraction_confidence")
+        _unit(self.similarity, "similarity")
+        _unit(self.match_weight, "match_weight", positive=True)
+        if self.tier is not DirectResolutionTier.EMBEDDING and self.similarity != 1.0:
+            raise ValueError("exact tiers require unit similarity")
+        expected = (
+            self.extraction_confidence
+            * _TIER_FACTORS[self.tier]
+            * (self.similarity if self.tier is DirectResolutionTier.EMBEDDING else 1.0)
+        )
+        if not isclose(self.match_weight, expected, rel_tol=0.0, abs_tol=1e-12):
+            raise ValueError("match_weight disagrees with its tier semantics")
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class ResolvedDirectSeedV1:
+    component_key: str
+    member_entity_keys: tuple[str, ...]
+    mass: float
+
+    def __post_init__(self) -> None:
+        _key(self.component_key, "component_key")
+        if type(self.member_entity_keys) is not tuple or not self.member_entity_keys:
+            raise TypeError("member_entity_keys must be a nonempty exact tuple")
+        if len(self.member_entity_keys) > _MAX_SEEDS:
+            raise ValueError("member_entity_keys exceed the hard cap")
+        for key in self.member_entity_keys:
+            _key(key, "member_entity_key")
+        if len(set(self.member_entity_keys)) != len(
+            self.member_entity_keys
+        ) or self.member_entity_keys != tuple(sorted(self.member_entity_keys)):
+            raise ValueError("member_entity_keys must be unique and sorted")
+        _unit(self.mass, "mass", positive=True)
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class DirectSeedAmbiguityV1:
+    span_index: int
+    tier: DirectResolutionTier
+    component_count: int
+    candidate_count: int
+
+    def __post_init__(self) -> None:
+        _count(self.span_index, "span_index", _MAX_SPANS - 1)
+        if type(self.tier) is not DirectResolutionTier:
+            raise TypeError("tier must be an exact DirectResolutionTier")
+        _count(self.component_count, "component_count", _MAX_SEEDS)
+        _count(self.candidate_count, "candidate_count", _MAX_MATCHES)
+        if self.component_count < 2 or self.candidate_count < self.component_count:
+            raise ValueError("ambiguity counts are incoherent")
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class DirectSeedDiagnosticsV1:
+    input_span_count: int
+    deduplicated_span_count: int
+    resolved_span_count: int
+    ambiguous_span_count: int
+    unresolved_span_count: int
+    embedding_attempt_count: int
+    embedding_match_count: int
+
+    def __post_init__(self) -> None:
+        for field in fields(self):
+            _count(getattr(self, field.name), field.name)
+        if self.deduplicated_span_count > self.input_span_count:
+            raise ValueError("deduplicated count exceeds input")
+        if (
+            self.resolved_span_count
+            + self.ambiguous_span_count
+            + self.unresolved_span_count
+            != self.deduplicated_span_count
+        ):
+            raise ValueError("diagnostic span counts are incoherent")
+        if self.embedding_match_count > self.embedding_attempt_count:
+            raise ValueError("embedding diagnostic counts are incoherent")
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class DirectSeedOutcomeV1:
+    matches: tuple[DirectEntityMatchV1, ...]
+    seeds: tuple[ResolvedDirectSeedV1, ...]
+    ambiguities: tuple[DirectSeedAmbiguityV1, ...]
+    diagnostics: DirectSeedDiagnosticsV1
+    failure_reason: DirectFailureReason | None
+
+    def __post_init__(self) -> None:
+        _typed_rows(self.matches, DirectEntityMatchV1, "matches", _MAX_MATCHES)
+        _typed_rows(self.seeds, ResolvedDirectSeedV1, "seeds", _MAX_SEEDS)
+        _typed_rows(
+            self.ambiguities,
+            DirectSeedAmbiguityV1,
+            "ambiguities",
+            _MAX_SPANS,
+        )
+        if type(self.diagnostics) is not DirectSeedDiagnosticsV1:
+            raise TypeError("diagnostics must be exact")
+        if (
+            self.failure_reason is not None
+            and type(self.failure_reason) is not DirectFailureReason
+        ):
+            raise TypeError("failure_reason must be an exact DirectFailureReason")
+        match_keys = tuple(
+            (row.span_index, row.tier.priority, row.component_key, row.entity_key)
+            for row in self.matches
+        )
+        seed_keys = tuple(row.member_entity_keys[0] for row in self.seeds)
+        ambiguity_keys = tuple(
+            (row.span_index, row.tier.priority) for row in self.ambiguities
+        )
+        _ordered_unique(match_keys, "matches")
+        _ordered_unique(seed_keys, "seeds")
+        _ordered_unique(ambiguity_keys, "ambiguities")
+        match_spans = {row.span_index for row in self.matches}
+        if len(match_spans) != len(self.matches):
+            raise ValueError("matches must retain one best component per span")
+        if match_spans & {row.span_index for row in self.ambiguities}:
+            raise ValueError("resolved and ambiguous spans must be disjoint")
+        components = {row.component_key: row for row in self.seeds}
+        match_components = {row.component_key for row in self.matches}
+        if set(components) != match_components:
+            raise ValueError("match/seed component closure is broken")
+        if any(
+            row.component_key not in components
+            or row.entity_key not in components[row.component_key].member_entity_keys
+            for row in self.matches
+        ):
+            raise ValueError("match/seed component closure is broken")
+        if self.seeds and not isclose(
+            fsum(seed.mass for seed in self.seeds), 1.0, rel_tol=0.0, abs_tol=1e-12
+        ):
+            raise ValueError("seed mass must normalize to one")
+        if self.matches:
+            total = fsum(row.match_weight for row in self.matches)
+            for seed in self.seeds:
+                expected = (
+                    fsum(
+                        row.match_weight
+                        for row in self.matches
+                        if row.component_key == seed.component_key
+                    )
+                    / total
+                )
+                if not isclose(seed.mass, expected, rel_tol=0.0, abs_tol=1e-12):
+                    raise ValueError("seed mass is not normalized component match mass")
+        if self.diagnostics.resolved_span_count != len(self.matches) or (
+            self.diagnostics.ambiguous_span_count != len(self.ambiguities)
+        ):
+            raise ValueError("diagnostics disagree with outcome rows")
+        if self.failure_reason is None:
+            if not self.matches or not self.seeds:
+                raise ValueError("successful outcome requires resolved seeds")
+        elif self.matches or self.seeds:
+            raise ValueError("failure outcome must not expose partial seeds")
+
+
+def _typed_rows(value: object, kind: type, name: str, cap: int) -> None:
+    if type(value) is not tuple:
+        raise TypeError(f"{name} must be an exact tuple")
+    if len(value) > cap:
+        raise ValueError(f"{name} exceed the hard cap")
+    if any(type(row) is not kind for row in value):
+        raise TypeError(f"{name} must contain exact {kind.__name__} values")
+
+
+def _ordered_unique(keys: tuple, name: str) -> None:
+    if len(set(keys)) != len(keys) or keys != tuple(sorted(keys)):
+        raise ValueError(f"{name} must be unique and canonically sorted")

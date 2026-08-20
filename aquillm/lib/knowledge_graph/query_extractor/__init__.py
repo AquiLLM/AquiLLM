@@ -1,0 +1,41 @@
+"""Safe public exports for the provider-neutral query extraction contract."""
+
+from .contracts import (
+    MAX_QUERY_CODE_POINTS,
+    MAX_QUERY_REQUEST_BODY_BYTES,
+    MAX_QUERY_RESPONSE_BODY_BYTES,
+    MAX_QUERY_SPANS,
+    MAX_QUERY_UTF8_BYTES,
+    QUERY_EXTRACTION_REQUEST_SCHEMA_VERSION,
+    QUERY_EXTRACTION_RESPONSE_SCHEMA_CHECKSUM,
+    QUERY_EXTRACTION_RESPONSE_SCHEMA_VERSION,
+    QueryEntitySpanV1,
+    QueryExtractionRequestV1,
+    QueryExtractionResponseV1,
+    QueryExtractorFailureReason,
+    QueryExtractorProvenanceV1,
+    canonical_query_extraction_request_bytes,
+    canonical_query_extraction_response_bytes,
+    parse_query_extraction_request,
+    parse_query_extraction_response,
+)
+
+__all__ = [
+    "MAX_QUERY_CODE_POINTS",
+    "MAX_QUERY_REQUEST_BODY_BYTES",
+    "MAX_QUERY_RESPONSE_BODY_BYTES",
+    "MAX_QUERY_SPANS",
+    "MAX_QUERY_UTF8_BYTES",
+    "QUERY_EXTRACTION_REQUEST_SCHEMA_VERSION",
+    "QUERY_EXTRACTION_RESPONSE_SCHEMA_CHECKSUM",
+    "QUERY_EXTRACTION_RESPONSE_SCHEMA_VERSION",
+    "QueryEntitySpanV1",
+    "QueryExtractionRequestV1",
+    "QueryExtractionResponseV1",
+    "QueryExtractorFailureReason",
+    "QueryExtractorProvenanceV1",
+    "canonical_query_extraction_request_bytes",
+    "canonical_query_extraction_response_bytes",
+    "parse_query_extraction_request",
+    "parse_query_extraction_response",
+]
