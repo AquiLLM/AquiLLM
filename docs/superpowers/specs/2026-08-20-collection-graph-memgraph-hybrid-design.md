@@ -28,7 +28,7 @@ The merged implementation already provides:
 - versioned document and collection graph artifacts in PostgreSQL;
 - immutable entity, relation, evidence, and canonical-link records;
 - collection activation, rebuild, invalidation, inspection, and retention;
-- permission-safe vector retrieval;
+- permission-safe vector/trigram retrieval;
 - vector-chunk-seeded personalized PageRank over a bounded graph snapshot;
 - graph-candidate fusion before the existing reranker; and
 - fail-open behavior with both shipping flags disabled by default.
@@ -68,8 +68,9 @@ It does not provide:
 8. **One reranker chooses final chunks.** Baseline candidates are retained,
    graph-only candidates are selected by a deterministic reciprocal-rank rule,
    and the existing reranker scores the final deduplicated pool.
-9. **Shipping fails open to vector retrieval, not to another graph backend.** The
-   PostgreSQL graph loader is an explicit evaluation/parity backend only.
+9. **Shipping fails open to the vector/trigram baseline, not to another graph
+   backend.** The PostgreSQL graph loader is an explicit evaluation/parity
+   backend only.
 
 ## Success Criteria
 
@@ -146,12 +147,13 @@ The v1 projection contains:
   artifact key, collection key, cluster key, retrieval utility, optional opaque
   automatic canonical membership key, and membership decision/resolver/version
   checksums;
-- opaque document membership nodes/edges with document UUID, projection chunk
-  key, and stable chunk number needed for authorization and candidate ordering;
+- opaque document membership nodes/edges with projection document key,
+  projection chunk key, and stable chunk number needed for authorization and
+  candidate ordering;
 - collection-local physical relation edges with opaque relation key, artifact
   key, source entity key, canonical relation type, and target entity key;
 - entity/relation evidence edges with opaque evidence and mention keys,
-  projection chunk key, document UUID, chunk number, finite confidence,
+  projection chunk key, projection document key, chunk number, finite confidence,
   provenance key, and semantic signature;
 - artifact-provenance markers containing the exact existing
   `AuthorizedArtifactProvenance` fields;
@@ -171,21 +173,38 @@ hexadecimal encoding. The SHA-256 of those canonical bytes is the projection
 checksum. Both the PostgreSQL encoder and Memgraph validator use the same pure
 contract module and test vectors.
 
-The projection is field-for-field sufficient to reconstruct the existing
-provider-neutral authorized snapshot. Its typed record contract includes the
-exact inputs represented today by `_AuthorizedEntityRow`,
-`_AuthorizedPhysicalRelation`, `_AuthorizedEvidenceProjection`, automatic
-canonical membership, and `AuthorizedArtifactProvenance` in
-`retrieval/expansion.py`: entity artifact/collection/cluster key and retrieval
-utility; physical relation artifact/source/type/target; evidence relation ID,
-evidence ID, mention ID, integer chunk PK, document UUID, chunk number,
-confidence, provenance key, and semantic signature; automatic canonical identity
-key plus decision/resolver/version checksums; and every artifact provenance
-field. Direction, admission hop, authorized support count, confidence, and raw
-edge weight remain derived by the unchanged `PPRAlgorithmConfig`,
-`raw_edge_weight`, and authorized-snapshot composition rules. They are not
-independently invented projection fields. Parity requires the PostgreSQL and
-Memgraph loaders to produce the same canonical `AuthorizedGraphSnapshot` bytes.
+The contract introduces `ProjectedAuthorizedGraphSnapshotV1`, a provider-neutral
+opaque-ID ranking DTO. Both the PostgreSQL parity loader and Memgraph loader must
+emit this DTO through the same `ProjectionIdentifierCodec`; exact parity compares
+its canonical bytes and ranked result, not the integer-bearing bytes of the
+legacy `AuthorizedGraphSnapshot`.
+
+The codec transforms every database-origin identity with a versioned,
+domain-separated HMAC. Generation-local domains cover collection, artifact,
+entity, relation, evidence, relation mention, entity mention/mapping, document,
+chunk, and canonical-link decision identities. The automatic canonical identity
+domain omits generation so selected nodes in different generations receive the
+same membership key. Both loaders receive the same key version and projection
+secret; a version change invalidates every projection.
+
+`ProjectedAuthorizedGraphSnapshotV1` contains the same logical inputs represented
+today by `_AuthorizedEntityRow`, `_AuthorizedPhysicalRelation`,
+`_AuthorizedEvidenceProjection`, automatic canonical membership,
+`AuthorizedArtifactProvenance`, and `raw_audit_rows`, but only with typed opaque
+keys. Its `ProjectedEvidenceSignatureV1` names every current semantic-signature
+field explicitly; identifier fields are codec outputs, while relation type,
+orientation, checksums, chunk number, and finite confidence keep their canonical
+typed values. Its typed projection-audit rows replace positional raw integer
+audit tuples. Direction, admission hop, authorized support count, confidence,
+and raw edge weight remain derived by the unchanged `PPRAlgorithmConfig`,
+`raw_edge_weight`, and snapshot-composition rules.
+
+The existing PostgreSQL loader remains behind the explicit parity backend and is
+normalized into the new DTO before comparison. The Memgraph shipping loader
+builds the DTO directly. The Python scorer consumes the new DTO while retaining
+the current numerical PPR, cap, zero-hop component, evidence-flow, and ordering
+rules. Contract tests prove that changing only identifier representation does not
+change ranked results or trace metrics.
 
 `TextChunk` keeps its current integer primary key. Memgraph never stores that key
 directly. PostgreSQL stores a generation-local `ProjectionChunkReference` with a
@@ -196,14 +215,15 @@ Memgraph returns the opaque key; PostgreSQL resolves it through this table and
 then applies current authorization. There is no `chunk_uuid` assumption or
 `TextChunk` schema migration.
 
-The Memgraph projection checksum covers only canonical graph records containing
-opaque projection keys; it never contains integer chunk PKs. A separate
+The Memgraph projection checksum and provider-neutral snapshot checksum cover
+only opaque-key records and contain no integer database IDs. A separate
 PostgreSQL-only mapping checksum covers sorted
 `(projection_chunk_key, integer_chunk_pk, document_uuid, chunk_number)` tuples.
-After a Memgraph load, PostgreSQL resolves all opaque keys, constructs the exact
-`AuthorizedGraphSnapshot`, and only then computes the provider-neutral parity
-checksum that contains the internal integer chunk IDs. The projection record
-stores all three checksum roles separately.
+Only candidate chunk keys require reverse mapping: after ranking, PostgreSQL
+resolves them through `ProjectionChunkReference`, reauthorizes, and materializes
+the rows. Entity/relation/evidence/audit keys are never reversed. The projection
+record stores graph, opaque-snapshot, and private chunk-mapping checksum roles
+separately.
 
 ### Automatic Canonical Membership Lifecycle
 
@@ -222,6 +242,15 @@ re-enqueues every affected collection projection in bounded batches. Candidate
 link changes do not. Collection ready compare-and-set verifies both the active
 artifact and the current per-collection membership checksum under lock; stale
 membership can never become ready.
+
+Canonical-registry mutations and projection-ready publication share the existing
+collection-scope fence. They lock affected collection rows in ascending primary
+key order, then lock canonical registry/projection rows in stable key order.
+Every automatic membership mutation increments a per-collection registry epoch
+inside that transaction. Ready compare-and-set verifies the locked epoch and
+checksum before transition. This lock order prevents a mutation from committing
+between the membership check and ready publication; request-time checksum checks
+remain a second fail-closed fence.
 
 Reconciliation compares each active collection projection with its current
 PostgreSQL membership checksum, republishes stale/missing work in bounded pages,
@@ -272,7 +301,8 @@ The request freezes selected collection and document authorization in PostgreSQL
 The topology adapter receives:
 
 - the exact selected collection-generation keys;
-- the exact authorized opaque document UUID set;
+- the exact authorized projection document-key set derived from the frozen
+  PostgreSQL document UUIDs;
 - branch seed keys and weights;
 - schema/projection version; and
 - explicit node, edge, depth, result, and time caps.
@@ -316,8 +346,8 @@ extraction output are neither persisted nor logged.
 
 Direct extraction v1 requires every selected active collection artifact to use
 the same ontology checksum. Mixed ontology selections disable only the direct
-branch with reason `mixed_ontology`; vector retrieval and vector-seeded graph
-retrieval remain eligible.
+branch with reason `mixed_ontology`; vector/trigram retrieval and vector-seeded
+graph retrieval remain eligible.
 
 ### Direct Entity Seed Resolution
 
@@ -479,7 +509,7 @@ Authorization is enforced at five boundaries:
 1. freeze selected collection/document membership in PostgreSQL;
 2. select only exact active-and-ready generation keys;
 3. constrain Memgraph topology and evidence to those generations and authorized
-   document UUIDs;
+   projection document keys;
 4. collapse automatic memberships only among the selected eligible generation
    nodes; and
 5. re-authorize every returned chunk before materialization.
@@ -536,11 +566,14 @@ The implementation requires:
 - unit tests for canonical projection encoding, numeric serialization,
   checksums, opaque chunk references, idempotency, and compare-and-set state
   transitions;
+- opaque identifier codec domain/key-version tests for every database-origin ID,
+  transformed evidence/audit signatures, no-integer-leak serialization, and
+  PostgreSQL/Memgraph `ProjectedAuthorizedGraphSnapshotV1` byte parity;
 - integration tests against an isolated dedicated Memgraph container;
 - crash/retry/reconciliation tests for partially written generations;
 - automatic membership create/remove/status/resolver-change invalidation,
   bounded outbox fan-out, checksum, compare-and-set, reconciliation, and pruning
-  tests, including single selected collections;
+  tests, including single selected collections and mutation/ready lock races;
 - all-or-nothing multi-collection readiness and stale-generation tests;
 - strict single/multi-collection authorization-context propagation, current
   permission revalidation, and mid-request revocation tests;
@@ -567,6 +600,8 @@ tests immutable interfaces for:
 
 - collection projection, automatic membership, opaque chunk reference, and
   canonical serialization records;
+- `ProjectedAuthorizedGraphSnapshotV1`, typed projected evidence/audit rows, and
+  the versioned identifier-codec interface;
 - extractor request/response and provenance;
 - topology request/result and authorized document scope;
 - direct/extended branch result and failure enums; and
@@ -606,10 +641,10 @@ parallel speed.
 
 ## Expected Outcome
 
-AquiLLM retains permission-safe, citable vector retrieval while adding a
+AquiLLM retains permission-safe, citable vector/trigram retrieval while adding a
 rebuildable Memgraph topology projection and two complementary graph expansion
 paths. Users searching one collection receive deeper collection understanding.
 Users selecting several collections may traverse conservative automatic identity
 links across exactly those scopes. The final reranker selects the best chunks
 from vector, direct graph, and extended graph retrieval, while any optional graph
-failure degrades to the unchanged authorized vector baseline.
+failure degrades to the unchanged authorized vector/trigram baseline.
