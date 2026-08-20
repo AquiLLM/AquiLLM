@@ -51,16 +51,16 @@ It does not provide:
    volume, health check, retention, and cleanup lifecycle.
 3. **Collection graph generations remain separate.** Memgraph entity nodes are
    generation-scoped. There are no global canonical nodes in v1.
-4. **Only automatic canonical links join selected collection generations.** An
-   automatic link is projected as a direct edge between two generation-scoped
-   entity nodes and carries an opaque canonical identity key. Candidate links
-   remain PostgreSQL-only and are never traversable in v1.
+4. **Only automatic canonical links join selected collection generations.** A
+   versioned pairwise bridge projection owns direct edges between two exact
+   generation-scoped entity sets. Candidate links remain PostgreSQL-only and are
+   never traversable in v1.
 5. **The frozen PostgreSQL document scope constrains topology.** A selected
    generation alone is insufficient; topology and evidence are filtered to the
    exact authorized document IDs captured for the request.
 6. **Direct-query and vector-seeded graph retrieval both run.** Direct extraction
-   runs alongside baseline vector retrieval; vector-seeded traversal begins
-   after baseline candidates exist.
+   runs alongside the existing vector/trigram baseline; vector-seeded traversal
+   begins after baseline candidates exist.
 7. **Memgraph loads topology; deterministic Python PPR scores it.** The direct
    and extended branches perform independently capped topology loads against the
    same immutable ready-generation set.
@@ -75,7 +75,9 @@ It does not provide:
 - Each active PostgreSQL collection graph can be projected idempotently into
   Memgraph and reconciled from an empty graph store.
 - A request can use graph retrieval only when every selected collection has an
-  exact active-and-ready projection generation.
+  exact active-and-ready projection generation and every selected generation
+  pair has an exact ready canonical-bridge marker, including an explicit empty
+  marker when the pair has no automatic links.
 - A query scoped to one collection cannot traverse another collection.
 - A query scoped to multiple selected collections may traverse only automatic
   canonical links whose two generation endpoints are in that exact selected set.
@@ -88,7 +90,7 @@ It does not provide:
 - The final pool contains no inaccessible chunks and preserves vector, direct,
   and extended source membership.
 - Memgraph, projection, extractor, ontology, or one branch failure never prevents
-  an authorized baseline vector result.
+  an authorized vector/trigram baseline result.
 - No raw query text, document text, entity display labels, or citation payloads
   are written to Memgraph or operational logs.
 - Feature flags remain disabled until cloud evaluation proves permission
@@ -114,18 +116,19 @@ PostgreSQL transaction. Broker publication is best-effort; a reconciler
 republishes pending records. PostgreSQL activation never depends on a
 cross-database commit.
 
-Ready publication is a transactional compare-and-set. After Memgraph validation,
-the worker locks the projection and collection activation rows with
+Collection ready publication is a transactional compare-and-set. After Memgraph
+validation, the worker locks the projection and collection activation rows with
 `select_for_update`, verifies that the projection still names the exact active
 artifact, checksum, schema version, and expected generation, and then moves only
 that record to `ready`. Any mismatch moves the work to `superseded`; it can never
 make an obsolete generation queryable.
 
 For a multi-collection request, readiness is all-or-nothing. Every selected
-collection must have an exact active-and-ready generation and the generation set
-must have complete automatic canonical-link projection metadata. If one selected
-collection is missing, stale, or mismatched, both graph branches are disabled for
-that request and vector retrieval continues.
+collection must have an exact active-and-ready generation and every unordered
+pair in the selected generation set must have an exact ready bridge marker. An
+empty pair still requires a ready zero-edge marker. If any collection or pair is
+missing, stale, or mismatched, both graph branches are disabled and the existing
+vector/trigram baseline continues.
 
 ### Dedicated Memgraph Projection Plane
 
@@ -139,13 +142,17 @@ The v1 projection contains:
 
 - `CollectionGeneration` markers with collection scope, artifact checksum,
   schema version, projection version, and immutable generation key;
-- generation-scoped entity nodes with opaque entity key and ontology type;
-- opaque document membership nodes/edges with document UUID, chunk UUID, and
-  stable chunk number needed for authorization and candidate ordering;
-- collection-local directed relation edges with relation type, direction,
-  confidence, retrieval utility, transition-weight inputs, and artifact version;
-- entity/relation evidence edges with document membership, confidence, and
-  provenance category;
+- generation-scoped entity nodes with opaque entity key, ontology type,
+  artifact key, collection key, cluster key, and retrieval utility;
+- opaque document membership nodes/edges with document UUID, projection chunk
+  key, and stable chunk number needed for authorization and candidate ordering;
+- collection-local physical relation edges with opaque relation key, artifact
+  key, source entity key, canonical relation type, and target entity key;
+- entity/relation evidence edges with opaque evidence and mention keys,
+  projection chunk key, document UUID, chunk number, finite confidence,
+  provenance key, and semantic signature;
+- artifact-provenance markers containing the exact existing
+  `AuthorizedArtifactProvenance` fields;
 - automatic canonical edges directly joining generation-scoped entity nodes,
   carrying an opaque canonical identity key and both generation endpoints; and
 - exact counts and checksum metadata used for validation.
@@ -161,6 +168,58 @@ finite numeric values represented by an explicitly versioned IEEE-754
 hexadecimal encoding. The SHA-256 of those canonical bytes is the projection
 checksum. Both the PostgreSQL encoder and Memgraph validator use the same pure
 contract module and test vectors.
+
+The projection is field-for-field sufficient to reconstruct the existing
+provider-neutral authorized snapshot. Its typed record contract includes the
+exact inputs represented today by `_AuthorizedEntityRow`,
+`_AuthorizedPhysicalRelation`, `_AuthorizedEvidenceProjection`, automatic
+canonical membership, and `AuthorizedArtifactProvenance` in
+`retrieval/expansion.py`: entity artifact/collection/cluster key and retrieval
+utility; physical relation artifact/source/type/target; evidence relation ID,
+evidence ID, mention ID, integer chunk PK, document UUID, chunk number,
+confidence, provenance key, and semantic signature; automatic canonical identity
+key plus decision/resolver/version checksums; and every artifact provenance
+field. Direction, admission hop, authorized support count, confidence, and raw
+edge weight remain derived by the unchanged `PPRAlgorithmConfig`,
+`raw_edge_weight`, and authorized-snapshot composition rules. They are not
+independently invented projection fields. Parity requires the PostgreSQL and
+Memgraph loaders to produce the same canonical `AuthorizedGraphSnapshot` bytes.
+
+`TextChunk` keeps its current integer primary key. Memgraph never stores that key
+directly. PostgreSQL stores a generation-local `ProjectionChunkReference` with a
+unique opaque key, chunk foreign key, document UUID, and chunk number. The opaque
+key is `HMAC-SHA256` over a versioned domain, generation key, and chunk PK using a
+dedicated projection-key secret. Key-version rotation forces projection rebuild.
+Memgraph returns the opaque key; PostgreSQL resolves it through this table and
+then applies current authorization. There is no `chunk_uuid` assumption or
+`TextChunk` schema migration.
+
+### Pairwise Canonical Bridge Lifecycle
+
+Automatic cross-collection identity is projected separately from either
+collection generation. PostgreSQL owns one `CanonicalBridgeProjection` for each
+unordered pair of exact active generation keys. The record contains the two
+ordered endpoint generation keys, resolver/version signature, automatic-link
+decision checksum, edge count, bridge checksum, projection state, lease, and
+terminal metadata. Its checksum includes only automatic links whose endpoint
+entities occur in those two generations; candidate links never enter it.
+
+Activation of either collection generation, supersession of either endpoint, or
+any automatic canonical-link decision change creates/supersedes the affected
+pair records and emits bridge outbox work. A bridge worker runs only after both
+endpoint collection projections are ready, writes direct endpoint edges under a
+new bridge generation, validates endpoint closure/count/checksum, and writes a
+ready marker. Its PostgreSQL compare-and-set locks both collection activation
+rows and the bridge row, then verifies both exact active generation keys and the
+current automatic-link decision checksum. Any mismatch supersedes the bridge.
+
+Reconciliation enumerates all unordered pairs of active projected collection
+generations, creates missing records (including zero-edge pairs), republishes
+pending work, detects orphaned Memgraph bridge generations, and prunes bridges
+whose endpoint generation was superseded. A query bundle checksum is SHA-256 of
+the sorted collection projection identities and sorted pair bridge identities.
+This makes selected-set completeness exact and testable without global canonical
+nodes.
 
 ### Projection Lifecycle
 
@@ -203,10 +262,15 @@ eligible only when both endpoint generations are selected and both endpoint
 entities remain eligible. This prevents unselected documents from influencing
 topology or weights even when their collection generation is selected.
 
-Memgraph returns only opaque topology and chunk coordinates. PostgreSQL
-re-authorizes every returned chunk against the same frozen scope before the row
-is materialized. Permission revocation detected at materialization drops the
-candidate and records a bounded aggregate; it never expands scope.
+Memgraph returns only opaque topology and projection chunk keys. PostgreSQL
+resolves each key and performs a current permission check intersected with the
+frozen scope before materialization. Immediately before reranking, the same
+current check is applied to baseline and graph rows. If any frozen selected
+collection or frozen authorized document is no longer authorized, every graph
+candidate is discarded because revoked topology may have influenced its rank;
+currently authorized baseline rows remain in their original relative order.
+Newly granted scope is ignored until the next request. This detects mid-request
+revocation without ever expanding the frozen scope.
 
 ### Query-Time GLiNER2 Extraction Plane
 
@@ -242,6 +306,16 @@ Resolution occurs in PostgreSQL inside the frozen collection/document scope:
 3. exact normalized alias match; and
 4. optional embedding similarity inside compatible ontology types.
 
+Tiers short-circuit per deduplicated span. The first tier with eligible matches
+is authoritative; an ambiguous higher tier drops the span rather than falling
+through to a broader tier. Matches are grouped by the automatic canonical
+equivalence component used by the selected generation bundle. Exactly one
+component is required. Multiple unrelated components are ambiguous and are
+dropped; multiple selected-generation entities in one component are one semantic
+match and do not multiply seed mass. A local entity without an automatic link is
+its own singleton component. Component grouping uses only automatic decisions
+whose resolver/version checksum is covered by the ready pairwise bridge bundle.
+
 Duplicate spans collapse by `(ontology_type, normalized_text)`, keeping the
 highest extraction confidence. The optional embedding fallback calls the
 existing embedding service with the transient extracted span only. All selected
@@ -250,13 +324,20 @@ signature mismatch or embedding timeout disables only embedding fallback; exact
 identifier/name/alias matching still runs. Neither span text nor its vector is
 persisted.
 
+The embedding request is query content. The client and embedding service disable
+request/response-body logging and tracing, redact payloads from exception
+messages, and expose only fixed route, status, byte-count, and latency fields.
+Access proxies may not log bodies. Contract tests submit a unique canary span and
+assert it is absent from client, service, proxy, and failure logs.
+
 Tier weights are versioned constants: identifier `1.00`, name `0.95`, alias
 `0.90`, and embedding `0.80 * cosine_similarity`. A seed weight is extraction
 confidence multiplied by its tier weight. Embedding matches below the configured
 minimum similarity or winner margin are dropped. Multiple matches resolving to
-the same generation-scoped entity are combined with `math.fsum`, normalized to a
-branch restart mass of exactly one, and ordered by opaque entity key for stable
-ties.
+the same equivalence component are combined with `math.fsum`. The component, not
+each member entity, receives that mass. Component masses are normalized to a
+branch restart mass of exactly one and ordered by the smallest opaque member key
+for stable ties.
 
 ### Hybrid Retrieval Flow
 
@@ -299,8 +380,13 @@ There is no deployment-wide graph traversal for ordinary requests.
 ### PPR and Candidate Fusion
 
 Memgraph performs bounded topology loading only. The existing deterministic
-Python PPR implementation remains the v1 scorer. The direct and extended branches
-have independent restart vectors, topology caps, deadlines, and diagnostics.
+Python PPR implementation remains the v1 scorer. Automatic canonical edges are
+not ordinary weighted transitions: the adapter validates them as an equivalence
+relation, collapses selected eligible nodes into the zero-hop identity components
+used by the current scorer, and normalizes seed mass per component. Only
+collection-local relation groups form weighted, hop-counted transitions. The
+direct and extended branches have independent restart vectors, topology caps,
+deadlines, and diagnostics.
 
 Fusion is exact and versioned:
 
@@ -309,11 +395,11 @@ Fusion is exact and versioned:
 2. cap direct and extended ranked graph lists independently;
 3. discard graph candidates already present in the baseline while adding their
    source-membership provenance to the baseline row;
-4. score remaining graph-only chunks with reciprocal-rank fusion using
-   `1 / (60 + rank)` from each graph branch in which the chunk appears;
+4. score remaining graph-only chunks with reciprocal-rank fusion using one-based
+   ranks and `1 / (60 + rank)` from each graph branch in which the chunk appears;
 5. sort graph-only candidates by descending RRF score, descending graph-source
    membership count, best branch rank, then stable
-   `(document_uuid, chunk_number, chunk_uuid)`;
+   `(document_uuid, chunk_number, integer_chunk_pk)` internally;
 6. add at most the existing graph candidate cap; and
 7. form the reranker input as baseline order followed by selected graph-only
    order.
@@ -324,7 +410,8 @@ calibrated. The existing reranker is the final relevance authority.
 
 ## Failure and Deadline Contract
 
-Shared failures disable both graph branches and return the baseline vector result:
+Shared failures disable both graph branches and return the existing
+vector/trigram baseline result:
 
 - selected-generation readiness or canonical-projection mismatch;
 - frozen authorization-scope construction failure;
@@ -414,17 +501,22 @@ label. Diagnostics use only fixed enums, booleans, counts, and bounded timings.
 The implementation requires:
 
 - unit tests for canonical projection encoding, numeric serialization,
-  checksums, idempotency, and compare-and-set state transitions;
+  checksums, opaque chunk references, idempotency, and compare-and-set state
+  transitions;
 - integration tests against an isolated dedicated Memgraph container;
 - crash/retry/reconciliation tests for partially written generations;
+- pairwise bridge creation, zero-edge markers, endpoint supersession, link-change
+  outbox, checksum, compare-and-set, reconciliation, and pruning tests;
 - all-or-nothing multi-collection readiness and stale-generation tests;
 - strict single/multi-collection authorization and permission-revocation tests;
 - tests proving unselected documents cannot affect topology or weights;
 - tests proving candidate canonical links are never projected or traversed;
 - query extractor Unicode span, bearer-auth, provenance, mixed-ontology,
   timeout, cardinality, and import-isolation tests;
-- direct resolution duplicate, ambiguity, type, embedding-signature, threshold,
-  weighting, normalization, and tie tests;
+- direct resolution tier short-circuit, equivalence-component, duplicate,
+  ambiguity, type, embedding-signature, threshold, weighting, normalization, tie,
+  and payload-log canary tests;
+- zero-hop canonical equivalence and relation-only hop/weight parity tests;
 - independent branch cap/deadline/failure and sibling-preservation tests;
 - exact RRF fusion, deduplication, provenance, cap, tie, and reranker tests;
 - explicit PostgreSQL/Memgraph topology parity tests;
@@ -438,7 +530,8 @@ The implementation requires:
 Parallel implementation starts only after one contract-first commit defines and
 tests immutable interfaces for:
 
-- projection records and canonical serialization;
+- collection projection, pairwise bridge, opaque chunk reference, and canonical
+  serialization records;
 - extractor request/response and provenance;
 - topology request/result and authorized document scope;
 - direct/extended branch result and failure enums; and
