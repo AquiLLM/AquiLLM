@@ -22,36 +22,15 @@ from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 
 K = tuple(character * 64 for character in "123456789abcdef")
 def _match(span_index: int = 0, component_key: str = K[1]) -> DirectEntityMatchV1:
-    return DirectEntityMatchV1(
-        span_index=span_index,
-        entity_key=K[0],
-        component_key=component_key,
-        ontology_type="person",
-        tier=DirectResolutionTier.NAME,
-        extraction_confidence=0.8,
-        similarity=1.0,
-        match_weight=0.76,
-    )
+    return DirectEntityMatchV1(span_index, K[0], component_key, "person", DirectResolutionTier.NAME, 0.8, 1.0, 0.76)
 def _diagnostics(**changes: int) -> DirectSeedDiagnosticsV1:
-    values = {
-        "input_span_count": 1,
-        "deduplicated_span_count": 1,
-        "resolved_span_count": 1,
-        "ambiguous_span_count": 0,
-        "unresolved_span_count": 0,
-        "embedding_attempt_count": 0,
-        "embedding_match_count": 0,
-    }
+    values = {"input_span_count": 1, "deduplicated_span_count": 1, "resolved_span_count": 1, "ambiguous_span_count": 0, "unresolved_span_count": 0, "embedding_attempt_count": 0, "embedding_match_count": 0}
     values.update(changes)
     return DirectSeedDiagnosticsV1(**values)
 def _outcome() -> DirectSeedOutcomeV1:
-    return DirectSeedOutcomeV1(
-        matches=(_match(),),
-        seeds=(ResolvedDirectSeedV1(K[1], (K[0],), 1.0),),
-        ambiguities=(),
-        diagnostics=_diagnostics(),
-        failure_reason=None,
-    )
+    return DirectSeedOutcomeV1((_match(),), (ResolvedDirectSeedV1(K[1], (K[0],), 1.0),), (), _diagnostics(), None)
+def _failure(reason, diagnostics, ambiguities=()) -> DirectSeedOutcomeV1:
+    return DirectSeedOutcomeV1((), (), ambiguities, diagnostics, reason)
 def test_resolution_tiers_priority_fields_and_exact_failure_values() -> None:
     assert tuple(DirectResolutionTier) == (
         "identifier",
@@ -298,3 +277,24 @@ def test_embedding_diagnostics_bind_authoritative_tier_outcomes() -> None:
         diagnostics=_diagnostics(resolved_span_count=0, ambiguous_span_count=1, embedding_attempt_count=1, embedding_match_count=1),
         failure_reason=DirectFailureReason.DIRECT_NO_SEEDS,
     )
+def test_failure_reasons_bind_lifecycle_diagnostics() -> None:
+    zero = _diagnostics(input_span_count=0, deduplicated_span_count=0, resolved_span_count=0)
+    nonzero = _diagnostics(input_span_count=1, deduplicated_span_count=0, resolved_span_count=0)
+    for reason in (DirectFailureReason.EXTRACTOR_TIMEOUT, DirectFailureReason.EXTRACTOR_AUTH, DirectFailureReason.EXTRACTOR_PROVENANCE):
+        _failure(reason, zero)
+        pytest.raises(ValueError, _failure, reason, nonzero)
+    unresolved = _diagnostics(resolved_span_count=0, unresolved_span_count=1)
+    ambiguity = DirectSeedAmbiguityV1(0, DirectResolutionTier.NAME, 2, 2)
+    ambiguous = _diagnostics(resolved_span_count=0, ambiguous_span_count=1)
+    pytest.raises(ValueError, _failure, DirectFailureReason.EXTRACTOR_AUTH, ambiguous, (ambiguity,))
+    for reason in (DirectFailureReason.MIXED_ONTOLOGY, DirectFailureReason.DIRECT_SEED_INVALID):
+        _failure(reason, unresolved)
+        pytest.raises(ValueError, _failure, reason, replace(unresolved, embedding_attempt_count=1))
+        pytest.raises(ValueError, _failure, reason, ambiguous, (ambiguity,))
+    _failure(DirectFailureReason.DIRECT_NO_SEEDS, unresolved)
+    _failure(DirectFailureReason.DIRECT_NO_SEEDS, ambiguous, (ambiguity,))
+    embedding_diag = replace(ambiguous, embedding_attempt_count=1)
+    _failure(DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE, embedding_diag, (ambiguity,))
+    pytest.raises(ValueError, _failure, DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE, ambiguous, (ambiguity,))
+    embedding_ambiguity = replace(ambiguity, tier=DirectResolutionTier.EMBEDDING)
+    pytest.raises(ValueError, _failure, DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE, replace(embedding_diag, embedding_match_count=1), (embedding_ambiguity,))

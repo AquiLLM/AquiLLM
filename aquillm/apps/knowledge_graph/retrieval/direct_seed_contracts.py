@@ -210,25 +210,14 @@ class DirectSeedOutcomeV1:
     def __post_init__(self) -> None:
         _typed_rows(self.matches, DirectEntityMatchV1, "matches", _MAX_MATCHES)
         _typed_rows(self.seeds, ResolvedDirectSeedV1, "seeds", _MAX_SEEDS)
-        _typed_rows(
-            self.ambiguities,
-            DirectSeedAmbiguityV1,
-            "ambiguities",
-            _MAX_SPANS,
-        )
+        _typed_rows(self.ambiguities, DirectSeedAmbiguityV1, "ambiguities", _MAX_SPANS)
         if type(self.diagnostics) is not DirectSeedDiagnosticsV1:
             raise TypeError("diagnostics must be exact")
-        if (
-            self.failure_reason is not None
-            and type(self.failure_reason) is not DirectFailureReason
-        ):
+        if self.failure_reason is not None and type(self.failure_reason) is not DirectFailureReason:
             raise TypeError("failure_reason must be an exact DirectFailureReason")
         if self.failure_reason is not None and self.failure_reason not in (DirectFailureReason.EXTRACTOR_TIMEOUT, DirectFailureReason.EXTRACTOR_AUTH, DirectFailureReason.EXTRACTOR_PROVENANCE, DirectFailureReason.MIXED_ONTOLOGY, DirectFailureReason.DIRECT_SEED_INVALID, DirectFailureReason.DIRECT_NO_SEEDS, DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE):
             raise ValueError("failure_reason is not valid at the direct-seed stage")
-        match_keys = tuple(
-            (row.span_index, row.tier.priority, row.component_key, row.entity_key)
-            for row in self.matches
-        )
+        match_keys = tuple((row.span_index, row.tier.priority, row.component_key, row.entity_key) for row in self.matches)
         seed_keys = tuple((-row.mass, row.member_entity_keys[0]) for row in self.seeds)
         ambiguity_keys = tuple(row.span_index for row in self.ambiguities)
         _ordered_unique(match_keys, "matches")
@@ -243,9 +232,7 @@ class DirectSeedOutcomeV1:
             raise ValueError("resolved and ambiguous spans must be disjoint")
         components = {row.component_key: row for row in self.seeds}
         match_components = {row.component_key for row in self.matches}
-        member_keys = tuple(
-            key for row in self.seeds for key in row.member_entity_keys
-        )
+        member_keys = tuple(key for row in self.seeds for key in row.member_entity_keys)
         if len(set(member_keys)) != len(member_keys):
             raise ValueError("seed member entity keys must form a unique partition")
         if set(components) != match_components:
@@ -286,8 +273,19 @@ class DirectSeedOutcomeV1:
         if self.failure_reason is None:
             if not self.matches or not self.seeds:
                 raise ValueError("successful outcome requires resolved seeds")
-        elif self.matches or self.seeds:
-            raise ValueError("failure outcome must not expose partial seeds")
+        else:
+            if self.matches or self.seeds:
+                raise ValueError("failure outcome must not expose partial seeds")
+            reason, diagnostics = self.failure_reason, self.diagnostics
+            extractor = (DirectFailureReason.EXTRACTOR_TIMEOUT, DirectFailureReason.EXTRACTOR_AUTH, DirectFailureReason.EXTRACTOR_PROVENANCE)
+            if reason in extractor and (self.ambiguities or any(getattr(diagnostics, field.name) for field in fields(diagnostics))):
+                raise ValueError("extractor failure lifecycle diagnostics are incoherent")
+            if reason in (DirectFailureReason.MIXED_ONTOLOGY, DirectFailureReason.DIRECT_SEED_INVALID) and (self.ambiguities or any((diagnostics.resolved_span_count, diagnostics.ambiguous_span_count, diagnostics.embedding_attempt_count, diagnostics.embedding_match_count)) or diagnostics.unresolved_span_count != diagnostics.deduplicated_span_count):
+                raise ValueError("pre-seed failure lifecycle diagnostics are incoherent")
+            if reason is DirectFailureReason.DIRECT_NO_SEEDS and diagnostics.resolved_span_count:
+                raise ValueError("no-seed failure lifecycle diagnostics are incoherent")
+            if reason is DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE and (diagnostics.resolved_span_count or diagnostics.embedding_attempt_count < 1 or diagnostics.embedding_match_count or any(row.tier is DirectResolutionTier.EMBEDDING for row in self.ambiguities)):
+                raise ValueError("embedding failure lifecycle diagnostics are incoherent")
 def _typed_rows(value: object, kind: type, name: str, cap: int) -> None:
     if type(value) is not tuple:
         raise TypeError(f"{name} must be an exact tuple")
