@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 from __future__ import annotations
 
 import importlib.util
@@ -249,3 +250,44 @@ def test_checker_allows_positively_proven_count_sources(assignment: str) -> None
 )
 def test_checker_rejects_unresolved_or_imprecise_count_sources(assignment: str) -> None:
     assert len(_scan(_structured_count_source(assignment))) == 1
+
+
+def test_checker_does_not_resolve_count_across_function_or_parameter_scope() -> None:
+    source = """
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+def unrelated():
+    count = 0
+def record(count):
+    logger.info("obs.rag.search", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
+"""
+    assert len(_scan(source)) == 1
+
+
+def test_checker_accepts_independent_lexical_count_definitions() -> None:
+    source = """
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+def first(rows):
+    count = len(rows)
+    logger.info("obs.rag.first", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
+def second(rows):
+    count = len(rows)
+    logger.info("obs.rag.second", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
+"""
+    assert _scan(source) == ()
+
+
+def test_checker_requires_one_unconditional_assignment_before_each_call() -> None:
+    before = """
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+def record():
+    count = 0
+    logger.info("obs.rag.search", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
+    count = unknown
+"""
+    branch = before.replace("count = 0", "count = 0 if enabled else 1")
+    ambiguous = before.replace(
+        "count = 0", "count = 0\n    if enabled:\n        count = 1"
+    )
+    assert _scan(before) == ()
+    assert len(_scan(branch)) == 1
+    assert len(_scan(ambiguous)) == 1

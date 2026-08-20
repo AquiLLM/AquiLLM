@@ -161,17 +161,26 @@ def _tainted_names(tree: ast.AST) -> frozenset[str]:
 
 
 # fmt: off
-def _assigned_value(name: str, assignments: tuple[tuple[str, ast.AST], ...]) -> ast.AST | None:
-    values = tuple(value for candidate, value in assignments if candidate == name)
-    return values[0] if len(values) == 1 else None
-def _safe_count(node: ast.AST, tainted: frozenset[str], assignments: tuple[tuple[str, ast.AST], ...], seen: frozenset[str] = frozenset()) -> bool:
+def _scope(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> ast.AST:
+    while not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)): node = parents[node]
+    return node
+def _branch_assignment(node: ast.AST, scope: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    while node is not scope:
+        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.Match, ast.comprehension)): return True
+        node = parents[node]
+    return False
+def _assigned_value(name: str, assignments: tuple[tuple[str, ast.AST], ...], call: ast.Call, parents: dict[ast.AST, ast.AST]) -> ast.AST | None:
+    scope = _scope(call, parents)
+    values = tuple(value for candidate, value in assignments if candidate == name and _scope(value, parents) is scope and (value.lineno, value.col_offset) < (call.lineno, call.col_offset))
+    return values[0] if len(values) == 1 and not _branch_assignment(values[0], scope, parents) else None
+def _safe_count(node: ast.AST, tainted: frozenset[str], assignments: tuple[tuple[str, ast.AST], ...], call: ast.Call, parents: dict[ast.AST, ast.AST], seen: frozenset[str] = frozenset()) -> bool:
     if _expression_is_tainted(node, tainted): return False
     if isinstance(node, ast.Constant): return type(node.value) is int and node.value >= 0
     if isinstance(node, ast.Name):
         if node.id in seen: return False
-        value = _assigned_value(node.id, assignments)
-        return value is not None and _safe_count(value, tainted, assignments, seen | {node.id})
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd): return _safe_count(node.operand, tainted, assignments, seen)
+        value = _assigned_value(node.id, assignments, call, parents)
+        return value is not None and _safe_count(value, tainted, assignments, call, parents, seen | {node.id})
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd): return _safe_count(node.operand, tainted, assignments, call, parents, seen)
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
@@ -179,33 +188,19 @@ def _safe_count(node: ast.AST, tainted: frozenset[str], assignments: tuple[tuple
         and len(node.args) == 1
         and not node.keywords
     )
+def _safe_elapsed(node: ast.AST, tainted: frozenset[str]) -> bool:
+    if _expression_is_tainted(node, tainted): return False
+    if isinstance(node, ast.Constant): return type(node.value) in {int, float} and not isinstance(node.value, bool) and node.value >= 0
+    if isinstance(node, ast.Name): return node.id in {"elapsed_ms", "duration_ms"} or node.id.endswith("_ms")
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd): return _safe_elapsed(node.operand, tainted)
+    if isinstance(node, ast.BinOp): return _safe_elapsed(node.left, tainted) and _safe_elapsed(node.right, tainted)
+    return False
 # fmt: on
 
 
-def _safe_elapsed(node: ast.AST, tainted: frozenset[str]) -> bool:
-    if _expression_is_tainted(node, tainted):
-        return False
-    if isinstance(node, ast.Constant):
-        return (
-            type(node.value) in {int, float}
-            and not isinstance(node.value, bool)
-            and node.value >= 0
-        )
-    if isinstance(node, ast.Name):
-        return node.id in {"elapsed_ms", "duration_ms"} or node.id.endswith("_ms")
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
-        return _safe_elapsed(node.operand, tainted)
-    if isinstance(node, ast.BinOp):
-        return _safe_elapsed(node.left, tainted) and _safe_elapsed(node.right, tainted)
-    return False
-
-
-def _safe_fields(
-    keywords: list[ast.keyword],
-    tainted: frozenset[str],
-    helpers: frozenset[str],
-    assignments: tuple[tuple[str, ast.AST], ...],
-) -> bool:
+# fmt: off
+def _safe_fields(keywords: list[ast.keyword], tainted: frozenset[str], helpers: frozenset[str], assignments: tuple[tuple[str, ast.AST], ...], call: ast.Call, parents: dict[ast.AST, ast.AST]) -> bool:
+# fmt: on
     if len(keywords) != 1 or keywords[0].arg is not None:
         return False
     value = keywords[0].value
@@ -223,7 +218,7 @@ def _safe_fields(
         len(values) == len(keywords)
         and values.keys() == _FIELDS
         and _fixed_reason(values["reason"])
-        and _safe_count(values["count"], tainted, assignments)
+        and _safe_count(values["count"], tainted, assignments, call, parents)
         and _safe_elapsed(values["elapsed_ms"], tainted)
     )
 
@@ -237,6 +232,9 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
     helpers = _redaction_helpers(tree)
     assignments = _assignments(tree)
     tainted = _tainted_names(tree)
+    # fmt: off
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    # fmt: on
     findings: list[LoggingViolation] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -253,7 +251,9 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
             or _EVENT.fullmatch(node.args[0].value) is None
         ):
             reason = "dynamic_or_invalid_event"
-        elif not _safe_fields(node.keywords, tainted, helpers, assignments):
+        elif not _safe_fields(
+            node.keywords, tainted, helpers, assignments, node, parents
+        ):
             reason = "unknown_or_payload_field_shape"
         else:
             continue
