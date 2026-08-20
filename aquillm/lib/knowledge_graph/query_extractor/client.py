@@ -59,9 +59,12 @@ def _stdlib_request_once(
             payload = response.read(max_response_body_bytes + 1)
             return QueryExtractorHTTPResponse(response.status, payload)
     except HTTPError as error:
-        return QueryExtractorHTTPResponse(
-            error.code, error.read(max_response_body_bytes + 1)
-        )
+        try:
+            return QueryExtractorHTTPResponse(
+                error.code, error.read(max_response_body_bytes + 1)
+            )
+        finally:
+            error.close()
 
 
 RequestOnce = Callable[..., QueryExtractorHTTPResponse]
@@ -147,7 +150,14 @@ class QueryExtractorClient:
             raise QueryExtractorClientError(
                 QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
             ) from None
-        except (OSError, URLError):
+        except URLError as error:
+            reason = (
+                QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
+                if isinstance(error.reason, TimeoutError)
+                else QueryExtractorFailureReason.EXTRACTOR_PROVENANCE
+            )
+            raise QueryExtractorClientError(reason) from None
+        except OSError:
             raise QueryExtractorClientError(
                 QueryExtractorFailureReason.EXTRACTOR_PROVENANCE
             ) from None

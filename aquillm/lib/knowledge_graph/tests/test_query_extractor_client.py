@@ -1,9 +1,10 @@
+# ruff: noqa: E501,E701,E702
 from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -35,9 +36,7 @@ EMOJI = chr(0x1F600)
 
 
 @dataclass(frozen=True)
-class Ontology:
-    checksum: str = DIGEST
-    entity_types: tuple[str, ...] = ("model",)
+class Ontology: checksum: str = DIGEST; entity_types: tuple[str, ...] = ("model",)  # fmt: skip
 
 
 def _environment(**overrides: str) -> dict[str, str]:
@@ -208,6 +207,7 @@ def test_stdlib_transport_reads_at_most_response_cap_plus_one(
         def __init__(self) -> None:
             super().__init__(b"x" * 1_000)
             self.status = status
+            Response.last = self
 
         def __enter__(self):
             return self
@@ -220,13 +220,14 @@ def test_stdlib_transport_reads_at_most_response_cap_plus_one(
             del request, timeout
             if status == 200:
                 return Response()
-            raise HTTPError(
+            Opener.error = HTTPError(
                 "https://extractor.internal/v1/extract",
                 status,
                 "fixed",
                 {},
                 Response(),
             )
+            raise Opener.error
 
     monkeypatch.setattr(client_module, "build_opener", lambda *_args: Opener())
     response = client_module._stdlib_request_once(
@@ -238,6 +239,8 @@ def test_stdlib_transport_reads_at_most_response_cap_plus_one(
     )
     assert response.status == status
     assert response.body == b"x" * (maximum + 1)
+    if status == 413:
+        assert Response.last.closed
 
 
 @pytest.mark.parametrize(
@@ -289,4 +292,9 @@ def test_expired_deadline_is_a_fixed_timeout_without_io() -> None:
     )
     with pytest.raises(QueryExtractorClientError) as exc_info:
         client.extract(query="model", ontology=Ontology(), deadline=5.0)
+    assert exc_info.value.reason is QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
+    client._request_once = lambda **_kwargs: (_ for _ in ()).throw(URLError(TimeoutError()))  # fmt: skip
+    client._monotonic = lambda: 1.0
+    with pytest.raises(QueryExtractorClientError) as exc_info:
+        client.extract(query="model", ontology=Ontology(), deadline=2.0)
     assert exc_info.value.reason is QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
