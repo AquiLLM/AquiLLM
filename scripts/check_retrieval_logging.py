@@ -47,8 +47,14 @@ class LoggingViolation(NamedTuple):
 
 
 def _logger_names(tree: ast.AST) -> frozenset[str]:
-    names = {"logger", "_logger"}
+    names = {"logger", "_logger", "logging"}
     for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "logging"
+            )
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
         value = node.value
@@ -61,14 +67,32 @@ def _logger_names(tree: ast.AST) -> frozenset[str]:
     return frozenset(names)
 
 
-def _log_call(node: ast.Call, logger_names: frozenset[str]) -> str | None:
+def _logging_functions(tree: ast.AST) -> frozenset[str]:
+    return frozenset(
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "logging"
+        for alias in node.names
+        if alias.name in _LOG_LEVELS
+    )
+
+
+def _log_call(
+    node: ast.Call,
+    logger_names: frozenset[str],
+    logging_functions: frozenset[str],
+) -> str | None:
     function = node.func
+    if isinstance(function, ast.Name) and function.id in logging_functions:
+        return function.id
     if not isinstance(function, ast.Attribute) or function.attr not in _LOG_LEVELS:
         return None
     receiver = function.value
     if isinstance(receiver, ast.Name) and (
         receiver.id in logger_names or receiver.id.casefold().endswith("logger")
     ):
+        return function.attr
+    if isinstance(receiver, ast.Call):
         return function.attr
     if isinstance(receiver, ast.Attribute) and receiver.attr.casefold().endswith(
         "logger"
@@ -150,11 +174,12 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
     except (SyntaxError, ValueError):
         return (LoggingViolation(path, 0, "invalid_python_source"),)
     names = _logger_names(tree)
+    functions = _logging_functions(tree)
     findings: list[LoggingViolation] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        level = _log_call(node, names)
+        level = _log_call(node, names, functions)
         if level is None:
             continue
         if level == "exception":

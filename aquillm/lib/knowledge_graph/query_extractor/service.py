@@ -1,5 +1,3 @@
-"""Minimal authenticated ASGI service for local query entity extraction."""
-
 from __future__ import annotations
 
 import json
@@ -23,7 +21,6 @@ from .contracts import (
     parse_query_extraction_request,
 )
 
-UVICORN_ACCESS_LOG = False
 _JSON_HEADERS = [(b"content-type", b"application/json")]
 
 
@@ -123,13 +120,16 @@ def _load_activated_ontology(path: Path) -> _ActivatedOntology:
     )
 
 
-def _get_runtime() -> QueryExtractorRuntime:
+def _get_runtime(
+    settings: QueryExtractorSettings | None = None,
+) -> QueryExtractorRuntime:
     global _runtime
     if _runtime is None:
         from lib.knowledge_graph.config import load_extraction_settings
         from lib.knowledge_graph.extractors.gliner2_local import GLiNER2LocalBackend
 
-        settings = load_query_extractor_settings(environ)
+        if settings is None:
+            settings = load_query_extractor_settings(environ)
         ontology = _load_activated_ontology(settings.ontology_path)
         if ontology.checksum != settings.ontology_checksum:
             raise RuntimeError("activated ontology provenance mismatch")
@@ -220,11 +220,21 @@ async def healthz(scope, receive, send) -> None:
 
 
 async def extract_v1(scope, receive, send) -> None:
-    runtime = _get_runtime()
-    settings = runtime.settings
+    try:
+        settings = load_query_extractor_settings(environ)
+    except Exception:
+        await _respond(send, 503, b'{"reason":"extractor_provenance"}')
+        return
     expected_auth = "Bearer " + settings.bearer_token.get_secret_value()
     if not compare_digest(_authorization(scope), expected_auth):
         await _respond(send, 401, b'{"reason":"extractor_auth"}')
+        return
+    try:
+        runtime = _get_runtime(settings)
+        if runtime.settings != settings:
+            raise RuntimeError("runtime configuration drift")
+    except Exception:
+        await _respond(send, 503, b'{"reason":"extractor_provenance"}')
         return
     body = await _read_body(receive, settings.max_request_body_bytes)
     if body is None:
@@ -278,10 +288,11 @@ async def app(scope, receive, send) -> None:
         await _respond(send, 404, b'{"reason":"not_found"}')
 
 
-__all__ = [
-    "QueryExtractorRuntime",
-    "UVICORN_ACCESS_LOG",
-    "app",
-    "extract_v1",
-    "healthz",
-]
+def run() -> None:
+    import uvicorn
+
+    uvicorn.run("lib.knowledge_graph.query_extractor.service:app", access_log=False)
+
+
+if __name__ == "__main__":
+    run()

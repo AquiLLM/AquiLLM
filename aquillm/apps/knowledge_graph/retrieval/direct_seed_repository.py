@@ -1,6 +1,4 @@
 # ruff: noqa: E501
-"""Bounded PostgreSQL lookups for authorized direct entity seeds."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -164,6 +162,13 @@ class DirectSeedRepository:
                 "document_links__document_entity__mention_links__mention__normalized_text"
             ),
         }.get(tier, "")
+        # fmt: off
+        if {generation for _, generation in self._scope.generation_keys_by_artifact} != {row.generation_key for row in ready.selected_generations}:
+            raise ValueError("ready membership scope is incomplete")
+        try:
+            membership_checksums = tuple((artifact_id, next(row.membership_checksum for row in ready.selected_generations if row.generation_key == generation_key)) for artifact_id, generation_key in self._scope.generation_keys_by_artifact)
+        except StopIteration:
+            raise ValueError("ready membership scope is incomplete") from None
         rows = self._row_loader(
             tier=tier,
             lookup=lookup,
@@ -171,6 +176,7 @@ class DirectSeedRepository:
             embedding=embedding,
             model_signature=model_signature,
             ontology_type=span.ontology_type,
+            membership_checksums_by_artifact=membership_checksums,
             scope=self._scope,
             using=self._using,
             limit=limit,
@@ -236,9 +242,7 @@ class DirectSeedRepository:
 
 # fmt: off
 def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...]:
-    """Execute the scope-repeated ORM query; provider rows never contain query text."""
-
-    from django.db.models import F, FloatField, OuterRef, Subquery, Value
+    from django.db.models import F, FloatField, OuterRef, Q, Subquery, Value
     from django.db.models.expressions import ExpressionWrapper
     from pgvector.django import CosineDistance
 
@@ -246,7 +250,11 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
 
     scope = options["scope"]
     assert type(scope) is DirectSeedScopeV1
+    membership_scope = Q()
+    for artifact_id, checksum in options["membership_checksums_by_artifact"]:
+        membership_scope |= Q(collection_entity__artifact_id=artifact_id, decision_checksum=checksum)
     automatic = CanonicalEntityLink.objects.using(options["using"]).filter(
+        membership_scope,
         collection_entity_id=OuterRef("pk"), status="active", outcome="automatic",
         resolver_version=scope.resolver_version, canonical_entity__status="active",
         canonical_entity__resolver_version=scope.resolver_version, canonical_entity__entity_type=OuterRef("entity_type"),
@@ -283,16 +291,9 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
         if tier is DirectResolutionTier.ALIAS:
             query = query.filter(document_links__document_entity__mention_links__status="active", document_links__document_entity__mention_links__resolver_version=scope.resolver_version, document_links__document_entity__mention_links__mention__artifact_id__in=scope.selected_document_artifact_ids, document_links__document_entity__mention_links__mention__document_id__in=scope.selected_document_ids, document_links__document_entity__mention_links__mention__artifact__status__in=("active", "superseded"), document_links__document_entity__mention_links__mention__artifact__evaluation_only=False, document_links__document_entity__mention_links__mention__artifact__ontology_checksum=scope.ontology_checksum, document_links__document_entity__mention_links__mention__entity_type=options["ontology_type"])
         query = query.filter(**{str(options["lookup_field"]): options["lookup"]}).annotate(similarity=Value(1.0, output_field=FloatField()))
-    rows = query.order_by("-similarity", "pk").values(
-        "id", "artifact_id", "entity_type", "automatic_identity_key", "similarity"
-    )[: int(options["limit"])]
+    rows = query.distinct().order_by("-similarity", "pk").values("id", "artifact_id", "entity_type", "automatic_identity_key", "similarity")[: int(options["limit"])]
     return tuple(DirectSeedCandidateRow(int(row["id"]), int(row["artifact_id"]), str(row["entity_type"]), row["automatic_identity_key"], float(row["similarity"])) for row in rows)
 
 
-__all__ = [
-    "DirectSeedCandidateRow",
-    "DirectSeedRepository",
-    "DirectSeedScopeV1",
-    "repository_predicates",
-]
+__all__ = ["DirectSeedCandidateRow", "DirectSeedRepository", "DirectSeedScopeV1", "repository_predicates"]
 # fmt: on

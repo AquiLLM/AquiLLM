@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
+from lib.knowledge_graph.query_extractor import client as client_module
 from lib.knowledge_graph.query_extractor.client import (
     QueryExtractorClient,
     QueryExtractorClientError,
@@ -147,6 +150,94 @@ def test_client_enforces_local_caps_before_io() -> None:
         with pytest.raises(ValueError):
             client.extract(query=query, ontology=Ontology(), deadline=2.0)
     assert calls == 0
+
+
+def test_client_rejects_caller_ontology_that_differs_from_configured_identity() -> None:
+    calls = 0
+    query = "model"
+
+    def request_once(**_kwargs: object) -> QueryExtractorHTTPResponse:
+        nonlocal calls
+        calls += 1
+        return QueryExtractorHTTPResponse(
+            200, _response(query, provenance_checksum="c" * 64)
+        )
+
+    client = QueryExtractorClient(
+        load_query_extractor_settings(_environment()),
+        request_once=request_once,
+        monotonic=lambda: 1.0,
+    )
+    with pytest.raises(QueryExtractorClientError) as exc_info:
+        client.extract(
+            query=query,
+            ontology=Ontology(checksum="c" * 64),
+            deadline=2.0,
+        )
+    assert exc_info.value.reason is QueryExtractorFailureReason.EXTRACTOR_PROVENANCE
+    assert calls == 0
+
+
+def test_client_requires_an_exact_runtime_ontology_checksum_type() -> None:
+    class Checksum(str):
+        pass
+
+    client = QueryExtractorClient(
+        load_query_extractor_settings(_environment()),
+        request_once=lambda **_kwargs: QueryExtractorHTTPResponse(
+            200, _response("model")
+        ),
+        monotonic=lambda: 1.0,
+    )
+    with pytest.raises(QueryExtractorClientError) as exc_info:
+        client.extract(
+            query="model",
+            ontology=Ontology(checksum=Checksum(DIGEST)),
+            deadline=2.0,
+        )
+    assert exc_info.value.reason is QueryExtractorFailureReason.EXTRACTOR_PROVENANCE
+
+
+@pytest.mark.parametrize("status", (200, 413))
+def test_stdlib_transport_reads_at_most_response_cap_plus_one(
+    monkeypatch, status: int
+) -> None:
+    maximum = 8
+
+    class Response(BytesIO):
+        def __init__(self) -> None:
+            super().__init__(b"x" * 1_000)
+            self.status = status
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class Opener:
+        def open(self, request, *, timeout):
+            del request, timeout
+            if status == 200:
+                return Response()
+            raise HTTPError(
+                "https://extractor.internal/v1/extract",
+                status,
+                "fixed",
+                {},
+                Response(),
+            )
+
+    monkeypatch.setattr(client_module, "build_opener", lambda *_args: Opener())
+    response = client_module._stdlib_request_once(
+        url="https://extractor.internal/v1/extract",
+        headers={},
+        body=b"{}",
+        timeout_seconds=0.1,
+        max_response_body_bytes=maximum,
+    )
+    assert response.status == status
+    assert response.body == b"x" * (maximum + 1)
 
 
 @pytest.mark.parametrize(

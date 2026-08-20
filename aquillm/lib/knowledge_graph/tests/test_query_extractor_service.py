@@ -101,7 +101,10 @@ def runtime(monkeypatch):
         ontology=SimpleNamespace(checksum=DIGEST, entity_types={"model": object()}),
         backend=Backend(),
     )
-    monkeypatch.setattr(service, "_get_runtime", lambda: value)
+    monkeypatch.setattr(
+        service, "load_query_extractor_settings", lambda _environment: value.settings
+    )
+    monkeypatch.setattr(service, "_get_runtime", lambda *_args: value)
 
 
 @pytest.mark.asyncio
@@ -167,7 +170,49 @@ async def test_health_and_route_dispatch_are_minimal() -> None:
     missing = await _call(path="/elsewhere", method="GET")
     assert health[0]["status"] == 200
     assert missing[0]["status"] == 404
-    assert service.UVICORN_ACCESS_LOG is False
+
+
+@pytest.mark.asyncio
+async def test_auth_precedes_runtime_loading_and_runtime_failures_are_fixed(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    def unavailable(*_args: object):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("secret-runtime-canary")
+
+    monkeypatch.setattr(service, "_get_runtime", unavailable)
+    unauthorized = await _call(path="/v1/extract", body=_request())
+    assert unauthorized[0]["status"] == 401
+    assert calls == 0
+
+    authorized = await _call(
+        path="/v1/extract",
+        body=_request(),
+        authorization=b"Bearer private-token",
+    )
+    assert authorized[0]["status"] == 503
+    assert calls == 1
+    assert b"secret-runtime-canary" not in repr(authorized).encode()
+
+
+def test_launcher_actively_disables_uvicorn_access_logging(monkeypatch) -> None:
+    calls: list[tuple[object, dict[str, object]]] = []
+    fake = SimpleNamespace(
+        run=lambda target, **options: calls.append((target, options))
+    )
+    monkeypatch.setitem(sys.modules, "uvicorn", fake)
+
+    service.run()
+
+    assert calls == [
+        (
+            "lib.knowledge_graph.query_extractor.service:app",
+            {"access_log": False},
+        )
+    ]
 
 
 def test_importing_service_does_not_import_ml_runtime() -> None:

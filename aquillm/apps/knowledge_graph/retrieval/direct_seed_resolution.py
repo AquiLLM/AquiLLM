@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from math import fsum
 
+from apps.knowledge_graph.resolution.normalization import normalize_entity_label
 from apps.knowledge_graph.retrieval.direct_seed_contracts import (
     DirectEntityMatchV1,
     DirectFailureReason,
@@ -18,15 +19,22 @@ from apps.knowledge_graph.retrieval.query_embedding import embed_unresolved_quer
 from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 
 
-def _deduplicate(spans: tuple[QueryEntitySpanV1, ...]) -> tuple[QueryEntitySpanV1, ...]:
-    seen: set[tuple[int, int, str]] = set()
-    rows = []
+def _deduplicate(
+    spans: tuple[QueryEntitySpanV1, ...], repository
+) -> tuple[QueryEntitySpanV1, ...]:
+    rows: dict[tuple[str, str], QueryEntitySpanV1] = {}
     for span in spans:
-        key = span.start, span.end, span.ontology_type
-        if key not in seen:
-            seen.add(key)
-            rows.append(span)
-    return tuple(rows)
+        key = span.ontology_type, normalize_entity_label(repository.span_text(span)).key
+        current = rows.get(key)
+        if current is None or (-span.confidence, span.start, span.end) < (
+            -current.confidence,
+            current.start,
+            current.end,
+        ):
+            rows[key] = span
+    return tuple(
+        sorted(rows.values(), key=lambda row: (row.start, row.end, row.ontology_type))
+    )
 
 
 def _best_exact(
@@ -121,11 +129,13 @@ def resolve_direct_seed_components(
         raise TypeError("spans must contain exact QueryEntitySpanV1 values")
     if len(spans) > 128:
         raise ValueError("spans exceed the hard cap")
-    deduplicated = _deduplicate(spans)
+    deduplicated = _deduplicate(spans, repository)
     matches: list[DirectEntityMatchV1] = []
     ambiguities: list[DirectSeedAmbiguityV1] = []
     embedding_attempts = 0
     embedding_matches = 0
+    embedding_failed = False
+    embedding_available = True
     exact_tiers = (
         (DirectResolutionTier.IDENTIFIER, repository.exact_identifier_matches),
         (DirectResolutionTier.NAME, repository.canonical_name_matches),
@@ -140,7 +150,12 @@ def resolve_direct_seed_components(
             if rows:
                 selected, ambiguity = _best_exact(rows, span_index)
                 break
-        if selected is None and ambiguity is None and settings.direct_embedding_enabled:
+        if (
+            selected is None
+            and ambiguity is None
+            and settings.direct_embedding_enabled
+            and embedding_available
+        ):
             embedding_attempts += 1
             try:
                 signature = ready.selected_generations[0].embedding_model_signature
@@ -163,20 +178,17 @@ def resolve_direct_seed_components(
                     limit=limit,
                 )
             except (RuntimeError, TimeoutError, TypeError, ValueError):
-                return _failure(
-                    DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE,
-                    total=len(spans),
-                    deduplicated=len(deduplicated),
-                    embedding_attempts=embedding_attempts,
+                embedding_available = False
+                embedding_failed = True
+            else:
+                selected, ambiguity = _best_embedding(
+                    rows,
+                    span_index=span_index,
+                    minimum=settings.direct_min_similarity,
+                    margin=settings.direct_winner_margin,
                 )
-            selected, ambiguity = _best_embedding(
-                rows,
-                span_index=span_index,
-                minimum=settings.direct_min_similarity,
-                margin=settings.direct_winner_margin,
-            )
-            if selected is not None or ambiguity is not None:
-                embedding_matches += 1
+                if selected is not None or ambiguity is not None:
+                    embedding_matches += 1
         if selected is not None:
             matches.append(selected)
         elif ambiguity is not None:
@@ -199,6 +211,13 @@ def resolve_direct_seed_components(
         embedding_matches=embedding_matches,
     )
     if not matches:
+        if embedding_failed:
+            return _failure(
+                DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE,
+                total=len(spans),
+                deduplicated=len(deduplicated),
+                embedding_attempts=embedding_attempts,
+            )
         return DirectSeedOutcomeV1(
             (),
             (),

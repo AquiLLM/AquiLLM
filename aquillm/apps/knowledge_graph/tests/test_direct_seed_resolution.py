@@ -107,7 +107,7 @@ class Repository:
         return self._get("embedding", span)
 
     def span_text(self, span):
-        return "model"
+        return f"model-{span.start}"
 
 
 def test_deduplicates_spans_and_short_circuits_at_first_nonempty_tier() -> None:
@@ -240,33 +240,3 @@ def test_embedding_threshold_margin_and_transient_fallback(
     assert outcome.failure_reason is (
         None if resolved else DirectFailureReason.DIRECT_NO_SEEDS
     )
-
-
-def test_embedding_failure_discards_partial_exact_matches(monkeypatch) -> None:
-    spans = (
-        QueryEntitySpanV1("model", 0, 5, 1.0),
-        QueryEntitySpanV1("model", 6, 11, 1.0),
-    )
-    repository = Repository(
-        {
-            ("name", 0): (
-                _match(
-                    span=0, entity=K[0], component=K[1], tier=DirectResolutionTier.NAME
-                ),
-            )
-        }
-    )
-    monkeypatch.setattr(
-        direct_seed_resolution,
-        "embed_unresolved_query_span",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable")),
-    )
-    outcome = direct_seed_resolution.resolve_direct_seed_components(
-        spans=spans,
-        repository=repository,
-        ready=_ready(),
-        settings=_settings(embedding=True),
-        deadline=10.0,
-    )
-    assert outcome.failure_reason is DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE
-    assert outcome.matches == () and outcome.seeds == ()

@@ -45,16 +45,23 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 def _stdlib_request_once(
-    *, url: str, headers: dict[str, str], body: bytes, timeout_seconds: float
+    *,
+    url: str,
+    headers: dict[str, str],
+    body: bytes,
+    timeout_seconds: float,
+    max_response_body_bytes: int,
 ) -> QueryExtractorHTTPResponse:
     request = Request(url, data=body, headers=headers, method="POST")
     opener = build_opener(_NoRedirect())
     try:
         with opener.open(request, timeout=timeout_seconds) as response:
-            payload = response.read()
+            payload = response.read(max_response_body_bytes + 1)
             return QueryExtractorHTTPResponse(response.status, payload)
     except HTTPError as error:
-        return QueryExtractorHTTPResponse(error.code, error.read())
+        return QueryExtractorHTTPResponse(
+            error.code, error.read(max_response_body_bytes + 1)
+        )
 
 
 RequestOnce = Callable[..., QueryExtractorHTTPResponse]
@@ -96,10 +103,20 @@ class QueryExtractorClient:
         self, *, query: str, ontology: OntologyDefinition, deadline: float
     ) -> QueryExtractionResponseV1:
         settings = self._settings
+        try:
+            if (
+                type(ontology.checksum) is not str
+                or ontology.checksum != settings.ontology_checksum
+            ):
+                raise ValueError("runtime ontology differs from configured ontology")
+        except (AttributeError, TypeError, ValueError):
+            raise QueryExtractorClientError(
+                QueryExtractorFailureReason.EXTRACTOR_PROVENANCE
+            ) from None
         request = QueryExtractionRequestV1(
             schema_version=QUERY_EXTRACTION_REQUEST_SCHEMA_VERSION,
             query=query,
-            ontology_checksum=ontology.checksum,
+            ontology_checksum=settings.ontology_checksum,
             max_query_utf8_bytes=settings.max_query_utf8_bytes,
             max_query_code_points=settings.max_query_code_points,
             max_spans=settings.max_spans,
@@ -124,6 +141,7 @@ class QueryExtractorClient:
                 },
                 body=body,
                 timeout_seconds=timeout,
+                max_response_body_bytes=settings.max_response_body_bytes,
             )
         except TimeoutError:
             raise QueryExtractorClientError(
@@ -146,7 +164,7 @@ class QueryExtractorClient:
                 settings.model_revision,
                 settings.schema_version,
                 settings.schema_checksum,
-                ontology.checksum,
+                settings.ontology_checksum,
                 settings.build_hash,
             )
             actual = (

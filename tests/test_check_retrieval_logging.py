@@ -73,6 +73,11 @@ logger.info(
         'logger.exception("obs.rag.failed")',
         'audit_logger.info("obs.rag.search", query=query)',
         'self.logger.info("obs.rag.search", body=body)',
+        'logging.info("obs.rag.search", query=query)',
+        'logging.getLogger(__name__).warning("obs.rag.failed", body=body)',
+        'logging.LoggerAdapter(logger, {}).info("obs.rag.search", exact_terms=terms)',
+        "structlog.stdlib.get_logger(__name__).error("
+        '"obs.rag.failed", reason=str(exc))',
     ),
 )
 def test_checker_rejects_payloads_exception_strings_and_dynamic_shapes(
@@ -96,3 +101,12 @@ def test_checker_fails_closed_on_missing_or_invalid_lane_source(tmp_path: Path) 
     invalid.write_text("logger.info(", encoding="utf-8")
     module.LANE_PATHS = ("broken.py",)
     assert module.find_violations(tmp_path)[0].reason == "invalid_python_source"
+
+
+def test_checker_rejects_direct_functions_imported_from_standard_logging() -> None:
+    violations = _scan(
+        "from logging import info as audit_info\n"
+        'audit_info("obs.rag.search", query=query)\n'
+    )
+    assert len(violations) == 1
+    assert violations[0].line == 2

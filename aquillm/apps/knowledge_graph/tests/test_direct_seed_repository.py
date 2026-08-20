@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import inspect
+from dataclasses import replace
 from uuid import UUID
+
+import pytest
 
 from apps.knowledge_graph.projection.identifiers import (
     HmacSha256ProjectionIdentifierCodec,
     ProjectionIdentifierDomain,
 )
+from apps.knowledge_graph.retrieval import direct_seed_repository
 from apps.knowledge_graph.retrieval.direct_seed_contracts import (
     DirectResolutionSpanInputV1,
     DirectResolutionTier,
@@ -117,6 +122,61 @@ def test_identifier_name_and_indexed_alias_use_bounded_scoped_predicates() -> No
     ):
         assert token in joined
     assert "metadata" not in joined
+
+
+def test_repository_binds_automatic_components_to_ready_membership_checksum() -> None:
+    ready = _ready()
+    span = QueryEntitySpanV1("model", 0, 5, 1.0)
+    calls: list[dict[str, object]] = []
+    repository = DirectSeedRepository(
+        scope=_scope(ready),
+        codec=HmacSha256ProjectionIdentifierCodec(b"key", key_version="key-v1"),
+        span_inputs=(DirectResolutionSpanInputV1(span, "model"),),
+        row_loader=lambda **options: calls.append(options) or (),
+    )
+
+    repository.canonical_name_matches(span=span, ready=ready, limit=4)
+
+    assert calls[0]["membership_checksums_by_artifact"] == ((11, K[5]),)
+    source = inspect.getsource(direct_seed_repository._load_candidate_rows)
+    assert "decision_checksum" in source
+
+
+def test_repository_deduplicates_entities_before_applying_the_result_cap() -> None:
+    source = inspect.getsource(direct_seed_repository._load_candidate_rows)
+    assert source.index(".distinct()") < source.index('[: int(options["limit"])]')
+
+
+def test_repository_rejects_scope_that_omits_a_selected_ready_generation() -> None:
+    ready = _ready()
+    second = replace(
+        ready.selected_generations[0],
+        collection_key=K[10],
+        generation_key=K[11],
+        active_artifact_key=K[12],
+        projection_key=K[13],
+        membership_checksum=K[14],
+    )
+    generations = (*ready.selected_generations, second)
+    checksum = ready_generation_bundle_checksum(
+        generations, ready.authorized_documents, ready.authorization_context_signature
+    )
+    expanded = ReadyGenerationBundleV1(
+        generations,
+        ready.authorized_documents,
+        ready.authorization_context_signature,
+        checksum,
+    )
+    span = QueryEntitySpanV1("model", 0, 5, 1.0)
+    repository = DirectSeedRepository(
+        scope=_scope(expanded),
+        codec=HmacSha256ProjectionIdentifierCodec(b"key", key_version="key-v1"),
+        span_inputs=(DirectResolutionSpanInputV1(span, "model"),),
+        row_loader=lambda **_options: (),
+    )
+
+    with pytest.raises(ValueError, match="membership scope"):
+        repository.canonical_name_matches(span=span, ready=expanded, limit=4)
 
 
 def test_automatic_components_cross_generations_and_singletons_do_not() -> None:
