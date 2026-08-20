@@ -43,51 +43,54 @@ It does not provide:
 
 ## Decision Summary
 
-Adopt the following architecture:
-
 1. **PostgreSQL remains authoritative.** Documents, chunks, permissions,
    embeddings, citations, graph evidence, artifact versions, activation state,
    and projection state remain in PostgreSQL.
 2. **A dedicated Memgraph service is a rebuildable read projection.** It is
    isolated from the existing Mem0 Memgraph service and has its own credentials,
    volume, health check, retention, and cleanup lifecycle.
-3. **Collection graphs remain versioned and separate.** Every projected node and
-   edge carries an opaque collection scope and artifact generation. Queries can
-   use only generations that exactly match active PostgreSQL artifacts.
-4. **The existing canonical spine connects selected collections only.**
-   Canonical identity links may connect equivalent entities when the caller has
-   explicitly selected and is authorized for multiple collections. Claims,
-   relations, and evidence stay local to their source collection.
-5. **Direct-query and vector-seeded graph retrieval both run.** Direct extraction
-   can run alongside baseline vector retrieval; vector-seeded traversal begins
-   once the baseline candidates are available.
-6. **One reranker chooses final chunks.** Vector, direct-graph, and
-   vector-seeded-graph candidates are unioned, deduplicated, bounded, and reranked
-   against the original query.
-7. **Every optional path fails open.** Extraction, projection, Memgraph, or graph
-   traversal failure must never prevent authorized baseline vector retrieval.
+3. **Collection graph generations remain separate.** Memgraph entity nodes are
+   generation-scoped. There are no global canonical nodes in v1.
+4. **Only automatic canonical links join selected collection generations.** An
+   automatic link is projected as a direct edge between two generation-scoped
+   entity nodes and carries an opaque canonical identity key. Candidate links
+   remain PostgreSQL-only and are never traversable in v1.
+5. **The frozen PostgreSQL document scope constrains topology.** A selected
+   generation alone is insufficient; topology and evidence are filtered to the
+   exact authorized document IDs captured for the request.
+6. **Direct-query and vector-seeded graph retrieval both run.** Direct extraction
+   runs alongside baseline vector retrieval; vector-seeded traversal begins
+   after baseline candidates exist.
+7. **Memgraph loads topology; deterministic Python PPR scores it.** The direct
+   and extended branches perform independently capped topology loads against the
+   same immutable ready-generation set.
+8. **One reranker chooses final chunks.** Baseline candidates are retained,
+   graph-only candidates are selected by a deterministic reciprocal-rank rule,
+   and the existing reranker scores the final deduplicated pool.
+9. **Shipping fails open to vector retrieval, not to another graph backend.** The
+   PostgreSQL graph loader is an explicit evaluation/parity backend only.
 
 ## Success Criteria
 
 - Each active PostgreSQL collection graph can be projected idempotently into
   Memgraph and reconciled from an empty graph store.
-- A query scoped to one collection cannot traverse another collection or a
-  canonical link outside that collection.
-- A query scoped to multiple selected collections may traverse the conservative
-  canonical spine only among those selected, authorized collection generations.
-- Query-time GLiNER2 extraction returns bounded typed entity spans without
-  loading the model into the web process.
-- Direct-query entity seeds and initial-vector-chunk seeds each produce bounded
-  graph candidates with independent diagnostics.
-- The final candidate pool contains no inaccessible chunks and preserves source
-  provenance for vector, direct graph, extended graph, or multiple sources.
-- The existing reranker receives one deduplicated candidate sequence and selects
-  the final context chunks.
-- Memgraph unavailability, stale projection, extraction timeout, or one graph
-  branch failure returns the baseline vector result and stable fail-open
-  diagnostics.
-- No raw query text, document text, entity display labels, or private citation
-  payloads are written to Memgraph or operational logs.
+- A request can use graph retrieval only when every selected collection has an
+  exact active-and-ready projection generation.
+- A query scoped to one collection cannot traverse another collection.
+- A query scoped to multiple selected collections may traverse only automatic
+  canonical links whose two generation endpoints are in that exact selected set.
+- Unselected or newly unauthorized documents cannot influence traversal weights,
+  candidate production, or final materialization.
+- Query-time GLiNER2 extraction returns bounded, versioned, typed entity spans
+  without loading the model into the web process.
+- Direct-query seeds and initial-vector-chunk seeds produce independently bounded
+  graph candidates and diagnostics.
+- The final pool contains no inaccessible chunks and preserves vector, direct,
+  and extended source membership.
+- Memgraph, projection, extractor, ontology, or one branch failure never prevents
+  an authorized baseline vector result.
+- No raw query text, document text, entity display labels, or citation payloads
+  are written to Memgraph or operational logs.
 - Feature flags remain disabled until cloud evaluation proves permission
   isolation, projection parity, retrieval benefit, determinism, and latency.
 
@@ -101,18 +104,28 @@ projection lifecycle adds authoritative records for:
 - the collection artifact expected in Memgraph;
 - projection state (`pending`, `building`, `ready`, `failed`, `superseded`);
 - an immutable projection generation identifier;
-- projected node, edge, and evidence counts;
+- projected node, edge, document-membership, and evidence counts;
 - a canonical projection checksum;
 - attempt, lease, and terminal error metadata; and
 - the exact Memgraph schema/projection version.
 
 Artifact activation creates or advances a projection outbox record in the same
-PostgreSQL transaction. Broker publication is best-effort; a reconciler republishes
-pending records. PostgreSQL activation never depends on a cross-database commit.
+PostgreSQL transaction. Broker publication is best-effort; a reconciler
+republishes pending records. PostgreSQL activation never depends on a
+cross-database commit.
 
-The retrieval path considers a Memgraph generation usable only when PostgreSQL
-marks it ready and the Memgraph generation marker matches the exact active
-artifact, checksum, and projection version. Otherwise graph retrieval fails open.
+Ready publication is a transactional compare-and-set. After Memgraph validation,
+the worker locks the projection and collection activation rows with
+`select_for_update`, verifies that the projection still names the exact active
+artifact, checksum, schema version, and expected generation, and then moves only
+that record to `ready`. Any mismatch moves the work to `superseded`; it can never
+make an obsolete generation queryable.
+
+For a multi-collection request, readiness is all-or-nothing. Every selected
+collection must have an exact active-and-ready generation and the generation set
+must have complete automatic canonical-link projection metadata. If one selected
+collection is missing, stale, or mismatched, both graph branches are disabled for
+that request and vector retrieval continues.
 
 ### Dedicated Memgraph Projection Plane
 
@@ -124,101 +137,147 @@ the knowledge-graph profile.
 Memgraph stores opaque graph topology rather than authoritative application data.
 The v1 projection contains:
 
-- `CollectionGeneration` markers;
-- collection-local entity nodes identified by stable opaque keys;
-- canonical identity nodes identified by stable opaque keys;
-- collection-local relation edges with type/version metadata;
-- canonical-link edges retaining candidate/automatic status and provenance;
-- entity-to-chunk evidence edges using opaque chunk identifiers; and
-- generation/checksum/count metadata used for validation.
+- `CollectionGeneration` markers with collection scope, artifact checksum,
+  schema version, projection version, and immutable generation key;
+- generation-scoped entity nodes with opaque entity key and ontology type;
+- opaque document membership nodes/edges with document UUID, chunk UUID, and
+  stable chunk number needed for authorization and candidate ordering;
+- collection-local directed relation edges with relation type, direction,
+  confidence, retrieval utility, transition-weight inputs, and artifact version;
+- entity/relation evidence edges with document membership, confidence, and
+  provenance category;
+- automatic canonical edges directly joining generation-scoped entity nodes,
+  carrying an opaque canonical identity key and both generation endpoints; and
+- exact counts and checksum metadata used for validation.
 
+There are no global canonical nodes. Candidate canonical links are not projected.
 Raw chunk text, raw query text, collection names, document names, user IDs,
-entity display labels, and citation payloads are excluded. Final chunks and
-citations are always loaded from PostgreSQL after authorization.
+entity display labels, aliases, and citation payloads are excluded. Final chunks
+and citations are always loaded from PostgreSQL after authorization.
+
+Projection records use one canonical serialization contract: versioned UTF-8
+JSON, sorted record arrays, sorted object keys, stable opaque identifiers, and
+finite numeric values represented by an explicitly versioned IEEE-754
+hexadecimal encoding. The SHA-256 of those canonical bytes is the projection
+checksum. Both the PostgreSQL encoder and Memgraph validator use the same pure
+contract module and test vectors.
 
 ### Projection Lifecycle
 
 Projection uses generation staging:
 
-1. lock/lease one authoritative projection job;
+1. lock and lease one authoritative projection job;
 2. stream one immutable active PostgreSQL artifact in bounded batches;
-3. write all nodes and edges under a new generation identifier;
-4. validate exact counts, endpoint closure, collection scope, canonical-link
-   scope, and a canonical checksum;
+3. write all nodes, memberships, and edges under a new generation key;
+4. validate exact counts, endpoint closure, document membership, automatic-link
+   scope, numeric finiteness, and canonical checksum;
 5. write a Memgraph `ready` generation marker;
-6. revalidate that the PostgreSQL artifact is still active;
-7. mark the matching PostgreSQL projection record ready; and
+6. revalidate the active artifact under the transactional compare-and-set;
+7. mark only the exact matching PostgreSQL projection record ready; and
 8. asynchronously prune superseded Memgraph generations after retention.
 
 All writes are idempotent by generation and stable key. A crash leaves an
 unusable staging generation that reconciliation can resume or delete. A newer
-artifact supersedes older pending work. No query selects a generation solely
-because it exists in Memgraph.
+artifact supersedes older work. No query selects a generation solely because it
+exists in Memgraph.
 
-Operational commands support:
+Operational commands support projection of one collection or all active
+collections, dry-run/checksum comparison, opaque inspection, reconciliation of
+missing/stale/orphaned generations, and bounded pruning.
 
-- projection of one collection;
-- projection of all active collection artifacts;
-- dry-run and checksum comparison;
-- inspection by collection/artifact/projection request;
-- reconciliation of missing, stale, and orphaned generations; and
-- bounded pruning of superseded generations.
+### Frozen Authorization and Topology Scope
+
+The request first freezes selected collection and document authorization in
+PostgreSQL. The topology adapter receives:
+
+- the exact selected collection-generation keys;
+- the exact authorized opaque document UUID set;
+- branch seed keys and weights;
+- schema/projection version; and
+- explicit node, edge, depth, result, and time caps.
+
+An entity is eligible only when it is supported by at least one authorized
+document. A relation is eligible only when its transition weight can be computed
+from evidence belonging to authorized documents. Automatic canonical edges are
+eligible only when both endpoint generations are selected and both endpoint
+entities remain eligible. This prevents unselected documents from influencing
+topology or weights even when their collection generation is selected.
+
+Memgraph returns only opaque topology and chunk coordinates. PostgreSQL
+re-authorizes every returned chunk against the same frozen scope before the row
+is materialized. Permission revocation detected at materialization drops the
+candidate and records a bounded aggregate; it never expands scope.
 
 ### Query-Time GLiNER2 Extraction Plane
 
-Direct retrieval requires synchronous, latency-bounded entity extraction. The
-web process must continue to avoid importing or loading the optional GLiNER2
-runtime.
-
 Add an internal `knowledge_graph_query_extractor` service built from the pinned
-knowledge-graph model image. It loads the exact immutable GLiNER2 checkpoint once
-and exposes a narrow internal endpoint with:
+knowledge-graph model image. The web process never imports or loads GLiNER2.
 
-- bounded UTF-8 query bytes;
-- a fixed, versioned query-entity schema derived from the active ontology;
-- strict response cardinality and span validation;
-- a short client timeout and no retries inside the user request;
-- no persistence of query text or extraction output; and
-- an authenticated health/provenance endpoint.
+The service accepts a bounded UTF-8 query and a fixed ontology contract. Spans
+use Unicode code-point offsets with half-open `[start, end)` coordinates over the
+exact decoded query string, matching Python string indexing. Every response
+includes:
 
-The service returns typed spans only. It does not resolve collection entities or
-write either database.
+- model identifier and immutable revision;
+- extractor response-schema version/checksum;
+- ontology checksum;
+- service build hash; and
+- bounded typed spans with finite confidence.
+
+The endpoint requires a dedicated internal bearer secret, exposes no host port,
+has a short client timeout, and performs no request retries. Query text and
+extraction output are neither persisted nor logged.
+
+Direct extraction v1 requires every selected active collection artifact to use
+the same ontology checksum. Mixed ontology selections disable only the direct
+branch with reason `mixed_ontology`; vector retrieval and vector-seeded graph
+retrieval remain eligible.
 
 ### Direct Entity Seed Resolution
 
-The application resolves extracted query entities against PostgreSQL within the
-already frozen authorized collection scope. Resolution is conservative:
+Resolution occurs in PostgreSQL inside the frozen collection/document scope:
 
-1. exact normalized identifiers;
-2. exact normalized names/aliases;
-3. tightly bounded embedding similarity only inside compatible ontology types;
-4. deterministic confidence and ambiguity thresholds; and
-5. no seed when the match is ambiguous.
+1. exact normalized identifier match;
+2. exact normalized name match;
+3. exact normalized alias match; and
+4. optional embedding similarity inside compatible ontology types.
 
-This produces stable collection-entity or canonical-identity keys. Raw extracted
-text is not sent to Memgraph. Seed lookup repeats collection and document
-authorization predicates and records only aggregate operational diagnostics.
+Duplicate spans collapse by `(ontology_type, normalized_text)`, keeping the
+highest extraction confidence. The optional embedding fallback calls the
+existing embedding service with the transient extracted span only. All selected
+artifacts must share the exact embedding model signature and dimension. A
+signature mismatch or embedding timeout disables only embedding fallback; exact
+identifier/name/alias matching still runs. Neither span text nor its vector is
+persisted.
+
+Tier weights are versioned constants: identifier `1.00`, name `0.95`, alias
+`0.90`, and embedding `0.80 * cosine_similarity`. A seed weight is extraction
+confidence multiplied by its tier weight. Embedding matches below the configured
+minimum similarity or winner margin are dropped. Multiple matches resolving to
+the same generation-scoped entity are combined with `math.fsum`, normalized to a
+branch restart mass of exactly one, and ordered by opaque entity key for stable
+ties.
 
 ### Hybrid Retrieval Flow
 
 For every eligible request:
 
-1. freeze the selected collection and document authorization scope;
-2. start baseline vector/trigram retrieval;
-3. concurrently call the query extractor;
-4. resolve direct query entities within the frozen PostgreSQL scope;
-5. use resolved direct entities as one Memgraph PPR restart vector;
+1. freeze selected collection/document authorization in PostgreSQL;
+2. resolve the all-or-nothing ready generation set;
+3. start baseline vector/trigram retrieval and direct extraction concurrently;
+4. resolve direct seeds and load a direct bounded Memgraph topology;
+5. score that topology using the deterministic Python PPR implementation;
 6. convert baseline chunk ranks into weighted collection-entity seeds using the
    existing evidence mapping;
-7. use those entities as a second Memgraph PPR restart vector;
-8. map both PPR results to opaque evidence chunk IDs;
-9. re-authorize and materialize every graph chunk from PostgreSQL;
-10. union baseline, direct-graph, and extended-graph candidates;
-11. deduplicate by stable chunk identity while retaining all source provenance;
-12. apply per-source and global candidate caps; and
-13. invoke the existing reranker once against the original query.
+7. load a separately capped extended topology and score it with Python PPR;
+8. map both result lists to opaque evidence chunk coordinates;
+9. re-authorize and materialize every graph chunk in PostgreSQL;
+10. fuse and deduplicate baseline, direct, and extended candidates; and
+11. invoke the existing complete reranker once against the original query.
 
-The final reranker, not PPR alone, chooses which chunks enter context.
+The two topology loads are independent immutable reads against the same ready
+generation set. Each has its own budget and failure result. A completed sibling
+branch remains usable if the other branch times out or fails.
 
 ### Collection and Cross-Collection Semantics
 
@@ -226,69 +285,89 @@ A single selected collection uses only its active projected generation.
 
 When multiple collections are explicitly selected:
 
-- all collections must pass the existing authorization snapshot;
-- each collection contributes only its active, ready generation;
-- collection-local relation edges never cross scopes;
-- only validated canonical-identity edges may connect scopes;
-- canonical candidate links remain distinguishable from automatic links;
+- all selected collections must pass the same frozen authorization snapshot;
+- every collection must contribute its exact active-and-ready generation;
+- collection-local relation and evidence edges never cross scopes;
+- only automatic canonical edges may connect selected generation-scoped nodes;
+- candidate canonical links remain PostgreSQL-only and non-traversable;
 - claims and supporting chunks remain attached to their source collection; and
-- removing a collection from the request removes its entities, edges, evidence,
-  and canonical connectivity from traversal.
+- removing a collection removes its generation, topology, evidence, and
+  canonical connectivity from the request.
 
-There is no deployment-wide graph traversal for ordinary user requests.
+There is no deployment-wide graph traversal for ordinary requests.
 
 ### PPR and Candidate Fusion
 
-Memgraph is responsible for bounded topology retrieval. The existing deterministic
-Python PPR implementation remains the v1 scorer after loading an authorized,
-generation-filtered induced subgraph from Memgraph. This preserves the tested
-algorithm signature, deterministic ordering, explicit caps, and exact ablations.
-It also avoids making a Memgraph procedure version part of the first rollout.
+Memgraph performs bounded topology loading only. The existing deterministic
+Python PPR implementation remains the v1 scorer. The direct and extended branches
+have independent restart vectors, topology caps, deadlines, and diagnostics.
 
-The two PPR branches keep separate restart vectors and diagnostics. Candidate
-fusion retains:
+Fusion is exact and versioned:
 
-- baseline vector/trigram rank and score;
-- direct-query graph rank, PPR score, and minimum hop;
-- vector-seeded graph rank, PPR score, and minimum hop;
-- contributing collection generations;
-- automatic-versus-candidate canonical path status; and
-- source membership bit flags.
+1. retain baseline candidates, in their existing order, up to the existing
+   baseline cap;
+2. cap direct and extended ranked graph lists independently;
+3. discard graph candidates already present in the baseline while adding their
+   source-membership provenance to the baseline row;
+4. score remaining graph-only chunks with reciprocal-rank fusion using
+   `1 / (60 + rank)` from each graph branch in which the chunk appears;
+5. sort graph-only candidates by descending RRF score, descending graph-source
+   membership count, best branch rank, then stable
+   `(document_uuid, chunk_number, chunk_uuid)`;
+6. add at most the existing graph candidate cap; and
+7. form the reranker input as baseline order followed by selected graph-only
+   order.
 
-A deterministic fusion order limits the pre-rerank pool. Source scores are not
-treated as globally calibrated. The existing reranker is the final relevance
-authority.
+Duplicate chunks appear once and retain all source-membership and branch-rank
+provenance. PPR, vector, and embedding scores are not treated as globally
+calibrated. The existing reranker is the final relevance authority.
 
-## Failure Handling
+## Failure and Deadline Contract
 
-Failures are isolated by branch:
+Shared failures disable both graph branches and return the baseline vector result:
 
-- baseline retrieval failure keeps its existing behavior;
-- query extraction failure disables only direct graph retrieval;
-- direct seed resolution failure disables only direct graph retrieval;
-- vector seed construction failure disables only extended graph retrieval;
-- Memgraph or projection mismatch disables both graph branches;
-- one PPR branch failure does not invalidate a successful sibling branch; and
-- reranker failure follows the existing strict/fail-open contract.
+- selected-generation readiness or canonical-projection mismatch;
+- frozen authorization-scope construction failure;
+- Memgraph authentication, connection, provenance, or schema mismatch; and
+- overall graph budget expiration before either branch completes.
 
-Every graph failure emits a stable reason code and bounded aggregate diagnostics,
-never query text, entity labels, graph IDs, chunk text, scores, or citations.
+Direct-only failures include extractor timeout/schema/provenance failure, mixed
+ontology, direct seed resolution failure, embedding fallback failure after no
+exact seeds, and direct topology/PPR failure.
+
+Extended-only failures include baseline-to-entity seed failure and extended
+topology/PPR failure. A branch-local Memgraph query error disables that branch;
+a connection/provenance/schema error is shared because the backend cannot be
+trusted for either branch.
+
+Each branch has a reserved deadline and independent node/edge/seed/candidate
+caps. The overall deadline cancels unfinished work but retains a completed
+sibling. Fusion validation failure drops all graph candidates and returns the
+unchanged baseline. Reranker failure follows the existing strict/fail-open
+contract.
+
+Every failure emits only a stable reason code and bounded aggregate diagnostics,
+never query text, entity labels, graph IDs, document IDs, chunk text, raw scores,
+or citations.
 
 ## Authorization and Privacy
 
 PostgreSQL remains the authorization authority. Memgraph identifiers are never
 accepted as proof of access.
 
-The retrieval path enforces authorization at four boundaries:
+Authorization is enforced at five boundaries:
 
 1. freeze selected collection/document membership in PostgreSQL;
-2. construct only generation IDs belonging to that scope;
-3. constrain every Memgraph topology query to those exact generations; and
-4. re-authorize every returned chunk in PostgreSQL before materialization.
+2. select only exact active-and-ready generation keys;
+3. constrain Memgraph topology and evidence to those generations and authorized
+   document UUIDs;
+4. restrict automatic canonical edges to the selected generation set; and
+5. re-authorize every returned chunk before materialization.
 
 Projection workers use read-only PostgreSQL access for source rows and dedicated
 write credentials for Memgraph. Query clients receive read-only Memgraph
-credentials. Credentials and raw driver configuration never appear in reports.
+credentials. The extractor uses a separate internal bearer secret. Credentials,
+driver configuration, spans, and raw identifiers never appear in reports.
 
 ## Configuration and Rollout
 
@@ -296,105 +375,113 @@ Add default-off configuration for:
 
 - Memgraph projection and traversal enablement;
 - dedicated Memgraph URI/database/credentials;
-- projection queue, batch size, lease, retry, and retention;
-- query extractor endpoint, model revision, timeout, and entity limits;
-- direct-query graph enablement;
-- vector-seeded graph enablement;
-- per-source seed/candidate caps; and
-- projection freshness and schema versions.
+- projection queue, batch size, lease, retry, retention, and schema version;
+- query extractor endpoint, bearer secret, model revision, timeout, and limits;
+- direct-query and vector-seeded branch enablement;
+- direct matching thresholds and embedding-signature requirements;
+- per-branch deadlines, seed/topology/candidate caps, and RRF constant; and
+- projection freshness and parity backend selection.
 
-`KG_BUILD_ENABLED=0` and `KG_OVERLAY_ENABLED=0` remain the shipping defaults.
-New Memgraph and direct-query flags also default off. The PostgreSQL graph loader
-remains available as an evaluation/fallback backend until parity is proven.
+`KG_BUILD_ENABLED=0` and `KG_OVERLAY_ENABLED=0` remain shipping defaults. New
+Memgraph and direct-query flags also default off. The PostgreSQL topology loader
+is available only through an explicit evaluation/test backend setting; shipping
+requests never automatically fall back from Memgraph to PostgreSQL graph loading.
 
 Rollout stages are:
 
 1. build projections with retrieval disabled;
 2. verify checksum/count parity and authorization isolation;
 3. shadow both graph branches without changing results;
-4. compare PostgreSQL and Memgraph graph candidates;
+4. compare explicit PostgreSQL and Memgraph evaluation backends;
 5. enable graph candidates for synthetic and approved development scopes;
-6. measure retrieval quality, determinism, latency, and citations;
+6. measure retrieval quality, determinism, latency, and citations in cloud;
 7. approve measured gates;
 8. stage collection-by-collection enablement; and
 9. soak before broader deployment.
 
 ## Observability
 
-Add bounded metrics for:
+Add bounded metrics for projection lag/duration/retries/drift, readiness mismatch,
+extractor latency, exact/embedding seed counts, per-branch topology/PPR latency,
+candidate counts and overlap, fail-open reason codes, automatic cross-collection
+traversals, authorization rejections, and reranked source contribution.
 
-- projection lag, duration, retries, failures, and drift;
-- active versus ready generation mismatches;
-- query extraction latency and seed counts;
-- direct and extended graph traversal latency;
-- per-source candidate counts and overlap;
-- graph branch fail-open reason codes;
-- cross-collection canonical traversals;
-- inaccessible candidate rejection count; and
-- reranked contribution rate by retrieval source.
-
-No high-cardinality collection, document, entity, chunk, query, or user values
-may be metric labels.
+No collection, document, entity, chunk, query, or user value may be a metric
+label. Diagnostics use only fixed enums, booleans, counts, and bounded timings.
 
 ## Testing and Evaluation
 
 The implementation requires:
 
-- unit tests for projection encoding, checksums, idempotency, and generation
-  state transitions;
-- integration tests against an isolated Memgraph container;
+- unit tests for canonical projection encoding, numeric serialization,
+  checksums, idempotency, and compare-and-set state transitions;
+- integration tests against an isolated dedicated Memgraph container;
 - crash/retry/reconciliation tests for partially written generations;
-- strict authorization tests for single and multiple selected collections;
-- tests proving canonical-spine traversal is impossible unless both collections
-  are selected and authorized;
-- query extractor contract, timeout, cardinality, provenance, and import-isolation
-  tests;
-- direct seed resolution ambiguity and ontology-type tests;
-- three-source fusion, deduplication, cap, provenance, and reranker tests;
-- fail-open tests for every optional boundary;
-- parity tests between PostgreSQL and Memgraph topology projections;
-- evaluation arms for vector-only, direct graph, extended graph, combined graph,
-  and combined-plus-reranker retrieval; and
+- all-or-nothing multi-collection readiness and stale-generation tests;
+- strict single/multi-collection authorization and permission-revocation tests;
+- tests proving unselected documents cannot affect topology or weights;
+- tests proving candidate canonical links are never projected or traversed;
+- query extractor Unicode span, bearer-auth, provenance, mixed-ontology,
+  timeout, cardinality, and import-isolation tests;
+- direct resolution duplicate, ambiguity, type, embedding-signature, threshold,
+  weighting, normalization, and tie tests;
+- independent branch cap/deadline/failure and sibling-preservation tests;
+- exact RRF fusion, deduplication, provenance, cap, tie, and reranker tests;
+- explicit PostgreSQL/Memgraph topology parity tests;
+- vector-only, direct, extended, combined, and combined-plus-reranker eval arms;
+  and
 - cloud gates for permission isolation, Recall@10, nDCG, multi-hop value,
-  deterministic ranking, p95 latency, projection freshness, and citation coverage.
+  deterministic ranking, p95 latency, projection freshness, and citations.
 
 ## Parallel Delivery Boundaries
 
-The implementation plan should use parallel agents only where file ownership and
-dependencies are independent:
+Parallel implementation starts only after one contract-first commit defines and
+tests immutable interfaces for:
 
-- projection schema/repository and projection lifecycle;
-- dedicated Memgraph Compose/runtime and driver configuration;
-- query extractor service and client contract;
-- direct query seed resolution;
-- Memgraph traversal adapter and parity tests;
-- three-source fusion integration;
-- operations, observability, and evaluation; and
-- independent security/correctness reviews.
+- projection records and canonical serialization;
+- extractor request/response and provenance;
+- topology request/result and authorized document scope;
+- direct/extended branch result and failure enums; and
+- fused candidate provenance and deterministic ordering.
 
-Shared hot spots such as `chunk_search.py`, knowledge-graph settings/config, the
-main Compose files, migrations, and rollout documentation must have one owning
-agent at a time. Integration proceeds through explicit contract commits rather
-than parallel edits to the same files.
+After that gate, independent agents may own non-overlapping lanes:
+
+- PostgreSQL projection state/repository/migrations;
+- Memgraph encoder, driver, reconciler, and isolated integration fixture;
+- query extractor service and authenticated client;
+- direct seed resolution;
+- topology adapter and deterministic PPR bridge;
+- observability/evaluation fixtures; and
+- operations and cloud runtime evidence.
+
+One integration owner exclusively owns shared hot spots: knowledge-graph
+settings/config, main Compose files, migration ordering, the `chunk_search.py`
+retrieval path, final runbook, and cross-lane integration tests. Parallel agents
+must not edit those files. Each lane lands a narrow commit behind its contract
+tests, receives an independent review, and is then integrated serially by the
+owner. This prevents merge conflicts and silent interface drift while preserving
+parallel speed.
 
 ## Non-Goals
 
 - Replacing PostgreSQL as the source of truth.
-- Storing document text, query text, or user-facing entity labels in Memgraph.
+- Storing document/query text, user-facing labels, or aliases in Memgraph.
 - Reusing or migrating the existing Mem0 memory graph.
 - Unrestricted deployment-wide graph traversal.
 - Merging claims or evidence across collections.
+- Projecting or traversing candidate canonical links in v1.
 - Allowing Memgraph to make authorization decisions.
-- Replacing the existing reranker.
-- Enabling any shipping flag before measured approval.
+- Replacing the existing reranker or Python PPR scorer.
+- Automatically falling back to the PostgreSQL graph loader in production.
+- Enabling shipping flags before cloud-measured approval.
 - Adding graph visualization UI in this phase.
 
 ## Expected Outcome
 
-AquiLLM will retain its current permission-safe, citable vector retrieval while
-adding graph-native topology storage and two complementary graph expansion paths.
-Users searching one collection receive deeper collection understanding. Users
-searching several explicitly selected collections may follow conservative
-canonical links across only those collections. The final reranker selects the
-best chunks from vector, direct graph, and extended graph retrieval without
-making the application dependent on Memgraph availability.
+AquiLLM retains permission-safe, citable vector retrieval while adding a
+rebuildable Memgraph topology projection and two complementary graph expansion
+paths. Users searching one collection receive deeper collection understanding.
+Users selecting several collections may traverse conservative automatic identity
+links across exactly those scopes. The final reranker selects the best chunks
+from vector, direct graph, and extended graph retrieval, while any optional graph
+failure degrades to the unchanged authorized vector baseline.
