@@ -1,4 +1,4 @@
-# fmt: off
+"""Pure, hand-computable tests for the ppr_v1 numerical kernel."""
 
 from __future__ import annotations
 
@@ -141,10 +141,12 @@ def test_personalized_pagerank_runs_exact_fixed_cycle_iterations() -> None:
 def test_personalized_pagerank_checks_one_private_deadline_per_iteration() -> None:
     observed_times: list[float] = []
     times = iter((0.0, 0.0, 1.1))
+
     def clock() -> float:
         value = next(times)
         observed_times.append(value)
         return value
+
     deadline = ppr_module._MonotonicDeadline(expires_at=1.0, clock=clock)
     with pytest.raises(TimeoutError):
         personalized_pagerank(
@@ -249,24 +251,21 @@ def test_personalized_pagerank_rejects_malformed_or_nonfinite_math(
 
 
 @pytest.mark.parametrize("iterations", [0, 9])
-def test_personalized_pagerank_enforces_the_v1_iteration_envelope(
-    iterations: int,
-) -> None:
+def test_ppr_enforces_v1_iteration_envelope(iterations: int) -> None:
     with pytest.raises(ValueError, match="iterations"):
         personalized_pagerank(
-            {_A: 1.0},
-            {},
-            restart_probability=0.2,
-            iterations=iterations,
+            {_A: 1.0}, {}, restart_probability=0.2, iterations=iterations
         )
 
 
 def test_transition_node_generator_stops_at_cap_plus_one() -> None:
     consumed: list[int] = []
+
     def node_stream():
         for node_id in range(1, 203):
             consumed.append(node_id)
             yield ("canonical", node_id)
+
     with pytest.raises(ValueError, match="node cap"):
         normalize_transition_rows({}, nodes=node_stream())
     assert consumed == list(range(1, 202))
@@ -274,10 +273,12 @@ def test_transition_node_generator_stops_at_cap_plus_one() -> None:
 
 def test_duplicate_transition_generator_stops_at_edge_cap_plus_one() -> None:
     consumed: list[int] = []
+
     def edge_stream():
         for edge_number in range(1, 1003):
             consumed.append(edge_number)
             yield (_B, 1.0)
+
     with pytest.raises(ValueError, match="edge cap"):
         normalize_transition_rows({_A: edge_stream()})
     assert consumed == list(range(1, 1002))
@@ -285,17 +286,22 @@ def test_duplicate_transition_generator_stops_at_edge_cap_plus_one() -> None:
 
 def test_malformed_mapping_cannot_stream_unbounded_duplicate_source_rows() -> None:
     consumed: list[int] = []
+
     class RepeatingRows(Mapping):
         def __getitem__(self, key):
             return ()
+
         def __iter__(self) -> Iterator[tuple[str, str]]:
             yield _A
+
         def __len__(self) -> int:
             return 1
+
         def items(self):
             for row_number in range(1, 203):
                 consumed.append(row_number)
                 yield (_A, ())
+
     with pytest.raises(ValueError, match="source row cap"):
         normalize_transition_rows(RepeatingRows())
     assert consumed == list(range(1, 202))
@@ -305,10 +311,13 @@ def test_transition_source_rows_require_exact_pair_tuples() -> None:
     class ListRows(Mapping):
         def __getitem__(self, key):
             return ()
+
         def __iter__(self) -> Iterator[tuple[str, str]]:
             yield _A
+
         def __len__(self) -> int:
             return 1
+
         def items(self):
             yield [_A, ()]
 
@@ -343,12 +352,7 @@ def test_restart_mapping_is_rejected_before_materializing_node_cap_plus_one() ->
     restart = {("canonical", node_id): 1.0 for node_id in range(1, 202)}
 
     with pytest.raises(ValueError, match="node cap"):
-        personalized_pagerank(
-            restart,
-            {},
-            restart_probability=0.2,
-            iterations=1,
-        )
+        personalized_pagerank(restart, {}, restart_probability=0.2, iterations=1)
 
 
 def test_ppr_numeric_inputs_require_exact_builtin_types() -> None:
@@ -494,12 +498,8 @@ def test_signature_derives_every_frozen_computation_constant(
         ({"max_candidates": 2, "max_per_document": 3}, "max_per_document"),
     ],
 )
-def test_ppr_v1_config_rejects_values_outside_the_hard_envelope(
-    overrides: dict[str, object], message: str
-) -> None:
-    values: dict[str, object] = {
-        "canonical_resolver_version": "canonical-resolution-v1"
-    }
+def test_config_rejects_invalid(overrides: dict[str, object], message: str) -> None:
+    values = {"canonical_resolver_version": "canonical-resolution-v1"}
     values.update(overrides)
 
     with pytest.raises(ValueError, match=message):

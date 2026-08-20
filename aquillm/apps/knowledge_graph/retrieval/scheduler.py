@@ -20,8 +20,6 @@ from .topology.contracts import HybridBranchKind
 
 
 class SharedSchedulerFailure(RuntimeError):
-    """A fixed safe failure that invalidates both graph branches."""
-
     def __init__(self, reason: SharedBranchFailureReason):
         if type(reason) is not SharedBranchFailureReason:
             raise TypeError("reason must be an exact shared branch failure")
@@ -109,8 +107,6 @@ def _validate_envelope(
 
 
 class HybridGraphBranchScheduler:
-    """Run direct and baseline-derived extended work under separate budgets."""
-
     def __init__(self, runtime: HybridBranchRuntime, *, clock=monotonic):
         if not isinstance(runtime, HybridBranchRuntime):
             raise TypeError("runtime must implement HybridBranchRuntime")
@@ -237,10 +233,11 @@ class HybridGraphBranchScheduler:
             if shared is not None:
                 return _shared(shared)
             now = self._clock()
-            if now >= overall_deadline:
+            overall_expired = now >= overall_deadline
+            if overall_expired and not results:
                 return _shared(SharedBranchFailureReason.OVERALL_DEADLINE)
             for kind in HybridBranchKind:
-                if kind not in results and now >= deadlines[kind]:
+                if kind not in results and (overall_expired or now >= deadlines[kind]):
                     results[kind] = _timeout(
                         kind, baseline=baseline, elapsed_ms=budgets[kind]
                     )

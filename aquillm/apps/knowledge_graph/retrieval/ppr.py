@@ -1,4 +1,4 @@
-# fmt: off
+"""Deterministic, ORM-free numerical primitives for ``ppr_v1`` retrieval."""
 
 from __future__ import annotations
 

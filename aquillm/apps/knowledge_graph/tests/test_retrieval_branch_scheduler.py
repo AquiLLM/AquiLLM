@@ -205,6 +205,29 @@ def test_independent_budget_times_out_one_branch_and_keeps_completed_peer() -> N
     assert outcome.shared_failure_reason is None
 
 
+def test_overall_deadline_preserves_completed_sibling_and_cancels_unfinished() -> None:
+    release = threading.Event()
+    runtime = _Runtime()
+    runtime.run_extended = lambda **kwargs: (
+        release.wait(timeout=1.0),
+        _success(HybridBranchKind.EXTENDED),
+    )[1]
+    try:
+        outcome = HybridGraphBranchScheduler(runtime).run(
+            query="q",
+            baseline=SimpleNamespace(graph_seeds=(object(),)),
+            authorization=object(),
+            settings=_settings(direct_ms=100, extended_ms=100),
+            deadline=time.monotonic() + 0.02,
+        )
+    finally:
+        release.set()
+    assert outcome.direct.status is BranchStatusV1.SUCCEEDED
+    reason = outcome.extended.failure_reason
+    assert reason is ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
+    assert outcome.shared_failure_reason is None
+
+
 def test_shared_preparation_failure_fails_both_without_starting_branches() -> None:
     runtime = _Runtime()
 
