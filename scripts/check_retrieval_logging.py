@@ -166,7 +166,7 @@ def _scope(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> ast.AST:
     return node
 def _branch_assignment(node: ast.AST, scope: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
     while node is not scope:
-        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.Match, ast.comprehension)): return True
+        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.Match, ast.BoolOp, ast.IfExp, ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp, ast.comprehension)): return True
         node = parents[node]
     return False
 def _assigned_value(name: str, assignments: tuple[tuple[str, ast.AST], ...], call: ast.Call, parents: dict[ast.AST, ast.AST]) -> ast.AST | None:

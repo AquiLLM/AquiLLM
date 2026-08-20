@@ -214,8 +214,7 @@ def test_checker_allows_unrelated_info_methods() -> None:
 
 
 def _structured_count_source(assignment: str) -> str:
-    return f"""
-from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+    return f"""from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 def record(prompt):
     {assignment}
     logger.info(
@@ -291,3 +290,11 @@ def record():
     assert _scan(before) == ()
     assert len(_scan(branch)) == 1
     assert len(_scan(ambiguous)) == 1
+
+
+# fmt: off
+@pytest.mark.parametrize("statement", ("enabled and (count := 0)", "None if enabled else (count := 0)", "pending = (count := 0 for _ in ())"))
+# fmt: on
+def test_checker_rejects_conditional_or_deferred_named_expression(statement: str) -> None:
+    source = _structured_count_source(statement).replace("record(prompt)", "record(prompt, count)")
+    assert len(_scan(source)) == 1
