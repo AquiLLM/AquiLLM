@@ -40,8 +40,7 @@ def test_checker_allows_only_fixed_event_and_redacted_structured_fields() -> Non
 import structlog
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 logger = structlog.stdlib.get_logger(__name__)
-rows = ()
-result_count = len(rows)
+result_count = len(())
 elapsed_ms = 2.5
 logger.info(
     "obs.rag.extract_failed",
@@ -55,7 +54,7 @@ logger.info(
     "obs.rag.extract_completed",
     **retrieval_log_fields(
         reason=RetrievalLogReason.COMPLETED,
-        count=len(rows),
+        count=len(()),
         elapsed_ms=2.5,
     ),
 )
@@ -244,7 +243,7 @@ def test_checker_allows_positively_proven_count_sources(assignment: str) -> None
         "count = True",
         "count = -1",
         "count = 1.5",
-        "count = measure()",
+        "count = len([0]*ord(prompt[0]))",
     ),
 )
 def test_checker_rejects_unresolved_or_imprecise_count_sources(assignment: str) -> None:
@@ -266,10 +265,10 @@ def test_checker_accepts_independent_lexical_count_definitions() -> None:
     source = """
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 def first(rows):
-    count = len(rows)
+    count = 0
     logger.info("obs.rag.first", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
 def second(rows):
-    count = len(rows)
+    count = 0
     logger.info("obs.rag.second", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
 """
     assert _scan(source) == ()
