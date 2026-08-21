@@ -17,9 +17,6 @@ MAX_RESULT_ROWS: Final = 5_000
 MAX_REQUEST_BYTES: Final = 16_384
 MAX_RESPONSE_BYTES: Final = 1_048_576
 SCHEMA_VERSION: Final = "topology-gateway-v1"
-SCHEMA_CHECKSUM: Final = sha256(
-    b"topology-gateway-v1|request=query,parameters,deadline,max_records|response=ok,rows,reason,status"
-).hexdigest()
 MALFORMED_REQUEST_STATUS: Final = 400
 OVERSIZED_REQUEST_STATUS: Final = 413
 
@@ -45,6 +42,66 @@ FAILURE_HTTP_STATUS: Final = MappingProxyType(
 )
 
 
+def _canonical(value: object) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError):
+        raise ValueError("gateway value is not canonical JSON") from None
+
+
+SCHEMA_DESCRIPTOR_V1: Final = (
+    ("version", SCHEMA_VERSION),
+    ("query_names", tuple(query.value for query in TopologyQueryName)),
+    (
+        "scalar_rules",
+        (
+            "exact builtins only: str, int, float, bool, null; "
+            "float finite; strings forbid C0/DEL",
+        ),
+    ),
+    (
+        "request_shape",
+        (
+            "exact fields: query, parameters, deadline, max_records",
+            "query is TopologyQueryName; parameters is Mapping[str, TopologyScalar]",
+            "deadline is exact finite positive absolute monotonic float",
+            "max_records is exact int in [1, 5000]",
+        ),
+    ),
+    (
+        "success_shape",
+        ("exact fields: ok=true, rows=list[Mapping[str, TopologyScalar]]",),
+    ),
+    (
+        "failure_shape",
+        ("exact fields: ok=false, reason=enum, status=fixed HTTP status",),
+    ),
+    (
+        "failure_http_status",
+        tuple((r.value, FAILURE_HTTP_STATUS[r]) for r in GatewayFailureReason),
+    ),
+    (
+        "canonical_json_rules",
+        (
+            "UTF-8; ensure_ascii=false; allow_nan=false; sort_keys=true; "
+            "separators=(',', ':'); duplicate keys rejected; bytes equal canonical encoding",  # noqa: E501
+        ),
+    ),
+    ("malformed_request_status", MALFORMED_REQUEST_STATUS),
+    ("oversized_request_status", OVERSIZED_REQUEST_STATUS),
+    ("max_result_rows", MAX_RESULT_ROWS),
+    ("max_request_bytes", MAX_REQUEST_BYTES),
+    ("max_response_bytes", MAX_RESPONSE_BYTES),
+)
+SCHEMA_CHECKSUM: Final = sha256(_canonical(SCHEMA_DESCRIPTOR_V1)).hexdigest()
+
+
 def _safe_text(value: object, name: str) -> str:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact string")
@@ -64,22 +121,27 @@ def _scalar(value: object, name: str) -> None:
 
 
 def _mapping(value: Mapping[str, TopologyScalar], name: str) -> MappingProxyType:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{name} must be a mapping")
-    copied: dict[str, TopologyScalar] = {}
-    for key, item in value.items():
-        _safe_text(key, f"{name} key")
-        _scalar(item, f"{name} value")
-        if key in copied:
-            raise ValueError(f"{name} contains duplicate keys")
-        copied[key] = item
-    return MappingProxyType(copied)
+    try:
+        if not isinstance(value, Mapping):
+            raise TypeError(f"{name} must be a mapping")
+        copied: dict[str, TopologyScalar] = {}
+        for key, item in value.items():
+            _safe_text(key, f"{name} key")
+            _scalar(item, f"{name} value")
+            if key in copied:
+                raise ValueError(f"{name} contains duplicate keys")
+            copied[key] = item
+        return MappingProxyType(copied)
+    except (TypeError, ValueError):
+        raise
+    except Exception:
+        raise ValueError("invalid topology mapping") from None
 
 
 @dataclass(frozen=True, slots=True)
 class TopologyGatewayRequestV1:
     query: TopologyQueryName
-    parameters: Mapping[str, TopologyScalar]
+    parameters: Mapping[str, TopologyScalar] = field(repr=False)
     deadline: float
     max_records: int
 
@@ -102,7 +164,7 @@ class TopologyGatewayRequestV1:
 
 @dataclass(frozen=True, slots=True)
 class TopologyGatewaySuccessV1:
-    rows: tuple[Mapping[str, TopologyScalar], ...]
+    rows: tuple[Mapping[str, TopologyScalar], ...] = field(repr=False)
 
     def __post_init__(self) -> None:
         if type(self.rows) is not tuple or len(self.rows) > MAX_RESULT_ROWS:
@@ -126,23 +188,6 @@ class TopologyGatewayFailureV1:
 
 
 type TopologyGatewayResponseV1 = TopologyGatewaySuccessV1 | TopologyGatewayFailureV1
-TopologyGatewayFailureReason = GatewayFailureReason
-TopologyQueryRequestV1 = TopologyGatewayRequestV1
-TopologyQuerySuccessV1 = TopologyGatewaySuccessV1
-TopologyQueryFailureV1 = TopologyGatewayFailureV1
-
-
-def _canonical(value: object) -> bytes:
-    try:
-        return json.dumps(
-            value,
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    except (TypeError, ValueError, UnicodeError):
-        raise ValueError("gateway value is not canonical JSON") from None
 
 
 def _pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -253,30 +298,3 @@ def http_status_for_failure(reason: GatewayFailureReason) -> int:
     if type(reason) is not GatewayFailureReason:
         raise ValueError("invalid gateway failure reason")
     return FAILURE_HTTP_STATUS[reason]
-
-
-def http_status_for_request_error(*, oversized: bool = False) -> int:
-    return OVERSIZED_REQUEST_STATUS if oversized else MALFORMED_REQUEST_STATUS
-
-
-HTTP_STATUS_BY_FAILURE = FAILURE_HTTP_STATUS
-SCHEMA_VERSION_V1 = SCHEMA_VERSION
-SCHEMA_CHECKSUM_V1 = SCHEMA_CHECKSUM
-GATEWAY_SCHEMA_VERSION = SCHEMA_VERSION
-GATEWAY_SCHEMA_CHECKSUM = SCHEMA_CHECKSUM
-TOPOLOGY_GATEWAY_SCHEMA_VERSION = SCHEMA_VERSION
-TOPOLOGY_GATEWAY_SCHEMA_CHECKSUM = SCHEMA_CHECKSUM
-REQUEST_MAX_BYTES = MAX_REQUEST_BYTES
-RESPONSE_MAX_BYTES = MAX_RESPONSE_BYTES
-MAX_REQUEST_PAYLOAD_BYTES = MAX_REQUEST_BYTES
-MAX_RESPONSE_PAYLOAD_BYTES = MAX_RESPONSE_BYTES
-TopologyGatewayResponseSuccessV1 = TopologyGatewaySuccessV1
-TopologyGatewayResponseFailureV1 = TopologyGatewayFailureV1
-
-
-def http_status_for_payload(payload: bytes, *, response: bool = False) -> int:
-    """Return the fixed caller status without exposing malformed input."""
-    maximum = MAX_RESPONSE_BYTES if response else MAX_REQUEST_BYTES
-    return (
-        OVERSIZED_REQUEST_STATUS if len(payload) > maximum else MALFORMED_REQUEST_STATUS
-    )

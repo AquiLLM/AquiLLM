@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Iterator, Mapping
+from hashlib import sha256
 
 import pytest
 
@@ -11,6 +13,8 @@ from apps.knowledge_graph.retrieval.topology.gateway_contracts import (
     MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
     MAX_RESULT_ROWS,
+    SCHEMA_CHECKSUM,
+    SCHEMA_DESCRIPTOR_V1,
     GatewayFailureReason,
     TopologyGatewayFailureV1,
     TopologyGatewayRequestV1,
@@ -40,6 +44,68 @@ def test_request_is_frozen_slotted_and_has_exact_four_fields():
         "deadline",
         "max_records",
     )
+
+
+def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor():
+    descriptor_bytes = json.dumps(
+        SCHEMA_DESCRIPTOR_V1,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert type(SCHEMA_DESCRIPTOR_V1) is tuple
+    assert (
+        SCHEMA_CHECKSUM
+        == "9cde1bee50b59842338fea042311a9db7a0fd53bbb1baf095b7155f28fa40ab1"
+    )
+    assert sha256(descriptor_bytes).hexdigest() == SCHEMA_CHECKSUM
+    assert (
+        sha256(
+            json.dumps(
+                ("mutated", *SCHEMA_DESCRIPTOR_V1), separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        != SCHEMA_CHECKSUM
+    )
+
+
+def test_payload_bearing_repr_is_fixed_and_never_contains_payload_text():
+    request_value = TopologyGatewayRequestV1(
+        TopologyQueryName.RELATION_TOPOLOGY,
+        {"canary": "secret-request"},
+        123.5,
+        2,
+    )
+    success = TopologyGatewaySuccessV1(({"canary": "secret-row"},))
+    assert "secret-request" not in repr(request_value)
+    assert "canary" not in repr(request_value)
+    assert "secret-row" not in repr(success)
+    assert "canary" not in repr(success)
+
+
+class _HostileMapping(Mapping[str, object]):
+    def __getitem__(self, key: str) -> object:
+        raise RuntimeError(f"canary-item-{key}")
+
+    def __iter__(self) -> Iterator[str]:
+        raise RuntimeError("canary-iteration")
+
+    def __len__(self) -> int:
+        raise RuntimeError("canary-length")
+
+    def items(self):
+        raise RuntimeError("canary-items")
+
+
+@pytest.mark.parametrize("mapping", [_HostileMapping()])
+def test_hostile_mapping_failures_are_fixed_non_echoing_contract_errors(mapping):
+    with pytest.raises((TypeError, ValueError)) as request_error:
+        TopologyGatewayRequestV1(TopologyQueryName.RELATION_TOPOLOGY, mapping, 1.0, 1)
+    with pytest.raises((TypeError, ValueError)) as row_error:
+        TopologyGatewaySuccessV1((mapping,))
+    assert "canary" not in str(request_error.value)
+    assert "canary" not in str(row_error.value)
     assert encode_request(request()) == (
         b'{"deadline":123.5,"max_records":2,"parameters":{"collection":"c-1","limit":2},"query":"relation_topology"}'
     )
