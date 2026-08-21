@@ -146,20 +146,27 @@ the knowledge-graph profile.
 Memgraph Community does not provide database-enforced read-only RBAC. The design
 must not claim otherwise or depend on Enterprise licensing. Instead, a
 `knowledge_graph_query_gateway` service is the query boundary. Only that gateway
-and the projection worker join the private KG graph network and can reach the KG
-Memgraph Bolt port. The web service reaches the gateway over a separate internal
-application network and has no route or credential with which to open a Bolt
-session. The gateway exposes a closed set of typed topology operations and never
-accepts arbitrary Cypher, query fragments, labels, property names, or database
-identifiers from callers.
+and a dedicated `knowledge_graph_projection_worker` service join the private KG
+graph network and can reach the KG Memgraph Bolt port. The projection worker
+consumes only the exclusive projection queue; no general Celery worker or other
+application container receives its network attachment or secrets. The web
+service reaches the gateway over a separate internal application network and has
+no route or credential with which to open a Bolt session. The gateway exposes a
+closed set of typed topology operations. It accepts typed opaque generation,
+document, entity, seed, and chunk-key values, but never accepts arbitrary Cypher,
+query fragments, caller-controlled schema identifiers, or raw database IDs.
 
-The projection worker writes directly to the dedicated KG Memgraph instance.
+The dedicated projection worker writes directly to the KG Memgraph instance.
 The gateway executes only the fixed, parameterized, bounded read queries defined
 by the projection topology contract. Community users may use separate credentials
-for rotation and audit attribution, but those identities are not represented as
-different database privilege levels. A gateway compromise is contained by its
-closed API, strict input validation, container/network isolation, and absence of
-a raw-query endpoint rather than by unavailable Community RBAC.
+for independent rotation, but those identities are not represented as different
+database privilege levels or as a database audit trail. The gateway is a trusted
+component: if its process is compromised, its Community credential can mutate
+the graph. The closed API and network boundary contain untrusted web callers, not
+compromised gateway code. PostgreSQL authority, periodic full generation/edge
+attestation, immutable generation markers, and reconciliation detect corruption;
+on any mismatch, retrieval fails open to the vector baseline, credentials are
+rotated, and the dedicated KG projection is rebuilt from PostgreSQL.
 
 Memgraph stores opaque graph topology rather than authoritative application data.
 The v1 projection contains:
@@ -248,6 +255,23 @@ projection rebuild.
 Memgraph returns the opaque key; PostgreSQL resolves it through this table and
 then applies current authorization. There is no `chunk_uuid` assumption or
 `TextChunk` schema migration.
+
+Secret ownership is explicit. The web process and dedicated projection worker
+receive the projection HMAC key because both must derive or validate opaque keys.
+The gateway receives opaque values only and never receives that HMAC key or any
+PostgreSQL credential. The projection worker receives the PostgreSQL source role
+for bounded authority reads and the function-only state role for leases, mapping
+persistence, lifecycle transitions, and ready compare-and-set. The web receives
+its normal request database authority plus the gateway client credential, but no
+Memgraph credential. The extractor receives only its own service credential and
+model configuration.
+
+An identifier key/version rotation updates the web and dedicated worker together,
+invalidates all older ready generations, and rebuilds them under the new version.
+Until the exact new generation is ready, graph retrieval remains disabled and the
+baseline continues; there is no dual-key expansion of request scope. Tests inspect
+rendered containers and process environments to prove each secret is present only
+in its declared consumers.
 
 The Memgraph projection checksum and provider-neutral snapshot checksum cover
 only opaque-key records and contain no integer database IDs. A separate
@@ -363,8 +387,12 @@ scope, opaque seeds, fixed caps, and an absolute deadline. The gateway validates
 the exact request schema, maps it to one named query family, and returns the
 existing canonical provider-neutral envelope. It cannot authorize scope, widen
 scope, resolve private identifiers, or materialize chunks. Any transport,
-schema, provenance, truncation, or deadline failure disables the affected graph
-path under the existing failure contract.
+authentication, schema, or generation/provenance failure makes the gateway or
+backend untrustworthy, so both graph branches are discarded. A request-local
+deadline, result cap, or attested truncation in one named query disables only
+that branch and preserves a completed sibling. Malformed envelopes are shared
+schema failures, not branch-local misses. Every case follows the existing stable
+reason-code and vector-baseline fallback contract.
 
 ### Query-Time GLiNER2 Extraction Plane
 
@@ -557,13 +585,15 @@ Authorization is enforced at five boundaries:
    nodes; and
 5. re-authorize every returned chunk before materialization.
 
-Projection workers use read-only PostgreSQL access for source rows and dedicated
-write credentials for the KG Memgraph projection. Query clients receive only an
-internal gateway credential and never receive Memgraph credentials. The gateway
-holds its own rotatable Community user credential, without claiming database-
-enforced read-only privileges. The extractor uses a separate internal bearer
-secret. Credentials, driver configuration, spans, and raw identifiers never
-appear in reports.
+The dedicated projection worker uses the PostgreSQL source role for authority
+reads, the function-only state role for lifecycle writes, and its KG Memgraph
+credential. Query clients receive only an internal gateway credential and never
+receive Memgraph credentials. The gateway holds its own rotatable Community user
+credential, without claiming database-enforced read-only privileges or Memgraph
+audit attribution. Gateway and worker emit bounded application audit events with
+fixed operation/reason enums, counts, and timings only. The extractor uses a
+separate internal bearer secret. Credentials, driver configuration, spans, raw
+identifiers, and payloads never appear in reports.
 
 ## Configuration and Rollout
 
@@ -587,6 +617,15 @@ is available only through an explicit evaluation/test backend setting; shipping
 requests never automatically fall back from Memgraph to PostgreSQL graph loading.
 No Enterprise license key, organization identifier, hosted graph endpoint, or
 external graph API is part of this configuration.
+
+Graph services are optional to baseline application startup. The web service has
+no Compose `depends_on` relationship on KG Memgraph, the gateway, extractor, or
+projection worker, and its readiness probe never calls them. The gateway exposes
+separate process liveness and KG-Memgraph readiness probes; the dedicated worker
+and extractor expose bounded liveness/readiness checks appropriate to their
+runtime. Their absence, startup delay, restart, or unhealthy state disables graph
+work without preventing the web service from becoming ready or serving the
+authorized vector/trigram baseline.
 
 Rollout stages are:
 
@@ -624,10 +663,18 @@ The implementation requires:
 - Compose/network tests proving the Mem0 and KG Memgraph services use distinct
   containers, volumes, credentials, and networks;
 - tests proving the web container cannot reach the KG Bolt port or obtain KG
-  Memgraph credentials, while the projection worker and gateway can;
+  Memgraph credentials, while only the dedicated projection worker and gateway
+  can; no general worker may join the KG network or consume its secrets;
 - fixed-query gateway tests proving arbitrary Cypher and unknown operations are
-  structurally impossible, every request is capped/deadlined, and malformed or
-  truncated responses fail closed to baseline retrieval;
+  structurally impossible, every request is capped/deadlined, shared failures
+  discard both graph branches, and request-local caps/deadlines preserve a
+  completed sibling;
+- startup/outage/restart tests proving web readiness and authorized baseline
+  retrieval remain independent of Memgraph, gateway, extractor, and projection
+  worker health;
+- rendered-environment tests proving the HMAC key, database roles, Memgraph
+  credentials, and service credentials are present only in their declared
+  containers, including fail-open behavior during identifier-key rotation;
 - crash/retry/reconciliation tests for partially written generations;
 - automatic membership create/remove/status/resolver-change invalidation,
   bounded outbox fan-out, checksum, compare-and-set, reconciliation, and pruning
