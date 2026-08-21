@@ -121,8 +121,8 @@ def test_figure_delete_signal_fences_the_exact_collected_parent_triple(
 
 def test_collection_delete_signal_fences_the_collected_parent_id(monkeypatch):
     from apps.knowledge_graph.graph import invalidation
-
-    calls = []
+    from apps.knowledge_graph.projection import lifecycle
+    calls, fences = [], []
     instance = SimpleNamespace(pk=23, parent_id=19)
     context = SimpleNamespace(snapshot=SimpleNamespace(locked_collection_ids=(23,)))
     monkeypatch.setattr(
@@ -136,16 +136,15 @@ def test_collection_delete_signal_fences_the_collected_parent_id(monkeypatch):
         lambda origin, *, using: context,
     )
     monkeypatch.setattr(
-        invalidation,
-        "_assert_collection_delete_scope",
-        lambda *_args: None,
+        invalidation, "_assert_collection_delete_scope", lambda *_: None
     )
-
+    monkeypatch.setattr(
+        lifecycle,
+        "tombstone_collection_projections_locked",
+        lambda *, collection_id, now, using: fences.append((collection_id, using)),
+    )
     invalidation.collection_pre_delete(
-        object(),
-        instance,
-        using="default",
-        origin=instance,
+        object(), instance, using="default", origin=instance
     )
 
     assert calls == [
@@ -160,6 +159,7 @@ def test_collection_delete_signal_fences_the_collected_parent_id(monkeypatch):
             },
         )
     ]
+    assert fences == [(23, "default")]
 
 
 @pytest.mark.django_db(transaction=True)
