@@ -9,7 +9,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "check_retrieval_logging.py"
 EXPECTED_LANE_PATHS = tuple(
-    "aquillm/lib/knowledge_graph/query_extractor/client.py aquillm/lib/knowledge_graph/query_extractor/service.py aquillm/apps/knowledge_graph/retrieval/direct_seed_repository.py aquillm/apps/knowledge_graph/retrieval/direct_seed_resolution.py aquillm/apps/knowledge_graph/retrieval/query_embedding.py aquillm/apps/documents/services/chunk_search_candidates.py aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/apps/documents/services/chunk_rerank.py aquillm/aquillm/utils.py aquillm/lib/embeddings/local.py aquillm/aquillm/settings_logging.py".split()
+    "aquillm/lib/knowledge_graph/query_extractor/client.py aquillm/lib/knowledge_graph/query_extractor/service.py aquillm/apps/knowledge_graph/retrieval/direct_seed_repository.py aquillm/apps/knowledge_graph/retrieval/direct_seed_resolution.py aquillm/apps/knowledge_graph/retrieval/query_embedding.py aquillm/apps/knowledge_graph/retrieval/topology/gateway_client.py aquillm/apps/documents/services/chunk_search_candidates.py aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/apps/documents/services/chunk_rerank.py aquillm/aquillm/utils.py aquillm/lib/embeddings/local.py aquillm/aquillm/settings_logging.py".split()
 )
 
 
@@ -29,6 +29,15 @@ def test_checker_has_an_explicit_lane_allowlist_and_current_lane_is_clean() -> N
     module = _module()
     assert module.LANE_PATHS == EXPECTED_LANE_PATHS
     assert module.find_violations(REPO) == ()
+
+
+def test_checker_rejects_gateway_payload_and_secret_canaries() -> None:
+    source = "\n".join(
+        "logger.info('obs.gateway.read', **retrieval_log_fields("
+        f"reason='completed', count={name}, elapsed_ms=0))"
+        for name in ("payload", "token", "key", "exception", "userinfo")
+    )
+    assert len(_scan(source)) == 5
 
 
 def test_checker_allows_only_fixed_event_and_redacted_structured_fields() -> None:

@@ -83,7 +83,9 @@ def _internal_origin(origin: str) -> str:
 
 
 def _is_internal_host(host: str) -> bool:
-    if host == "localhost" or host.endswith(".internal"):
+    if host in {"localhost", "knowledge_graph_query_gateway"} or host.endswith(
+        ".internal"
+    ):
         return True
     try:
         address = ip_address(host)
@@ -154,7 +156,6 @@ class TopologyGatewayClient:
         remaining = deadline - time.monotonic()
         if not isfinite(remaining) or remaining <= 0.0:
             raise TopologyGatewayRequestError(GatewayFailureReason.DEADLINE)
-        timeout = min(remaining, self.timeout_ceiling)
         request = Request(
             self._endpoint,
             data=encode_request(request_dto),
@@ -166,10 +167,18 @@ class TopologyGatewayClient:
             method="POST",
         )
         opener = build_opener(ProxyHandler({}), _RejectRedirect())
+        remaining = deadline - time.monotonic()
+        if not isfinite(remaining) or remaining <= 0.0:
+            raise TopologyGatewayRequestError(GatewayFailureReason.DEADLINE)
+        timeout = min(remaining, self.timeout_ceiling)
         try:
             response = opener.open(request, timeout=timeout)
         except HTTPError as error:
             if 300 <= error.code < 400:
+                try:
+                    error.close()
+                except OSError:
+                    pass
                 raise _unavailable() from None
             response = error
         except TimeoutError:

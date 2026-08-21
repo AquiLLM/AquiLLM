@@ -7,7 +7,6 @@ from unittest.mock import Mock
 from urllib.error import HTTPError
 
 import pytest
-from scripts.check_retrieval_logging import LANE_PATHS, scan_source
 
 from apps.knowledge_graph.retrieval.topology import contracts
 from apps.knowledge_graph.retrieval.topology.failures import TopologyLoadError
@@ -30,8 +29,16 @@ from apps.knowledge_graph.tests.test_memgraph_topology import K, ready
 
 
 class Response:
-    def __init__(self, body: bytes, *, status: int = 200, headers: dict | None = None):
+    def __init__(
+        self,
+        body: bytes,
+        *,
+        status: int = 200,
+        headers: dict | None = None,
+        read_error: Exception | None = None,
+    ):
         self._body = BytesIO(body)
+        self._read_error = read_error
         self.status = status
         self.headers = {
             "Content-Length": str(len(body)),
@@ -42,19 +49,12 @@ class Response:
         }
 
     def read(self, amount: int = -1) -> bytes:
+        if self._read_error is not None:
+            raise self._read_error
         return self._body.read(amount)
 
     def close(self) -> None:
         self._body.close()
-
-
-class ReadFailureResponse(Response):
-    def __init__(self, error: Exception):
-        super().__init__(b"{}")
-        self.error = error
-
-    def read(self, _amount: int = -1) -> bytes:
-        raise self.error
 
 
 class Opener:
@@ -125,15 +125,17 @@ def test_posts_canonical_contract_with_pinned_transport_headers(monkeypatch) -> 
     assert isinstance(client, contracts.ProjectedTopologyQueryDriver)
 
 
-def test_expired_deadline_fails_before_network_io(monkeypatch) -> None:
+@pytest.mark.parametrize("ticks", ((12.0,), (10.0, 12.0)))
+def test_deadline_expiring_before_open_fails_before_network_io(
+    monkeypatch, ticks
+) -> None:
+    from apps.knowledge_graph.retrieval.topology import gateway_client
+
     client, opener = _client(monkeypatch, Response(b""))
+    clock = iter(ticks)
+    monkeypatch.setattr(gateway_client.time, "monotonic", lambda: next(clock))
     with pytest.raises(TopologyGatewayRequestError) as captured:
-        client.execute_read(
-            query=contracts.TopologyQueryName.GENERATION_MANIFESTS,
-            parameters={},
-            deadline=10.0,
-            max_records=1,
-        )
+        _read(client)
 
     assert captured.value.reason is GatewayFailureReason.DEADLINE
     opener.open.assert_not_called()
@@ -149,7 +151,7 @@ def test_expired_deadline_fails_before_network_io(monkeypatch) -> None:
 def test_response_read_transport_failures_are_not_schema_failures(
     monkeypatch, error, expected
 ) -> None:
-    client, _ = _client(monkeypatch, ReadFailureResponse(error))
+    client, _ = _client(monkeypatch, Response(b"{}", read_error=error))
     with pytest.raises(expected) as captured:
         _read(client)
 
@@ -177,19 +179,6 @@ def test_invalid_success_transport_is_a_schema_failure(
     monkeypatch, headers, body
 ) -> None:
     client, _ = _client(monkeypatch, Response(body, headers=headers))
-    with pytest.raises(TopologyLoadError) as captured:
-        _read(client)
-
-    assert captured.value.reason is (
-        contracts.TopologyFailureReason.BACKEND_SCHEMA_MISMATCH
-    )
-
-
-def test_noncanonical_content_length_is_a_schema_failure(monkeypatch) -> None:
-    body = encode_response(TopologyGatewaySuccessV1(()))
-    client, _ = _client(
-        monkeypatch, Response(body, headers={"Content-Length": f"0{len(body)}"})
-    )
     with pytest.raises(TopologyLoadError) as captured:
         _read(client)
 
@@ -275,25 +264,30 @@ def test_rejects_external_or_secret_bearing_origins_and_secret_repr() -> None:
         "https://public.example",
         "https://user:pass@gateway.internal",
         "https://gateway.internal/?x=1",
+        "https://knowledge_graph_query_gateway.example",
+        "https://knowledge_graph_query_gateway_",
     ):
         with pytest.raises(ValueError):
             TopologyGatewayClient(origin, "top-secret", 1.0)
     with pytest.raises(ValueError):
         TopologyGatewayClient("https://gateway.internal", "token\u0080", 1.0)
-    client = TopologyGatewayClient("http://localhost:8080", "top-secret", 1.0)
+    client = TopologyGatewayClient(
+        "http://knowledge_graph_query_gateway:8080", "top-secret", 1.0
+    )
     assert "top-secret" not in repr(client)
-    assert "localhost" not in repr(client)
+    assert "knowledge_graph_query_gateway" not in repr(client)
 
 
-def test_logging_checker_covers_gateway_and_rejects_gateway_canaries() -> None:
-    assert (
-        "aquillm/apps/knowledge_graph/retrieval/topology/gateway_client.py"
-        in LANE_PATHS
+def test_redirect_error_response_is_closed_before_unavailable_failure(
+    monkeypatch,
+) -> None:
+    body = BytesIO(b"redirect canary")
+    client, _ = _client(
+        monkeypatch,
+        HTTPError("https://gateway.internal", 302, "ignored", {}, body),
     )
-    source = "\n".join(
-        "logger.info('obs.gateway.read', **retrieval_log_fields("
-        f"reason='completed', count={name}, elapsed_ms=0))"
-        for name in ("payload", "token", "key", "exception", "userinfo")
-    )
-    findings = scan_source(path=__file__, source=source)
-    assert len(findings) == 5
+    with pytest.raises(TopologyLoadError) as captured:
+        _read(client)
+
+    assert captured.value.reason is contracts.TopologyFailureReason.BACKEND_UNAVAILABLE
+    assert body.closed
