@@ -258,11 +258,9 @@ def load_hybrid_retrieval_settings(source: Mapping[str, str]) -> HybridRetrieval
     source_dsn = settings.projection_postgres_source_dsn.get_secret_value(); state_dsn = settings.projection_postgres_state_dsn.get_secret_value()
     source_identity = _postgres_identity("KG_PROJECTION_POSTGRES_SOURCE_DSN", source_dsn) if source_dsn else None
     state_identity = _postgres_identity("KG_PROJECTION_POSTGRES_STATE_DSN", state_dsn) if state_dsn else None
-    if source_identity is not None and state_identity is not None:
-        if source_identity == state_identity:
-            raise _error("KG_PROJECTION_POSTGRES_STATE_DSN", "must use a distinct canonical database identity")
-        if source_identity[0] == state_identity[0]:
-            raise _error("KG_PROJECTION_POSTGRES_STATE_DSN", "must use a distinct PostgreSQL role")
+    for dsn_key, identity, required_role in (("KG_PROJECTION_POSTGRES_SOURCE_DSN", source_identity, "aquillm_projection_source"), ("KG_PROJECTION_POSTGRES_STATE_DSN", state_identity, "aquillm_projection_state")):
+        if identity is not None and identity[0] != required_role:
+            raise _error(dsn_key, "must use the fixed least-privilege PostgreSQL role")
     if _TOKEN.fullmatch(settings.projection_queue) is None:
         raise _error("KG_PROJECTION_QUEUE", "must be a bounded token")
     if settings.memgraph_database and _TOKEN.fullmatch(settings.memgraph_database) is None:

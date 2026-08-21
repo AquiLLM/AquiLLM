@@ -326,8 +326,8 @@ DATABASES = {
     }
 }
 DATABASES.update(projection_databases())
-DATABASE_ROUTERS = ["apps.knowledge_graph.projection.database_router.ProjectionDatabaseRouter"]
-
+DATABASE_ROUTERS = ["apps.knowledge_graph.projection.database_router."
+                    "ProjectionDatabaseRouter"]
 
 # Password validation
 # https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators

@@ -11,6 +11,7 @@ from apps.knowledge_graph.models import (
     GraphArtifact,
     ProjectionChunkReference,
 )
+from aquillm.projection_database_settings import projection_databases
 
 
 def test_projection_router_is_narrow_and_never_migrates_worker_aliases() -> None:
@@ -49,6 +50,52 @@ def test_projection_settings_define_separate_fail_closed_database_aliases() -> N
         "unquote",
     ):
         assert expected in alias_source
+
+
+def test_projection_aliases_accept_frozen_passwordless_default_port_dsns() -> None:
+    databases = projection_databases(
+        {
+            "KG_MEMGRAPH_PROJECTION_ENABLED": "1",
+            "KG_PROJECTION_POSTGRES_SOURCE_DSN": (
+                "postgresql://aquillm_projection_source@pg.internal/aquillm"
+            ),
+            "KG_PROJECTION_POSTGRES_STATE_DSN": (
+                "postgresql://aquillm_projection_state@pg.internal/aquillm"
+            ),
+        }
+    )
+    assert databases["projection_source"] == {
+        "ENGINE": "django_prometheus.db.backends.postgresql",
+        "NAME": "aquillm",
+        "USER": "aquillm_projection_source",
+        "PASSWORD": "",
+        "HOST": "pg.internal",
+        "PORT": "5432",
+        "OPTIONS": {"connect_timeout": 5},
+    }
+    assert databases["projection_state"]["USER"] == "aquillm_projection_state"
+
+
+@pytest.mark.parametrize(("key", "username"), (
+    ("KG_PROJECTION_POSTGRES_SOURCE_DSN", "unexpected_source"),
+    ("KG_PROJECTION_POSTGRES_STATE_DSN", "unexpected_state"),
+))
+def test_projection_aliases_reject_non_authority_roles(
+    key: str, username: str
+) -> None:
+    source = {
+        "KG_MEMGRAPH_PROJECTION_ENABLED": "1",
+        "KG_PROJECTION_POSTGRES_SOURCE_DSN": (
+            "postgresql://aquillm_projection_source@pg/aquillm"
+        ),
+        "KG_PROJECTION_POSTGRES_STATE_DSN": (
+            "postgresql://aquillm_projection_state@pg/aquillm"
+        ),
+    }
+    source[key] = f"postgresql://{username}@pg/aquillm"
+
+    with pytest.raises(ValueError, match=key):
+        projection_databases(source)
 
 
 def test_production_alias_contract_resolves_in_django_settings() -> None:
@@ -180,6 +227,21 @@ def test_0008_owns_a_function_only_projection_state_api() -> None:
     assert "GRANT ALL" not in sql
 
 
+def test_0008_uses_real_collection_and_chunk_tables_and_requires_roles() -> None:
+    migration = importlib.import_module(
+        "apps.knowledge_graph.migrations.0008_projection_worker_state_api"
+    )
+    sql = migration.STATE_API_SQL
+
+    assert "public.aquillm_collection" in sql
+    assert "public.aquillm_textchunk" in sql
+    assert "apps_collections_collection" not in sql
+    assert "apps_documents_textchunk" not in sql
+    for role in ("aquillm_projection_source", "aquillm_projection_state"):
+        assert f"required role {role} is missing" in sql
+    assert "IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles" not in sql
+
+
 def test_ready_cas_has_exact_predicates_and_lock_order() -> None:
     migration = importlib.import_module(
         "apps.knowledge_graph.migrations.0008_projection_worker_state_api"
@@ -187,7 +249,7 @@ def test_ready_cas_has_exact_predicates_and_lock_order() -> None:
     sql = migration.STATE_API_SQL
     ready = sql.split("FUNCTION public.kg_projection_ready_compare_and_set", 1)[1]
     ready = ready.split("BEGIN", 1)[1]
-    assert ready.index("apps_collections_collection") < ready.index("graphartifact")
+    assert ready.index("aquillm_collection") < ready.index("graphartifact")
     assert ready.index("graphartifact") < ready.index("collectiongraphmembershipstate")
     assert ready.index("collectiongraphmembershipstate") < ready.index(
         "collectiongraphprojection"

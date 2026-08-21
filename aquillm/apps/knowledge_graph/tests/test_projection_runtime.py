@@ -15,10 +15,10 @@ def _projection_environment() -> dict[str, str]:
         "KG_MEMGRAPH_PROJECTION_USERNAME": "writer",
         "KG_MEMGRAPH_PROJECTION_PASSWORD": "writer-secret",
         "KG_PROJECTION_POSTGRES_SOURCE_DSN": (
-            "postgresql://source_reader@source.internal/source"
+            "postgresql://aquillm_projection_source@source.internal/source"
         ),
         "KG_PROJECTION_POSTGRES_STATE_DSN": (
-            "postgresql://state_writer@state.internal/state"
+            "postgresql://aquillm_projection_state@state.internal/state"
         ),
         "KG_PROJECTION_IDENTIFIER_HMAC_KEY": "identifier-secret",
         "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "key-v7",

@@ -6,6 +6,11 @@ import os
 from collections.abc import Mapping
 from urllib.parse import unquote, urlsplit
 
+from lib.knowledge_graph.retrieval_config import (
+    HybridRetrievalConfigError,
+    _postgres_identity,
+)
+
 _ENGINE = "django_prometheus.db.backends.postgresql"
 
 
@@ -21,25 +26,19 @@ def _disabled_database() -> dict[str, object]:
     }
 
 
-def _projection_database(name: str, source: Mapping[str, str]) -> dict[str, object]:
+def _projection_database(
+    name: str,
+    expected_role: str,
+    source: Mapping[str, str],
+) -> dict[str, object]:
     raw = source.get(name, "")
     if not raw:
         return _disabled_database()
     try:
+        identity = _postgres_identity(name, raw)
         parsed = urlsplit(raw)
-        port = parsed.port
-        database_name = parsed.path.removeprefix("/")
-        valid = (
-            parsed.scheme in {"postgres", "postgresql"}
-            and parsed.hostname is not None
-            and parsed.username is not None
-            and parsed.password is not None
-            and bool(database_name)
-            and port is not None
-            and not parsed.query
-            and not parsed.fragment
-        )
-    except ValueError:
+        valid = identity[0] == expected_role
+    except (HybridRetrievalConfigError, ValueError):
         valid = False
     if not valid:
         if source.get("KG_MEMGRAPH_PROJECTION_ENABLED") == "1":
@@ -47,11 +46,11 @@ def _projection_database(name: str, source: Mapping[str, str]) -> dict[str, obje
         return _disabled_database()
     return {
         "ENGINE": _ENGINE,
-        "NAME": unquote(database_name),
-        "USER": unquote(parsed.username),
-        "PASSWORD": unquote(parsed.password),
-        "HOST": parsed.hostname,
-        "PORT": str(port),
+        "NAME": identity[3],
+        "USER": identity[0],
+        "PASSWORD": unquote(parsed.password or ""),
+        "HOST": identity[1],
+        "PORT": str(identity[2]),
         "OPTIONS": {"connect_timeout": 5},
     }
 
@@ -61,9 +60,13 @@ def projection_databases(
 ) -> dict[str, dict[str, object]]:
     return {
         "projection_source": _projection_database(
-            "KG_PROJECTION_POSTGRES_SOURCE_DSN", source
+            "KG_PROJECTION_POSTGRES_SOURCE_DSN",
+            "aquillm_projection_source",
+            source,
         ),
         "projection_state": _projection_database(
-            "KG_PROJECTION_POSTGRES_STATE_DSN", source
+            "KG_PROJECTION_POSTGRES_STATE_DSN",
+            "aquillm_projection_state",
+            source,
         ),
     }

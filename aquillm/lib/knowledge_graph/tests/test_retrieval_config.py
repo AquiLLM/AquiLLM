@@ -99,8 +99,8 @@ def _projection() -> dict[str, str]:
         "KG_MEMGRAPH_URI": "bolt://graph:7687",
         "KG_MEMGRAPH_PROJECTION_USERNAME": "writer",
         "KG_MEMGRAPH_PROJECTION_PASSWORD": "projection-secret",
-        "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://reader@pg/source",
-        "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://cas@pg/state",
+        "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://aquillm_projection_source@pg/source",
+        "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://aquillm_projection_state@pg/state",
         "KG_PROJECTION_IDENTIFIER_HMAC_KEY": "hmac-secret",
         "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "task21-key-v1",
     }
@@ -262,7 +262,7 @@ def test_projection_dsns_are_canonical_postgresql_uris(value: str) -> None:
         config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": value})
     assert value not in str(caught.value)
 def test_projection_dsns_accept_supported_hosts_and_credentials() -> None:
-    settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://reader@db.example.com/source_db", "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://cas:secret@[::1]:5432/state_db"})
+    settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://aquillm_projection_source@db.example.com/source_db", "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://aquillm_projection_state:secret@[::1]:5432/state_db"})
     assert settings.projection_postgres_source_dsn.get_secret_value().endswith("/source_db")
 @pytest.mark.parametrize(("key", "value"), (("KG_MEMGRAPH_URI", "bolt://."), ("KG_MEMGRAPH_URI", "bolt://example.com:"), ("KG_MEMGRAPH_URI", "bolt://%65xample.com"), ("KG_MEMGRAPH_URI", "bolt://example..com"), ("KG_MEMGRAPH_URI", "bolt://Example.com"), ("KG_MEMGRAPH_URI", "BOLT://example.com"), ("KG_MEMGRAPH_URI", "bolt://host:65536"), ("KG_MEMGRAPH_URI", "bolt://host:" + "9" * 5000), ("KG_QUERY_EXTRACTOR_URL", "https://. /v1"), ("KG_QUERY_EXTRACTOR_URL", "https://example.com:")))
 def test_service_urls_reject_noncanonical_authorities(key: str, value: str) -> None:
@@ -275,11 +275,11 @@ def test_oversized_integer_is_a_fixed_configuration_error() -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_BATCH_SIZE") as caught:
         config.load_hybrid_retrieval_settings({"KG_PROJECTION_BATCH_SIZE": "9" * 5000})
     assert "999999" not in str(caught.value)
-@pytest.mark.parametrize("value", ("postgresql://u:p@evil@trusted/db", "postgresql://host/db", "postgresql://:p@host/db", "postgresql://BadRole@host/db", "postgresql://role:%00@host/db", "postgresql://role:%ZZ@host/db", "postgresql://role:%FF@host/db", "postgresql://role@host/%00", "postgresql://role@host/db%2Fother"))
+@pytest.mark.parametrize("value", ("postgresql://u:p@evil@trusted/db", "postgresql://host/db", "postgresql://:p@host/db", "postgresql://BadRole@host/db", "postgresql://reader@pg/source", "postgresql://role:%00@host/db", "postgresql://role:%ZZ@host/db", "postgresql://role:%FF@host/db", "postgresql://role@host/%00", "postgresql://role@host/db%2Fother"))
 def test_projection_dsn_roles_and_escapes_fail_closed(value: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_SOURCE_DSN"):
         config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": value})
-@pytest.mark.parametrize(("source", "state"), (("postgresql://same@host/source", "postgresql://same@host/state"), ("postgresql://same@host/db", "postgresql://same@host:5432/db"), ("postgresql://same@[0:0:0:0:0:0:0:1]/db", "postgresql://same@[::1]:5432/db")))
+@pytest.mark.parametrize(("source", "state"), (("postgresql://aquillm_projection_source@host/source", "postgresql://aquillm_projection_source@host/state"), ("postgresql://aquillm_projection_source@host/db", "postgresql://aquillm_projection_source@host:5432/db"), ("postgresql://aquillm_projection_source@[0:0:0:0:0:0:0:1]/db", "postgresql://aquillm_projection_source@[::1]:5432/db")))
 def test_projection_roles_and_canonical_identities_are_separate(source: str, state: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_STATE_DSN"):
         config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": source, "KG_PROJECTION_POSTGRES_STATE_DSN": state})
@@ -287,11 +287,11 @@ def test_postgres_identity_normalizes_percent_encoding_host_and_port() -> None:
     identity = config._postgres_identity
     assert identity("KG_PROJECTION_POSTGRES_SOURCE_DSN", "postgresql://%72eader@DB.EXAMPLE.com/%64b") == identity("KG_PROJECTION_POSTGRES_STATE_DSN", "postgresql://reader@db.example.com:5432/db")
 def test_projection_accepts_distinct_canonical_roles() -> None:
-    settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://source_role:p%3Ass@db.example.com/source", "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://state_role@127.0.0.1:5432/state"})
+    settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": "postgresql://aquillm_projection_source:p%3Ass@db.example.com/source", "KG_PROJECTION_POSTGRES_STATE_DSN": "postgresql://aquillm_projection_state@127.0.0.1:5432/state"})
     assert settings.memgraph_projection_enabled
 @pytest.mark.parametrize("password", ("p%40ss", "p%2Fss", "p%3Fss", "p%23ss", "p%5Css"))
 def test_projection_dsn_accepts_percent_encoded_reserved_passwords(password: str) -> None:
-    settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": f"postgresql://source_role:{password}@host/source"})
+    settings = config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": f"postgresql://aquillm_projection_source:{password}@host/source"})
     assert settings.projection_postgres_source_dsn.get_secret_value().endswith("@host/source")
 @pytest.mark.parametrize("dsn", ("postgresql://role:p@ss@host/db", "postgresql://role:p%4@host/db", "postgresql://role:p%1F@host/db", "postgresql://role:p%7F@host/db", "postgresql://role:" + "p" * 4097 + "@host/db"))
 def test_projection_dsn_password_structure_and_controls_fail_closed(dsn: str) -> None:
