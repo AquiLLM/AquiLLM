@@ -915,20 +915,13 @@ def test_disabled_path_preserves_four_tuple_sources_and_diagnostics_exactly(
         "chunks_with_embeddings": None,
         "vector_error": None,
         "trigram_candidates": 0,
-        "exact_terms": [],
+        "exact_term_count": 0,
     }
     assert search_log.call_args_list[0].args == ("obs.rag.search",)
     assert set(search_log.call_args_list[0].kwargs) == {
-        "total_ms",
-        "vector_ms",
-        "trigram_ms",
-        "exact_ms",
-        "rerank_ms",
-        "doc_count",
-        "top_k",
-        "exact_term_count",
-        "pre_dedupe_count",
-        "candidate_count",
+        "reason",
+        "count",
+        "elapsed_ms",
     }
 
 

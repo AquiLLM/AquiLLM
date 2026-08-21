@@ -119,7 +119,11 @@ def test_rerank_logs_cache_hit_without_query_text(
         if c.args and c.args[0] == "obs.rag.rerank_cache_hit"
     ]
     assert hit_calls
-    assert hit_calls[0].kwargs == {"candidate_count": 3, "top_k": 2}
+    assert hit_calls[0].kwargs == {
+        "reason": "completed",
+        "count": 0,
+        "elapsed_ms": 0.0,
+    }
     joined = " ".join(f"{call.args!r} {call.kwargs!r}" for call in hit_calls)
     assert "secret-query-text" not in joined
     assert "user query must not appear" not in joined

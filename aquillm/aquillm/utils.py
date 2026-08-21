@@ -25,6 +25,7 @@ from lib.embeddings import (
     get_strict_indexed_embeddings_via_local_openai,
 )
 from lib.embeddings.config import get_local_embed_config, get_target_dims
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -98,16 +99,33 @@ def get_multimodal_embedding(
     try:
         embedding = get_multimodal_embedding_via_vllm_pooling(prompt, image_data_url)
         if embedding:
-            logger.info("obs.core.multimodal_embedding_generated")
+            logger.info(
+                "obs.core.multimodal_embedding_generated",
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.COMPLETED,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
+            )
             return fit_embedding_dims(embedding)
-    except Exception as exc:
+    except Exception:
         logger.debug(
             "obs.core.multimodal_embedding_failed",
-            error=str(exc),
-            error_type=type(exc).__name__,
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
 
-    logger.debug("obs.core.multimodal_embedding_unavailable")
+    logger.debug(
+        "obs.core.multimodal_embedding_unavailable",
+        **retrieval_log_fields(
+            reason=RetrievalLogReason.EMBEDDING_UNAVAILABLE,
+            count=0,
+            elapsed_ms=0.0,
+        ),
+    )
     return get_embedding(prompt, input_type=input_type)
 
 
@@ -123,11 +141,14 @@ def get_embedding(query: Any, input_type: str = "search_query"):
 
     try:
         return fit_embedding_dims(get_embedding_via_local_openai(query))
-    except Exception as exc:
+    except Exception:
         logger.warning(
             "obs.core.embedding_local_fallback",
-            error=str(exc),
-            error_type=type(exc).__name__,
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.EMBEDDING_UNAVAILABLE,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
 
     if not isinstance(query, str):
@@ -142,7 +163,7 @@ def get_embedding(query: Any, input_type: str = "search_query"):
             get_embedding_via_cohere(cohere_client, query, input_type)
         )
     except Exception as exc:
-        raise RuntimeError(f"All embedding providers failed: {exc}") from exc
+        raise RuntimeError("All embedding providers failed") from exc
 
 
 def get_embeddings(
@@ -162,11 +183,14 @@ def get_embeddings(
         return [
             fit_embedding_dims(emb) for emb in get_embeddings_via_local_openai(queries)
         ]
-    except Exception as exc:
+    except Exception:
         logger.warning(
             "obs.core.embedding_batch_local_fallback",
-            error=str(exc),
-            error_type=type(exc).__name__,
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.EMBEDDING_UNAVAILABLE,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
     if not all(isinstance(q, str) for q in queries):
         raise RuntimeError(
@@ -184,7 +208,7 @@ def get_embeddings(
             )
         ]
     except Exception as exc:
-        raise RuntimeError(f"All embedding providers failed: {exc}") from exc
+        raise RuntimeError("All embedding providers failed") from exc
 
 
 def strict_index_embedding_signature() -> str:

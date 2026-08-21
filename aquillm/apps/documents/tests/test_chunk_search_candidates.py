@@ -219,7 +219,7 @@ def test_vector_db_failure_keeps_trigram_and_exact_candidates() -> None:
     assert snapshot.trigram_chunk_ids == (2,)
     assert snapshot.exact_chunk_ids == (3,)
     assert tuple(row.pk for row in snapshot.baseline_candidates) == (2, 3)
-    assert "vector operator unavailable" in (snapshot.vector_error or "")
+    assert snapshot.vector_error == "upstream_unavailable"
     assert tuple(seed.chunk_id for seed in snapshot.graph_seeds) == (2, 3)
 
 

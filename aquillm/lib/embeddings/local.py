@@ -7,6 +7,8 @@ from typing import Any
 import structlog
 from openai import OpenAI
 
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+
 from .config import (
     _env_int,
     allow_embed_dimensions_override,
@@ -98,11 +100,11 @@ def _embed_local_with_context_retry(
                 break
             logger.warning(
                 "obs.embed.input_retry_truncate",
-                original_chars=len(candidate),
-                new_chars=len(next_candidate),
-                attempt=attempt,
-                max_retries=max_retries,
-                limit_tokens=limit_tokens,
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.INVALID_REQUEST,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
             )
             candidate = next_candidate
     if last_exc is not None:
@@ -141,8 +143,11 @@ def get_embeddings_via_local_openai(queries: list[Any]) -> list[list[float]]:
             raise
         logger.warning(
             "obs.embed.batch_context_retry",
-            error=str(exc),
-            error_type=type(exc).__name__,
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.INVALID_REQUEST,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
         return [
             _embed_local_with_context_retry(client, model, query) for query in queries

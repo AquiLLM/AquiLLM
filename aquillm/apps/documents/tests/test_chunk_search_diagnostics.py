@@ -1,4 +1,5 @@
 """Retrieval diagnostics returned by text_chunk_search when results are empty."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -71,7 +72,7 @@ class _TriChain:
 
 
 class _QRoot:
-    """Minimal queryset-like root that supports the filter_by_documents().exclude/filter chains."""
+    """Query root supporting vector, trigram, and count chains."""
 
     def __init__(self, vec_rows, tri_rows, count_val: int = 0):
         self._vec = vec_rows
@@ -105,9 +106,12 @@ def _make_cfg():
 @patch("apps.documents.services.chunk_search._fallback_rerank")
 @patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
-def test_vector_error_captured_in_diagnostics(mock_embed, mock_rerank, mock_fallback, mock_app_cfg):
-    """When get_embedding raises, vector_error in diagnostics is the error string."""
-    mock_embed.side_effect = ConnectionError("connection refused")
+def test_vector_error_captured_in_diagnostics(
+    mock_embed, mock_rerank, mock_fallback, mock_app_cfg
+):
+    """Embedding failures expose only a fixed diagnostic reason."""
+    canary = "PRIVATE_EMBEDDING_FAILURE_CANARY"
+    mock_embed.side_effect = ConnectionError(canary)
     mock_rerank.return_value = []
     mock_fallback.return_value = []
     mock_app_cfg.return_value = _make_cfg()
@@ -115,10 +119,13 @@ def test_vector_error_captured_in_diagnostics(mock_embed, mock_rerank, mock_fall
     mc = _ModelCls
     mc.objects.filter_by_documents.return_value = _QRoot([], [], count_val=0)
 
-    _vec, _tri, results, diagnostics = text_chunk_search(mc, "anything", 3, [MagicMock()])
+    _vec, _tri, results, diagnostics = text_chunk_search(
+        mc, "anything", 3, [MagicMock()]
+    )
 
     assert results == []
-    assert "connection refused" in diagnostics["vector_error"]
+    assert diagnostics["vector_error"] == "embedding_unavailable"
+    assert canary not in repr(diagnostics)
     assert diagnostics["doc_count"] == 1
 
 
@@ -136,7 +143,9 @@ def test_no_vector_error_when_embed_succeeds(mock_embed, mock_rerank, mock_app_c
     mc = _ModelCls
     mc.objects.filter_by_documents.return_value = _QRoot(chunks, chunks, count_val=3)
 
-    _vec, _tri, results, diagnostics = text_chunk_search(mc, "query with results", 3, [MagicMock()])
+    _vec, _tri, results, diagnostics = text_chunk_search(
+        mc, "query with results", 3, [MagicMock()]
+    )
 
     assert diagnostics["vector_error"] is None
 
@@ -146,7 +155,9 @@ def test_no_vector_error_when_embed_succeeds(mock_embed, mock_rerank, mock_app_c
 @patch("apps.documents.services.chunk_search._fallback_rerank")
 @patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
-def test_chunks_with_embeddings_zero_when_no_embeddings(mock_embed, mock_rerank, mock_fallback, mock_app_cfg):
+def test_chunks_with_embeddings_zero_when_no_embeddings(
+    mock_embed, mock_rerank, mock_fallback, mock_app_cfg
+):
     """chunks_with_embeddings is 0 when the count query returns 0 (no embeddings)."""
     mock_embed.side_effect = RuntimeError("embed unavailable")
     mock_rerank.return_value = []
@@ -156,7 +167,9 @@ def test_chunks_with_embeddings_zero_when_no_embeddings(mock_embed, mock_rerank,
     mc = _ModelCls
     mc.objects.filter_by_documents.return_value = _QRoot([], [], count_val=0)
 
-    _vec, _tri, results, diagnostics = text_chunk_search(mc, "no embedding query", 3, [MagicMock()])
+    _vec, _tri, results, diagnostics = text_chunk_search(
+        mc, "no embedding query", 3, [MagicMock()]
+    )
 
     assert results == []
     assert diagnostics["chunks_with_embeddings"] == 0
@@ -166,7 +179,9 @@ def test_chunks_with_embeddings_zero_when_no_embeddings(mock_embed, mock_rerank,
 @patch("apps.documents.services.chunk_search.apps.get_app_config")
 @patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
-def test_chunks_with_embeddings_none_when_results_found(mock_embed, mock_rerank, mock_app_cfg):
+def test_chunks_with_embeddings_none_when_results_found(
+    mock_embed, mock_rerank, mock_app_cfg
+):
     """chunks_with_embeddings is None (not queried) when results are returned."""
     mock_embed.return_value = [0.5] * 16
     chunks = [MagicMock(pk=i, content=f"c{i}") for i in range(5)]
@@ -176,7 +191,9 @@ def test_chunks_with_embeddings_none_when_results_found(mock_embed, mock_rerank,
     mc = _ModelCls
     mc.objects.filter_by_documents.return_value = _QRoot(chunks, chunks, count_val=5)
 
-    _vec, _tri, results, diagnostics = text_chunk_search(mc, "found results", 3, [MagicMock()])
+    _vec, _tri, results, diagnostics = text_chunk_search(
+        mc, "found results", 3, [MagicMock()]
+    )
 
     assert results
     assert diagnostics["chunks_with_embeddings"] is None
@@ -197,7 +214,9 @@ def test_diagnostics_doc_count_matches_docs_list(mock_embed, mock_rerank, mock_a
     mc = _ModelCls
     mc.objects.filter_by_documents.return_value = _QRoot(chunks, chunks, count_val=1)
 
-    _vec, _tri, _results, diagnostics = text_chunk_search(mc, "multi doc query", 2, docs)
+    _vec, _tri, _results, diagnostics = text_chunk_search(
+        mc, "multi doc query", 2, docs
+    )
 
     assert diagnostics["doc_count"] == 3
 
@@ -207,7 +226,9 @@ def test_diagnostics_doc_count_matches_docs_list(mock_embed, mock_rerank, mock_a
 @patch("apps.documents.services.chunk_search._fallback_rerank")
 @patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
-def test_diagnostics_trigram_candidates_count(mock_embed, mock_rerank, mock_fallback, mock_app_cfg):
+def test_diagnostics_trigram_candidates_count(
+    mock_embed, mock_rerank, mock_fallback, mock_app_cfg
+):
     """trigram_candidates equals the number of trigram results materialised."""
     mock_embed.side_effect = RuntimeError("no embed")
     mock_rerank.return_value = []
@@ -218,7 +239,9 @@ def test_diagnostics_trigram_candidates_count(mock_embed, mock_rerank, mock_fall
     mc = _ModelCls
     mc.objects.filter_by_documents.return_value = _QRoot([], tri_chunks, count_val=0)
 
-    _vec, _tri, results, diagnostics = text_chunk_search(mc, "trigram query", 3, [MagicMock()])
+    _vec, _tri, results, diagnostics = text_chunk_search(
+        mc, "trigram query", 3, [MagicMock()]
+    )
 
     assert diagnostics["trigram_candidates"] == 4
 
@@ -228,7 +251,7 @@ def test_diagnostics_trigram_candidates_count(mock_embed, mock_rerank, mock_fall
 @patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
 def test_diagnostics_exact_terms_extracted(mock_embed, mock_rerank, mock_app_cfg):
-    """exact_terms in diagnostics lists salient terms from the query."""
+    """Diagnostics expose only the number of extracted exact terms."""
     mock_embed.return_value = [0.2] * 16
     chunks = [MagicMock(pk=0, content="c0")]
     mock_rerank.return_value = chunks
@@ -241,5 +264,6 @@ def test_diagnostics_exact_terms_extracted(mock_embed, mock_rerank, mock_app_cfg
         mc, "What about HSC-PDR2 calibration pipeline?", 3, [MagicMock()]
     )
 
-    assert isinstance(diagnostics["exact_terms"], list)
-    assert any("HSC-PDR2" in t for t in diagnostics["exact_terms"])
+    assert diagnostics["exact_term_count"] >= 1
+    assert "exact_terms" not in diagnostics
+    assert "HSC-PDR2" not in repr(diagnostics)

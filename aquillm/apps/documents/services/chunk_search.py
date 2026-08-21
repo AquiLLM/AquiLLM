@@ -13,6 +13,7 @@ from django.conf import settings as django_settings
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError
 
+from apps.documents.services import chunk_search_legacy_graph as _legacy_graph
 from apps.documents.services.chunk_rerank import (
     _STRICT_EVALUATION_RERANK,
     _fallback_rerank,
@@ -30,16 +31,6 @@ from apps.documents.services.chunk_search_candidates import (
 from apps.documents.services.chunk_search_candidates import (
     _salient_exact_terms as _candidate_salient_exact_terms,
 )
-from apps.documents.services.chunk_search_legacy_graph import (
-    EVALUATION_GRAPH_FAILURE,
-    EVALUATION_GRAPH_MISS,
-)
-from apps.documents.services.chunk_search_legacy_graph import (
-    apply_graph_overlay as _apply_graph_overlay,
-)
-from apps.documents.services.chunk_search_legacy_graph import (
-    graph_diagnostics as _graph_diagnostics,
-)
 from apps.documents.services.hybrid_graph_authorization import (
     HybridGraphRetrievalDependencies,
     documents_match_retrieval_authorization,
@@ -49,23 +40,23 @@ from apps.documents.services.hybrid_graph_dependencies import resolve
 from apps.documents.services.hybrid_graph_orchestration import (
     hybrid_graph_candidate_pool,
 )
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
 logger = structlog.stdlib.get_logger(__name__)
-_EVALUATION_GRAPH_FAILURE = EVALUATION_GRAPH_FAILURE
-_EVALUATION_GRAPH_MISS = EVALUATION_GRAPH_MISS
+_EVALUATION_GRAPH_FAILURE = _legacy_graph.EVALUATION_GRAPH_FAILURE
+_EVALUATION_GRAPH_MISS = _legacy_graph.EVALUATION_GRAPH_MISS
+_apply_graph_overlay = _legacy_graph.apply_graph_overlay
+_graph_diagnostics = _legacy_graph.graph_diagnostics
 
-# Compatibility aliases used by conversation-search's independent chunk model.
 _exact_term_query = _candidate_exact_term_query
 _salient_exact_terms = _candidate_salient_exact_terms
 
 
 @dataclass(frozen=True, slots=True)
 class CandidateRankingResult:
-    """One permission-checked candidate pool and its production rerank output."""
-
     combined_candidates: tuple[object, ...]
     graph_candidates: tuple[object, ...]
     ranked_results: tuple[object, ...]
@@ -275,7 +266,6 @@ def text_chunk_search(
                 graph_config = None
                 graph_scope = None
 
-        vector_started = perf_counter()
         initial_vector_error: str | None = None
         query_embedding: object | None = None
         try:
@@ -295,12 +285,15 @@ def text_chunk_search(
                     embed_model,
                     query_embedding,
                 )
-        except Exception as exc:
-            initial_vector_error = str(exc)
+        except Exception:
+            initial_vector_error = RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
             logger.warning(
                 "obs.rag.vector_search_failed",
-                error=str(exc),
-                error_type=type(exc).__name__,
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.EMBEDDING_UNAVAILABLE,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
             )
 
         snapshot = collect_hybrid_candidate_snapshot(
@@ -318,7 +311,6 @@ def text_chunk_search(
                 else None
             ),
         )
-        vector_ms = (perf_counter() - vector_started) * 1000
         graph_chunk_ids: tuple[int, ...] = ()
         graph_diagnostics: dict[str, object] = {}
         hybrid_pool: tuple[object, ...] | None = None
@@ -414,24 +406,16 @@ def text_chunk_search(
                 graph_diagnostics["graph_candidate_count"] = len(
                     ranking.graph_candidates
                 )
-        combined_candidates = ranking.combined_candidates
         reranked_results = list(ranking.ranked_results)
-        rerank_ms = ranking.rerank_ms
 
-        total_ms = (perf_counter() - total_start) * 1000
+        total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
         logger.info(
             "obs.rag.search",
-            total_ms=total_ms,
-            vector_ms=vector_ms,
-            trigram_ms=snapshot.trigram_ms,
-            exact_ms=snapshot.exact_ms,
-            rerank_ms=rerank_ms,
-            doc_count=len(docs),
-            top_k=top_k,
-            exact_term_count=len(snapshot.exact_terms),
-            pre_dedupe_count=snapshot.pre_dedupe_count,
-            candidate_count=len(combined_candidates),
-            **graph_diagnostics,
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.COMPLETED,
+                count=0,
+                elapsed_ms=total_ms,
+            ),
         )
         chunks_with_embeddings: int | None = None
         if not reranked_results:
@@ -441,28 +425,32 @@ def text_chunk_search(
                     .exclude(embedding__isnull=True)
                     .count()
                 )
-            except Exception as count_exc:
-                logger.warning("Could not count chunks_with_embeddings: %s", count_exc)
+            except Exception:
+                logger.warning(
+                    "obs.rag.chunk_count_failed",
+                    **retrieval_log_fields(
+                        reason=RetrievalLogReason.INTERNAL_FAILURE,
+                        count=0,
+                        elapsed_ms=0.0,
+                    ),
+                )
         diagnostics: dict = {
             "doc_count": len(docs),
             "chunks_with_embeddings": chunks_with_embeddings,
             "vector_error": snapshot.vector_error,
             "trigram_candidates": len(snapshot.trigram_chunk_ids),
-            "exact_terms": list(snapshot.exact_terms),
+            "exact_term_count": len(snapshot.exact_terms),
         }
         if overlay_enabled:
             diagnostics.update(graph_diagnostics)
         if not reranked_results:
             logger.info(
-                "text_chunk_search returned no results",
-                extra={
-                    "doc_count": diagnostics["doc_count"],
-                    "chunks_with_embeddings": chunks_with_embeddings,
-                    "vector_error": snapshot.vector_error,
-                    "trigram_candidates": diagnostics["trigram_candidates"],
-                    "exact_terms": list(snapshot.exact_terms),
-                    **graph_diagnostics,
-                },
+                "obs.rag.search_empty",
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.NO_SEEDS,
+                    count=0,
+                    elapsed_ms=total_ms,
+                ),
             )
         return (
             snapshot.vector_results,
@@ -470,25 +458,34 @@ def text_chunk_search(
             reranked_results,
             diagnostics,
         )
-    except DatabaseError as error:
+    except DatabaseError:
         logger.error(
             "obs.rag.search_db_error",
-            error=str(error),
-            error_type=type(error).__name__,
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
         raise
-    except ValidationError as error:
+    except ValidationError:
         logger.error(
             "obs.rag.search_validation_error",
-            error=str(error),
-            error_type=type(error).__name__,
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.INVALID_REQUEST,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
         raise
-    except Exception as error:
+    except Exception:
         logger.error(
             "obs.rag.search_error",
-            error=str(error),
-            error_type=type(error).__name__,
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.INTERNAL_FAILURE,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
         raise
 

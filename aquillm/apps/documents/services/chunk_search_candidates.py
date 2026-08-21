@@ -22,6 +22,7 @@ from apps.documents.services.chunk_search_graph_seeds import (
 from apps.documents.services.hybrid_graph_authorization import (
     documents_match_retrieval_authorization,
 )
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 if TYPE_CHECKING:
     from apps.knowledge_graph.retrieval import (
@@ -32,23 +33,10 @@ if TYPE_CHECKING:
 logger = structlog.stdlib.get_logger(__name__)
 
 _DATABASE_ID_MAX = 2**63 - 1
-_EXACT_STOPWORDS = {
-    "about",
-    "after",
-    "answer",
-    "before",
-    "could",
-    "document",
-    "documents",
-    "explain",
-    "information",
-    "selected",
-    "should",
-    "through",
-    "where",
-    "which",
-    "would",
-}
+_EXACT_STOPWORDS = frozenset(
+    "about after answer before could document documents explain information "
+    "selected should through where which would".split()
+)
 
 
 class CandidateScopeLimit(ValueError):
@@ -243,7 +231,11 @@ def collect_hybrid_candidate_snapshot(
         top_k,
         app_config_getter=app_config_getter or apps.get_app_config,
     )
-    vector_error = initial_vector_error
+    vector_error = (
+        RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
+        if initial_vector_error is not None
+        else None
+    )
     vector_started = perf_counter()
     if query_embedding is None:
         vector_results = model_cls.objects.none()
@@ -258,12 +250,15 @@ def collect_hybrid_candidate_snapshot(
             )
             # Force database evaluation inside the vector-only fail-open seam.
             vector_rows = tuple(vector_results)
-        except Exception as exc:
-            vector_error = str(exc)
+        except Exception:
+            vector_error = RetrievalLogReason.UPSTREAM_UNAVAILABLE.value
             logger.warning(
                 "obs.rag.vector_search_failed",
-                error=str(exc),
-                error_type=type(exc).__name__,
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
             )
             vector_results = model_cls.objects.none()
             vector_rows = ()

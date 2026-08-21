@@ -8,12 +8,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "check_retrieval_logging.py"
-EXPECTED_LANE_PATHS = (
-    "aquillm/lib/knowledge_graph/query_extractor/client.py",
-    "aquillm/lib/knowledge_graph/query_extractor/service.py",
-    "aquillm/apps/knowledge_graph/retrieval/direct_seed_repository.py",
-    "aquillm/apps/knowledge_graph/retrieval/direct_seed_resolution.py",
-    "aquillm/apps/knowledge_graph/retrieval/query_embedding.py",
+EXPECTED_LANE_PATHS = tuple(
+    "aquillm/lib/knowledge_graph/query_extractor/client.py aquillm/lib/knowledge_graph/query_extractor/service.py aquillm/apps/knowledge_graph/retrieval/direct_seed_repository.py aquillm/apps/knowledge_graph/retrieval/direct_seed_resolution.py aquillm/apps/knowledge_graph/retrieval/query_embedding.py aquillm/apps/documents/services/chunk_search_candidates.py aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/apps/documents/services/chunk_rerank.py aquillm/aquillm/utils.py aquillm/lib/embeddings/local.py aquillm/aquillm/settings_logging.py".split()
 )
 
 

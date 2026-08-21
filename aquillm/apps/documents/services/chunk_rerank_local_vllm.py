@@ -24,6 +24,7 @@ from apps.documents.services.chunk_rerank_parse import (
     parse_single_score,
 )
 from apps.documents.services.chunk_rerank_payload import rerank_document_payload
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
@@ -82,8 +83,11 @@ def rerank_via_local_vllm(
     if cached_ranked:
         logger.info(
             "obs.rag.rerank_cache_hit",
-            candidate_count=len(cand_ids),
-            top_k=top_k,
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.COMPLETED,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
         return ordered_queryset_from_ids(model_cls, cached_ranked)
 
@@ -126,22 +130,15 @@ def rerank_via_local_vllm(
         headers["Authorization"] = f"Bearer {api_key}"
 
     timeout = rerank_timeout_seconds()
-    first_http_error: str | None = None
+    observed_http_error = False
 
     effective_query = query
     effective_documents = documents
     effective_multimodal_documents = multimodal_documents_trimmed
 
-    def _track_http_error(endpoint: str, response: requests.Response):
-        nonlocal first_http_error
-        if first_http_error is not None:
-            return
-        response_body = ""
-        try:
-            response_body = response.text[:600]
-        except Exception:
-            response_body = "<unavailable>"
-        first_http_error = f"{endpoint} -> {response.status_code}: {response_body}"
+    def _track_http_error():
+        nonlocal observed_http_error
+        observed_http_error = True
 
     rerank_endpoints = [
         f"{base_root}/rerank",
@@ -156,8 +153,6 @@ def rerank_via_local_vllm(
     if rerank_model_is_qwen3_vl():
         rerank_endpoints = []
     if require_complete_scoring:
-        # Generic rerank endpoints expose only the truncated ranking, so they cannot
-        # attest that every candidate was scored.
         rerank_endpoints = []
     rerank_payloads = (
         {
@@ -197,7 +192,7 @@ def rerank_via_local_vllm(
                 if response.status_code in (404, 405):
                     continue
                 if response.status_code >= 400:
-                    _track_http_error(endpoint, response)
+                    _track_http_error()
                     continue
                 ranked_ids = parse_rerank_results(response.json(), chunks_list)
                 if ranked_ids:
@@ -243,7 +238,7 @@ def rerank_via_local_vllm(
                 if response.status_code in (404, 405):
                     continue
                 if response.status_code >= 400:
-                    _track_http_error(endpoint, response)
+                    _track_http_error()
                     continue
                 pairs = parse_score_results(response.json())
                 if not pairs:
@@ -316,7 +311,7 @@ def rerank_via_local_vllm(
                     if response.status_code in (404, 405):
                         continue
                     if response.status_code >= 400:
-                        _track_http_error(endpoint, response)
+                        _track_http_error()
                         continue
                     score = parse_single_score(response.json())
                     scored.append((idx, score))
@@ -340,9 +335,14 @@ def rerank_via_local_vllm(
         except Exception:
             continue
 
-    if first_http_error:
+    if observed_http_error:
         logger.warning(
-            "obs.rag.rerank_requests_failed", first_http_error=first_http_error
+            "obs.rag.rerank_requests_failed",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
 
     return () if require_complete_scoring else model_cls.objects.none()

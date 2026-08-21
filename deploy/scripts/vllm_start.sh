@@ -445,6 +445,7 @@ cmd=("${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --port "${PORT}"
   --model "${MODEL_TO_SERVE}"
   --served-model-name "${SERVED_MODEL_NAME}"
+  --disable-log-requests
 )
 
 if [ -n "${VLLM_API_KEY:-}" ]; then

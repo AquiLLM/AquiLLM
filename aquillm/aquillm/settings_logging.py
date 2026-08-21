@@ -1,4 +1,5 @@
 """Logging configuration for Django — structlog with direct Loki push."""
+
 from __future__ import annotations
 
 import os
@@ -9,6 +10,36 @@ from aquillm.observability import add_otel_trace_context
 
 DEBUG = os.environ.get("DJANGO_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
 
+_RETRIEVAL_PAYLOAD_FIELDS = frozenset(
+    {
+        "body",
+        "document",
+        "documents",
+        "error",
+        "error_type",
+        "exact_terms",
+        "exc_info",
+        "exception",
+        "extra",
+        "first_http_error",
+        "prompt",
+        "query",
+        "request",
+        "request_body",
+        "response",
+        "response_body",
+    }
+)
+
+
+def redact_retrieval_log_payloads(_logger, _method_name, event_dict):
+    """Remove payload-bearing and exception-rendering fields before formatting."""
+
+    for field in _RETRIEVAL_PAYLOAD_FIELDS:
+        event_dict.pop(field, None)
+    return event_dict
+
+
 # --------------------------------------------------------------------------- #
 # Shared structlog processors (used by both structlog loggers and stdlib       #
 # loggers routed through ProcessorFormatter).                                  #
@@ -17,6 +48,7 @@ shared_processors: list = [
     structlog.contextvars.merge_contextvars,
     structlog.stdlib.add_logger_name,
     structlog.stdlib.add_log_level,
+    redact_retrieval_log_payloads,
     structlog.stdlib.PositionalArgumentsFormatter(),
     structlog.processors.TimeStamper(fmt="iso"),
     structlog.processors.StackInfoRenderer(),
@@ -137,4 +169,4 @@ LOGGING = {
     },
 }
 
-__all__ = ["LOGGING"]
+__all__ = ["LOGGING", "redact_retrieval_log_payloads"]

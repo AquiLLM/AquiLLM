@@ -70,16 +70,6 @@ _BASELINE_VIOLATIONS: Counter[tuple[str, str, str]] = Counter(
             "direct_rag_turn_failed; falling back to tool loop",
         ): 1,
         (
-            "aquillm/apps/documents/services/chunk_search.py",
-            "warning",
-            "Could not count chunks_with_embeddings: %s",
-        ): 1,
-        (
-            "aquillm/apps/documents/services/chunk_search.py",
-            "info",
-            "text_chunk_search returned no results",
-        ): 1,
-        (
             "aquillm/apps/documents/views/api.py",
             "warning",
             "citation_narrow_empty",
