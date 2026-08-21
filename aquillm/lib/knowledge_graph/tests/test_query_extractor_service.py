@@ -129,6 +129,11 @@ def _use_backend(monkeypatch, backend, *, timeout_ms: int = 75) -> None:
     value = service.QueryExtractorRuntime(settings, SimpleNamespace(checksum=DIGEST, entity_types={"model": object()}), backend)
     monkeypatch.setattr(service, "load_query_extractor_settings", lambda _environment: settings)
     monkeypatch.setattr(service, "_get_runtime", lambda *_args: value)
+
+
+async def _wait_for_inference_slot() -> None:
+    await asyncio.wait_for(service._inference_slots.acquire(), timeout=0.5)
+    service._inference_slots.release()
 # fmt: on
 
 
@@ -262,7 +267,7 @@ async def test_timeout_and_cancellation_hold_slot_until_worker_finishes(monkeypa
     assert timed_out[0]["status"] == 503
     assert timed_out[1]["body"] == b'{"reason":"extractor_timeout"}'
     assert (await _call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token"))[0]["status"] == 503
-    await asyncio.sleep(0.05)
+    await _wait_for_inference_slot()
     backend.delay = 0.05
     cancelled = asyncio.create_task(_call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token"))
     await asyncio.sleep(0.005)
@@ -270,9 +275,11 @@ async def test_timeout_and_cancellation_hold_slot_until_worker_finishes(monkeypa
     with pytest.raises(asyncio.CancelledError):
         await cancelled
     assert (await _call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token"))[0]["status"] == 503
-    await asyncio.sleep(0.05)
+    await _wait_for_inference_slot()
     backend.delay = 0.0
-    assert (await _call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token"))[0]["status"] == 200
+    _use_backend(monkeypatch, backend)
+    recovered = await _call(path="/v1/extract", body=_request(), authorization=b"Bearer private-token")
+    assert recovered[0]["status"] == 200, recovered
 # fmt: on
 
 
