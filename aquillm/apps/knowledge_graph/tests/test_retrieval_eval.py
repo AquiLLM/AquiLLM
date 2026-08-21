@@ -257,3 +257,25 @@ def test_all_arms_share_full_baseline_and_exact_production_rerank_seam():
     assert result["arms"]["vector_only"]["ranked_chunk_ids"] != (
         candidates.vector_chunk_ids
     )
+
+
+def test_task23_hybrid_arm_specs_select_branches_and_exactly_one_final_reranker():
+    specs = run_kg_eval.task21_hybrid_arm_specs()
+
+    assert tuple(row["name"] for row in specs) == (
+        "vector_only",
+        "direct",
+        "extended",
+        "combined",
+        "combined_reranked",
+    )
+    assert tuple(
+        (row["direct_enabled"], row["extended_enabled"], row["reranker_calls"])
+        for row in specs
+    ) == (
+        (False, False, 0),
+        (True, False, 0),
+        (False, True, 0),
+        (True, True, 0),
+        (True, True, 1),
+    )

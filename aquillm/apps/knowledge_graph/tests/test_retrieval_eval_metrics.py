@@ -143,3 +143,92 @@ def test_fixture_checksum_is_stable_and_covers_both_fixture_files(tmp_path):
 
     assert observed == expected
     assert run_kg_eval.fixture_checksum(extraction, retrieval) == observed
+
+
+TASK23_ARMS = (
+    "vector_only",
+    "direct",
+    "extended",
+    "combined",
+    "combined_reranked",
+)
+
+
+def task23_inputs():
+    case = {
+        "id": "task23-case",
+        "accessible_collection_ids": ["collection-a"],
+        "documents": [
+            {
+                "doc_id": "document-a",
+                "collection_id": "collection-a",
+                "chunks": [
+                    {"chunk_id": "seed", "text": "Atlas is evaluated."},
+                    {"chunk_id": "answer", "text": "Atlas uses nDCG at ten."},
+                ],
+            }
+        ],
+        "expected_retrieval_chunk_ids": ["answer"],
+        "expected_min_semantic_distance": {"answer": 2},
+        "quality_tags": ["relationship", "two_hop"],
+    }
+    observations = {}
+    for index, arm in enumerate(TASK23_ARMS, start=1):
+        graph = [] if arm == "vector_only" else ["answer"]
+        ranked = ["seed"] if arm == "vector_only" else ["seed", "answer"]
+        if arm == "combined_reranked":
+            ranked = ["answer", "seed"]
+        observations[arm] = [
+            {
+                "case_id": "task23-case",
+                "ranked_chunk_ids": ranked,
+                "graph_chunk_ids": graph,
+                "citation_evidence_chunk_ids": ranked,
+                "seed_chunk_ids": ["seed"],
+                "mapped_seed_chunk_ids": ["seed"],
+                "projected_ranks": graph,
+                "repeated_projected_ranks": graph,
+                "latency_ms": float(index),
+                "reranker_calls": 1 if arm == "combined_reranked" else 0,
+                "comparison_snapshot_signature": "a" * 64,
+            }
+        ]
+    freshness = {
+        "generation_key": "b" * 64,
+        "projection_checksum": "c" * 64,
+        "age_seconds": 5.0,
+        "max_age_seconds": 60.0,
+    }
+    parity = {
+        f"{backend}_{kind}_sha256": character * 64
+        for kind, character in (
+            ("snapshot", "d"),
+            ("scores", "e"),
+            ("trace", "f"),
+            ("ties", "1"),
+        )
+        for backend in ("postgres", "memgraph")
+    }
+    parity.update(
+        postgres_projected_ranks=["entity-a", "entity-b"],
+        memgraph_projected_ranks=["entity-a", "entity-b"],
+    )
+    return (case,), observations, freshness, parity
+
+
+def test_task23_metrics_cover_all_five_arms_quality_multihop_latency_and_citations():
+    cases, observations, freshness, parity = task23_inputs()
+
+    report = run_kg_eval.build_task21_hybrid_report(
+        cases=cases,
+        observations=observations,
+        freshness=freshness,
+        backend_parity=parity,
+    )
+
+    assert tuple(report["arms"]) == TASK23_ARMS
+    assert report["arms"]["vector_only"]["metrics"]["recall_at_10"] == 0.0
+    assert report["arms"]["combined_reranked"]["metrics"]["ndcg_at_10"] == 1.0
+    assert report["arms"]["extended"]["metrics"]["distance_2_novel_fraction"] == 1.0
+    assert report["arms"]["combined"]["metrics"]["citation_evidence_coverage"] == 1.0
+    assert report["arms"]["combined_reranked"]["metrics"]["latency_p95_ms"] == 5.0

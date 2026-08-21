@@ -59,7 +59,8 @@ cases:
     description: "A vector seed in collection A expands through canonical identity into accessible collection B."
     privacy_intent: "cross-collection expansion is allowed only because both collections are authorized."
     query: "How does the Orion model rank source passages?"
-    quality_tags: [alias, cross_document, cross_collection]
+    quality_tags: [alias, direct_query, cross_document, cross_collection]
+    task21_expected_arms: [direct, extended, combined, combined_reranked]
     accessible_collection_ids: [collection-research-a, collection-research-b]
     documents:
       - doc_id: doc-orion-a
@@ -112,6 +113,7 @@ cases:
     privacy_intent: "all three documents belong to the exact authorized collection."
     query: "Which metric is reported for the Atlas retrieval benchmark?"
     quality_tags: [relationship, two_hop, cross_document]
+    task21_expected_arms: [extended, combined, combined_reranked]
     accessible_collection_ids: [collection-research-a]
     documents:
       - doc_id: doc-atlas-paper

@@ -8,6 +8,7 @@ import pytest
 
 from apps.knowledge_graph.evals import run_kg_eval
 from apps.knowledge_graph.tests import retrieval_eval_support as support
+from apps.knowledge_graph.tests.test_retrieval_eval_metrics import task23_inputs
 
 
 def test_stable_graph_but_nondeterministic_final_reranker_aborts_comparison():
@@ -113,3 +114,22 @@ def test_comparison_aborts_on_scope_mismatch_before_candidate_search():
     with pytest.raises(run_kg_eval.ComparisonAborted, match="scope"):
         run_kg_eval.run_one_snapshot_comparison(**kwargs)
     assert candidate_called is False
+
+
+@pytest.mark.parametrize("failure", ("permission", "reranker", "snapshot"))
+def test_task23_hybrid_report_rejects_permission_reranker_and_snapshot_drift(failure):
+    cases, observations, freshness, parity = task23_inputs()
+    if failure == "permission":
+        observations["combined"][0]["ranked_chunk_ids"].append("private")
+    elif failure == "reranker":
+        observations["combined_reranked"][0]["reranker_calls"] = 0
+    else:
+        observations["direct"][0]["comparison_snapshot_signature"] = "9" * 64
+
+    with pytest.raises(run_kg_eval.Task21HybridEvalError):
+        run_kg_eval.build_task21_hybrid_report(
+            cases=cases,
+            observations=observations,
+            freshness=freshness,
+            backend_parity=parity,
+        )

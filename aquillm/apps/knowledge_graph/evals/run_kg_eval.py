@@ -1,22 +1,17 @@
 """Pure-Python, deterministic evaluation support for the knowledge graph.
-
 The loaders resolve their default fixture paths beside this module, so they are
 safe to use from any working directory.  They make no Django, ORM, LLM,
 GLiNER2, database, or network calls.
-
 Metrics use structural set equality: each expected/predicted record is
 canonicalized as sorted JSON before set intersection.  Precision and recall use
 ``1.0`` when their denominator is zero (no predicted records for precision, or
 no gold records for recall); this makes empty-vs-empty a perfect match.
-
 Usage from ``aquillm/``::
 
     python -m apps.knowledge_graph.evals.run_kg_eval --baseline-only
-
 ``--baseline-only`` prints compact, key-sorted JSON.  It records vector result
 IDs only when injected by ``--retrieval-results`` or supplied by a fixture; a
 case with neither emits ``SKIP`` and never fabricates IDs or scores.
-
 Retrieval-result JSON maps each case ID either to a simple result-ID list or to
 ``{"result_ids": [...], "id_collections": {"<id>": "<collection_id>"}}``.
 Native integer IDs need this optional collection evidence to receive a resolved
@@ -47,6 +42,7 @@ from uuid import UUID
 
 import yaml
 
+from . import task21_hybrid_eval as _task21_hybrid_eval
 from .fixture_manifest import (
     FixtureEmbeddingBinding,
     FixtureValidationError,
@@ -64,6 +60,10 @@ from .fixture_manifest import (
 from .retrieval_eval_statistics import mean as _mean
 from .retrieval_eval_statistics import percentile_95 as _percentile_95
 
+TASK21_HYBRID_ARMS = _task21_hybrid_eval.TASK21_HYBRID_ARMS
+Task21HybridEvalError = _task21_hybrid_eval.Task21HybridEvalError
+build_task21_hybrid_report = _task21_hybrid_eval.build_task21_hybrid_report
+task21_hybrid_arm_specs = _task21_hybrid_eval.task21_hybrid_arm_specs
 _HERE = Path(__file__).resolve().parent
 _DEFAULT_EXTRACTION_CASES_PATH = _HERE / "extraction_cases.yaml"
 _DEFAULT_RETRIEVAL_CASES_PATH = _HERE / "retrieval_cases.yaml"

@@ -15,6 +15,7 @@ from apps.knowledge_graph.retrieval.types import (
     GraphExpansionResult,
 )
 from apps.knowledge_graph.tests import retrieval_eval_support as support
+from apps.knowledge_graph.tests.test_retrieval_eval_metrics import task23_inputs
 
 
 def test_comparison_aborts_when_repeated_ppr_order_or_trace_metrics_change():
@@ -219,3 +220,25 @@ def test_slow_graph_phase_still_aborts_its_fresh_query_budget():
 
     with pytest.raises(run_kg_eval.ComparisonAborted, match="timed out"):
         run_kg_eval.run_one_snapshot_comparison(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    (("stale", "fresh"), ("parity", "parity"), ("ranks", "deterministic")),
+)
+def test_task23_hybrid_report_rejects_stale_parity_and_rank_drift(failure, message):
+    cases, observations, freshness, parity = task23_inputs()
+    if failure == "stale":
+        freshness["age_seconds"] = 61.0
+    elif failure == "parity":
+        parity["memgraph_trace_sha256"] = "9" * 64
+    else:
+        observations["extended"][0]["repeated_projected_ranks"] = ["drift"]
+
+    with pytest.raises(run_kg_eval.Task21HybridEvalError, match=message):
+        run_kg_eval.build_task21_hybrid_report(
+            cases=cases,
+            observations=observations,
+            freshness=freshness,
+            backend_parity=parity,
+        )

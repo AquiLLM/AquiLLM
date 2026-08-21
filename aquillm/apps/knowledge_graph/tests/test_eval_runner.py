@@ -3128,14 +3128,14 @@ def test_cli_rejects_missing_or_mismatched_rebuild_request_mapping(
             str(tmp_path / "report.json"),
         ]
     )
-
     assert result == 2
     assert "rebuild" in capsys.readouterr().out
 
 
-def test_fixture_checksum_field_is_exact_sha256():
+def test_fixture_checksum_and_task23_hybrid_runner_contracts_are_public():
     bundle = _passing_comparison_bundle()
-    assert (
-        bundle["fixture_checksum"] == sha256(b"fixture").hexdigest()
-        or len(bundle["fixture_checksum"]) == 64
-    )
+    assert bundle["fixture_checksum"] == sha256(b"fixture").hexdigest() or len(
+        bundle["fixture_checksum"]
+    ) == 64
+    assert run_kg_eval.TASK21_HYBRID_ARMS[-1] == "combined_reranked"
+    assert callable(run_kg_eval.build_task21_hybrid_report)
