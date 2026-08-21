@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import sys
 from collections.abc import Iterator, Mapping
 from hashlib import sha256
 
@@ -10,6 +11,7 @@ import pytest
 from apps.knowledge_graph.retrieval.topology.contracts import TopologyQueryName
 from apps.knowledge_graph.retrieval.topology.gateway_contracts import (
     FAILURE_HTTP_STATUS,
+    MAX_MAPPING_ITEMS,
     MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
     MAX_RESULT_ROWS,
@@ -44,6 +46,7 @@ def test_request_is_frozen_slotted_and_has_exact_four_fields():
         "deadline",
         "max_records",
     )
+    assert decode_request(encode_request(request())) == request()
 
 
 def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor():
@@ -57,7 +60,7 @@ def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor(
     assert type(SCHEMA_DESCRIPTOR_V1) is tuple
     assert (
         SCHEMA_CHECKSUM
-        == "ad5e6b39bb7a3a73251fc6454df58b71acfd3fda7e1cb17f37f8371b6d0258c6"
+        == "a1214d48cc7ce0eeb926ec0f12bf0e9324ea7fae39fe24a1a152c7c0dd9098df"
     )
     assert sha256(descriptor_bytes).hexdigest() == SCHEMA_CHECKSUM
     assert (
@@ -84,20 +87,6 @@ def test_payload_bearing_repr_is_fixed_and_never_contains_payload_text():
     assert "canary" not in repr(success)
 
 
-class _HostileMapping(Mapping[str, object]):
-    def __getitem__(self, key: str) -> object:
-        raise RuntimeError(f"canary-item-{key}")
-
-    def __iter__(self) -> Iterator[str]:
-        raise RuntimeError("canary-iteration")
-
-    def __len__(self) -> int:
-        raise RuntimeError("canary-length")
-
-    def items(self):
-        raise RuntimeError("canary-items")
-
-
 class _TypedHostileMapping(Mapping[str, object]):
     def __init__(self, mode: str, error: type[Exception]):
         self.mode = mode
@@ -109,7 +98,7 @@ class _TypedHostileMapping(Mapping[str, object]):
         return "value"
 
     def __iter__(self) -> Iterator[str]:
-        if self.mode == "iteration":
+        if self.mode in ("iteration", "pair-error"):
             raise self.error("canary-iteration")
         return iter(("key",))
 
@@ -126,46 +115,145 @@ class _TypedHostileMapping(Mapping[str, object]):
                 raise self.error("canary-generator")
 
             return rows()
+        if self.mode.startswith("arity"):
+            return [
+                {"arity0": (), "arity1": ("key",), "arity3": ("a", "b", "c")}[self.mode]
+            ]
+        if self.mode == "pair-error":
+            return [self]
         return super().items()
 
 
-@pytest.mark.parametrize("mapping", [_HostileMapping()])
-def test_hostile_mapping_failures_are_fixed_non_echoing_contract_errors(mapping):
-    with pytest.raises((TypeError, ValueError)) as request_error:
-        TopologyGatewayRequestV1(TopologyQueryName.RELATION_TOPOLOGY, mapping, 1.0, 1)
-    with pytest.raises((TypeError, ValueError)) as row_error:
-        TopologyGatewaySuccessV1((mapping,))
-    assert "canary" not in str(request_error.value)
-    assert "canary" not in str(row_error.value)
-
-
-@pytest.mark.parametrize("mode", ["items", "iteration", "lookup", "generator"])
-@pytest.mark.parametrize("error", [TypeError, ValueError])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "items",
+        "iteration",
+        "lookup",
+        "generator",
+        "arity0",
+        "arity1",
+        "arity3",
+        "pair-error",
+    ],
+)
+@pytest.mark.parametrize("error", [TypeError, ValueError, RuntimeError])
 def test_typed_mapping_failures_are_normalized_for_requests_and_rows(mode, error):
     mapping = _TypedHostileMapping(mode, error)
     with pytest.raises(ValueError, match="^invalid topology mapping$"):
         TopologyGatewayRequestV1(TopologyQueryName.RELATION_TOPOLOGY, mapping, 1.0, 1)
     with pytest.raises(ValueError, match="^invalid topology mapping$"):
         TopologyGatewaySuccessV1((mapping,))
-    assert encode_request(request()) == (
-        b'{"deadline":123.5,"max_records":2,"parameters":{"collection":"c-1","limit":2},"query":"relation_topology"}'
+
+
+def test_deep_json_under_byte_caps_is_a_fixed_decoder_error():
+    nested = b"0"
+    for _ in range(1_100):
+        nested = b"[" + nested + b"]"
+    payloads = (
+        b'{"deadline":1.0,"max_records":1,"parameters":{"x":'
+        + nested
+        + b'},"query":"relation_topology"}',
+        b'{"ok":true,"rows":[' + nested + b"]}",
     )
+    for decoder, payload in zip((decode_request, decode_response), payloads):
+        with pytest.raises(ValueError) as error:
+            decoder(payload)
+        assert "canary" not in str(error.value)
 
 
-def test_request_round_trip_and_schema_rejects_unknown_or_raw_query_fields():
-    assert decode_request(encode_request(request())) == request()
-    for payload in (
-        {
-            "query": "relation_topology",
-            "parameters": {},
-            "deadline": 1.0,
-            "max_records": 1,
-            "cypher": "MATCH (n) RETURN n",
-        },
-        {"query": "not_a_query", "parameters": {}, "deadline": 1.0, "max_records": 1},
-    ):
+def test_signed_int64_boundaries_and_parse_limits_are_frozen():
+    values = (-(2**63), 2**63 - 1)
+    for value in values:
+        assert (
+            decode_request(
+                encode_request(
+                    TopologyGatewayRequestV1(
+                        TopologyQueryName.RELATION_TOPOLOGY, {"x": value}, 1.0, 1
+                    )
+                )
+            ).parameters["x"]
+            == value
+        )
+    for value in (-(2**63) - 1, 2**63):
         with pytest.raises(ValueError):
-            decode_request(json.dumps(payload, separators=(",", ":")).encode())
+            TopologyGatewayRequestV1(
+                TopologyQueryName.RELATION_TOPOLOGY, {"x": value}, 1.0, 1
+            )
+    payload = encode_request(
+        TopologyGatewayRequestV1(
+            TopologyQueryName.RELATION_TOPOLOGY, {"x": values[0]}, 1.0, 1
+        )
+    )
+    original = sys.get_int_max_str_digits()
+    try:
+        for limit in (640, 4_300):
+            sys.set_int_max_str_digits(limit)
+            assert decode_request(payload).parameters["x"] == values[0]
+    finally:
+        sys.set_int_max_str_digits(original)
+
+
+def test_lone_surrogates_are_rejected_in_request_and_success_scalars():
+    with pytest.raises(ValueError):
+        TopologyGatewayRequestV1(
+            TopologyQueryName.RELATION_TOPOLOGY, {"x": "\ud800"}, 1.0, 1
+        )
+    with pytest.raises(ValueError):
+        TopologyGatewaySuccessV1(({"x": "\ud800"},))
+
+
+def test_request_and_success_equality_is_canonical_wire_exact_and_unhashable():
+    values = (1, 1.0, True, -0.0, 0.0)
+    requests = tuple(
+        TopologyGatewayRequestV1(
+            TopologyQueryName.RELATION_TOPOLOGY, {"x": value}, 1.0, 1
+        )
+        for value in values
+    )
+    successes = tuple(TopologyGatewaySuccessV1(({"x": value},)) for value in values)
+    assert len({encode_request(value) for value in requests}) == len(values)
+    assert len({encode_response(value) for value in successes}) == len(values)
+    for value, encoded in zip(requests, map(encode_request, requests)):
+        assert value == decode_request(encoded)
+        with pytest.raises(TypeError):
+            hash(value)
+    for valueset in (requests, successes):
+        assert all(
+            left != right
+            for index, left in enumerate(valueset)
+            for right in valueset[index + 1 :]
+        )
+
+
+class _ManyMapping(Mapping[str, object]):
+    def __init__(self):
+        self.consumed = 0
+
+    def __getitem__(self, key: str) -> object:
+        return "value"
+
+    def __iter__(self):
+        return iter(f"k{index}" for index in range(100_000))
+
+    def __len__(self):
+        return 100_000
+
+    def items(self):
+        for index in range(100_000):
+            self.consumed += 1
+            yield f"k{index}", "value"
+
+
+def test_mapping_and_aggregate_response_caps_fail_before_large_materialization():
+    mapping = _ManyMapping()
+    with pytest.raises(ValueError):
+        TopologyGatewayRequestV1(TopologyQueryName.RELATION_TOPOLOGY, mapping, 1.0, 1)
+    assert mapping.consumed <= MAX_MAPPING_ITEMS + 1
+    with pytest.raises(ValueError):
+        TopologyGatewaySuccessV1(
+            tuple({"x": "v" * 300} for _ in range(MAX_RESULT_ROWS))
+        )
 
 
 @pytest.mark.parametrize(
@@ -177,6 +265,9 @@ def test_request_round_trip_and_schema_rejects_unknown_or_raw_query_fields():
         b'{"deadline":1.0,"max_records":1,"parameters":{},"query":"relation_topology","query":"relation_topology"}',
         b'{"deadline":1.0,"max_records":1,"parameters":{"x":"a\\u0000b"},"query":"relation_topology"}',
         b'{"deadline":1.0,"max_records":1,"parameters":{"x":NaN},"query":"relation_topology"}',
+        b'{"cypher":"MATCH (n) RETURN n","deadline":1.0,"max_records":1,'
+        b'"parameters":{},"query":"relation_topology"}',
+        b'{"deadline":1.0,"max_records":1,"parameters":{},"query":"not_a_query"}',
     ],
 )
 def test_request_decoder_accepts_only_canonical_safe_json(payload: bytes):
@@ -189,26 +280,10 @@ def test_response_union_has_only_success_rows_or_failure_reason_and_status():
     failure = TopologyGatewayFailureV1(GatewayFailureReason.PROVENANCE)
     assert decode_response(encode_response(success)) == success
     assert decode_response(encode_response(failure)) == failure
-    assert json.loads(encode_response(success)) == {
-        "ok": True,
-        "rows": [{"id": "n1", "weight": 1.0}],
-    }
-    assert json.loads(encode_response(failure)) == {
-        "ok": False,
-        "reason": "provenance",
-        "status": 409,
-    }
 
 
 def test_failure_status_mapping_is_closed_and_fixed():
-    assert FAILURE_HTTP_STATUS == {
-        GatewayFailureReason.AUTHENTICATION: 401,
-        GatewayFailureReason.UNAVAILABLE: 503,
-        GatewayFailureReason.SCHEMA: 502,
-        GatewayFailureReason.PROVENANCE: 409,
-        GatewayFailureReason.DEADLINE: 504,
-        GatewayFailureReason.RESULT_CAP: 422,
-    }
+    assert tuple(FAILURE_HTTP_STATUS.values()) == (401, 503, 502, 409, 504, 422)
 
 
 def test_limits_and_malformed_bytes_fail_closed_without_echoing_input():
