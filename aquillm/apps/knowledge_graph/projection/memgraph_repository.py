@@ -9,7 +9,11 @@ from apps.knowledge_graph.retrieval.topology.contracts import TopologyCapsV1
 
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
 from .memgraph_driver import MemgraphWriteSummaryV1, Neo4jMemgraphDriver
-from .memgraph_edges import write_topology_edges
+from .memgraph_edges import (
+    EDGE_FAMILIES,
+    topology_edge_attestation,
+    write_topology_edges,
+)
 from .memgraph_records import manifest_from_row, read_bundle
 from .memgraph_validation import (
     ProjectionValidationV1,
@@ -89,6 +93,7 @@ class MemgraphProjectionRepository:
                 "private mapping checksum must be lowercase SHA-256 hexadecimal"
             )
         checksum = projection_checksum(bundle)
+        topology = topology_edge_attestation(bundle)
         marker = bundle.generation
         parameters = {
             "generation_key": marker.generation_key,
@@ -104,6 +109,13 @@ class MemgraphProjectionRepository:
             "snapshot_checksum": checksum,
             "private_mapping_checksum": private_mapping_checksum,
             "state": "staging",
+            "topology_checksum": topology.checksum,
+            **{
+                f"{family}_count": count
+                for family, count in zip(
+                    EDGE_FAMILIES, topology.counts, strict=True
+                )
+            },
             **asdict(bundle.counts),
         }
         self._driver.execute_write(

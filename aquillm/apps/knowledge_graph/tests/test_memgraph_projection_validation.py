@@ -4,6 +4,10 @@ from hashlib import sha256
 
 import pytest
 
+from apps.knowledge_graph.projection.memgraph_edges import (
+    EDGE_FAMILIES,
+    topology_edge_attestation_from_rows,
+)
 from apps.knowledge_graph.projection.memgraph_repository import (
     MemgraphProjectionRepository,
 )
@@ -128,16 +132,29 @@ def test_ready_rejects_private_checksum_changed_after_validation() -> None:
 
 
 def test_ready_fails_closed_when_publication_compare_and_set_is_lost() -> None:
+    empty_topology = topology_edge_attestation_from_rows(((), (), (), (), ()))
     validated = {
         "validation_checksum": "a" * 64,
         "graph_checksum": "a" * 64,
         "private_mapping_checksum": "b" * 64,
         "validated_private_mapping_checksum": "b" * 64,
         "chunk_count": 1,
+        "topology_checksum": empty_topology.checksum,
+        "validated_topology_checksum": empty_topology.checksum,
         "state": "building",
     }
     driver = _FakeDriver()
-    driver.read_results.extend(((validated,), (validated,)))
+    driver.read_results.append((validated,))
+    driver.read_results.append(
+        (
+            {
+                "topology_checksum": empty_topology.checksum,
+                **{f"{family}_count": 0 for family in EDGE_FAMILIES},
+            },
+        )
+    )
+    driver.read_results.extend(((), (), (), (), ()))
+    driver.read_results.append((validated,))
 
     with pytest.raises(ValueError, match="publication fence was lost"):
         MemgraphProjectionRepository(driver).mark_generation_ready(

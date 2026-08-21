@@ -9,6 +9,11 @@ import pytest
 from apps.knowledge_graph.projection.memgraph_driver import (
     MemgraphWriteSummaryV1,
 )
+from apps.knowledge_graph.projection.memgraph_edges import (
+    EDGE_FAMILIES,
+    topology_edge_attestation,
+    topology_edge_rows,
+)
 from apps.knowledge_graph.projection.memgraph_repository import (
     MemgraphProjectionRepository,
 )
@@ -97,6 +102,22 @@ def _record_reads(bundle):
     ]
 
 
+def _topology_reads(bundle):
+    attestation = topology_edge_attestation(bundle)
+    counts = {
+        f"{family}_count": count
+        for family, count in zip(EDGE_FAMILIES, attestation.counts, strict=True)
+    }
+    marker = {"topology_checksum": attestation.checksum, **counts}
+    return [
+        (marker,),
+        *(
+            tuple({"edge": row} for row in family)
+            for family in topology_edge_rows(bundle)
+        ),
+    ]
+
+
 def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> None:
     driver = _FakeDriver()
     repository = MemgraphProjectionRepository(driver)
@@ -122,37 +143,6 @@ def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> No
     assert not any(call[1].get("state") == "ready" for call in driver.writes)
 
 
-def test_repository_projects_generation_scoped_topology_edges() -> None:
-    driver = _FakeDriver()
-    bundle = _closed_bundle()
-
-    MemgraphProjectionRepository(driver).write_staging_generation(
-        bundle=bundle,
-        private_mapping_checksum="d" * 64,
-        batch_size=10,
-        timeout_seconds=1.0,
-    )
-
-    cypher = "\n".join(call[0] for call in driver.writes)
-    assert "PROJECTED_RELATION" in cypher
-    assert "ENTITY_MENTION" in cypher
-    assert "RELATION_EVIDENCE" in cypher
-    assert "DOCUMENT_CHUNK" in cypher
-    assert all(
-        "generation_key:$generation_key" in statement
-        for statement, _parameters, _timeout in driver.writes
-        if any(
-            label in statement
-            for label in (
-                "PROJECTED_RELATION",
-                "ENTITY_MENTION",
-                "RELATION_EVIDENCE",
-                "DOCUMENT_CHUNK",
-            )
-        )
-    )
-
-
 def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -> None:
     driver = _FakeDriver()
     repository = MemgraphProjectionRepository(driver)
@@ -172,6 +162,7 @@ def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -
     staged["state"] = "staging"
     driver.read_results.append((staged,))
     driver.read_results.extend(_record_reads(bundle))
+    driver.read_results.extend(_topology_reads(bundle))
     driver.read_results.append((_manifest_row(expected),))
 
     validation = repository.validate_generation(
@@ -186,18 +177,38 @@ def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -
         "chunk_count": expected.counts.chunk_count,
         "state": "building",
     }
-    driver.read_results.extend(((ready_state,), ({**ready_state, "state": "ready"},)))
+    ready_state["topology_checksum"] = topology_edge_attestation(bundle).checksum
+    ready_state["validated_topology_checksum"] = ready_state["topology_checksum"]
+    driver.read_results.append((ready_state,))
+    driver.read_results.extend(_topology_reads(bundle))
+    driver.read_results.append(({**ready_state, "state": "ready"},))
+    reads_before_ready = len(driver.reads)
 
     repository.mark_generation_ready(
         generation_key=repository.opaque_generation_key("1" * 64),
         validation_checksum=validation.validation_checksum,
         timeout_seconds=1.0,
     )
-
     assert validation.valid is True
     assert driver.writes[-2][1]["validation_checksum"] == expected.graph_checksum
+    assert driver.writes[-2][1]["validated_topology_checksum"] == (
+        topology_edge_attestation(bundle).checksum
+    )
     assert driver.writes[-1][1]["state"] == "ready"
     assert "MATCH" in driver.writes[-1][0]
+    assert any(
+        "PROJECTED_RELATION" in read[0]
+        for read in driver.reads[reads_before_ready:]
+    )
+    ready_reads = [read[0] for read in driver.reads[reads_before_ready:]]
+    assert any(
+        "ORDER BY document_key, chunk_number, chunk_key" in query
+        for query in ready_reads
+    )
+    assert any(
+        "ORDER BY entity_key, provenance_key, mention_key" in query
+        for query in ready_reads
+    )
 
 
 def test_validation_rejects_count_or_endpoint_drift_without_publishing_token() -> None:
@@ -214,7 +225,6 @@ def test_validation_rejects_count_or_endpoint_drift_without_publishing_token() -
         expected=expected,
         timeout_seconds=1.0,
     )
-
     assert validation.valid is False
     assert driver.writes == []
 

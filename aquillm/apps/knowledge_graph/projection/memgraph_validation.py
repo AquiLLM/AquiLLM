@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from .memgraph_edge_validation import (
+    validate_topology_edges,
+    validate_topology_marker,
+)
+from .memgraph_edges import topology_edge_attestation
 from .memgraph_records import read_bundle
 from .records import (
     ProjectionCountsV1,
@@ -101,6 +106,15 @@ def validate(repository, *, expected, timeout, empty_private_checksum):
         and bundle.counts == expected.counts
         and checksum == expected.graph_checksum == expected.snapshot_checksum
     )
+    if valid:
+        try:
+            valid = validate_topology_edges(
+                repository._driver,
+                bundle,
+                timeout_seconds=timeout,
+            )
+        except (KeyError, TypeError, ValueError):
+            valid = False
     if not valid:
         return _invalid(expected, observed, checksum, bundle.counts)
     if expected.state is ProjectionLifecycleState.READY:
@@ -115,13 +129,15 @@ def validate(repository, *, expected, timeout, empty_private_checksum):
         "validation_checksum": checksum,
         "private_mapping_checksum": expected.private_mapping_checksum,
         "validated_private_mapping_checksum": expected.private_mapping_checksum,
+        "validated_topology_checksum": topology_edge_attestation(bundle).checksum,
     }
     repository._driver.execute_write(
         "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
         "WHERE g.state IN ['staging','building'] "
         "AND g.private_mapping_checksum=$private_mapping_checksum "
         "SET g.validation_checksum=$validation_checksum, "
-        "g.validated_private_mapping_checksum=$validated_private_mapping_checksum",
+        "g.validated_private_mapping_checksum=$validated_private_mapping_checksum, "
+        "g.validated_topology_checksum=$validated_topology_checksum",
         values,
         timeout_seconds=timeout,
     )
@@ -165,14 +181,20 @@ def mark_ready(
         or row.get("state") not in {"staging", "building", "ready"}
         or type(row.get("chunk_count")) is not int
         or row.get("validated_private_mapping_checksum") != private_checksum
+        or row.get("validated_topology_checksum") != row.get("topology_checksum")
         or not private_checksum_valid
     ):
         raise ValueError("generation validation checksum/state mismatch")
+    if not validate_topology_marker(
+        driver, generation_key, timeout_seconds=timeout
+    ):
+        raise ValueError("generation topology attestation mismatch")
     parameters = {
         "generation_key": generation_key,
         "validation_checksum": validation_checksum,
         "private_mapping_checksum": private_checksum,
         "chunk_count": row["chunk_count"],
+        "topology_checksum": row["topology_checksum"],
         "state": "ready",
     }
     driver.execute_write(
@@ -181,6 +203,8 @@ def mark_ready(
         "AND g.graph_checksum=$validation_checksum "
         "AND g.private_mapping_checksum=$private_mapping_checksum "
         "AND g.validated_private_mapping_checksum=$private_mapping_checksum "
+        "AND g.topology_checksum=$topology_checksum "
+        "AND g.validated_topology_checksum=$topology_checksum "
         "AND g.chunk_count=$chunk_count "
         "AND g.state IN ['staging','building','ready'] SET g.state=$state",
         parameters,
@@ -198,6 +222,8 @@ def _ready_state(driver, generation_key, timeout):
         "g.graph_checksum AS graph_checksum, "
         "g.private_mapping_checksum AS private_mapping_checksum, "
         "g.validated_private_mapping_checksum AS validated_private_mapping_checksum, "
+        "g.topology_checksum AS topology_checksum, "
+        "g.validated_topology_checksum AS validated_topology_checksum, "
         "g.chunk_count AS chunk_count, g.state AS state",
         {"generation_key": generation_key},
         timeout_seconds=timeout,

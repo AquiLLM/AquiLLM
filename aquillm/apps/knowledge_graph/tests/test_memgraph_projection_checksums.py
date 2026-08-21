@@ -14,6 +14,7 @@ from apps.knowledge_graph.tests.test_memgraph_projection_repository import (
     _FakeDriver,
     _manifest_row,
     _record_reads,
+    _topology_reads,
 )
 from apps.knowledge_graph.tests.test_projection_records import _bundle
 
@@ -59,6 +60,7 @@ def test_ready_validation_rereads_records_without_republishing_marker() -> None:
     bundle, expected = _expected(ProjectionLifecycleState.READY)
     driver.read_results.append((_manifest_row(expected),))
     driver.read_results.extend(_record_reads(bundle))
+    driver.read_results.extend(_topology_reads(bundle))
 
     validation = repository.validate_generation(
         expected=expected,
