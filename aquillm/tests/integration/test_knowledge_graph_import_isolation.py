@@ -16,6 +16,7 @@ def test_disabled_graph_imports_do_not_load_optional_runtimes() -> None:
         "transformers",
         "peft",
         "huggingface_hub",
+        "fastapi",
     }
     script = textwrap.dedent(
         f"""
@@ -53,7 +54,13 @@ def test_disabled_graph_imports_do_not_load_optional_runtimes() -> None:
         import apps.knowledge_graph.retrieval.ppr
         import apps.knowledge_graph.retrieval.projected_types
         import apps.knowledge_graph.retrieval.topology.contracts
+        import apps.knowledge_graph.retrieval.topology.gateway_client
+        import apps.knowledge_graph.retrieval.topology.gateway_config
+        import apps.knowledge_graph.retrieval.topology.gateway_contracts
+        import apps.knowledge_graph.retrieval.topology.gateway_service
         from aquillm.celery import app
+
+        assert apps.knowledge_graph.retrieval.topology.gateway_service._runtime is None
 
         app.autodiscover_tasks(['apps.knowledge_graph'], force=True)
 
