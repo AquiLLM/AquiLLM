@@ -73,18 +73,18 @@ TIMINGS="$WORK_ROOT/timings.json"
 PROJECTIONS="$WORK_ROOT/projection-checksums.json"
 ATTESTATION="$WORK_ROOT/observation-attestation.json"
 LIVE_TRACE="$WORK_ROOT/live-trace.json"
+FIXTURE_MANIFEST="$WORK_ROOT/fixture-manifest.json"
+RUNTIME_IDENTITY="$WORK_ROOT/runtime-identity.json"
 RUN_LOG="$WORK_ROOT/runner.log"
 STARTED_NS="$(python3 -c 'import time; print(time.time_ns())')"
 
 install -d -m 700 "$WORK_ROOT" "$OUTPUT_ROOT"
 printf '%s\n' '{"schema_version":"task21-hybrid-eval-v1","status":"not_completed"}' >"$ARMS"
 printf '%s\n' '{"status":"not_completed"}' >"$TIMINGS"
-printf '%s\n' '{"schema":"task21-hybrid-live-observation-v1","status":"not_completed"}' >"$ATTESTATION"
-printf '%s\n' '{"schema":"task21-hybrid-live-trace-v1","status":"not_completed"}' >"$LIVE_TRACE"
 printf '%s\n' \
   '{"generation_key":"0000000000000000000000000000000000000000000000000000000000000000","projection_checksum":"0000000000000000000000000000000000000000000000000000000000000000"}' \
   >"$PROJECTIONS"
-chmod 600 "$ARMS" "$TIMINGS" "$PROJECTIONS" "$ATTESTATION" "$LIVE_TRACE"
+chmod 600 "$ARMS" "$TIMINGS" "$PROJECTIONS"
 
 compose=(
   docker compose
@@ -139,6 +139,18 @@ finalize() {
   set +e
   ((original_status == 0)) || status_label="failed"
   write_timings "$status_label" "$original_status" || timings_status="$?"
+  if [[ ! -e "$ATTESTATION" ]]; then
+    printf '%s\n' \
+      '{"schema":"task21-hybrid-live-observation-v1","status":"not_completed"}' \
+      >"$ATTESTATION"
+    chmod 600 "$ATTESTATION"
+  fi
+  if [[ ! -e "$LIVE_TRACE" ]]; then
+    printf '%s\n' \
+      '{"schema":"task21-hybrid-live-trace-v1","status":"not_completed"}' \
+      >"$LIVE_TRACE"
+    chmod 600 "$LIVE_TRACE"
+  fi
   python3 scripts/task21_hybrid_failure_bundle.py \
     --run-id "$RUN_ID" \
     --output-root "$OUTPUT_ROOT" \
@@ -163,6 +175,7 @@ finalize() {
   rm -f -- \
     "$WORK_ROOT/observations.json" "$WORK_ROOT/freshness.json" \
     "$WORK_ROOT/backend-parity.json" "$ATTESTATION" "$LIVE_TRACE" \
+    "$FIXTURE_MANIFEST" "$RUNTIME_IDENTITY" \
     "$ARMS" "$ARMS_CANDIDATE" "$TIMINGS" "$TIMINGS.tmp" \
     "$PROJECTIONS" "$RUN_LOG"
   rmdir -- "$WORK_ROOT" 2>/dev/null
@@ -197,6 +210,51 @@ export KG_PROJECTION_POSTGRES_STATE_DSN="postgresql://aquillm_projection_state:$
 "${compose[@]}" exec -T web /bin/sh -c \
   'cd /app/aquillm && exec /opt/venv/bin/python manage.py migrate --noinput' \
   >>"$RUN_LOG" 2>&1
+"${compose[@]}" exec -T worker_knowledge_graph /bin/sh -c \
+  'cd /app/aquillm && exec /opt/venv/bin/python manage.py activate_knowledge_graph_ontology --path research-v1.yaml --expected-checksum eb8d0c6b512216db2592f16898cd59ab76a2c95e9151c5fabfcc3f1be87a9059 --yes' \
+  >>"$RUN_LOG" 2>&1
+"${compose[@]}" exec -T \
+  -e KG_BUILD_ENABLED=0 -e KG_OVERLAY_ENABLED=0 \
+  -e KG_EVAL_BYPASS_ALLOWED=1 -e COHERE_KEY= \
+  worker_knowledge_graph /bin/sh -c \
+  "cd /app/aquillm && exec /opt/venv/bin/python manage.py seed_knowledge_graph_eval_fixture --fixture-manifest /app/$WORK_REL/fixture-manifest.json" \
+  >>"$RUN_LOG" 2>&1
+
+mapfile -t fixture_builds < <(python3 - "$FIXTURE_MANIFEST" <<'PY'
+import json
+import sys
+from uuid import UUID
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+for row in payload["authorized_scope"]:
+    collection_id = row["collection_id"]
+    request_text = row["rebuild_request_id"]
+    request_id = UUID(request_text)
+    if (
+        type(collection_id) is not int
+        or collection_id < 1
+        or str(request_id) != request_text
+    ):
+        raise SystemExit("fixture build identity is invalid")
+    print(f"{collection_id} {request_id}")
+PY
+)
+EXPECTED_PROJECTIONS="${#fixture_builds[@]}"
+((EXPECTED_PROJECTIONS > 0)) || {
+  echo "fixture has no authorized projections" >&2
+  exit 65
+}
+for fixture_build in "${fixture_builds[@]}"; do
+  read -r collection_id request_id <<<"$fixture_build"
+  "${compose[@]}" exec -T -e KG_BUILD_ENABLED=1 \
+    worker_knowledge_graph /bin/sh -c \
+    "cd /app/aquillm && exec /opt/venv/bin/python manage.py rebuild_knowledge_graph --collection $collection_id --request-id $request_id" \
+    >>"$RUN_LOG" 2>&1
+  "${compose[@]}" exec -T worker_knowledge_graph /bin/sh -c \
+    "cd /app/aquillm && exec /opt/venv/bin/python manage.py inspect_knowledge_graph --request-id $request_id --wait --timeout-seconds 1800" \
+    >>"$RUN_LOG" 2>&1
+done
 "${compose[@]}" exec -T worker_knowledge_graph_projection /bin/sh -c \
   'cd /app/aquillm && exec /opt/venv/bin/python manage.py project_knowledge_graph --all' \
   >>"$RUN_LOG" 2>&1
@@ -207,10 +265,59 @@ export KG_PROJECTION_POSTGRES_STATE_DSN="postgresql://aquillm_projection_state:$
   'cd /app/aquillm && exec /opt/venv/bin/python manage.py inspect_knowledge_graph_projection --all' \
   >>"$RUN_LOG" 2>&1
 
-"${compose[@]}" exec -T worker_knowledge_graph /opt/venv/bin/python -m \
+projection_ready=0
+for _attempt in $(seq 1 180); do
+  inspection="$("${compose[@]}" exec -T worker_knowledge_graph_projection \
+    /bin/sh -c \
+    'cd /app/aquillm && exec /opt/venv/bin/python manage.py inspect_knowledge_graph_projection --all')"
+  printf '%s\n' "$inspection" >>"$RUN_LOG"
+  if python3 - "$EXPECTED_PROJECTIONS" "$inspection" <<'PY'
+import json
+import sys
+
+expected = int(sys.argv[1])
+payload = json.loads(sys.argv[2].splitlines()[-1])
+required = {
+    "ready_count": expected,
+    "pending_count": 0,
+    "failed_count": 0,
+    "drift_count": 0,
+    "orphan_count": 0,
+    "replayed_count": 0,
+}
+raise SystemExit(0 if payload == required else 1)
+PY
+  then
+    projection_ready=1
+    break
+  fi
+  sleep 10
+done
+((projection_ready == 1)) || {
+  echo "fixture projections did not become exactly ready" >&2
+  exit 70
+}
+
+python3 scripts/task21_hybrid_runtime_identity.py \
+  --run-id "$RUN_ID" \
+  --source-commit "$SOURCE_COMMIT" \
+  --env-file "$TASK21_ENV_FILE" \
+  --compose-file "$DEVELOPMENT" \
+  --compose-file "$EVALUATION" \
+  --profile knowledge-graph \
+  --profile vllm \
+  --output "$RUNTIME_IDENTITY" \
+  >>"$RUN_LOG" 2>&1
+
+"${compose[@]}" exec -T \
+  -e KG_OVERLAY_ENABLED=1 -e KG_MEMGRAPH_TRAVERSAL_ENABLED=1 \
+  -e KG_GRAPH_DIRECT_ENABLED=1 -e KG_GRAPH_EXTENDED_ENABLED=1 \
+  worker_knowledge_graph /opt/venv/bin/python -m \
   apps.knowledge_graph.evals.task21_hybrid_live_observations \
   --run-id "$RUN_ID" \
   --source-commit "$SOURCE_COMMIT" \
+  --fixture-manifest "/app/$WORK_REL/fixture-manifest.json" \
+  --runtime-identity "/app/$WORK_REL/runtime-identity.json" \
   --observations-output "/app/$WORK_REL/observations.json" \
   --freshness-output "/app/$WORK_REL/freshness.json" \
   --backend-parity-output "/app/$WORK_REL/backend-parity.json" \
