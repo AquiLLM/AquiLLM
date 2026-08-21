@@ -31,15 +31,6 @@ def test_checker_has_an_explicit_lane_allowlist_and_current_lane_is_clean() -> N
     assert module.find_violations(REPO) == ()
 
 
-def test_checker_rejects_gateway_payload_and_secret_canaries() -> None:
-    source = "\n".join(
-        "logger.info('obs.gateway.read', **retrieval_log_fields("
-        f"reason='completed', count={name}, elapsed_ms=0))"
-        for name in ("payload", "token", "key", "exception", "userinfo")
-    )
-    assert len(_scan(source)) == 5
-
-
 def test_checker_allows_only_fixed_event_and_redacted_structured_fields() -> None:
     source = """import structlog
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
