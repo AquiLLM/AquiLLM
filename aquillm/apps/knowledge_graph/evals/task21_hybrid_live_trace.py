@@ -123,6 +123,17 @@ def _validate_candidate(value, *, arm, ordinal, fixture_chunks):
         raise ValueError("direct rank and score presence differs")
     if (extended_rank is None) != (extended_score is None):
         raise ValueError("extended rank and score presence differs")
+    allowed_sources = {
+        "vector_only": frozenset({"baseline"}),
+        "direct": frozenset({"baseline", "direct"}),
+        "extended": frozenset({"baseline", "extended"}),
+        "combined": frozenset(SOURCES),
+        "combined_reranked": frozenset(SOURCES),
+    }
+    if not set(sources).issubset(allowed_sources[arm]):
+        raise ValueError("candidate sources violate the exact arm policy")
+    if arm == "combined_reranked" and reranker_rank is None:
+        raise ValueError("combined_reranked candidates require a reranker rank")
     if arm != "combined_reranked" and reranker_rank is not None:
         raise ValueError("reranker ranks belong only to combined_reranked")
 

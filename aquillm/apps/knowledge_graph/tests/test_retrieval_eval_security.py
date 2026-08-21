@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from types import SimpleNamespace
 
 import pytest
@@ -175,3 +176,92 @@ def test_task23_hybrid_report_requires_privacy_fixture_in_every_arm():
             freshness=freshness,
             backend_parity=parity,
         )
+
+
+def test_task23_hybrid_report_requires_each_intended_privacy_case_fixture():
+    cases, observations, freshness, parity = task23_inputs()
+    cases = list(cases)
+    cases.append(
+        {
+            "id": "privacy-without-fixture",
+            "privacy_intent": "security-sensitive: private evidence must stay excluded",
+            "accessible_collection_ids": ["collection-a"],
+            "documents": [
+                {
+                    "doc_id": "public-only",
+                    "collection_id": "collection-a",
+                    "chunks": [{"chunk_id": "public-only", "text": "Public."}],
+                }
+            ],
+            "expected_retrieval_chunk_ids": ["public-only"],
+            "quality_tags": ["inaccessible_neighbor"],
+        }
+    )
+    for arm, rows in observations.items():
+        row = copy.deepcopy(rows[0])
+        row.update(
+            case_id="privacy-without-fixture",
+            ranked_chunk_ids=["public-only"],
+            graph_chunk_ids=[],
+            citation_evidence_chunk_ids=["public-only"],
+            seed_chunk_ids=["public-only"],
+            mapped_seed_chunk_ids=["public-only"],
+            projected_ranks=[],
+            repeated_projected_ranks=[],
+            adversarial_candidate_chunk_ids=[],
+            inaccessible_result_chunk_ids=[],
+        )
+        observations[arm].append(row)
+
+    with pytest.raises(run_kg_eval.Task21HybridEvalError, match="privacy fixture"):
+        run_kg_eval.build_task21_hybrid_report(
+            cases=cases,
+            observations=observations,
+            freshness=freshness,
+            backend_parity=parity,
+        )
+
+
+def test_task23_hybrid_report_allows_empty_adversarial_for_nonprivacy_case():
+    cases, observations, freshness, parity = task23_inputs()
+    cases = list(cases)
+    cases.append(
+        {
+            "id": "public-only",
+            "privacy_intent": "public collection retrieval",
+            "accessible_collection_ids": ["collection-a"],
+            "documents": [
+                {
+                    "doc_id": "public-only",
+                    "collection_id": "collection-a",
+                    "chunks": [{"chunk_id": "public-only", "text": "Public."}],
+                }
+            ],
+            "expected_retrieval_chunk_ids": ["public-only"],
+            "quality_tags": ["relationship"],
+        }
+    )
+    for rows in observations.values():
+        row = copy.deepcopy(rows[0])
+        row.update(
+            case_id="public-only",
+            ranked_chunk_ids=["public-only"],
+            graph_chunk_ids=[],
+            citation_evidence_chunk_ids=["public-only"],
+            seed_chunk_ids=["public-only"],
+            mapped_seed_chunk_ids=["public-only"],
+            projected_ranks=[],
+            repeated_projected_ranks=[],
+            adversarial_candidate_chunk_ids=[],
+            inaccessible_result_chunk_ids=[],
+        )
+        rows.append(row)
+
+    report = run_kg_eval.build_task21_hybrid_report(
+        cases=cases,
+        observations=observations,
+        freshness=freshness,
+        backend_parity=parity,
+    )
+
+    assert report["observed_adversarial_candidate_count"] == len(observations)

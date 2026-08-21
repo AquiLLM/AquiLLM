@@ -73,6 +73,18 @@ def validate_cases(
         fixture_ids = exact_ids(
             tuple(sorted(inaccessible_fixture)), "inaccessible fixture chunks"
         )
+        quality_tags = exact_ids(case.get("quality_tags", ()), "quality tags")
+        privacy_intent = case.get("privacy_intent", "")
+        if type(privacy_intent) is not str:
+            raise Task21HybridEvalError("privacy intent must be exact text")
+        privacy_required = bool(fixture_ids) or (
+            "inaccessible_neighbor" in quality_tags
+            or "security-sensitive" in privacy_intent.lower()
+        )
+        if privacy_required and not fixture_ids:
+            raise Task21HybridEvalError(
+                f"{case_id} intended privacy case requires its own privacy fixture"
+            )
         expected = exact_ids(
             case.get("expected_retrieval_chunk_ids"), "expected chunks"
         )
@@ -92,7 +104,8 @@ def validate_cases(
             "inaccessible_fixture": fixture_ids,
             "expected": expected,
             "distances": distances,
-            "quality_tags": tuple(case.get("quality_tags", ())),
+            "quality_tags": quality_tags,
+            "privacy_required": privacy_required,
         }
     if not result:
         raise Task21HybridEvalError("at least one case is required")

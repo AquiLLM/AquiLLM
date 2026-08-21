@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from task21_hybrid_live_trace_support import valid_trace
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "task21_hybrid_failure_bundle.py"
@@ -37,6 +38,8 @@ def _module(name, path):
         "http://client:canary-secret@example.test/v1",
         "endpoints=https://public.test/path,postgresql://user:canary@db/a",
         "endpoint=https://public.test/path?next=bolt://user:canary@graph:7687",
+        "endpoint=https://public.test/redirect/https://inner:canary@host/path",
+        "endpoint=https://public.test/path#next=bolt://user:canary@graph:7687",
     ),
 )
 def test_url_credentials_are_redacted_without_encoded_canary_leakage(value):
@@ -233,6 +236,35 @@ def test_publisher_rejects_post_capture_source_commit_change(tmp_path):
     arguments["source"] = {"commit": "f" * 40, "clean": True}
 
     with pytest.raises(ValueError, match="source commit"):
+        module.publish_bundle(**arguments)
+
+
+@pytest.mark.parametrize("mutation", ("invalid", "run_id", "source_commit"))
+def test_publisher_validates_and_binds_live_trace_identity(tmp_path, mutation):
+    module = _module("task21_hybrid_failure_bundle", SCRIPT)
+    arguments = _publish_fixture(module, tmp_path)
+    if mutation != "invalid":
+        contract = _module(
+            "apps.knowledge_graph.evals.task21_hybrid_live_trace",
+            REPO
+            / "aquillm"
+            / "apps"
+            / "knowledge_graph"
+            / "evals"
+            / "task21_hybrid_live_trace.py",
+        )
+        payload = valid_trace()
+        payload["run_id"] = arguments["run_id"]
+        payload["source_commit"] = arguments["expected_source_commit"]
+        if mutation == "run_id":
+            payload["run_id"] = "0" * 32
+        else:
+            payload["source_commit"] = "0" * 40
+        arguments["artifacts"]["live_trace"].write_bytes(
+            contract.canonical_live_trace_bytes(payload)
+        )
+
+    with pytest.raises(ValueError, match="live trace"):
         module.publish_bundle(**arguments)
 
 

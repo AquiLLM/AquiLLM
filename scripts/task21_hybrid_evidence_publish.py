@@ -12,6 +12,13 @@ import shutil
 import tempfile
 from pathlib import Path, PurePosixPath
 
+try:
+    from scripts.task21_hybrid_live_trace_artifact import (
+        validate_live_trace_artifact,
+    )
+except ImportError:
+    from task21_hybrid_live_trace_artifact import validate_live_trace_artifact
+
 SCHEMA = "task21-hybrid-cloud-evidence-v1"
 _HEX32 = re.compile(r"[0-9a-f]{32}")
 _HEX40 = re.compile(r"[0-9a-f]{40}")
@@ -212,6 +219,11 @@ def publish_bundle(
         signing_key_version=signing_key_version,
     )
     _validate_timings(Path(artifacts["timings"]))
+    validate_live_trace_artifact(
+        artifacts["live_trace"],
+        run_id=run_id,
+        source_commit=expected_source_commit,
+    )
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(root, 0o700)

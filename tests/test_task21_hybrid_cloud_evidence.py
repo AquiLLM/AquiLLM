@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from task21_hybrid_live_trace_support import valid_trace
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "task21_hybrid_failure_bundle.py"
@@ -156,7 +157,13 @@ def test_publish_is_canonical_signed_0600_and_never_overwrites(tmp_path):
         json.dumps({"generation_key": "a" * 64, "projection_checksum": "b" * 64}),
         encoding="utf-8",
     )
-    live_trace.write_text('{"schema":"task21-hybrid-live-trace-v1"}', encoding="utf-8")
+    trace_contract = importlib.import_module(
+        "apps.knowledge_graph.evals.task21_hybrid_live_trace"
+    )
+    trace_payload = valid_trace()
+    trace_payload["run_id"] = "e" * 32
+    trace_payload["source_commit"] = "f" * 40
+    live_trace.write_bytes(trace_contract.canonical_live_trace_bytes(trace_payload))
     captured = module.CapturedRuntime(
         members={
             "runtime/config.redacted.yml": b"services: {}\n",

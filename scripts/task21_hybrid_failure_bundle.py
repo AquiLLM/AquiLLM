@@ -35,9 +35,12 @@ _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(password|secret|token|api[_-]?key)(\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
 _AUTHORIZATION = re.compile(r"(?i)\bauthorization\s*:\s*(?:bearer\s+)?[^\s,;]+")
+_URL_SCHEME = (
+    r"(?:postgres(?:ql)?|memgraph|bolt(?:\+s|\+ssc)?|neo4j(?:\+s|\+ssc)?|https?)"
+)
 _CREDENTIAL_URL = re.compile(
-    r"(?i)\b(?:postgres(?:ql)?|memgraph|bolt(?:\+s|\+ssc)?|neo4j(?:\+s|\+ssc)?|https?)"
-    r"://[^\s,\"'<>?&;]+"
+    rf"(?i)\b{_URL_SCHEME}://"
+    rf"(?:(?!\b{_URL_SCHEME}://)[^\s,\"'<>?&#;])+"
 )
 
 

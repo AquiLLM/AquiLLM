@@ -10,14 +10,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from task21_hybrid_live_trace_support import ARMS, valid_trace
 
-ARMS = (
-    "vector_only",
-    "direct",
-    "extended",
-    "combined",
-    "combined_reranked",
-)
 REPO = Path(__file__).resolve().parents[1]
 ATTESTATION = REPO / "scripts" / "task21_hybrid_observation_attestation.py"
 
@@ -38,85 +32,6 @@ def _attestation_module():
     finally:
         sys.path.pop(0)
     return module
-
-
-def _candidate(arm):
-    direct = arm in {"direct", "combined", "combined_reranked"}
-    extended = arm in {"extended", "combined", "combined_reranked"}
-    sources = ["baseline"]
-    if direct:
-        sources.append("direct")
-    if extended:
-        sources.append("extended")
-    return {
-        "chunk_id": "public-token-001",
-        "ordinal": 1,
-        "sources": sources,
-        "baseline_rank": 1,
-        "direct_rank": 1 if direct else None,
-        "direct_score_hex": 0.5.hex() if direct else None,
-        "extended_rank": 1 if extended else None,
-        "extended_score_hex": 0.25.hex() if extended else None,
-        "fusion_score_hex": 0.75.hex(),
-        "reranker_rank": 1 if arm == "combined_reranked" else None,
-    }
-
-
-def valid_trace():
-    return {
-        "schema": "task21-hybrid-live-trace-v1",
-        "run_id": "a" * 32,
-        "source_commit": "b" * 40,
-        "fixture_id": "kg-task20-synthetic-v1",
-        "fixture_checksum": "c" * 64,
-        "manifest_checksum": "d" * 64,
-        "arms": {
-            arm: [
-                {
-                    "case_id": "inaccessible_collection_is_excluded",
-                    "candidate_trace": [_candidate(arm)],
-                    "timing_trace": {
-                        "candidate_ms": 0.2,
-                        "branch_ms": 0.2,
-                        "fusion_ms": 0.2,
-                        "rerank_ms": 0.2,
-                        "total_ms": 1.0,
-                    },
-                    "authorization_status": "current",
-                    "graph_scheduled": arm != "vector_only",
-                    "inaccessible_candidate_count": 0,
-                }
-            ]
-            for arm in ARMS
-        },
-        "freshness_attestation": {
-            "projection_keys": ["e" * 64],
-            "generation_keys": ["f" * 64],
-            "graph_checksums": ["1" * 64],
-            "ready_bundle_checksums": ["2" * 64],
-            "ontology_version": "ontology-v1",
-            "ontology_checksum": "3" * 64,
-        },
-        "backend_parity_inputs": [
-            {
-                "branch": branch,
-                "ready_bundle_checksum": "4" * 64,
-                "seed_checksum": "5" * 64,
-                "seed_count": 1,
-                "max_depth": depth,
-                "max_nodes": 20,
-                "max_edges": 40,
-                "max_results": 10,
-                "projection_keys": ["6" * 64],
-                "generation_keys": ["7" * 64],
-                "authorized_document_keys": [character * 64],
-            }
-            for branch, depth, character in (
-                ("direct", 1, "8"),
-                ("extended", 2, "9"),
-            )
-        ],
-    }
 
 
 def test_live_trace_writer_is_canonical_atomic_0600_and_never_overwrites(tmp_path):
@@ -169,6 +84,24 @@ def test_live_trace_rejects_open_or_unbound_claims(mutation):
         )
 
 
+@pytest.mark.parametrize("mutation", ("vector_direct", "missing_final_rerank"))
+def test_live_trace_enforces_exact_arm_candidate_policy(mutation):
+    module = _module()
+    payload = valid_trace()
+    if mutation == "vector_direct":
+        candidate = payload["arms"]["vector_only"][0]["candidate_trace"][0]
+        candidate["sources"].append("direct")
+        candidate["direct_rank"] = 1
+        candidate["direct_score_hex"] = 0.5.hex()
+    else:
+        payload["arms"]["combined_reranked"][0]["candidate_trace"][0][
+            "reranker_rank"
+        ] = None
+
+    with pytest.raises(ValueError, match="arm|reranker"):
+        module.validate_live_trace(payload)
+
+
 def test_live_trace_timing_and_leakage_match_metric_observations():
     module = _module()
     observations = {
@@ -191,9 +124,20 @@ def test_live_trace_timing_and_leakage_match_metric_observations():
 def test_live_trace_hash_binds_attestation_runtime_and_artifact_bytes(tmp_path):
     runtime = importlib.import_module("scripts.task21_hybrid_failure_bundle")
     attestation = _attestation_module()
+    contract = _module()
     artifacts = {}
+    observations = {
+        arm: [
+            {
+                "case_id": "inaccessible_collection_is_excluded",
+                "latency_ms": 1.0,
+                "inaccessible_result_chunk_ids": [],
+            }
+        ]
+        for arm in ARMS
+    }
     bodies = {
-        "observations": b'{"combined":[]}\n',
+        "observations": json.dumps(observations).encode() + b"\n",
         "freshness": json.dumps(
             {
                 "generation_key": "a" * 64,
@@ -229,6 +173,23 @@ def test_live_trace_hash_binds_attestation_runtime_and_artifact_bytes(tmp_path):
         },
     }
 
+    with pytest.raises(ValueError, match="live trace"):
+        attestation.verify_attestation(
+            payload=payload,
+            captured=captured,
+            artifacts=artifacts,
+            run_id="e" * 32,
+            source_commit="f" * 40,
+        )
+    trace_payload = valid_trace()
+    trace_payload["run_id"] = "e" * 32
+    trace_payload["source_commit"] = "f" * 40
+    artifacts["live_trace"].write_bytes(
+        contract.canonical_live_trace_bytes(trace_payload)
+    )
+    payload["artifact_sha256"]["live_trace"] = hashlib.sha256(
+        artifacts["live_trace"].read_bytes()
+    ).hexdigest()
     attestation.verify_attestation(
         payload=payload,
         captured=captured,
@@ -245,7 +206,9 @@ def test_live_trace_hash_binds_attestation_runtime_and_artifact_bytes(tmp_path):
             run_id="e" * 32,
             source_commit="f" * 40,
         )
-    artifacts["live_trace"].write_bytes(b'{"schema":"task21-hybrid-live-trace-v1"}\n')
+    artifacts["live_trace"].write_bytes(
+        contract.canonical_live_trace_bytes(trace_payload)
+    )
     with pytest.raises(ValueError, match="runtime capture"):
         attestation.verify_attestation(
             payload=payload,

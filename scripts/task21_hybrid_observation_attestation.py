@@ -11,8 +11,12 @@ from pathlib import Path
 
 try:
     from scripts import task21_hybrid_failure_bundle as _runtime
+    from scripts.task21_hybrid_live_trace_artifact import (
+        validate_live_trace_artifact,
+    )
 except ImportError:
     import task21_hybrid_failure_bundle as _runtime
+    from task21_hybrid_live_trace_artifact import validate_live_trace_artifact
 
 SCHEMA = "task21-hybrid-live-observation-v1"
 _HEX32 = re.compile(r"[0-9a-f]{32}")
@@ -58,6 +62,12 @@ def verify_attestation(*, payload, captured, artifacts, run_id, source_commit) -
     expected_hashes = {name: _sha256(Path(artifacts[name])) for name in _ARTIFACTS}
     if payload["artifact_sha256"] != expected_hashes:
         raise ValueError("live observation artifact bytes changed")
+    validate_live_trace_artifact(
+        artifacts["live_trace"],
+        run_id=run_id,
+        source_commit=source_commit,
+        observations_path=artifacts["observations"],
+    )
     freshness = json.loads(Path(artifacts["freshness"]).read_text(encoding="utf-8"))
     projections = {
         name: freshness.get(name) for name in ("generation_key", "projection_checksum")
