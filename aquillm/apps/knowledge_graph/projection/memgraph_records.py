@@ -43,6 +43,53 @@ _ORDER_FIELDS = (
     "scope_type scope_key artifact_key",
 )
 
+_ENTITY_TRAVERSAL = (
+    "MATCH (membership:AutomaticMembership {generation_key:$generation_key}) "
+    "WHERE membership.automatic_membership_key IN split($seed_keys_csv, ',') "
+    "OR membership.entity_key IN split($seed_keys_csv, ',') "
+    "MATCH (seed:ProjectedEntity {generation_key:$generation_key})"
+    "-[:ENTITY_MEMBERSHIP]->(membership) "
+    "MATCH p=(seed)"
+    "-[:PROJECTED_RELATION*0..2]-(n:ProjectedEntity "
+    "{generation_key:$generation_key}) "
+    "WHERE seed.opaque_key IN split($seed_keys_csv, ',') "
+    "AND length(p) <= $max_depth "
+    "RETURN n AS record ORDER BY n.opaque_key LIMIT $family_limit"
+)
+_RELATION_TRAVERSAL = (
+    "MATCH (membership:AutomaticMembership {generation_key:$generation_key}) "
+    "WHERE membership.automatic_membership_key IN split($seed_keys_csv, ',') "
+    "OR membership.entity_key IN split($seed_keys_csv, ',') "
+    "MATCH (seed:ProjectedEntity {generation_key:$generation_key})"
+    "-[:ENTITY_MEMBERSHIP]->(membership) "
+    "MATCH p=(seed)"
+    "-[:PROJECTED_RELATION*1..2]-(target:ProjectedEntity "
+    "{generation_key:$generation_key}) "
+    "WHERE seed.opaque_key IN split($seed_keys_csv, ',') "
+    "AND length(p) <= $max_depth "
+    "MATCH (r:ProjectedRelation {generation_key:$generation_key}) "
+    "WHERE any(edge IN relationships(p) WHERE edge.relation_key = r.relation_key) "
+    "RETURN r AS record ORDER BY r.opaque_key LIMIT $family_limit"
+)
+_EVIDENCE_TRAVERSAL = (
+    "MATCH (r:ProjectedRelation {generation_key:$generation_key})"
+    "-[edge:RELATION_EVIDENCE]->(c:ProjectedChunk "
+    "{generation_key:$generation_key}) "
+    "WHERE c.document_key IN split($authorized_document_keys_csv, ',') "
+    "MATCH (n:ProjectedEvidence {generation_key:$generation_key}) "
+    "WHERE n.opaque_key = edge.evidence_key "
+    "RETURN n AS record ORDER BY n.opaque_key LIMIT $family_limit"
+)
+_MENTION_TRAVERSAL = (
+    "MATCH (entity:ProjectedEntity {generation_key:$generation_key})"
+    "-[edge:ENTITY_MENTION]->(c:ProjectedChunk "
+    "{generation_key:$generation_key}) "
+    "WHERE c.document_key IN split($authorized_document_keys_csv, ',') "
+    "MATCH (n:ProjectedEntityMention {generation_key:$generation_key}) "
+    "WHERE n.opaque_key = edge.mention_key "
+    "RETURN n AS record ORDER BY n.opaque_key LIMIT $family_limit"
+)
+
 
 def _properties(row: object, name: str) -> dict:
     if type(row) is not dict:
@@ -100,13 +147,21 @@ def manifest_from_row(row: object) -> ProjectionGenerationManifestV1:
 
 
 def read_bundle(
-    driver, *, generation_key: str, maxima: tuple[int, ...], timeout: float
+    driver,
+    *,
+    generation_key: str,
+    maxima: tuple[int, ...],
+    timeout: float,
+    reject_full_pages: bool = False,
+    topology_parameters: dict[str, object] | None = None,
 ):
     if len(maxima) != len(FAMILIES) or any(
         type(value) is not int or not 1 <= value <= 5_000 for value in maxima
     ):
         raise ValueError("Memgraph projection read maxima are invalid")
     parameters = {"generation_key": generation_key}
+    if topology_parameters is not None:
+        parameters.update(topology_parameters)
     marker_rows = driver.execute_read(
         "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
         "RETURN g AS record",
@@ -121,13 +176,32 @@ def read_bundle(
     for (label, kind), maximum, order_fields in zip(
         FAMILIES, maxima, _ORDER_FIELDS, strict=True
     ):
+        if topology_parameters is not None and label == "ProjectedEntity":
+            query = _ENTITY_TRAVERSAL
+        elif topology_parameters is not None and label == "ProjectedRelation":
+            query = _RELATION_TRAVERSAL
+        elif topology_parameters is not None and label == "ProjectedEvidence":
+            query = _EVIDENCE_TRAVERSAL
+        elif topology_parameters is not None and label == "ProjectedEntityMention":
+            query = _MENTION_TRAVERSAL
+        else:
+            query = (
+                f"MATCH (n:{label} {{generation_key:$generation_key}}) "
+                "RETURN n AS record ORDER BY n.opaque_key"
+            )
+        family_parameters = dict(parameters)
+        if topology_parameters is not None:
+            family_parameters["family_limit"] = (
+                maximum + 1 if reject_full_pages else maximum
+            )
         rows = driver.execute_read(
-            f"MATCH (n:{label} {{generation_key:$generation_key}}) "
-            "RETURN n AS record ORDER BY n.opaque_key",
-            parameters,
+            query,
+            family_parameters,
             timeout_seconds=timeout,
-            max_records=maximum,
+            max_records=maximum + 1 if reject_full_pages else maximum,
         )
+        if reject_full_pages and len(rows) > maximum:
+            raise ValueError("bounded Memgraph family read was truncated")
         decoded = tuple(_dto(kind, _properties(row, "record")) for row in rows)
         fields = order_fields.split()
         loaded.append(

@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from math import isfinite
 from time import monotonic
 
-from apps.knowledge_graph.retrieval import projected_types as t
 from apps.knowledge_graph.retrieval.topology import contracts as c
 from apps.knowledge_graph.retrieval.topology.failures import TopologyLoadError
 
@@ -16,6 +15,7 @@ from .memgraph_driver import MemgraphDriverError
 from .memgraph_records import read_bundle
 from .serialization import projection_checksum
 from .topology_request import decode_topology_request
+from .topology_results import family_response
 from .topology_snapshot import build_projected_topology_snapshot
 
 _MANIFEST_CYPHER = (
@@ -171,11 +171,33 @@ class Neo4jProjectedTopologyQueryAdapter:
         bundles = []
         for selected in ready.selected_generations:
             try:
+                bounded_parameters = None
+                if getattr(self._driver, "supports_bounded_topology", False):
+                    bounded_parameters = {
+                        "seed_keys_csv": ",".join(row.identity_key for row in seeds),
+                        "max_depth": caps.max_depth,
+                        "authorized_document_keys_csv": ",".join(
+                            row.document_key for row in ready.authorized_documents
+                        ),
+                    }
                 bundle = read_bundle(
                     deadline_driver,
                     generation_key=selected.generation_key,
-                    maxima=(5_000,) * 9,
+                    maxima=(
+                        caps.max_nodes,
+                        caps.max_nodes,
+                        caps.max_nodes,
+                        caps.max_edges,
+                        caps.max_edges,
+                        caps.max_edges,
+                        caps.max_edges,
+                        caps.max_edges,
+                        len(ready.authorized_documents)
+                        + len(ready.selected_generations),
+                    ),
                     timeout=self._remaining(deadline),
+                    reject_full_pages=True,
+                    topology_parameters=bounded_parameters,
                 )
             except MemgraphDriverError as error:
                 if error.code == "memgraph_timeout":
@@ -208,49 +230,6 @@ class Neo4jProjectedTopologyQueryAdapter:
             self._cache.popitem(last=False)
         return snapshot
 
-    @staticmethod
-    def _family(query, snapshot):
-        value = json.loads(t.canonical_projected_snapshot_bytes(snapshot))
-        if query is c.TopologyQueryName.AUTOMATIC_MEMBERSHIPS:
-            value["relation_groups"], value["mentions"] = [], []
-            value["audit_rows"] = [
-                row
-                for row in value["audit_rows"]
-                if row["kind"] == "automatic_membership"
-            ]
-            field, payload = "snapshot_json", value
-        elif query is c.TopologyQueryName.RELATION_TOPOLOGY:
-            field, payload = (
-                "section_json",
-                {
-                    "relation_groups": value["relation_groups"],
-                    "audit_rows": [
-                        row
-                        for row in value["audit_rows"]
-                        if row["kind"] == "physical_relation"
-                    ],
-                },
-            )
-        else:
-            field, payload = (
-                "section_json",
-                {
-                    "mentions": value["mentions"],
-                    "audit_rows": [
-                        row
-                        for row in value["audit_rows"]
-                        if row["kind"] in {"fallback_mention", "relation_evidence"}
-                    ],
-                },
-            )
-        return (
-            {
-                field: json.dumps(
-                    payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-                )
-            },
-        )
-
     def execute_read(
         self,
         *,
@@ -274,7 +253,7 @@ class Neo4jProjectedTopologyQueryAdapter:
         if max_records != expected:
             raise TopologyLoadError(c.TopologyFailureReason.BACKEND_SCHEMA_MISMATCH)
         snapshot = self._snapshot(ready, seeds, caps, parameters, deadline=deadline)
-        return self._family(query, snapshot)
+        return family_response(query, snapshot)
 
 
 __all__ = ["Neo4jProjectedTopologyQueryAdapter"]

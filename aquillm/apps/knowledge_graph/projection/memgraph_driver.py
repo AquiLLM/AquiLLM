@@ -106,6 +106,9 @@ def _read_failure_code(error: Exception) -> str:
 
 
 class Neo4jMemgraphDriver:
+    # The shipping adapter may opt into graph-seeded reads only for this driver.
+    supports_bounded_topology = True
+
     def __init__(
         self,
         uri: str,
