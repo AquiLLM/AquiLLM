@@ -13,15 +13,16 @@ from .lifecycle import (
 )
 from .memgraph_driver import MemgraphDriverError
 from .memgraph_repository import MemgraphProjectionRepository
-from .postgres_repository import PostgresProjectionRepository
 from .records import (
     ProjectionFailureCode,
     ProjectionGenerationManifestV1,
     ProjectionLifecycleState,
 )
 from .runtime import (
+    ProjectionDatabaseAliases,
     load_projection_runtime_settings,
     memgraph_projection_repository,
+    postgres_projection_repository,
 )
 from .serialization import projection_checksum
 
@@ -40,7 +41,11 @@ def _identifier(value: object) -> UUID:
 
 
 def _postgres_repository():
-    return PostgresProjectionRepository()
+    return postgres_projection_repository(_projection_settings())
+
+
+def _state_using() -> str:
+    return ProjectionDatabaseAliases().state
 
 
 def _projection_settings():
@@ -78,12 +83,13 @@ def project_generation(
 ) -> ProjectionRunOutcomeV1:
     identifier = _identifier(projection_id)
     settings = _projection_settings()
+    using = _state_using()
     lease = claim_projection_lease(
         projection_id=identifier,
         owner=lease_owner,
         now=timezone.now(),
         lease_seconds=settings.projection_lease_seconds,
-        using="default",
+        using=using,
     )
     if lease is None:
         return ProjectionRunOutcomeV1(identifier, False, "lease_lost")
@@ -92,6 +98,7 @@ def project_generation(
         bundle = postgres.load_projection_bundle(
             projection_id=identifier,
             batch_size=settings.projection_batch_size,
+            purpose="build",
         )
         private_rows = postgres.load_private_chunk_references(
             projection_id=identifier,
@@ -107,7 +114,7 @@ def project_generation(
             owner=lease_owner,
             checksum=private_checksum,
             now=timezone.now(),
-            using="default",
+            using=using,
         )
         graph = _memgraph_repository()
         timeout = settings.graph_overall_timeout_ms / 1_000.0
@@ -139,7 +146,7 @@ def project_generation(
             expected_graph_checksum=expected.graph_checksum,
             expected_private_mapping_checksum=private_checksum,
             now=timezone.now(),
-            using="default",
+            using=using,
         )
         return ProjectionRunOutcomeV1(
             identifier,
@@ -160,7 +167,7 @@ def project_generation(
                 owner=lease_owner,
                 failure_code=code,
                 now=timezone.now(),
-                using="default",
+                using=using,
             )
         except Exception as failure_exc:
             if _backend_transient(failure_exc):

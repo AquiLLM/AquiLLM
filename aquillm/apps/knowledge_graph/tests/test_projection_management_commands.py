@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from contextlib import nullcontext
 from io import StringIO
 from types import SimpleNamespace
 
@@ -156,3 +157,71 @@ def test_command_page_and_retention_defaults_use_frozen_configuration(monkeypatc
 
     assert [value.page_size for value in parsed] == [17, 17, 17, 17]
     assert parsed[2].retain == 9
+
+
+def test_project_command_routes_source_state_and_injects_configured_codec(monkeypatch):
+    from apps.knowledge_graph.management.commands import (
+        project_knowledge_graph as command_module,
+    )
+
+    observed = []
+
+    class Query:
+        def using(self, alias):
+            observed.append(("source", alias))
+            return self
+
+        def filter(self, **_kwargs):
+            return self
+
+        def values_list(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return 11
+
+    settings = SimpleNamespace()
+    codec = object()
+    monkeypatch.setattr(command_module.GraphArtifact, "objects", Query())
+    monkeypatch.setattr(
+        command_module,
+        "ProjectionDatabaseAliases",
+        lambda: SimpleNamespace(source="projection_source", state="projection_state"),
+    )
+    monkeypatch.setattr(
+        command_module, "load_projection_runtime_settings", lambda: settings
+    )
+    monkeypatch.setattr(
+        command_module, "projection_identifier_codec", lambda value: codec
+    )
+    monkeypatch.setattr(
+        command_module.transaction,
+        "atomic",
+        lambda *, using: observed.append(("state", using)) or nullcontext(),
+    )
+    monkeypatch.setattr(
+        command_module,
+        "enqueue_collection_projection_locked",
+        lambda **kwargs: observed.append(("enqueue", kwargs)),
+    )
+
+    command_module.Command(stdout=StringIO()).handle(
+        collection=7,
+        all=False,
+        dry_run=False,
+        page_size=10,
+    )
+
+    assert observed == [
+        ("source", "projection_source"),
+        ("state", "projection_state"),
+        (
+            "enqueue",
+            {
+                "collection_id": 7,
+                "artifact_id": 11,
+                "using": "projection_state",
+                "codec": codec,
+            },
+        ),
+    ]

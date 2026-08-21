@@ -11,7 +11,7 @@ from .reconciler import (
     prune_graph_projection_generations,
     reconcile_graph_projections,
 )
-from .runtime import load_projection_runtime_settings
+from .runtime import ProjectionDatabaseAliases, load_projection_runtime_settings
 from .worker import project_generation
 
 _TRANSIENT = (ConnectionError, TimeoutError)
@@ -45,6 +45,17 @@ def _uuid(value: object) -> UUID:
     if str(parsed) != value:
         raise ValueError("projection_id must be a canonical UUID string")
     return parsed
+
+
+def _publish_due_outbox(limit: int):
+    summary = publish_projection_outbox(
+        limit=limit,
+        now=timezone.now(),
+        using=ProjectionDatabaseAliases().state,
+    )
+    if summary.failed_count:
+        raise TimeoutError("projection_outbox_publish_pending")
+    return summary
 
 
 @shared_task(
@@ -81,6 +92,14 @@ def reconcile_knowledge_graph_projections(
     collection_id: int | None = None,
 ):
     size = _TASK_SETTINGS.projection_batch_size if page_size is None else page_size
+    published = (
+        None
+        if dry_run
+        else _run_redacted(
+            self,
+            lambda: _publish_due_outbox(size),
+        )
+    )
     summary = _run_redacted(
         self,
         lambda: reconcile_graph_projections(
@@ -89,47 +108,10 @@ def reconcile_knowledge_graph_projections(
             collection_id=collection_id,
         ),
     )
-    published = (
-        None
-        if dry_run
-        else _run_redacted(
-            self,
-            lambda: publish_projection_outbox(
-                limit=size,
-                now=timezone.now(),
-                using="default",
-            ),
-        )
-    )
     return {
         "examined_count": summary.examined_count,
         "enqueued_count": summary.enqueued_count,
         "published_count": 0 if published is None else published.published_count,
-    }
-
-
-@shared_task(
-    bind=True,
-    name="apps.knowledge_graph.projection.tasks.publish_knowledge_graph_projection_outbox",
-    max_retries=_TASK_MAX_RETRIES,
-    queue=_TASK_QUEUE,
-    acks_late=True,
-    reject_on_worker_lost=True,
-)
-def publish_knowledge_graph_projection_outbox(self, limit: int | None = None):
-    size = _TASK_SETTINGS.projection_batch_size if limit is None else limit
-    summary = _run_redacted(
-        self,
-        lambda: publish_projection_outbox(
-            limit=size,
-            now=timezone.now(),
-            using="default",
-        ),
-    )
-    return {
-        "attempted_count": summary.attempted_count,
-        "published_count": summary.published_count,
-        "failed_count": summary.failed_count,
     }
 
 
@@ -168,7 +150,6 @@ def prune_knowledge_graph_projection(
 
 
 __all__ = [
-    "publish_knowledge_graph_projection_outbox",
     "project_knowledge_graph_projection",
     "prune_knowledge_graph_projection",
     "reconcile_knowledge_graph_projections",

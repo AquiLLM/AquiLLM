@@ -65,6 +65,7 @@ class MemgraphProjectionRepository:
         self,
         *,
         bundle: CollectionGraphProjectionBundleV1,
+        private_mapping_checksum: str,
         batch_size: int,
         timeout_seconds: float,
     ) -> None:
@@ -72,6 +73,17 @@ class MemgraphProjectionRepository:
             raise TypeError("bundle must be an exact projection bundle")
         size = _size(batch_size, "batch_size")
         timeout = _timeout(timeout_seconds)
+        if (
+            type(private_mapping_checksum) is not str
+            or len(private_mapping_checksum) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in private_mapping_checksum
+            )
+        ):
+            raise ValueError(
+                "private mapping checksum must be lowercase SHA-256 hexadecimal"
+            )
         checksum = projection_checksum(bundle)
         marker = bundle.generation
         parameters = {
@@ -85,12 +97,16 @@ class MemgraphProjectionRepository:
             "membership_checksum": marker.membership_checksum,
             "graph_checksum": checksum,
             "snapshot_checksum": checksum,
-            "private_mapping_checksum": _EMPTY_PRIVATE_MAPPING,
+            "private_mapping_checksum": private_mapping_checksum,
             "state": "staging",
             **asdict(bundle.counts),
         }
         self._driver.execute_write(
             "MERGE (g:CollectionGeneration {generation_key:$generation_key}) "
+            "ON CREATE SET g.private_mapping_checksum=$private_mapping_checksum, "
+            "g.state=$state WITH g WHERE "
+            "g.private_mapping_checksum=$private_mapping_checksum "
+            "AND g.state IN ['staging','building'] "
             + self._set_clause("g", parameters),
             parameters,
             timeout_seconds=timeout,

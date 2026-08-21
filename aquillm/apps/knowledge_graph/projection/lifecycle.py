@@ -11,6 +11,7 @@ from django.utils import timezone
 from apps.collections.models import Collection
 from apps.knowledge_graph.models import CollectionGraphMembershipState, CollectionGraphProjection, GraphArtifact, GraphProjectionOutbox
 from .memberships import advance_membership_state_locked
+from .identifiers import ProjectionIdentifierCodec
 from .memgraph_repository import ProjectionValidationV1
 from .records import ProjectionFailureCode, ProjectionLeaseV1
 from .runtime import load_projection_runtime_settings
@@ -61,12 +62,12 @@ def _enqueue_outbox(row: object, operation: str, now: datetime, using: str) -> N
         entry.state, entry.published_at, entry.next_attempt_at, entry.last_failure_code = GraphProjectionOutbox.State.PENDING, None, now, ""
         entry.save(using=using, update_fields=["state", "published_at", "next_attempt_at", "last_failure_code"])
 
-def enqueue_collection_projection_locked(*, collection_id: int, artifact_id: int, using: str) -> CollectionGraphProjection:
+def enqueue_collection_projection_locked(*, collection_id: int, artifact_id: int, using: str, codec: ProjectionIdentifierCodec) -> CollectionGraphProjection:
     if type(collection_id) is not int or collection_id < 1 or type(artifact_id) is not int or artifact_id < 1: raise ValueError("collection_id and artifact_id must be positive integers")
     with _atomic(using):
         Collection.objects.using(using).select_for_update().get(pk=collection_id)
         GraphArtifact.objects.using(using).select_for_update().get(pk=artifact_id, collection_scope_id=collection_id, scope_type=GraphArtifact.ScopeType.COLLECTION, status=GraphArtifact.Status.ACTIVE, evaluation_only=False)
-        membership = advance_membership_state_locked(collection_id=collection_id, using=using, expected_artifact_id=artifact_id)
+        membership = advance_membership_state_locked(collection_id=collection_id, using=using, expected_artifact_id=artifact_id, codec=codec)
         rows = tuple(CollectionGraphProjection.objects.using(using).select_for_update().filter(collection_id=collection_id, state__in=("pending", "building", "ready")).order_by("id")[: _MAX_ROWS + 1])
         if len(rows) > _MAX_ROWS: raise RuntimeError("projection fanout exceeds the bounded row limit")
         schema_version, projection_version, identifier_key_version = _projection_versions()
@@ -80,14 +81,14 @@ def enqueue_collection_projection_locked(*, collection_id: int, artifact_id: int
         _enqueue_outbox(current, GraphProjectionOutbox.Operation.PROJECT, timezone.now(), using)
         return current
 
-def enqueue_automatic_membership_changes_locked(*, collection_ids: tuple[int, ...], using: str) -> int:
+def enqueue_automatic_membership_changes_locked(*, collection_ids: tuple[int, ...], using: str, codec: ProjectionIdentifierCodec) -> int:
     if type(collection_ids) is not tuple or collection_ids != tuple(sorted(set(collection_ids))) or any(type(value) is not int or value < 1 for value in collection_ids) or len(collection_ids) > _MAX_ROWS: raise ValueError("collection_ids must be a bounded sorted unique tuple")
     if not connections[using].in_atomic_block: raise RuntimeError("membership projection enqueue requires an atomic transaction")
     enqueued = 0
     for collection_id in collection_ids:
         artifact_id = GraphArtifact.objects.using(using).filter(collection_scope_id=collection_id, scope_type="collection", status="active", evaluation_only=False).values_list("pk", flat=True).first()
         if artifact_id is not None:
-            enqueue_collection_projection_locked(collection_id=collection_id, artifact_id=artifact_id, using=using); enqueued += 1
+            enqueue_collection_projection_locked(collection_id=collection_id, artifact_id=artifact_id, using=using, codec=codec); enqueued += 1
     return enqueued
 
 def claim_projection_lease(*, projection_id: UUID, owner: str, now: datetime, lease_seconds: int, using: str) -> ProjectionLeaseV1 | None:

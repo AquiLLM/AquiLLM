@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -81,25 +82,64 @@ def test_reconcile_and_prune_tasks_are_registered_thin_wrappers(monkeypatch):
     assert len(published) == 1
 
 
-def test_outbox_publisher_task_is_registered_and_redacted(monkeypatch):
+def test_projection_module_registers_exactly_three_production_task_wrappers() -> None:
+    source = Path(tasks.__file__).read_text(encoding="utf-8")
+
+    assert source.count("@shared_task(") == 3
+    assert "def publish_knowledge_graph_projection_outbox" not in source
+
+
+def test_reconcile_task_retries_failed_outbox_then_publishes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_graph_projections",
+        lambda **_kwargs: SimpleNamespace(examined_count=0, enqueued_count=0),
+    )
+    summaries = [
+        SimpleNamespace(attempted_count=1, published_count=0, failed_count=1),
+        SimpleNamespace(attempted_count=1, published_count=1, failed_count=0),
+    ]
+    observed = []
     monkeypatch.setattr(
         tasks,
         "publish_projection_outbox",
-        lambda **_kwargs: SimpleNamespace(
-            attempted_count=3,
-            published_count=2,
-            failed_count=1,
-        ),
-        raising=False,
+        lambda **kwargs: observed.append(kwargs) or summaries.pop(0),
     )
 
-    result = tasks.publish_knowledge_graph_projection_outbox.run(limit=25)
+    with pytest.raises(RuntimeError, match="projection_task_transient"):
+        tasks.reconcile_knowledge_graph_projections.run(10, False, None)
+    recovered = tasks.reconcile_knowledge_graph_projections.run(10, False, None)
 
-    assert result == {
-        "attempted_count": 3,
-        "published_count": 2,
-        "failed_count": 1,
-    }
+    assert recovered["published_count"] == 1
+    assert [call["using"] for call in observed] == [
+        "projection_state",
+        "projection_state",
+    ]
+
+
+def test_reconcile_attempts_due_outbox_before_graph_maintenance(monkeypatch) -> None:
+    order = []
+    monkeypatch.setattr(
+        tasks,
+        "publish_projection_outbox",
+        lambda **_kwargs: (
+            order.append("publish")
+            or SimpleNamespace(attempted_count=0, published_count=0, failed_count=0)
+        ),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_graph_projections",
+        lambda **_kwargs: (
+            order.append("reconcile")
+            or (_ for _ in ()).throw(TimeoutError("backend detail"))
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="projection_task_transient"):
+        tasks.reconcile_knowledge_graph_projections.run(10, False, None)
+
+    assert order == ["publish", "reconcile"]
 
 
 def test_task_boundary_retries_fixed_redacted_memgraph_failures():

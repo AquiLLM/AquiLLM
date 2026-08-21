@@ -7,7 +7,8 @@ from django.utils import timezone
 from apps.knowledge_graph.models import CollectionGraphProjection
 
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
-from .records import ProjectionLifecycleState
+from .records import ProjectionGenerationManifestV1, ProjectionLifecycleState
+from .runtime import ProjectionDatabaseAliases
 from .serialization import projection_checksum
 
 
@@ -22,7 +23,9 @@ def _opaque_generation(value: str) -> OpaqueProjectionKey:
 
 
 def _projection_page(*, after_id, page_size: int, collection_id: int | None = None):
-    query = CollectionGraphProjection.objects.order_by("id")
+    query = CollectionGraphProjection.objects.using(
+        ProjectionDatabaseAliases().state
+    ).order_by("id")
     if collection_id is not None:
         query = query.filter(collection_pk_snapshot=collection_id)
     if after_id is not None:
@@ -93,6 +96,7 @@ def audit_projection_generation(*, row, postgres, graph, settings) -> Generation
     bundle = postgres.load_projection_bundle(
         projection_id=row.id,
         batch_size=settings.projection_batch_size,
+        purpose="audit",
     )
     checksum = projection_checksum(bundle)
     try:
@@ -105,6 +109,23 @@ def audit_projection_generation(*, row, postgres, graph, settings) -> Generation
     if not _row_matches_bundle(row, bundle, checksum):
         return GenerationAuditV1("authority_drift", bundle.generation.collection_key)
     if not _manifest_matches(row, bundle, manifest, checksum):
+        return GenerationAuditV1("checksum_drift", bundle.generation.collection_key)
+    expected = ProjectionGenerationManifestV1(
+        bundle.generation.generation_key,
+        bundle.generation.schema_version,
+        bundle.generation.projection_version,
+        bundle.generation.identifier_key_version,
+        checksum,
+        checksum,
+        row.private_mapping_checksum,
+        bundle.counts,
+        ProjectionLifecycleState.READY,
+    )
+    validation = graph.validate_generation(
+        expected=expected,
+        timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
+    )
+    if not validation.valid:
         return GenerationAuditV1("checksum_drift", bundle.generation.collection_key)
     return GenerationAuditV1(None, bundle.generation.collection_key)
 
@@ -123,9 +144,23 @@ def _authoritative_generation_keys(
         if not page:
             break
         for row in page:
+            purpose = {
+                "building": "build",
+                "ready": "audit",
+                "failed": "prune",
+                "superseded": "prune",
+            }.get(row.state)
+            if purpose is None:
+                continue
+            if purpose == "prune" and (
+                getattr(row, "collection_id", False) is None
+                or getattr(row, "artifact_id", False) is None
+            ):
+                continue
             bundle = postgres.load_projection_bundle(
                 projection_id=row.id,
                 batch_size=settings.projection_batch_size,
+                purpose=purpose,
             )
             values.add(bundle.generation.generation_key)
         after_id = page[-1].id

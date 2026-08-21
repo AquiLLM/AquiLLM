@@ -10,7 +10,11 @@ from apps.knowledge_graph.projection.lifecycle import (
     enqueue_collection_projection_locked,
 )
 from apps.knowledge_graph.projection.reconciler import reconcile_graph_projections
-from apps.knowledge_graph.projection.runtime import load_projection_runtime_settings
+from apps.knowledge_graph.projection.runtime import (
+    ProjectionDatabaseAliases,
+    load_projection_runtime_settings,
+    projection_identifier_codec,
+)
 
 
 class Command(BaseCommand):
@@ -40,8 +44,11 @@ class Command(BaseCommand):
                 "enqueued_count": summary.enqueued_count,
             }
         else:
+            settings = load_projection_runtime_settings()
+            aliases = ProjectionDatabaseAliases()
             artifact_id = (
-                GraphArtifact.objects.filter(
+                GraphArtifact.objects.using(aliases.source)
+                .filter(
                     collection_scope_id=collection_id,
                     scope_type="collection",
                     status="active",
@@ -53,11 +60,12 @@ class Command(BaseCommand):
             if artifact_id is None:
                 raise CommandError("collection has no active graph artifact")
             if not options["dry_run"]:
-                with transaction.atomic():
+                with transaction.atomic(using=aliases.state):
                     enqueue_collection_projection_locked(
                         collection_id=collection_id,
                         artifact_id=artifact_id,
-                        using="default",
+                        using=aliases.state,
+                        codec=projection_identifier_codec(settings),
                     )
             payload = {
                 "examined_count": 1,

@@ -49,7 +49,10 @@ def test_memgraph_repository_stage_read_validate_ready_delete_end_to_end(
     key = repository.opaque_generation_key(bundle.generation.generation_key)
     try:
         repository.write_staging_generation(
-            bundle=bundle, batch_size=2, timeout_seconds=5.0
+            bundle=bundle,
+            private_mapping_checksum=expected.private_mapping_checksum,
+            batch_size=2,
+            timeout_seconds=5.0,
         )
         assert (
             repository.read_generation_records(

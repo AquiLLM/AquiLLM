@@ -34,7 +34,7 @@ def _projection_id(value: object) -> UUID:
 
 class ProjectionRowSource(Protocol):
     def load_projection_rows(
-        self, *, projection_id: UUID, batch_size: int
+        self, *, projection_id: UUID, batch_size: int, purpose: str = "build"
     ) -> Mapping[str, object]: ...
 
     def load_private_chunk_rows(
@@ -89,12 +89,20 @@ class PostgresProjectionRepository:
         )
 
     def load_projection_bundle(
-        self, *, projection_id: UUID, batch_size: int
+        self,
+        *,
+        projection_id: UUID,
+        batch_size: int,
+        purpose: str = "build",
     ) -> CollectionGraphProjectionBundleV1:
         identifier = _projection_id(projection_id)
         size = _page_size(batch_size)
+        if type(purpose) is not str or purpose not in {"build", "audit", "prune"}:
+            raise ValueError("projection load purpose must be build, audit, or prune")
         rows = self._source.load_projection_rows(
-            projection_id=identifier, batch_size=size
+            projection_id=identifier,
+            batch_size=size,
+            purpose=purpose,
         )
         required = {
             "generation",

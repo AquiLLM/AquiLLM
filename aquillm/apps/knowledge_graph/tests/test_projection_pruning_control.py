@@ -64,8 +64,13 @@ def test_exact_projection_prune_is_not_hidden_by_collection_retention(monkeypatc
     projection_id = uuid4()
     row = SimpleNamespace(id=projection_id)
     filters = []
+    aliases = []
 
     class Query:
+        def using(self, alias):
+            aliases.append(alias)
+            return self
+
         def filter(self, **kwargs):
             filters.append(kwargs)
             return self
@@ -82,7 +87,7 @@ def test_exact_projection_prune_is_not_hidden_by_collection_retention(monkeypatc
     monkeypatch.setattr(
         reconciler.CollectionGraphProjection,
         "objects",
-        SimpleNamespace(filter=lambda **kwargs: Query().filter(**kwargs)),
+        Query(),
     )
 
     candidates = reconciler._prune_candidates(
@@ -93,11 +98,18 @@ def test_exact_projection_prune_is_not_hidden_by_collection_retention(monkeypatc
     )
 
     assert candidates == (row,)
+    assert aliases == ["projection_state"]
     assert {"pk": projection_id} in filters
 
 
 def test_inspection_reports_manifest_drift_and_orphans_not_failed_alias(monkeypatch):
+    aliases = []
+
     class Query:
+        def using(self, alias):
+            aliases.append(alias)
+            return self
+
         def all(self):
             return self
 
@@ -123,6 +135,7 @@ def test_inspection_reports_manifest_drift_and_orphans_not_failed_alias(monkeypa
     )
 
     assert counts["failed_count"] == 1
+    assert aliases == ["projection_state"]
     assert counts["drift_count"] == 0
     assert counts["orphan_count"] == 3
     assert counts["replayed_count"] == 1

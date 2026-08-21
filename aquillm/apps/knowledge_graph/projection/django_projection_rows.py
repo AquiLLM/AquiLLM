@@ -19,6 +19,11 @@ from apps.knowledge_graph.models import (
 from .django_projection_evidence import load_projection_evidence
 
 _MAX_FAMILY_ROWS = 4_999
+_PURPOSE_STATES = {
+    "build": ("building",),
+    "audit": ("ready",),
+    "prune": ("failed", "superseded"),
+}
 _ARTIFACT_FIELDS = (
     "id scope_type scope_id collection_scope_id rebuild_request_id evaluation_only "
     "build_key build_generation orchestration_version source_hash ontology_version "
@@ -42,11 +47,16 @@ def _bounded(query, fields: tuple[str, ...], batch_size: int) -> tuple[dict, ...
 class DjangoProjectionOrmLoader:
     """Load the selected active authoritative graph without text-bearing columns."""
 
-    def __init__(self, using: str) -> None:
+    def __init__(self, using: str, *, state_using: str | None = None) -> None:
         self.using = using
+        self.state_using = using if state_using is None else state_using
 
-    def load(self, *, projection_id: UUID, batch_size: int) -> Mapping[str, object]:
-        projection = self._projection(projection_id)
+    def load(
+        self, *, projection_id: UUID, batch_size: int, purpose: str = "build"
+    ) -> Mapping[str, object]:
+        if type(purpose) is not str or purpose not in _PURPOSE_STATES:
+            raise ValueError("projection load purpose must be build, audit, or prune")
+        projection = self._projection(projection_id, purpose)
         artifact_id = projection["artifact_id"]
         collection_id = projection["collection_id"]
         inputs = _bounded(
@@ -62,7 +72,7 @@ class DjangoProjectionOrmLoader:
         )
         document_ids = tuple(row["document_id"] for row in inputs)
         document_artifact_ids = tuple(row["document_artifact_id"] for row in inputs)
-        entities = self._entities(artifact_id, collection_id, batch_size)
+        entities = self._entities(artifact_id, collection_id, batch_size, purpose)
         entity_ids = tuple(row["id"] for row in entities)
         relations = self._relations(artifact_id, entity_ids, batch_size)
         chunks = _bounded(
@@ -107,18 +117,14 @@ class DjangoProjectionOrmLoader:
             ),
         }
 
-    def _projection(self, projection_id: UUID) -> dict[str, object]:
+    def _projection(self, projection_id: UUID, purpose: str) -> dict[str, object]:
         row = (
-            CollectionGraphProjection.objects.using(self.using)
+            CollectionGraphProjection.objects.using(self.state_using)
             .filter(
                 pk=projection_id,
-                state="building",
+                state__in=_PURPOSE_STATES[purpose],
                 collection__isnull=False,
                 artifact__isnull=False,
-                artifact__status="active",
-                artifact__evaluation_only=False,
-                artifact__scope_type="collection",
-                artifact__collection_scope_id=F("collection_id"),
             )
             .values(
                 "id",
@@ -127,7 +133,6 @@ class DjangoProjectionOrmLoader:
                 "collection_pk_snapshot",
                 "artifact_id",
                 "artifact_pk_snapshot",
-                "artifact__scope_id",
                 "schema_version",
                 "projection_version",
                 "identifier_key_version",
@@ -137,28 +142,44 @@ class DjangoProjectionOrmLoader:
             )
             .get()
         )
-        if (
-            row["collection_id"] != row["collection_pk_snapshot"]
-            or row["artifact_id"] != row["artifact_pk_snapshot"]
-            or row["artifact__scope_id"] != str(row["collection_id"])
-        ):
-            raise ValueError("projection source identity is stale")
-        membership = (
-            CollectionGraphMembershipState.objects.using(self.using)
-            .filter(collection_id=row["collection_id"])
-            .values("active_artifact_id", "registry_epoch", "membership_checksum")
+        artifact_statuses = (
+            ("active",) if purpose != "prune" else ("active", "superseded")
+        )
+        artifact = (
+            GraphArtifact.objects.using(self.using)
+            .filter(
+                pk=row["artifact_id"],
+                status__in=artifact_statuses,
+                evaluation_only=False,
+                scope_type="collection",
+                collection_scope_id=row["collection_id"],
+            )
+            .values("scope_id")
             .get()
         )
         if (
-            membership["active_artifact_id"],
-            membership["registry_epoch"],
-            membership["membership_checksum"],
-        ) != (
-            row["artifact_id"],
-            row["membership_epoch"],
-            row["membership_checksum"],
+            row["collection_id"] != row["collection_pk_snapshot"]
+            or row["artifact_id"] != row["artifact_pk_snapshot"]
+            or artifact["scope_id"] != str(row["collection_id"])
         ):
-            raise ValueError("projection membership source is stale")
+            raise ValueError("projection source identity is stale")
+        if purpose != "prune":
+            membership = (
+                CollectionGraphMembershipState.objects.using(self.state_using)
+                .filter(collection_id=row["collection_id"])
+                .values("active_artifact_id", "registry_epoch", "membership_checksum")
+                .get()
+            )
+            if (
+                membership["active_artifact_id"],
+                membership["registry_epoch"],
+                membership["membership_checksum"],
+            ) != (
+                row["artifact_id"],
+                row["membership_epoch"],
+                row["membership_checksum"],
+            ):
+                raise ValueError("projection membership source is stale")
         return {
             key.removeprefix("artifact__"): value
             for key, value in row.items()
@@ -166,18 +187,23 @@ class DjangoProjectionOrmLoader:
             not in {
                 "collection_pk_snapshot",
                 "artifact_pk_snapshot",
-                "artifact__scope_id",
             }
         }
 
     def _entities(
-        self, artifact_id: int, collection_id: int, batch_size: int
+        self,
+        artifact_id: int,
+        collection_id: int,
+        batch_size: int,
+        purpose: str,
     ) -> tuple[dict, ...]:
         return _bounded(
             CollectionEntity.objects.using(self.using).filter(
                 artifact_id=artifact_id,
                 collection_id=collection_id,
-                artifact__status="active",
+                artifact__status__in=(
+                    ("active",) if purpose != "prune" else ("active", "superseded")
+                ),
                 artifact__evaluation_only=False,
                 status="active",
             ),

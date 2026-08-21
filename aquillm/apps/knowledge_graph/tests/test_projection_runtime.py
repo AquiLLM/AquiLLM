@@ -69,3 +69,111 @@ def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
         "password": "writer-secret",
         "database": "projection",
     }
+
+
+def test_postgres_factory_injects_frozen_hmac_versions_and_database_aliases(
+    monkeypatch,
+) -> None:
+    settings = runtime.load_projection_runtime_settings(_projection_environment())
+    aliases = runtime.ProjectionDatabaseAliases(
+        source="projection_source",
+        state="projection_state",
+    )
+    observed: dict[str, object] = {}
+
+    def source(using, **kwargs):
+        observed["source"] = (using, kwargs)
+        return "source"
+
+    def store(using):
+        observed["store"] = using
+        return "store"
+
+    def repository(**kwargs):
+        observed["repository"] = kwargs
+        return "repository"
+
+    monkeypatch.setattr(runtime, "DjangoProjectionRowSource", source, raising=False)
+    monkeypatch.setattr(runtime, "DjangoChunkReferenceStore", store, raising=False)
+    monkeypatch.setattr(
+        runtime, "PostgresProjectionRepository", repository, raising=False
+    )
+
+    result = runtime.postgres_projection_repository(settings, aliases=aliases)
+
+    assert result == "repository"
+    assert observed == {
+        "source": (
+            "projection_source",
+            {
+                "state_using": "projection_state",
+                "identifier_key": b"identifier-secret",
+                "identifier_key_version": "key-v7",
+                "schema_version": "collection-graph-v1",
+                "projection_version": "projection-v1",
+            },
+        ),
+        "store": "projection_state",
+        "repository": {
+            "using": "projection_state",
+            "source": "source",
+            "chunk_store": "store",
+        },
+    }
+
+
+def test_activation_projection_hook_is_default_off_and_fail_open(monkeypatch) -> None:
+    called = []
+    monkeypatch.setattr(
+        runtime,
+        "enqueue_collection_projection_locked",
+        lambda **kwargs: called.append(kwargs),
+        raising=False,
+    )
+
+    assert runtime.enqueue_activated_collection_projection(7, 9, source={}) is False
+    assert called == []
+
+
+def test_enabled_activation_injects_frozen_membership_hmac_on_web_alias(
+    monkeypatch,
+) -> None:
+    from apps.knowledge_graph.projection import lifecycle
+
+    observed = {}
+    monkeypatch.setattr(
+        lifecycle,
+        "enqueue_collection_projection_locked",
+        lambda **kwargs: observed.update(kwargs),
+    )
+
+    enabled = runtime.enqueue_activated_collection_projection(
+        7,
+        9,
+        source=_projection_environment(),
+    )
+
+    assert enabled is True
+    assert observed["using"] == "default"
+    assert observed["codec"].key_version == "key-v7"
+
+
+def test_worker_postgres_factory_uses_the_live_configured_repository(
+    monkeypatch,
+) -> None:
+    from apps.knowledge_graph.projection import worker
+
+    settings = runtime.load_projection_runtime_settings(_projection_environment())
+    repository = object()
+    observed = []
+    monkeypatch.setattr(worker, "_projection_settings", lambda: settings)
+    monkeypatch.setattr(
+        worker,
+        "postgres_projection_repository",
+        lambda value: observed.append(value) or repository,
+        raising=False,
+    )
+
+    assert worker._postgres_repository() is repository
+    assert observed == [settings]
+    assert worker._state_using() == "projection_state"

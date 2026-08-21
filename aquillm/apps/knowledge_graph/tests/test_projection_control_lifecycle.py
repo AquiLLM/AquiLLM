@@ -53,6 +53,39 @@ def test_evaluation_activation_completes_without_projection_enqueue(monkeypatch)
     assert enqueued == []
 
 
+def test_normal_activation_completes_when_projection_is_disabled(monkeypatch):
+    from django.db import transaction
+
+    from apps.knowledge_graph.graph import assembly
+
+    artifact = SimpleNamespace(pk=11, evaluation_only=False)
+    monkeypatch.setattr(transaction, "atomic", lambda: nullcontext())
+    monkeypatch.setattr(
+        assembly,
+        "_locked_candidate",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(pk=7),
+            artifact,
+            SimpleNamespace(),
+            (artifact,),
+        ),
+    )
+    monkeypatch.setattr(
+        assembly,
+        "_validate_locked_complete_artifact",
+        lambda **_kwargs: "validated",
+    )
+    monkeypatch.setattr(
+        assembly,
+        "_swap_active_collection_artifact",
+        lambda **_kwargs: None,
+    )
+
+    result = assembly.activate_collection_graph(7, 13, "a" * 64)
+
+    assert result == "validated"
+
+
 def test_rebuild_resets_published_project_outbox_to_pending(monkeypatch):
     now = datetime(2026, 8, 20, tzinfo=UTC)
     projection = SimpleNamespace(id=uuid4())

@@ -262,6 +262,9 @@ def test_reconcile_handles_empty_store_drift_and_newer_artifact_in_pages(monkeyp
     )
     monkeypatch.setattr(reconciler, "_orphan_generation_keys", lambda **_kwargs: ())
     monkeypatch.setattr(reconciler, "_projection_settings", lambda: object())
+    monkeypatch.setattr(
+        reconciler, "projection_identifier_codec", lambda _value: object()
+    )
     monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
     monkeypatch.setattr(reconciler, "_memgraph_repository", lambda: object())
     enqueued = []
@@ -277,22 +280,3 @@ def test_reconcile_handles_empty_store_drift_and_newer_artifact_in_pages(monkeyp
 
     assert summary.examined_count == 3
     assert enqueued == [(1, 11), (2, 22), (3, 33)]
-
-
-def test_pruning_is_bounded_and_dry_run_never_deletes(monkeypatch):
-    rows = tuple(SimpleNamespace(id=uuid4()) for _ in range(3))
-    monkeypatch.setattr(reconciler, "_prune_candidates", lambda **_kwargs: rows)
-    monkeypatch.setattr(reconciler, "_orphan_generation_keys", lambda **_kwargs: ())
-    monkeypatch.setattr(reconciler, "_projection_settings", lambda: object())
-    monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
-    monkeypatch.setattr(reconciler, "_memgraph_repository", lambda: object())
-    deleted = []
-    monkeypatch.setattr(
-        reconciler, "_delete_projection_generation", lambda row: deleted.append(row.id)
-    )
-
-    dry = reconciler.prune_graph_projection_generations(
-        page_size=3, retain=1, dry_run=True
-    )
-
-    assert dry.candidate_count == 3 and deleted == []

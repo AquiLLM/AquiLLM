@@ -4,7 +4,6 @@ import json
 from collections.abc import Sequence
 from hashlib import sha256
 
-from django.conf import settings
 from django.db import connections
 
 from apps.collections.models import Collection
@@ -54,18 +53,6 @@ def _opaque_entity_key(
         generation=generation,  # type: ignore[arg-type]
         source=primary_key,
     ).value
-
-
-def _configured_codec() -> ProjectionIdentifierCodec:
-    from .identifiers import HmacSha256ProjectionIdentifierCodec
-
-    secret = getattr(settings, "KG_PROJECTION_IDENTIFIER_HMAC_KEY", "")
-    version = getattr(settings, "KG_PROJECTION_IDENTIFIER_KEY_VERSION", "")
-    if type(secret) is not str or not secret or type(version) is not str or not version:
-        raise RuntimeError("projection identifier codec is not configured")
-    return HmacSha256ProjectionIdentifierCodec(
-        secret.encode("utf-8"), key_version=version
-    )
 
 
 def null_membership_decision_checksum(
@@ -139,7 +126,9 @@ def load_automatic_membership_assignments(
     size = _batch_size(batch_size)
     if type(using) is not str or not using:
         raise ValueError("using must be a nonempty database alias")
-    encoder = codec if codec is not None else _configured_codec()
+    if codec is None:
+        raise RuntimeError("projection identifier codec is not configured")
+    encoder = codec
     assignments = []
     for (
         entity_id,
@@ -191,7 +180,11 @@ def membership_decision_checksum(
 
 
 def advance_membership_state_locked(
-    *, collection_id: int, using: str, expected_artifact_id: int | None
+    *,
+    collection_id: int,
+    using: str,
+    expected_artifact_id: int | None,
+    codec: ProjectionIdentifierCodec,
 ) -> CollectionGraphMembershipState:
     if type(collection_id) is not int or collection_id < 1:
         raise ValueError("collection_id must be a positive integer")
@@ -217,7 +210,10 @@ def advance_membership_state_locked(
     if artifact_id != expected_artifact_id:
         raise ValueError("active artifact changed while membership state was locked")
     assignments = load_automatic_membership_assignments(
-        collection_ids=(collection_id,), using=using, batch_size=_MAX_BATCH
+        collection_ids=(collection_id,),
+        using=using,
+        batch_size=_MAX_BATCH,
+        codec=codec,
     )
     checksum = membership_decision_checksum(assignments)
     resolver = "unresolved-v1" if artifact is None else artifact.resolver_version

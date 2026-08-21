@@ -68,7 +68,7 @@ def validate(repository, *, expected, timeout, empty_private_checksum):
         expected.graph_checksum,
         expected.snapshot_checksum,
         expected.counts,
-        ProjectionLifecycleState.BUILDING,
+        expected.state,
     )
     marker_matches = (
         marker.generation_key,
@@ -81,17 +81,17 @@ def validate(repository, *, expected, timeout, empty_private_checksum):
         expected.projection_version,
         expected.identifier_key_version,
     )
-    private_valid = observed.private_mapping_checksum in {
-        empty_private_checksum,
-        expected.private_mapping_checksum,
-    } and (
-        (
-            expected.counts.chunk_count == 0
-            and expected.private_mapping_checksum == empty_private_checksum
-        )
-        or (
-            expected.counts.chunk_count > 0
-            and expected.private_mapping_checksum != empty_private_checksum
+    private_valid = (
+        observed.private_mapping_checksum == expected.private_mapping_checksum
+        and (
+            (
+                expected.counts.chunk_count == 0
+                and expected.private_mapping_checksum == empty_private_checksum
+            )
+            or (
+                expected.counts.chunk_count > 0
+                and expected.private_mapping_checksum != empty_private_checksum
+            )
         )
     )
     valid = (
@@ -103,20 +103,24 @@ def validate(repository, *, expected, timeout, empty_private_checksum):
     )
     if not valid:
         return _invalid(expected, observed, checksum, bundle.counts)
+    if expected.state is ProjectionLifecycleState.READY:
+        return ProjectionValidationV1(
+            expected.generation_key,
+            checksum,
+            bundle.counts,
+            True,
+        )
     values = {
         "generation_key": expected.generation_key,
         "validation_checksum": checksum,
         "private_mapping_checksum": expected.private_mapping_checksum,
         "validated_private_mapping_checksum": expected.private_mapping_checksum,
-        "empty_private_mapping_checksum": empty_private_checksum,
     }
     repository._driver.execute_write(
         "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
         "WHERE g.state IN ['staging','building'] "
-        "AND g.private_mapping_checksum IN "
-        "[$empty_private_mapping_checksum,$private_mapping_checksum] "
+        "AND g.private_mapping_checksum=$private_mapping_checksum "
         "SET g.validation_checksum=$validation_checksum, "
-        "g.private_mapping_checksum=$private_mapping_checksum, "
         "g.validated_private_mapping_checksum=$validated_private_mapping_checksum",
         values,
         timeout_seconds=timeout,

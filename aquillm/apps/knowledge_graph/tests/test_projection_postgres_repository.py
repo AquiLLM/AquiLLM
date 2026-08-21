@@ -28,8 +28,10 @@ class _BundleSource:
         self.calls: list[tuple[uuid.UUID, int]] = []
         self.endpoint_closed = endpoint_closed
 
-    def load_projection_rows(self, *, projection_id: uuid.UUID, batch_size: int):
-        self.calls.append((projection_id, batch_size))
+    def load_projection_rows(
+        self, *, projection_id: uuid.UUID, batch_size: int, purpose: str = "build"
+    ):
+        self.calls.append((projection_id, batch_size, purpose))
         marker = ProjectionGenerationMarkerV1(
             _key("1"),
             _key("2"),
@@ -109,7 +111,7 @@ def test_bundle_loader_uses_bounded_ordered_source_and_returns_no_private_text()
         projection_id=projection_id, batch_size=37
     )
 
-    assert source.calls == [(projection_id, 37)]
+    assert source.calls == [(projection_id, 37, "build")]
     assert bundle.counts.entity_count == 1
     assert "label" not in repr(bundle)
     assert "text" not in repr(bundle)
@@ -166,3 +168,25 @@ def test_private_row_loader_is_a_stable_bounded_repository_api() -> None:
             projection_id=projection_id, batch_size=23
         )
     assert source.calls == [(projection_id, 23)]
+
+
+def test_bundle_loader_routes_ready_audit_and_terminal_prune_purposes() -> None:
+    source = _BundleSource()
+    repository = PostgresProjectionRepository(source=source)
+    projection_id = uuid.uuid4()
+
+    repository.load_projection_bundle(
+        projection_id=projection_id,
+        batch_size=37,
+        purpose="audit",
+    )
+    repository.load_projection_bundle(
+        projection_id=projection_id,
+        batch_size=37,
+        purpose="prune",
+    )
+
+    assert source.calls == [
+        (projection_id, 37, "audit"),
+        (projection_id, 37, "prune"),
+    ]

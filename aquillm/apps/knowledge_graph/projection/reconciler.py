@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from uuid import UUID
 
 from django.db import transaction
@@ -17,35 +16,21 @@ from .generation_audit import (
     orphan_generation_keys as _orphan_generation_keys,
 )
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
+from .inspection import inspect_projection_authority as inspect_projection_authority
 from .lifecycle import (
     enqueue_collection_projection_locked,
     supersede_projection_locked,
 )
-from .postgres_repository import PostgresProjectionRepository
+from .reconciliation_types import PruneSummaryV1, ReconcileSummaryV1
 from .runtime import (
+    ProjectionDatabaseAliases,
     load_projection_runtime_settings,
     memgraph_projection_repository,
+    postgres_projection_repository,
+    projection_identifier_codec,
 )
 
 _MAX_PAGE = 5_000
-
-
-@dataclass(frozen=True, slots=True)
-class ReconcileSummaryV1:
-    examined_count: int
-    enqueued_count: int
-    dry_run: bool
-    drift_count: int = 0
-    orphan_count: int = 0
-    replayed_count: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class PruneSummaryV1:
-    candidate_count: int
-    deleted_count: int
-    dry_run: bool
-    orphan_count: int = 0
 
 
 def _size(value: object, name: str) -> int:
@@ -79,13 +64,17 @@ def _memgraph_repository():
 
 
 def _postgres_repository():
-    return PostgresProjectionRepository()
+    return postgres_projection_repository(_projection_settings())
+
+
+def _aliases() -> ProjectionDatabaseAliases:
+    return ProjectionDatabaseAliases()
 
 
 def _active_artifact_page(
     *, after_id: int, page_size: int, collection_id: int | None = None
 ):
-    query = GraphArtifact.objects.filter(
+    query = GraphArtifact.objects.using(_aliases().source).filter(
         pk__gt=after_id,
         scope_type="collection",
         status="active",
@@ -100,7 +89,8 @@ def _active_artifact_page(
 
 def _projection_for_active(*, collection_id: int, artifact_id: int):
     return (
-        CollectionGraphProjection.objects.filter(
+        CollectionGraphProjection.objects.using(_aliases().state)
+        .filter(
             collection_pk_snapshot=collection_id,
             artifact_pk_snapshot=artifact_id,
         )
@@ -109,18 +99,20 @@ def _projection_for_active(*, collection_id: int, artifact_id: int):
     )
 
 
-def _replay_projection(*, row, collection_id: int, artifact_id: int) -> None:
-    with _atomic("default"):
+def _replay_projection(*, row, collection_id: int, artifact_id: int, codec) -> None:
+    using = _aliases().state
+    with _atomic(using):
         if row is not None and row.state == "ready":
             supersede_projection_locked(
                 projection_id=row.id,
                 now=timezone.now(),
-                using="default",
+                using=using,
             )
         enqueue_collection_projection_locked(
             collection_id=collection_id,
             artifact_id=artifact_id,
-            using="default",
+            using=using,
+            codec=codec,
         )
 
 
@@ -133,6 +125,7 @@ def reconcile_graph_projections(
         raise TypeError("dry_run must be exact")
     settings = _projection_settings()
     postgres, graph = _postgres_repository(), _memgraph_repository()
+    codec = None if dry_run else projection_identifier_codec(settings)
     after = examined = enqueued = drift = replayed = 0
     selected_collection_key = None
     while True:
@@ -168,6 +161,7 @@ def reconcile_graph_projections(
                         row=row,
                         collection_id=active_collection_id,
                         artifact_id=artifact_id,
+                        codec=codec,
                     )
                     enqueued += 1
         after = page[-1][1]
@@ -195,7 +189,9 @@ def _prune_candidates(
     projection_id: UUID | None,
     collection_id: int | None,
 ):
-    query = CollectionGraphProjection.objects.filter(state__in=("failed", "superseded"))
+    query = CollectionGraphProjection.objects.using(_aliases().state).filter(
+        state__in=("failed", "superseded")
+    )
     if projection_id is not None:
         return tuple(query.filter(pk=projection_id).order_by("id")[:page_size])
     if collection_id is not None:
@@ -218,12 +214,24 @@ def _opaque_generation(value: str) -> OpaqueProjectionKey:
 
 
 def _delete_projection_generation(*, row, postgres, graph, settings) -> None:
-    bundle = postgres.load_projection_bundle(
-        projection_id=row.id,
-        batch_size=settings.projection_batch_size,
-    )
+    if (
+        getattr(row, "collection_id", False) is None
+        or getattr(row, "artifact_id", False) is None
+    ):
+        generation_key = projection_identifier_codec(settings).encode(
+            ProjectionIdentifierDomain.COLLECTION,
+            generation=row.generation_key,
+            source=row.generation_key,
+        )
+    else:
+        bundle = postgres.load_projection_bundle(
+            projection_id=row.id,
+            batch_size=settings.projection_batch_size,
+            purpose="prune",
+        )
+        generation_key = _opaque_generation(bundle.generation.generation_key)
     graph.delete_generation(
-        generation_key=_opaque_generation(bundle.generation.generation_key),
+        generation_key=generation_key,
         timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
     )
 
@@ -279,16 +287,4 @@ def prune_graph_projection_generations(
             deleted += 1
     return PruneSummaryV1(
         len(candidates) + len(orphaned), deleted, dry_run, len(orphaned)
-    )
-
-
-def inspect_projection_authority(
-    *, collection_id: int | None, all_collections: bool, page_size: int
-) -> dict[str, int]:
-    from .inspection import inspect_projection_authority as inspect
-
-    return inspect(
-        collection_id=collection_id,
-        all_collections=all_collections,
-        page_size=page_size,
     )

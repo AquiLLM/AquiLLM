@@ -29,8 +29,8 @@ class _Loader:
         self.snapshot = snapshot
         self.calls = []
 
-    def load(self, *, projection_id, batch_size):
-        self.calls.append((projection_id, batch_size))
+    def load(self, *, projection_id, batch_size, purpose="build"):
+        self.calls.append((projection_id, batch_size, purpose))
         return self.snapshot
 
 
@@ -193,7 +193,10 @@ def test_source_encodes_all_authoritative_families_and_exact_private_rows() -> N
     rows = source.load_projection_rows(projection_id=projection_id, batch_size=37)
     private = source.load_private_chunk_rows(projection_id=projection_id, batch_size=37)
 
-    assert loader.calls == [(projection_id, 37), (projection_id, 37)]
+    assert loader.calls == [
+        (projection_id, 37, "build"),
+        (projection_id, 37, "build"),
+    ]
     assert (
         type(CollectionGraphProjectionBundleV1(**rows))
         is CollectionGraphProjectionBundleV1

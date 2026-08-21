@@ -134,8 +134,12 @@ def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> No
     repository = MemgraphProjectionRepository(driver)
     bundle = CollectionGraphProjectionBundleV1(**_bundle())
 
+    private_checksum = "d" * 64
     repository.write_staging_generation(
-        bundle=bundle, batch_size=2, timeout_seconds=1.0
+        bundle=bundle,
+        private_mapping_checksum=private_checksum,
+        batch_size=2,
+        timeout_seconds=1.0,
     )
 
     assert all("MERGE" in cypher for cypher, _parameters, _timeout in driver.writes)
@@ -143,6 +147,8 @@ def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> No
         "1" * 64 not in cypher for cypher, _parameters, _timeout in driver.writes
     )
     assert driver.writes[0][1]["state"] == "staging"
+    assert driver.writes[0][1]["private_mapping_checksum"] == private_checksum
+    assert "g.private_mapping_checksum=$private_mapping_checksum" in driver.writes[0][0]
     assert not any(call[1].get("state") == "ready" for call in driver.writes)
 
 
@@ -162,7 +168,6 @@ def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -
         ProjectionLifecycleState.BUILDING,
     )
     staged = _manifest_row(expected)
-    staged["private_mapping_checksum"] = sha256(b"[]").hexdigest()
     staged["state"] = "staging"
     driver.read_results.append((staged,))
     driver.read_results.extend(_record_reads(bundle))

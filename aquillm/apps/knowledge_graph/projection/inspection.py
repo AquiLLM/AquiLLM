@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from apps.knowledge_graph.models import CollectionGraphProjection
 
+from .runtime import ProjectionDatabaseAliases
+
 
 def _size(value: object) -> int:
     if type(value) is not int or not 1 <= value <= 5_000:
@@ -24,7 +26,9 @@ def inspect_projection_authority(
     if type(all_collections) is not bool:
         raise TypeError("all_collections must be exact")
     selected_collection = None if all_collections else _collection(collection_id)
-    query = CollectionGraphProjection.objects.all()
+    query = CollectionGraphProjection.objects.using(
+        ProjectionDatabaseAliases().state
+    ).all()
     if selected_collection is not None:
         query = query.filter(collection_pk_snapshot=selected_collection)
     counts = {"ready_count": 0, "pending_count": 0, "failed_count": 0}

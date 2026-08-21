@@ -71,9 +71,15 @@ def _manifest(bundle):
 def test_generation_audit_detects_empty_store_and_checksum_drift(monkeypatch):
     row = _ready_row()
     bundle = _bundle()
-    postgres = SimpleNamespace(load_projection_bundle=lambda **_kwargs: bundle)
+    purposes = []
+    postgres = SimpleNamespace(
+        load_projection_bundle=lambda **kwargs: (
+            purposes.append(kwargs["purpose"]) or bundle
+        )
+    )
     graph = SimpleNamespace(
-        read_generation_manifest=lambda **_kwargs: _manifest(bundle)
+        read_generation_manifest=lambda **_kwargs: _manifest(bundle),
+        validate_generation=lambda **_kwargs: SimpleNamespace(valid=True),
     )
     monkeypatch.setattr(
         generation_audit,
@@ -109,6 +115,36 @@ def test_generation_audit_detects_empty_store_and_checksum_drift(monkeypatch):
     assert healthy.replay_reason is None
     assert missing.replay_reason == "missing_generation"
     assert drift.replay_reason == "checksum_drift"
+    assert purposes == ["audit", "audit", "audit"]
+
+
+def test_ready_marker_does_not_hide_mutated_or_deleted_graph_records(monkeypatch):
+    row = _ready_row()
+    bundle = _bundle()
+    validations = []
+
+    def validate(**kwargs):
+        validations.append(kwargs["expected"])
+        return SimpleNamespace(valid=False)
+
+    graph = SimpleNamespace(
+        read_generation_manifest=lambda **_kwargs: _manifest(bundle),
+        validate_generation=validate,
+    )
+    monkeypatch.setattr(
+        generation_audit, "projection_checksum", lambda _value: "b" * 64
+    )
+
+    audit = generation_audit.audit_projection_generation(
+        row=row,
+        postgres=SimpleNamespace(load_projection_bundle=lambda **_kwargs: bundle),
+        graph=graph,
+        settings=_settings(),
+    )
+
+    assert audit.replay_reason == "checksum_drift"
+    assert validations[0].private_mapping_checksum == row.private_mapping_checksum
+    assert validations[0].state is ProjectionLifecycleState.READY
 
 
 def test_reconcile_replays_only_missing_expired_or_drifted_work(monkeypatch):
@@ -138,6 +174,9 @@ def test_reconcile_replays_only_missing_expired_or_drifted_work(monkeypatch):
     )
     monkeypatch.setattr(reconciler, "_orphan_generation_keys", lambda **_kwargs: ())
     monkeypatch.setattr(reconciler, "_projection_settings", _settings)
+    monkeypatch.setattr(
+        reconciler, "projection_identifier_codec", lambda _value: object()
+    )
     monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
     monkeypatch.setattr(reconciler, "_memgraph_repository", lambda: object())
     monkeypatch.setattr(reconciler, "_atomic", lambda _using: nullcontext())
@@ -165,7 +204,7 @@ def test_reconcile_replays_only_missing_expired_or_drifted_work(monkeypatch):
 
 def test_global_orphan_scan_uses_exclusive_opaque_cursor(monkeypatch):
     authoritative = _bundle("1" * 64)
-    row = SimpleNamespace(id=1)
+    row = SimpleNamespace(id=1, state="ready")
     projection_pages = [(row,), ()]
     monkeypatch.setattr(
         generation_audit,
@@ -199,7 +238,7 @@ def test_global_orphan_scan_uses_exclusive_opaque_cursor(monkeypatch):
 
 def test_collection_orphan_scan_never_reads_other_collection_manifests(monkeypatch):
     authoritative = _bundle("1" * 64)
-    projection_pages = [(SimpleNamespace(id=1),), ()]
+    projection_pages = [(SimpleNamespace(id=1, state="ready"),), ()]
     monkeypatch.setattr(
         generation_audit,
         "_projection_page",
@@ -224,3 +263,38 @@ def test_collection_orphan_scan_never_reads_other_collection_manifests(monkeypat
     )
 
     assert observed[0]["collection_key"].value == "e" * 64
+
+
+def test_authoritative_scan_loads_only_graph_eligible_lifecycle_purposes(monkeypatch):
+    rows = (
+        SimpleNamespace(id=1, state="pending"),
+        SimpleNamespace(id=2, state="building"),
+        SimpleNamespace(id=3, state="ready"),
+        SimpleNamespace(id=4, state="superseded"),
+        SimpleNamespace(
+            id=5,
+            state="superseded",
+            collection_id=None,
+            artifact_id=None,
+        ),
+    )
+    pages = [rows, ()]
+    monkeypatch.setattr(
+        generation_audit,
+        "_projection_page",
+        lambda **_kwargs: pages.pop(0),
+    )
+    observed = []
+
+    def load(**kwargs):
+        observed.append((kwargs["projection_id"], kwargs["purpose"]))
+        return _bundle(str(kwargs["projection_id"]) * 64)
+
+    keys = generation_audit._authoritative_generation_keys(
+        postgres=SimpleNamespace(load_projection_bundle=load),
+        settings=_settings(),
+        collection_id=None,
+    )
+
+    assert observed == [(2, "build"), (3, "audit"), (4, "prune")]
+    assert keys == frozenset(("2" * 64, "3" * 64, "4" * 64))

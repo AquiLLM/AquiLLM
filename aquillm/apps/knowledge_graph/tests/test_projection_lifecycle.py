@@ -266,6 +266,6 @@ def test_activation_canonical_and_invalidation_hooks_are_transactional():
     canonical = (root / "resolution" / "canonical.py").read_text(encoding="utf-8")
     invalidation = (root / "graph" / "invalidation.py").read_text(encoding="utf-8")
 
-    assert "enqueue_collection_projection_locked(" in assembly
-    assert "enqueue_automatic_membership_changes_locked(" in canonical
+    assert "enqueue_activated_collection_projection(" in assembly
+    assert "enqueue_automatic_membership_projections(" in canonical
     assert "supersede_artifact_projections_locked(" in invalidation
