@@ -21,7 +21,6 @@ from apps.documents.services.chunk_rerank import (
 )
 from apps.documents.services.chunk_search_candidates import (
     CandidateScopeLimit,
-    HybridCandidateSnapshot,
     collect_hybrid_candidate_snapshot,
     freeze_authorized_document_scope,
 )
@@ -31,13 +30,31 @@ from apps.documents.services.chunk_search_candidates import (
 from apps.documents.services.chunk_search_candidates import (
     _salient_exact_terms as _candidate_salient_exact_terms,
 )
+from apps.documents.services.chunk_search_legacy_graph import (
+    EVALUATION_GRAPH_FAILURE,
+    EVALUATION_GRAPH_MISS,
+)
+from apps.documents.services.chunk_search_legacy_graph import (
+    apply_graph_overlay as _apply_graph_overlay,
+)
+from apps.documents.services.chunk_search_legacy_graph import (
+    graph_diagnostics as _graph_diagnostics,
+)
+from apps.documents.services.hybrid_graph_authorization import (
+    HybridGraphRetrievalDependencies,
+    documents_match_retrieval_authorization,
+    is_exact_authorization_context,
+)
+from apps.documents.services.hybrid_graph_orchestration import (
+    hybrid_graph_candidate_pool,
+)
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
 logger = structlog.stdlib.get_logger(__name__)
-_EVALUATION_GRAPH_FAILURE = object()
-_EVALUATION_GRAPH_MISS = object()
+_EVALUATION_GRAPH_FAILURE = EVALUATION_GRAPH_FAILURE
+_EVALUATION_GRAPH_MISS = EVALUATION_GRAPH_MISS
 
 # Compatibility aliases used by conversation-search's independent chunk model.
 _exact_term_query = _candidate_exact_term_query
@@ -208,153 +225,15 @@ def materialize_and_rerank_candidates(
     )
 
 
-def _graph_diagnostics(
-    *,
-    started_at: float,
-    seed_count: int,
-    candidate_count: int,
-    status: str,
-    algorithm_signature: str | None,
-    version_signature: str | None,
-) -> dict[str, object]:
-    return {
-        "graph_ms": (perf_counter() - started_at) * 1000,
-        "graph_seed_count": seed_count,
-        "graph_candidate_count": candidate_count,
-        "graph_status": status,
-        "graph_algorithm_signature": algorithm_signature,
-        "graph_version_signature": version_signature,
-    }
-
-
-def _apply_graph_overlay(
+def text_chunk_search(
     model_cls: type[TextChunk],
-    snapshot: HybridCandidateSnapshot,
-    scope: object | None,
-    graph_config: object | None,
+    query: str,
+    top_k: int,
+    docs: list,
     *,
-    preflight_status: str | None,
-    _eval_failure_capability: object | None = None,
-) -> tuple[tuple[int, ...], dict[str, object]]:
-    """Return bounded graph IDs; the shared seam permission-refetches them."""
-
-    if _eval_failure_capability is not None and _eval_failure_capability not in {
-        _EVALUATION_GRAPH_FAILURE,
-        _EVALUATION_GRAPH_MISS,
-    }:
-        raise ValueError("invalid graph failure evaluation capability")
-    if _eval_failure_capability is _EVALUATION_GRAPH_MISS:
-        if preflight_status != "miss":
-            raise ValueError("graph miss evaluation requires miss preflight")
-    elif preflight_status is not None and _eval_failure_capability is not None:
-        raise ValueError("graph failure evaluation cannot set preflight status")
-
-    started_at = perf_counter()
-    baseline = list(snapshot.baseline_candidates)
-    algorithm_signature = getattr(graph_config, "algorithm_signature", None)
-    seed_count = len(snapshot.graph_seeds)
-    if preflight_status is not None:
-        return (), _graph_diagnostics(
-            started_at=started_at,
-            seed_count=seed_count,
-            candidate_count=0,
-            status=preflight_status,
-            algorithm_signature=algorithm_signature,
-            version_signature=None,
-        )
-    if snapshot.graph_seed_error:
-        return (), _graph_diagnostics(
-            started_at=started_at,
-            seed_count=0,
-            candidate_count=0,
-            status="error",
-            algorithm_signature=algorithm_signature,
-            version_signature=None,
-        )
-    if not snapshot.graph_seeds:
-        return (), _graph_diagnostics(
-            started_at=started_at,
-            seed_count=0,
-            candidate_count=0,
-            status="miss",
-            algorithm_signature=algorithm_signature,
-            version_signature=None,
-        )
-
-    try:
-        from apps.documents.services.chunk_search_candidates import (
-            AuthorizedDocumentScope,
-        )
-        from apps.knowledge_graph.retrieval import (
-            GraphExpansionConfig,
-            GraphExpansionRequest,
-            GraphExpansionResult,
-            expand_chunk_candidates,
-        )
-
-        if type(scope) is not AuthorizedDocumentScope:
-            raise ValueError("graph scope must be an exact authorized snapshot")
-        if type(graph_config) is not GraphExpansionConfig:
-            raise ValueError("graph config must be exact")
-        request = GraphExpansionRequest(
-            seeds=snapshot.graph_seeds,
-            allowed_doc_ids=scope.allowed_doc_ids,
-            allowed_collection_ids=scope.allowed_collection_ids,
-        )
-        if _eval_failure_capability is _EVALUATION_GRAPH_FAILURE:
-            raise RuntimeError("forced evaluation of production fail-open composition")
-        result = expand_chunk_candidates(request)
-        if type(result) is not GraphExpansionResult:
-            raise ValueError("graph expansion returned an invalid result")
-        result_diagnostics = result.diagnostics
-        if result_diagnostics.algorithm_signature != graph_config.algorithm_signature:
-            raise ValueError("graph expansion used a different algorithm config")
-        if result_diagnostics.status != "hit":
-            return (), _graph_diagnostics(
-                started_at=started_at,
-                seed_count=result_diagnostics.seed_count,
-                candidate_count=0,
-                status=result_diagnostics.status,
-                algorithm_signature=result_diagnostics.algorithm_signature,
-                version_signature=result_diagnostics.graph_version_signature,
-            )
-
-        baseline_ids = {getattr(candidate, "pk", None) for candidate in baseline}
-        novel_ids = tuple(
-            identifier
-            for identifier in result.chunk_ids
-            if identifier not in baseline_ids
-        )[: graph_config.max_candidates]
-        if not novel_ids:
-            return (), _graph_diagnostics(
-                started_at=started_at,
-                seed_count=result_diagnostics.seed_count,
-                candidate_count=0,
-                status="miss",
-                algorithm_signature=result_diagnostics.algorithm_signature,
-                version_signature=result_diagnostics.graph_version_signature,
-            )
-
-        return novel_ids, _graph_diagnostics(
-            started_at=started_at,
-            seed_count=result_diagnostics.seed_count,
-            candidate_count=len(novel_ids),
-            status="hit",
-            algorithm_signature=result_diagnostics.algorithm_signature,
-            version_signature=result_diagnostics.graph_version_signature,
-        )
-    except Exception:
-        return (), _graph_diagnostics(
-            started_at=started_at,
-            seed_count=seed_count,
-            candidate_count=0,
-            status="error",
-            algorithm_signature=algorithm_signature,
-            version_signature=None,
-        )
-
-
-def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: list):
+    authorization_context: object | None = None,
+    hybrid_graph_dependencies: HybridGraphRetrievalDependencies | None = None,
+):
     from apps.documents.services import rag_cache
     from aquillm.utils import get_embedding
     from lib.embeddings.config import get_local_embed_config
@@ -362,6 +241,7 @@ def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: 
     total_start = perf_counter()
     try:
         overlay_enabled = bool(getattr(django_settings, "KG_OVERLAY_ENABLED", False))
+        hybrid_requested = overlay_enabled and hybrid_graph_dependencies is not None
         graph_config: object | None = None
         graph_scope: object | None = None
         graph_preflight_status: str | None = None
@@ -373,8 +253,14 @@ def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: 
                 )
 
                 graph_config = get_graph_expansion_config()
-                graph_scope = freeze_authorized_document_scope(docs, graph_config)
-                search_documents = graph_scope.documents
+                if hybrid_requested:
+                    if not documents_match_retrieval_authorization(
+                        docs, authorization_context
+                    ):
+                        graph_preflight_status = "error"
+                else:
+                    graph_scope = freeze_authorized_document_scope(docs, graph_config)
+                    search_documents = graph_scope.documents
             except CandidateScopeLimit:
                 graph_preflight_status = "miss"
                 graph_scope = None
@@ -420,11 +306,42 @@ def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: 
             graph_config=graph_config if graph_preflight_status is None else None,
             initial_vector_error=initial_vector_error,
             app_config_getter=apps.get_app_config,
+            authorization_context=(
+                authorization_context
+                if hybrid_requested and graph_preflight_status is None
+                else None
+            ),
         )
         vector_ms = (perf_counter() - vector_started) * 1000
         graph_chunk_ids: tuple[int, ...] = ()
         graph_diagnostics: dict[str, object] = {}
-        if overlay_enabled:
+        hybrid_pool: tuple[object, ...] | None = None
+        if overlay_enabled and hybrid_requested:
+            if (
+                graph_preflight_status is None
+                and type(hybrid_graph_dependencies)
+                is HybridGraphRetrievalDependencies
+                and is_exact_authorization_context(authorization_context)
+            ):
+                hybrid_pool, graph_diagnostics = hybrid_graph_candidate_pool(
+                    snapshot,
+                    query,
+                    authorization_context,
+                    hybrid_graph_dependencies,
+                )
+            else:
+                hybrid_pool = snapshot.baseline_candidates
+                graph_diagnostics = _graph_diagnostics(
+                    started_at=total_start,
+                    seed_count=len(snapshot.graph_seeds),
+                    candidate_count=0,
+                    status=graph_preflight_status or "error",
+                    algorithm_signature=getattr(
+                        graph_config, "algorithm_signature", None
+                    ),
+                    version_signature=None,
+                )
+        elif overlay_enabled:
             graph_chunk_ids, graph_diagnostics = _apply_graph_overlay(
                 model_cls,
                 snapshot,
@@ -433,41 +350,50 @@ def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: 
                 preflight_status=graph_preflight_status,
             )
 
-        try:
+        if hybrid_pool is not None:
             ranking = materialize_and_rerank_candidates(
                 model_cls,
                 query,
                 top_k,
-                snapshot.baseline_candidates,
-                authorized_scope=graph_scope,
-                graph_chunk_ids=graph_chunk_ids,
-                max_graph_candidates=(
-                    int(getattr(graph_config, "max_candidates", 0))
-                    if graph_chunk_ids
-                    else 0
-                ),
-            )
-        except Exception:
-            ranking = materialize_and_rerank_candidates(
-                model_cls,
-                query,
-                top_k,
-                snapshot.baseline_candidates,
+                hybrid_pool,
                 authorized_scope=None,
             )
-            if overlay_enabled:
-                graph_diagnostics = _graph_diagnostics(
-                    started_at=total_start,
-                    seed_count=len(snapshot.graph_seeds),
-                    candidate_count=0,
-                    status="error",
-                    algorithm_signature=getattr(
-                        graph_config,
-                        "algorithm_signature",
-                        None,
+        else:
+            try:
+                ranking = materialize_and_rerank_candidates(
+                    model_cls,
+                    query,
+                    top_k,
+                    snapshot.baseline_candidates,
+                    authorized_scope=graph_scope,
+                    graph_chunk_ids=graph_chunk_ids,
+                    max_graph_candidates=(
+                        int(getattr(graph_config, "max_candidates", 0))
+                        if graph_chunk_ids
+                        else 0
                     ),
-                    version_signature=None,
                 )
+            except Exception:
+                ranking = materialize_and_rerank_candidates(
+                    model_cls,
+                    query,
+                    top_k,
+                    snapshot.baseline_candidates,
+                    authorized_scope=None,
+                )
+                if overlay_enabled:
+                    graph_diagnostics = _graph_diagnostics(
+                        started_at=total_start,
+                        seed_count=len(snapshot.graph_seeds),
+                        candidate_count=0,
+                        status="error",
+                        algorithm_signature=getattr(
+                            graph_config,
+                            "algorithm_signature",
+                            None,
+                        ),
+                        version_signature=None,
+                    )
         if overlay_enabled and ranking.inaccessible_candidate_count:
             graph_diagnostics.update(
                 graph_status="error",
@@ -478,7 +404,10 @@ def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: 
                 float(graph_diagnostics.get("graph_ms", 0.0))
                 + ranking.materialization_ms
             )
-            if graph_diagnostics.get("graph_status") == "hit":
+            if (
+                not hybrid_requested
+                and graph_diagnostics.get("graph_status") == "hit"
+            ):
                 graph_diagnostics["graph_candidate_count"] = len(
                     ranking.graph_candidates
                 )
@@ -563,6 +492,7 @@ def text_chunk_search(model_cls: type[TextChunk], query: str, top_k: int, docs: 
 
 __all__ = [
     "CandidateRankingResult",
+    "HybridGraphRetrievalDependencies",
     "materialize_and_rerank_candidates",
     "text_chunk_search",
 ]

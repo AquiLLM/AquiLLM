@@ -12,6 +12,8 @@ _DOC_ID = UUID("00000000-0000-0000-0000-000000000017")
 
 
 def test_single_document_search_keeps_scope_payload_and_real_citation(monkeypatch):
+    authorization_context = object()
+    hybrid_graph_dependencies = object()
     collection = SimpleNamespace(user_can_view=lambda _user: True)
     document = SimpleNamespace(
         id=_DOC_ID,
@@ -41,10 +43,19 @@ def test_single_document_search_keeps_scope_payload_and_real_citation(monkeypatc
         lambda _document_id: document,
     )
 
-    def fake_search(query, top_k, docs):
+    def fake_search(
+        query,
+        top_k,
+        docs,
+        *,
+        authorization_context,
+        hybrid_graph_dependencies,
+    ):
         seen["query"] = query
         seen["top_k"] = top_k
         seen["docs"] = docs
+        seen["authorization_context"] = authorization_context
+        seen["hybrid_graph_dependencies"] = hybrid_graph_dependencies
         return (
             (),
             (),
@@ -65,6 +76,8 @@ def test_single_document_search_keeps_scope_payload_and_real_citation(monkeypatc
     tool = document_tools.search_single_document_tool(
         user=object(),
         col_ref=CollectionsRef([3]),
+        authorization_context=authorization_context,
+        hybrid_graph_dependencies=hybrid_graph_dependencies,
     )
 
     result = tool(
@@ -77,6 +90,8 @@ def test_single_document_search_keeps_scope_payload_and_real_citation(monkeypatc
         "query": "related context",
         "top_k": 4,
         "docs": [document],
+        "authorization_context": authorization_context,
+        "hybrid_graph_dependencies": hybrid_graph_dependencies,
     }
     assert result["result"] == [
         {
@@ -114,7 +129,7 @@ def test_single_document_no_result_diagnostics_strip_graph_fields(monkeypatch):
     monkeypatch.setattr(
         document_tools.TextChunk,
         "text_chunk_search",
-        lambda *_args: (
+        lambda *_args, **_kwargs: (
             (),
             (),
             (),

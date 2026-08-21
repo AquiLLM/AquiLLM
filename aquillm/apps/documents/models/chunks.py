@@ -143,7 +143,22 @@ class TextChunk(models.Model):
         return rerank_chunks(cls, query, chunks, top_k)
 
     @classmethod
-    def text_chunk_search(cls, query: str, top_k: int, docs: List):
+    def text_chunk_search(
+        cls,
+        query: str,
+        top_k: int,
+        docs: List,
+        *,
+        authorization_context: object | None = None,
+        hybrid_graph_dependencies: object | None = None,
+    ):
         from apps.documents.services.chunk_search import text_chunk_search as hybrid_search
 
-        return hybrid_search(cls, query, top_k, docs)
+        return hybrid_search(
+            cls,
+            query,
+            top_k,
+            docs,
+            authorization_context=authorization_context,
+            hybrid_graph_dependencies=hybrid_graph_dependencies,
+        )

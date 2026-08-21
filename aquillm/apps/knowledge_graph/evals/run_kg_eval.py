@@ -61,6 +61,8 @@ from .fixture_manifest import (
 from .fixture_manifest import (
     validate_fixture_manifest as _validate_fixture_manifest,
 )
+from .retrieval_eval_statistics import mean as _mean
+from .retrieval_eval_statistics import percentile_95 as _percentile_95
 
 _HERE = Path(__file__).resolve().parent
 _DEFAULT_EXTRACTION_CASES_PATH = _HERE / "extraction_cases.yaml"
@@ -2492,6 +2494,7 @@ def run_one_snapshot_comparison(
     load_graph: Callable[..., object],
     rank_graph: Callable[..., object],
     materialize_and_rerank: Callable[..., object],
+    authorization_context: object | None = None,
     app_config_getter: Callable[[str], object] | None = None,
     relevant_chunk_ids: tuple[int, ...] = (),
     validate_graph_snapshot: Callable[[object, object], None] | None = None,
@@ -2544,6 +2547,7 @@ def run_one_snapshot_comparison(
                     graph_config=graph_config,
                     initial_vector_error=None,
                     app_config_getter=app_config_getter,
+                    authorization_context=authorization_context,
                 )
             candidate_ms = (clock() - candidate_started) * 1_000
             if not isfinite(candidate_ms) or candidate_ms < 0.0:
@@ -4161,18 +4165,6 @@ def _runtime_eval_context() -> tuple[bool, str]:
         or ("test" if os.environ.get("PYTEST_CURRENT_TEST") else "development")
     )
     return debug, environment
-
-
-def _percentile_95(values: Sequence[float]) -> float:
-    if not values:
-        return 0.0
-    ordered = sorted(float(value) for value in values)
-    index = max(0, (95 * len(ordered) + 99) // 100 - 1)
-    return ordered[index]
-
-
-def _mean(values: Sequence[float]) -> float:
-    return 0.0 if not values else sum(values) / len(values)
 
 
 def _build_production_extraction_context(

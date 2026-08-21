@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from math import fsum, isfinite
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -16,6 +15,13 @@ from django.conf import settings as django_settings
 from django.contrib.postgres.search import TrigramSimilarity
 from django.db.models import Q
 from pgvector.django import L2Distance
+
+from apps.documents.services.chunk_search_graph_seeds import (
+    build_graph_seeds as _build_graph_seeds,
+)
+from apps.documents.services.hybrid_graph_authorization import (
+    documents_match_retrieval_authorization,
+)
 
 if TYPE_CHECKING:
     from apps.knowledge_graph.retrieval import (
@@ -169,66 +175,6 @@ def _candidate_limits(
     )
 
 
-def _positive_chunk_id(candidate: object) -> int:
-    identifier = getattr(candidate, "pk", None)
-    if type(identifier) is not int or not 1 <= identifier <= _DATABASE_ID_MAX:
-        raise ValueError("candidate chunk IDs must be positive database integers")
-    return identifier
-
-
-def _source_first_ranks(rows: Sequence[object]) -> dict[int, int]:
-    ranks: dict[int, int] = {}
-    for rank, row in enumerate(rows, start=1):
-        identifier = _positive_chunk_id(row)
-        ranks.setdefault(identifier, rank)
-    return ranks
-
-
-def _build_graph_seeds(
-    vector_rows: Sequence[object],
-    trigram_rows: Sequence[object],
-    exact_rows: Sequence[object],
-    graph_config: GraphExpansionConfig,
-) -> tuple[GraphExpansionSeed, ...]:
-    # Deliberately lazy: importing the public KG composition boundary is an
-    # enabled-overlay action, never a baseline-search import side effect.
-    from apps.knowledge_graph.retrieval import (
-        GraphExpansionConfig,
-        GraphExpansionSeed,
-    )
-
-    if type(graph_config) is not GraphExpansionConfig:
-        raise ValueError("graph_config must be an exact GraphExpansionConfig")
-    contributions: dict[int, list[float]] = {}
-    for rows in (vector_rows, trigram_rows, exact_rows):
-        for identifier, rank in _source_first_ranks(rows).items():
-            contribution = 1.0 / (graph_config.rrf_k + rank)
-            if not isfinite(contribution) or contribution <= 0.0:
-                raise ValueError("RRF produced a non-finite seed contribution")
-            contributions.setdefault(identifier, []).append(contribution)
-
-    weighted = [
-        (identifier, fsum(values)) for identifier, values in contributions.items()
-    ]
-    if any(not isfinite(weight) or weight <= 0.0 for _identifier, weight in weighted):
-        raise ValueError("RRF produced a non-finite seed weight")
-    weighted.sort(key=lambda item: (-item[1], item[0]))
-    selected = weighted[: graph_config.max_seeds]
-    if not selected:
-        return ()
-    total = fsum(weight for _identifier, weight in selected)
-    if not isfinite(total) or total <= 0.0:
-        raise ValueError("RRF produced a non-finite normalization total")
-    return tuple(
-        GraphExpansionSeed(
-            chunk_id=identifier,
-            rank=rank,
-            restart_weight=weight / total,
-        )
-        for rank, (identifier, weight) in enumerate(selected, start=1)
-    )
-
-
 def freeze_authorized_document_scope(
     documents: Iterable[object],
     graph_config: GraphExpansionConfig,
@@ -280,10 +226,18 @@ def collect_hybrid_candidate_snapshot(
     graph_config: GraphExpansionConfig | None = None,
     initial_vector_error: str | None = None,
     app_config_getter: Callable[[str], object] | None = None,
+    authorization_context: object | None = None,
 ) -> HybridCandidateSnapshot:
     """Acquire vector/trigram/exact rows once and prepare the pre-rerank pool."""
 
     documents_snapshot = tuple(documents)
+    if (
+        authorization_context is not None
+        and not documents_match_retrieval_authorization(
+            documents_snapshot, authorization_context
+        )
+    ):
+        raise ValueError("candidate documents differ from frozen authorization")
     limits = _candidate_limits(
         query,
         top_k,
@@ -389,5 +343,6 @@ __all__ = [
     "CandidateScopeLimit",
     "HybridCandidateSnapshot",
     "collect_hybrid_candidate_snapshot",
+    "documents_match_retrieval_authorization",
     "freeze_authorized_document_scope",
 ]
