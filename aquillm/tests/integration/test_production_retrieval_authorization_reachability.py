@@ -6,6 +6,7 @@ import inspect
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
 from django.contrib.auth.models import User
 
 from apps.chat.refs import ChatRef, CollectionsRef
@@ -14,6 +15,14 @@ from apps.chat.services import retrieval_authorization as chat_authorization
 from apps.chat.services.tool_wiring import documents as document_tools
 from apps.core.views import pages
 from apps.documents.services import hybrid_graph_dependencies
+from apps.documents.tests.hybrid_graph_test_support import Policy, authorization
+from apps.knowledge_graph.projection.identifiers import (
+    HmacSha256ProjectionIdentifierCodec,
+)
+from apps.knowledge_graph.retrieval.ready_scope_repository import (
+    load_selected_ready_scope,
+)
+from apps.knowledge_graph.tests.test_ready_scope import _authority
 
 _DOC = UUID("11111111-1111-4111-8111-111111111111")
 
@@ -190,3 +199,93 @@ def test_no_production_capability_never_constructs_or_schedules_graph_runtime(
 
     assert observed["authorization"] is None
     assert observed["resolved"] == (None, True)
+
+
+@pytest.mark.parametrize("route", ("page", "chat"))
+def test_enabled_web_and_chat_routes_reach_projection_source_authority(
+    monkeypatch, settings, route
+):
+    from apps.knowledge_graph.projection import runtime as projection_runtime
+    from apps.knowledge_graph.retrieval import ready_scope_repository
+
+    settings.KG_OVERLAY_ENABLED = True
+    settings.KG_MEMGRAPH_TRAVERSAL_ENABLED = True
+    settings.KG_GRAPH_DIRECT_ENABLED = True
+    settings.KG_GRAPH_EXTENDED_ENABLED = True
+    user, document = User(pk=7), _document()
+    policy = Policy()
+    policy.rows = ((3, _DOC),)
+    context = authorization(
+        policy, collection_ids=(3,), document_ids=(_DOC,)
+    )
+    authorities = (_authority(3, _DOC, "3"),)
+    observed = []
+
+    def load_authorities(*, source_using, **_kwargs):
+        if source_using == "projection_state":
+            raise PermissionError("function-only projection state denied SELECT")
+        observed.append(source_using)
+        return authorities
+
+    monkeypatch.setattr(ready_scope_repository, "_load_authorities", load_authorities)
+    monkeypatch.setattr(
+        projection_runtime,
+        "projection_identifier_codec",
+        lambda _settings: HmacSha256ProjectionIdentifierCodec(
+            b"secret", key_version="key-v1"
+        ),
+    )
+    retrieval_settings = SimpleNamespace()
+
+    def text_chunk_search(*_args, **kwargs):
+        assert kwargs["authorization_context"] is context
+        scope = load_selected_ready_scope(
+            authorization=context, settings=retrieval_settings
+        )
+        assert scope.projections == authorities
+        return _search_result()
+
+    if route == "page":
+        class Form:
+            cleaned_data = {
+                "query": "q", "top_k": 3,
+                "collections": (SimpleNamespace(pk=3),),
+            }
+
+            def __init__(self, *_args):
+                pass
+
+            def is_valid(self):
+                return True
+
+        monkeypatch.setattr(pages, "SearchForm", Form)
+        monkeypatch.setattr(pages, "render", lambda *_args, **_kwargs: object())
+        monkeypatch.setattr(
+            pages.Collection, "get_user_accessible_documents",
+            lambda *_args, **_kwargs: [document],
+        )
+        monkeypatch.setattr(
+            pages, "build_production_retrieval_authorization_context",
+            lambda **_kwargs: context,
+        )
+        monkeypatch.setattr(pages.TextChunk, "text_chunk_search", text_chunk_search)
+        inspect.unwrap(pages.search)(
+            SimpleNamespace(method="POST", POST={}, user=user)
+        )
+    else:
+        monkeypatch.setattr(
+            document_tools.Collection, "get_user_accessible_documents",
+            lambda *_args, **_kwargs: [document],
+        )
+        monkeypatch.setattr(
+            chat_authorization, "build_production_retrieval_authorization_context",
+            lambda **_kwargs: context,
+        )
+        monkeypatch.setattr(
+            document_tools.TextChunk, "text_chunk_search", text_chunk_search
+        )
+        document_tools.vector_search_tool(user, CollectionsRef([3]))(
+            search_string="q", top_k=3
+        )
+
+    assert observed == ["projection_source"]

@@ -38,8 +38,8 @@ def _projection_repository(runtime):
     )
 
     source = DjangoProjectionRowSource(
-        runtime.authorization.database_alias,
-        state_using="projection_state",
+        "projection_source",
+        state_using="projection_source",
         identifier_key=(
             runtime.settings.projection_identifier_hmac_key.get_secret_value().encode()
         ),
@@ -47,7 +47,7 @@ def _projection_repository(runtime):
         schema_version=runtime.settings.projection_schema_version,
         projection_version=runtime.settings.projection_format_version,
     )
-    return PostgresProjectionRepository(using="projection_state", source=source)
+    return PostgresProjectionRepository(using="projection_source", source=source)
 
 
 def _source_failure(error):

@@ -11,14 +11,14 @@ from .ready_scope import SelectedReadyScopeV1
 
 
 class DjangoPrivateChunkMapRepository:
-    def __init__(self, state_using: str = "projection_state") -> None:
-        self.state_using = state_using
+    def __init__(self, source_using: str = "projection_source") -> None:
+        self.source_using = source_using
 
     def locate(self, *, projection_ids: tuple[UUID, ...], chunk_keys: tuple[str, ...]):
         from apps.knowledge_graph.models import ProjectionChunkReference
 
         return tuple(
-            ProjectionChunkReference.objects.using(self.state_using)
+            ProjectionChunkReference.objects.using(self.source_using)
             .filter(
                 projection_id__in=projection_ids,
                 projection_chunk_key__in=chunk_keys,
@@ -41,13 +41,13 @@ class DjangoPrivateChunkMapRepository:
             ProjectionChunkReference,
         )
 
-        projection = CollectionGraphProjection.objects.using(self.state_using).get(
+        projection = CollectionGraphProjection.objects.using(self.source_using).get(
             pk=projection_id, state="ready"
         )
         if projection.private_mapping_checksum != expected_private_mapping_checksum:
             raise ValueError("private mapping authority checksum is stale")
         rows = tuple(
-            ProjectionChunkReference.objects.using(self.state_using)
+            ProjectionChunkReference.objects.using(self.source_using)
             .filter(projection_id=projection_id, projection_chunk_key__in=chunk_keys)
             .order_by("projection_chunk_key")
             .values(

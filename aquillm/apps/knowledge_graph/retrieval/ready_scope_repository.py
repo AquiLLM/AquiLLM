@@ -13,7 +13,7 @@ from .ready_scope import (
 )
 
 
-def _load_authorities(*, authorization, settings, state_using: str):
+def _load_authorities(*, authorization, settings, source_using: str):
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
         CollectionGraphMembershipState,
@@ -24,7 +24,7 @@ def _load_authorities(*, authorization, settings, state_using: str):
     collections = tuple(sorted(authorization.selected_collection_ids))
     documents = tuple(sorted(authorization.selected_document_ids, key=str))
     projection_rows = tuple(
-        CollectionGraphProjection.objects.using(state_using)
+        CollectionGraphProjection.objects.using(source_using)
         .filter(
             state="ready",
             collection_id__in=collections,
@@ -51,7 +51,7 @@ def _load_authorities(*, authorization, settings, state_using: str):
     )
     states = {
         row["collection_id"]: row
-        for row in CollectionGraphMembershipState.objects.using(state_using)
+        for row in CollectionGraphMembershipState.objects.using(source_using)
         .filter(collection_id__in=collections)
         .values(
             "collection_id",
@@ -65,7 +65,7 @@ def _load_authorities(*, authorization, settings, state_using: str):
     artifact_ids = tuple(row["artifact_id"] for row in projection_rows)
     artifacts = {
         row["id"]: row
-        for row in GraphArtifact.objects.using(authorization.database_alias)
+        for row in GraphArtifact.objects.using(source_using)
         .filter(
             id__in=artifact_ids,
             status="active",
@@ -84,7 +84,7 @@ def _load_authorities(*, authorization, settings, state_using: str):
         artifact_id: [] for artifact_id in artifact_ids
     }
     for row in (
-        CollectionArtifactInput.objects.using(authorization.database_alias)
+        CollectionArtifactInput.objects.using(source_using)
         .filter(
             artifact_id__in=artifact_ids,
             document_id__in=documents,
@@ -150,12 +150,12 @@ def _load_authorities(*, authorization, settings, state_using: str):
 
 
 def load_selected_ready_scope(
-    *, authorization, settings, state_using: str = "projection_state"
+    *, authorization, settings, source_using: str = "projection_source"
 ) -> SelectedReadyScopeV1:
     from apps.knowledge_graph.projection.runtime import projection_identifier_codec
 
     authorities = _load_authorities(
-        authorization=authorization, settings=settings, state_using=state_using
+        authorization=authorization, settings=settings, source_using=source_using
     )
     return assemble_selected_ready_scope(
         authorization=authorization,
