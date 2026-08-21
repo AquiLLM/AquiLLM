@@ -235,10 +235,20 @@ def test_gateway_request_failures_are_typed_and_redacted(monkeypatch, reason) ->
 
 
 @pytest.mark.parametrize(
-    "reason", (GatewayFailureReason.DEADLINE, GatewayFailureReason.RESULT_CAP)
+    ("reason", "expected"),
+    (
+        (
+            GatewayFailureReason.DEADLINE,
+            contracts.TopologyFailureReason.DIRECT_TOPOLOGY_TIMEOUT,
+        ),
+        (
+            GatewayFailureReason.RESULT_CAP,
+            contracts.TopologyFailureReason.DIRECT_TOPOLOGY_INVALID,
+        ),
+    ),
 )
 def test_gateway_local_failures_remain_local_at_the_existing_loader_boundary(
-    reason,
+    reason, expected
 ) -> None:
     class LocalFailureDriver:
         def execute_read(self, **_kwargs):
@@ -253,10 +263,7 @@ def test_gateway_local_failures_remain_local_at_the_existing_loader_boundary(
             ),
             deadline=42.5,
         )
-
-    assert captured.value.reason is (
-        contracts.TopologyFailureReason.DIRECT_TOPOLOGY_TIMEOUT
-    )
+    assert captured.value.reason is expected
 
 
 def test_rejects_external_or_secret_bearing_origins_and_secret_repr() -> None:
