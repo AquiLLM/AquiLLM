@@ -13,6 +13,9 @@ from apps.documents.services.hybrid_graph_authorization import (
     is_exact_authorization_context,
 )
 from lib.knowledge_graph.retrieval_config import HybridRetrievalSettings
+from lib.knowledge_graph.topology_gateway_config import (
+    TopologyGatewayClientSettings,
+)
 
 
 def django_hybrid_retrieval_settings() -> HybridRetrievalSettings:
@@ -27,26 +30,41 @@ def django_hybrid_retrieval_settings() -> HybridRetrievalSettings:
 
 
 @lru_cache(maxsize=4)
-def _provider_components(settings: HybridRetrievalSettings):
-    from apps.knowledge_graph.projection.memgraph_driver import Neo4jMemgraphDriver
-    from apps.knowledge_graph.projection.runtime import projection_identifier_codec
-    from apps.knowledge_graph.projection.topology_adapter import (
-        Neo4jProjectedTopologyQueryAdapter,
+def _topology_loader(gateway: TopologyGatewayClientSettings):
+    from apps.knowledge_graph.retrieval.topology.gateway_client import (
+        TopologyGatewayClient,
     )
     from apps.knowledge_graph.retrieval.topology.memgraph import (
         MemgraphProjectedTopologyLoader,
     )
 
-    driver = Neo4jMemgraphDriver(
-        settings.memgraph_uri,
-        settings.memgraph_query_username,
-        settings.memgraph_query_password.get_secret_value(),
-        database=settings.memgraph_database,
+    driver = TopologyGatewayClient(
+        gateway.url,
+        gateway.bearer_token.get_secret_value(),
+        gateway.timeout_ms / 1000.0,
     )
-    topology = MemgraphProjectedTopologyLoader(
-        Neo4jProjectedTopologyQueryAdapter(driver)
+    return MemgraphProjectedTopologyLoader(driver)
+
+
+def django_topology_gateway_client_settings() -> TopologyGatewayClientSettings:
+    from django.conf import settings as django_settings
+
+    return TopologyGatewayClientSettings(
+        url=django_settings.KG_TOPOLOGY_GATEWAY_URL,
+        bearer_token=django_settings.KG_TOPOLOGY_GATEWAY_BEARER_TOKEN,
+        timeout_ms=django_settings.KG_TOPOLOGY_GATEWAY_TIMEOUT_MS,
+        max_request_bytes=django_settings.KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES,
+        max_response_bytes=django_settings.KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES,
     )
-    return topology, projection_identifier_codec(settings)
+
+
+@lru_cache(maxsize=4)
+def _provider_components(
+    settings: HybridRetrievalSettings, gateway: TopologyGatewayClientSettings
+):
+    from apps.knowledge_graph.projection.runtime import projection_identifier_codec
+
+    return _topology_loader(gateway), projection_identifier_codec(settings)
 
 
 def _production_runtime(*, authorization, settings):
@@ -54,7 +72,8 @@ def _production_runtime(*, authorization, settings):
         ProductionHybridBranchRuntime,
     )
 
-    topology, codec = _provider_components(settings)
+    gateway = django_topology_gateway_client_settings()
+    topology, codec = _provider_components(settings, gateway)
     return ProductionHybridBranchRuntime(
         authorization=authorization,
         settings=settings,
@@ -84,14 +103,10 @@ def build_hybrid_graph_dependencies(
     ):
         return None
     try:
-        current = revalidate_retrieval_authorization_context(
-            context=authorization
-        )
+        current = revalidate_retrieval_authorization_context(context=authorization)
         if (
-            frozenset(current.collection_ids)
-            != authorization.selected_collection_ids
-            or frozenset(current.document_ids)
-            != authorization.selected_document_ids
+            frozenset(current.collection_ids) != authorization.selected_collection_ids
+            or frozenset(current.document_ids) != authorization.selected_document_ids
         ):
             return None
         runtime = runtime_factory(
@@ -134,5 +149,6 @@ def resolve(overlay_enabled, authorization, provided):
 __all__ = [
     "build_hybrid_graph_dependencies",
     "django_hybrid_retrieval_settings",
+    "django_topology_gateway_client_settings",
     "resolve",
 ]

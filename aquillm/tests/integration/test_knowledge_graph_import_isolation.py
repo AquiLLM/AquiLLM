@@ -42,6 +42,7 @@ def test_disabled_graph_imports_do_not_load_optional_runtimes() -> None:
         import lib.knowledge_graph.extractors
         import lib.knowledge_graph.query_extractor.contracts
         import lib.knowledge_graph.retrieval_config
+        import lib.knowledge_graph.topology_gateway_config
         import aquillm.settings
         import aquillm.asgi
         import apps.knowledge_graph.models
@@ -58,9 +59,18 @@ def test_disabled_graph_imports_do_not_load_optional_runtimes() -> None:
         import apps.knowledge_graph.retrieval.topology.gateway_config
         import apps.knowledge_graph.retrieval.topology.gateway_contracts
         import apps.knowledge_graph.retrieval.topology.gateway_service
+        import apps.documents.services.hybrid_graph_dependencies
         from aquillm.celery import app
 
         assert apps.knowledge_graph.retrieval.topology.gateway_service._runtime is None
+        gateway_loader = (
+            lib.knowledge_graph.topology_gateway_config.load_topology_gateway_client_settings
+        )
+        gateway = gateway_loader({{
+            'KG_TOPOLOGY_GATEWAY_URL': 'http://knowledge_graph_query_gateway:8092',
+            'KG_TOPOLOGY_GATEWAY_BEARER_TOKEN': 'test-only',
+        }}, required=True)
+        apps.documents.services.hybrid_graph_dependencies._topology_loader(gateway)
 
         app.autodiscover_tasks(['apps.knowledge_graph'], force=True)
 

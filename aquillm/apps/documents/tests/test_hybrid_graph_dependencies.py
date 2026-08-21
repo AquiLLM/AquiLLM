@@ -5,9 +5,19 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from apps.documents.services.hybrid_graph_dependencies import (
+    _topology_loader,
     build_hybrid_graph_dependencies,
 )
 from apps.documents.tests.hybrid_graph_test_support import Policy, authorization
+from apps.knowledge_graph.retrieval.topology.gateway_client import (
+    TopologyGatewayClient,
+)
+from apps.knowledge_graph.retrieval.topology.memgraph import (
+    MemgraphProjectedTopologyLoader,
+)
+from lib.knowledge_graph.topology_gateway_config import (
+    load_topology_gateway_client_settings,
+)
 
 
 def _settings(**overrides: object):
@@ -99,3 +109,27 @@ def test_factory_reauthorizes_before_constructing_provider_runtime():
         is None
     )
     assert observed == []
+
+
+def test_shipping_topology_loader_is_http_only_and_redacted() -> None:
+    gateway = load_topology_gateway_client_settings(
+        {
+            "KG_TOPOLOGY_GATEWAY_URL": "http://knowledge_graph_query_gateway:8092",
+            "KG_TOPOLOGY_GATEWAY_BEARER_TOKEN": "gateway-secret",
+            "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS": "300",
+            "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": "16384",
+            "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": "1048576",
+        },
+        required=True,
+    )
+    loader = _topology_loader(gateway)
+    assert type(loader) is MemgraphProjectedTopologyLoader
+    assert type(loader.driver) is TopologyGatewayClient
+    assert "gateway-secret" not in repr(loader.driver)
+    source = __import__(
+        "apps.documents.services.hybrid_graph_dependencies", fromlist=["x"]
+    ).__file__
+    assert source is not None
+    text = open(source, encoding="utf-8").read()
+    assert "Neo4jMemgraphDriver" not in text
+    assert "Neo4jProjectedTopologyQueryAdapter" not in text

@@ -24,8 +24,6 @@ DEFAULTS: dict[str, object] = {
     "memgraph_image": "memgraph/memgraph-mage:3.8.1",
     "memgraph_uri": "",
     "memgraph_database": "memgraph",
-    "memgraph_query_username": "",
-    "memgraph_query_password": "",
     "memgraph_projection_username": "",
     "memgraph_projection_password": "",
     "projection_postgres_source_dsn": "",
@@ -107,9 +105,11 @@ def _projection() -> dict[str, str]:
 def _traversal() -> dict[str, str]:
     return {
         "KG_MEMGRAPH_TRAVERSAL_ENABLED": "1",
-        "KG_MEMGRAPH_URI": "bolt://graph:7687",
-        "KG_MEMGRAPH_QUERY_USERNAME": "reader",
-        "KG_MEMGRAPH_QUERY_PASSWORD": "query-secret",
+        "KG_TOPOLOGY_GATEWAY_URL": "http://knowledge_graph_query_gateway:8092",
+        "KG_TOPOLOGY_GATEWAY_BEARER_TOKEN": "gateway-secret",
+        "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS": "300",
+        "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": "16384",
+        "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": "1048576",
     }
 
 
@@ -173,7 +173,7 @@ def test_ratios_reject_noncanonical_or_nonstring_values(bad: object) -> None:
 def test_projection_requires_each_connection_and_secret_independently(key: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match=key):
         config.load_hybrid_retrieval_settings({**_projection(), key: ""})
-@pytest.mark.parametrize("key", ("KG_MEMGRAPH_URI", "KG_MEMGRAPH_DATABASE", "KG_MEMGRAPH_QUERY_USERNAME", "KG_MEMGRAPH_QUERY_PASSWORD"))
+@pytest.mark.parametrize("key", ("KG_TOPOLOGY_GATEWAY_URL", "KG_TOPOLOGY_GATEWAY_BEARER_TOKEN", "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS", "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES", "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES"))
 def test_traversal_requires_each_connection_and_secret_independently(key: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match=key):
         config.load_hybrid_retrieval_settings({**_traversal(), key: ""})
@@ -207,9 +207,9 @@ def test_source_shape_and_unknown_graph_keys_fail_closed() -> None:
     assert config.load_hybrid_retrieval_settings(original)
     assert original == {"UNRELATED": "kept"}
     exposed = config.load_django_hybrid_retrieval_settings(cast(dict[str, str], {"KG_BUILD_ENABLED": "1", "KG_GRAPH_DIRECT_ENABLEDD": "1", "UNRELATED_HOSTILE_VALUE": object()}))
-    assert set(exposed) == {f"KG_{field.name.upper()}" for field in dataclasses.fields(config.HybridRetrievalSettings)}
+    assert set(exposed) == {f"KG_{field.name.upper()}" for field in dataclasses.fields(config.HybridRetrievalSettings)} | config._gateway.GATEWAY_SETTING_KEYS
     assert not exposed["KG_MEMGRAPH_PROJECTION_ENABLED"] and not exposed["KG_GRAPH_DIRECT_ENABLED"]
-    assert repr(exposed["KG_MEMGRAPH_QUERY_PASSWORD"]) == "<redacted>"
+    assert repr(exposed["KG_TOPOLOGY_GATEWAY_BEARER_TOKEN"]) == "<redacted>"
     assert all(value is not config._EVALUATION_BACKEND_CAPABILITY for value in exposed.values())
 def test_secrets_are_redacted_from_repr_and_errors_but_affect_equality() -> None:
     canary = "DO-NOT-LOG-CANARY"
@@ -222,7 +222,7 @@ def test_secrets_are_redacted_from_repr_and_errors_but_affect_equality() -> None
         config.load_hybrid_retrieval_settings({**valid, "KG_PROJECTION_POSTGRES_STATE_DSN": valid["KG_PROJECTION_POSTGRES_SOURCE_DSN"]})
     assert canary not in str(caught.value)
     assert all(value not in repr(settings) for key, value in valid.items() if "PASSWORD" in key or "DSN" in key or "HMAC" in key)
-    direct = config.load_hybrid_retrieval_settings({**_direct(), "KG_MEMGRAPH_QUERY_PASSWORD": canary, "KG_QUERY_EXTRACTOR_BEARER_TOKEN": canary})
+    direct = config.load_hybrid_retrieval_settings({**_direct(), "KG_TOPOLOGY_GATEWAY_BEARER_TOKEN": canary, "KG_QUERY_EXTRACTOR_BEARER_TOKEN": canary})
     assert canary not in repr(direct)
 def test_evaluation_backend_requires_exact_private_capability() -> None:
     settings = config.load_hybrid_retrieval_settings({})
@@ -243,7 +243,7 @@ def test_settings_are_frozen_slotted_and_import_isolated() -> None:
 def test_secret_wrapper_survives_dataclass_traversal_and_is_immutable() -> None:
     raw = {**_projection(), **_direct()}
     settings = config.load_hybrid_retrieval_settings(raw)
-    pairs = (("memgraph_query_password", "KG_MEMGRAPH_QUERY_PASSWORD"), ("memgraph_projection_password", "KG_MEMGRAPH_PROJECTION_PASSWORD"), ("projection_postgres_source_dsn", "KG_PROJECTION_POSTGRES_SOURCE_DSN"), ("projection_postgres_state_dsn", "KG_PROJECTION_POSTGRES_STATE_DSN"), ("projection_identifier_hmac_key", "KG_PROJECTION_IDENTIFIER_HMAC_KEY"), ("query_extractor_bearer_token", "KG_QUERY_EXTRACTOR_BEARER_TOKEN"))
+    pairs = (("memgraph_projection_password", "KG_MEMGRAPH_PROJECTION_PASSWORD"), ("projection_postgres_source_dsn", "KG_PROJECTION_POSTGRES_SOURCE_DSN"), ("projection_postgres_state_dsn", "KG_PROJECTION_POSTGRES_STATE_DSN"), ("projection_identifier_hmac_key", "KG_PROJECTION_IDENTIFIER_HMAC_KEY"), ("query_extractor_bearer_token", "KG_QUERY_EXTRACTOR_BEARER_TOKEN"))
     copied, flattened = dataclasses.asdict(settings), dataclasses.astuple(settings)
     for field_name, source_key in pairs:
         secret = getattr(settings, field_name)

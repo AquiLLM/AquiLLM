@@ -9,13 +9,14 @@ from dataclasses import dataclass, field
 from ipaddress import ip_address
 from urllib.parse import unquote_to_bytes, urlsplit
 
+from . import topology_gateway_config as _gateway
+
 __all__ = ("HybridRetrievalConfigError", "HybridRetrievalSettings", "SecretSetting", "QUERY_EXTRACTOR_MODEL", "QUERY_EXTRACTOR_MODEL_REVISION", "QUERY_SCHEMA_CHECKSUM", "QUERY_SCHEMA_VERSION", "load_django_hybrid_retrieval_settings", "load_hybrid_retrieval_settings", "select_evaluation_topology_backend")  # fmt: skip
 
 QUERY_EXTRACTOR_MODEL = "fastino/gliner2-base-v1"
 QUERY_EXTRACTOR_MODEL_REVISION = "8437ba583a733d87f56ae902f3b197934eedd58e"
 QUERY_SCHEMA_VERSION = "query-entities-v1"
 QUERY_SCHEMA_CHECKSUM = "45bc8f86637a73324d2edae3096aac61d242fb0bcbab3c481cfa7599456cd271"  # fmt: skip
-
 _EVALUATION_BACKEND_CAPABILITY = object()
 _DECIMAL = re.compile(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 _LOWER_REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -60,7 +61,7 @@ class SecretSetting:
 class HybridRetrievalSettings:
     memgraph_projection_enabled: bool; memgraph_traversal_enabled: bool; graph_direct_enabled: bool; graph_extended_enabled: bool
     graph_topology_backend: str; graph_algorithm: str; memgraph_image: str; memgraph_uri: str = field(repr=False)
-    memgraph_database: str; memgraph_query_username: str; memgraph_query_password: SecretSetting = field(repr=False); memgraph_projection_username: str
+    memgraph_database: str; memgraph_projection_username: str
     memgraph_projection_password: SecretSetting = field(repr=False); projection_postgres_source_dsn: SecretSetting = field(repr=False); projection_postgres_state_dsn: SecretSetting = field(repr=False)
     projection_queue: str; projection_schema_version: str; projection_format_version: str; projection_identifier_hmac_key: SecretSetting = field(repr=False)
     projection_identifier_key_version: str; projection_batch_size: int; projection_lease_seconds: int; projection_max_attempts: int; projection_retention: int
@@ -88,22 +89,21 @@ _INT_RULES = {
 _FLOAT_RULES = {"KG_DIRECT_MIN_SIMILARITY": ("0.80", 0.0, 1.0), "KG_DIRECT_WINNER_MARGIN": ("0.05", 0.0, 1.0)}
 _TEXT_DEFAULTS = {
     "KG_GRAPH_TOPOLOGY_BACKEND": "memgraph", "KG_GRAPH_ALGORITHM": "ppr_projected_v1", "KG_MEMGRAPH_IMAGE": "memgraph/memgraph-mage:3.8.1", "KG_MEMGRAPH_URI": "", "KG_MEMGRAPH_DATABASE": "memgraph",
-    "KG_MEMGRAPH_QUERY_USERNAME": "", "KG_MEMGRAPH_QUERY_PASSWORD": "", "KG_MEMGRAPH_PROJECTION_USERNAME": "", "KG_MEMGRAPH_PROJECTION_PASSWORD": "",
+    "KG_MEMGRAPH_PROJECTION_USERNAME": "", "KG_MEMGRAPH_PROJECTION_PASSWORD": "",
     "KG_PROJECTION_POSTGRES_SOURCE_DSN": "", "KG_PROJECTION_POSTGRES_STATE_DSN": "", "KG_PROJECTION_QUEUE": "knowledge_graph_projection", "KG_PROJECTION_SCHEMA_VERSION": "collection-graph-v1",
     "KG_PROJECTION_FORMAT_VERSION": "projection-v1", "KG_PROJECTION_IDENTIFIER_HMAC_KEY": "", "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "", "KG_QUERY_EXTRACTOR_URL": "",
     "KG_QUERY_EXTRACTOR_BEARER_TOKEN": "", "KG_QUERY_EXTRACTOR_MODEL": QUERY_EXTRACTOR_MODEL, "KG_QUERY_EXTRACTOR_MODEL_REVISION": QUERY_EXTRACTOR_MODEL_REVISION, "KG_QUERY_EXTRACTOR_BUILD_HASH": "",
     "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION": QUERY_SCHEMA_VERSION, "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": "", "KG_GRAPH_EVAL_PARITY_BACKEND": "postgres",
 }
 # fmt: on
-_ALLOWED_KEYS = frozenset(_BOOL_DEFAULTS | _INT_RULES | _FLOAT_RULES | _TEXT_DEFAULTS)
-_SECRET_KEYS = frozenset(
-    key
-    for key in _TEXT_DEFAULTS
-    if any(marker in key for marker in ("PASSWORD", "BEARER_TOKEN", "HMAC_KEY", "DSN"))
+_ALLOWED_KEYS = (
+    frozenset(_BOOL_DEFAULTS | _INT_RULES | _FLOAT_RULES | _TEXT_DEFAULTS)
+    | _gateway.GATEWAY_SETTING_KEYS
 )
 
 
 # fmt: off
+def _secret(key: str) -> bool: return any(marker in key for marker in ("PASSWORD", "BEARER_TOKEN", "HMAC_KEY", "DSN"))
 def _error(key: str, reason: str) -> HybridRetrievalConfigError: return HybridRetrievalConfigError(f"{key} {reason}")
 def _raw(source: Mapping[str, str], key: str, default: str) -> str:
     value = source.get(key, default)
@@ -114,7 +114,7 @@ def _parse_text(source: Mapping[str, str], key: str, default: str) -> str:
     value = _raw(source, key, default)
     if len(value) > 4096 or any(ord(char) < 32 or ord(char) == 127 or 0xD800 <= ord(char) <= 0xDFFF for char in value):
         raise _error(key, "contains invalid text")
-    if key not in _SECRET_KEYS and value != value.strip():
+    if not _secret(key) and value != value.strip():
         raise _error(key, "must not contain surrounding whitespace")
     return value
 def _parse_int(source: Mapping[str, str], key: str, rule: tuple[str, int, int]) -> int:
@@ -215,8 +215,6 @@ def _validate_settings(settings: HybridRetrievalSettings) -> None:
         raise _error("KG_DIRECT_WINNER_MARGIN", "must not exceed minimum similarity")
     if settings.memgraph_projection_enabled:
         _require(settings, "KG_MEMGRAPH_URI KG_MEMGRAPH_DATABASE KG_MEMGRAPH_PROJECTION_USERNAME KG_MEMGRAPH_PROJECTION_PASSWORD KG_PROJECTION_POSTGRES_SOURCE_DSN KG_PROJECTION_POSTGRES_STATE_DSN KG_PROJECTION_IDENTIFIER_HMAC_KEY KG_PROJECTION_IDENTIFIER_KEY_VERSION")
-    if settings.memgraph_traversal_enabled:
-        _require(settings, "KG_MEMGRAPH_URI KG_MEMGRAPH_DATABASE KG_MEMGRAPH_QUERY_USERNAME KG_MEMGRAPH_QUERY_PASSWORD")
     if settings.graph_direct_enabled:
         if not settings.memgraph_traversal_enabled:
             raise _error("KG_MEMGRAPH_TRAVERSAL_ENABLED", "is required for direct retrieval")
@@ -251,7 +249,7 @@ def load_hybrid_retrieval_settings(source: Mapping[str, str]) -> HybridRetrieval
         values[float_key[3:].lower()] = _parse_float(source, float_key, float_rule)
     for text_key, default in _TEXT_DEFAULTS.items():
         text_value = _parse_text(source, text_key, default)
-        values[text_key[3:].lower()] = SecretSetting(text_value) if text_key in _SECRET_KEYS else text_value
+        values[text_key[3:].lower()] = SecretSetting(text_value) if _secret(text_key) else text_value
     settings = HybridRetrievalSettings(**values)  # type: ignore[arg-type]
     _validate_url("KG_MEMGRAPH_URI", settings.memgraph_uri, frozenset({"bolt", "bolt+s", "neo4j", "neo4j+s"}))
     _validate_url("KG_QUERY_EXTRACTOR_URL", settings.query_extractor_url, frozenset({"http", "https"}))
@@ -265,7 +263,7 @@ def load_hybrid_retrieval_settings(source: Mapping[str, str]) -> HybridRetrieval
         raise _error("KG_PROJECTION_QUEUE", "must be a bounded token")
     if settings.memgraph_database and _TOKEN.fullmatch(settings.memgraph_database) is None:
         raise _error("KG_MEMGRAPH_DATABASE", "must be a bounded token")
-    for username_key in ("KG_MEMGRAPH_QUERY_USERNAME", "KG_MEMGRAPH_PROJECTION_USERNAME"):
+    for username_key in ("KG_MEMGRAPH_PROJECTION_USERNAME",):
         username = getattr(settings, username_key[3:].lower())
         if username and _TOKEN.fullmatch(username) is None:
             raise _error(username_key, "must be a bounded token")
@@ -283,11 +281,15 @@ def load_hybrid_retrieval_settings(source: Mapping[str, str]) -> HybridRetrieval
         checksum = getattr(settings, checksum_key[3:].lower())
         if checksum and _LOWER_CHECKSUM.fullmatch(checksum) is None: raise _error(checksum_key, "must be a lowercase SHA-256")
     _validate_settings(settings)
+    try: _gateway.load_topology_gateway_client_settings(source, required=settings.memgraph_traversal_enabled)
+    except _gateway.GatewayClientConfigError as error: raise HybridRetrievalConfigError(str(error)) from None
     return settings
 def load_django_hybrid_retrieval_settings(source: Mapping[str, str]) -> dict[str, object]:
     if not isinstance(source, Mapping): raise HybridRetrievalConfigError("configuration source must be a mapping")
     settings = load_hybrid_retrieval_settings({key: source[key] for key in _ALLOWED_KEYS if key in source})
-    return {key: getattr(settings, key[3:].lower()) for key in _ALLOWED_KEYS}
+    core: dict[str, object] = {key: getattr(settings, key[3:].lower()) for key in _ALLOWED_KEYS - _gateway.GATEWAY_SETTING_KEYS}
+    gateway: dict[str, object] = _gateway.django_topology_gateway_client_values(source)
+    return core | gateway
 def select_evaluation_topology_backend(settings: HybridRetrievalSettings, *, capability: object) -> str:
     """Return the parity backend only to code holding the private test capability."""
     if capability is not _EVALUATION_BACKEND_CAPABILITY:
