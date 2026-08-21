@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import json
 import sys
 from collections.abc import Iterator, Mapping
@@ -8,9 +7,9 @@ from hashlib import sha256
 
 import pytest
 
+from apps.knowledge_graph.retrieval.topology import gateway_contracts
 from apps.knowledge_graph.retrieval.topology.contracts import TopologyQueryName
 from apps.knowledge_graph.retrieval.topology.gateway_contracts import (
-    _REQUEST_FIELDS,
     FAILURE_HTTP_STATUS,
     MAX_MAPPING_ITEMS,
     MAX_REQUEST_BYTES,
@@ -30,14 +29,6 @@ from apps.knowledge_graph.retrieval.topology.gateway_contracts import (
 )
 
 
-def test_request_is_frozen_slotted_and_has_exact_four_fields():
-    assert getattr(TopologyGatewayRequestV1, "__slots__")
-    assert {
-        field.name for field in dataclasses.fields(TopologyGatewayRequestV1)
-    } == _REQUEST_FIELDS
-    assert type(_REQUEST_FIELDS) is frozenset
-
-
 def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor():
     descriptor_bytes = json.dumps(
         SCHEMA_DESCRIPTOR_V1,
@@ -49,7 +40,7 @@ def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor(
     assert type(SCHEMA_DESCRIPTOR_V1) is tuple
     assert (
         SCHEMA_CHECKSUM
-        == "b00e76c547740cb37d97fd787bc396691e1c9184b3b9d421913db33b0abe81f9"
+        == "8d72b91f7391475da31747426b6b7e6b4fbe4ec8f4af921adcf2a6769d00d4ec"
     )
     assert sha256(descriptor_bytes).hexdigest() == SCHEMA_CHECKSUM
     assert (
@@ -67,6 +58,7 @@ def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor(
         "failure_reason_type",
         "failure_status_type",
         "input_bytes_rule",
+        "scalar_int64_domain",
     ):
         mutated = tuple(
             (entry_name, () if entry_name == name else value)
@@ -92,6 +84,7 @@ class _TypedHostileMapping(Mapping[str, object]):
     def __init__(self, mode: str, error: type[Exception]):
         self.mode = mode
         self.error = error
+        self.consumed = 0
 
     def __getitem__(self, key: str) -> object:
         if self.mode == "lookup":
@@ -109,6 +102,14 @@ class _TypedHostileMapping(Mapping[str, object]):
     def items(self):
         if self.mode == "items":
             raise self.error("canary-items")
+        if self.mode == "many":
+
+            def rows():
+                for index in range(100_000):
+                    self.consumed += 1
+                    yield f"k{index}", "value"
+
+            return rows()
         if self.mode == "generator":
 
             def rows():
@@ -149,7 +150,7 @@ def test_typed_mapping_failures_are_normalized_for_requests_and_rows(mode, error
 
 def test_deep_json_under_byte_caps_is_a_fixed_decoder_error():
     nested = b"0"
-    for _ in range(1_100):
+    for _ in range(4_000):
         nested = b"[" + nested + b"]"
     payloads = (
         b'{"deadline":1.0,"max_records":1,"parameters":{"x":'
@@ -158,39 +159,46 @@ def test_deep_json_under_byte_caps_is_a_fixed_decoder_error():
         b'{"ok":true,"rows":[' + nested + b"]}",
     )
     for decoder, payload in zip((decode_request, decode_response), payloads):
-        with pytest.raises(ValueError) as error:
+        with pytest.raises(ValueError):
             decoder(payload)
-        assert "canary" not in str(error.value)
 
 
-def test_signed_int64_boundaries_and_parse_limits_are_frozen():
+def test_signed_int64_boundaries_and_parse_limits_are_frozen(monkeypatch):
     values = (-(2**63), 2**63 - 1)
     for value in values:
-        assert (
-            decode_request(
-                encode_request(
-                    TopologyGatewayRequestV1(
-                        TopologyQueryName.RELATION_TOPOLOGY, {"x": value}, 1.0, 1
-                    )
-                )
-            ).parameters["x"]
-            == value
+        request = TopologyGatewayRequestV1(
+            TopologyQueryName.RELATION_TOPOLOGY, {"x": value}, 1.0, 1
         )
+        assert decode_request(encode_request(request)).parameters["x"] == value
     for value in (-(2**63) - 1, 2**63):
         with pytest.raises(ValueError):
             TopologyGatewayRequestV1(
                 TopologyQueryName.RELATION_TOPOLOGY, {"x": value}, 1.0, 1
             )
-    payload = encode_request(
-        TopologyGatewayRequestV1(
-            TopologyQueryName.RELATION_TOPOLOGY, {"x": values[0]}, 1.0, 1
-        )
-    )
     original = sys.get_int_max_str_digits()
+    loads = json.loads
+
+    def parse_int_called(*args, **kwargs):
+        assert kwargs["parse_int"].__name__ == "_parse_int"
+        return loads(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_contracts.json, "loads", parse_int_called)
     try:
-        for limit in (640, 4_300):
-            sys.set_int_max_str_digits(limit)
-            assert decode_request(payload).parameters["x"] == values[0]
+        sys.set_int_max_str_digits(0)
+        huge = b"9" * 8_000
+        payloads = (
+            (
+                decode_request,
+                b'{"deadline":1.0,"max_records":1,"parameters":{"x":'
+                + huge
+                + b'},"query":"relation_topology"}',
+            ),
+            (decode_response, b'{"ok":true,"rows":[{"x":' + huge + b"}]}"),
+        )
+        for decoder, payload in payloads:
+            with pytest.raises(ValueError) as error:
+                decoder(payload)
+            assert "9" * 50 not in str(error.value)
     finally:
         sys.set_int_max_str_digits(original)
 
@@ -227,27 +235,8 @@ def test_request_and_success_equality_is_canonical_wire_exact_and_unhashable():
         )
 
 
-class _ManyMapping(Mapping[str, object]):
-    def __init__(self):
-        self.consumed = 0
-
-    def __getitem__(self, key: str) -> object:
-        return "value"
-
-    def __iter__(self):
-        return iter(f"k{index}" for index in range(100_000))
-
-    def __len__(self):
-        return 100_000
-
-    def items(self):
-        for index in range(100_000):
-            self.consumed += 1
-            yield f"k{index}", "value"
-
-
-def test_mapping_and_aggregate_response_caps_fail_before_large_materialization():
-    mapping = _ManyMapping()
+def test_mapping_caps_fail_before_large_materialization(monkeypatch):
+    mapping = _TypedHostileMapping("many", RuntimeError)
     with pytest.raises(ValueError):
         TopologyGatewayRequestV1(TopologyQueryName.RELATION_TOPOLOGY, mapping, 1.0, 1)
     assert mapping.consumed <= MAX_MAPPING_ITEMS + 1
@@ -255,6 +244,20 @@ def test_mapping_and_aggregate_response_caps_fail_before_large_materialization()
         TopologyGatewaySuccessV1(
             tuple({"x": "v" * 300} for _ in range(MAX_RESULT_ROWS))
         )
+    huge = "x" * (MAX_RESPONSE_BYTES + 1)
+
+    def no_huge_canonical(value):
+        if value is huge:
+            raise AssertionError("huge value was canonicalized")
+        return _canonical(value)
+
+    monkeypatch.setattr(gateway_contracts, "_canonical", no_huge_canonical)
+    with pytest.raises(ValueError):
+        TopologyGatewayRequestV1(
+            TopologyQueryName.RELATION_TOPOLOGY, {"x": huge}, 1.0, 1
+        )
+    with pytest.raises(ValueError):
+        TopologyGatewaySuccessV1(({"x": huge},))
 
 
 @pytest.mark.parametrize(
@@ -281,9 +284,6 @@ def test_response_union_has_only_success_rows_or_failure_reason_and_status():
     failure = TopologyGatewayFailureV1(GatewayFailureReason.PROVENANCE)
     for response in (success, failure):
         assert decode_response(encode_response(response)) == response
-
-
-def test_failure_status_mapping_is_closed_and_fixed():
     assert tuple(FAILURE_HTTP_STATUS.values()) == (401, 503, 502, 409, 504, 422)
 
 

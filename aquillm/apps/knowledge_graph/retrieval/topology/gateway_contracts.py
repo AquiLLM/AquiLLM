@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -74,7 +72,7 @@ SCHEMA_DESCRIPTOR_V1: Final = (
     ("success_fields", ("ok", "rows")),
     ("failure_fields", ("ok", "reason", "status")),
     ("scalar_builtins", ("str", "int", "float", "bool", "null")),
-    ("scalar_int64_domain", (INT64_MIN, INT64_MAX)),
+    ("scalar_int64_domain", ("lexical_preparse", INT64_MIN, INT64_MAX)),
     ("scalar_float_rule", "finite"),
     ("scalar_text_forbidden", ("C0", "DEL", "surrogate")),
     ("canonical_encoding", "UTF-8"),
@@ -99,29 +97,14 @@ SCHEMA_DESCRIPTOR_V1: Final = (
 SCHEMA_CHECKSUM: Final = sha256(_canonical(SCHEMA_DESCRIPTOR_V1)).hexdigest()
 
 
-def _safe_text(value: object, name: str) -> str:
+def _safe_text(value: object, name: str, limit: int) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact string")
-    if any(
+    if len(value) > limit or any(
         ord(char) < 0x20 or ord(char) == 0x7F or 0xD800 <= ord(char) <= 0xDFFF
         for char in value
     ):
         raise ValueError(f"{name} contains forbidden control text")
-
-
-def _scalar(value: object, name: str) -> None:
-    if value is None or type(value) is bool:
-        return
-    if type(value) is int:
-        if INT64_MIN <= value <= INT64_MAX:
-            return
-        raise ValueError(f"{name} exceeds signed 64-bit range")
-    if type(value) is str:
-        _safe_text(value, name)
-        return
-    if type(value) is float and isfinite(value):
-        return
-    raise TypeError(f"{name} must be an exact topology scalar")
 
 
 def _mapping(value: Mapping[str, TopologyScalar], name: str, limit: int) -> Mapping:
@@ -136,16 +119,20 @@ def _mapping(value: Mapping[str, TopologyScalar], name: str, limit: int) -> Mapp
         raise ValueError("invalid topology mapping") from None
     size = 1
     for key, item in copied.items():
-        _safe_text(key, f"{name} key")
-        _scalar(item, f"{name} value")
+        _safe_text(key, f"{name} key", limit)
+        if item is None or type(item) is bool:
+            pass
+        elif type(item) is int:
+            if not INT64_MIN <= item <= INT64_MAX:
+                raise ValueError(f"{name} value exceeds signed 64-bit range")
+        elif type(item) is str:
+            _safe_text(item, f"{name} value", limit)
+        elif type(item) is not float or not isfinite(item):
+            raise TypeError(f"{name} value must be an exact topology scalar")
         size += len(_canonical(key)) + len(_canonical(item)) + 2
         if size > limit:
             raise ValueError("topology mapping exceeds its byte cap")
     return MappingProxyType(copied)
-
-
-def _wire_equal(value: object, other: object, encoder: object) -> bool:
-    return type(other) is type(value) and encoder(value) == encoder(other)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -169,7 +156,9 @@ class TopologyGatewayRequestV1:
         encode_request(self)
 
     def __eq__(self, other: object) -> bool:
-        return _wire_equal(self, other, encode_request)
+        return type(other) is type(self) and encode_request(self) == encode_request(
+            other
+        )
 
     __hash__ = None
 
@@ -192,7 +181,9 @@ class TopologyGatewaySuccessV1:
         object.__setattr__(self, "rows", tuple(normalized))
 
     def __eq__(self, other: object) -> bool:
-        return _wire_equal(self, other, encode_response)
+        return type(other) is type(self) and encode_response(self) == encode_response(
+            other
+        )
 
     __hash__ = None
 
@@ -222,13 +213,21 @@ def _load(payload: bytes, maximum: int) -> object:
         raise ValueError("gateway payload must be bytes")
     if len(payload) > maximum:
         raise ValueError("gateway payload exceeds its byte cap")
+
+    def _parse_int(value: str) -> int:
+        if len(value) > 19 + value.startswith("-"):
+            raise ValueError("signed 64-bit integer has too many digits")
+        parsed = int(value)
+        if INT64_MIN <= parsed <= INT64_MAX:
+            return parsed
+        raise ValueError("integer exceeds signed 64-bit range")
+
     try:
         value = json.loads(
             payload.decode("utf-8"),
             object_pairs_hook=_pairs,
-            parse_constant=lambda _value: (_ for _ in ()).throw(
-                ValueError("non-finite JSON number")
-            ),
+            parse_constant=int,
+            parse_int=_parse_int,
         )
         if _canonical(value) != payload:
             raise ValueError("gateway JSON is not canonical")
