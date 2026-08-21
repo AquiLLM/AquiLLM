@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from ipaddress import ip_address
 from urllib.parse import unquote_to_bytes, urlsplit
 
-__all__ = ("HybridRetrievalConfigError", "HybridRetrievalSettings", "SecretSetting", "QUERY_EXTRACTOR_MODEL", "QUERY_EXTRACTOR_MODEL_REVISION", "QUERY_SCHEMA_CHECKSUM", "QUERY_SCHEMA_VERSION", "load_hybrid_retrieval_settings", "select_evaluation_topology_backend")  # fmt: skip
+__all__ = ("HybridRetrievalConfigError", "HybridRetrievalSettings", "SecretSetting", "QUERY_EXTRACTOR_MODEL", "QUERY_EXTRACTOR_MODEL_REVISION", "QUERY_SCHEMA_CHECKSUM", "QUERY_SCHEMA_VERSION", "load_django_hybrid_retrieval_settings", "load_hybrid_retrieval_settings", "select_evaluation_topology_backend")  # fmt: skip
 
 QUERY_EXTRACTOR_MODEL = "fastino/gliner2-base-v1"
 QUERY_EXTRACTOR_MODEL_REVISION = "8437ba583a733d87f56ae902f3b197934eedd58e"
@@ -104,8 +104,7 @@ _SECRET_KEYS = frozenset(
 
 
 # fmt: off
-def _error(key: str, reason: str) -> HybridRetrievalConfigError:
-    return HybridRetrievalConfigError(f"{key} {reason}")
+def _error(key: str, reason: str) -> HybridRetrievalConfigError: return HybridRetrievalConfigError(f"{key} {reason}")
 def _raw(source: Mapping[str, str], key: str, default: str) -> str:
     value = source.get(key, default)
     if type(value) is not str:
@@ -122,10 +121,7 @@ def _parse_int(source: Mapping[str, str], key: str, rule: tuple[str, int, int]) 
     raw = _raw(source, key, rule[0])
     if len(raw) > len(str(rule[2])) or not raw.isascii() or not raw.isdecimal() or (len(raw) > 1 and raw[0] == "0"):
         raise _error(key, "must be a canonical decimal integer")
-    try:
-        value = int(raw)
-    except ValueError:
-        raise _error(key, "must be a canonical decimal integer") from None
+    value = int(raw)
     if not rule[1] <= value <= rule[2]:
         raise _error(key, "is outside the supported range")
     return value
@@ -290,6 +286,10 @@ def load_hybrid_retrieval_settings(source: Mapping[str, str]) -> HybridRetrieval
         raise _error("KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM", "must be a lowercase SHA-256")
     _validate_settings(settings)
     return settings
+def load_django_hybrid_retrieval_settings(source: Mapping[str, str]) -> dict[str, object]:
+    if not isinstance(source, Mapping): raise HybridRetrievalConfigError("configuration source must be a mapping")
+    settings = load_hybrid_retrieval_settings({key: source[key] for key in _ALLOWED_KEYS if key in source})
+    return {key: getattr(settings, key[3:].lower()) for key in _ALLOWED_KEYS}
 def select_evaluation_topology_backend(settings: HybridRetrievalSettings, *, capability: object) -> str:
     """Return the parity backend only to code holding the private test capability."""
     if capability is not _EVALUATION_BACKEND_CAPABILITY:

@@ -16,6 +16,7 @@ from apps.knowledge_graph.retrieval.ppr import (
     PPRAlgorithmConfig,
     graph_algorithm_signature,
 )
+from lib.knowledge_graph import retrieval_config
 from lib.knowledge_graph.config import (
     DEFAULT_ARTIFACT_KEEP_SUPERSEDED,
     DEFAULT_ARTIFACT_RETENTION_DAYS,
@@ -54,24 +55,18 @@ _OVERLAY_SETTING_DEFAULTS: dict[str, object] = {
 }
 
 
-def _load_django_graph_settings(overrides: dict[str, str]) -> dict[str, object]:
-    """Import settings in a fresh process so environment parsing is observable."""
-
-    names = tuple(_OVERLAY_SETTING_DEFAULTS)
-    script = (
-        "import json\n"
-        "from aquillm import settings\n"
-        f"names = {names!r}\n"
-        "print(json.dumps({name: getattr(settings, name) for name in names}, "
-        "sort_keys=True))\n"
-    )
+def _run_settings_script(
+    script: str, overrides: dict[str, str], names: tuple[str, ...]
+) -> str:
     environment = os.environ.copy()
     for name in names:
         environment.pop(name, None)
     environment.update(overrides)
-    environment["DJANGO_DEBUG"] = "1"
-    environment["DJANGO_SETTINGS_MODULE"] = "aquillm.settings"
-    environment["PYTHONPATH"] = str(_PROJECT_ROOT)
+    environment |= {
+        "DJANGO_DEBUG": "1",
+        "DJANGO_SETTINGS_MODULE": "aquillm.settings",
+        "PYTHONPATH": str(_PROJECT_ROOT),
+    }
     completed = subprocess.run(
         [sys.executable, "-c", script],
         cwd=_PROJECT_ROOT,
@@ -81,7 +76,21 @@ def _load_django_graph_settings(overrides: dict[str, str]) -> dict[str, object]:
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
-    return json.loads(completed.stdout)
+    return completed.stdout
+
+
+def _load_django_graph_settings(
+    overrides: dict[str, str],
+    names: tuple[str, ...] = tuple(_OVERLAY_SETTING_DEFAULTS),
+) -> dict[str, object]:
+    script = (
+        "import json\n"
+        "from aquillm import settings\n"
+        f"names = {names!r}\n"
+        "print(json.dumps({name: getattr(settings, name) for name in names}, "
+        "sort_keys=True, default=repr))\n"
+    )
+    return json.loads(_run_settings_script(script, overrides, names))
 
 
 def _django_startup_accepts_but_retrieval_rejects(
@@ -99,23 +108,8 @@ def _django_startup_accepts_but_retrieval_rejects(
         "    valid = True\n"
         "print(json.dumps({'valid': valid}))\n"
     )
-    environment = os.environ.copy()
-    for setting_name in _OVERLAY_SETTING_DEFAULTS:
-        environment.pop(setting_name, None)
-    environment.update(overrides)
-    environment["DJANGO_DEBUG"] = "1"
-    environment["DJANGO_SETTINGS_MODULE"] = "aquillm.settings"
-    environment["PYTHONPATH"] = str(_PROJECT_ROOT)
-    completed = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=_PROJECT_ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode == 0, completed.stderr
-    return bool(json.loads(completed.stdout.splitlines()[-1])["valid"])
+    output = _run_settings_script(script, overrides, tuple(_OVERLAY_SETTING_DEFAULTS))
+    return bool(json.loads(output.splitlines()[-1])["valid"])
 
 
 def test_extraction_retention_and_eval_controls_are_safe_by_default() -> None:
@@ -138,6 +132,16 @@ def test_extraction_retention_and_eval_controls_are_safe_by_default() -> None:
 
 def test_django_settings_expose_off_by_default_overlay_and_queue_contract() -> None:
     assert _load_django_graph_settings({}) == _OVERLAY_SETTING_DEFAULTS
+
+
+def test_django_exposes_bounded_hybrid_defaults_despite_hostile_ambient() -> None:
+    expected = retrieval_config.load_django_hybrid_retrieval_settings({})
+    encoded = json.loads(json.dumps(expected, default=repr))
+    hostile = {"KG_BUILD_ENABLED": "1", "KG_GRAPH_DIRECT_ENABLEDD": "1"}
+
+    assert _load_django_graph_settings({}, tuple(expected)) == encoded
+    assert _load_django_graph_settings(hostile, tuple(expected)) == encoded
+    assert not any(value for name, value in encoded.items() if name.endswith("ENABLED"))
 
 
 def test_django_settings_parse_exact_overlay_ceiling_values() -> None:

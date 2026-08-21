@@ -19,6 +19,7 @@ from lib.knowledge_graph.config import (
     KnowledgeGraphConfigError,
     load_extraction_queue,
 )
+from lib.knowledge_graph.retrieval_config import load_django_hybrid_retrieval_settings
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -38,8 +39,7 @@ def env_csv(key: str) -> list[str]:
 
 def env_int(key: str, default: int) -> int:
     try:
-        raw = (os.environ.get(key) or str(default)).strip()
-        value = int(raw)
+        value = int((os.environ.get(key) or str(default)).strip())
     except Exception:
         return default
     return value if value >= 0 else default
@@ -47,8 +47,7 @@ def env_int(key: str, default: int) -> int:
 
 def env_float(key: str, default: float) -> float:
     try:
-        raw = (os.environ.get(key) or str(default)).strip()
-        value = float(raw)
+        value = float((os.environ.get(key) or str(default)).strip())
     except Exception:
         return default
     return value if value >= 0 else default
@@ -139,6 +138,7 @@ KG_OVERLAY_PPR_ITERATIONS = env_kg_int("KG_OVERLAY_PPR_ITERATIONS", 8)
 KG_OVERLAY_MAX_CANDIDATES = env_kg_int("KG_OVERLAY_MAX_CANDIDATES", 20)
 KG_OVERLAY_MAX_PER_DOCUMENT = env_kg_int("KG_OVERLAY_MAX_PER_DOCUMENT", 3)
 KG_OVERLAY_TIMEOUT_MS = env_kg_int("KG_OVERLAY_TIMEOUT_MS", 150)
+globals().update(load_django_hybrid_retrieval_settings(os.environ))
 TESTING = (
     env_bool("DJANGO_TESTING", False)
     or "pytest" in sys.modules

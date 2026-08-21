@@ -69,7 +69,6 @@ DEFAULTS: dict[str, object] = {
     "direct_winner_margin": 0.05,
     "graph_eval_parity_backend": "postgres",
 }
-
 INT_LIMITS = {
     "KG_PROJECTION_BATCH_SIZE": (1, 5000),
     "KG_PROJECTION_LEASE_SECONDS": (10, 3600),
@@ -94,8 +93,6 @@ INT_LIMITS = {
     "KG_GRAPH_EXTENDED_MAX_EDGES": (1, 1000),
     "KG_GRAPH_EXTENDED_MAX_CANDIDATES": (1, 20),
 }
-
-
 def _projection() -> dict[str, str]:
     return {
         "KG_MEMGRAPH_PROJECTION_ENABLED": "1",
@@ -107,8 +104,6 @@ def _projection() -> dict[str, str]:
         "KG_PROJECTION_IDENTIFIER_HMAC_KEY": "hmac-secret",
         "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "task21-key-v1",
     }
-
-
 def _traversal() -> dict[str, str]:
     return {
         "KG_MEMGRAPH_TRAVERSAL_ENABLED": "1",
@@ -211,6 +206,11 @@ def test_source_shape_and_unknown_graph_keys_fail_closed() -> None:
     original = {"UNRELATED": "kept"}
     assert config.load_hybrid_retrieval_settings(original)
     assert original == {"UNRELATED": "kept"}
+    exposed = config.load_django_hybrid_retrieval_settings(cast(dict[str, str], {"KG_BUILD_ENABLED": "1", "KG_GRAPH_DIRECT_ENABLEDD": "1", "UNRELATED_HOSTILE_VALUE": object()}))
+    assert set(exposed) == {f"KG_{field.name.upper()}" for field in dataclasses.fields(config.HybridRetrievalSettings)}
+    assert not exposed["KG_MEMGRAPH_PROJECTION_ENABLED"] and not exposed["KG_GRAPH_DIRECT_ENABLED"]
+    assert repr(exposed["KG_MEMGRAPH_QUERY_PASSWORD"]) == "<redacted>"
+    assert all(value is not config._EVALUATION_BACKEND_CAPABILITY for value in exposed.values())
 def test_secrets_are_redacted_from_repr_and_errors_but_affect_equality() -> None:
     canary = "DO-NOT-LOG-CANARY"
     valid = {**_projection(), "KG_MEMGRAPH_PROJECTION_PASSWORD": canary}
