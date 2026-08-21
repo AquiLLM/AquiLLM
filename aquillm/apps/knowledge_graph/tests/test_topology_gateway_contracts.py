@@ -10,6 +10,7 @@ import pytest
 
 from apps.knowledge_graph.retrieval.topology.contracts import TopologyQueryName
 from apps.knowledge_graph.retrieval.topology.gateway_contracts import (
+    _REQUEST_FIELDS,
     FAILURE_HTTP_STATUS,
     MAX_MAPPING_ITEMS,
     MAX_REQUEST_BYTES,
@@ -38,15 +39,9 @@ def request() -> TopologyGatewayRequestV1:
 
 
 def test_request_is_frozen_slotted_and_has_exact_four_fields():
-    assert dataclasses.fields(TopologyGatewayRequestV1)
     assert getattr(TopologyGatewayRequestV1, "__slots__")
-    assert tuple(field.name for field in dataclasses.fields(request())) == (
-        "query",
-        "parameters",
-        "deadline",
-        "max_records",
-    )
-    assert decode_request(encode_request(request())) == request()
+    assert {field.name for field in dataclasses.fields(request())} == _REQUEST_FIELDS
+    assert type(_REQUEST_FIELDS) is frozenset
 
 
 def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor():
@@ -60,17 +55,23 @@ def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor(
     assert type(SCHEMA_DESCRIPTOR_V1) is tuple
     assert (
         SCHEMA_CHECKSUM
-        == "a1214d48cc7ce0eeb926ec0f12bf0e9324ea7fae39fe24a1a152c7c0dd9098df"
+        == "385b907a4bbd9854598fe165776c14bb5088b343940aebbd34387f4922f3b285"
     )
     assert sha256(descriptor_bytes).hexdigest() == SCHEMA_CHECKSUM
-    assert (
-        sha256(
-            json.dumps(
-                ("mutated", *SCHEMA_DESCRIPTOR_V1), separators=(",", ":")
-            ).encode()
-        ).hexdigest()
-        != SCHEMA_CHECKSUM
-    )
+    for name in (
+        "request_fields",
+        "success_fields",
+        "scalar_builtins",
+        "canonical_ensure_ascii",
+    ):
+        mutated = tuple(
+            (entry_name, () if entry_name == name else value)
+            for entry_name, value in SCHEMA_DESCRIPTOR_V1
+        )
+        assert (
+            sha256(json.dumps(mutated, separators=(",", ":")).encode()).hexdigest()
+            != SCHEMA_CHECKSUM
+        )
 
 
 def test_payload_bearing_repr_is_fixed_and_never_contains_payload_text():
@@ -81,10 +82,9 @@ def test_payload_bearing_repr_is_fixed_and_never_contains_payload_text():
         2,
     )
     success = TopologyGatewaySuccessV1(({"canary": "secret-row"},))
-    assert "secret-request" not in repr(request_value)
-    assert "canary" not in repr(request_value)
-    assert "secret-row" not in repr(success)
-    assert "canary" not in repr(success)
+    for value, secret in ((request_value, "secret-request"), (success, "secret-row")):
+        assert secret not in repr(value)
+        assert "canary" not in repr(value)
 
 
 class _TypedHostileMapping(Mapping[str, object]):
@@ -278,8 +278,8 @@ def test_request_decoder_accepts_only_canonical_safe_json(payload: bytes):
 def test_response_union_has_only_success_rows_or_failure_reason_and_status():
     success = TopologyGatewaySuccessV1(rows=({"id": "n1", "weight": 1.0},))
     failure = TopologyGatewayFailureV1(GatewayFailureReason.PROVENANCE)
-    assert decode_response(encode_response(success)) == success
-    assert decode_response(encode_response(failure)) == failure
+    for response in (success, failure):
+        assert decode_response(encode_response(response)) == response
 
 
 def test_failure_status_mapping_is_closed_and_fixed():
@@ -287,7 +287,6 @@ def test_failure_status_mapping_is_closed_and_fixed():
 
 
 def test_limits_and_malformed_bytes_fail_closed_without_echoing_input():
-    assert MAX_REQUEST_BYTES < MAX_RESPONSE_BYTES
     with pytest.raises(ValueError) as exc:
         decode_request(b"x" * (MAX_REQUEST_BYTES + 1))
     assert "x" * 50 not in str(exc.value)

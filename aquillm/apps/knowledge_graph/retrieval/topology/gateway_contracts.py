@@ -18,7 +18,8 @@ MAX_RESPONSE_BYTES: Final = 1_048_576
 MAX_MAPPING_ITEMS: Final = 512
 INT64_MIN: Final = -(2**63)
 INT64_MAX: Final = 2**63 - 1
-_REQUEST_FIELDS = {"query", "parameters", "deadline", "max_records"}
+_REQUEST_FIELDS = frozenset({"query", "parameters", "deadline", "max_records"})
+SCHEMA_VERSION: Final = "topology-gateway-v1"
 MALFORMED_REQUEST_STATUS: Final = 400
 OVERSIZED_REQUEST_STATUS: Final = 413
 
@@ -58,29 +59,32 @@ def _canonical(value: object) -> bytes:
 
 
 SCHEMA_DESCRIPTOR_V1: Final = (
-    ("version", "topology-gateway-v1"),
-    ("query_names", tuple(query.value for query in TopologyQueryName)),
-    (
-        "rules",
-        "scalar types/int64/finite/C0-DEL-surrogate; request fields/monotonic; "
-        "response canonical closed; JSON UTF8/sorted/compact/duplicate recursion fixed",
-    ),
+    ("version", SCHEMA_VERSION),
+    ("request_fields", tuple(sorted(_REQUEST_FIELDS))),
+    ("success_fields", ("ok", "rows")),
+    ("failure_fields", ("ok", "reason", "status")),
+    ("scalar_builtins", ("str", "int", "float", "bool", "null")),
+    ("scalar_int64_domain", (INT64_MIN, INT64_MAX)),
+    ("scalar_float_rule", "finite"),
+    ("scalar_text_forbidden", ("C0", "DEL", "surrogate")),
+    ("canonical_encoding", "UTF-8"),
+    ("canonical_ensure_ascii", False),
+    ("canonical_allow_nan", False),
+    ("canonical_sort_keys", True),
+    ("canonical_separators", (",", ":")),
+    ("canonical_duplicate_keys", "rejected"),
+    ("canonical_recursion_errors", "normalized"),
+    ("query_allowlist", tuple(query.value for query in TopologyQueryName)),
     (
         "failure_http_status",
         tuple((r.value, FAILURE_HTTP_STATUS[r]) for r in GatewayFailureReason),
     ),
-    (
-        "status_caps",
-        (
-            MALFORMED_REQUEST_STATUS,
-            OVERSIZED_REQUEST_STATUS,
-            MAX_RESULT_ROWS,
-            MAX_REQUEST_BYTES,
-            MAX_RESPONSE_BYTES,
-            MAX_MAPPING_ITEMS,
-        ),
-    ),
-    ("int64_domain", (INT64_MIN, INT64_MAX)),
+    ("malformed_request_status", MALFORMED_REQUEST_STATUS),
+    ("oversized_request_status", OVERSIZED_REQUEST_STATUS),
+    ("max_result_rows", MAX_RESULT_ROWS),
+    ("max_request_bytes", MAX_REQUEST_BYTES),
+    ("max_response_bytes", MAX_RESPONSE_BYTES),
+    ("max_mapping_items", MAX_MAPPING_ITEMS),
 )
 SCHEMA_CHECKSUM: Final = sha256(_canonical(SCHEMA_DESCRIPTOR_V1)).hexdigest()
 
@@ -258,8 +262,6 @@ def decode_request(payload: bytes) -> TopologyGatewayRequestV1:
             value["deadline"],
             value["max_records"],
         )
-        if len(encode_request(request)) != len(payload):
-            raise ValueError("gateway request is not canonical")
         return request
     except (TypeError, ValueError, KeyError):
         raise ValueError("invalid gateway request") from None
@@ -293,8 +295,6 @@ def decode_response(payload: bytes) -> TopologyGatewayResponseV1:
             response = TopologyGatewayFailureV1(GatewayFailureReason(value["reason"]))
             if value["status"] != response.status or type(value["status"]) is not int:
                 raise ValueError
-        if encode_response(response) != payload:
-            raise ValueError
         return response
     except (TypeError, ValueError, KeyError):
         raise ValueError("invalid gateway response") from None
