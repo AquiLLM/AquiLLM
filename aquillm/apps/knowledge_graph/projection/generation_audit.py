@@ -53,14 +53,18 @@ def _row_matches_bundle(row, bundle, checksum: str) -> bool:
         and row.snapshot_checksum == checksum
         and (
             row.entity_count,
+            row.relation_semantics_count,
             row.relation_count,
             row.evidence_count,
+            row.entity_mention_count,
             row.chunk_count,
         )
         == (
             counts.entity_count,
+            counts.relation_semantics_count,
             counts.relation_count,
             counts.evidence_count,
+            counts.entity_mention_count,
             counts.chunk_count,
         )
     )

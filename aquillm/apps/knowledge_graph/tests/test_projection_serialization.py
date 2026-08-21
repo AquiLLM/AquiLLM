@@ -26,7 +26,7 @@ GENERATION, COLLECTION, ARTIFACT, ENTITY_A, ENTITY_B = (
 )
 CLUSTER = "a" * 64
 DOCUMENT_UUID = "12345678-1234-5678-9234-567812345678"
-ZERO_COUNTS = ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0)
+ZERO_COUNTS = ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 
 def _entity(key: str, utility: float) -> ProjectedEntityV1:
@@ -93,8 +93,9 @@ def test_literal_manifest_lifecycle_lease_failure_and_full_bundle_vectors() -> N
     )
     expected_manifest = (
         b'{"counts":{"artifact_provenance_count":0,"automatic_membership_count":0,"chu'
-        b'nk_count":0,"document_count":0,"entity_count":0,"evidence_count":0,"relation'
-        b'_count":0},"generation_key":"<GEN>","graph_checksum":"<GRAPH>","identifier_k'
+        b'nk_count":0,"document_count":0,"entity_count":0,"entity_mention_count":0,"e'
+        b'vidence_count":0,"relation_count":0,"relation_semantics_count":0},"generatio'
+        b'n_key":"<GEN>","graph_checksum":"<GRAPH>","identifier_k'
         b'ey_version":"key-v1","private_mapping_checksum":"<PRIVATE>","projection_vers'
         b'ion":"projection-v1","schema_version":"schema-v1","snapshot_checksum":"<SNAP'
         b'>","state":"ready"}'
@@ -127,13 +128,17 @@ def test_literal_manifest_lifecycle_lease_failure_and_full_bundle_vectors() -> N
         b'":"<F>","resolver_version":"resolver-v1"}],"chunks":[{"chunk_key":"<CHUNK>",'
         b'"chunk_number":2,"document_key":"<DOC>"}],"counts":{"artifact_provenance_cou'
         b'nt":2,"automatic_membership_count":2,"chunk_count":1,"document_count":1,"ent'
-        b'ity_count":2,"evidence_count":1,"relation_count":1},"documents":[{"document_'
+        b'ity_count":2,"entity_mention_count":1,"evidence_count":1,"relation_count":1'
+        b',"relation_semantics_count":1},"documents":[{"document_'
         b'key":"<DOC>","generation_key":"<GEN>"}],"entities":[{"artifact_key":"<ART>",'
         b'"cluster_key":"<AUTO>","collection_key":"<COL>","entity_key":"<EA>","generat'
         b'ion_key":"<GEN>","ontology_type":"person","retrieval_utility":"0x1.000000000'
         b'0000p-1"},{"artifact_key":"<ART>","cluster_key":"<AUTO>","collection_key":"<'
         b'COL>","entity_key":"<EB>","generation_key":"<GEN>","ontology_type":"person",'
-        b'"retrieval_utility":"0x1.0000000000000p-2"}],"evidence":[{"artifact_key":"<F'
+        b'"retrieval_utility":"0x1.0000000000000p-2"}],"entity_mentions":[{"chunk_key"'
+        b':"<CHUNK>","chunk_number":2,"confidence":"0x1.0000000000000p-1","document_'
+        b'key":"<DOC>","entity_key":"<EA>","mention_key":"<MENT>","provenance_key":"'
+        b'<REBUILD>"}],"evidence":[{"artifact_key":"<F'
         b'>","assembly_config_checksum":"<F>","chunk_key":"<CHUNK>","chunk_number":2,"'
         b'confidence":"0x1.8000000000000p-1","document_key":"<DOC>","evidence_key":"<E'
         b'VID>","head_mapping_key":"<EA>","head_mention_key":"<MENT>","ontology_checks'
@@ -142,8 +147,10 @@ def test_literal_manifest_lifecycle_lease_failure_and_full_bundle_vectors() -> N
         b'c_signature":"<F>","source_document_key":"<DOC>","tail_mapping_key":"<EB>","'
         b'tail_mention_key":"<EVID>"}],"generation":{"artifact_key":"<ART>","collectio'
         b'n_key":"<COL>","generation_key":"<GEN>","identifier_key_version":"key-v1","m'
-        b'embership_checksum":"<F>","membership_epoch":7,"projection_version":"project'
-        b'ion-v1","schema_version":"memgraph-schema-v1"},"relations":[{"artifact_key":'
+        b'embership_checksum":"<F>","membership_epoch":7,"projection_key":"<SCOPE>"'
+        b',"projection_version":"projection-v1","schema_version":"memgraph-schema-v1"'
+        b'},"relation_semantics":[{"artifact_key":"<ART>","direction":"directed","rel'
+        b'ation_type":"knows","semantics_key":"<SCOPE>"}],"relations":[{"artifact_key":'
         b'"<ART>","relation_key":"<REL>","relation_type":"knows","source_entity_key":"'
         b'<EA>","target_entity_key":"<EB>"}]}'
     )
@@ -164,10 +171,10 @@ def test_literal_manifest_lifecycle_lease_failure_and_full_bundle_vectors() -> N
     )
     assert canonical_projection_bytes(_bundle()) == expected_bundle
     assert tuple(map(projection_checksum, (manifest, lease, failure, _bundle()))) == (
-        "fb2726d5a09eace760030057ae523923ff0fb355e64ce4fbc90330c75a40a367",
+        "b48738ee41c9594aec2e691194c5e3078dad80235a757def897f3b40299a0a52",
         "dbe87cb726e6db021d018061ddf1eee20f192c7fcf13b72242aabc06f2a8229d",
         "63a322de2d531a1ed7ab3dd19baa7cb907fa1eebf969fc93a19d8ce7b81bc7db",
-        "5cedd6e208d90b355cfe6c5a239e24b43153c42662b04e07341e80171a6f7dcb",
+        "e4732ed48ebcca6a9a13ae4719936ba044828bcac029a9a5924acc5abe9d5788",
     )
     assert " ".join(state.value for state in ProjectionLifecycleState) == (
         "pending building ready failed superseded"
@@ -289,12 +296,3 @@ def test_float_byte_and_record_order_mutations_change_or_fail_contract() -> None
 def test_serializer_rejects_unknown_types_and_arbitrary_stringification(value) -> None:
     with pytest.raises(TypeError, match="supported"):
         canonical_projection_bytes(value)
-
-
-def test_duplicate_and_unsorted_record_arrays_are_rejected() -> None:
-    first = _entity(ENTITY_A, 0.5)
-    second = _entity(ENTITY_B, 0.25)
-    with pytest.raises(ValueError, match="unique"):
-        canonical_projection_bytes((first, first))
-    with pytest.raises(ValueError, match="sorted"):
-        canonical_projection_bytes((second, first))

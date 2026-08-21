@@ -162,7 +162,7 @@ def test_ready_cas_rechecks_membership_and_never_publishes_stale_generation(
     validation = ProjectionValidationV1(
         "d" * 64,
         "e" * 64,
-        ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0),
+        ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0, 0, 0),
         True,
     )
 
@@ -219,7 +219,7 @@ def test_ready_cas_rejects_validation_for_another_generation(monkeypatch):
     validation = ProjectionValidationV1(
         "d" * 64,
         "e" * 64,
-        ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0),
+        ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0, 0, 0),
         True,
     )
 

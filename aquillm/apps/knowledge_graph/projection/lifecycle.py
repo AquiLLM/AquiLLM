@@ -150,9 +150,9 @@ def publish_projection_ready_compare_and_set(*, projection_id: UUID, owner: str,
                 _supersede(row, instant, using); _enqueue_outbox(row, GraphProjectionOutbox.Operation.PRUNE, instant, using)
             return ProjectionReadyOutcomeV1(identifier, False, row.state, "source_changed")
         counts = validation.counts; row.graph_checksum = row.snapshot_checksum = graph_checksum
-        row.entity_count, row.relation_count, row.evidence_count, row.chunk_count = counts.entity_count, counts.relation_count, counts.evidence_count, counts.chunk_count
+        row.entity_count, row.relation_semantics_count, row.relation_count, row.evidence_count, row.entity_mention_count, row.chunk_count = counts.entity_count, counts.relation_semantics_count, counts.relation_count, counts.evidence_count, counts.entity_mention_count, counts.chunk_count
         row.state, row.ready_at, row.lease_owner, row.lease_expires_at = "ready", instant, "", None
-        _save(row, ["graph_checksum", "snapshot_checksum", "entity_count", "relation_count", "evidence_count", "chunk_count", "state", "ready_at", "lease_owner", "lease_expires_at", "updated_at"], using)
+        _save(row, ["graph_checksum", "snapshot_checksum", "entity_count", "relation_semantics_count", "relation_count", "evidence_count", "entity_mention_count", "chunk_count", "state", "ready_at", "lease_owner", "lease_expires_at", "updated_at"], using)
         return ProjectionReadyOutcomeV1(identifier, True, "ready", None)
 
 def supersede_projection_locked(*, projection_id: UUID, now: datetime, using: str) -> None:

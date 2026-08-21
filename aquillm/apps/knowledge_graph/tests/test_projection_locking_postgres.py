@@ -141,7 +141,7 @@ def test_concurrent_membership_mutation_fences_ready_without_deadlock():
             validation = ProjectionValidationV1(
                 "d" * 64,
                 "e" * 64,
-                ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0),
+                ProjectionCountsV1(0, 0, 0, 0, 0, 0, 0, 0, 0),
                 True,
             )
             return publish_projection_ready_compare_and_set(

@@ -1,20 +1,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from datetime import UTC, datetime
-from enum import StrEnum
 from math import isfinite
 
+from .bundle_validation import validate_bundle
+from .control_records import (
+    PrivateProjectionChunkReferenceV1 as PrivateProjectionChunkReferenceV1,
+)
+from .control_records import (
+    ProjectionFailureCode as ProjectionFailureCode,
+)
+from .control_records import (
+    ProjectionFailureStateV1 as ProjectionFailureStateV1,
+)
+from .control_records import (
+    ProjectionLeaseV1 as ProjectionLeaseV1,
+)
+from .control_records import (
+    ProjectionLifecycleState as ProjectionLifecycleState,
+)
 from .serialization import (
     _count,
     _key,
     _token,
-    _uuid,
-    _validate_bundle,
 )
-
-_MAX_PRIVATE_PK = 2**63 - 1
-_MAX_ATTEMPTS = 32767
 
 
 def _finite_float(value: object, name: str) -> None:
@@ -63,28 +72,10 @@ class _ValidatedRecord:
                 raise TypeError(f"{field.name} has an unsupported exact type")
 
 
-class ProjectionLifecycleState(StrEnum):
-    PENDING = "pending"
-    BUILDING = "building"
-    READY = "ready"
-    FAILED = "failed"
-    SUPERSEDED = "superseded"
-
-
-class ProjectionFailureCode(StrEnum):
-    SOURCE_CHANGED = "source_changed"
-    LEASE_LOST = "lease_lost"
-    GRAPH_UNAVAILABLE = "graph_unavailable"
-    WRITE_FAILED = "write_failed"
-    VALIDATION_FAILED = "validation_failed"
-    CHECKSUM_MISMATCH = "checksum_mismatch"
-    TIMEOUT = "timeout"
-    INTERNAL_ERROR = "internal_error"
-
-
 @dataclass(frozen=True, slots=True)
 class ProjectionGenerationMarkerV1(_ValidatedRecord):
     generation_key: str
+    projection_key: str
     collection_key: str
     artifact_key: str
     schema_version: str
@@ -137,6 +128,19 @@ class ProjectedPhysicalRelationV1(_ValidatedRecord):
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectedRelationSemanticsV1(_ValidatedRecord):
+    semantics_key: str
+    artifact_key: str
+    relation_type: str
+    direction: str
+
+    def __post_init__(self) -> None:
+        _ValidatedRecord.__post_init__(self)
+        if self.direction not in {"directed", "undirected"}:
+            raise ValueError("direction must be directed or undirected")
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectedRelationEvidenceV1(_ValidatedRecord):
     evidence_key: str
     relation_key: str
@@ -162,6 +166,17 @@ class ProjectedRelationEvidenceV1(_ValidatedRecord):
         _ValidatedRecord.__post_init__(self)
         if self.orientation not in {"head_to_tail", "tail_to_head"}:
             raise ValueError("orientation is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedEntityMentionEvidenceV1(_ValidatedRecord):
+    mention_key: str
+    provenance_key: str
+    entity_key: str
+    chunk_key: str
+    document_key: str
+    chunk_number: int
+    confidence: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,8 +222,10 @@ class ProjectionCountsV1(_ValidatedRecord):
     automatic_membership_count: int
     document_count: int
     chunk_count: int
+    relation_semantics_count: int
     relation_count: int
     evidence_count: int
+    entity_mention_count: int
     artifact_provenance_count: int
 
 
@@ -233,64 +250,18 @@ class ProjectionGenerationManifestV1(_ValidatedRecord):
 
 
 @dataclass(frozen=True, slots=True)
-class ProjectionLeaseV1:
-    projection_id: str
-    owner: str
-    expires_at: datetime
-    attempt_count: int
-
-    def __post_init__(self) -> None:
-        _uuid(self.projection_id, "projection_id")
-        _token(self.owner, "owner", maximum=128)
-        if type(self.expires_at) is not datetime or self.expires_at.tzinfo is not UTC:
-            raise ValueError("expires_at must be an exact UTC datetime")
-        _count(self.attempt_count, "attempt_count", maximum=_MAX_ATTEMPTS)
-
-
-@dataclass(frozen=True, slots=True)
-class ProjectionFailureStateV1:
-    state: ProjectionLifecycleState
-    failure_code: ProjectionFailureCode
-    attempt_count: int
-
-    def __post_init__(self) -> None:
-        if self.state is not ProjectionLifecycleState.FAILED:
-            raise ValueError("failure state must be failed")
-        if type(self.failure_code) is not ProjectionFailureCode:
-            raise TypeError("failure_code must be ProjectionFailureCode")
-        _count(self.attempt_count, "attempt_count", maximum=_MAX_ATTEMPTS)
-
-
-@dataclass(frozen=True, slots=True)
-class PrivateProjectionChunkReferenceV1:
-    projection_chunk_key: str
-    integer_chunk_pk: int
-    document_uuid: str
-    chunk_number: int
-
-    def __post_init__(self) -> None:
-        _key(self.projection_chunk_key, "projection_chunk_key")
-        _count(
-            self.integer_chunk_pk,
-            "integer_chunk_pk",
-            minimum=1,
-            maximum=_MAX_PRIVATE_PK,
-        )
-        _uuid(self.document_uuid, "document_uuid")
-        _count(self.chunk_number, "chunk_number")
-
-
-@dataclass(frozen=True, slots=True)
 class CollectionGraphProjectionBundleV1:
     generation: ProjectionGenerationMarkerV1
     entities: tuple[ProjectedEntityV1, ...]
     automatic_memberships: tuple[AutomaticCanonicalMembershipV1, ...]
     documents: tuple[ProjectedDocumentMembershipV1, ...]
     chunks: tuple[ProjectedChunkMembershipV1, ...]
+    relation_semantics: tuple[ProjectedRelationSemanticsV1, ...]
     relations: tuple[ProjectedPhysicalRelationV1, ...]
     evidence: tuple[ProjectedRelationEvidenceV1, ...]
+    entity_mentions: tuple[ProjectedEntityMentionEvidenceV1, ...]
     artifact_provenance: tuple[ProjectedArtifactProvenanceV1, ...]
     counts: ProjectionCountsV1
 
     def __post_init__(self) -> None:
-        _validate_bundle(self)
+        validate_bundle(self)

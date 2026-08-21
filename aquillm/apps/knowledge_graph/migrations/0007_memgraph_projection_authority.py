@@ -20,7 +20,7 @@ _PROJECTION_LIFECYCLE = (
 )
 _OUTBOX_LIFECYCLE = models.Q(state="pending", published_at__isnull=True) | models.Q(state="published", published_at__isnull=False)
 _ACTIVE_IDENTITY_FIELDS = ("collection", "artifact", "schema_version", "projection_version", "identifier_key_version", "membership_epoch")
-_NONNEGATIVE_COUNTS = models.Q(entity_count__gte=0) & models.Q(relation_count__gte=0) & models.Q(evidence_count__gte=0) & models.Q(chunk_count__gte=0) & models.Q(attempt_count__gte=0)
+_NONNEGATIVE_COUNTS = models.Q(entity_count__gte=0) & models.Q(relation_semantics_count__gte=0) & models.Q(relation_count__gte=0) & models.Q(evidence_count__gte=0) & models.Q(entity_mention_count__gte=0) & models.Q(chunk_count__gte=0) & models.Q(attempt_count__gte=0)
 # fmt: on
 
 
@@ -140,8 +140,10 @@ class Migration(migrations.Migration):
                 ),  # fmt: skip
                 ("private_mapping_checksum", models.CharField(max_length=64)),
                 ("entity_count", models.PositiveIntegerField(default=0)),
+                ("relation_semantics_count", models.PositiveIntegerField(default=0)),
                 ("relation_count", models.PositiveIntegerField(default=0)),
                 ("evidence_count", models.PositiveIntegerField(default=0)),
+                ("entity_mention_count", models.PositiveIntegerField(default=0)),
                 ("chunk_count", models.PositiveIntegerField(default=0)),
                 ("attempt_count", models.PositiveSmallIntegerField(default=0)),
                 (

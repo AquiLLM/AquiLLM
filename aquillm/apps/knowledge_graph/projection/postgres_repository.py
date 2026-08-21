@@ -110,8 +110,10 @@ class PostgresProjectionRepository:
             "automatic_memberships",
             "documents",
             "chunks",
+            "relation_semantics",
             "relations",
             "evidence",
+            "entity_mentions",
             "artifact_provenance",
             "counts",
         }

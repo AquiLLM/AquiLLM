@@ -22,6 +22,7 @@ _FAMILIES = {
     "chunks",
     "relations",
     "evidence",
+    "entity_mentions",
 }
 
 

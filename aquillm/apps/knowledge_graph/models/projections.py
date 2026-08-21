@@ -28,7 +28,7 @@ _PROJECTION_LIFECYCLE = (
 )
 _OUTBOX_LIFECYCLE = Q(state="pending", published_at__isnull=True) | Q(state="published", published_at__isnull=False)
 _ACTIVE_IDENTITY_FIELDS = ("collection", "artifact", "schema_version", "projection_version", "identifier_key_version", "membership_epoch")
-_NONNEGATIVE_COUNTS = Q(entity_count__gte=0) & Q(relation_count__gte=0) & Q(evidence_count__gte=0) & Q(chunk_count__gte=0) & Q(attempt_count__gte=0)
+_NONNEGATIVE_COUNTS = Q(entity_count__gte=0) & Q(relation_semantics_count__gte=0) & Q(relation_count__gte=0) & Q(evidence_count__gte=0) & Q(entity_mention_count__gte=0) & Q(chunk_count__gte=0) & Q(attempt_count__gte=0)
 # fmt: on
 
 
@@ -117,8 +117,10 @@ class CollectionGraphProjection(ProjectionAuthorityModel):
     snapshot_checksum = models.CharField(max_length=64, blank=True, default="")
     private_mapping_checksum = models.CharField(max_length=64)
     entity_count = models.PositiveIntegerField(default=0)
+    relation_semantics_count = models.PositiveIntegerField(default=0)
     relation_count = models.PositiveIntegerField(default=0)
     evidence_count = models.PositiveIntegerField(default=0)
+    entity_mention_count = models.PositiveIntegerField(default=0)
     chunk_count = models.PositiveIntegerField(default=0)
     attempt_count = models.PositiveSmallIntegerField(default=0)
     lease_owner = models.CharField(max_length=128, blank=True, default="")
@@ -180,7 +182,14 @@ class CollectionGraphProjection(ProjectionAuthorityModel):
         for name in ("graph_checksum", "snapshot_checksum"):
             if getattr(self, name):
                 _validate_checksum(errors, name, getattr(self, name))
-        for name in ("entity_count", "relation_count", "evidence_count", "chunk_count"):
+        for name in (
+            "entity_count",
+            "relation_semantics_count",
+            "relation_count",
+            "evidence_count",
+            "entity_mention_count",
+            "chunk_count",
+        ):
             if getattr(self, name) < 0:
                 errors[name] = "Projection counts must be nonnegative."
         validate_projection_lifecycle(self, errors, _FAILURE_CODES)

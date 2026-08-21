@@ -8,9 +8,11 @@ from .records import (
     ProjectedArtifactProvenanceV1,
     ProjectedChunkMembershipV1,
     ProjectedDocumentMembershipV1,
+    ProjectedEntityMentionEvidenceV1,
     ProjectedEntityV1,
     ProjectedPhysicalRelationV1,
     ProjectedRelationEvidenceV1,
+    ProjectedRelationSemanticsV1,
     ProjectionCountsV1,
     ProjectionGenerationManifestV1,
     ProjectionGenerationMarkerV1,
@@ -22,8 +24,10 @@ FAMILIES = (
     ("AutomaticMembership", AutomaticCanonicalMembershipV1),
     ("ProjectedDocument", ProjectedDocumentMembershipV1),
     ("ProjectedChunk", ProjectedChunkMembershipV1),
+    ("ProjectedRelationSemantics", ProjectedRelationSemanticsV1),
     ("ProjectedRelation", ProjectedPhysicalRelationV1),
     ("ProjectedEvidence", ProjectedRelationEvidenceV1),
+    ("ProjectedEntityMention", ProjectedEntityMentionEvidenceV1),
     ("ArtifactProvenance", ProjectedArtifactProvenanceV1),
 )
 
@@ -60,8 +64,10 @@ def manifest_from_row(row: object) -> ProjectionGenerationManifestV1:
         "automatic_membership_count",
         "document_count",
         "chunk_count",
+        "relation_semantics_count",
         "relation_count",
         "evidence_count",
+        "entity_mention_count",
         "artifact_provenance_count",
     )
     try:
@@ -109,14 +115,26 @@ def read_bundle(
             max_records=maximum,
         )
         loaded.append(tuple(_dto(kind, _properties(row, "record")) for row in rows))
-    entities, memberships, documents, chunks, relations, evidence, provenance = loaded
+    (
+        entities,
+        memberships,
+        documents,
+        chunks,
+        relation_semantics,
+        relations,
+        evidence,
+        entity_mentions,
+        provenance,
+    ) = loaded
     counts = ProjectionCountsV1(
         len(entities),
         len(memberships),
         len(documents),
         len(chunks),
+        len(relation_semantics),
         len(relations),
         len(evidence),
+        len(entity_mentions),
         len(provenance),
     )
     return CollectionGraphProjectionBundleV1(
@@ -125,8 +143,10 @@ def read_bundle(
         memberships,
         documents,
         chunks,
+        relation_semantics,
         relations,
         evidence,
+        entity_mentions,
         provenance,
         counts,
     )

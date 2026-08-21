@@ -88,6 +88,7 @@ class MemgraphProjectionRepository:
         marker = bundle.generation
         parameters = {
             "generation_key": marker.generation_key,
+            "projection_key": marker.projection_key,
             "collection_key": marker.collection_key,
             "artifact_key": marker.artifact_key,
             "schema_version": marker.schema_version,
@@ -116,8 +117,14 @@ class MemgraphProjectionRepository:
             ("AutomaticMembership", bundle.automatic_memberships, "entity_key"),
             ("ProjectedDocument", bundle.documents, "document_key"),
             ("ProjectedChunk", bundle.chunks, "chunk_key"),
+            (
+                "ProjectedRelationSemantics",
+                bundle.relation_semantics,
+                "semantics_key",
+            ),
             ("ProjectedRelation", bundle.relations, "relation_key"),
             ("ProjectedEvidence", bundle.evidence, "evidence_key"),
+            ("ProjectedEntityMention", bundle.entity_mentions, "mention_key"),
             ("ArtifactProvenance", bundle.artifact_provenance, "scope_key"),
         )
         for label, records, identity in families:
@@ -170,6 +177,8 @@ class MemgraphProjectionRepository:
             caps.max_nodes,
             caps.max_nodes,
             caps.max_nodes,
+            caps.max_edges,
+            caps.max_edges,
             caps.max_edges,
             caps.max_edges,
             caps.max_edges,

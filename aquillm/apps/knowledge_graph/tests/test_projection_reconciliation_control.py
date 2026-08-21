@@ -31,15 +31,17 @@ def _ready_row():
         snapshot_checksum="b" * 64,
         private_mapping_checksum="c" * 64,
         entity_count=1,
+        relation_semantics_count=1,
         relation_count=2,
         evidence_count=3,
+        entity_mention_count=2,
         chunk_count=4,
         lease_expires_at=None,
     )
 
 
 def _bundle(generation_key="d" * 64):
-    counts = ProjectionCountsV1(1, 1, 1, 4, 2, 3, 1)
+    counts = ProjectionCountsV1(1, 1, 1, 4, 1, 2, 3, 2, 1)
     return SimpleNamespace(
         generation=SimpleNamespace(
             generation_key=generation_key,

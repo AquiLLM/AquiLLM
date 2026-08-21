@@ -17,6 +17,7 @@ from apps.knowledge_graph.models import (
 )
 
 from .django_projection_evidence import load_projection_evidence
+from .django_projection_topology import load_projection_topology
 
 _MAX_FAMILY_ROWS = 4_999
 _PURPOSE_STATES = {
@@ -45,8 +46,6 @@ def _bounded(query, fields: tuple[str, ...], batch_size: int) -> tuple[dict, ...
 
 
 class DjangoProjectionOrmLoader:
-    """Load the selected active authoritative graph without text-bearing columns."""
-
     def __init__(self, using: str, *, state_using: str | None = None) -> None:
         self.using = using
         self.state_using = using if state_using is None else state_using
@@ -74,7 +73,6 @@ class DjangoProjectionOrmLoader:
         document_artifact_ids = tuple(row["document_artifact_id"] for row in inputs)
         entities = self._entities(artifact_id, collection_id, batch_size, purpose)
         entity_ids = tuple(row["id"] for row in entities)
-        relations = self._relations(artifact_id, entity_ids, batch_size)
         chunks = _bounded(
             TextChunk.objects.using(self.using).filter(doc_id__in=document_ids),
             ("id", "doc_id", "chunk_number"),
@@ -85,6 +83,21 @@ class DjangoProjectionOrmLoader:
             GraphArtifact.objects.using(self.using).filter(pk__in=artifact_ids),
             tuple(_ARTIFACT_FIELDS),
             batch_size,
+        )
+        collection_artifact = next(
+            row for row in artifacts if row["id"] == artifact_id
+        )
+        chunk_coordinates = {
+            row["id"]: (row["doc_id"], row["chunk_number"]) for row in chunks
+        }
+        relations, entity_mentions = load_projection_topology(
+            using=self.using,
+            artifact=collection_artifact,
+            purpose=purpose,
+            entity_ids=entity_ids,
+            chunks=chunk_coordinates,
+            relations=self._relations(artifact_id, entity_ids, batch_size),
+            batch_size=batch_size,
         )
         return {
             "projection": projection,
@@ -115,6 +128,7 @@ class DjangoProjectionOrmLoader:
                 document_artifact_ids=document_artifact_ids,
                 batch_size=batch_size,
             ),
+            "entity_mentions": entity_mentions,
         }
 
     def _projection(self, projection_id: UUID, purpose: str) -> dict[str, object]:

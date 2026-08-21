@@ -7,6 +7,10 @@ from .memberships import (
     null_membership_decision_checksum,
 )
 from .projection_evidence_encoding import encode_evidence
+from .projection_topology_encoding import (
+    encode_entity_mentions,
+    encode_relation_semantics,
+)
 from .records import (
     AutomaticCanonicalMembershipV1,
     ProjectedArtifactProvenanceV1,
@@ -33,6 +37,10 @@ def encode_projection_snapshot(*, snapshot: dict, codec):
     artifact_key = key(ProjectionIdentifierDomain.ARTIFACT, projection["artifact_id"])
     marker = ProjectionGenerationMarkerV1(
         generation_key,
+        key(
+            ProjectionIdentifierDomain.COLLECTION,
+            f"projection:{projection['id']}",
+        ),
         collection_key,
         artifact_key,
         projection["schema_version"],
@@ -48,6 +56,7 @@ def encode_projection_snapshot(*, snapshot: dict, codec):
     documents, document_keys = _documents(snapshot, key, generation_key)
     chunks, chunk_keys = _chunks(snapshot, key, document_keys)
     relations, relation_keys = _relations(snapshot, key, artifact_key, entity_keys)
+    relation_semantics = encode_relation_semantics(snapshot, key, artifact_key)
     provenance, artifact_keys = _provenance(snapshot, key, collection_key)
     evidence = encode_evidence(
         snapshot,
@@ -57,13 +66,18 @@ def encode_projection_snapshot(*, snapshot: dict, codec):
         document_keys,
         artifact_keys,
     )
+    entity_mentions = encode_entity_mentions(
+        snapshot, key, entity_keys, chunk_keys, document_keys
+    )
     counts = ProjectionCountsV1(
         len(entities),
         len(memberships),
         len(documents),
         len(chunks),
+        len(relation_semantics),
         len(relations),
         len(evidence),
+        len(entity_mentions),
         len(provenance),
     )
     return {
@@ -72,8 +86,10 @@ def encode_projection_snapshot(*, snapshot: dict, codec):
         "automatic_memberships": memberships,
         "documents": documents,
         "chunks": chunks,
+        "relation_semantics": relation_semantics,
         "relations": relations,
         "evidence": evidence,
+        "entity_mentions": entity_mentions,
         "artifact_provenance": provenance,
         "counts": counts,
     }

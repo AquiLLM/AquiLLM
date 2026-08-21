@@ -89,13 +89,19 @@ def test_projection_lifecycle_requires_exact_terminal_metadata() -> None:
         superseded.clean()
 
 
-def test_projection_rejects_invalid_versions_counts_and_checksums() -> None:
-    projection = _projection(schema_version=" bad", entity_count=-1)
+@pytest.mark.parametrize(
+    "count_field",
+    ("entity_count", "relation_semantics_count", "entity_mention_count"),
+)
+def test_projection_rejects_invalid_versions_counts_and_checksums(
+    count_field: str,
+) -> None:
+    projection = _projection(schema_version=" bad", **{count_field: -1})
 
     with pytest.raises(ValidationError) as captured:
         projection.clean()
 
-    assert {"schema_version", "entity_count"} <= set(captured.value.message_dict)
+    assert {"schema_version", count_field} <= set(captured.value.message_dict)
 
 
 def test_projection_fields_and_constraints_preserve_authoritative_tombstones() -> None:

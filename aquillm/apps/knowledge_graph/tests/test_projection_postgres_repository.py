@@ -14,6 +14,7 @@ from apps.knowledge_graph.projection.records import (
     AutomaticCanonicalMembershipV1,
     ProjectedArtifactProvenanceV1,
     ProjectedEntityV1,
+    ProjectedRelationSemanticsV1,
     ProjectionCountsV1,
     ProjectionGenerationMarkerV1,
 )
@@ -34,6 +35,7 @@ class _BundleSource:
         self.calls.append((projection_id, batch_size, purpose))
         marker = ProjectionGenerationMarkerV1(
             _key("1"),
+            _key("f"),
             _key("2"),
             _key("3"),
             "schema-v1",
@@ -59,6 +61,11 @@ class _BundleSource:
             )
         else:
             relations = ()
+        semantics = (
+            (ProjectedRelationSemanticsV1(_key("e"), _key("3"), "knows", "directed"),)
+            if relations
+            else ()
+        )
         provenance = (
             ProjectedArtifactProvenanceV1(
                 _key("3"),
@@ -93,10 +100,14 @@ class _BundleSource:
             ),
             "documents": (),
             "chunks": (),
+            "relation_semantics": semantics,
             "relations": relations,
             "evidence": (),
+            "entity_mentions": (),
             "artifact_provenance": provenance,
-            "counts": ProjectionCountsV1(1, 1, 0, 0, len(relations), 0, 1),
+            "counts": ProjectionCountsV1(
+                1, 1, 0, 0, len(semantics), len(relations), 0, 0, 1
+            ),
         }
 
 

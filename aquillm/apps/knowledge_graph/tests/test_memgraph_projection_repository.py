@@ -69,72 +69,38 @@ def _manifest_row(manifest):
     return row
 
 
+def _family_rows(bundle, records, identity):
+    return tuple(
+        {
+            "record": {
+                **asdict(row),
+                "opaque_key": getattr(row, identity),
+                "generation_key": bundle.generation.generation_key,
+            }
+        }
+        for row in records
+    )
+
+
 def _record_reads(bundle):
     return [
         ({"record": {**asdict(bundle.generation), "graph_checksum": "ignored"}},),
-        tuple(
-            {"record": {**asdict(row), "opaque_key": row.entity_key}}
-            for row in bundle.entities
-        ),
-        tuple(
-            {"record": {**asdict(row), "opaque_key": row.entity_key}}
-            for row in bundle.automatic_memberships
-        ),
-        tuple(
-            {"record": {**asdict(row), "opaque_key": row.document_key}}
-            for row in bundle.documents
-        ),
-        tuple(
-            {
-                "record": {
-                    **asdict(row),
-                    "opaque_key": row.chunk_key,
-                    "generation_key": bundle.generation.generation_key,
-                }
-            }
-            for row in bundle.chunks
-        ),
-        tuple(
-            {
-                "record": {
-                    **asdict(row),
-                    "opaque_key": row.relation_key,
-                    "generation_key": bundle.generation.generation_key,
-                }
-            }
-            for row in bundle.relations
-        ),
-        tuple(
-            {
-                "record": {
-                    **asdict(row),
-                    "opaque_key": row.evidence_key,
-                    "generation_key": bundle.generation.generation_key,
-                }
-            }
-            for row in bundle.evidence
-        ),
-        tuple(
-            {
-                "record": {
-                    **asdict(row),
-                    "opaque_key": row.scope_key,
-                    "generation_key": bundle.generation.generation_key,
-                }
-            }
-            for row in bundle.artifact_provenance
-        ),
+        _family_rows(bundle, bundle.entities, "entity_key"),
+        _family_rows(bundle, bundle.automatic_memberships, "entity_key"),
+        _family_rows(bundle, bundle.documents, "document_key"),
+        _family_rows(bundle, bundle.chunks, "chunk_key"),
+        _family_rows(bundle, bundle.relation_semantics, "semantics_key"),
+        _family_rows(bundle, bundle.relations, "relation_key"),
+        _family_rows(bundle, bundle.evidence, "evidence_key"),
+        _family_rows(bundle, bundle.entity_mentions, "mention_key"),
+        _family_rows(bundle, bundle.artifact_provenance, "scope_key"),
     ]
 
 
 def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> None:
-    from apps.knowledge_graph.projection.records import (
-        CollectionGraphProjectionBundleV1,
-    )
-
     driver = _FakeDriver()
     repository = MemgraphProjectionRepository(driver)
-    bundle = CollectionGraphProjectionBundleV1(**_bundle())
+    bundle = _closed_bundle()
 
     private_checksum = "d" * 64
     repository.write_staging_generation(
@@ -151,6 +117,8 @@ def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> No
     assert driver.writes[0][1]["state"] == "staging"
     assert driver.writes[0][1]["private_mapping_checksum"] == private_checksum
     assert "g.private_mapping_checksum=$private_mapping_checksum" in driver.writes[0][0]
+    assert any("ProjectedRelationSemantics" in call[0] for call in driver.writes)
+    assert any("ProjectedEntityMention" in call[0] for call in driver.writes)
     assert not any(call[1].get("state") == "ready" for call in driver.writes)
 
 

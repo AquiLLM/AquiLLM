@@ -122,6 +122,7 @@ def _snapshot(projection_id, generation):
                 "source_id": 11,
                 "relation_type": "knows",
                 "target_id": 12,
+                "direction": "directed",
             },
         ),
         "evidence": (
@@ -142,6 +143,16 @@ def _snapshot(projection_id, generation):
                 "relation_type": "knows",
                 "ontology_checksum": H,
                 "assembly_config_checksum": H,
+            },
+        ),
+        "entity_mentions": (
+            {
+                "entity_id": 11,
+                "mention_id": 51,
+                "chunk_id": 101,
+                "document_id": document,
+                "chunk_number": 2,
+                "confidence": 0.75,
             },
         ),
     }
@@ -215,8 +226,10 @@ def test_source_encodes_all_authoritative_families_and_exact_private_rows() -> N
         "automatic_memberships": 2,
         "documents": 1,
         "chunks": 1,
+        "relation_semantics": 1,
         "relations": 1,
         "evidence": 1,
+        "entity_mentions": 1,
         "artifact_provenance": 2,
     }
     assert {

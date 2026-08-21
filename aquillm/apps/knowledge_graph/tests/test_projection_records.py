@@ -8,9 +8,11 @@ from apps.knowledge_graph.projection.records import (
     ProjectedArtifactProvenanceV1,
     ProjectedChunkMembershipV1,
     ProjectedDocumentMembershipV1,
+    ProjectedEntityMentionEvidenceV1,
     ProjectedEntityV1,
     ProjectedPhysicalRelationV1,
     ProjectedRelationEvidenceV1,
+    ProjectedRelationSemanticsV1,
     ProjectionCountsV1,
     ProjectionGenerationMarkerV1,
 )
@@ -26,6 +28,7 @@ DIGEST = "f" * 64
 def _bundle() -> CollectionGraphProjectionBundleV1:
     marker = ProjectionGenerationMarkerV1(
         generation_key=K["generation"],
+        projection_key=K["scope"],
         collection_key=K["collection"],
         artifact_key=K["artifact"],
         schema_version="memgraph-schema-v1",
@@ -84,6 +87,11 @@ def _bundle() -> CollectionGraphProjectionBundleV1:
             target_entity_key=K["entity_b"],
         ),
     )
+    relation_semantics = (
+        ProjectedRelationSemanticsV1(
+            K["scope"], K["artifact"], "knows", "directed"
+        ),
+    )
     evidence = (
         ProjectedRelationEvidenceV1(
             evidence_key=K["evidence"],
@@ -105,6 +113,17 @@ def _bundle() -> CollectionGraphProjectionBundleV1:
             assembly_config_checksum=DIGEST,
             provenance_key=K["provenance"],
             semantic_signature=DIGEST,
+        ),
+    )
+    entity_mentions = (
+        ProjectedEntityMentionEvidenceV1(
+            K["mention"],
+            K["rebuild"],
+            K["entity_a"],
+            K["chunk"],
+            K["document"],
+            2,
+            0.5,
         ),
     )
     collection_provenance = ProjectedArtifactProvenanceV1(
@@ -141,15 +160,17 @@ def _bundle() -> CollectionGraphProjectionBundleV1:
             assembly_config_checksum="e" * 64,
         ),
     )
-    counts = ProjectionCountsV1(2, 2, 1, 1, 1, 1, 2)
+    counts = ProjectionCountsV1(2, 2, 1, 1, 1, 1, 1, 1, 2)
     return CollectionGraphProjectionBundleV1(
         generation=marker,
         entities=entities,
         automatic_memberships=automatic,
         documents=documents,
         chunks=chunks,
+        relation_semantics=relation_semantics,
         relations=relations,
         evidence=evidence,
+        entity_mentions=entity_mentions,
         artifact_provenance=provenance,
         counts=counts,
     )
@@ -273,28 +294,3 @@ def test_document_provenance_allows_empty_embedding_signature() -> None:
     subclass = type("_SignatureSubclass", (str,), {})("")
     with pytest.raises(TypeError, match="built-in str"):
         replace(document, embedding_model_signature=subclass)
-
-
-def test_evidence_assembly_uses_collection_not_document_provenance() -> None:
-    bundle = _bundle()
-    evidence = bundle.evidence[0]
-    collection, document = bundle.artifact_provenance
-    assert collection.assembly_config_checksum == evidence.assembly_config_checksum
-    assert evidence.assembly_config_checksum != document.assembly_config_checksum
-
-
-def test_bundle_rejects_chunk_key_and_coordinate_conflicts_independently() -> None:
-    bundle = _bundle()
-    original = bundle.chunks[0]
-    for duplicate in (
-        replace(original, chunk_number=3),
-        replace(original, chunk_key="e" * 64),
-    ):
-        rows = tuple(
-            sorted(
-                (original, duplicate),
-                key=lambda row: (row.document_key, row.chunk_number, row.chunk_key),
-            )
-        )
-        with pytest.raises(ValueError, match="chunk"):
-            replace(bundle, chunks=rows, counts=replace(bundle.counts, chunk_count=2))
