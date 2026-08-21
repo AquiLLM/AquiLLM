@@ -13,6 +13,7 @@ from apps.knowledge_graph.retrieval.branch_contracts import (
     DirectBranchFailureReason,
     SharedBranchFailureReason,
 )
+from apps.knowledge_graph.retrieval.production_direct import prepare_direct_seeds
 from apps.knowledge_graph.retrieval.production_extended import (
     prepare_extended_branch,
     run_extended_branch,
@@ -35,16 +36,12 @@ from apps.knowledge_graph.retrieval.scheduler_support import (
     SharedSchedulerFailure,
     failed_branch,
 )
-from lib.knowledge_graph.query_extractor.client import (
-    QueryExtractorClient,
-    QueryExtractorClientError,
-    reconstruct_entity_texts,
-)
+from lib.knowledge_graph.query_extractor.client import QueryExtractorClient
 from lib.knowledge_graph.query_extractor.config import QueryExtractorSettings
 
 from .ready_materialization import materialize_selected_ready_chunks
 from .ready_scope_repository import load_selected_ready_scope
-from .topology.contracts import HybridBranchKind, ProjectedSeedV1
+from .topology.contracts import HybridBranchKind
 
 
 class ProductionHybridBranchRuntime:
@@ -123,91 +120,8 @@ class ProductionHybridBranchRuntime:
         return QueryExtractorClient(client_settings)
 
     def _direct_seeds(self, *, query, scope, deadline):
-        from apps.knowledge_graph.retrieval.direct_seed_contracts import (
-            DirectResolutionSpanInputV1,
-        )
-        from apps.knowledge_graph.retrieval.direct_seed_repository import (
-            DirectSeedRepository,
-            DirectSeedScopeV1,
-        )
-        from apps.knowledge_graph.retrieval.direct_seed_resolution import (
-            resolve_direct_seed_components,
-        )
-        from apps.knowledge_graph.retrieval.query_ontology import load_query_ontology
-
-        if self.clock() >= deadline:
-            return DirectBranchFailureReason.EXTRACTOR_TIMEOUT
-        artifact_ids = tuple(sorted({row.artifact_id for row in scope.projections}))
-        ontology_outcome = load_query_ontology(
-            selected_artifact_ids=artifact_ids, using=self.authorization.database_alias
-        )
-        if self.clock() >= deadline:
-            return DirectBranchFailureReason.EXTRACTOR_TIMEOUT
-        ontology = ontology_outcome.ontology
-        expected_ontologies = {
-            (row.ontology_version, row.ontology_checksum) for row in scope.projections
-        }
-        if (
-            ontology is None
-            or len(expected_ontologies) != 1
-            or ontology.checksum != scope.projections[0].ontology_checksum
-        ):
-            return DirectBranchFailureReason.MIXED_ONTOLOGY
-        try:
-            response = self._extractor(scope=scope, ontology=ontology).extract(
-                query=query, ontology=ontology, deadline=deadline
-            )
-        except QueryExtractorClientError as error:
-            return DirectBranchFailureReason(error.reason.value)
-        surfaces = reconstruct_entity_texts(query=query, response=response)
-        span_inputs = tuple(
-            DirectResolutionSpanInputV1(span, text)
-            for span, text in zip(response.spans, surfaces, strict=True)
-        )
-        generation_by_projection = dict(scope.generation_keys_by_projection)
-        generation_by_artifact = tuple(
-            sorted(
-                (row.artifact_id, generation_by_projection[row.projection_id])
-                for row in scope.projections
-            )
-        )
-        direct_scope = DirectSeedScopeV1(
-            scope.ready.bundle_checksum,
-            tuple(sorted(row.collection_id for row in scope.projections)),
-            artifact_ids,
-            scope.selected_document_ids,
-            tuple(
-                sorted(
-                    artifact
-                    for row in scope.projections
-                    for _document, artifact in row.documents
-                )
-            ),
-            generation_by_artifact,
-            ontology.checksum,
-            scope.projections[0].resolver_version,
-            scope.projections[0].embedding_model_signature,
-        )
-        repository = DirectSeedRepository(
-            scope=direct_scope,
-            codec=self.codec,
-            span_inputs=span_inputs,
-            using=self.authorization.database_alias,
-        )
-        outcome = resolve_direct_seed_components(
-            spans=response.spans,
-            repository=repository,
-            ready=scope.ready,
-            settings=self.settings,
-            deadline=deadline,
-        )
-        if outcome.failure_reason is not None:
-            return DirectBranchFailureReason(outcome.failure_reason.value)
-        return tuple(
-            sorted(
-                (ProjectedSeedV1(row.component_key, row.mass) for row in outcome.seeds),
-                key=lambda row: row.identity_key,
-            )
+        return prepare_direct_seeds(
+            self, query=query, scope=scope, deadline=deadline
         )
 
     def run_direct(self, *, query, shared, authorization, settings, deadline):

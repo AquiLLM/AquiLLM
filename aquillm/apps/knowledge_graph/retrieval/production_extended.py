@@ -9,7 +9,10 @@ from apps.knowledge_graph.projection.identifiers import ProjectionIdentifierDoma
 from apps.knowledge_graph.projection.serialization import projection_checksum
 from apps.knowledge_graph.retrieval.branch_contracts import ExtendedBranchFailureReason
 from apps.knowledge_graph.retrieval.projected_ppr import ppr_projected_v1
-from apps.knowledge_graph.retrieval.scheduler_support import failed_branch
+from apps.knowledge_graph.retrieval.scheduler_support import (
+    LocalBranchSchedulerFailure,
+    failed_branch,
+)
 from apps.knowledge_graph.retrieval.topology.contracts import (
     HybridBranchKind,
     ProjectedSeedV1,
@@ -47,6 +50,13 @@ def _projection_repository(runtime):
     return PostgresProjectionRepository(using="projection_state", source=source)
 
 
+def _source_failure(error):
+    raise LocalBranchSchedulerFailure(
+        HybridBranchKind.EXTENDED,
+        ExtendedBranchFailureReason.EXTENDED_SEED_INVALID,
+    ) from error
+
+
 def prepare_extended_branch(
     runtime, *, baseline, shared, authorization, settings, deadline
 ):
@@ -78,24 +88,33 @@ def prepare_extended_branch(
         weight = getattr(seed, "restart_weight", None)
         if authority is None or type(weight) is not float or weight <= 0.0:
             return ExtendedBranchFailureReason.EXTENDED_SEED_INVALID
-        chunk_key = runtime.codec.encode(
-            ProjectionIdentifierDomain.CHUNK,
-            generation=authority.generation_id,
-            source=candidate.pk,
-        ).value
+        try:
+            chunk_key = runtime.codec.encode(
+                ProjectionIdentifierDomain.CHUNK,
+                generation=authority.generation_id,
+                source=candidate.pk,
+            ).value
+        except (TypeError, ValueError) as error:
+            _source_failure(error)
         if chunk_key in requested:
             return ExtendedBranchFailureReason.EXTENDED_SEED_INVALID
         requested[chunk_key] = weight
     identities: dict[str, list[float]] = defaultdict(list)
-    repository = _projection_repository(runtime)
+    try:
+        repository = _projection_repository(runtime)
+    except Exception as error:
+        _source_failure(error)
     for authority in scope.projections:
         if runtime.clock() >= deadline:
             return ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
-        bundle = repository.load_projection_bundle(
-            projection_id=authority.projection_id,
-            batch_size=runtime.settings.projection_batch_size,
-            purpose="audit",
-        )
+        try:
+            bundle = repository.load_projection_bundle(
+                projection_id=authority.projection_id,
+                batch_size=runtime.settings.projection_batch_size,
+                purpose="audit",
+            )
+        except Exception as error:
+            _source_failure(error)
         if runtime.clock() >= deadline:
             return ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
         if (
@@ -103,7 +122,7 @@ def prepare_extended_branch(
             or bundle.generation.generation_key
             != generation_by_projection[authority.projection_id]
         ):
-            raise ValueError("extended seed projection provenance is stale")
+            _source_failure(ValueError("extended seed projection provenance is stale"))
         membership = {
             row.entity_key: row.automatic_membership_key or row.entity_key
             for row in bundle.automatic_memberships

@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from django.utils.connection import ConnectionDoesNotExist
 
 from apps.documents.tests.hybrid_graph_test_support import Policy, authorization
 from apps.knowledge_graph.projection.identifiers import (
@@ -24,6 +25,7 @@ from apps.knowledge_graph.retrieval.production_runtime_support import (
     ppr_failure_envelope,
 )
 from apps.knowledge_graph.retrieval.ready_scope import assemble_selected_ready_scope
+from apps.knowledge_graph.retrieval.scheduler import LocalBranchSchedulerFailure
 from apps.knowledge_graph.retrieval.topology.contracts import HybridBranchKind
 from apps.knowledge_graph.tests.projected_ppr_fixtures import key, projected_snapshot
 from apps.knowledge_graph.tests.test_ready_scope import (
@@ -122,3 +124,105 @@ def test_extended_seed_loading_fails_closed_before_database_io_after_deadline():
     )
 
     assert outcome is ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
+
+
+def test_direct_ontology_source_exception_is_an_exact_branch_local_failure(
+    monkeypatch,
+):
+    from apps.knowledge_graph.retrieval import query_ontology
+
+    runtime = ProductionHybridBranchRuntime(
+        authorization=authorization(Policy()),
+        settings=object(),
+        topology_loader=object(),
+        codec=object(),
+        clock=lambda: 0.0,
+    )
+    monkeypatch.setattr(
+        query_ontology,
+        "load_query_ontology",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("source unavailable")),
+    )
+
+    with pytest.raises(LocalBranchSchedulerFailure) as raised:
+        runtime._direct_seeds(query="q", scope=_ready_scope(), deadline=1.0)
+
+    assert raised.value.kind is HybridBranchKind.DIRECT
+    assert raised.value.reason is DirectBranchFailureReason.DIRECT_SEED_INVALID
+
+
+def test_direct_extractor_setup_exception_is_an_exact_branch_local_failure(
+    monkeypatch,
+):
+    from apps.knowledge_graph.retrieval import query_ontology
+
+    scope = _ready_scope()
+    ontology = SimpleNamespace(
+        version=scope.projections[0].ontology_version,
+        checksum=scope.projections[0].ontology_checksum,
+    )
+    runtime = ProductionHybridBranchRuntime(
+        authorization=authorization(Policy()),
+        settings=object(),
+        topology_loader=object(),
+        codec=object(),
+        extractor_factory=lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("extractor setup unavailable")
+        ),
+        clock=lambda: 0.0,
+    )
+    monkeypatch.setattr(
+        query_ontology,
+        "load_query_ontology",
+        lambda **_kwargs: SimpleNamespace(ontology=ontology),
+    )
+
+    with pytest.raises(LocalBranchSchedulerFailure) as raised:
+        runtime._direct_seeds(query="q", scope=scope, deadline=1.0)
+
+    assert raised.value.kind is HybridBranchKind.DIRECT
+    assert raised.value.reason is DirectBranchFailureReason.EXTRACTOR_PROVENANCE
+
+
+@pytest.mark.parametrize("state_alias", ("projection_state", "default"))
+def test_extended_projection_source_alias_failure_is_branch_local(state_alias):
+    scope = _ready_scope()
+    auth = authorization(Policy())
+    settings = SimpleNamespace(
+        graph_extended_enabled=True,
+        graph_extended_max_seeds=3,
+        projection_batch_size=50,
+    )
+
+    class Repository:
+        def load_projection_bundle(self, **_kwargs):
+            raise ConnectionDoesNotExist(state_alias)
+
+    runtime = SimpleNamespace(
+        authorization=auth,
+        settings=settings,
+        codec=HmacSha256ProjectionIdentifierCodec(
+            b"secret", key_version="key-v1"
+        ),
+        clock=lambda: 0.0,
+        projection_repository_factory=Repository,
+        _exact_request=lambda request_authorization, request_settings: None,
+        _shared_scope=lambda _shared: scope,
+    )
+    baseline = SimpleNamespace(
+        graph_seeds=(SimpleNamespace(chunk_id=1, restart_weight=1.0),),
+        baseline_candidates=(SimpleNamespace(pk=1, doc_id=_DOC_A),),
+    )
+
+    with pytest.raises(LocalBranchSchedulerFailure) as raised:
+        prepare_extended_branch(
+            runtime,
+            baseline=baseline,
+            shared=object(),
+            authorization=auth,
+            settings=settings,
+            deadline=1.0,
+        )
+
+    assert raised.value.kind is HybridBranchKind.EXTENDED
+    assert raised.value.reason is ExtendedBranchFailureReason.EXTENDED_SEED_INVALID

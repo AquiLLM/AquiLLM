@@ -14,6 +14,7 @@ from .branch_contracts import (
 from .scheduler_support import (
     CompletedBranch,
     HybridBranchRuntime,
+    LocalBranchSchedulerFailure,
     SharedSchedulerFailure,
     failed_branch,
     map_topology_failure,
@@ -258,6 +259,11 @@ class HybridGraphBranchScheduler:
                     return mapped
                 results[kind] = failed_branch(kind, mapped, seed_count=1)
                 continue
+            except LocalBranchSchedulerFailure as error:
+                if error.kind is not kind:
+                    return SharedBranchFailureReason.BACKEND_PROVENANCE_MISMATCH
+                results[kind] = failed_branch(kind, error.reason)
+                continue
             except Exception:
                 return SharedBranchFailureReason.BACKEND_UNAVAILABLE
             if completed.completed_at > deadlines[kind]:
@@ -288,6 +294,7 @@ def run_hybrid_graph_branches(*, runtime: HybridBranchRuntime, **request):
 __all__ = [
     "HybridBranchRuntime",
     "HybridGraphBranchScheduler",
+    "LocalBranchSchedulerFailure",
     "SharedSchedulerFailure",
     "run_hybrid_graph_branches",
 ]

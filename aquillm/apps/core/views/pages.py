@@ -1,6 +1,5 @@
 """Page views for core app functionality."""
 import structlog
-
 from django.apps import apps
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
@@ -8,7 +7,10 @@ from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from django.views.generic import TemplateView
 
-from apps.collections.models import Collection, CollectionPermission
+from apps.collections.models import Collection
+from apps.collections.services.django_retrieval_authorization import (
+    build_production_retrieval_authorization_context,
+)
 from apps.documents.models import TextChunk
 from aquillm.forms import SearchForm
 from aquillm.settings import DEBUG
@@ -42,16 +44,19 @@ def search(request):
             top_k = form.cleaned_data['top_k']
             collections = form.cleaned_data['collections']
             searchable_docs = Collection.get_user_accessible_documents(request.user, collections=collections)
-            vector_results, trigram_results, reranked_results, _diagnostics = TextChunk.text_chunk_search(
-                query,
-                top_k,
-                searchable_docs,
-                authorization_context=getattr(
-                    request, "retrieval_authorization_context", None
-                ),
-                hybrid_graph_dependencies=getattr(
-                    request, "hybrid_graph_dependencies", None
-                ),
+            authorization_context = build_production_retrieval_authorization_context(
+                principal=request.user,
+                selected_collection_ids=tuple(row.pk for row in collections),
+                selected_documents=tuple(searchable_docs),
+            )
+            vector_results, trigram_results, reranked_results, _diagnostics = (
+                TextChunk.text_chunk_search(
+                    query,
+                    top_k,
+                    searchable_docs,
+                    authorization_context=authorization_context,
+                    hybrid_graph_dependencies=None,
+                )
             )
         else:
             error_message = "Invalid form submission"

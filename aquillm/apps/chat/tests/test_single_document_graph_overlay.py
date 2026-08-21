@@ -7,12 +7,13 @@ from uuid import UUID
 
 from apps.chat.refs import CollectionsRef
 from apps.chat.services.tool_wiring import documents as document_tools
+from apps.documents.tests.hybrid_graph_test_support import Policy, authorization
 
 _DOC_ID = UUID("00000000-0000-0000-0000-000000000017")
 
 
 def test_single_document_search_keeps_scope_payload_and_real_citation(monkeypatch):
-    authorization_context = object()
+    authorization_context = authorization(Policy())
     hybrid_graph_dependencies = object()
     collection = SimpleNamespace(user_can_view=lambda _user: True)
     document = SimpleNamespace(

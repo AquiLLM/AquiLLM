@@ -1,35 +1,32 @@
-"""Document- and search-related LLM tools (Django-bound).
-
-Collection-backed tools resolve visible documents via
-``Collection.get_user_accessible_documents`` (optional RAG doc-access cache when
-``RAG_CACHE_ENABLED``).
-"""
+"""Document/search LLM tools with current selected-scope access checks."""
 from __future__ import annotations
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import User
 
-from aquillm.llm import LLMTool, ToolResultDict, llm_tool
 from apps.chat.consumers.utils import truncate_tool_text
 from apps.chat.refs import ChatRef, CollectionsRef
+from apps.chat.services.tool_wiring import document_figure_payloads as figure_payloads
 from apps.collections.models import Collection
-from apps.chat.services.tool_wiring.document_figure_payloads import (
-    format_related_figure_payloads,
-    related_figure_payloads as _related_figure_payloads,
-)
 from apps.documents.models import Document, DocumentChild, TextChunk
-from lib.tools.documents.ids import clean_and_parse_doc_id, resolve_doc_id_with_candidates
+from aquillm.llm import LLMTool, ToolResultDict, llm_tool
+from lib.tools.documents import ids as document_id_tools
+from lib.tools.documents import whole_document as whole_document_tools
 from lib.tools.documents.list_ids import titles_to_document_ids
-from lib.tools.documents.whole_document import image_document_instruction, image_document_tool_payload
 from lib.tools.search.context import format_adjacent_chunks_tool_result
 from lib.tools.search.vector_search import pack_chunk_search_results
 
-_format_related_figure_payloads = format_related_figure_payloads
+from ..retrieval_authorization import resolve_document_retrieval_authorization
+
+_format_related_figure_payloads = figure_payloads.format_related_figure_payloads
+_related_figure_payloads = figure_payloads.related_figure_payloads
+clean_and_parse_doc_id = document_id_tools.clean_and_parse_doc_id
+resolve_doc_id_with_candidates = document_id_tools.resolve_doc_id_with_candidates
+image_document_instruction = whole_document_tools.image_document_instruction
+image_document_tool_payload = whole_document_tools.image_document_tool_payload
 _NO_DOCS_EXCEPTION = {
-    "exception": (
-        "No documents to search! Either no collections were selected, or the selected "
-        "collections are empty."
-    )
+    "exception": "No documents to search! Either no collections were selected, or "
+    "the selected collections are empty."
 }
 
 
@@ -108,11 +105,14 @@ def vector_search_tool(
         )
         if not docs:
             return _NO_DOCS_EXCEPTION
+        resolved_authorization = resolve_document_retrieval_authorization(
+            user, col_ref, docs, authorization_context
+        )
         _, _, results, diagnostics = TextChunk.text_chunk_search(
             search_string,
             top_k,
             docs,
-            authorization_context=authorization_context,
+            authorization_context=resolved_authorization,
             hybrid_graph_dependencies=hybrid_graph_dependencies,
         )
         titles_by_doc_id = {doc.id: doc.title for doc in docs}
@@ -264,11 +264,14 @@ def search_single_document_tool(
             }
         if not doc.collection.user_can_view(user):
             return {"exception": f"User cannot access document {doc_id}!"}
+        resolved_authorization = resolve_document_retrieval_authorization(
+            user, col_ref, (doc,), authorization_context
+        )
         _, _, results, diagnostics = TextChunk.text_chunk_search(
             search_string,
             top_k,
             [doc],
-            authorization_context=authorization_context,
+            authorization_context=resolved_authorization,
             hybrid_graph_dependencies=hybrid_graph_dependencies,
         )
 
@@ -333,9 +336,6 @@ def more_context_tool(user: User) -> LLMTool:
 
 
 __all__ = [
-    "document_list_ids_tool",
-    "more_context_tool",
-    "search_single_document_tool",
-    "vector_search_tool",
-    "whole_document_tool",
+    "document_list_ids_tool", "more_context_tool",
+    "search_single_document_tool", "vector_search_tool", "whole_document_tool",
 ]

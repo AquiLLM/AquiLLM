@@ -27,6 +27,23 @@ class SharedSchedulerFailure(RuntimeError):
         super().__init__(reason.value)
 
 
+class LocalBranchSchedulerFailure(RuntimeError):
+    """A typed setup/source failure isolated to exactly one graph branch."""
+
+    def __init__(self, kind: HybridBranchKind, reason) -> None:
+        expected = (
+            DirectBranchFailureReason
+            if kind is HybridBranchKind.DIRECT
+            else ExtendedBranchFailureReason
+            if kind is HybridBranchKind.EXTENDED
+            else None
+        )
+        if expected is None or type(reason) is not expected:
+            raise TypeError("local failure kind and reason must match exactly")
+        self.kind, self.reason = kind, reason
+        super().__init__(reason.value)
+
+
 @runtime_checkable
 class HybridBranchRuntime(Protocol):
     """Provider adapter whose every operation receives an absolute deadline."""
@@ -185,6 +202,7 @@ def map_topology_failure(kind: HybridBranchKind, reason: TopologyFailureReason):
 __all__ = [
     "CompletedBranch",
     "HybridBranchRuntime",
+    "LocalBranchSchedulerFailure",
     "SharedSchedulerFailure",
     "failed_branch",
     "map_topology_failure",

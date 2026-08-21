@@ -48,10 +48,20 @@ def _make_test_reauthorization_capability(
 ) -> RetrievalReauthorizationCapability:
     """Create the exact private capability used by isolated service tests."""
 
+    return bind_retrieval_reauthorization_capability(
+        principal=principal, policy=policy
+    )
+
+
+def bind_retrieval_reauthorization_capability(
+    *, principal: object, policy: RetrievalPermissionPolicy
+) -> RetrievalReauthorizationCapability:
+    """Bind a non-serializable current-policy capability to one principal."""
+
     if principal is None or not callable(
         getattr(policy, "current_authorized_document_scope", None)
     ):
-        raise TypeError("test capability requires a principal and permission policy")
+        raise TypeError("capability requires a principal and permission policy")
     _policy_signature(policy)
     return RetrievalReauthorizationCapability(principal, policy)
 
@@ -157,6 +167,7 @@ __all__ = [
     "RetrievalAuthorizationContext",
     "RetrievalPermissionPolicy",
     "RetrievalReauthorizationCapability",
+    "bind_retrieval_reauthorization_capability",
     "freeze_retrieval_authorization_context",
     "revalidate_retrieval_authorization_context",
 ]
