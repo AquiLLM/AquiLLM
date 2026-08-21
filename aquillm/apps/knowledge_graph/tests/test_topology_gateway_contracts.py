@@ -57,7 +57,7 @@ def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor(
     assert type(SCHEMA_DESCRIPTOR_V1) is tuple
     assert (
         SCHEMA_CHECKSUM
-        == "9cde1bee50b59842338fea042311a9db7a0fd53bbb1baf095b7155f28fa40ab1"
+        == "ad5e6b39bb7a3a73251fc6454df58b71acfd3fda7e1cb17f37f8371b6d0258c6"
     )
     assert sha256(descriptor_bytes).hexdigest() == SCHEMA_CHECKSUM
     assert (
@@ -98,6 +98,37 @@ class _HostileMapping(Mapping[str, object]):
         raise RuntimeError("canary-items")
 
 
+class _TypedHostileMapping(Mapping[str, object]):
+    def __init__(self, mode: str, error: type[Exception]):
+        self.mode = mode
+        self.error = error
+
+    def __getitem__(self, key: str) -> object:
+        if self.mode == "lookup":
+            raise self.error("canary-lookup")
+        return "value"
+
+    def __iter__(self) -> Iterator[str]:
+        if self.mode == "iteration":
+            raise self.error("canary-iteration")
+        return iter(("key",))
+
+    def __len__(self) -> int:
+        return 1
+
+    def items(self):
+        if self.mode == "items":
+            raise self.error("canary-items")
+        if self.mode == "generator":
+
+            def rows():
+                yield ("key", "value")
+                raise self.error("canary-generator")
+
+            return rows()
+        return super().items()
+
+
 @pytest.mark.parametrize("mapping", [_HostileMapping()])
 def test_hostile_mapping_failures_are_fixed_non_echoing_contract_errors(mapping):
     with pytest.raises((TypeError, ValueError)) as request_error:
@@ -106,6 +137,16 @@ def test_hostile_mapping_failures_are_fixed_non_echoing_contract_errors(mapping)
         TopologyGatewaySuccessV1((mapping,))
     assert "canary" not in str(request_error.value)
     assert "canary" not in str(row_error.value)
+
+
+@pytest.mark.parametrize("mode", ["items", "iteration", "lookup", "generator"])
+@pytest.mark.parametrize("error", [TypeError, ValueError])
+def test_typed_mapping_failures_are_normalized_for_requests_and_rows(mode, error):
+    mapping = _TypedHostileMapping(mode, error)
+    with pytest.raises(ValueError, match="^invalid topology mapping$"):
+        TopologyGatewayRequestV1(TopologyQueryName.RELATION_TOPOLOGY, mapping, 1.0, 1)
+    with pytest.raises(ValueError, match="^invalid topology mapping$"):
+        TopologyGatewaySuccessV1((mapping,))
     assert encode_request(request()) == (
         b'{"deadline":123.5,"max_records":2,"parameters":{"collection":"c-1","limit":2},"query":"relation_topology"}'
     )

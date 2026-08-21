@@ -75,12 +75,11 @@ SCHEMA_DESCRIPTOR_V1: Final = (
         ),
     ),
     (
-        "success_shape",
-        ("exact fields: ok=true, rows=list[Mapping[str, TopologyScalar]]",),
-    ),
-    (
-        "failure_shape",
-        ("exact fields: ok=false, reason=enum, status=fixed HTTP status",),
+        "response_shapes",
+        (
+            "success_shape: ok=true; rows=list[Mapping[str, TopologyScalar]]",
+            "failure_shape: ok=false; reason=enum; status=fixed HTTP status",
+        ),
     ),
     (
         "failure_http_status",
@@ -89,8 +88,8 @@ SCHEMA_DESCRIPTOR_V1: Final = (
     (
         "canonical_json_rules",
         (
-            "UTF-8; ensure_ascii=false; allow_nan=false; sort_keys=true; "
-            "separators=(',', ':'); duplicate keys rejected; bytes equal canonical encoding",  # noqa: E501
+            "UTF-8; ensure_ascii=false; allow_nan=false; sort_keys=true",
+            "separators=(',', ':'); duplicate keys rejected; bytes canonical",
         ),
     ),
     ("malformed_request_status", MALFORMED_REQUEST_STATUS),
@@ -121,21 +120,20 @@ def _scalar(value: object, name: str) -> None:
 
 
 def _mapping(value: Mapping[str, TopologyScalar], name: str) -> MappingProxyType:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a mapping")
     try:
-        if not isinstance(value, Mapping):
-            raise TypeError(f"{name} must be a mapping")
-        copied: dict[str, TopologyScalar] = {}
-        for key, item in value.items():
-            _safe_text(key, f"{name} key")
-            _scalar(item, f"{name} value")
-            if key in copied:
-                raise ValueError(f"{name} contains duplicate keys")
-            copied[key] = item
-        return MappingProxyType(copied)
-    except (TypeError, ValueError):
-        raise
+        snapshot = [tuple(pair) for pair in value.items()]
     except Exception:
         raise ValueError("invalid topology mapping") from None
+    copied: dict[str, TopologyScalar] = {}
+    for key, item in snapshot:
+        _safe_text(key, f"{name} key")
+        _scalar(item, f"{name} value")
+        if key in copied:
+            raise ValueError(f"{name} contains duplicate keys")
+        copied[key] = item
+    return MappingProxyType(copied)
 
 
 @dataclass(frozen=True, slots=True)
