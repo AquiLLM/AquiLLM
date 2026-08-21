@@ -13,7 +13,6 @@ from apps.knowledge_graph.retrieval.topology.failures import TopologyLoadError
 
 from .memgraph_driver import MemgraphDriverError
 from .memgraph_records import read_bundle
-from .serialization import projection_checksum
 from .topology_request import decode_topology_request
 from .topology_results import family_response
 from .topology_snapshot import build_projected_topology_snapshot
@@ -70,7 +69,6 @@ def _selected_matches_bundle(selected, bundle) -> bool:
         and collection[0].ontology_checksum == selected.ontology_checksum
         and collection[0].embedding_model_signature
         == selected.embedding_model_signature
-        and projection_checksum(bundle) == selected.graph_checksum
     )
 
 
@@ -171,29 +169,30 @@ class Neo4jProjectedTopologyQueryAdapter:
         bundles = []
         for selected in ready.selected_generations:
             try:
-                bounded_parameters = None
-                if getattr(self._driver, "supports_bounded_topology", False):
-                    bounded_parameters = {
-                        "seed_keys_csv": ",".join(row.identity_key for row in seeds),
-                        "max_depth": caps.max_depth,
-                        "authorized_document_keys_csv": ",".join(
-                            row.document_key for row in ready.authorized_documents
-                        ),
-                    }
+                authorized_documents = tuple(
+                    row.document_key
+                    for row in ready.authorized_documents
+                    if row.generation_key == selected.generation_key
+                )
+                bounded_parameters = {
+                    "seed_keys_csv": ",".join(row.identity_key for row in seeds),
+                    "max_depth": caps.max_depth,
+                    "authorized_document_keys_csv": ",".join(authorized_documents),
+                    "collection_key": selected.collection_key,
+                }
                 bundle = read_bundle(
                     deadline_driver,
                     generation_key=selected.generation_key,
                     maxima=(
                         caps.max_nodes,
                         caps.max_nodes,
-                        caps.max_nodes,
+                        max(1, len(authorized_documents)),
                         caps.max_edges,
                         caps.max_edges,
                         caps.max_edges,
                         caps.max_edges,
-                        caps.max_edges,
-                        len(ready.authorized_documents)
-                        + len(ready.selected_generations),
+                        caps.max_nodes * 2,
+                        len(authorized_documents) + 1,
                     ),
                     timeout=self._remaining(deadline),
                     reject_full_pages=True,

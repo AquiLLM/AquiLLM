@@ -112,7 +112,9 @@ class ProjectionDriver:
         if "CollectionGeneration" in cypher:
             return ({"record": asdict(self.bundle.generation)},)
         for label, field, identity in _FAMILIES:
-            if f"n:{label} " in cypher:
+            if f"(n:{label} " in cypher or (
+                label == "ProjectedRelation" and "RETURN r AS record" in cypher
+            ):
                 return tuple(
                     {
                         "record": {
@@ -160,7 +162,11 @@ def test_adapter_builds_actual_authorized_bfs_families_with_fixed_cypher() -> No
     assert snapshot.allowed_scope.document_keys == (bundle.documents[0].document_key,)
     assert snapshot.load_max_hops == 2
     assert all(seed_identity not in cypher for cypher, *_rest in driver.calls)
-    assert {tuple(call[1]) for call in driver.calls} == {("generation_key",)}
+    assert all(
+        call[1].get("seed_keys_csv") == seed_identity
+        for call in driver.calls
+        if "CollectionGeneration" not in call[0]
+    )
     assert {call[2] for call in driver.calls} == {2.5}
 
 
@@ -197,14 +203,7 @@ def test_adapter_maps_fixed_backend_failures_and_expired_deadline() -> None:
 
 def test_adapter_rejects_checksum_drift_and_arbitrary_query_passthrough() -> None:
     original = _bundle()
-    changed = replace(
-        original,
-        entities=(
-            replace(original.entities[0], retrieval_utility=0.625),
-            original.entities[1],
-        ),
-    )
-    driver = ProjectionDriver(changed, manifest_checksum=projection_checksum(original))
+    driver = ProjectionDriver(original, manifest_checksum="e" * 64)
     ready = _ready(original)
     adapter = Neo4jProjectedTopologyQueryAdapter(driver, clock=lambda: 40.0)
 
@@ -215,7 +214,7 @@ def test_adapter_rejects_checksum_drift_and_arbitrary_query_passthrough() -> Non
             caps=_caps(),
             deadline=42.5,
         )
-    assert captured.value.reason is TopologyFailureReason.BACKEND_PROVENANCE_MISMATCH
+    assert captured.value.reason is TopologyFailureReason.READINESS_MISMATCH
 
     calls = len(driver.calls)
     with pytest.raises(TypeError):

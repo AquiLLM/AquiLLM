@@ -18,6 +18,7 @@ from .records import (
     ProjectionGenerationMarkerV1,
     ProjectionLifecycleState,
 )
+from .topology_cypher import bounded_family_query
 
 FAMILIES = (
     ("ProjectedEntity", ProjectedEntityV1),
@@ -41,53 +42,6 @@ _ORDER_FIELDS = (
     "evidence_key",
     "entity_key provenance_key mention_key",
     "scope_type scope_key artifact_key",
-)
-
-_ENTITY_TRAVERSAL = (
-    "MATCH (membership:AutomaticMembership {generation_key:$generation_key}) "
-    "WHERE membership.automatic_membership_key IN split($seed_keys_csv, ',') "
-    "OR membership.entity_key IN split($seed_keys_csv, ',') "
-    "MATCH (seed:ProjectedEntity {generation_key:$generation_key})"
-    "-[:ENTITY_MEMBERSHIP]->(membership) "
-    "MATCH p=(seed)"
-    "-[:PROJECTED_RELATION*0..2]-(n:ProjectedEntity "
-    "{generation_key:$generation_key}) "
-    "WHERE seed.opaque_key IN split($seed_keys_csv, ',') "
-    "AND length(p) <= $max_depth "
-    "RETURN n AS record ORDER BY n.opaque_key LIMIT $family_limit"
-)
-_RELATION_TRAVERSAL = (
-    "MATCH (membership:AutomaticMembership {generation_key:$generation_key}) "
-    "WHERE membership.automatic_membership_key IN split($seed_keys_csv, ',') "
-    "OR membership.entity_key IN split($seed_keys_csv, ',') "
-    "MATCH (seed:ProjectedEntity {generation_key:$generation_key})"
-    "-[:ENTITY_MEMBERSHIP]->(membership) "
-    "MATCH p=(seed)"
-    "-[:PROJECTED_RELATION*1..2]-(target:ProjectedEntity "
-    "{generation_key:$generation_key}) "
-    "WHERE seed.opaque_key IN split($seed_keys_csv, ',') "
-    "AND length(p) <= $max_depth "
-    "MATCH (r:ProjectedRelation {generation_key:$generation_key}) "
-    "WHERE any(edge IN relationships(p) WHERE edge.relation_key = r.relation_key) "
-    "RETURN r AS record ORDER BY r.opaque_key LIMIT $family_limit"
-)
-_EVIDENCE_TRAVERSAL = (
-    "MATCH (r:ProjectedRelation {generation_key:$generation_key})"
-    "-[edge:RELATION_EVIDENCE]->(c:ProjectedChunk "
-    "{generation_key:$generation_key}) "
-    "WHERE c.document_key IN split($authorized_document_keys_csv, ',') "
-    "MATCH (n:ProjectedEvidence {generation_key:$generation_key}) "
-    "WHERE n.opaque_key = edge.evidence_key "
-    "RETURN n AS record ORDER BY n.opaque_key LIMIT $family_limit"
-)
-_MENTION_TRAVERSAL = (
-    "MATCH (entity:ProjectedEntity {generation_key:$generation_key})"
-    "-[edge:ENTITY_MENTION]->(c:ProjectedChunk "
-    "{generation_key:$generation_key}) "
-    "WHERE c.document_key IN split($authorized_document_keys_csv, ',') "
-    "MATCH (n:ProjectedEntityMention {generation_key:$generation_key}) "
-    "WHERE n.opaque_key = edge.mention_key "
-    "RETURN n AS record ORDER BY n.opaque_key LIMIT $family_limit"
 )
 
 
@@ -176,14 +130,8 @@ def read_bundle(
     for (label, kind), maximum, order_fields in zip(
         FAMILIES, maxima, _ORDER_FIELDS, strict=True
     ):
-        if topology_parameters is not None and label == "ProjectedEntity":
-            query = _ENTITY_TRAVERSAL
-        elif topology_parameters is not None and label == "ProjectedRelation":
-            query = _RELATION_TRAVERSAL
-        elif topology_parameters is not None and label == "ProjectedEvidence":
-            query = _EVIDENCE_TRAVERSAL
-        elif topology_parameters is not None and label == "ProjectedEntityMention":
-            query = _MENTION_TRAVERSAL
+        if topology_parameters is not None:
+            query = bounded_family_query(label)
         else:
             query = (
                 f"MATCH (n:{label} {{generation_key:$generation_key}}) "
