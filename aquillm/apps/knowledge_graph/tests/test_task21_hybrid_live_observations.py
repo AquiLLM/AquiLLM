@@ -171,7 +171,7 @@ def test_production_executor_records_repeatable_branch_scores_and_one_rerank(
         lambda _prepared, _pool, calls: (
             ((graph, seed), 5.0, 0)
             if calls == 1
-            else ((seed, graph), 0.0, 0)
+            else ((seed,), 0.0, 0)
         ),
     )
     prepared = SimpleNamespace(
@@ -217,3 +217,6 @@ def test_production_executor_records_repeatable_branch_scores_and_one_rerank(
         },
     )
     assert all(row["reranker_rank"] is None for row in direct["candidate_trace"])
+    assert [row["chunk_id"] for row in direct["candidate_trace"]] == direct[
+        "ranked_chunk_ids"
+    ]

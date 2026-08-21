@@ -123,7 +123,12 @@ def _payloads():
 def test_live_payloads_split_frozen_metrics_from_strict_trace():
     evidence = _payloads()
 
-    assert "candidate_trace" not in evidence.observations["direct"][0]
+    observation = evidence.observations["direct"][0]
+    trace = evidence.live_trace["arms"]["direct"][0]
+    assert observation["candidate_trace"] == trace["candidate_trace"]
+    assert [row["chunk_id"] for row in observation["candidate_trace"]] == observation[
+        "ranked_chunk_ids"
+    ]
     assert tuple(evidence.live_trace["arms"]["direct"][0]) == (
         "case_id",
         "candidate_trace",
@@ -235,7 +240,9 @@ def test_runner_publishes_only_frozen_metrics_plus_bound_live_trace(monkeypatch)
         output_paths=object(),
     )
 
-    assert "candidate_trace" not in report["observations"]["direct"][0]
+    assert report["observations"]["direct"][0]["candidate_trace"] == published[
+        "live_trace"
+    ]["arms"]["direct"][0]["candidate_trace"]
     assert "comparison_inputs" not in report["backend_parity"]
     assert "projection_keys" not in report["freshness"]
     assert published["observations"] == report["observations"]

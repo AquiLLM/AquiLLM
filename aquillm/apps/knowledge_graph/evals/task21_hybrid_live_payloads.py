@@ -14,6 +14,7 @@ from .task21_hybrid_live_trace import (
 _OBSERVATION_FIELDS = (
     "case_id",
     "ranked_chunk_ids",
+    "candidate_trace",
     "graph_chunk_ids",
     "citation_evidence_chunk_ids",
     "seed_chunk_ids",

@@ -183,8 +183,7 @@ class ProductionArmExecutor:
         }
         rerank_ranks = {row.pk: rank for rank, row in enumerate(ranked, 1)}
         candidate_trace = []
-        trace_pool = ranked if spec["reranker_calls"] else pool
-        for ordinal, row in enumerate(trace_pool, 1):
+        for ordinal, row in enumerate(ranked, 1):
             direct = branch_maps["direct"].get(row.pk)
             extended = branch_maps["extended"].get(row.pk)
             candidate_trace.append(
