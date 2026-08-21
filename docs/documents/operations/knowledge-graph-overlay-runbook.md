@@ -11,6 +11,165 @@ It is not a source of truth and it never grants access. Vector, trigram, and
 exact retrieval remain the baseline. If graph configuration, storage, or
 ranking fails, retrieval returns that baseline without graph candidates.
 
+## Task21 Memgraph hybrid cloud acceptance
+
+This section is the operator handoff for the Task23 cloud evaluator. It is
+provider-neutral: the matched cloud host supplies the reviewed environment,
+container runtime, GPUs, and secret source; this runbook does not assume a
+particular cloud vendor or add a vendor integration.
+
+The only approved cloud entry point is:
+
+```bash
+bash scripts/run_task21_hybrid_cloud_eval.sh --require-clean-head --evidence-schema task21-hybrid-cloud-evidence-v1
+```
+
+Run it only on the matched cloud host after operator review. It must verify the
+clean source head, use the exact Task23 script, and publish only the
+`task21-hybrid-cloud-evidence-v1` evidence contract. A local pass, a Compose
+render, or a unit test does not authorize cloud gates or feature enablement.
+
+### Storage and ownership boundary
+
+PostgreSQL with pgvector remains authoritative for documents, chunks,
+collection artifacts, lifecycle state, and permissions. The Dedicated KG Memgraph
+service is an opaque, versioned projection used for bounded graph traversal; it
+is rebuildable and never grants access. It is not Mem0.
+
+Mem0 remains the separate conversation/user-memory system with separate
+identity, permissions, storage, lifecycle, and product semantics. Do not use
+Mem0 as the collection graph store, route KG projection credentials to Mem0,
+or merge Mem0 records into the canonical collection spine. A shared embedding
+endpoint, if reviewed, does not change that boundary.
+
+The two PostgreSQL DSNs target the same authoritative database so the
+function-backed state API and source reads observe one transactionally
+coherent authority. They must use the exact distinct least-privilege roles:
+
+```text
+KG_PROJECTION_POSTGRES_SOURCE_DSN=postgresql://aquillm_projection_source:<secret>@<db-host>/<db-name>
+KG_PROJECTION_POSTGRES_STATE_DSN=postgresql://aquillm_projection_state:<secret>@<db-host>/<db-name>
+```
+
+`aquillm_projection_source` is read-only for projection authority. The
+`aquillm_projection_state` alias is function-only: workers call the migration
+owned `SECURITY DEFINER` lease/CAS/outbox functions and never issue direct
+SELECT, INSERT, UPDATE, DELETE, or broad grants through that alias. Keep both
+passwords and DSNs out of logs, reports, command history, and evidence.
+
+The extractor contract must pin the immutable build identity in addition to
+the model and revision:
+
+```text
+KG_QUERY_EXTRACTOR_BUILD_HASH=<lowercase-64-hex-build-hash>
+```
+
+The hash must match the reviewed extractor image/build and the schema,
+ontology, and model identities used by the run. A mismatch is a preflight
+failure; do not enable projection or retrieval to work around it.
+
+The complete hybrid default-off fence is:
+
+```text
+KG_BUILD_ENABLED=0
+KG_OVERLAY_ENABLED=0
+KG_MEMGRAPH_PROJECTION_ENABLED=0
+KG_MEMGRAPH_TRAVERSAL_ENABLED=0
+KG_GRAPH_DIRECT_ENABLED=0
+KG_GRAPH_EXTENDED_ENABLED=0
+KG_DIRECT_EMBEDDING_ENABLED=0
+```
+
+`KG_GRAPH_EVAL_PARITY_BACKEND=postgres` is private evaluation configuration
+only; it is never an automatic production fallback.
+
+### Cloud stages
+
+Keep every feature flag off during image, dependency, migration, and health
+checks. The Task23 script owns the fresh evaluation project and captures
+state before teardown. The required stages are:
+
+1. **Preflight:** verify the source commit and dependency/config/image hashes,
+   extractor build hash, Memgraph health, PostgreSQL migration state, exact
+   fixed roles, and default-off flags. Run `migrate --check`; do not repair a
+   live deployment with ad-hoc SQL.
+2. **Projection shadow:** start only the dedicated KG worker and projection
+   path. Use `project_knowledge_graph` for an explicitly approved collection,
+   then `reconcile_knowledge_graph_projection` and
+   `inspect_knowledge_graph_projection`. Keep retrieval disabled and verify
+   that the baseline remains unchanged.
+3. **Parity/shadow evaluation:** run vector-only, direct, extended, combined,
+   and combined-plus-one-reranker arms over the same authorized fixture and
+   snapshot. Compare PostgreSQL parity data with the dedicated KG Memgraph
+   projection, projected ranks, permissions, citations, and repeatability.
+   The PostgreSQL topology is a private parity loader, never an automatic
+   production fallback.
+4. **Measured approval:** review the immutable evidence bundle and every
+   quality, permission, fail-open, multi-hop, determinism, latency, and
+   citation gate. All gates remain `PENDING_MEASUREMENT` until the matched
+   cloud run is reviewed and approved in writing as explicit cloud approval.
+   Do not infer a gate from
+   local CPU tests.
+5. **Staged enablement:** after approval, enable builds first with
+   `KG_BUILD_ENABLED=1` and retrieval still off. After a successful
+   representative rebuild, reconcile and inspect the projection, then enable
+   retrieval for a bounded shadow/cohort. Direct and extended traversal remain
+   independently disabled until their cloud evidence is approved.
+
+Use only bounded management commands inside the reviewed deployment network:
+
+```bash
+docker compose --env-file .env -f deploy/compose/development.yml exec web /opt/venv/bin/python manage.py project_knowledge_graph --collection <positive-integer-pk>
+docker compose --env-file .env -f deploy/compose/development.yml exec web /opt/venv/bin/python manage.py reconcile_knowledge_graph_projection --collection <positive-integer-pk>
+docker compose --env-file .env -f deploy/compose/development.yml exec web /opt/venv/bin/python manage.py inspect_knowledge_graph_projection --collection <positive-integer-pk>
+docker compose --env-file .env -f deploy/compose/development.yml exec web /opt/venv/bin/python manage.py inspect_knowledge_graph --collection <positive-integer-pk>
+docker compose --env-file .env -f deploy/compose/development.yml exec web /opt/venv/bin/python manage.py prune_knowledge_graph_projection --collection <positive-integer-pk>
+docker compose --env-file .env -f deploy/compose/development.yml exec web /opt/venv/bin/python manage.py prune_knowledge_graph --batch-size 100
+```
+
+Preview pruning before execution and retain the existing lifecycle protections.
+Do not dump graph tables, expose labels/edges, or use direct SQL as an
+inspection shortcut.
+
+### Evidence and failure handling
+
+The evaluator must capture service state, bounded redacted logs/hashes, source
+commit and clean bit, image digests, arm/result/timing files, projection
+checksums, and cleanup proof before any teardown. It writes the canonical
+bundle under `artifacts/task21-hybrid-cloud/<run_id>/bundle.json`; every member
+is `0600`, content-addressed, and listed with role, size, and SHA-256. The
+bundle is fsynced and atomically published without overwrite, then signed with
+the secret `TASK21_EVIDENCE_SIGNING_KEY` and its key version. Print only the
+final path, size, and SHA-256 line. Never put secret values, private scope,
+queries, graph labels, or inaccessible-neighbor details in logs or artifacts
+outside that protected directory.
+
+Graph extraction, projection, Memgraph, or traversal errors are fail-open:
+baseline vector/trigram/exact retrieval, existing reranking, real-chunk
+materialization, and citations remain available. Roll back in this order:
+
+1. Set `KG_OVERLAY_ENABLED=0` and restart every retrieval reader; verify
+   baseline retrieval and citations.
+2. Set `KG_BUILD_ENABLED=0` and restart build publishers.
+3. Stop the dedicated KG worker and optional Memgraph projection service.
+
+Keep durable artifacts, requests, and evidence for diagnosis. Do not delete
+rows or repair state manually. Resume with the same request ID only through
+the bounded reconciliation procedure.
+
+### Projection identifier key rotation
+
+Treat `KG_PROJECTION_IDENTIFIER_HMAC_KEY` and
+`KG_PROJECTION_IDENTIFIER_KEY_VERSION` as one versioned secret/config pair.
+Before rotation, disable retrieval and builds, capture the active projection
+versions, and retain the old key only in the approved secret store. Publish
+the new key/version, rebuild every selected collection, project and reconcile
+the new generations, and inspect that all active projections use the new
+version. Re-run the cloud shadow/parity arms and obtain fresh gate approval
+before enabling retrieval. Retire the old key only after no active or
+resumable projection references it. A key rotation always requires a rebuild;
+never reinterpret old opaque IDs under a new key.
+
 ## Safety invariants
 
 - Build and retrieval controls are independent and off by default.

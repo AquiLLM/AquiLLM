@@ -156,3 +156,57 @@ def test_eval_inspection_accepts_only_private_success_lifecycle() -> None:
     ):
         bad_build = {**report, "builds": [{**build, **mutation}]}
         assert _run_inspection_validator(bad_build, request_id).returncode != 0
+
+
+def test_task24_runbook_contains_provider_neutral_cloud_handoff_contract() -> None:
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+
+    assert (
+        "bash scripts/run_task21_hybrid_cloud_eval.sh --require-clean-head "
+        "--evidence-schema task21-hybrid-cloud-evidence-v1"
+    ) in runbook
+    assert "scripts/run_task21_hybrid_cloud_eval.sh" in runbook
+    assert "task21-hybrid-cloud-evidence-v1" in runbook
+    assert "Dedicated KG Memgraph" in runbook
+    assert "Mem0" in runbook
+    assert "KG_QUERY_EXTRACTOR_BUILD_HASH" in runbook
+    assert "aquillm_projection_source" in runbook
+    assert "aquillm_projection_state" in runbook
+    assert "projection_state" in runbook and "SECURITY DEFINER" in runbook
+    for flag in (
+        "KG_BUILD_ENABLED=0",
+        "KG_OVERLAY_ENABLED=0",
+        "KG_MEMGRAPH_PROJECTION_ENABLED=0",
+        "KG_MEMGRAPH_TRAVERSAL_ENABLED=0",
+        "KG_GRAPH_DIRECT_ENABLED=0",
+        "KG_GRAPH_EXTENDED_ENABLED=0",
+        "KG_DIRECT_EMBEDDING_ENABLED=0",
+    ):
+        assert flag in runbook
+
+
+def test_task24_runbook_contains_staged_safety_and_evidence_contract() -> None:
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+    secrets = (
+        REPO / "docs" / "documents" / "operations" / "gcp-secret-manager-runbook.md"
+    ).read_text(encoding="utf-8")
+
+    for required in (
+        "shadow",
+        "parity",
+        "reconcile",
+        "inspect_knowledge_graph",
+        "prune_knowledge_graph",
+        "key rotation",
+        "rebuild",
+        "fail-open",
+        "0600",
+        "TASK21_EVIDENCE_SIGNING_KEY",
+        "KG_BUILD_ENABLED=0",
+        "KG_OVERLAY_ENABLED=0",
+        "PENDING_MEASUREMENT",
+        "cloud approval",
+    ):
+        assert required in runbook
+    assert "0600" in secrets
+    assert "TASK21_EVIDENCE_SIGNING_KEY" in secrets
