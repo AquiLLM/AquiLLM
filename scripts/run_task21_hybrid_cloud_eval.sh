@@ -72,6 +72,7 @@ ARMS_CANDIDATE="$WORK_ROOT/arms.valid.json"
 TIMINGS="$WORK_ROOT/timings.json"
 PROJECTIONS="$WORK_ROOT/projection-checksums.json"
 ATTESTATION="$WORK_ROOT/observation-attestation.json"
+LIVE_TRACE="$WORK_ROOT/live-trace.json"
 RUN_LOG="$WORK_ROOT/runner.log"
 STARTED_NS="$(python3 -c 'import time; print(time.time_ns())')"
 
@@ -79,10 +80,11 @@ install -d -m 700 "$WORK_ROOT" "$OUTPUT_ROOT"
 printf '%s\n' '{"schema_version":"task21-hybrid-eval-v1","status":"not_completed"}' >"$ARMS"
 printf '%s\n' '{"status":"not_completed"}' >"$TIMINGS"
 printf '%s\n' '{"schema":"task21-hybrid-live-observation-v1","status":"not_completed"}' >"$ATTESTATION"
+printf '%s\n' '{"schema":"task21-hybrid-live-trace-v1","status":"not_completed"}' >"$LIVE_TRACE"
 printf '%s\n' \
   '{"generation_key":"0000000000000000000000000000000000000000000000000000000000000000","projection_checksum":"0000000000000000000000000000000000000000000000000000000000000000"}' \
   >"$PROJECTIONS"
-chmod 600 "$ARMS" "$TIMINGS" "$PROJECTIONS" "$ATTESTATION"
+chmod 600 "$ARMS" "$TIMINGS" "$PROJECTIONS" "$ATTESTATION" "$LIVE_TRACE"
 
 compose=(
   docker compose
@@ -132,10 +134,11 @@ finalize() {
   local original_status="$?"
   local status_label="passed"
   local evidence_status=0
+  local timings_status=0
   trap - EXIT INT TERM
   set +e
   ((original_status == 0)) || status_label="failed"
-  write_timings "$status_label" "$original_status"
+  write_timings "$status_label" "$original_status" || timings_status="$?"
   python3 scripts/task21_hybrid_failure_bundle.py \
     --run-id "$RUN_ID" \
     --output-root "$OUTPUT_ROOT" \
@@ -149,13 +152,19 @@ finalize() {
     --timings "$TIMINGS" \
     --projection-checksums "$PROJECTIONS" \
     --observation-attestation "$ATTESTATION" \
+    --live-trace "$LIVE_TRACE" \
+    --expected-source-commit "$SOURCE_COMMIT" \
     --claim-scope cloud \
     --signing-key-version "$TASK21_EVIDENCE_SIGNING_KEY_VERSION"
   evidence_status="$?"
+  if ((timings_status != 0 && evidence_status == 0)); then
+    evidence_status=70
+  fi
   rm -f -- \
     "$WORK_ROOT/observations.json" "$WORK_ROOT/freshness.json" \
-    "$WORK_ROOT/backend-parity.json" "$ATTESTATION" \
-    "$ARMS" "$ARMS_CANDIDATE" "$TIMINGS" "$PROJECTIONS" "$RUN_LOG"
+    "$WORK_ROOT/backend-parity.json" "$ATTESTATION" "$LIVE_TRACE" \
+    "$ARMS" "$ARMS_CANDIDATE" "$TIMINGS" "$TIMINGS.tmp" \
+    "$PROJECTIONS" "$RUN_LOG"
   rmdir -- "$WORK_ROOT" 2>/dev/null
   ((original_status == 0)) || exit "$original_status"
   exit "$evidence_status"
@@ -205,6 +214,7 @@ export KG_PROJECTION_POSTGRES_STATE_DSN="postgresql://aquillm_projection_state:$
   --observations-output "/app/$WORK_REL/observations.json" \
   --freshness-output "/app/$WORK_REL/freshness.json" \
   --backend-parity-output "/app/$WORK_REL/backend-parity.json" \
+  --live-trace-output "/app/$WORK_REL/live-trace.json" \
   --attestation-output "/app/$WORK_REL/observation-attestation.json" \
   >>"$RUN_LOG" 2>&1
 
@@ -220,6 +230,7 @@ python3 scripts/task21_hybrid_observation_attestation.py \
   --observations "$WORK_ROOT/observations.json" \
   --freshness "$WORK_ROOT/freshness.json" \
   --backend-parity "$WORK_ROOT/backend-parity.json" \
+  --live-trace "$LIVE_TRACE" \
   >>"$RUN_LOG" 2>&1
 
 "${compose[@]}" exec -T worker_knowledge_graph /opt/venv/bin/python -m \

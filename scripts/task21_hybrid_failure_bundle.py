@@ -37,7 +37,7 @@ _SECRET_ASSIGNMENT = re.compile(
 _AUTHORIZATION = re.compile(r"(?i)\bauthorization\s*:\s*(?:bearer\s+)?[^\s,;]+")
 _CREDENTIAL_URL = re.compile(
     r"(?i)\b(?:postgres(?:ql)?|memgraph|bolt(?:\+s|\+ssc)?|neo4j(?:\+s|\+ssc)?|https?)"
-    r"://[^\s\"'<>]+"
+    r"://[^\s,\"'<>?&;]+"
 )
 
 
@@ -143,7 +143,9 @@ def capture_runtime(runner, compose_prefix) -> CapturedRuntime:
         if not ps_result.succeeded:
             state["capture_error"] = "compose_ps_failed"
             errors.append(_command_error(f"compose_ps:{service}", ps_result))
-        if container:
+        elif not container:
+            state["capture_error"] = "service_missing"
+        else:
             if _HEX64.fullmatch(container) is None:
                 state["capture_error"] = "invalid_container_id"
             else:
@@ -171,6 +173,10 @@ def capture_runtime(runner, compose_prefix) -> CapturedRuntime:
                                 exit_code=exact_exit,
                             )
                             images[service] = image
+                            if status != "running":
+                                state["capture_error"] = "service_not_running"
+                            elif exact_exit != 0:
+                                state["capture_error"] = "service_exit_unsuccessful"
         states[service] = state
         log_result = runner.run(
             prefix + ("logs", "--no-color", "--tail", "200", service)

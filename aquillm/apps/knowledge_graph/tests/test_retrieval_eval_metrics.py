@@ -166,7 +166,14 @@ def task23_inputs():
                     {"chunk_id": "seed", "text": "Atlas is evaluated."},
                     {"chunk_id": "answer", "text": "Atlas uses nDCG at ten."},
                 ],
-            }
+            },
+            {
+                "doc_id": "document-private",
+                "collection_id": "collection-private",
+                "chunks": [
+                    {"chunk_id": "private", "text": "Restricted Atlas details."}
+                ],
+            },
         ],
         "expected_retrieval_chunk_ids": ["answer"],
         "expected_min_semantic_distance": {"answer": 2},

@@ -55,15 +55,24 @@ def validate_cases(
             exact_ids(case.get("accessible_collection_ids"), "collections")
         )
         accessible: set[str] = set()
+        inaccessible_fixture: list[str] = []
         for document in case.get("documents", ()):
             if not isinstance(document, Mapping):
                 raise Task21HybridEvalError("documents must be mappings")
-            if document.get("collection_id") not in collections:
-                continue
+            authorized = document.get("collection_id") in collections
             for chunk in document.get("chunks", ()):
                 if not isinstance(chunk, Mapping):
                     raise Task21HybridEvalError("chunks must be mappings")
-                accessible.add(str(chunk.get("chunk_id")))
+                chunk_id = chunk.get("chunk_id")
+                if type(chunk_id) is not str or not chunk_id:
+                    raise Task21HybridEvalError("fixture chunk id is invalid")
+                if authorized:
+                    accessible.add(chunk_id)
+                else:
+                    inaccessible_fixture.append(chunk_id)
+        fixture_ids = exact_ids(
+            tuple(sorted(inaccessible_fixture)), "inaccessible fixture chunks"
+        )
         expected = exact_ids(
             case.get("expected_retrieval_chunk_ids"), "expected chunks"
         )
@@ -80,6 +89,7 @@ def validate_cases(
             raise Task21HybridEvalError("semantic distances must be integers in [0, 2]")
         result[case_id] = {
             "accessible": accessible,
+            "inaccessible_fixture": fixture_ids,
             "expected": expected,
             "distances": distances,
             "quality_tags": tuple(case.get("quality_tags", ())),
@@ -164,6 +174,10 @@ def score_case(
         observation["inaccessible_result_chunk_ids"], "inaccessible results"
     )
     observed_inaccessible = tuple(item for item in ranked if item not in accessible)
+    if adversarial != case["inaccessible_fixture"]:
+        raise Task21HybridEvalError(
+            "adversarial candidates differ from the inaccessible fixture"
+        )
     if inaccessible != observed_inaccessible:
         raise Task21HybridEvalError("inaccessible result observations are inconsistent")
     if set(adversarial).intersection(accessible):

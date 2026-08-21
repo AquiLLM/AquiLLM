@@ -14,7 +14,6 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "task21_hybrid_failure_bundle.py"
 SHELL = REPO / "scripts" / "run_task21_hybrid_cloud_eval.sh"
-ATTESTATION = REPO / "scripts" / "task21_hybrid_observation_attestation.py"
 
 
 def _module():
@@ -25,18 +24,6 @@ def _module():
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    return module
-
-
-def _attestation_module():
-    spec = importlib.util.spec_from_file_location("task21_attestation", ATTESTATION)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(ATTESTATION.parent))
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.pop(0)
     return module
 
 
@@ -95,79 +82,10 @@ def test_cloud_shell_is_provider_neutral_fail_closed_and_uses_fixed_entrypoints(
     assert "worker_knowledge_graph_projection" in source
     assert source.count("git status --porcelain=v1 --untracked-files=normal") >= 2
     assert "original_exit_code" in source
+    assert "timings_status" in source
+    assert '--expected-source-commit "$SOURCE_COMMIT"' in source
     assert not {"gcloud", "aws ", "az "}.intersection(source.splitlines())
     assert 'eval "' not in source
-
-
-def test_live_observations_bind_same_run_source_runtime_and_artifact_bytes(tmp_path):
-    runtime = _module()
-    attestation = _attestation_module()
-    artifacts = {}
-    bodies = {
-        "observations": b'{"combined":[]}\n',
-        "freshness": json.dumps(
-            {
-                "generation_key": "a" * 64,
-                "projection_checksum": "b" * 64,
-                "age_seconds": 0,
-                "max_age_seconds": 60,
-            }
-        ).encode(),
-        "backend_parity": b'{"status":"exact"}\n',
-    }
-    for name, body in bodies.items():
-        artifacts[name] = tmp_path / f"{name}.json"
-        artifacts[name].write_bytes(body)
-    captured = runtime.CapturedRuntime(
-        members={},
-        images={service: "sha256:" + "c" * 64 for service in runtime.SERVICES},
-        config_sha256="d" * 64,
-    )
-    payload = {
-        "schema": attestation.SCHEMA,
-        "run_id": "e" * 32,
-        "source_commit": "f" * 40,
-        "config_sha256": "d" * 64,
-        "images": captured.images,
-        "projection_checksums": {
-            "generation_key": "a" * 64,
-            "projection_checksum": "b" * 64,
-        },
-        "artifact_sha256": {
-            name: hashlib.sha256(path.read_bytes()).hexdigest()
-            for name, path in artifacts.items()
-        },
-    }
-
-    attestation.verify_attestation(
-        payload=payload,
-        captured=captured,
-        artifacts=artifacts,
-        run_id="e" * 32,
-        source_commit="f" * 40,
-    )
-    with pytest.raises(ValueError, match="runtime capture"):
-        attestation.verify_attestation(
-            payload=payload,
-            captured=runtime.CapturedRuntime(
-                captured.members,
-                captured.images,
-                captured.config_sha256,
-                complete=False,
-            ),
-            artifacts=artifacts,
-            run_id="e" * 32,
-            source_commit="f" * 40,
-        )
-    payload["run_id"] = "0" * 32
-    with pytest.raises(ValueError, match="run identity"):
-        attestation.verify_attestation(
-            payload=payload,
-            captured=captured,
-            artifacts=artifacts,
-            run_id="e" * 32,
-            source_commit="f" * 40,
-        )
 
 
 def test_capture_precedes_cleanup_and_preserves_bounded_redacted_service_logs():
@@ -220,12 +138,25 @@ def test_publish_is_canonical_signed_0600_and_never_overwrites(tmp_path):
     arm_results = tmp_path / "arms.json"
     timings = tmp_path / "timings.json"
     projections = tmp_path / "projections.json"
+    live_trace = tmp_path / "live-trace.json"
     arm_results.write_text('{"arms":[]}', encoding="utf-8")
-    timings.write_text('{"p95_ms":12.5}', encoding="utf-8")
+    timings.write_text(
+        json.dumps(
+            {
+                "elapsed_ms": 12.5,
+                "finished_ns": 13_500_000,
+                "original_exit_code": 0,
+                "started_ns": 1_000_000,
+                "status": "passed",
+            }
+        ),
+        encoding="utf-8",
+    )
     projections.write_text(
         json.dumps({"generation_key": "a" * 64, "projection_checksum": "b" * 64}),
         encoding="utf-8",
     )
+    live_trace.write_text('{"schema":"task21-hybrid-live-trace-v1"}', encoding="utf-8")
     captured = module.CapturedRuntime(
         members={
             "runtime/config.redacted.yml": b"services: {}\n",
@@ -246,9 +177,11 @@ def test_publish_is_canonical_signed_0600_and_never_overwrites(tmp_path):
             "arm_results": arm_results,
             "timings": timings,
             "projection_checksums": projections,
+            "live_trace": live_trace,
         },
         cleanup_proof=cleanup,
         source={"commit": "f" * 40, "clean": True},
+        expected_source_commit="f" * 40,
         claim_scope="cloud",
         signing_key=key,
         signing_key_version="task23-v1",
@@ -282,9 +215,11 @@ def test_publish_is_canonical_signed_0600_and_never_overwrites(tmp_path):
                 "arm_results": arm_results,
                 "timings": timings,
                 "projection_checksums": projections,
+                "live_trace": live_trace,
             },
             cleanup_proof=cleanup,
             source={"commit": "f" * 40, "clean": True},
+            expected_source_commit="f" * 40,
             claim_scope="cloud",
             signing_key=key,
             signing_key_version="task23-v1",

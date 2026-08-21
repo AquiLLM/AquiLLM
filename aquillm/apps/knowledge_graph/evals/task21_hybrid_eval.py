@@ -66,6 +66,8 @@ def task21_hybrid_arm_specs() -> tuple[Mapping[str, object], ...]:
 
 def build_task21_hybrid_report(*, cases, observations, freshness, backend_parity):
     indexed = validate_cases(cases)
+    if not any(case["inaccessible_fixture"] for case in indexed.values()):
+        raise Task21HybridEvalError("an inaccessible privacy fixture is required")
     if (
         not isinstance(observations, Mapping)
         or tuple(observations) != TASK21_HYBRID_ARMS

@@ -42,6 +42,8 @@ def main() -> int:
     parser.add_argument("--timings", type=Path, required=True)
     parser.add_argument("--projection-checksums", type=Path, required=True)
     parser.add_argument("--observation-attestation", type=Path, required=True)
+    parser.add_argument("--live-trace", type=Path, required=True)
+    parser.add_argument("--expected-source-commit", required=True)
     parser.add_argument(
         "--claim-scope",
         choices=("cloud", "local-nonacceptance"),
@@ -88,9 +90,11 @@ def main() -> int:
             "arm_results": args.arm_results,
             "timings": args.timings,
             "projection_checksums": args.projection_checksums,
+            "live_trace": args.live_trace,
         },
         cleanup_proof=cleanup,
         source=source,
+        expected_source_commit=args.expected_source_commit,
         claim_scope=args.claim_scope,
         signing_key=os.environ.get("TASK21_EVIDENCE_SIGNING_KEY", "").encode(),
         signing_key_version=args.signing_key_version,

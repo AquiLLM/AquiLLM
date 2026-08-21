@@ -148,3 +148,30 @@ def test_task23_hybrid_report_requires_observed_adversarial_candidates():
             freshness=freshness,
             backend_parity=parity,
         )
+
+
+def test_task23_hybrid_report_rejects_fabricated_adversarial_fixture_ids():
+    cases, observations, freshness, parity = task23_inputs()
+    for rows in observations.values():
+        rows[0]["adversarial_candidate_chunk_ids"] = ["invented-private"]
+
+    with pytest.raises(run_kg_eval.Task21HybridEvalError, match="fixture"):
+        run_kg_eval.build_task21_hybrid_report(
+            cases=cases,
+            observations=observations,
+            freshness=freshness,
+            backend_parity=parity,
+        )
+
+
+def test_task23_hybrid_report_requires_privacy_fixture_in_every_arm():
+    cases, observations, freshness, parity = task23_inputs()
+    observations["direct"][0]["adversarial_candidate_chunk_ids"] = []
+
+    with pytest.raises(run_kg_eval.Task21HybridEvalError, match="fixture"):
+        run_kg_eval.build_task21_hybrid_report(
+            cases=cases,
+            observations=observations,
+            freshness=freshness,
+            backend_parity=parity,
+        )

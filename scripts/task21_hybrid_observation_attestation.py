@@ -18,7 +18,7 @@ SCHEMA = "task21-hybrid-live-observation-v1"
 _HEX32 = re.compile(r"[0-9a-f]{32}")
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
-_ARTIFACTS = ("observations", "freshness", "backend_parity")
+_ARTIFACTS = ("observations", "freshness", "backend_parity", "live_trace")
 
 
 def _sha256(path: Path) -> str:
@@ -79,6 +79,7 @@ def main() -> int:
     parser.add_argument("--observations", type=Path, required=True)
     parser.add_argument("--freshness", type=Path, required=True)
     parser.add_argument("--backend-parity", type=Path, required=True)
+    parser.add_argument("--live-trace", type=Path, required=True)
     args = parser.parse_args()
     prefix = (
         "docker",
@@ -101,6 +102,7 @@ def main() -> int:
             "observations": args.observations,
             "freshness": args.freshness,
             "backend_parity": args.backend_parity,
+            "live_trace": args.live_trace,
         },
         run_id=args.run_id,
         source_commit=args.source_commit,

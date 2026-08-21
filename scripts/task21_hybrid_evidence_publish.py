@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import shutil
@@ -59,11 +60,23 @@ def _projection_checksums(path: Path) -> dict[str, str]:
 
 
 def _validate_publish_inputs(
-    *, run_id, artifacts, source, claim_scope, signing_key, signing_key_version
+    *,
+    run_id,
+    artifacts,
+    source,
+    expected_source_commit,
+    claim_scope,
+    signing_key,
+    signing_key_version,
 ) -> None:
     if _HEX32.fullmatch(run_id) is None:
         raise ValueError("run id must be 32 lowercase hexadecimal characters")
-    if set(artifacts) != {"arm_results", "timings", "projection_checksums"}:
+    if set(artifacts) != {
+        "arm_results",
+        "timings",
+        "projection_checksums",
+        "live_trace",
+    }:
         raise ValueError("evidence artifacts are not exact")
     if (
         set(source) != {"commit", "clean"}
@@ -71,12 +84,50 @@ def _validate_publish_inputs(
         or type(source["clean"]) is not bool
     ):
         raise ValueError("source identity is invalid")
+    if _HEX40.fullmatch(expected_source_commit) is None:
+        raise ValueError("expected source commit is invalid")
+    if source["commit"] != expected_source_commit:
+        raise ValueError("source commit changed after observation attestation")
     if claim_scope not in {"cloud", "local-nonacceptance"}:
         raise ValueError("claim scope is invalid")
     if type(signing_key) is not bytes or len(signing_key) < 16:
         raise ValueError("evidence signing key is invalid")
     if _SAFE_VERSION.fullmatch(signing_key_version) is None:
         raise ValueError("signing key version is invalid")
+
+
+def _validate_timings(path: Path) -> None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("timings artifact is unavailable") from error
+    expected = {
+        "elapsed_ms",
+        "finished_ns",
+        "original_exit_code",
+        "started_ns",
+        "status",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ValueError("timings artifact fields are not exact")
+    elapsed = value["elapsed_ms"]
+    started = value["started_ns"]
+    finished = value["finished_ns"]
+    original = value["original_exit_code"]
+    if (
+        type(elapsed) not in (int, float)
+        or not math.isfinite(float(elapsed))
+        or elapsed < 0
+        or type(started) is not int
+        or type(finished) is not int
+        or started < 0
+        or finished < started
+        or type(original) is not int
+    ):
+        raise ValueError("timings artifact values are invalid")
+    status = value["status"]
+    if status not in {"passed", "failed"} or (status == "passed") != (original == 0):
+        raise ValueError("timings artifact status is invalid")
 
 
 def _copy_members(staging: Path, captured, artifacts) -> dict[str, str]:
@@ -90,6 +141,7 @@ def _copy_members(staging: Path, captured, artifacts) -> dict[str, str]:
         "arm_results": "results/arms.json",
         "timings": "results/timings.json",
         "projection_checksums": "projection/checksums.json",
+        "live_trace": "trace/live-trace.json",
     }
     for role, relative in destinations.items():
         source_path = Path(artifacts[role])
@@ -145,6 +197,7 @@ def publish_bundle(
     artifacts,
     cleanup_proof,
     source,
+    expected_source_commit,
     claim_scope,
     signing_key,
     signing_key_version,
@@ -153,10 +206,12 @@ def publish_bundle(
         run_id=run_id,
         artifacts=artifacts,
         source=source,
+        expected_source_commit=expected_source_commit,
         claim_scope=claim_scope,
         signing_key=signing_key,
         signing_key_version=signing_key_version,
     )
+    _validate_timings(Path(artifacts["timings"]))
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(root, 0o700)

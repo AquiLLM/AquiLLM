@@ -10,6 +10,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "task21_hybrid_failure_bundle.py"
 CLI = REPO / "scripts" / "task21_hybrid_evidence_cli.py"
+SHELL = REPO / "scripts" / "run_task21_hybrid_cloud_eval.sh"
 
 
 def _module(name, path):
@@ -34,6 +35,8 @@ def _module(name, path):
         "bolt+s://projection:canary%23pw@graph:7687",
         "https://client:canary%2Btoken@example.test/v1",
         "http://client:canary-secret@example.test/v1",
+        "endpoints=https://public.test/path,postgresql://user:canary@db/a",
+        "endpoint=https://public.test/path?next=bolt://user:canary@graph:7687",
     ),
 )
 def test_url_credentials_are_redacted_without_encoded_canary_leakage(value):
@@ -79,6 +82,52 @@ def test_capture_records_failed_commands_instead_of_converting_them_to_empty_suc
     assert captured.complete is False
     assert state["command_errors"][0]["returncode"] == 17
     assert "canary-secret" not in json.dumps(state)
+
+
+@pytest.mark.parametrize(
+    ("service_output", "inspect_state", "expected_error"),
+    (
+        ("", None, "service_missing"),
+        ("container", ("exited", 0), "service_not_running"),
+        ("container", ("running", 137), "service_exit_unsuccessful"),
+    ),
+)
+def test_capture_requires_every_fixed_service_running_with_successful_exit(
+    service_output,
+    inspect_state,
+    expected_error,
+):
+    module = _module("task21_hybrid_failure_bundle", SCRIPT)
+    prefix = ("docker", "compose", "-p", "aquillm-task21-runtime")
+    outputs = {prefix + ("config", "--no-interpolate"): module.CommandResult(
+        "services: {}\n", "", 0
+    )}
+    for index, service in enumerate(module.SERVICES, start=1):
+        container = f"{index:x}" * 64
+        image = f"{(index + 7) % 16:x}" * 64
+        outputs[prefix + ("ps", "--all", "--quiet", service)] = (
+            module.CommandResult(container, "", 0)
+        )
+        outputs[module.inspect_command(container)] = module.CommandResult(
+            f"{container}\tsha256:{image}\trunning\t0", "", 0
+        )
+    service = module.SERVICES[0]
+    container = "1" * 64
+    if not service_output:
+        outputs[prefix + ("ps", "--all", "--quiet", service)] = (
+            module.CommandResult("", "", 0)
+        )
+    else:
+        status, exit_code = inspect_state
+        outputs[module.inspect_command(container)] = module.CommandResult(
+            f"{container}\tsha256:{'8' * 64}\t{status}\t{exit_code}", "", 0
+        )
+
+    captured = module.capture_runtime(FakeRunner(module, outputs), prefix)
+    state = json.loads(captured.members["runtime/state.json"])
+
+    assert captured.complete is False
+    assert state[service]["capture_error"] == expected_error
 
 
 @pytest.mark.parametrize("failed_operation", ("down", "listing"))
@@ -130,3 +179,67 @@ def test_evidence_source_status_includes_untracked_files():
 
     assert cli._source(runner) == {"commit": "c" * 40, "clean": False}
     assert status in runner.calls
+
+
+def _publish_fixture(module, tmp_path):
+    artifacts = {}
+    bodies = {
+        "arm_results": '{"arms":{}}',
+        "timings": json.dumps(
+            {
+                "elapsed_ms": 1.0,
+                "finished_ns": 2,
+                "original_exit_code": 0,
+                "started_ns": 1,
+                "status": "passed",
+            }
+        ),
+        "projection_checksums": json.dumps(
+            {"generation_key": "a" * 64, "projection_checksum": "b" * 64}
+        ),
+        "live_trace": '{"schema":"task21-hybrid-live-trace-v1"}',
+    }
+    for name, body in bodies.items():
+        artifacts[name] = tmp_path / f"{name}.json"
+        artifacts[name].write_text(body, encoding="utf-8")
+    return {
+        "output_root": tmp_path / "evidence",
+        "run_id": "d" * 32,
+        "captured": module.CapturedRuntime({}, {}, "c" * 64),
+        "artifacts": artifacts,
+        "cleanup_proof": {"complete": True},
+        "source": {"commit": "e" * 40, "clean": True},
+        "expected_source_commit": "e" * 40,
+        "claim_scope": "cloud",
+        "signing_key": b"task23-signing-key",
+        "signing_key_version": "task23-v2",
+    }
+
+
+def test_publisher_rejects_not_completed_timings(tmp_path):
+    module = _module("task21_hybrid_failure_bundle", SCRIPT)
+    arguments = _publish_fixture(module, tmp_path)
+    arguments["artifacts"]["timings"].write_text(
+        '{"status":"not_completed"}', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="timings"):
+        module.publish_bundle(**arguments)
+
+
+def test_publisher_rejects_post_capture_source_commit_change(tmp_path):
+    module = _module("task21_hybrid_failure_bundle", SCRIPT)
+    arguments = _publish_fixture(module, tmp_path)
+    arguments["source"] = {"commit": "f" * 40, "clean": True}
+
+    with pytest.raises(ValueError, match="source commit"):
+        module.publish_bundle(**arguments)
+
+
+def test_shell_gates_timing_write_and_passes_expected_source_commit():
+    source = SHELL.read_text(encoding="utf-8")
+
+    assert "timings_status" in source
+    assert '--expected-source-commit "$SOURCE_COMMIT"' in source
+    assert "--live-trace-output" in source
+    assert "--live-trace" in source
