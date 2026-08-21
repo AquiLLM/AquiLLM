@@ -99,6 +99,10 @@ services:
     volumes: !override
       - kg_eval_memgraph_data:/var/lib/memgraph
 
+  knowledge_graph_query_gateway:
+    restart: "no"
+    env_file: !override []
+
   knowledge_graph_query_extractor:
     restart: "no"
     env_file: !override []

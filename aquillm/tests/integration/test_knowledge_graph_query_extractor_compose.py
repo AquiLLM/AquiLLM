@@ -80,8 +80,11 @@ def test_web_gets_query_only_and_projection_worker_gets_split_credentials(
     worker_environment = _env(worker)
     assert web_environment["KG_QUERY_EXTRACTOR_BUILD_HASH"] == BUILD_HASH
     assert web_environment["KG_QUERY_EXTRACTOR_URL"].endswith(":8000")
-    assert web_environment["KG_MEMGRAPH_QUERY_USERNAME"]
-    assert web_environment["KG_MEMGRAPH_QUERY_PASSWORD"]
+    assert web_environment["KG_TOPOLOGY_GATEWAY_URL"].endswith(":8092")
+    assert web_environment["KG_TOPOLOGY_GATEWAY_BEARER_TOKEN"]
+    assert web_environment.get("KG_MEMGRAPH_URI") in (None, "")
+    assert web_environment.get("KG_MEMGRAPH_QUERY_USERNAME") in (None, "")
+    assert web_environment.get("KG_MEMGRAPH_QUERY_PASSWORD") in (None, "")
     assert web_environment.get("KG_MEMGRAPH_PROJECTION_PASSWORD") in (None, "")
     assert web_environment.get("KG_PROJECTION_POSTGRES_SOURCE_DSN") in (None, "")
     assert web_environment.get("KG_PROJECTION_POSTGRES_STATE_DSN") in (None, "")
@@ -102,8 +105,8 @@ def test_web_gets_query_only_and_projection_worker_gets_split_credentials(
 def test_dedicated_graph_has_private_network_and_persistent_volume(path: Path) -> None:
     compose = _compose(path)
     graph = compose["services"]["memgraph_knowledge_graph"]
-    assert "knowledge_graph" in graph["networks"]
-    assert compose["networks"]["knowledge_graph"]["internal"] is True
+    assert "knowledge_graph_store" in graph["networks"]
+    assert compose["networks"]["knowledge_graph_store"]["internal"] is True
     assert any("knowledge_graph_memgraph_data" in str(row) for row in graph["volumes"])
     assert "knowledge_graph_memgraph_data" in compose["volumes"]
 
@@ -112,6 +115,7 @@ def test_eval_override_neutralizes_ambient_files_for_new_services() -> None:
     source = (COMPOSE / "knowledge-graph-eval.yml").read_text(encoding="utf-8")
     for service in (
         "memgraph_knowledge_graph",
+        "knowledge_graph_query_gateway",
         "knowledge_graph_query_extractor",
         "worker_knowledge_graph_projection",
     ):
