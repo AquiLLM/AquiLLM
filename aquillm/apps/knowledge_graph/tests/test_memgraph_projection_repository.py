@@ -122,6 +122,37 @@ def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> No
     assert not any(call[1].get("state") == "ready" for call in driver.writes)
 
 
+def test_repository_projects_generation_scoped_topology_edges() -> None:
+    driver = _FakeDriver()
+    bundle = _closed_bundle()
+
+    MemgraphProjectionRepository(driver).write_staging_generation(
+        bundle=bundle,
+        private_mapping_checksum="d" * 64,
+        batch_size=10,
+        timeout_seconds=1.0,
+    )
+
+    cypher = "\n".join(call[0] for call in driver.writes)
+    assert "PROJECTED_RELATION" in cypher
+    assert "ENTITY_MENTION" in cypher
+    assert "RELATION_EVIDENCE" in cypher
+    assert "DOCUMENT_CHUNK" in cypher
+    assert all(
+        "generation_key:$generation_key" in statement
+        for statement, _parameters, _timeout in driver.writes
+        if any(
+            label in statement
+            for label in (
+                "PROJECTED_RELATION",
+                "ENTITY_MENTION",
+                "RELATION_EVIDENCE",
+                "DOCUMENT_CHUNK",
+            )
+        )
+    )
+
+
 def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -> None:
     driver = _FakeDriver()
     repository = MemgraphProjectionRepository(driver)

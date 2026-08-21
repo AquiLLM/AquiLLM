@@ -9,6 +9,7 @@ from apps.knowledge_graph.retrieval.topology.contracts import TopologyCapsV1
 
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
 from .memgraph_driver import MemgraphWriteSummaryV1, Neo4jMemgraphDriver
+from .memgraph_edges import write_topology_edges
 from .memgraph_records import manifest_from_row, read_bundle
 from .memgraph_validation import (
     ProjectionValidationV1,
@@ -58,6 +59,9 @@ class MemgraphProjectionRepository:
         for statement in (
             "CREATE INDEX ON :CollectionGeneration(generation_key)",
             "CREATE INDEX ON :ProjectedRecord(generation_key)",
+            "CREATE INDEX ON :ProjectedEntity(entity_key)",
+            "CREATE INDEX ON :ProjectedChunk(chunk_key)",
+            "CREATE INDEX ON :ProjectedRelation(relation_key)",
         ):
             self._driver.execute_write(statement, {}, timeout_seconds=timeout)
 
@@ -140,6 +144,7 @@ class MemgraphProjectionRepository:
                         values,
                         timeout_seconds=timeout,
                     )
+        write_topology_edges(self._driver, bundle, timeout_seconds=timeout)
 
     @staticmethod
     def _set_clause(alias: str, values: dict[str, object]) -> str:
