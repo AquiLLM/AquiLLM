@@ -18,9 +18,8 @@ from tests.integration.task21_compose_test_support import (
     RERANK_MODEL,
     RERANK_REVISION,
     compose_command,
-    env_file_path,
+    compose_service_source,
     render,
-    render_without_env_resolution,
     reviewed_env,
     run_compose,
     volume_by_target,
@@ -30,18 +29,14 @@ from tests.integration.task21_compose_test_support import (
 def test_eval_override_renders_isolated_local_contract(tmp_path) -> None:
     env_file = reviewed_env(tmp_path, HOSTILE_SIDECAR_ENV)
     config = render(env_file, COMPOSE_DIR / "development.yml", EVAL_OVERRIDE)
-    path_config = render_without_env_resolution(
-        env_file, COMPOSE_DIR / "development.yml", EVAL_OVERRIDE
-    )
     services = config["services"]
-    path_services = path_config["services"]
     assert ENV_FILE_SERVICES <= services.keys()
+    reviewed_declaration = (
+        'env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an '
+        'absolute reviewed env path}"]'
+    )
     for name in ENV_FILE_SERVICES:
-        assert "env_file" in path_services[name], name
-    assert {name: env_file_path(path_services[name]) for name in ENV_FILE_SERVICES} == {
-        name: str(env_file) for name in ENV_FILE_SERVICES
-    }
-    assert "../../.env" not in str(path_config)
+        assert reviewed_declaration in compose_service_source(EVAL_OVERRIDE, name), name
     assert services["db"]["restart"] == "no"
     assert services["redis"]["restart"] == "no"
     assert services["worker_knowledge_graph"]["restart"] == "no"

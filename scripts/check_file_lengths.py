@@ -95,7 +95,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/lib/memory/mem0/operations.py": 704,
     "aquillm/lib/memory/tests/test_mem0_graph_mode.py": 390,
     "aquillm/lib/memory/tests/test_mem0_graph_mode_async.py": 436,
-    "aquillm/tests/integration/test_knowledge_graph_compose.py": 496,
+    "aquillm/tests/integration/test_knowledge_graph_compose.py": 457,
     "aquillm/tests/integration/test_vllm_extra_args_parser.py": 635,
     "react/src/features/chat/components/Chat.tsx": 371,
     "react/src/features/chat/components/CitationModalProvider.test.tsx": 517,

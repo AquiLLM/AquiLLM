@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
 import shutil
 import subprocess
 import tomllib
@@ -9,6 +7,10 @@ from pathlib import Path
 
 import pytest
 import yaml
+
+from tests.integration.compose_render_test_support import (
+    render_compose_with_reviewed_env,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 COMPOSE_FILES = tuple(
@@ -67,53 +69,12 @@ def _resolved_compose(
     include_base: bool = True,
     environment_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
-    docker = shutil.which("docker")
-    if docker is None:
-        pytest.skip("Docker Compose is unavailable")
-    compose_version = subprocess.run(
-        [docker, "compose", "version"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if compose_version.returncode != 0:
-        pytest.skip("Docker Compose is unavailable")
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "POSTGRES_NAME": "compose-test",
-            "POSTGRES_USER": "compose-test",
-            "POSTGRES_PASSWORD": "compose-test",
-            "STORAGE_ACCESS_KEY": "compose-test",
-            "STORAGE_SECRET_KEY": "compose-test",
-        }
-    )
-    environment.update(environment_overrides or {})
     compose_files = (COMPOSE_FILES[0], override) if include_base else (override,)
-    compose_arguments = [docker, "compose"]
-    for compose_file in compose_files:
-        compose_arguments.extend(("-f", str(compose_file)))
-    compose_arguments.extend(
-        (
-            "--profile",
-            "knowledge-graph",
-            "config",
-            "--format",
-            "json",
-            "--no-env-resolution",
-        )
+    return render_compose_with_reviewed_env(
+        compose_files,
+        profile="knowledge-graph",
+        environment_overrides=environment_overrides,
     )
-    result = subprocess.run(
-        compose_arguments,
-        cwd=REPOSITORY_ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
 
 
 @pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
