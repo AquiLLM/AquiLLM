@@ -1,14 +1,17 @@
 import React from 'react';
 import type { Collection } from '../../../components/CollectionsTree';
 import CollectionSettingsMenu from '../../../components/CollectionSettingsMenu';
-import FileSystemViewer from '../../documents/components/FileSystemViewer';
-import MoveCollectionModal from '../../../components/MoveCollectionModal';
-import CreateCollectionModal from '../../../components/CreateCollectionModal';
 import UserManagementModal from '../../platform_admin/components/UserManagementModal';
 import type { FileSystemItem } from '../../../types/FileSystemItem';
-import IngestRowContainer from '../../../components/IngestRow';
 import formatUrl from '../../../utils/formatUrl';
-import type { CollectionBreadcrumb, CollectionContent } from './collectionViewTypes';
+import CollectionFilesWorkspace from './CollectionFilesWorkspace';
+import CollectionModeNav from './CollectionModeNav';
+import type {
+  CollectionBreadcrumb,
+  CollectionContent,
+  CollectionViewMode,
+  CollectionViewNavigationGuard,
+} from './collectionViewTypes';
 
 export interface CollectionViewShellProps {
   collection: Collection;
@@ -22,6 +25,12 @@ export interface CollectionViewShellProps {
     permission_level: string | null;
   } | null;
   allCollections: Collection[];
+  activeMode: CollectionViewMode;
+  onActiveModeChange: (mode: CollectionViewMode) => void;
+  guardNavigation?: CollectionViewNavigationGuard;
+  initialCanEdit: boolean;
+  initialCanManage: boolean;
+  knowledgeGraphContent: React.ReactNode;
   movingItem: FileSystemItem | Collection | null;
   isMoveModalOpen: boolean;
   batchMovingItems: FileSystemItem[];
@@ -59,6 +68,12 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
   contents,
   permissionSource,
   allCollections,
+  activeMode,
+  onActiveModeChange,
+  guardNavigation,
+  initialCanEdit,
+  initialCanManage,
+  knowledgeGraphContent,
   movingItem,
   isMoveModalOpen,
   batchMovingItems,
@@ -155,6 +170,7 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
         />
       </div>
     </div>
+
     {permissionSource && !permissionSource.direct && permissionSource.source_collection_name && (
       <div className="mb-4 p-3 bg-accent bg-opacity-15 text-accent-light rounded-md flex items-center">
         <svg
@@ -179,86 +195,56 @@ const CollectionViewShell: React.FC<CollectionViewShellProps> = ({
       </div>
     )}
 
-    <div className="mb-[24px] bg-scheme-shade_4 border border-border-low_contrast rounded-[20px] p-[14px]">
-      <IngestRowContainer
-        ingestUploadsUrl={window.apiUrls.api_ingest_uploads}
-        ingestArxivUrl={window.apiUrls.api_ingest_arxiv}
-        ingestPdfUrl={window.apiUrls.api_ingest_pdf}
-        ingestVttUrl={window.apiUrls.api_ingest_vtt}
-        ingestWebpageUrl={window.apiUrls.api_ingest_webpage}
-        ingestHandwrittenUrl={window.apiUrls.api_ingest_handwritten_notes}
-        collectionId={collectionId}
-        onUploadSuccess={fetchCollectionData}
-        layout="compact"
-      />
-    </div>
-
-    <div className="relative flex items-center mb-[16px]">
-      <div className="flex-grow border-t border-border-low_contrast" />
-      <span className="text-xs px-[8px] bg-dark-mode-background text-text-lower_contrast">Browse</span>
-      <div className="flex-grow border-t border-border-low_contrast" />
-    </div>
-
-    <FileSystemViewer
-      mode="browse"
-      items={contents}
-      collection={collection}
-      onOpenItem={onOpenItem}
-      onRemoveItem={onRemoveItem}
-      onMove={onContextMove}
-      onContextMenuRename={onRenameItem}
-      onBatchMove={onBatchMove}
-      onRemoveBatch={onBatchRemove}
+    <CollectionModeNav
+      activeMode={activeMode}
+      onActiveModeChange={onActiveModeChange}
+      guardNavigation={guardNavigation}
     />
 
-    <MoveCollectionModal
-      folder={movingItem as unknown as Collection}
-      collections={allCollections.filter((c) => c.id !== movingItem?.id)}
-      isOpen={isMoveModalOpen}
-      onClose={onCloseMoveModal}
-      onSubmit={onMoveSubmit}
-    />
-
-    <CreateCollectionModal
-      isOpen={isCreateSubcollectionOpen}
-      onClose={onCloseCreateSubcollection}
-      onSubmit={onSubmitCreateSubcollection}
-      parentCollection={collection}
-    />
-
-    {batchMovingItems.length > 0 && (
-      <MoveCollectionModal
-        folder={{
-          id: -1,
-          name: `${batchMovingItems.length} selected item${batchMovingItems.length > 1 ? 's' : ''}`,
-          parent: null,
-          collection: collection.id,
-          path: '',
-          children: [],
-          document_count: 0,
-          children_count: 0,
-          created_at: '',
-          updated_at: '',
-        }}
-        collections={allCollections}
-        isOpen={isBatchMoveModalOpen}
-        onClose={onCloseBatchMoveModal}
-        onSubmit={(_, newParentId) => onBatchMoveSubmit(newParentId)}
-      />
-    )}
-
-    {successMessage && (
-      <div className="fixed top-4 right-4 bg-green-600 text-white px-4 py-2 rounded shadow-lg z-50 animate-fade-in">
-        {successMessage}
+    {activeMode === 'files' ? (
+      <div
+        role="tabpanel"
+        id="collection-view-panel-files"
+        aria-labelledby="collection-view-tab-files"
+        data-testid="collection-view-panel-files"
+      >
+        <CollectionFilesWorkspace
+          collection={collection}
+          collectionId={collectionId}
+          contents={contents}
+          allCollections={allCollections}
+          movingItem={movingItem}
+          isMoveModalOpen={isMoveModalOpen}
+          batchMovingItems={batchMovingItems}
+          isBatchMoveModalOpen={isBatchMoveModalOpen}
+          isCreateSubcollectionOpen={isCreateSubcollectionOpen}
+          successMessage={successMessage}
+          isBatchOperationLoading={isBatchOperationLoading}
+          fetchCollectionData={fetchCollectionData}
+          onOpenItem={onOpenItem}
+          onRemoveItem={onRemoveItem}
+          onContextMove={onContextMove}
+          onRenameItem={onRenameItem}
+          onBatchMove={onBatchMove}
+          onBatchRemove={onBatchRemove}
+          onCloseCreateSubcollection={onCloseCreateSubcollection}
+          onSubmitCreateSubcollection={onSubmitCreateSubcollection}
+          onCloseMoveModal={onCloseMoveModal}
+          onMoveSubmit={onMoveSubmit}
+          onCloseBatchMoveModal={onCloseBatchMoveModal}
+          onBatchMoveSubmit={onBatchMoveSubmit}
+        />
       </div>
-    )}
-
-    {isBatchOperationLoading && (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-scheme-shade_3 p-6 rounded-lg shadow-xl flex flex-col items-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4" />
-          <p className="text-white text-lg">Processing items...</p>
-        </div>
+    ) : (
+      <div
+        role="tabpanel"
+        id="collection-view-panel-knowledge-graph"
+        aria-labelledby="collection-view-tab-knowledge-graph"
+        data-testid="collection-view-panel-knowledge-graph"
+        data-initial-can-edit={String(initialCanEdit)}
+        data-initial-can-manage={String(initialCanManage)}
+      >
+        {knowledgeGraphContent}
       </div>
     )}
 

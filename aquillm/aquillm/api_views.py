@@ -20,6 +20,20 @@ from apps.collections.views.api import (
     collection_permissions,
     collection_detail as collection,
 )
+from apps.collections.views.schema_api import (
+    schema_create_draft,
+    schema_diff,
+    schema_discard,
+    schema_entity,
+    schema_publish,
+    schema_relation,
+    schema_restore,
+    schema_restore_replace,
+    schema_validate,
+    schema_version_diff,
+    schema_versions,
+    schema_workspace,
+)
 
 # Re-export document views
 from apps.documents.views.api import (
@@ -72,6 +86,38 @@ from apps.bug_reports.views.api import (
 urlpatterns = [
     path("collections/", collections, name="api_collections"),
     path("collection/<int:col_id>/", collection, name="api_collection"),
+    path("collection/<int:col_id>/schema/", schema_workspace, name="api_collection_schema_workspace"),
+    path("collection/<int:col_id>/schema/draft/", schema_create_draft, name="api_collection_schema_draft"),
+    path(
+        "collection/<int:col_id>/schema/entity/<str:entity_key>/",
+        schema_entity,
+        name="api_collection_schema_entity",
+    ),
+    path(
+        "collection/<int:col_id>/schema/relation/<str:relation_key>/",
+        schema_relation,
+        name="api_collection_schema_relation",
+    ),
+    path("collection/<int:col_id>/schema/validate/", schema_validate, name="api_collection_schema_validate"),
+    path("collection/<int:col_id>/schema/diff/", schema_diff, name="api_collection_schema_diff"),
+    path("collection/<int:col_id>/schema/publish/", schema_publish, name="api_collection_schema_publish"),
+    path("collection/<int:col_id>/schema/discard/", schema_discard, name="api_collection_schema_discard"),
+    path("collection/<int:col_id>/schema/versions/", schema_versions, name="api_collection_schema_versions"),
+    path(
+        "collection/<int:col_id>/schema/versions/<int:version_id>/diff/",
+        schema_version_diff,
+        name="api_collection_schema_version_diff",
+    ),
+    path(
+        "collection/<int:col_id>/schema/versions/<int:version_id>/restore/",
+        schema_restore,
+        name="api_collection_schema_restore",
+    ),
+    path(
+        "collection/<int:col_id>/schema/restore-replace/",
+        schema_restore_replace,
+        name="api_collection_schema_restore_replace",
+    ),
     path("collections/permissions/<int:col_id>/", collection_permissions, name="api_collection_permissions"),
     path("collections/move/<int:collection_id>/", move_collection, name="api_move_collection"),
     path("collections/delete/<int:collection_id>/", delete_collection, name="api_delete_collection"),

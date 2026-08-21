@@ -1,106 +1,57 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import type { Collection } from '../../../components/CollectionsTree';
-import { mapCollectionFromApi } from '../../../components/collectionsPageMap';
 import type { FileSystemItem } from '../../../types/FileSystemItem';
 import { getCookie } from '../../../utils/csrf';
 import formatUrl from '../../../utils/formatUrl';
+import CollectionSchemaNavigationGuard from './CollectionSchemaNavigationGuard';
 import { buildCollectionBreadcrumbs } from './collectionViewBreadcrumbs';
-import { buildOrderedCollectionContents } from './collectionViewContents';
-import type { CollectionContent, CollectionViewProps } from './collectionViewTypes';
-import CollectionViewShell from './CollectionViewShell';
+import CollectionViewGuardedContent from './collectionViewGuardedContent';
+import type { CollectionViewProps } from './collectionViewTypes';
+import {
+  buildCollectionViewUrl,
+  parseCollectionViewMode,
+  type CollectionViewNavigationIntent,
+} from './collectionViewTypes';
 import { useCollectionViewMoveBatch } from './useCollectionViewMoveBatch';
+import { useCollectionViewData } from './useCollectionViewData';
 
 const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack }) => {
-  const [collection, setCollection] = useState<Collection | null>(null);
-  const [contents, setContents] = useState<CollectionContent[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    collection,
+    contents,
+    loading,
+    error,
+    permissionSource,
+    allCollections,
+    initialCanEdit,
+    initialCanManage,
+    fetchCollectionData,
+    refreshAllCollections,
+    setContents,
+  } = useCollectionViewData(collectionId);
 
+  const [activeMode, setActiveMode] = useState(() =>
+    parseCollectionViewMode(window.location.search)
+  );
   const [movingItem, setMovingItem] = useState<FileSystemItem | Collection | null>(null);
   const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
-  const [allCollections, setAllCollections] = useState<Collection[]>([]);
   const [batchMovingItems, setBatchMovingItems] = useState<FileSystemItem[]>([]);
   const [isBatchMoveModalOpen, setIsBatchMoveModalOpen] = useState(false);
   const [isBatchOperationLoading, setIsBatchOperationLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isCreateSubcollectionOpen, setIsCreateSubcollectionOpen] = useState(false);
-  const [permissionSource, setPermissionSource] = useState<{
-    direct: boolean;
-    source_collection_id: number | null;
-    source_collection_name: string | null;
-    permission_level: string | null;
-  } | null>(null);
   const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState(false);
 
-  const fetchCollectionData = useCallback(() => {
-    setLoading(true);
-    fetch(formatUrl(window.apiUrls.api_collection, { col_id: collectionId }), {
-      headers: { Accept: 'application/json' },
-    })
-      .then((res) => {
-        if (!res.ok) {
-          return res.json().then((err) => {
-            throw new Error(err.error || 'Failed to fetch collection');
-          });
-        }
-        return res.json();
-      })
-      .then((data) => {
-        if (!data.collection) throw new Error('Invalid response format');
-        if (data.permission_source) setPermissionSource(data.permission_source);
-        setCollection({
-          id: data.collection.id,
-          name: data.collection.name,
-          parent: data.collection.parent,
-          collection: data.collection.id,
-          path: data.collection.path,
-          children: data.children || [],
-          document_count: data.documents?.length || 0,
-          children_count: data.children?.length || 0,
-          created_at: data.collection.created_at
-            ? new Date(data.collection.created_at).toLocaleString()
-            : new Date().toLocaleString(),
-          updated_at: data.collection.updated_at
-            ? new Date(data.collection.updated_at).toISOString()
-            : new Date().toISOString(),
-        });
-        const orderedContents = buildOrderedCollectionContents(
-          data.documents || [],
-          data.children || []
-        );
-        setContents(orderedContents);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error('Error refetching collection:', err);
-        setError(err.message);
-        setLoading(false);
-      });
-  }, [collectionId]);
-
-  useEffect(() => {
-    fetchCollectionData();
-  }, [fetchCollectionData]);
-
-  const refreshAllCollections = useCallback(() => {
-    fetch(window.apiUrls.api_collections, {
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to fetch available collections');
-        return res.json();
-      })
-      .then((data) => {
-        const collectionsData = data.collections || [];
-        setAllCollections(collectionsData.map((col: any) => mapCollectionFromApi(col)));
-      })
-      .catch((err) => console.error('Error fetching all collections:', err));
+  const proceedNavigation = useCallback((intent: CollectionViewNavigationIntent) => {
+    const nextUrl = buildCollectionViewUrl(
+      window.location.pathname,
+      window.location.search,
+      window.location.hash,
+      intent.mode,
+    );
+    window.history.pushState(null, '', nextUrl);
+    setActiveMode(intent.mode);
   }, []);
-
-  useEffect(() => {
-    refreshAllCollections();
-  }, [refreshAllCollections]);
 
   const {
     handleMoveSubmit,
@@ -120,36 +71,17 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
     allCollections,
   });
 
-  const handleRenameItem = () => {
-    console.log('Rename item clicked');
-  };
-
-  const handleBack = () => {
-    if (onBack) {
-      onBack();
-    } else {
-      window.history.back();
-    }
-  };
-
-  const handleManageCollaborators = () => {
-    setIsUserManagementModalOpen(true);
-  };
-
   const handleDelete = () => {
     if (collection && window.confirm(`Are you sure you want to delete "${collection.name}"?`)) {
       fetch(formatUrl(window.apiUrls.api_delete_collection, { collection_id: collection.id }), {
         method: 'DELETE',
-        headers: { 'X-CSRFToken': getCookie('csrftoken') },
+        headers: { 'X-CSRFToken': getCookie('csrftoken') ?? '' },
         credentials: 'include',
       })
         .then((res) => {
           if (!res.ok) throw new Error('Failed to delete collection');
-          if (onBack) {
-            onBack();
-          } else {
-            window.location.href = window.pageUrls.user_collections;
-          }
+          if (onBack) onBack();
+          else window.location.href = window.pageUrls.user_collections;
         })
         .catch((err) => {
           console.error('Error:', err);
@@ -167,12 +99,12 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
 
       fetch(endpoint, {
         method: 'DELETE',
-        headers: { 'X-CSRFToken': getCookie('csrftoken') },
+        headers: { 'X-CSRFToken': getCookie('csrftoken') ?? '' },
         credentials: 'include',
       })
         .then((res) => {
           if (!res.ok) throw new Error(`Failed to remove ${item.type}`);
-          setContents((prevContents) => prevContents.filter((contentItem) => contentItem.id !== item.id));
+          setContents((prev) => prev.filter((contentItem) => contentItem.id !== item.id));
         })
         .catch((err) => {
           console.error('Error:', err);
@@ -181,35 +113,19 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
     }
   };
 
-  const handleOpenItem = (item: FileSystemItem) => {
-    if (item.type === 'collection') {
-      window.location.href = formatUrl(window.pageUrls.collection, { col_id: item.id });
-    } else {
-      window.location.href = formatUrl(window.pageUrls.document, { doc_id: item.id });
-    }
-  };
-
-  const handleContextMove = (item: FileSystemItem) => {
-    setMovingItem(item);
-    setIsMoveModalOpen(true);
-  };
-
   const handleCreateSubcollection = (newCollection: Collection) => {
     if (!collection) return;
     fetch(window.apiUrls.api_collections, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-CSRFToken': getCookie('csrftoken'),
+        'X-CSRFToken': getCookie('csrftoken') ?? '',
       },
       body: JSON.stringify({ name: newCollection.name, parent_id: collection.id }),
       credentials: 'include',
     })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to create subcollection');
-        return res.json();
-      })
-      .then(() => {
         setIsCreateSubcollectionOpen(false);
         setSuccessMessage(`Created subcollection "${newCollection.name}"`);
         setTimeout(() => setSuccessMessage(null), 3000);
@@ -229,55 +145,70 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
   const breadcrumbs = buildCollectionBreadcrumbs(collection, allCollections);
 
   return (
-    <CollectionViewShell
-      collection={collection}
-      collectionId={collectionId}
-      breadcrumbs={breadcrumbs}
-      contents={contents}
-      permissionSource={permissionSource}
-      allCollections={allCollections}
-      movingItem={movingItem}
-      isMoveModalOpen={isMoveModalOpen}
-      batchMovingItems={batchMovingItems}
-      isBatchMoveModalOpen={isBatchMoveModalOpen}
-      isCreateSubcollectionOpen={isCreateSubcollectionOpen}
-      successMessage={successMessage}
-      isBatchOperationLoading={isBatchOperationLoading}
-      isUserManagementModalOpen={isUserManagementModalOpen}
-      onBack={handleBack}
-      onManageCollaborators={handleManageCollaborators}
-      onDelete={handleDelete}
-      onOpenCollectionSettingsMove={() => {
-        setMovingItem({ id: collection.id, type: 'collection', name: collection.name });
-        setIsMoveModalOpen(true);
-      }}
-      onOpenCreateSubcollection={() => setIsCreateSubcollectionOpen(true)}
-      onCloseCreateSubcollection={() => setIsCreateSubcollectionOpen(false)}
-      onSubmitCreateSubcollection={handleCreateSubcollection}
-      onCloseMoveModal={() => {
-        setIsMoveModalOpen(false);
-        setMovingItem(null);
-      }}
-      onMoveSubmit={handleMoveSubmit}
-      onCloseBatchMoveModal={() => {
-        setIsBatchMoveModalOpen(false);
-        setBatchMovingItems([]);
-      }}
-      onBatchMoveSubmit={handleBatchMoveSubmit}
-      fetchCollectionData={fetchCollectionData}
-      onOpenItem={handleOpenItem}
-      onRemoveItem={handleRemoveItem}
-      onContextMove={handleContextMove}
-      onRenameItem={handleRenameItem}
-      onBatchMove={handleBatchMove}
-      onBatchRemove={handleBatchRemoveItems}
-      onCloseUserManagement={() => setIsUserManagementModalOpen(false)}
-      onUserManagementSave={() => {
-        setSuccessMessage('Permissions updated successfully!');
-        setTimeout(() => setSuccessMessage(null), 3000);
-        fetchCollectionData();
-      }}
-    />
+    <CollectionSchemaNavigationGuard onProceedNavigation={proceedNavigation}>
+      <CollectionViewGuardedContent
+        collection={collection}
+        collectionId={collectionId}
+        breadcrumbs={breadcrumbs}
+        contents={contents}
+        permissionSource={permissionSource}
+        allCollections={allCollections}
+        activeMode={activeMode}
+        onActiveModeChange={setActiveMode}
+        initialCanEdit={initialCanEdit}
+        initialCanManage={initialCanManage}
+        movingItem={movingItem}
+        isMoveModalOpen={isMoveModalOpen}
+        batchMovingItems={batchMovingItems}
+        isBatchMoveModalOpen={isBatchMoveModalOpen}
+        isCreateSubcollectionOpen={isCreateSubcollectionOpen}
+        successMessage={successMessage}
+        isBatchOperationLoading={isBatchOperationLoading}
+        isUserManagementModalOpen={isUserManagementModalOpen}
+        onBack={() => (onBack ? onBack() : window.history.back())}
+        onManageCollaborators={() => setIsUserManagementModalOpen(true)}
+        onDelete={handleDelete}
+        onOpenCollectionSettingsMove={() => {
+          setMovingItem({ id: collection.id, type: 'collection', name: collection.name });
+          setIsMoveModalOpen(true);
+        }}
+        onOpenCreateSubcollection={() => setIsCreateSubcollectionOpen(true)}
+        onCloseCreateSubcollection={() => setIsCreateSubcollectionOpen(false)}
+        onSubmitCreateSubcollection={handleCreateSubcollection}
+        onCloseMoveModal={() => {
+          setIsMoveModalOpen(false);
+          setMovingItem(null);
+        }}
+        onMoveSubmit={handleMoveSubmit}
+        onCloseBatchMoveModal={() => {
+          setIsBatchMoveModalOpen(false);
+          setBatchMovingItems([]);
+        }}
+        onBatchMoveSubmit={handleBatchMoveSubmit}
+        fetchCollectionData={fetchCollectionData}
+        onOpenItem={(item) => {
+          if (item.type === 'collection') {
+            window.location.href = formatUrl(window.pageUrls.collection, { col_id: item.id });
+          } else {
+            window.location.href = formatUrl(window.pageUrls.document, { doc_id: item.id });
+          }
+        }}
+        onRemoveItem={handleRemoveItem}
+        onContextMove={(item) => {
+          setMovingItem(item);
+          setIsMoveModalOpen(true);
+        }}
+        onRenameItem={() => undefined}
+        onBatchMove={handleBatchMove}
+        onBatchRemove={handleBatchRemoveItems}
+        onCloseUserManagement={() => setIsUserManagementModalOpen(false)}
+        onUserManagementSave={() => {
+          setSuccessMessage('Permissions updated successfully!');
+          setTimeout(() => setSuccessMessage(null), 3000);
+          fetchCollectionData();
+        }}
+      />
+    </CollectionSchemaNavigationGuard>
   );
 };
 
