@@ -27,7 +27,7 @@ def inspect_projection_authority(
         raise TypeError("all_collections must be exact")
     selected_collection = None if all_collections else _collection(collection_id)
     query = CollectionGraphProjection.objects.using(
-        ProjectionDatabaseAliases().state
+        ProjectionDatabaseAliases().source
     ).all()
     if selected_collection is not None:
         query = query.filter(collection_pk_snapshot=selected_collection)

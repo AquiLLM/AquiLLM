@@ -3,17 +3,16 @@ from __future__ import annotations
 import json
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.utils import timezone
 
 from apps.knowledge_graph.models import GraphArtifact
-from apps.knowledge_graph.projection.lifecycle import (
-    enqueue_collection_projection_locked,
-)
 from apps.knowledge_graph.projection.reconciler import reconcile_graph_projections
 from apps.knowledge_graph.projection.runtime import (
     ProjectionDatabaseAliases,
     load_projection_runtime_settings,
-    projection_identifier_codec,
+)
+from apps.knowledge_graph.projection.state_repository import (
+    FunctionProjectionStateRepository,
 )
 
 
@@ -60,13 +59,17 @@ class Command(BaseCommand):
             if artifact_id is None:
                 raise CommandError("collection has no active graph artifact")
             if not options["dry_run"]:
-                with transaction.atomic(using=aliases.state):
-                    enqueue_collection_projection_locked(
-                        collection_id=collection_id,
-                        artifact_id=artifact_id,
-                        using=aliases.state,
-                        codec=projection_identifier_codec(settings),
-                    )
+                FunctionProjectionStateRepository().replay(
+                    projection_id=None,
+                    collection_id=collection_id,
+                    artifact_id=artifact_id,
+                    versions=(
+                        settings.projection_schema_version,
+                        settings.projection_format_version,
+                        settings.projection_identifier_key_version,
+                    ),
+                    now=timezone.now(),
+                )
             payload = {
                 "examined_count": 1,
                 "enqueued_count": 0 if options["dry_run"] else 1,

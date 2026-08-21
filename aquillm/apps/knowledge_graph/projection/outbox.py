@@ -7,6 +7,8 @@ from django.db import transaction
 
 from apps.knowledge_graph.models import GraphProjectionOutbox
 
+from .state_repository import FunctionProjectionStateRepository
+
 _MAX_LIMIT = 5_000
 
 
@@ -51,6 +53,25 @@ def publish_projection_outbox(
         raise ValueError("limit must be an integer in 1..5000")
     if type(now) is not datetime or now.tzinfo is not UTC:
         raise ValueError("now must be an exact UTC datetime")
+    if using == "projection_state":
+        repository = FunctionProjectionStateRepository(state_using=using)
+        rows = repository.claim_outbox(limit=limit, now=now)
+        published = failed = 0
+        for row in rows:
+            try:
+                _publish(row.projection_id, row.operation)
+            except Exception:
+                repository.fail_outbox(
+                    outbox_id=row.id,
+                    now=now,
+                    attempt_count=row.attempt_count,
+                )
+                failed += 1
+            else:
+                if not repository.complete_outbox(outbox_id=row.id, now=now):
+                    raise RuntimeError("projection outbox completion fence was lost")
+                published += 1
+        return OutboxPublishSummaryV1(len(rows), published, failed)
     published = failed = 0
     with _atomic(using):
         rows = _due_outbox_rows(limit=limit, now=now, using=using)

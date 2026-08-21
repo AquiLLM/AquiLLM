@@ -24,7 +24,7 @@ def _opaque_generation(value: str) -> OpaqueProjectionKey:
 
 def _projection_page(*, after_id, page_size: int, collection_id: int | None = None):
     query = CollectionGraphProjection.objects.using(
-        ProjectionDatabaseAliases().state
+        ProjectionDatabaseAliases().source
     ).order_by("id")
     if collection_id is not None:
         query = query.filter(collection_pk_snapshot=collection_id)

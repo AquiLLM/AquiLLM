@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 from __future__ import annotations
 
 from uuid import UUID
@@ -9,18 +10,9 @@ from django.utils import timezone
 
 from apps.knowledge_graph.models import CollectionGraphProjection, GraphArtifact
 
-from .generation_audit import (
-    audit_projection_generation as _generation_audit,
-)
-from .generation_audit import (
-    orphan_generation_keys as _orphan_generation_keys,
-)
+from .generation_audit import audit_projection_generation as _generation_audit, orphan_generation_keys as _orphan_generation_keys  # noqa: E501
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
 from .inspection import inspect_projection_authority as inspect_projection_authority
-from .lifecycle import (
-    enqueue_collection_projection_locked,
-    supersede_projection_locked,
-)
 from .reconciliation_types import PruneSummaryV1, ReconcileSummaryV1
 from .runtime import (
     ProjectionDatabaseAliases,
@@ -29,8 +21,9 @@ from .runtime import (
     postgres_projection_repository,
     projection_identifier_codec,
 )
+from .state_repository import FunctionProjectionStateRepository
 
-_MAX_PAGE = 5_000
+_MAX_PAGE, _ALIASES = 5_000, ProjectionDatabaseAliases()
 
 
 def _size(value: object, name: str) -> int:
@@ -55,26 +48,43 @@ def _atomic(using: str):
     return transaction.atomic(using=using)
 
 
-def _projection_settings():
-    return load_projection_runtime_settings()
+_projection_settings = load_projection_runtime_settings
 
 
 def _memgraph_repository():
     return memgraph_projection_repository(_projection_settings())
 
 
+def supersede_projection_locked(*, projection_id, now, using):
+    del using
+    return FunctionProjectionStateRepository().supersede(
+        projection_id=projection_id, now=now
+    )
+
+
+def enqueue_collection_projection_locked(*, collection_id, artifact_id, using, codec):
+    del using, codec
+    settings = _projection_settings()
+    return FunctionProjectionStateRepository().replay(
+        projection_id=None, collection_id=collection_id, artifact_id=artifact_id,
+        versions=(
+            settings.projection_schema_version, settings.projection_format_version,
+            settings.projection_identifier_key_version,
+        ),
+        now=timezone.now(),
+    )
+
+
 def _postgres_repository():
-    return postgres_projection_repository(_projection_settings())
-
-
-def _aliases() -> ProjectionDatabaseAliases:
-    return ProjectionDatabaseAliases()
+    return postgres_projection_repository(
+        _projection_settings(), state_repository=FunctionProjectionStateRepository()
+    )
 
 
 def _active_artifact_page(
     *, after_id: int, page_size: int, collection_id: int | None = None
 ):
-    query = GraphArtifact.objects.using(_aliases().source).filter(
+    query = GraphArtifact.objects.using(_ALIASES.source).filter(
         pk__gt=after_id,
         scope_type="collection",
         status="active",
@@ -89,7 +99,7 @@ def _active_artifact_page(
 
 def _projection_for_active(*, collection_id: int, artifact_id: int):
     return (
-        CollectionGraphProjection.objects.using(_aliases().state)
+        CollectionGraphProjection.objects.using(_ALIASES.source)
         .filter(
             collection_pk_snapshot=collection_id,
             artifact_pk_snapshot=artifact_id,
@@ -101,7 +111,7 @@ def _projection_for_active(*, collection_id: int, artifact_id: int):
 
 
 def _replay_projection(*, row, collection_id: int, artifact_id: int, codec) -> None:
-    using = _aliases().state
+    using = _ALIASES.state
     with _atomic(using):
         if row is not None and row.state == "ready":
             supersede_projection_locked(
@@ -190,7 +200,7 @@ def _prune_candidates(
     projection_id: UUID | None,
     collection_id: int | None,
 ):
-    query = CollectionGraphProjection.objects.using(_aliases().state).filter(
+    query = CollectionGraphProjection.objects.using(_ALIASES.source).filter(
         state__in=("failed", "superseded")
     )
     if projection_id is not None:

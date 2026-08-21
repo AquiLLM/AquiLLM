@@ -80,11 +80,11 @@ services:
       APP_RERANK_MAX_MODEL_LEN: "1024"
       KG_EXTRACTOR_PROVIDER: gliner2_local
       KG_EXTRACTOR_FAIL_OPEN: "0"
-      KG_GLINER2_MODEL: ${KG_GLINER2_MODEL:?KG_GLINER2_MODEL is required}
-      KG_GLINER2_REVISION: ${KG_GLINER2_REVISION:?KG_GLINER2_REVISION is required}
-      KG_GLINER2_DEVICE: ${KG_GLINER2_DEVICE:?KG_GLINER2_DEVICE is required}
-      KG_GLINER2_BATCH_SIZE: ${KG_GLINER2_BATCH_SIZE:?KG_GLINER2_BATCH_SIZE is required}
-      KG_GLINER2_MAX_BATCH_CHARACTERS: ${KG_GLINER2_MAX_BATCH_CHARACTERS:?KG_GLINER2_MAX_BATCH_CHARACTERS is required}
+      KG_GLINER2_MODEL: ${KG_GLINER2_MODEL:-}
+      KG_GLINER2_REVISION: ${KG_GLINER2_REVISION:-}
+      KG_GLINER2_DEVICE: ${KG_GLINER2_DEVICE:-}
+      KG_GLINER2_BATCH_SIZE: ${KG_GLINER2_BATCH_SIZE:-}
+      KG_GLINER2_MAX_BATCH_CHARACTERS: ${KG_GLINER2_MAX_BATCH_CHARACTERS:-}
       KG_GLINER2_LOCAL_FILES_ONLY: "1"
       HF_HOME: /opt/kg-eval-hf-cache
       KG_GLINER2_CACHE_DIR: /opt/kg-eval-hf-cache
@@ -92,6 +92,22 @@ services:
       - ../..:/app
       - kg_eval_app_venv_shadow:/app/.venv
       - kg_eval_gliner_cache:/opt/kg-eval-hf-cache
+
+  memgraph_knowledge_graph:
+    restart: "no"
+    env_file: !override []
+    volumes: !override
+      - kg_eval_memgraph_data:/var/lib/memgraph
+
+  knowledge_graph_query_extractor:
+    restart: "no"
+    env_file: !override []
+    volumes: !override
+      - kg_eval_gliner_cache:/root/.cache/huggingface
+
+  worker_knowledge_graph_projection:
+    restart: "no"
+    env_file: !override []
 
   worker_memory_promotion:
     env_file: !override ["${TASK21_ENV_FILE:?TASK21_ENV_FILE must be an absolute reviewed env path}"]
@@ -212,6 +228,9 @@ volumes:
     labels:
       aquillm.task21.eval: "true"
   kg_eval_vllm_cache:
+    labels:
+      aquillm.task21.eval: "true"
+  kg_eval_memgraph_data:
     labels:
       aquillm.task21.eval: "true"
 

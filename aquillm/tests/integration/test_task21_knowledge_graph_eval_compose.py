@@ -47,6 +47,9 @@ def test_eval_override_renders_isolated_local_contract(tmp_path) -> None:
     assert services["worker_knowledge_graph"]["restart"] == "no"
     assert services["vllm_embed"]["restart"] == "no"
     assert services["vllm_rerank"]["restart"] == "no"
+    assert services["memgraph_knowledge_graph"]["restart"] == "no"
+    assert services["knowledge_graph_query_extractor"]["restart"] == "no"
+    assert services["worker_knowledge_graph_projection"]["restart"] == "no"
 
     database = services["db"]
     worker = services["worker_knowledge_graph"]

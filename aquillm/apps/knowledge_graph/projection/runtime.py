@@ -87,6 +87,7 @@ def postgres_projection_repository(
     settings: HybridRetrievalSettings,
     *,
     aliases: ProjectionDatabaseAliases | None = None,
+    state_repository=None,
 ):
     if type(settings) is not HybridRetrievalSettings:
         raise TypeError("settings must be exact hybrid retrieval settings")
@@ -97,7 +98,7 @@ def postgres_projection_repository(
         raise TypeError("aliases must be exact projection database aliases")
     source = DjangoProjectionRowSource(
         selected.source,
-        state_using=selected.state,
+        state_using=(selected.state if state_repository is None else selected.source),
         identifier_key=settings.projection_identifier_hmac_key.get_secret_value().encode(
             "utf-8"
         ),
@@ -106,9 +107,13 @@ def postgres_projection_repository(
         projection_version=settings.projection_format_version,
     )
     return PostgresProjectionRepository(
-        using=selected.state,
+        using=(selected.state if state_repository is None else selected.source),
         source=source,
-        chunk_store=DjangoChunkReferenceStore(selected.state),
+        chunk_store=(
+            DjangoChunkReferenceStore(selected.state)
+            if state_repository is None
+            else state_repository
+        ),
     )
 
 

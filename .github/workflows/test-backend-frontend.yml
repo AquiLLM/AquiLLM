@@ -49,6 +49,14 @@ jobs:
           aquillm/tests/integration/test_context_processors_urls.py
           aquillm/tests/integration/test_document_image_view.py
           -q --tb=short
+      - name: Hybrid graph runtime static contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_projection_database_routing.py
+          aquillm/tests/integration/test_knowledge_graph_compose.py
+          aquillm/tests/integration/test_knowledge_graph_query_extractor_compose.py
+          aquillm/tests/integration/test_task21_knowledge_graph_eval_compose.py
+          -q --tb=short
 
   frontend-build:
     runs-on: ubuntu-latest

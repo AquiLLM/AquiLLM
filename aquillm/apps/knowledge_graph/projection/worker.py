@@ -1,16 +1,11 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import UUID
 
 from django.utils import timezone
 
-from .lifecycle import (
-    claim_projection_lease,
-    mark_projection_failed,
-    publish_projection_ready_compare_and_set,
-    record_projection_private_mapping_checksum,
-)
 from .memgraph_driver import MemgraphDriverError
 from .memgraph_repository import MemgraphProjectionRepository
 from .records import (
@@ -25,6 +20,11 @@ from .runtime import (
     postgres_projection_repository,
 )
 from .serialization import projection_checksum
+from .state_repository import FunctionProjectionStateRepository
+
+_STATE_REPOSITORY: ContextVar[FunctionProjectionStateRepository | None] = ContextVar(
+    "projection_state_repository", default=None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +41,12 @@ def _identifier(value: object) -> UUID:
 
 
 def _postgres_repository():
-    return postgres_projection_repository(_projection_settings())
+    state_repository = _STATE_REPOSITORY.get()
+    if state_repository is None:
+        return postgres_projection_repository(_projection_settings())
+    return postgres_projection_repository(
+        _projection_settings(), state_repository=state_repository
+    )
 
 
 def _state_using() -> str:
@@ -54,6 +59,39 @@ def _projection_settings():
 
 def _memgraph_repository():
     return memgraph_projection_repository(_projection_settings())
+
+
+def _function_state_repository() -> FunctionProjectionStateRepository:
+    repository = _STATE_REPOSITORY.get()
+    if repository is None:
+        raise RuntimeError("projection state repository is not bound")
+    return repository
+
+
+def claim_projection_lease(**kwargs):
+    kwargs.pop("using", None)
+    return _function_state_repository().claim(**kwargs)
+
+
+def record_projection_private_mapping_checksum(**kwargs):
+    kwargs.pop("using", None)
+    return _function_state_repository().record_private_mapping(**kwargs)
+
+
+def mark_projection_failed(**kwargs):
+    kwargs.pop("using", None)
+    return _function_state_repository().fail(**kwargs)
+
+
+def publish_projection_ready_compare_and_set(**kwargs):
+    kwargs.pop("using", None)
+    settings = _projection_settings()
+    kwargs["versions"] = (
+        settings.projection_schema_version,
+        settings.projection_format_version,
+        settings.projection_identifier_key_version,
+    )
+    return _function_state_repository().ready(**kwargs)
 
 
 def _backend_transient(exc: BaseException) -> bool:
@@ -84,16 +122,22 @@ def project_generation(
     identifier = _identifier(projection_id)
     settings = _projection_settings()
     using = _state_using()
-    lease = claim_projection_lease(
-        projection_id=identifier,
+    state_repository = FunctionProjectionStateRepository(
+        state_using=using,
+        source_using=ProjectionDatabaseAliases().source,
         owner=lease_owner,
-        now=timezone.now(),
-        lease_seconds=settings.projection_lease_seconds,
-        using=using,
     )
-    if lease is None:
-        return ProjectionRunOutcomeV1(identifier, False, "lease_lost")
+    token = _STATE_REPOSITORY.set(state_repository)
     try:
+        lease = claim_projection_lease(
+            projection_id=identifier,
+            owner=lease_owner,
+            now=timezone.now(),
+            lease_seconds=settings.projection_lease_seconds,
+            using=using,
+        )
+        if lease is None:
+            return ProjectionRunOutcomeV1(identifier, False, "lease_lost")
         postgres = _postgres_repository()
         bundle = postgres.load_projection_bundle(
             projection_id=identifier,
@@ -173,6 +217,8 @@ def project_generation(
             if _backend_transient(failure_exc):
                 raise TimeoutError("projection_backend_transient") from None
         return ProjectionRunOutcomeV1(identifier, False, code.value)
+    finally:
+        _STATE_REPOSITORY.reset(token)
 
 
 __all__ = ["ProjectionRunOutcomeV1", "project_generation"]

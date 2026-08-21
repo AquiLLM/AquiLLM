@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 
+from aquillm.projection_database_settings import projection_databases
 from lib.knowledge_graph.config import (
     INVALID_EXTRACTION_QUEUE,
     KnowledgeGraphConfigError,
@@ -303,8 +304,7 @@ TEMPLATES = [
 WSGI_APPLICATION = "aquillm.wsgi.application"
 
 
-# Database
-# https://docs.djangoproject.com/en/5.0/ref/settings/#databases
+# Database: https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
 POSTGRES_USER = os.environ.get("POSTGRES_USER", "aquillm")
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "db")
@@ -322,11 +322,11 @@ DATABASES = {
         "PASSWORD": POSTGRES_PASSWORD,
         "HOST": POSTGRES_HOST,
         "PORT": str(POSTGRES_PORT),
-        "TEST": {
-            'NAME': 'test'
-        }
+        "TEST": {"NAME": "test"},
     }
 }
+DATABASES.update(projection_databases())
+DATABASE_ROUTERS = ["apps.knowledge_graph.projection.database_router.ProjectionDatabaseRouter"]
 
 
 # Password validation

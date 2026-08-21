@@ -106,7 +106,7 @@ def test_exact_projection_prune_is_not_hidden_by_collection_retention(monkeypatc
     )
 
     assert candidates == (row,)
-    assert aliases == ["projection_state"]
+    assert aliases == ["projection_source"]
     assert {"pk": projection_id} in filters
 
 
@@ -200,7 +200,7 @@ def test_inspection_reports_manifest_drift_and_orphans_not_failed_alias(monkeypa
     )
 
     assert counts["failed_count"] == 1
-    assert aliases == ["projection_state"]
+    assert aliases == ["projection_source"]
     assert counts["drift_count"] == 0
     assert counts["orphan_count"] == 3
     assert counts["replayed_count"] == 1
