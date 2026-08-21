@@ -98,6 +98,7 @@ def materialize_and_rerank_candidates(
     authorized_scope: object | None,
     graph_chunk_ids: tuple[int, ...] = (),
     max_graph_candidates: int = 0,
+    force_complete_rerank: bool = False,
     _eval_rerank_capability: object | None = None,
 ) -> CandidateRankingResult:
     """Permission-refetch graph rows, append to the baseline, and rerank once."""
@@ -119,6 +120,8 @@ def materialize_and_rerank_candidates(
         raise ValueError("graph_chunk_ids must be unique")
     if type(max_graph_candidates) is not int or max_graph_candidates < 0:
         raise ValueError("max_graph_candidates must be a nonnegative exact integer")
+    if type(force_complete_rerank) is not bool:
+        raise ValueError("force_complete_rerank must be an exact bool")
     if (
         _eval_rerank_capability is not None
         and _eval_rerank_capability is not _STRICT_EVALUATION_RERANK
@@ -198,7 +201,7 @@ def materialize_and_rerank_candidates(
             top_k,
             _capability=_eval_rerank_capability,
         )
-    elif len(combined) <= top_k:
+    elif not force_complete_rerank and len(combined) <= top_k:
         reranked = _fallback_rerank(model_cls, combined, top_k)
     else:
         reranked = rerank_chunks(model_cls, query, combined, top_k)
@@ -319,8 +322,7 @@ def text_chunk_search(
         if overlay_enabled and hybrid_requested:
             if (
                 graph_preflight_status is None
-                and type(hybrid_graph_dependencies)
-                is HybridGraphRetrievalDependencies
+                and type(hybrid_graph_dependencies) is HybridGraphRetrievalDependencies
                 and is_exact_authorization_context(authorization_context)
             ):
                 hybrid_pool, graph_diagnostics = hybrid_graph_candidate_pool(
@@ -357,6 +359,7 @@ def text_chunk_search(
                 top_k,
                 hybrid_pool,
                 authorized_scope=None,
+                force_complete_rerank=graph_diagnostics.get("graph_status") == "hit",
             )
         else:
             try:
@@ -404,10 +407,7 @@ def text_chunk_search(
                 float(graph_diagnostics.get("graph_ms", 0.0))
                 + ranking.materialization_ms
             )
-            if (
-                not hybrid_requested
-                and graph_diagnostics.get("graph_status") == "hit"
-            ):
+            if not hybrid_requested and graph_diagnostics.get("graph_status") == "hit":
                 graph_diagnostics["graph_candidate_count"] = len(
                     ranking.graph_candidates
                 )

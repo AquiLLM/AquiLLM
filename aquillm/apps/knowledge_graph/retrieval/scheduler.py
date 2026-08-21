@@ -7,7 +7,8 @@ from math import isfinite
 from time import monotonic
 
 from .branch_contracts import (
-    BranchEnvelopeV1,
+    DirectBranchFailureReason,
+    ExtendedBranchFailureReason,
     SharedBranchFailureReason,
 )
 from .scheduler_support import (
@@ -89,6 +90,7 @@ class HybridGraphBranchScheduler:
         if type(deadline) is not float or not isfinite(deadline) or deadline <= started:
             raise ValueError("deadline must be a future finite monotonic float")
         budgets = self._budgets(settings)
+        enabled = self._enabled(settings)
         shared_future = BRANCH_WORKERS.submit(
             self._shared, authorization, settings, deadline
         )
@@ -114,33 +116,45 @@ class HybridGraphBranchScheduler:
             kind: min(deadline, started + budget / 1000.0)
             for kind, budget in budgets.items()
         }
+        requests = {
+            HybridBranchKind.DIRECT: (
+                self._direct,
+                (
+                    query,
+                    shared,
+                    authorization,
+                    settings,
+                    deadlines[HybridBranchKind.DIRECT],
+                ),
+            ),
+            HybridBranchKind.EXTENDED: (
+                self._extended,
+                (
+                    baseline,
+                    shared,
+                    authorization,
+                    settings,
+                    deadlines[HybridBranchKind.EXTENDED],
+                ),
+            ),
+        }
+        enabled_kinds = tuple(kind for kind in HybridBranchKind if enabled[kind])
         submitted = BRANCH_WORKERS.submit_batch(
-            (
-                (
-                    self._direct,
-                    (
-                        query,
-                        shared,
-                        authorization,
-                        settings,
-                        deadlines[HybridBranchKind.DIRECT],
-                    ),
-                ),
-                (
-                    self._extended,
-                    (
-                        baseline,
-                        shared,
-                        authorization,
-                        settings,
-                        deadlines[HybridBranchKind.EXTENDED],
-                    ),
-                ),
-            )
+            tuple(requests[kind] for kind in enabled_kinds)
         )
         if submitted is None:
             return shared_outcome(SharedBranchFailureReason.BACKEND_UNAVAILABLE)
-        futures = dict(zip(HybridBranchKind, submitted, strict=True))
+        futures = dict(zip(enabled_kinds, submitted, strict=True))
+        results = {
+            kind: failed_branch(
+                kind,
+                DirectBranchFailureReason.DIRECT_NO_SEEDS
+                if kind is HybridBranchKind.DIRECT
+                else ExtendedBranchFailureReason.EXTENDED_NO_SEEDS,
+            )
+            for kind in HybridBranchKind
+            if not enabled[kind]
+        }
         try:
             return self._collect(
                 futures=futures,
@@ -148,10 +162,28 @@ class HybridGraphBranchScheduler:
                 budgets=budgets,
                 baseline=baseline,
                 overall_deadline=deadline,
+                results=results,
             )
         finally:
             for future in futures.values():
                 future.cancel()
+
+    @staticmethod
+    def _enabled(settings: object) -> dict[HybridBranchKind, bool]:
+        flag_names = ("graph_direct_enabled", "graph_extended_enabled")
+        if not any(hasattr(settings, name) for name in flag_names):
+            return dict.fromkeys(HybridBranchKind, True)
+        values = {
+            HybridBranchKind.DIRECT: getattr(settings, "graph_direct_enabled", None),
+            HybridBranchKind.EXTENDED: getattr(
+                settings, "graph_extended_enabled", None
+            ),
+        }
+        if any(type(value) is not bool for value in values.values()) or not any(
+            values.values()
+        ):
+            raise ValueError("at least one branch must be explicitly enabled")
+        return values  # type: ignore[return-value]
 
     @staticmethod
     def _budgets(settings: object) -> dict[HybridBranchKind, int]:
@@ -168,8 +200,16 @@ class HybridGraphBranchScheduler:
             raise ValueError("branch timeouts must be exact integers in [1, 5000]")
         return values  # type: ignore[return-value]
 
-    def _collect(self, *, futures, deadlines, budgets, baseline, overall_deadline):
-        results: dict[HybridBranchKind, BranchEnvelopeV1] = {}
+    def _collect(
+        self,
+        *,
+        futures,
+        deadlines,
+        budgets,
+        baseline,
+        overall_deadline,
+        results,
+    ):
         while len(results) < 2:
             shared = self._read_completed(futures, deadlines, results)
             if shared is not None:
@@ -203,8 +243,10 @@ class HybridGraphBranchScheduler:
     @staticmethod
     def _read_completed(futures, deadlines, results):
         for kind in HybridBranchKind:
+            if kind in results:
+                continue
             future: Future = futures[kind]
-            if kind in results or not future.done():
+            if not future.done():
                 continue
             try:
                 completed = future.result()

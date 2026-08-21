@@ -130,6 +130,13 @@ def hybrid_graph_candidate_pool(
             type(row) is not MaterializedGraphChunkV1 for row in materialized
         ):
             raise TypeError("graph materializer returned invalid rows")
+        if any(
+            _candidate_identifier(row.candidate_object) != row.integer_chunk_pk
+            or getattr(row.candidate_object, "doc_id", None) != row.document_uuid
+            or getattr(row.candidate_object, "chunk_number", None) != row.chunk_number
+            for row in materialized
+        ):
+            raise ValueError("materialized candidate coordinates disagree")
         by_key = {row.chunk_key: row for row in materialized}
         if len(by_key) != len(materialized) or set(by_key) != set(chunk_key_values):
             raise ValueError("graph materialization did not cover the exact pool")

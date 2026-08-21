@@ -29,7 +29,9 @@ from apps.knowledge_graph.retrieval.materialization import MaterializedGraphChun
 from apps.knowledge_graph.retrieval.topology.contracts import HybridBranchKind
 
 
-@pytest.mark.parametrize("failure", ("materialization", "fusion"))
+@pytest.mark.parametrize(
+    "failure", ("materialization", "mismatched_candidate_object", "fusion")
+)
 @override_settings(KG_OVERLAY_ENABLED=True, RAG_CACHE_ENABLED=False)
 def test_materialization_or_fusion_failure_discards_entire_graph_pool_once(
     monkeypatch,
@@ -60,6 +62,11 @@ def test_materialization_or_fusion_failure_discards_entire_graph_pool_once(
     def materialize(**_kwargs):
         if failure == "materialization":
             return ()
+        if failure == "mismatched_candidate_object":
+            return (
+                MaterializedGraphChunkV1(KEYS[0], 3, _DOC_A, 2, chunk(99, _DOC_B)),
+                MaterializedGraphChunkV1(KEYS[1], 4, _DOC_B, 3, chunk(4, _DOC_B)),
+            )
         return (
             MaterializedGraphChunkV1(KEYS[0], 3, _DOC_A, 2, chunk(3)),
             MaterializedGraphChunkV1(KEYS[1], 3, _DOC_B, 3, chunk(3, _DOC_B)),

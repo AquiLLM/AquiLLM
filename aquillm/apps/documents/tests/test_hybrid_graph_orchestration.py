@@ -12,6 +12,9 @@ from apps.documents.services.chunk_search import (
     HybridGraphRetrievalDependencies,
     text_chunk_search,
 )
+from apps.documents.services.hybrid_graph_orchestration import (
+    hybrid_graph_candidate_pool,
+)
 from apps.documents.tests.hybrid_graph_test_support import (
     KEYS,
     Policy,
@@ -195,3 +198,73 @@ def test_missing_or_malformed_authorization_never_starts_graph(
     assert rerank_inputs == [(1, 2)]
     assert tuple(row.pk for row in returned[2]) == (1, 2)
     assert returned[3]["graph_candidate_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("direct_enabled", "extended_enabled", "expected_calls"),
+    (
+        (True, False, ("shared", "direct")),
+        (False, True, ("shared", "prepare_extended", "extended")),
+    ),
+)
+def test_disabled_branch_is_never_invoked_or_fused(
+    direct_enabled,
+    extended_enabled,
+    expected_calls,
+) -> None:
+    baseline = (chunk(1), chunk(2))
+    graph_row = chunk(3)
+    snapshot = selected_snapshot(baseline=baseline)
+    calls: list[str] = []
+
+    class Runtime:
+        def prepare_shared(self, **_kwargs):
+            calls.append("shared")
+            return object()
+
+        def run_direct(self, **_kwargs):
+            calls.append("direct")
+            if not direct_enabled:
+                raise AssertionError("disabled direct branch was invoked")
+            return successful_branch(
+                HybridBranchKind.DIRECT,
+                (GraphBranchCandidateV1(KEYS[0], 1, 0.9),),
+            )
+
+        def prepare_extended(self, **_kwargs):
+            calls.append("prepare_extended")
+            if not extended_enabled:
+                raise AssertionError("disabled extended branch was invoked")
+            return object()
+
+        def run_extended(self, **_kwargs):
+            calls.append("extended")
+            return successful_branch(
+                HybridBranchKind.EXTENDED,
+                (GraphBranchCandidateV1(KEYS[0], 1, 0.9),),
+            )
+
+    settings = hybrid_settings()
+    settings.graph_direct_enabled = direct_enabled
+    settings.graph_extended_enabled = extended_enabled
+    materialized_keys: list[tuple[object, ...]] = []
+
+    def materialize(*, chunk_keys, **_kwargs):
+        materialized_keys.append(chunk_keys)
+        return (MaterializedGraphChunkV1(KEYS[0], 3, _DOC_A, 2, graph_row),)
+
+    candidates, diagnostics = hybrid_graph_candidate_pool(
+        snapshot,
+        "query",
+        authorization(Policy()),
+        HybridGraphRetrievalDependencies(
+            runtime=Runtime(),
+            settings=settings,
+            materialize=materialize,
+        ),
+    )
+
+    assert tuple(calls) == expected_calls
+    assert tuple(row.pk for row in candidates) == (1, 2, 3)
+    assert tuple(key.value for key in materialized_keys[0]) == (KEYS[0],)
+    assert diagnostics["graph_candidate_count"] == 1

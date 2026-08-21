@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
 
 _DATABASE_ID_MAX = 9_223_372_036_854_775_807
@@ -13,9 +13,9 @@ _DATABASE_ID_MAX = 9_223_372_036_854_775_807
 class HybridGraphRetrievalDependencies:
     """Request-independent adapters required by the projected graph overlay."""
 
-    runtime: object
-    settings: object
-    materialize: Callable[..., tuple[object, ...]]
+    runtime: object = field(repr=False)
+    settings: object = field(repr=False)
+    materialize: Callable[..., tuple[object, ...]] = field(repr=False)
 
     def __post_init__(self) -> None:
         operations = (
