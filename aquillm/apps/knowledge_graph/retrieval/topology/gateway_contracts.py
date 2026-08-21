@@ -61,6 +61,16 @@ def _canonical(value: object) -> bytes:
 SCHEMA_DESCRIPTOR_V1: Final = (
     ("version", SCHEMA_VERSION),
     ("request_fields", tuple(sorted(_REQUEST_FIELDS))),
+    ("request_query_type", "exact TopologyQueryName"),
+    ("request_parameters_type", "exact Mapping[str, TopologyScalar]"),
+    ("success_rows_type", "exact Mapping[str, TopologyScalar]"),
+    ("deadline_rule", ("float", "exact", "finite", "positive", "absolute_monotonic")),
+    ("max_records_rule", ("exact int", 1, MAX_RESULT_ROWS)),
+    ("success_discriminator", ("ok", True)),
+    ("failure_discriminator", ("ok", False)),
+    ("failure_reason_type", "exact GatewayFailureReason"),
+    ("failure_status_type", "exact int"),
+    ("input_bytes_rule", ("bytes", "equal canonical encoding")),
     ("success_fields", ("ok", "rows")),
     ("failure_fields", ("ok", "reason", "status")),
     ("scalar_builtins", ("str", "int", "float", "bool", "null")),
@@ -114,33 +124,21 @@ def _scalar(value: object, name: str) -> None:
     raise TypeError(f"{name} must be an exact topology scalar")
 
 
-def _request_domains(deadline: float, max_records: int) -> None:
-    if type(deadline) is not float or not isfinite(deadline) or deadline <= 0:
-        raise ValueError("deadline must be a positive finite monotonic float")
-    if type(max_records) is not int or not 1 <= max_records <= MAX_RESULT_ROWS:
-        raise ValueError("max_records exceeds the result cap")
-
-
 def _mapping(value: Mapping[str, TopologyScalar], name: str, limit: int) -> Mapping:
     if not isinstance(value, Mapping):
         raise TypeError(f"{name} must be a mapping")
     try:
-        snapshot = [
-            (key, item) for key, item in islice(value.items(), MAX_MAPPING_ITEMS + 1)
-        ]
-        if len(snapshot) > MAX_MAPPING_ITEMS:
-            raise ValueError("mapping item cap exceeded")
+        snapshot = tuple(islice(value.items(), MAX_MAPPING_ITEMS + 1))
+        copied: dict[str, TopologyScalar] = dict(snapshot)
+        if len(snapshot) > MAX_MAPPING_ITEMS or len(copied) != len(snapshot):
+            raise ValueError("mapping item cap exceeded or has duplicate keys")
     except Exception:
         raise ValueError("invalid topology mapping") from None
-    copied: dict[str, TopologyScalar] = {}
-    size = 2
-    for key, item in snapshot:
+    size = 1
+    for key, item in copied.items():
         _safe_text(key, f"{name} key")
         _scalar(item, f"{name} value")
-        if key in copied:
-            raise ValueError(f"{name} contains duplicate keys")
-        copied[key] = item
-        size += len(_canonical(key)) + len(_canonical(item)) + 1
+        size += len(_canonical(key)) + len(_canonical(item)) + 2
         if size > limit:
             raise ValueError("topology mapping exceeds its byte cap")
     return MappingProxyType(copied)
@@ -160,11 +158,15 @@ class TopologyGatewayRequestV1:
     def __post_init__(self) -> None:
         if type(self.query) is not TopologyQueryName:
             raise TypeError("query must be an exact TopologyQueryName")
+        deadline = self.deadline
+        max_records = self.max_records
+        if type(deadline) is not float or not isfinite(deadline) or deadline <= 0:
+            raise ValueError("deadline must be a positive finite monotonic float")
+        if type(max_records) is not int or not 1 <= max_records <= MAX_RESULT_ROWS:
+            raise ValueError("max_records exceeds the result cap")
         parameters = _mapping(self.parameters, "parameters", MAX_REQUEST_BYTES)
         object.__setattr__(self, "parameters", parameters)
-        _request_domains(self.deadline, self.max_records)
-        if len(encode_request(self)) > MAX_REQUEST_BYTES:
-            raise ValueError("gateway request exceeds its byte cap")
+        encode_request(self)
 
     def __eq__(self, other: object) -> bool:
         return _wire_equal(self, other, encode_request)
@@ -210,10 +212,9 @@ type TopologyGatewayResponseV1 = TopologyGatewaySuccessV1 | TopologyGatewayFailu
 
 
 def _pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result = dict(pairs)
-    if len(result) != len(pairs):
+    if len({key for key, _ in pairs}) != len(pairs):
         raise ValueError("duplicate JSON object key")
-    return result
+    return dict(pairs)
 
 
 def _load(payload: bytes, maximum: int) -> object:
@@ -232,7 +233,7 @@ def _load(payload: bytes, maximum: int) -> object:
         if _canonical(value) != payload:
             raise ValueError("gateway JSON is not canonical")
         return value
-    except (RecursionError, ValueError, UnicodeError, json.JSONDecodeError):
+    except (RecursionError, ValueError, UnicodeError):
         raise ValueError("malformed gateway payload") from None
 
 
@@ -256,13 +257,12 @@ def decode_request(payload: bytes) -> TopologyGatewayRequestV1:
     if type(value) is not dict or set(value) != _REQUEST_FIELDS:
         raise ValueError("gateway request schema mismatch")
     try:
-        request = TopologyGatewayRequestV1(
+        return TopologyGatewayRequestV1(
             TopologyQueryName(value["query"]),
             value["parameters"],
             value["deadline"],
             value["max_records"],
         )
-        return request
     except (TypeError, ValueError, KeyError):
         raise ValueError("invalid gateway request") from None
 
@@ -288,7 +288,7 @@ def decode_response(payload: bytes) -> TopologyGatewayResponseV1:
         if value["ok"] is True:
             if set(value) != {"ok", "rows"} or type(value["rows"]) is not list:
                 raise ValueError
-            response = TopologyGatewaySuccessV1(tuple(value["rows"]))
+            return TopologyGatewaySuccessV1(tuple(value["rows"]))
         else:
             if set(value) != {"ok", "reason", "status"}:
                 raise ValueError
