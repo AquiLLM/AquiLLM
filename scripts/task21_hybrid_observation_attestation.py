@@ -26,6 +26,8 @@ def _sha256(path: Path) -> str:
 
 
 def verify_attestation(*, payload, captured, artifacts, run_id, source_commit) -> None:
+    if captured.complete is not True:
+        raise ValueError("live observation runtime capture is incomplete")
     if set(payload) != {
         "schema",
         "run_id",

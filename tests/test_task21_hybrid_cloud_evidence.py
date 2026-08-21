@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,17 @@ def _attestation_module():
     return module
 
 
+@dataclass(frozen=True)
+class FakeCommandResult:
+    stdout: str
+    stderr: str = ""
+    returncode: int = 0
+
+    @property
+    def succeeded(self):
+        return self.returncode == 0
+
+
 class FakeRunner:
     def __init__(self, outputs=None):
         self.outputs = outputs or {}
@@ -47,7 +59,8 @@ class FakeRunner:
     def run(self, arguments, **_kwargs):
         command = tuple(arguments)
         self.calls.append(command)
-        return self.outputs.get(command, "")
+        result = self.outputs.get(command, "")
+        return result if hasattr(result, "succeeded") else FakeCommandResult(result)
 
 
 def _capture_outputs(module, prefix):
@@ -80,6 +93,8 @@ def test_cloud_shell_is_provider_neutral_fail_closed_and_uses_fixed_entrypoints(
     assert "CREATE ROLE aquillm_projection_source" in source
     assert "CREATE ROLE aquillm_projection_state" in source
     assert "worker_knowledge_graph_projection" in source
+    assert source.count("git status --porcelain=v1 --untracked-files=normal") >= 2
+    assert "original_exit_code" in source
     assert not {"gcloud", "aws ", "az "}.intersection(source.splitlines())
     assert 'eval "' not in source
 
@@ -131,6 +146,19 @@ def test_live_observations_bind_same_run_source_runtime_and_artifact_bytes(tmp_p
         run_id="e" * 32,
         source_commit="f" * 40,
     )
+    with pytest.raises(ValueError, match="runtime capture"):
+        attestation.verify_attestation(
+            payload=payload,
+            captured=runtime.CapturedRuntime(
+                captured.members,
+                captured.images,
+                captured.config_sha256,
+                complete=False,
+            ),
+            artifacts=artifacts,
+            run_id="e" * 32,
+            source_commit="f" * 40,
+        )
     payload["run_id"] = "0" * 32
     with pytest.raises(ValueError, match="run identity"):
         attestation.verify_attestation(

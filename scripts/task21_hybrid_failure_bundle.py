@@ -35,16 +35,35 @@ _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(password|secret|token|api[_-]?key)(\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
 _AUTHORIZATION = re.compile(r"(?i)\bauthorization\s*:\s*(?:bearer\s+)?[^\s,;]+")
+_CREDENTIAL_URL = re.compile(
+    r"(?i)\b(?:postgres(?:ql)?|memgraph|bolt(?:\+s|\+ssc)?|neo4j(?:\+s|\+ssc)?|https?)"
+    r"://[^\s\"'<>]+"
+)
 
 
 def canonical_json_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _redact_url_userinfo(match: re.Match[str]) -> str:
+    value = match.group(0)
+    prefix, remainder = value.split("://", 1)
+    boundary = min(
+        (index for marker in "/?#" if (index := remainder.find(marker)) >= 0),
+        default=len(remainder),
+    )
+    authority, suffix = remainder[:boundary], remainder[boundary:]
+    if "@" not in authority:
+        return value
+    host = authority.rsplit("@", 1)[1]
+    return f"{prefix}://<redacted>@{host}{suffix}"
+
+
 def redact_log(value: str, *, max_bytes: int = MAX_LOG_BYTES) -> str:
     if type(value) is not str or type(max_bytes) is not int or max_bytes <= 0:
         raise ValueError("log redaction inputs are invalid")
-    redacted = _AUTHORIZATION.sub("Authorization: <redacted>", value)
+    redacted = _CREDENTIAL_URL.sub(_redact_url_userinfo, value)
+    redacted = _AUTHORIZATION.sub("Authorization: <redacted>", redacted)
     redacted = _SECRET_ASSIGNMENT.sub(r"\1\2<redacted>", redacted)
     bounded = redacted.encode("utf-8")[:max_bytes]
     return bounded.decode("utf-8", errors="ignore")
@@ -56,8 +75,25 @@ def inspect_command(container_id: str) -> tuple[str, ...]:
     return ("docker", "inspect", "--format", _INSPECT_FORMAT, container_id)
 
 
+@dataclass(frozen=True, slots=True)
+class CommandResult:
+    stdout: str
+    stderr: str
+    returncode: int
+
+    def __post_init__(self) -> None:
+        if type(self.stdout) is not str or type(self.stderr) is not str:
+            raise TypeError("command output must be exact text")
+        if type(self.returncode) is not int:
+            raise ValueError("command return code is invalid")
+
+    @property
+    def succeeded(self) -> bool:
+        return self.returncode == 0
+
+
 class CommandRunner:
-    def run(self, arguments, *, check=True, timeout=1_800):
+    def run(self, arguments, *, timeout=1_800) -> CommandResult:
         try:
             result = subprocess.run(
                 tuple(arguments),
@@ -67,15 +103,18 @@ class CommandRunner:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired as error:
-            if check:
-                raise RuntimeError("evidence command timed out") from error
-            return error.stdout if isinstance(error.stdout, str) else ""
-        if check and result.returncode:
-            raise RuntimeError(
-                f"evidence command failed ({result.returncode}): "
-                + " ".join(tuple(arguments)[:4])
-            )
-        return result.stdout
+            stdout = error.stdout if isinstance(error.stdout, str) else ""
+            stderr = error.stderr if isinstance(error.stderr, str) else ""
+            return CommandResult(stdout, stderr or "command timed out", 124)
+        return CommandResult(result.stdout, result.stderr, result.returncode)
+
+
+def _command_error(operation: str, result) -> dict[str, object]:
+    return {
+        "operation": operation,
+        "returncode": result.returncode,
+        "stderr": redact_log(result.stderr, max_bytes=4_096),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,30 +122,37 @@ class CapturedRuntime:
     members: dict[str, bytes]
     images: dict[str, str]
     config_sha256: str
+    complete: bool = True
 
 
 def capture_runtime(runner, compose_prefix) -> CapturedRuntime:
     prefix = tuple(compose_prefix)
-    raw_config = runner.run(prefix + ("config", "--no-interpolate"), check=False)
+    config_result = runner.run(prefix + ("config", "--no-interpolate"))
+    raw_config = config_result.stdout
     redacted_config = redact_log(raw_config).encode("utf-8")
     members = {"runtime/config.redacted.yml": redacted_config}
     images: dict[str, str] = {}
     states: dict[str, object] = {}
+    errors = []
+    if not config_result.succeeded:
+        errors.append(_command_error("compose_config", config_result))
     for service in SERVICES:
-        container = runner.run(
-            prefix + ("ps", "--all", "--quiet", service), check=False
-        ).strip()
+        ps_result = runner.run(prefix + ("ps", "--all", "--quiet", service))
+        container = ps_result.stdout.strip() if ps_result.succeeded else ""
         state: dict[str, object] = {"service": service, "present": bool(container)}
+        if not ps_result.succeeded:
+            state["capture_error"] = "compose_ps_failed"
+            errors.append(_command_error(f"compose_ps:{service}", ps_result))
         if container:
             if _HEX64.fullmatch(container) is None:
                 state["capture_error"] = "invalid_container_id"
             else:
-                fields = (
-                    runner.run(inspect_command(container), check=False)
-                    .strip()
-                    .split("\t")
-                )
-                if len(fields) != 4 or fields[0] != container:
+                inspect_result = runner.run(inspect_command(container))
+                fields = inspect_result.stdout.strip().split("\t")
+                if not inspect_result.succeeded:
+                    state["capture_error"] = "inspect_command_failed"
+                    errors.append(_command_error(f"inspect:{service}", inspect_result))
+                elif len(fields) != 4 or fields[0] != container:
                     state["capture_error"] = "inspect_state_unavailable"
                 else:
                     image, status, exit_code = fields[1:]
@@ -126,16 +172,25 @@ def capture_runtime(runner, compose_prefix) -> CapturedRuntime:
                             )
                             images[service] = image
         states[service] = state
-        log = runner.run(
-            prefix + ("logs", "--no-color", "--tail", "200", service),
-            check=False,
+        log_result = runner.run(
+            prefix + ("logs", "--no-color", "--tail", "200", service)
         )
+        log = log_result.stdout
+        if not log_result.succeeded:
+            errors.append(_command_error(f"compose_logs:{service}", log_result))
+            log += f"\ncommand_error={log_result.stderr}"
         members[f"logs/{service}.log"] = redact_log(log).encode("utf-8")
+    states["command_errors"] = errors
     members["runtime/state.json"] = canonical_json_bytes(states) + b"\n"
+    capture_complete = not errors and not any(
+        isinstance(state, dict) and "capture_error" in state
+        for state in states.values()
+    )
     return CapturedRuntime(
         members,
         images,
         hashlib.sha256(raw_config.encode("utf-8")).hexdigest(),
+        complete=capture_complete,
     )
 
 
@@ -145,7 +200,10 @@ def cleanup_runtime(runner, compose_prefix, *, project_label: str) -> dict[str, 
     ):
         raise ValueError("project label is invalid")
     prefix = tuple(compose_prefix)
-    runner.run(prefix + ("down", "--volumes", "--remove-orphans"), check=False)
+    errors = []
+    down = runner.run(prefix + ("down", "--volumes", "--remove-orphans"))
+    if not down.succeeded:
+        errors.append(_command_error("compose_down", down))
     commands = {
         "containers": ("docker", "ps", "-aq", "--filter", f"label={project_label}"),
         "volumes": (
@@ -165,17 +223,25 @@ def cleanup_runtime(runner, compose_prefix, *, project_label: str) -> dict[str, 
             f"label={project_label}",
         ),
     }
-    samples = tuple(
-        {
-            name: runner.run(command, check=False).strip()
-            for name, command in commands.items()
-        }
-        for _ in range(3)
-    )
+    samples = []
+    for sample_index in range(3):
+        sample = {}
+        for name, command in commands.items():
+            result = runner.run(command)
+            sample[name] = result.stdout.strip()
+            if not result.succeeded:
+                errors.append(
+                    _command_error(f"cleanup_{name}:{sample_index + 1}", result)
+                )
+        samples.append(sample)
+    zero_samples = tuple(samples)
     return {
         "project_label": project_label,
-        "zero_samples": samples,
-        "complete": not any(value for sample in samples for value in sample.values()),
+        "down_returncode": down.returncode,
+        "zero_samples": zero_samples,
+        "command_errors": errors,
+        "complete": not errors
+        and not any(value for sample in zero_samples for value in sample.values()),
     }
 
 

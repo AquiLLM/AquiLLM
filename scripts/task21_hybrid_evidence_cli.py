@@ -17,11 +17,17 @@ from task21_hybrid_failure_bundle import (
 
 
 def _source(runner) -> dict[str, object]:
-    commit = runner.run(("git", "rev-parse", "HEAD")).strip()
-    clean = not runner.run(
-        ("git", "status", "--porcelain", "--untracked-files=no"), check=False
-    ).strip()
+    revision = runner.run(("git", "rev-parse", "HEAD"))
+    status = runner.run(
+        ("git", "status", "--porcelain", "--untracked-files=normal")
+    )
+    commit = revision.stdout.strip() if revision.succeeded else "0" * 40
+    clean = revision.succeeded and status.succeeded and not status.stdout.strip()
     return {"commit": commit, "clean": clean}
+
+
+def _evidence_exit_code(captured, cleanup, source) -> int:
+    return 0 if captured.complete and cleanup["complete"] and source["clean"] else 2
 
 
 def main() -> int:
@@ -66,12 +72,14 @@ def main() -> int:
         },
         captured.images,
         captured.config_sha256,
+        complete=captured.complete,
     )
     cleanup = cleanup_runtime(
         runner,
         prefix,
         project_label=f"com.docker.compose.project={args.project_name}",
     )
+    source = _source(runner)
     destination = publish_bundle(
         output_root=args.output_root,
         run_id=args.run_id,
@@ -82,7 +90,7 @@ def main() -> int:
             "projection_checksums": args.projection_checksums,
         },
         cleanup_proof=cleanup,
-        source=_source(runner),
+        source=source,
         claim_scope=args.claim_scope,
         signing_key=os.environ.get("TASK21_EVIDENCE_SIGNING_KEY", "").encode(),
         signing_key_version=args.signing_key_version,
@@ -90,7 +98,7 @@ def main() -> int:
     bundle = destination / "bundle.json"
     digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
     print(f"evidence={destination} size={bundle.stat().st_size} sha256={digest}")
-    return 0 if cleanup["complete"] else 2
+    return _evidence_exit_code(captured, cleanup, source)
 
 
 if __name__ == "__main__":

@@ -41,6 +41,8 @@ _OBSERVATION_FIELDS = frozenset(
         "mapped_seed_chunk_ids",
         "projected_ranks",
         "repeated_projected_ranks",
+        "adversarial_candidate_chunk_ids",
+        "inaccessible_result_chunk_ids",
         "latency_ms",
         "reranker_calls",
         "comparison_snapshot_signature",
@@ -71,6 +73,8 @@ def build_task21_hybrid_report(*, cases, observations, freshness, backend_parity
         raise Task21HybridEvalError("observations require the exact five ordered arms")
     snapshots: dict[str, str] = {}
     arms: dict[str, object] = {}
+    observed_adversarial = 0
+    observed_inaccessible = 0
     specs = {row[0]: row for row in _ARM_SPECS}
     for arm in TASK21_HYBRID_ARMS:
         rows = observations[arm]
@@ -106,6 +110,14 @@ def build_task21_hybrid_report(*, cases, observations, freshness, backend_parity
                 raise Task21HybridEvalError("vector_only cannot contain graph material")
             scored[case_id] = score_case(indexed[case_id], row)
         ordered = [scored[case_id] for case_id in sorted(scored)]
+        arm_adversarial = sum(
+            int(item["adversarial_candidate_count"]) for item in ordered
+        )
+        arm_inaccessible = sum(
+            int(item["inaccessible_result_count"]) for item in ordered
+        )
+        observed_adversarial += arm_adversarial
+        observed_inaccessible += arm_inaccessible
         arms[arm] = {
             "policy": dict(task21_hybrid_arm_specs()[TASK21_HYBRID_ARMS.index(arm)]),
             "cases": scored,
@@ -124,9 +136,18 @@ def build_task21_hybrid_report(*, cases, observations, freshness, backend_parity
                 "latency_p95_ms": percentile_95(
                     [float(item["latency_ms"]) for item in ordered]
                 ),
-                "inaccessible_result_count": 0,
+                "adversarial_candidate_count": arm_adversarial,
+                "inaccessible_result_count": arm_inaccessible,
             },
         }
+    if observed_adversarial == 0:
+        raise Task21HybridEvalError(
+            "adversarial permission candidates were not observed"
+        )
+    if observed_inaccessible:
+        raise Task21HybridEvalError(
+            "permission isolation observed inaccessible results"
+        )
     return MappingProxyType(
         {
             "schema_version": "task21-hybrid-eval-v1",
@@ -137,7 +158,11 @@ def build_task21_hybrid_report(*, cases, observations, freshness, backend_parity
                 dict(sorted(snapshots.items()))
             ),
             "deterministic_projected_ranks": True,
-            "permission_isolation": True,
+            "observed_adversarial_candidate_count": observed_adversarial,
+            "observed_inaccessible_result_count": observed_inaccessible,
+            "permission_isolation": (
+                observed_adversarial > 0 and observed_inaccessible == 0
+            ),
         }
     )
 

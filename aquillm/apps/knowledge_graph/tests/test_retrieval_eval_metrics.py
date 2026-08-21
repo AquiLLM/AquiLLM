@@ -188,6 +188,8 @@ def task23_inputs():
                 "mapped_seed_chunk_ids": ["seed"],
                 "projected_ranks": graph,
                 "repeated_projected_ranks": graph,
+                "adversarial_candidate_chunk_ids": ["private"],
+                "inaccessible_result_chunk_ids": [],
                 "latency_ms": float(index),
                 "reranker_calls": 1 if arm == "combined_reranked" else 0,
                 "comparison_snapshot_signature": "a" * 64,
@@ -232,3 +234,7 @@ def test_task23_metrics_cover_all_five_arms_quality_multihop_latency_and_citatio
     assert report["arms"]["extended"]["metrics"]["distance_2_novel_fraction"] == 1.0
     assert report["arms"]["combined"]["metrics"]["citation_evidence_coverage"] == 1.0
     assert report["arms"]["combined_reranked"]["metrics"]["latency_p95_ms"] == 5.0
+    assert report["arms"]["combined"]["metrics"]["adversarial_candidate_count"] == 1
+    assert report["observed_inaccessible_result_count"] == 0
+    assert report["observed_adversarial_candidate_count"] == len(TASK23_ARMS)
+    assert report["permission_isolation"] is True

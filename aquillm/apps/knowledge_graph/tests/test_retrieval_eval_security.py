@@ -121,12 +121,27 @@ def test_task23_hybrid_report_rejects_permission_reranker_and_snapshot_drift(fai
     cases, observations, freshness, parity = task23_inputs()
     if failure == "permission":
         observations["combined"][0]["ranked_chunk_ids"].append("private")
+        observations["combined"][0]["inaccessible_result_chunk_ids"] = ["private"]
     elif failure == "reranker":
         observations["combined_reranked"][0]["reranker_calls"] = 0
     else:
         observations["direct"][0]["comparison_snapshot_signature"] = "9" * 64
 
     with pytest.raises(run_kg_eval.Task21HybridEvalError):
+        run_kg_eval.build_task21_hybrid_report(
+            cases=cases,
+            observations=observations,
+            freshness=freshness,
+            backend_parity=parity,
+        )
+
+
+def test_task23_hybrid_report_requires_observed_adversarial_candidates():
+    cases, observations, freshness, parity = task23_inputs()
+    for rows in observations.values():
+        rows[0]["adversarial_candidate_chunk_ids"] = []
+
+    with pytest.raises(run_kg_eval.Task21HybridEvalError, match="adversarial"):
         run_kg_eval.build_task21_hybrid_report(
             cases=cases,
             observations=observations,

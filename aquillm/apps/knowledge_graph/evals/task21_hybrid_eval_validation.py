@@ -157,8 +157,22 @@ def score_case(
     seeds = set(exact_ids(observation["seed_chunk_ids"], "seed chunks"))
     mapped = set(exact_ids(observation["mapped_seed_chunk_ids"], "mapped seeds"))
     accessible = set(case["accessible"])
-    if not set(ranked).issubset(accessible):
-        raise Task21HybridEvalError("authorization rejected an inaccessible result")
+    adversarial = exact_ids(
+        observation["adversarial_candidate_chunk_ids"], "adversarial candidates"
+    )
+    inaccessible = exact_ids(
+        observation["inaccessible_result_chunk_ids"], "inaccessible results"
+    )
+    observed_inaccessible = tuple(item for item in ranked if item not in accessible)
+    if inaccessible != observed_inaccessible:
+        raise Task21HybridEvalError("inaccessible result observations are inconsistent")
+    if set(adversarial).intersection(accessible):
+        raise Task21HybridEvalError("adversarial candidates must be inaccessible")
+    if observed_inaccessible:
+        count = len(observed_inaccessible)
+        raise Task21HybridEvalError(
+            f"authorization observed {count} inaccessible result(s)"
+        )
     if not set(graph).issubset(set(ranked)) or not mapped.issubset(seeds):
         raise Task21HybridEvalError("graph/seed observations are inconsistent")
     expected = set(case["expected"])
@@ -180,7 +194,8 @@ def score_case(
         "recall_at_10": recall,
         "ndcg_at_10": 1.0 if not ideal else dcg / ideal,
         "graph_hit_rate": 1.0 if graph else 0.0,
-        "inaccessible_result_count": 0,
+        "adversarial_candidate_count": len(adversarial),
+        "inaccessible_result_count": len(observed_inaccessible),
         "citation_evidence_coverage": 1.0
         if not ranked
         else len(set(ranked).intersection(citations)) / len(ranked),

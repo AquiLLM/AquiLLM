@@ -100,17 +100,20 @@ services=(
 
 write_timings() {
   local status="$1"
+  local original_exit_code="$2"
   local finished_ns
   finished_ns="$(python3 -c 'import time; print(time.time_ns())')"
-  python3 - "$TIMINGS" "$STARTED_NS" "$finished_ns" "$status" <<'PY'
+  python3 - \
+    "$TIMINGS" "$STARTED_NS" "$finished_ns" "$status" "$original_exit_code" <<'PY'
 import json
 import os
 import sys
 
-path, started, finished, status = sys.argv[1:]
+path, started, finished, status, original_exit_code = sys.argv[1:]
 payload = {
     "elapsed_ms": (int(finished) - int(started)) / 1_000_000,
     "finished_ns": int(finished),
+    "original_exit_code": int(original_exit_code),
     "started_ns": int(started),
     "status": status,
 }
@@ -132,7 +135,7 @@ finalize() {
   trap - EXIT INT TERM
   set +e
   ((original_status == 0)) || status_label="failed"
-  write_timings "$status_label"
+  write_timings "$status_label" "$original_status"
   python3 scripts/task21_hybrid_failure_bundle.py \
     --run-id "$RUN_ID" \
     --output-root "$OUTPUT_ROOT" \
@@ -258,5 +261,7 @@ PY
   echo "source commit changed during evaluation" >&2
   exit 65
 }
-git diff --quiet
-git diff --cached --quiet
+if [[ -n "$(git status --porcelain=v1 --untracked-files=normal)" ]]; then
+  echo "source tree changed during evaluation" >&2
+  exit 65
+fi
