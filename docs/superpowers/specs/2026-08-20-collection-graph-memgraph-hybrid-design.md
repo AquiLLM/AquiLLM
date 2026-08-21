@@ -1,7 +1,7 @@
 # Collection-Scoped pgvector + Memgraph Hybrid Retrieval Design
 
 **Date:** 2026-08-20
-**Status:** Draft for user review
+**Status:** Approved, including the Community-only deployment amendment
 **Extends:** `docs/superpowers/plans/2026-08-17-gliner2-knowledge-graph-hybrid-retrieval.md`
 
 ## Goal
@@ -72,6 +72,10 @@ It does not provide:
 9. **Shipping fails open to the vector/trigram baseline, not to another graph
    backend.** The PostgreSQL graph loader is an explicit evaluation/parity
    backend only.
+10. **Deployment uses only self-hosted Community/open-source components.** The
+    existing Mem0 Memgraph instance remains isolated. A second dedicated KG
+    Memgraph instance and fixed-query gateway run inside Docker; the web process
+    receives neither Bolt network access nor Memgraph credentials.
 
 ## Success Criteria
 
@@ -138,6 +142,24 @@ Add a `memgraph_knowledge_graph` service and named volume rather than reusing th
 existing `memgraph` service used by Mem0. The service is internal-only by default,
 has no required host port, uses dedicated credentials, and is included only in
 the knowledge-graph profile.
+
+Memgraph Community does not provide database-enforced read-only RBAC. The design
+must not claim otherwise or depend on Enterprise licensing. Instead, a
+`knowledge_graph_query_gateway` service is the query boundary. Only that gateway
+and the projection worker join the private KG graph network and can reach the KG
+Memgraph Bolt port. The web service reaches the gateway over a separate internal
+application network and has no route or credential with which to open a Bolt
+session. The gateway exposes a closed set of typed topology operations and never
+accepts arbitrary Cypher, query fragments, labels, property names, or database
+identifiers from callers.
+
+The projection worker writes directly to the dedicated KG Memgraph instance.
+The gateway executes only the fixed, parameterized, bounded read queries defined
+by the projection topology contract. Community users may use separate credentials
+for rotation and audit attribution, but those identities are not represented as
+different database privilege levels. A gateway compromise is contained by its
+closed API, strict input validation, container/network isolation, and absence of
+a raw-query endpoint rather than by unavailable Community RBAC.
 
 Memgraph stores opaque graph topology rather than authoritative application data.
 The v1 projection contains:
@@ -336,6 +358,14 @@ currently authorized baseline rows remain in their original relative order.
 Newly granted scope is ignored until the next request. This detects mid-request
 revocation without ever expanding the frozen scope.
 
+The web-to-gateway request contains only the frozen opaque generation/document
+scope, opaque seeds, fixed caps, and an absolute deadline. The gateway validates
+the exact request schema, maps it to one named query family, and returns the
+existing canonical provider-neutral envelope. It cannot authorize scope, widen
+scope, resolve private identifiers, or materialize chunks. Any transport,
+schema, provenance, truncation, or deadline failure disables the affected graph
+path under the existing failure contract.
+
 ### Query-Time GLiNER2 Extraction Plane
 
 Add an internal `knowledge_graph_query_extractor` service built from the pinned
@@ -528,16 +558,22 @@ Authorization is enforced at five boundaries:
 5. re-authorize every returned chunk before materialization.
 
 Projection workers use read-only PostgreSQL access for source rows and dedicated
-write credentials for Memgraph. Query clients receive read-only Memgraph
-credentials. The extractor uses a separate internal bearer secret. Credentials,
-driver configuration, spans, and raw identifiers never appear in reports.
+write credentials for the KG Memgraph projection. Query clients receive only an
+internal gateway credential and never receive Memgraph credentials. The gateway
+holds its own rotatable Community user credential, without claiming database-
+enforced read-only privileges. The extractor uses a separate internal bearer
+secret. Credentials, driver configuration, spans, and raw identifiers never
+appear in reports.
 
 ## Configuration and Rollout
 
 Add default-off configuration for:
 
 - Memgraph projection and traversal enablement;
-- dedicated Memgraph URI/database/credentials;
+- dedicated KG Memgraph URI/database/credentials, owned only by the projection
+  worker and fixed-query gateway;
+- internal gateway endpoint, service credential, timeout, request byte limit,
+  and fixed response-family limits;
 - projection queue, batch size, lease, retry, retention, and schema version;
 - query extractor endpoint, bearer secret, model revision, timeout, and limits;
 - direct-query and vector-seeded branch enablement;
@@ -549,6 +585,8 @@ Add default-off configuration for:
 Memgraph and direct-query flags also default off. The PostgreSQL topology loader
 is available only through an explicit evaluation/test backend setting; shipping
 requests never automatically fall back from Memgraph to PostgreSQL graph loading.
+No Enterprise license key, organization identifier, hosted graph endpoint, or
+external graph API is part of this configuration.
 
 Rollout stages are:
 
@@ -583,6 +621,13 @@ The implementation requires:
   transformed evidence/audit signatures, no-integer-leak serialization, and
   PostgreSQL/Memgraph `ProjectedAuthorizedGraphSnapshotV1` byte parity;
 - integration tests against an isolated dedicated Memgraph container;
+- Compose/network tests proving the Mem0 and KG Memgraph services use distinct
+  containers, volumes, credentials, and networks;
+- tests proving the web container cannot reach the KG Bolt port or obtain KG
+  Memgraph credentials, while the projection worker and gateway can;
+- fixed-query gateway tests proving arbitrary Cypher and unknown operations are
+  structurally impossible, every request is capped/deadlined, and malformed or
+  truncated responses fail closed to baseline retrieval;
 - crash/retry/reconciliation tests for partially written generations;
 - automatic membership create/remove/status/resolver-change invalidation,
   bounded outbox fan-out, checksum, compare-and-set, reconciliation, and pruning
@@ -645,6 +690,8 @@ parallel speed.
 - Replacing PostgreSQL as the source of truth.
 - Storing document/query text, user-facing labels, or aliases in Memgraph.
 - Reusing or migrating the existing Mem0 memory graph.
+- Memgraph Enterprise, paid RBAC, hosted Memgraph, or any external graph API.
+- Exposing the dedicated KG Memgraph Bolt port to the web service or public host.
 - Unrestricted deployment-wide graph traversal.
 - Merging claims or evidence across collections.
 - Projecting or traversing candidate canonical links in v1.
