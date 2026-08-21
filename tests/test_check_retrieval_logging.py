@@ -193,8 +193,7 @@ def test_checker_rejects_static_and_dynamic_getattr_log_dispatch(source: str) ->
 
 
 def test_checker_propagates_payload_taint_through_transformations() -> None:
-    source = """
-from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+    source = """from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 prompt = query
 count = ord(prompt[0]) + 1
 logger.info(
@@ -252,37 +251,38 @@ def test_checker_rejects_unresolved_or_imprecise_count_sources(assignment: str) 
 
 
 def test_checker_does_not_resolve_count_across_function_or_parameter_scope() -> None:
-    source = """
-from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+    source = """from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 def unrelated():
     count = 0
 def record(count):
-    logger.info("obs.rag.search", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
-"""
+    logger.info("obs.rag.search", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))"""
     assert len(_scan(source)) == 1
 
 
+# fmt: off
+def test_checker_rejects_descendant_nonlocal_or_global_mutation() -> None:
+    assert all(len(_scan(source)) == 1 for source in ("from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields\ndef record(logger, prompt):\n    count = 0\n    def mutate():\n        nonlocal count\n        count = ord(prompt[0])\n    mutate()\n    logger.info(\"obs.rag.search\", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))", "from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields\ncount = 0\ndef mutate(prompt):\n    global count\n    count = ord(prompt[0])\nmutate(prompt)\nlogger.info(\"obs.rag.search\", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))"))
+# fmt: on
+
+
 def test_checker_accepts_independent_lexical_count_definitions() -> None:
-    source = """
-from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+    source = """from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 def first(rows):
     count = 0
+    def independent(): count = 1
     logger.info("obs.rag.first", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
 def second(rows):
     count = 0
-    logger.info("obs.rag.second", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
-"""
+    logger.info("obs.rag.second", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))"""
     assert _scan(source) == ()
 
 
 def test_checker_requires_one_unconditional_assignment_before_each_call() -> None:
-    before = """
-from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+    before = """from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 def record():
     count = 0
     logger.info("obs.rag.search", **retrieval_log_fields(reason=RetrievalLogReason.COMPLETED, count=count, elapsed_ms=1.0))
-    count = unknown
-"""
+    count = unknown"""
     branch = before.replace("count = 0", "count = 0 if enabled else 1")
     ambiguous = before.replace(
         "count = 0", "count = 0\n    if enabled:\n        count = 1"

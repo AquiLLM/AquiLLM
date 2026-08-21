@@ -178,7 +178,7 @@ def _assigned_value(name: str, assignments: tuple[tuple[str, ast.AST], ...], cal
     scope = _scope(call, parents)
     bindings = tuple(node for node in ast.walk(scope) if _binds(node, name) and _scope(parents[node], parents) is scope and (node.lineno, node.col_offset) < (call.lineno, call.col_offset))
     values = tuple(value for candidate, value in assignments if candidate == name and _scope(value, parents) is scope and (value.lineno, value.col_offset) < (call.lineno, call.col_offset))
-    return values[0] if len(values) == len(bindings) == 1 and _ordinary_binding(bindings[0], scope, parents) else None
+    return values[0] if len(values) == len(bindings) == 1 and _ordinary_binding(bindings[0], scope, parents) and not any(isinstance(node, ast.Global if isinstance(scope, ast.Module) else ast.Nonlocal) and name in node.names for node in ast.walk(scope)) else None
 def _safe_count(node: ast.AST, tainted: frozenset[str], assignments: tuple[tuple[str, ast.AST], ...], call: ast.Call, parents: dict[ast.AST, ast.AST], seen: frozenset[str] = frozenset()) -> bool:
     if _expression_is_tainted(node, tainted): return False
     if isinstance(node, ast.Constant): return type(node.value) is int and node.value >= 0
