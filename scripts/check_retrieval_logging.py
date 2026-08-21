@@ -187,7 +187,7 @@ def _safe_count(node: ast.AST, tainted: frozenset[str], assignments: tuple[tuple
         value = _assigned_value(node.id, assignments, call, parents)
         return value is not None and _safe_count(value, tainted, assignments, call, parents, seen | {node.id})
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd): return _safe_count(node.operand, tainted, assignments, call, parents, seen)
-    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "len" and len(node.args) == 1 and not node.keywords and ((isinstance(node.args[0], (ast.Tuple, ast.List, ast.Set)) and all(isinstance(item, ast.Constant) for item in node.args[0].elts)) or (isinstance(node.args[0], ast.Dict) and all(isinstance(item, ast.Constant) for item in node.args[0].keys + node.args[0].values)))
+    return False
 def _safe_elapsed(node: ast.AST, tainted: frozenset[str]) -> bool:
     if _expression_is_tainted(node, tainted): return False
     if isinstance(node, ast.Constant): return type(node.value) in {int, float} and not isinstance(node.value, bool) and node.value >= 0

@@ -36,11 +36,10 @@ def test_checker_has_an_explicit_lane_allowlist_and_current_lane_is_clean() -> N
 
 
 def test_checker_allows_only_fixed_event_and_redacted_structured_fields() -> None:
-    source = """
-import structlog
+    source = """import structlog
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 logger = structlog.stdlib.get_logger(__name__)
-result_count = len(())
+result_count = 0
 elapsed_ms = 2.5
 logger.info(
     "obs.rag.extract_failed",
@@ -54,7 +53,7 @@ logger.info(
     "obs.rag.extract_completed",
     **retrieval_log_fields(
         reason=RetrievalLogReason.COMPLETED,
-        count=len(()),
+        count=0,
         elapsed_ms=2.5,
     ),
 )
@@ -227,11 +226,13 @@ def record(prompt):
 """
 
 
-def test_checker_resolves_transformed_count_assignment_before_allowing_name() -> None:
-    assert len(_scan(_structured_count_source("count = ord(prompt[0])"))) == 1
+# fmt: off
+def test_checker_rejects_transformed_or_shadowed_count_sources() -> None:
+    assert all(len(_scan(source)) == 1 for source in (_structured_count_source("count = ord(prompt[0])"), _structured_count_source("count = len(())").replace("record(prompt)", "record(logger, prompt, len)")))
+# fmt: on
 
 
-@pytest.mark.parametrize("assignment", ("count:int=0", "count = len(())", "count = +2"))
+@pytest.mark.parametrize("assignment", ("count:int=0", "count = 2", "count = +2"))
 def test_checker_allows_positively_proven_count_sources(assignment: str) -> None:
     assert _scan(_structured_count_source(assignment)) == ()
 
