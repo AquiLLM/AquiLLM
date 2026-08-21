@@ -49,9 +49,13 @@ def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor(
     assert type(SCHEMA_DESCRIPTOR_V1) is tuple
     assert (
         SCHEMA_CHECKSUM
-        == "8cccd703a2759d9d3c64b04ec87fd76f37e0b95cf0ea6a80cdd10484e0a189b9"
+        == "b00e76c547740cb37d97fd787bc396691e1c9184b3b9d421913db33b0abe81f9"
     )
     assert sha256(descriptor_bytes).hexdigest() == SCHEMA_CHECKSUM
+    assert (
+        dict(SCHEMA_DESCRIPTOR_V1)["success_rows_type"]
+        == "exact list[Mapping[str, TopologyScalar]]"
+    )
     for name in (
         "request_query_type",
         "request_parameters_type",

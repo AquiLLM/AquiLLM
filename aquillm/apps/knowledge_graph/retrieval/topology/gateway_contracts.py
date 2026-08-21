@@ -63,7 +63,7 @@ SCHEMA_DESCRIPTOR_V1: Final = (
     ("request_fields", tuple(sorted(_REQUEST_FIELDS))),
     ("request_query_type", "exact TopologyQueryName"),
     ("request_parameters_type", "exact Mapping[str, TopologyScalar]"),
-    ("success_rows_type", "exact Mapping[str, TopologyScalar]"),
+    ("success_rows_type", "exact list[Mapping[str, TopologyScalar]]"),
     ("deadline_rule", ("float", "exact", "finite", "positive", "absolute_monotonic")),
     ("max_records_rule", ("exact int", 1, MAX_RESULT_ROWS)),
     ("success_discriminator", ("ok", True)),
