@@ -127,7 +127,6 @@ def test_posts_canonical_contract_with_pinned_transport_headers(monkeypatch) -> 
 
 def test_expired_deadline_fails_before_network_io(monkeypatch) -> None:
     client, opener = _client(monkeypatch, Response(b""))
-
     with pytest.raises(TopologyGatewayRequestError) as captured:
         client.execute_read(
             query=contracts.TopologyQueryName.GENERATION_MANIFESTS,
@@ -151,7 +150,6 @@ def test_response_read_transport_failures_are_not_schema_failures(
     monkeypatch, error, expected
 ) -> None:
     client, _ = _client(monkeypatch, ReadFailureResponse(error))
-
     with pytest.raises(expected) as captured:
         _read(client)
 
@@ -179,7 +177,6 @@ def test_invalid_success_transport_is_a_schema_failure(
     monkeypatch, headers, body
 ) -> None:
     client, _ = _client(monkeypatch, Response(body, headers=headers))
-
     with pytest.raises(TopologyLoadError) as captured:
         _read(client)
 
@@ -193,7 +190,6 @@ def test_noncanonical_content_length_is_a_schema_failure(monkeypatch) -> None:
     client, _ = _client(
         monkeypatch, Response(body, headers={"Content-Length": f"0{len(body)}"})
     )
-
     with pytest.raises(TopologyLoadError) as captured:
         _read(client)
 
@@ -228,7 +224,6 @@ def test_gateway_wide_failures_keep_their_typed_scope(
 ) -> None:
     failure = TopologyGatewayFailureV1(gateway_reason)
     client, _ = _client(monkeypatch, _http_error(failure))
-
     with pytest.raises(TopologyLoadError) as captured:
         _read(client)
 
@@ -241,7 +236,6 @@ def test_gateway_wide_failures_keep_their_typed_scope(
 def test_gateway_request_failures_are_typed_and_redacted(monkeypatch, reason) -> None:
     failure = TopologyGatewayFailureV1(reason)
     client, _ = _client(monkeypatch, _http_error(failure))
-
     with pytest.raises(TopologyGatewayRequestError) as captured:
         _read(client)
 
