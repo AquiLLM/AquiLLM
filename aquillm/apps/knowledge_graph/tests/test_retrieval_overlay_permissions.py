@@ -9,6 +9,12 @@ from uuid import UUID
 
 import pytest
 
+from apps.documents.services.hybrid_graph_authorization import reauthorized_baseline
+from apps.documents.tests.hybrid_graph_test_support import (
+    Policy,
+    authorization,
+    chunk,
+)
 from apps.knowledge_graph.retrieval import expansion
 from apps.knowledge_graph.retrieval.ppr import PPRAlgorithmConfig
 from apps.knowledge_graph.retrieval.types import (
@@ -165,3 +171,32 @@ def test_production_composition_has_no_network_ml_cache_or_global_graph_path() -
     assert "allowed_doc_ids" in source
     assert "allowed_collection_ids" in source
     assert "_deadline.check()" in source
+
+
+def test_partial_revocation_filters_baseline_and_discards_graph_authority() -> None:
+    policy = Policy()
+    frozen = authorization(policy)
+    baseline = (chunk(1), chunk(2, _DOC_B))
+    policy.rows = ((7, baseline[0].doc_id),)
+
+    retained, graph_allowed = reauthorized_baseline(baseline, frozen)
+
+    assert retained == (baseline[0],)
+    assert graph_allowed is False
+
+
+def test_new_grant_is_ignored_without_expanding_the_frozen_scope() -> None:
+    policy = Policy()
+    baseline = (chunk(1),)
+    policy.rows = ((7, baseline[0].doc_id),)
+    frozen = authorization(
+        policy,
+        collection_ids=(7,),
+        document_ids=(baseline[0].doc_id,),
+    )
+    policy.rows = ((7, baseline[0].doc_id), (9, _DOC_B))
+
+    retained, graph_allowed = reauthorized_baseline(baseline, frozen)
+
+    assert retained == baseline
+    assert graph_allowed is True
