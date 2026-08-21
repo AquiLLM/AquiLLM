@@ -43,7 +43,7 @@ def negative_observation(
         "projected_ranks": [],
         "repeated_projected_ranks": [],
         "latency_ms": 0.0,
-        "reranker_calls": 0,
+        "reranker_calls": int(arm == "combined_reranked"),
         "comparison_snapshot_signature": signature,
         "candidate_trace": [],
         "timing_trace": {
@@ -99,6 +99,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--observations-output", required=True)
     parser.add_argument("--freshness-output", required=True)
     parser.add_argument("--backend-parity-output", required=True)
+    parser.add_argument("--live-trace-output", required=True)
     parser.add_argument("--attestation-output", required=True)
     return parser
 
@@ -122,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             _absolute(args.observations_output),
             _absolute(args.freshness_output),
             _absolute(args.backend_parity_output),
+            _absolute(args.live_trace_output),
             _absolute(args.attestation_output),
         ),
     )

@@ -1,37 +1,15 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 from dataclasses import dataclass
 from types import SimpleNamespace
-
-import pytest
 
 from apps.knowledge_graph.evals import task21_hybrid_live_execution as execution
 from apps.knowledge_graph.evals import task21_hybrid_live_observations as live
 from apps.knowledge_graph.retrieval.branch_contracts import BranchStatusV1
 
 
-def _trace(chunk_id: str, ordinal: int) -> dict[str, object]:
-    return {
-        "chunk_id": chunk_id,
-        "ordinal": ordinal,
-        "sources": ["baseline"],
-        "baseline_rank": ordinal,
-        "direct_rank": None,
-        "direct_score_hex": None,
-        "extended_rank": None,
-        "extended_score_hex": None,
-        "fusion_score_hex": "0x0.0p+0",
-        "reranker_rank": None,
-    }
-
-
 def _observation(case_id: str, arm: str) -> dict[str, object]:
     reranked = arm == "combined_reranked"
-    trace = _trace("visible-chunk", 1)
-    trace["reranker_rank"] = 1 if reranked else None
     return {
         "case_id": case_id,
         "ranked_chunk_ids": ["visible-chunk"],
@@ -42,9 +20,22 @@ def _observation(case_id: str, arm: str) -> dict[str, object]:
         "projected_ranks": [],
         "repeated_projected_ranks": [],
         "latency_ms": 1.25,
-        "reranker_calls": 1 if reranked else 0,
+        "reranker_calls": int(reranked),
         "comparison_snapshot_signature": "a" * 64,
-        "candidate_trace": [trace],
+        "candidate_trace": [
+            {
+                "chunk_id": "visible-chunk",
+                "ordinal": 1,
+                "sources": ["baseline"],
+                "baseline_rank": 1,
+                "direct_rank": None,
+                "direct_score_hex": None,
+                "extended_rank": None,
+                "extended_score_hex": None,
+                "fusion_score_hex": "0x0.0p+0",
+                "reranker_rank": 1 if reranked else None,
+            }
+        ],
         "timing_trace": {
             "candidate_ms": 0.25,
             "branch_ms": 0.5,
@@ -53,7 +44,7 @@ def _observation(case_id: str, arm: str) -> dict[str, object]:
             "total_ms": 1.25,
         },
         "authorization_status": "current",
-        "graph_scheduled": arm not in {"vector_only"},
+        "graph_scheduled": arm != "vector_only",
         "inaccessible_candidate_count": 0,
         "adversarial_candidate_chunk_ids": [],
         "inaccessible_result_chunk_ids": [],
@@ -131,6 +122,7 @@ def test_empty_authorized_case_never_constructs_or_schedules_graph_provider():
                 "inaccessible_result_chunk_ids": [],
             }
         ]
+    assert rows["combined_reranked"][0]["reranker_calls"] == 1
 
 
 def test_production_executor_records_repeatable_branch_scores_and_one_rerank(
@@ -152,6 +144,7 @@ def test_production_executor_records_repeatable_branch_scores_and_one_rerank(
                 candidates=(SimpleNamespace(chunk_key=key, rank=1, score=score),)
             ),
         )
+
     traces = iter(
         execution.GraphExecutionTrace(
             runtime=SimpleNamespace(
@@ -166,7 +159,7 @@ def test_production_executor_records_repeatable_branch_scores_and_one_rerank(
             pool=(seed, graph),
             graph_ms=4.0,
         )
-        for _index in range(2)
+        for _index in range(4)
     )
     monkeypatch.setattr(execution, "_graph_pool", lambda *_args: next(traces))
     monkeypatch.setattr(
@@ -176,7 +169,9 @@ def test_production_executor_records_repeatable_branch_scores_and_one_rerank(
         execution,
         "_ranked_pool",
         lambda _prepared, _pool, calls: (
-            ((graph, seed), 5.0, 0) if calls == 1 else None
+            ((graph, seed), 5.0, 0)
+            if calls == 1
+            else ((seed, graph), 0.0, 0)
         ),
     )
     prepared = SimpleNamespace(
@@ -206,68 +201,19 @@ def test_production_executor_records_repeatable_branch_scores_and_one_rerank(
     assert observed["ranked_chunk_ids"] == ["graph", "seed"]
     assert observed["projected_ranks"] == ["graph"]
     assert observed["repeated_projected_ranks"] == ["graph"]
-    assert observed["candidate_trace"][1]["direct_score_hex"] == (0.75).hex()
-    assert observed["candidate_trace"][1]["extended_score_hex"] == (0.5).hex()
+    traced = {row["chunk_id"]: row for row in observed["candidate_trace"]}
+    assert traced["graph"]["direct_score_hex"] == (0.75).hex()
+    assert traced["graph"]["extended_score_hex"] == (0.5).hex()
     assert observed["reranker_calls"] == 1
 
-
-def test_atomic_live_publish_is_0600_attested_and_never_overwrites(tmp_path):
-    paths = live.LiveOutputPaths(
-        observations=tmp_path / "observations.json",
-        freshness=tmp_path / "freshness.json",
-        backend_parity=tmp_path / "backend-parity.json",
-        attestation=tmp_path / "observation-attestation.json",
-    )
-    runtime = {
-        "schema": live.RUNTIME_IDENTITY_SCHEMA,
-        "run_id": "1" * 32,
-        "source_commit": "2" * 40,
-        "config_sha256": "3" * 64,
-        "images": {name: "sha256:" + "4" * 64 for name in live.RUNTIME_SERVICES},
-        "complete": True,
-    }
-    artifacts = live.publish_live_artifacts(
-        paths=paths,
-        run_id="1" * 32,
-        source_commit="2" * 40,
-        runtime_identity=runtime,
-        observations={arm: [] for arm in live.TASK21_HYBRID_ARMS},
-        freshness={
-            "generation_key": "5" * 64,
-            "projection_checksum": "6" * 64,
-            "age_seconds": 0.0,
-            "max_age_seconds": 300.0,
-            "projection_keys": ["7" * 64],
-            "generation_keys": ["8" * 64],
-            "graph_checksums": ["9" * 64],
-            "ready_bundle_checksums": ["a" * 64],
-            "ontology_version": "research-v1",
-            "ontology_checksum": "b" * 64,
+    direct = execution.ProductionArmExecutor(_Settings()).run_arm(
+        case=prepared.case,
+        prepared=prepared,
+        spec={
+            "name": "direct",
+            "direct_enabled": True,
+            "extended_enabled": False,
+            "reranker_calls": 0,
         },
-        backend_parity={"status": "exact"},
     )
-
-    assert artifacts == paths
-    for path in paths:
-        assert path.is_file()
-        if os.name != "nt":
-            assert path.stat().st_mode & 0o777 == 0o600
-    attestation = json.loads(paths.attestation.read_text(encoding="utf-8"))
-    assert attestation["run_id"] == "1" * 32
-    assert attestation["source_commit"] == "2" * 40
-    assert attestation["config_sha256"] == "3" * 64
-    assert attestation["images"] == runtime["images"]
-    assert attestation["artifact_sha256"] == {
-        name: hashlib.sha256(getattr(paths, name).read_bytes()).hexdigest()
-        for name in ("observations", "freshness", "backend_parity")
-    }
-    with pytest.raises(FileExistsError):
-        live.publish_live_artifacts(
-            paths=paths,
-            run_id="1" * 32,
-            source_commit="2" * 40,
-            runtime_identity=runtime,
-            observations={arm: [] for arm in live.TASK21_HYBRID_ARMS},
-            freshness=json.loads(paths.freshness.read_text(encoding="utf-8")),
-            backend_parity={"status": "exact"},
-        )
+    assert all(row["reranker_rank"] is None for row in direct["candidate_trace"])

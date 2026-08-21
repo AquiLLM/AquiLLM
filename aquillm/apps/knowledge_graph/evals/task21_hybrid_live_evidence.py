@@ -26,7 +26,7 @@ RUNTIME_SERVICES = (
 _HEX32 = re.compile(r"[0-9a-f]{32}")
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
-_ARTIFACTS = ("observations", "freshness", "backend_parity")
+_ARTIFACTS = ("observations", "freshness", "backend_parity", "live_trace")
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,19 +34,21 @@ class LiveOutputPaths:
     observations: Path
     freshness: Path
     backend_parity: Path
+    live_trace: Path
     attestation: Path
 
     def __post_init__(self) -> None:
         values = tuple(self)
         if any(not isinstance(path, Path) or not path.is_absolute() for path in values):
             raise ValueError("live output paths must be exact absolute Paths")
-        if len(set(values)) != 4 or len({path.parent for path in values}) != 1:
+        if len(set(values)) != 5 or len({path.parent for path in values}) != 1:
             raise ValueError("live output paths must be unique siblings")
 
     def __iter__(self) -> Iterator[Path]:
         yield self.observations
         yield self.freshness
         yield self.backend_parity
+        yield self.live_trace
         yield self.attestation
 
 
@@ -132,8 +134,16 @@ def publish_live_artifacts(
     observations: object,
     freshness: Mapping[str, object],
     backend_parity: object,
+    live_trace: Mapping[str, object],
+    expected_case_ids=(),
+    fixture_chunk_ids=(),
 ) -> LiveOutputPaths:
-    """Publish three artifacts then their binding attestation, never overwriting."""
+    """Publish four artifacts then their binding attestation, never overwriting."""
+
+    from .task21_hybrid_live_trace import (
+        validate_live_trace_observations,
+        write_live_trace,
+    )
 
     if type(paths) is not LiveOutputPaths:
         raise TypeError("paths must be exact")
@@ -149,12 +159,23 @@ def publish_live_artifacts(
         "observations": observations,
         "freshness": freshness,
         "backend_parity": backend_parity,
+        "live_trace": live_trace,
     }
     temporaries: dict[str, Path] = {}
     published: list[Path] = []
     try:
-        for name in _ARTIFACTS:
+        for name in _ARTIFACTS[:-1]:
             temporaries[name] = _private_temp(getattr(paths, name), payloads[name])
+        validate_live_trace_observations(live_trace, observations)
+        trace_stage = paths.live_trace.with_name(
+            f".{paths.live_trace.name}.{os.getpid()}.stage"
+        )
+        temporaries["live_trace"] = write_live_trace(
+            trace_stage,
+            live_trace,
+            expected_case_ids=expected_case_ids,
+            fixture_chunk_ids=fixture_chunk_ids,
+        )
         hashes = {
             name: hashlib.sha256(temporaries[name].read_bytes()).hexdigest()
             for name in _ARTIFACTS

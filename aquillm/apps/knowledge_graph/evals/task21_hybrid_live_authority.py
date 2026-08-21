@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
-from .fixture_manifest import ResolvedFixtureManifest, load_fixture_manifest
+from .fixture_manifest import (
+    ResolvedFixtureManifest,
+    canonical_embedding_sha256,
+    load_fixture_manifest,
+)
 from .fixture_seed_cases import logical_fixture
 from .fixture_seed_contract import PHYSICAL_BINDINGS, VISIBLE_USERNAME
 from .fixture_seed_manifest_io import canonical_manifest_bytes, validate_payload
@@ -116,6 +121,68 @@ def _load_exact_manifest(path: Path) -> ResolvedFixtureManifest:
     return validate_payload(payload, logical_fixture())
 
 
+def validate_live_fixture_rows(*, manifest, documents, chunks) -> None:
+    """Bind every live document/chunk byte to the canonical signed manifest."""
+
+    documents_by_id = {row.id: row for row in documents}
+    if set(documents_by_id) != {
+        binding.document_id for binding in manifest.documents.values()
+    }:
+        raise RuntimeError("fixture documents are incomplete")
+    for binding in manifest.documents.values():
+        row = documents_by_id[binding.document_id]
+        digest = sha256(row.full_text.encode()).hexdigest()
+        if (
+            row.collection_id != binding.collection_id
+            or digest != binding.full_text_sha256
+            or row.full_text_hash != binding.full_text_sha256
+        ):
+            raise RuntimeError("fixture document content drifted")
+    chunks_by_pk = {row.pk: row for row in chunks}
+    if set(chunks_by_pk) != {
+        binding.chunk_id for binding in manifest.chunks.values()
+    }:
+        raise RuntimeError("fixture chunks are incomplete")
+    for symbol, binding in manifest.chunks.items():
+        row = chunks_by_pk[binding.chunk_id]
+        document_id = manifest.documents[binding.document_symbol].document_id
+        if (row.doc_id, row.chunk_number, row.start_position, row.end_position) != (
+            document_id,
+            binding.chunk_number,
+            binding.start,
+            binding.end,
+        ):
+            raise RuntimeError("fixture chunk coordinates drifted")
+        if sha256(row.content.encode()).hexdigest() != binding.content_sha256:
+            raise RuntimeError("fixture chunk content drifted")
+        if (
+            row.modality != "text"
+            or row.metadata
+            != {"chunk_symbol": symbol, "fixture_id": manifest.fixture_id}
+        ):
+            raise RuntimeError("fixture chunk metadata drifted")
+        try:
+            embedding_checksum = canonical_embedding_sha256(tuple(row.embedding))
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("fixture chunk embedding drifted") from error
+        if embedding_checksum != binding.embedding_sha256:
+            raise RuntimeError("fixture chunk embedding drifted")
+
+
+def _validate_embedding_identity(manifest: ResolvedFixtureManifest) -> None:
+    from aquillm.utils import strict_index_embedding_signature
+
+    signature = strict_index_embedding_signature()
+    expected_prefix = (
+        f"local-openai:{manifest.embedding.model}@{manifest.embedding.checkpoint}:"
+    )
+    if (
+        not signature.startswith(expected_prefix)
+        or f":dims={manifest.embedding.dimensions}:" not in signature
+    ):
+        raise RuntimeError("fixture embedding runtime identity drifted")
+
+
 def load_live_fixture_authority(path: Path) -> LiveFixtureAuthority:
     """Validate the checked-in fixture's exact live rows and policy principal."""
 
@@ -126,34 +193,18 @@ def load_live_fixture_authority(path: Path) -> LiveFixtureAuthority:
 
     _validate_runtime_flags()
     manifest = _load_exact_manifest(path)
+    _validate_embedding_identity(manifest)
     principal = User.objects.get(username=VISIBLE_USERNAME)
     if principal.is_active is not False or principal.is_authenticated is not True:
         raise RuntimeError("fixture principal identity drifted")
     document_ids = tuple(row.document_id for row in manifest.documents.values())
     documents = tuple(RawTextDocument.objects.filter(id__in=document_ids))
     documents_by_id = {row.id: row for row in documents}
-    if set(documents_by_id) != set(document_ids):
-        raise RuntimeError("fixture documents are incomplete")
-    for binding in manifest.documents.values():
-        row = documents_by_id[binding.document_id]
-        if row.collection_id != binding.collection_id:
-            raise RuntimeError("fixture document collection drifted")
     chunk_ids = tuple(row.chunk_id for row in manifest.chunks.values())
-    chunks = tuple(
-        TextChunk.objects.filter(pk__in=chunk_ids).only(
-            "pk", "doc_id", "chunk_number"
-        )
+    chunks = tuple(TextChunk.objects.filter(pk__in=chunk_ids))
+    validate_live_fixture_rows(
+        manifest=manifest, documents=documents, chunks=chunks
     )
-    by_pk = {row.pk: row for row in chunks}
-    if set(by_pk) != set(chunk_ids):
-        raise RuntimeError("fixture chunks are incomplete")
-    for binding in manifest.chunks.values():
-        row = by_pk[binding.chunk_id]
-        if (row.doc_id, row.chunk_number) != (
-            manifest.documents[binding.document_symbol].document_id,
-            binding.chunk_number,
-        ):
-            raise RuntimeError("fixture chunk coordinates drifted")
     expected_labels = {
         binding.collection_id
         for logical, binding in manifest.collections.items()
@@ -172,5 +223,7 @@ def load_live_fixture_authority(path: Path) -> LiveFixtureAuthority:
 __all__ = [
     "LiveFixtureAuthority",
     "PreparedLiveCase",
+    "canonical_embedding_sha256",
     "load_live_fixture_authority",
+    "validate_live_fixture_rows",
 ]

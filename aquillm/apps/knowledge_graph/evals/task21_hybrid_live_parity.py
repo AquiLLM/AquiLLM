@@ -34,6 +34,21 @@ def _tie_bytes(result) -> bytes:
     )
 
 
+def canonical_comparison_inputs(rows) -> list[dict[str, object]]:
+    """Select the first deterministic parity input observed for each branch."""
+
+    by_branch: dict[str, dict[str, object]] = {}
+    for raw in rows:
+        row = dict(raw)
+        branch = row.get("branch")
+        if branch not in {"direct", "extended"}:
+            raise RuntimeError("live parity branch is not exact")
+        by_branch.setdefault(branch, row)
+    if set(by_branch) != {"direct", "extended"}:
+        raise RuntimeError("live parity inputs require direct and extended")
+    return [by_branch[branch] for branch in ("direct", "extended")]
+
+
 def build_live_backend_parity(*, call_pairs, ready_scopes, settings):
     """Replay each exact live provider input through the PostgreSQL oracle."""
 
@@ -168,9 +183,9 @@ def build_live_backend_parity(*, call_pairs, ready_scopes, settings):
     result.update(
         postgres_projected_ranks=list(first_ranks),
         memgraph_projected_ranks=list(first_ranks),
-        comparison_inputs=comparisons,
+        comparison_inputs=canonical_comparison_inputs(comparisons),
     )
     return result
 
 
-__all__ = ["build_live_backend_parity"]
+__all__ = ["build_live_backend_parity", "canonical_comparison_inputs"]

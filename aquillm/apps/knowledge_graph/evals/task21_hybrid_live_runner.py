@@ -15,6 +15,7 @@ from .task21_hybrid_eval import (
 from .task21_hybrid_live_authority import load_live_fixture_authority
 from .task21_hybrid_live_execution import ProductionArmExecutor
 from .task21_hybrid_live_parity import build_live_backend_parity
+from .task21_hybrid_live_payloads import build_live_evidence_payloads
 
 
 def _digest(values) -> str:
@@ -170,20 +171,31 @@ def run_production_live_observations(
         ready_scopes=executor.ready_scopes,
         settings=settings,
     )
+    evidence = build_live_evidence_payloads(
+        run_id=run_id,
+        source_commit=source_commit,
+        manifest=authority.manifest,
+        combined_observations=observations,
+        combined_freshness=freshness,
+        combined_backend_parity=parity,
+    )
     build_task21_hybrid_report(
         cases=cases,
-        observations=observations,
-        freshness=freshness,
-        backend_parity=parity,
+        observations=evidence.observations,
+        freshness=evidence.freshness,
+        backend_parity=evidence.backend_parity,
     )
     publish_live_artifacts(
         paths=output_paths,
         run_id=run_id,
         source_commit=source_commit,
         runtime_identity=runtime_identity,
-        observations=observations,
-        freshness=freshness,
-        backend_parity=parity,
+        observations=evidence.observations,
+        freshness=evidence.freshness,
+        backend_parity=evidence.backend_parity,
+        live_trace=evidence.live_trace,
+        expected_case_ids=evidence.case_ids,
+        fixture_chunk_ids=evidence.fixture_chunk_ids,
     )
 
 
