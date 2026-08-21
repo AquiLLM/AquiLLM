@@ -9,11 +9,11 @@ from lib.knowledge_graph.retrieval_config import (
     load_hybrid_retrieval_settings,
 )
 
-from .chunk_reference_store import DjangoChunkReferenceStore
 from .django_projection_source import DjangoProjectionRowSource
 from .memgraph_driver import Neo4jMemgraphDriver
 from .memgraph_repository import MemgraphProjectionRepository
 from .postgres_repository import PostgresProjectionRepository
+from .state_repository import FunctionProjectionStateRepository
 
 _PROJECTION_SETTING_NAMES = frozenset(
     (
@@ -96,9 +96,13 @@ def postgres_projection_repository(
     selected = ProjectionDatabaseAliases() if aliases is None else aliases
     if type(selected) is not ProjectionDatabaseAliases:
         raise TypeError("aliases must be exact projection database aliases")
+    if state_repository is None:
+        raise RuntimeError("function state repository is required")
+    if type(state_repository) is not FunctionProjectionStateRepository:
+        raise TypeError("state_repository must be an exact function state repository")
     source = DjangoProjectionRowSource(
         selected.source,
-        state_using=(selected.state if state_repository is None else selected.source),
+        state_using=selected.source,
         identifier_key=settings.projection_identifier_hmac_key.get_secret_value().encode(
             "utf-8"
         ),
@@ -107,13 +111,9 @@ def postgres_projection_repository(
         projection_version=settings.projection_format_version,
     )
     return PostgresProjectionRepository(
-        using=(selected.state if state_repository is None else selected.source),
+        using=selected.source,
         source=source,
-        chunk_store=(
-            DjangoChunkReferenceStore(selected.state)
-            if state_repository is None
-            else state_repository
-        ),
+        chunk_store=state_repository,
     )
 
 

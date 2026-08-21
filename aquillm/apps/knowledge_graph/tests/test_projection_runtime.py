@@ -73,9 +73,52 @@ def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
     }
 
 
-def test_postgres_factory_injects_frozen_hmac_versions_and_database_aliases(
+def test_postgres_factory_rejects_missing_function_state_repository_before_io(
     monkeypatch,
 ) -> None:
+    settings = runtime.load_projection_runtime_settings(_projection_environment())
+    constructed = []
+
+    def forbidden(*_args, **_kwargs):
+        constructed.append("direct-store")
+        raise AssertionError("direct projection-state ORM store was constructed")
+
+    monkeypatch.setattr(
+        runtime, "DjangoChunkReferenceStore", forbidden, raising=False
+    )
+    monkeypatch.setattr(runtime, "DjangoProjectionRowSource", forbidden)
+
+    with pytest.raises(RuntimeError, match="function state repository is required"):
+        runtime.postgres_projection_repository(settings)
+
+    assert constructed == []
+
+
+def test_postgres_factory_rejects_nonexact_state_repository_before_io(
+    monkeypatch,
+) -> None:
+    settings = runtime.load_projection_runtime_settings(_projection_environment())
+
+    def forbidden_source(*_args, **_kwargs):
+        pytest.fail("source constructed before authority check")
+
+    monkeypatch.setattr(
+        runtime,
+        "DjangoProjectionRowSource",
+        forbidden_source,
+    )
+
+    with pytest.raises(TypeError, match="exact function state repository"):
+        runtime.postgres_projection_repository(settings, state_repository=object())
+
+
+def test_postgres_factory_injects_frozen_hmac_versions_and_function_repository(
+    monkeypatch,
+) -> None:
+    from apps.knowledge_graph.projection.state_repository import (
+        FunctionProjectionStateRepository,
+    )
+
     settings = runtime.load_projection_runtime_settings(_projection_environment())
     aliases = runtime.ProjectionDatabaseAliases(
         source="projection_source",
@@ -87,39 +130,38 @@ def test_postgres_factory_injects_frozen_hmac_versions_and_database_aliases(
         observed["source"] = (using, kwargs)
         return "source"
 
-    def store(using):
-        observed["store"] = using
-        return "store"
-
     def repository(**kwargs):
         observed["repository"] = kwargs
         return "repository"
 
     monkeypatch.setattr(runtime, "DjangoProjectionRowSource", source, raising=False)
-    monkeypatch.setattr(runtime, "DjangoChunkReferenceStore", store, raising=False)
     monkeypatch.setattr(
         runtime, "PostgresProjectionRepository", repository, raising=False
     )
+    function_repository = FunctionProjectionStateRepository(owner="worker-1")
 
-    result = runtime.postgres_projection_repository(settings, aliases=aliases)
+    result = runtime.postgres_projection_repository(
+        settings,
+        aliases=aliases,
+        state_repository=function_repository,
+    )
 
     assert result == "repository"
     assert observed == {
         "source": (
             "projection_source",
             {
-                "state_using": "projection_state",
+                "state_using": "projection_source",
                 "identifier_key": b"identifier-secret",
                 "identifier_key_version": "key-v7",
                 "schema_version": "collection-graph-v1",
                 "projection_version": "projection-v1",
             },
         ),
-        "store": "projection_state",
         "repository": {
-            "using": "projection_state",
+            "using": "projection_source",
             "source": "source",
-            "chunk_store": "store",
+            "chunk_store": function_repository,
         },
     }
 
@@ -169,15 +211,19 @@ def test_worker_postgres_factory_uses_the_live_configured_repository(
     repository = object()
     observed = []
     monkeypatch.setattr(worker, "_projection_settings", lambda: settings)
-    monkeypatch.setattr(
-        worker,
-        "postgres_projection_repository",
-        lambda value: observed.append(value) or repository,
-        raising=False,
-    )
+    state_repository = object()
 
-    assert worker._postgres_repository() is repository
-    assert observed == [settings]
+    def factory(value, *, state_repository):
+        observed.append((value, state_repository))
+        return repository
+
+    monkeypatch.setattr(worker, "postgres_projection_repository", factory)
+    token = worker._STATE_REPOSITORY.set(state_repository)
+    try:
+        assert worker._postgres_repository() is repository
+    finally:
+        worker._STATE_REPOSITORY.reset(token)
+    assert observed == [(settings, state_repository)]
     assert worker._state_using() == "projection_state"
 
 
