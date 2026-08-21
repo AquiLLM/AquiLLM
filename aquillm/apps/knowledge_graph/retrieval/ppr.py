@@ -61,8 +61,6 @@ type NormalizedTransitionRows = dict[
 # projected opaque-key validator here, because this module remains the frozen
 # compatibility surface for ppr_v1.
 #
-# These notes occupy the reviewed legacy file-length budget that the repository
-# ratchet requires this tracked hotspot to retain after numerical extraction.
 # The new kernel itself remains below the ordinary source-file limit.
 #
 # Compatibility invariants covered by test_retrieval_ppr:

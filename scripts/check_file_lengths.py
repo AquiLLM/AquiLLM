@@ -44,7 +44,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/knowledge_graph/resolution/normalization.py": 369,
     "aquillm/apps/knowledge_graph/resolution/persistence.py": 816,
     "aquillm/apps/knowledge_graph/retrieval/expansion.py": 4099,
-    "aquillm/apps/knowledge_graph/retrieval/ppr.py": 555,
+    "aquillm/apps/knowledge_graph/retrieval/ppr.py": 553,
     "aquillm/apps/knowledge_graph/services/builds.py": 5236,
     "aquillm/apps/knowledge_graph/services/inspection.py": 416,
     "aquillm/apps/knowledge_graph/services/ontology.py": 825,

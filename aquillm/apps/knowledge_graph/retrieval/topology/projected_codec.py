@@ -10,12 +10,21 @@ from .. import projected_types as t
 _MAX_JSON_BYTES = 2_000_000
 
 
+def _hex_float(value: object) -> float:
+    if type(value) is not str:
+        raise ValueError("projected numeric value is not an exact hex string")
+    try:
+        return float.fromhex(value)
+    except (OverflowError, ValueError) as error:
+        raise ValueError("projected numeric value is not a finite hex float") from error
+
+
 def _evidence(value):
     return t.ProjectedChunkEvidenceV1(
         value["chunk_key"],
         value["document_key"],
         value["chunk_number"],
-        float.fromhex(value["confidence"]),
+        _hex_float(value["confidence"]),
         value["provenance_key"],
     )
 
@@ -28,7 +37,7 @@ def _signature(value):
         value["chunk_key"],
         value["document_key"],
         value["chunk_number"],
-        float.fromhex(value["confidence"]),
+        _hex_float(value["confidence"]),
         value["artifact_key"],
         value["source_document_key"],
         value["head_mention_key"],
@@ -138,7 +147,7 @@ def decode_projected_snapshot_json(raw: object) -> t.ProjectedAuthorizedGraphSna
                 row["relation_type"],
                 row["target_identity_key"],
                 t.ProjectedRetrievalDirectionV1(row["direction"]),
-                float.fromhex(row["raw_weight"]),
+                _hex_float(row["raw_weight"]),
                 row["admission_hop"],
                 tuple(_evidence(item) for item in row["evidence"]),
             )

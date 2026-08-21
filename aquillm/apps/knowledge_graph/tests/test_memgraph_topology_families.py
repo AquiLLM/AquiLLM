@@ -7,6 +7,12 @@ from hashlib import sha256
 import pytest
 
 from apps.knowledge_graph.retrieval import projected_types as t
+from apps.knowledge_graph.retrieval.branch_contracts import (
+    BranchStatusV1,
+    DirectBranchFailureReason,
+    ExtendedBranchFailureReason,
+)
+from apps.knowledge_graph.retrieval.scheduler import HybridGraphBranchScheduler
 from apps.knowledge_graph.retrieval.topology.contracts import (
     HybridBranchKind,
     ProjectedSeedV1,
@@ -18,6 +24,10 @@ from apps.knowledge_graph.retrieval.topology.memgraph import (
     TopologyLoadError,
 )
 from apps.knowledge_graph.tests.test_memgraph_topology import Driver, K, ready, snapshot
+from apps.knowledge_graph.tests.test_retrieval_branch_scheduler import (
+    _Runtime,
+    _settings,
+)
 
 
 def _key(label: str) -> str:
@@ -86,13 +96,31 @@ def graph_snapshot():
     )
 
 
-def _load(driver):
+def _load(driver, branch=HybridBranchKind.DIRECT):
     return MemgraphProjectedTopologyLoader(driver).load(
         ready=ready(),
         seeds=(ProjectedSeedV1(K[4], 1.0),),
-        caps=TopologyCapsV1(HybridBranchKind.DIRECT, 32, 2, 200, 1_000, 20),
+        caps=TopologyCapsV1(branch, 32, 2, 200, 1_000, 20),
         deadline=42.5,
     )
+
+
+def _overflow_driver(query, path):
+    driver = Driver(graph_snapshot())
+    section = json.loads(driver._section(query)["section_json"])
+    target = section
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = "0x1p+999999999"
+    driver.section_overrides[query] = {
+        "section_json": json.dumps(
+            section,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    }
+    return driver
 
 
 def test_memgraph_loader_constructs_graph_from_all_response_families() -> None:
@@ -157,3 +185,67 @@ def test_memgraph_loader_rejects_family_caps_tampering() -> None:
     )
     with pytest.raises(TopologyLoadError, match="direct_topology_invalid"):
         _load(driver)
+
+
+@pytest.mark.parametrize("branch", tuple(HybridBranchKind))
+@pytest.mark.parametrize(
+    ("query", "path"),
+    (
+        (TopologyQueryName.RELATION_TOPOLOGY, ("relation_groups", 0, "raw_weight")),
+        (
+            TopologyQueryName.RELATION_TOPOLOGY,
+            ("relation_groups", 0, "evidence", 0, "confidence"),
+        ),
+        (
+            TopologyQueryName.EVIDENCE_MENTIONS,
+            ("audit_rows", 0, "signature", "confidence"),
+        ),
+    ),
+)
+def test_memgraph_loader_normalizes_overflowed_hex_floats_to_local_invalid(
+    branch, query, path
+) -> None:
+    reason = (
+        "direct_topology_invalid"
+        if branch is HybridBranchKind.DIRECT
+        else "extended_topology_invalid"
+    )
+
+    with pytest.raises(TopologyLoadError, match=reason):
+        _load(_overflow_driver(query, path), branch)
+
+
+@pytest.mark.parametrize("failing_branch", tuple(HybridBranchKind))
+def test_scheduler_preserves_sibling_for_overflowed_backend_json(
+    failing_branch,
+) -> None:
+    runtime = _Runtime()
+
+    def overflow(**_kwargs):
+        return _load(
+            _overflow_driver(
+                TopologyQueryName.RELATION_TOPOLOGY,
+                ("relation_groups", 0, "raw_weight"),
+            ),
+            failing_branch,
+        )
+
+    if failing_branch is HybridBranchKind.DIRECT:
+        runtime.run_direct = overflow
+        sibling_name, failed_name = "extended", "direct"
+        expected = DirectBranchFailureReason.DIRECT_TOPOLOGY_INVALID
+    else:
+        runtime.run_extended = overflow
+        sibling_name, failed_name = "direct", "extended"
+        expected = ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_INVALID
+    outcome = HybridGraphBranchScheduler(runtime, clock=lambda: 40.0).run(
+        query="q",
+        baseline=object(),
+        authorization=object(),
+        settings=_settings(),
+        deadline=42.5,
+    )
+
+    assert getattr(outcome, sibling_name).status is BranchStatusV1.SUCCEEDED
+    assert getattr(outcome, failed_name).failure_reason is expected
+    assert outcome.shared_failure_reason is None
