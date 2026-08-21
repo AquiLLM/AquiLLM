@@ -162,6 +162,7 @@ class FunctionProjectionStateRepository:
 
     def ready(self, *, projection_id: UUID, owner: str, validation, expected_generation_key: str, expected_graph_checksum: str, expected_private_mapping_checksum: str, now: datetime, versions: tuple[str, str, str]):
         identifier = _identifier(projection_id)
+        if validation.generation_key != _checksum(expected_generation_key): raise ValueError("projection generation validation is stale")
         row = CollectionGraphProjection.objects.using(self.source_using).values("generation_key", "collection_id", "artifact_id", "membership_epoch", "membership_checksum").get(pk=identifier)
         counts = validation.counts
         result = self._one("ready", (
@@ -170,7 +171,6 @@ class FunctionProjectionStateRepository:
             _checksum(validation.validation_checksum), counts.entity_count, counts.relation_semantics_count, counts.relation_count,
             counts.evidence_count, counts.entity_mention_count, counts.chunk_count, bool(validation.valid), _instant(now),
         ))
-        if validation.generation_key != _checksum(expected_generation_key): raise ValueError("projection generation validation is stale")
         if result is None: return StateReadyOutcomeV1(identifier, False, "superseded", "source_changed")
         return StateReadyOutcomeV1(identifier, result["published"], result["state"], result["failure_code"])
 
