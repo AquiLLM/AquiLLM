@@ -112,14 +112,22 @@ def postgres_projection_repository(
     )
 
 
-def projection_identifier_codec(settings: HybridRetrievalSettings):
+def projection_identifier_codec(
+    settings: HybridRetrievalSettings,
+    *,
+    key_version: str | None = None,
+):
     from .identifiers import HmacSha256ProjectionIdentifierCodec
 
     if type(settings) is not HybridRetrievalSettings:
         raise TypeError("settings must be exact hybrid retrieval settings")
     return HmacSha256ProjectionIdentifierCodec(
         settings.projection_identifier_hmac_key.get_secret_value().encode("utf-8"),
-        key_version=settings.projection_identifier_key_version,
+        key_version=(
+            settings.projection_identifier_key_version
+            if key_version is None
+            else key_version
+        ),
     )
 
 

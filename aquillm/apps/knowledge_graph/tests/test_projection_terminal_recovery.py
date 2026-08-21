@@ -6,11 +6,12 @@ from uuid import uuid4
 
 import pytest
 
-from apps.knowledge_graph.projection import generation_audit, reconciler
+from apps.knowledge_graph.projection import generation_audit, reconciler, runtime
 from apps.knowledge_graph.projection.identifiers import (
     HmacSha256ProjectionIdentifierCodec,
     ProjectionIdentifierDomain,
 )
+from apps.knowledge_graph.tests.test_projection_runtime import _projection_environment
 
 
 def _settings():
@@ -33,6 +34,7 @@ def test_terminal_prune_uses_immutable_orm_authority_after_source_change(
         artifact_id=11,
         membership_epoch=3,
         membership_checksum="a" * 64,
+        identifier_key_version="key-v1",
     )
     filters = []
 
@@ -59,7 +61,9 @@ def test_terminal_prune_uses_immutable_orm_authority_after_source_change(
     deleted = []
     monkeypatch.setattr(reconciler.CollectionGraphProjection, "objects", Query())
     monkeypatch.setattr(reconciler, "_projection_settings", _settings)
-    monkeypatch.setattr(reconciler, "projection_identifier_codec", lambda _s: codec)
+    monkeypatch.setattr(
+        reconciler, "projection_identifier_codec", lambda _s, **_kwargs: codec
+    )
     monkeypatch.setattr(
         reconciler,
         "_postgres_repository",
@@ -105,6 +109,7 @@ def test_terminal_generation_identity_never_reloads_mutable_bundle(monkeypatch):
             generation_key=generation,
             collection_id=7,
             artifact_id=11,
+            identifier_key_version="key-v1",
         ),
     )
     pages = [rows, ()]
@@ -120,7 +125,7 @@ def test_terminal_generation_identity_never_reloads_mutable_bundle(monkeypatch):
     monkeypatch.setattr(
         generation_audit,
         "projection_identifier_codec",
-        lambda _settings: codec,
+        lambda _settings, **_kwargs: codec,
         raising=False,
     )
 
@@ -156,6 +161,73 @@ def test_direct_prune_refuses_nonterminal_authority(monkeypatch):
             ),
             settings=_settings(),
         )
+
+
+def test_rotated_runtime_prunes_with_persisted_generation_key_version():
+    generation = uuid4()
+    environment = {
+        **_projection_environment(),
+        "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "key-v2",
+    }
+    settings = runtime.load_projection_runtime_settings(environment)
+    expected = HmacSha256ProjectionIdentifierCodec(
+        b"identifier-secret", key_version="key-v1"
+    ).encode(
+        ProjectionIdentifierDomain.COLLECTION,
+        generation=generation,
+        source=generation,
+    )
+    deleted = []
+
+    reconciler._delete_projection_generation(
+        row=SimpleNamespace(
+            state="superseded",
+            generation_key=generation,
+            identifier_key_version="key-v1",
+        ),
+        graph=SimpleNamespace(
+            delete_generation=lambda **kwargs: deleted.append(kwargs["generation_key"])
+        ),
+        settings=settings,
+    )
+
+    assert deleted == [expected]
+
+
+def test_rotated_runtime_orphan_scan_uses_persisted_generation_key_version(
+    monkeypatch,
+):
+    generation = uuid4()
+    row = SimpleNamespace(
+        id=uuid4(),
+        state="superseded",
+        generation_key=generation,
+        identifier_key_version="key-v1",
+    )
+    pages = [(row,), ()]
+    environment = {
+        **_projection_environment(),
+        "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "key-v2",
+    }
+    settings = runtime.load_projection_runtime_settings(environment)
+    expected = HmacSha256ProjectionIdentifierCodec(
+        b"identifier-secret", key_version="key-v1"
+    ).encode(
+        ProjectionIdentifierDomain.COLLECTION,
+        generation=generation,
+        source=generation,
+    )
+    monkeypatch.setattr(
+        generation_audit, "_projection_page", lambda **_kwargs: pages.pop(0)
+    )
+
+    keys = generation_audit._authoritative_generation_keys(
+        postgres=SimpleNamespace(),
+        settings=settings,
+        collection_id=None,
+    )
+
+    assert keys == frozenset((expected.value,))
 
 
 def test_reconcile_replaces_cas_supersession_and_preserves_terminal_prune(

@@ -4,6 +4,8 @@ import uuid
 from dataclasses import asdict
 from hashlib import sha256
 
+import pytest
+
 from apps.knowledge_graph.projection.memgraph_driver import (
     MemgraphWriteSummaryV1,
 )
@@ -229,6 +231,22 @@ def test_generation_deletion_is_generation_scoped_and_parameterized() -> None:
     assert "DETACH DELETE" in cypher
     assert "a" * 64 not in cypher
     assert parameters == {"generation_key": "a" * 64}
+
+
+@pytest.mark.parametrize(("node_count", "expected"), ((0, False), (3, True)))
+def test_generation_deletion_reports_attested_node_count(node_count, expected) -> None:
+    driver = _FakeDriver()
+    driver.execute_write = lambda *_args, **_kwargs: MemgraphWriteSummaryV1(
+        {"nodes_deleted": node_count}
+    )
+    repository = MemgraphProjectionRepository(driver)
+
+    deleted = repository.delete_generation(
+        generation_key=repository.opaque_generation_key("a" * 64),
+        timeout_seconds=1.0,
+    )
+
+    assert deleted is expected
 
 
 def test_generation_listing_supports_bounded_global_opaque_cursor_paging() -> None:

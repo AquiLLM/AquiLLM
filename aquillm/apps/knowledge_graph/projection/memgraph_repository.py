@@ -8,7 +8,7 @@ from math import isfinite
 from apps.knowledge_graph.retrieval.topology.contracts import TopologyCapsV1
 
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
-from .memgraph_driver import Neo4jMemgraphDriver
+from .memgraph_driver import MemgraphWriteSummaryV1, Neo4jMemgraphDriver
 from .memgraph_records import manifest_from_row, read_bundle
 from .memgraph_validation import (
     ProjectionValidationV1,
@@ -237,9 +237,15 @@ class MemgraphProjectionRepository:
 
     def delete_generation(
         self, *, generation_key: OpaqueProjectionKey, timeout_seconds: float
-    ) -> None:
-        self._driver.execute_write(
+    ) -> bool | None:
+        summary = self._driver.execute_write(
             "MATCH (n {generation_key:$generation_key}) DETACH DELETE n",
             {"generation_key": _key(generation_key)},
             timeout_seconds=_timeout(timeout_seconds),
         )
+        if (
+            type(summary) is MemgraphWriteSummaryV1
+            and "nodes_deleted" in summary.counters
+        ):
+            return summary.counters["nodes_deleted"] > 0
+        return None

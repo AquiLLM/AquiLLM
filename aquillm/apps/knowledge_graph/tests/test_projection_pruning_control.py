@@ -6,6 +6,7 @@ from uuid import uuid4
 from apps.knowledge_graph.projection import reconciler
 from apps.knowledge_graph.projection.identifiers import (
     HmacSha256ProjectionIdentifierCodec,
+    OpaqueProjectionKey,
     ProjectionIdentifierDomain,
 )
 
@@ -19,7 +20,12 @@ def _settings():
 
 def test_prune_honors_projection_id_and_uses_immutable_generation_key(monkeypatch):
     generation = uuid4()
-    row = SimpleNamespace(id=uuid4(), state="superseded", generation_key=generation)
+    row = SimpleNamespace(
+        id=uuid4(),
+        state="superseded",
+        generation_key=generation,
+        identifier_key_version="key-v1",
+    )
     codec = HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v1")
     expected = codec.encode(
         ProjectionIdentifierDomain.COLLECTION,
@@ -34,7 +40,9 @@ def test_prune_honors_projection_id_and_uses_immutable_generation_key(monkeypatc
     )
     monkeypatch.setattr(reconciler, "_orphan_generation_keys", lambda **_kwargs: ())
     monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
-    monkeypatch.setattr(reconciler, "projection_identifier_codec", lambda _s: codec)
+    monkeypatch.setattr(
+        reconciler, "projection_identifier_codec", lambda _s, **_kwargs: codec
+    )
     deleted = []
     monkeypatch.setattr(
         reconciler,
@@ -100,6 +108,63 @@ def test_exact_projection_prune_is_not_hidden_by_collection_retention(monkeypatc
     assert candidates == (row,)
     assert aliases == ["projection_state"]
     assert {"pk": projection_id} in filters
+
+
+def test_attested_missing_generation_is_not_counted_as_deleted(monkeypatch):
+    generation = uuid4()
+    row = SimpleNamespace(
+        id=uuid4(),
+        state="superseded",
+        generation_key=generation,
+        identifier_key_version="key-v1",
+    )
+    codec = HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v1")
+    monkeypatch.setattr(reconciler, "_prune_candidates", lambda **_kwargs: (row,))
+    monkeypatch.setattr(reconciler, "_orphan_generation_keys", lambda **_kwargs: ())
+    monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
+    monkeypatch.setattr(
+        reconciler, "projection_identifier_codec", lambda _s, **_kwargs: codec
+    )
+    monkeypatch.setattr(
+        reconciler,
+        "_memgraph_repository",
+        lambda: SimpleNamespace(delete_generation=lambda **_kwargs: False),
+    )
+    monkeypatch.setattr(reconciler, "_projection_settings", _settings)
+
+    summary = reconciler.prune_graph_projection_generations(
+        projection_id=row.id,
+        page_size=10,
+        retain=2,
+        dry_run=False,
+    )
+
+    assert summary.candidate_count == 1
+    assert summary.deleted_count == 0
+
+
+def test_attested_missing_orphan_is_not_counted_as_deleted(monkeypatch):
+    orphan = OpaqueProjectionKey(ProjectionIdentifierDomain.COLLECTION, "a" * 64)
+    monkeypatch.setattr(reconciler, "_prune_candidates", lambda **_kwargs: ())
+    monkeypatch.setattr(
+        reconciler, "_orphan_generation_keys", lambda **_kwargs: (orphan,)
+    )
+    monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
+    monkeypatch.setattr(
+        reconciler,
+        "_memgraph_repository",
+        lambda: SimpleNamespace(delete_generation=lambda **_kwargs: False),
+    )
+    monkeypatch.setattr(reconciler, "_projection_settings", _settings)
+
+    summary = reconciler.prune_graph_projection_generations(
+        page_size=10,
+        retain=2,
+        dry_run=False,
+    )
+
+    assert summary.orphan_count == summary.candidate_count == 1
+    assert summary.deleted_count == 0
 
 
 def test_inspection_reports_manifest_drift_and_orphans_not_failed_alias(monkeypatch):

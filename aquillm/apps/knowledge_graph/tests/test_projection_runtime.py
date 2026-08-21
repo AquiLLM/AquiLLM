@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from apps.knowledge_graph.projection import runtime
 
 
@@ -177,3 +179,31 @@ def test_worker_postgres_factory_uses_the_live_configured_repository(
     assert worker._postgres_repository() is repository
     assert observed == [settings]
     assert worker._state_using() == "projection_state"
+
+
+def test_identifier_codec_factory_can_frame_a_persisted_key_version() -> None:
+    environment = {
+        **_projection_environment(),
+        "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "key-v2",
+    }
+    settings = runtime.load_projection_runtime_settings(environment)
+
+    codec = runtime.projection_identifier_codec(settings, key_version="key-v1")
+
+    assert codec.key_version == "key-v1"
+    assert runtime.projection_identifier_codec(settings).key_version == "key-v2"
+
+
+@pytest.mark.parametrize(
+    ("value", "error"),
+    ((1, TypeError), ("", ValueError), (" key-v1", ValueError)),
+)
+def test_identifier_codec_factory_rejects_noncanonical_version_without_secret(
+    value, error
+) -> None:
+    settings = runtime.load_projection_runtime_settings(_projection_environment())
+
+    with pytest.raises(error) as captured:
+        runtime.projection_identifier_codec(settings, key_version=value)
+
+    assert "identifier-secret" not in repr(captured.value)

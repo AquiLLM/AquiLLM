@@ -146,7 +146,10 @@ def _authoritative_generation_keys(
         for row in page:
             if row.state in {"failed", "superseded"}:
                 values.add(
-                    projection_identifier_codec(settings)
+                    projection_identifier_codec(
+                        settings,
+                        key_version=row.identifier_key_version,
+                    )
                     .encode(
                         ProjectionIdentifierDomain.COLLECTION,
                         generation=row.generation_key,

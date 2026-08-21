@@ -214,15 +214,18 @@ def _opaque_generation(value: str) -> OpaqueProjectionKey:
     return OpaqueProjectionKey(ProjectionIdentifierDomain.COLLECTION, value)
 
 
-def _delete_projection_generation(*, row, graph, settings) -> None:
+def _delete_projection_generation(*, row, graph, settings) -> bool | None:
     if row.state not in {"failed", "superseded"}:
         raise ValueError("only terminal projection authority may be pruned")
-    generation_key = projection_identifier_codec(settings).encode(
+    generation_key = projection_identifier_codec(
+        settings,
+        key_version=row.identifier_key_version,
+    ).encode(
         ProjectionIdentifierDomain.COLLECTION,
         generation=row.generation_key,
         source=row.generation_key,
     )
-    graph.delete_generation(
+    return graph.delete_generation(
         generation_key=generation_key,
         timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
     )
@@ -264,18 +267,22 @@ def prune_graph_projection_generations(
     deleted = 0
     if not dry_run:
         for row in candidates:
-            _delete_projection_generation(
-                row=row,
-                graph=graph,
-                settings=settings,
+            deleted += int(
+                _delete_projection_generation(
+                    row=row,
+                    graph=graph,
+                    settings=settings,
+                )
+                is not False
             )
-            deleted += 1
         for generation_key in orphaned:
-            graph.delete_generation(
-                generation_key=generation_key,
-                timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
+            deleted += int(
+                graph.delete_generation(
+                    generation_key=generation_key,
+                    timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
+                )
+                is not False
             )
-            deleted += 1
     return PruneSummaryV1(
         len(candidates) + len(orphaned), deleted, dry_run, len(orphaned)
     )

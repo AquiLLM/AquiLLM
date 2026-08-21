@@ -37,7 +37,9 @@ def test_tombstoned_prune_derives_exact_hmac_generation_without_source(monkeypat
         generation=generation,
         source=generation,
     ).value
-    monkeypatch.setattr(reconciler, "projection_identifier_codec", lambda _value: codec)
+    monkeypatch.setattr(
+        reconciler, "projection_identifier_codec", lambda _value, **_kwargs: codec
+    )
     deleted = []
 
     reconciler._delete_projection_generation(
@@ -47,6 +49,7 @@ def test_tombstoned_prune_derives_exact_hmac_generation_without_source(monkeypat
             generation_key=generation,
             collection_id=None,
             artifact_id=None,
+            identifier_key_version="key-v1",
         ),
         graph=SimpleNamespace(
             delete_generation=lambda **kwargs: deleted.append(
