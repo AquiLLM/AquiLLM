@@ -4,7 +4,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from apps.knowledge_graph.projection import reconciler
-from apps.knowledge_graph.projection.records import ProjectionCountsV1
+from apps.knowledge_graph.projection.identifiers import (
+    HmacSha256ProjectionIdentifierCodec,
+    ProjectionIdentifierDomain,
+)
 
 
 def _settings():
@@ -14,15 +17,15 @@ def _settings():
     )
 
 
-def _bundle(generation_key="d" * 64):
-    return SimpleNamespace(
-        generation=SimpleNamespace(generation_key=generation_key),
-        counts=ProjectionCountsV1(1, 1, 1, 4, 2, 3, 1),
-    )
-
-
-def test_prune_honors_projection_id_and_uses_persisted_opaque_key(monkeypatch):
-    row = SimpleNamespace(id=uuid4())
+def test_prune_honors_projection_id_and_uses_immutable_generation_key(monkeypatch):
+    generation = uuid4()
+    row = SimpleNamespace(id=uuid4(), state="superseded", generation_key=generation)
+    codec = HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v1")
+    expected = codec.encode(
+        ProjectionIdentifierDomain.COLLECTION,
+        generation=generation,
+        source=generation,
+    ).value
     observed = {}
     monkeypatch.setattr(
         reconciler,
@@ -30,11 +33,8 @@ def test_prune_honors_projection_id_and_uses_persisted_opaque_key(monkeypatch):
         lambda **kwargs: observed.update(filters=kwargs) or (row,),
     )
     monkeypatch.setattr(reconciler, "_orphan_generation_keys", lambda **_kwargs: ())
-    monkeypatch.setattr(
-        reconciler,
-        "_postgres_repository",
-        lambda: SimpleNamespace(load_projection_bundle=lambda **_kwargs: _bundle()),
-    )
+    monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
+    monkeypatch.setattr(reconciler, "projection_identifier_codec", lambda _s: codec)
     deleted = []
     monkeypatch.setattr(
         reconciler,
@@ -56,7 +56,7 @@ def test_prune_honors_projection_id_and_uses_persisted_opaque_key(monkeypatch):
     )
 
     assert observed["filters"]["projection_id"] == row.id
-    assert deleted == ["d" * 64]
+    assert deleted == [expected]
     assert summary.deleted_count == 1
 
 

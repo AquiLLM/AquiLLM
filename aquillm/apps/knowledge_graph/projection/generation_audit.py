@@ -8,7 +8,7 @@ from apps.knowledge_graph.models import CollectionGraphProjection
 
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
 from .records import ProjectionGenerationManifestV1, ProjectionLifecycleState
-from .runtime import ProjectionDatabaseAliases
+from .runtime import ProjectionDatabaseAliases, projection_identifier_codec
 from .serialization import projection_checksum
 
 
@@ -144,18 +144,22 @@ def _authoritative_generation_keys(
         if not page:
             break
         for row in page:
+            if row.state in {"failed", "superseded"}:
+                values.add(
+                    projection_identifier_codec(settings)
+                    .encode(
+                        ProjectionIdentifierDomain.COLLECTION,
+                        generation=row.generation_key,
+                        source=row.generation_key,
+                    )
+                    .value
+                )
+                continue
             purpose = {
                 "building": "build",
                 "ready": "audit",
-                "failed": "prune",
-                "superseded": "prune",
             }.get(row.state)
             if purpose is None:
-                continue
-            if purpose == "prune" and (
-                getattr(row, "collection_id", False) is None
-                or getattr(row, "artifact_id", False) is None
-            ):
                 continue
             bundle = postgres.load_projection_bundle(
                 projection_id=row.id,

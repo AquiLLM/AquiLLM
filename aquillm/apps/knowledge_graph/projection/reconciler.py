@@ -93,6 +93,7 @@ def _projection_for_active(*, collection_id: int, artifact_id: int):
         .filter(
             collection_pk_snapshot=collection_id,
             artifact_pk_snapshot=artifact_id,
+            state__in=("pending", "building", "ready"),
         )
         .order_by("-created_at", "-id")
         .first()
@@ -213,23 +214,14 @@ def _opaque_generation(value: str) -> OpaqueProjectionKey:
     return OpaqueProjectionKey(ProjectionIdentifierDomain.COLLECTION, value)
 
 
-def _delete_projection_generation(*, row, postgres, graph, settings) -> None:
-    if (
-        getattr(row, "collection_id", False) is None
-        or getattr(row, "artifact_id", False) is None
-    ):
-        generation_key = projection_identifier_codec(settings).encode(
-            ProjectionIdentifierDomain.COLLECTION,
-            generation=row.generation_key,
-            source=row.generation_key,
-        )
-    else:
-        bundle = postgres.load_projection_bundle(
-            projection_id=row.id,
-            batch_size=settings.projection_batch_size,
-            purpose="prune",
-        )
-        generation_key = _opaque_generation(bundle.generation.generation_key)
+def _delete_projection_generation(*, row, graph, settings) -> None:
+    if row.state not in {"failed", "superseded"}:
+        raise ValueError("only terminal projection authority may be pruned")
+    generation_key = projection_identifier_codec(settings).encode(
+        ProjectionIdentifierDomain.COLLECTION,
+        generation=row.generation_key,
+        source=row.generation_key,
+    )
     graph.delete_generation(
         generation_key=generation_key,
         timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
@@ -254,7 +246,7 @@ def prune_graph_projection_generations(
     if type(dry_run) is not bool:
         raise TypeError("dry_run must be exact")
     settings = _projection_settings()
-    postgres, graph = _postgres_repository(), _memgraph_repository()
+    graph = _memgraph_repository()
     candidates = _prune_candidates(
         page_size=size,
         retain=retain,
@@ -264,7 +256,7 @@ def prune_graph_projection_generations(
     orphaned = ()
     if identifier is None and selected_collection is None and len(candidates) < size:
         orphaned = _orphan_generation_keys(
-            postgres=postgres,
+            postgres=_postgres_repository(),
             graph=graph,
             settings=settings,
             limit=size - len(candidates),
@@ -274,7 +266,6 @@ def prune_graph_projection_generations(
         for row in candidates:
             _delete_projection_generation(
                 row=row,
-                postgres=postgres,
                 graph=graph,
                 settings=settings,
             )

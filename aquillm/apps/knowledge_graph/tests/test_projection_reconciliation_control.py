@@ -263,38 +263,3 @@ def test_collection_orphan_scan_never_reads_other_collection_manifests(monkeypat
     )
 
     assert observed[0]["collection_key"].value == "e" * 64
-
-
-def test_authoritative_scan_loads_only_graph_eligible_lifecycle_purposes(monkeypatch):
-    rows = (
-        SimpleNamespace(id=1, state="pending"),
-        SimpleNamespace(id=2, state="building"),
-        SimpleNamespace(id=3, state="ready"),
-        SimpleNamespace(id=4, state="superseded"),
-        SimpleNamespace(
-            id=5,
-            state="superseded",
-            collection_id=None,
-            artifact_id=None,
-        ),
-    )
-    pages = [rows, ()]
-    monkeypatch.setattr(
-        generation_audit,
-        "_projection_page",
-        lambda **_kwargs: pages.pop(0),
-    )
-    observed = []
-
-    def load(**kwargs):
-        observed.append((kwargs["projection_id"], kwargs["purpose"]))
-        return _bundle(str(kwargs["projection_id"]) * 64)
-
-    keys = generation_audit._authoritative_generation_keys(
-        postgres=SimpleNamespace(load_projection_bundle=load),
-        settings=_settings(),
-        collection_id=None,
-    )
-
-    assert observed == [(2, "build"), (3, "audit"), (4, "prune")]
-    assert keys == frozenset(("2" * 64, "3" * 64, "4" * 64))
