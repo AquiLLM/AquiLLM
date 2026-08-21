@@ -6,6 +6,8 @@ import math
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
+from .task21_hybrid_live_trace import validate_candidate_trace
+
 PARITY_KINDS = ("snapshot", "scores", "trace", "ties")
 
 
@@ -172,9 +174,19 @@ def validate_parity(value: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def score_case(
-    case: Mapping[str, object], observation: Mapping[str, object]
+    case: Mapping[str, object], observation: Mapping[str, object], *, arm: str
 ) -> dict[str, object]:
     ranked = exact_ids(observation["ranked_chunk_ids"], "ranked chunks")
+    try:
+        candidates = validate_candidate_trace(observation["candidate_trace"], arm=arm)
+    except ValueError as error:
+        raise Task21HybridEvalError("candidate trace is invalid") from error
+    candidate_ids = exact_ids(
+        tuple(candidate["chunk_id"] for candidate in candidates),
+        "candidate trace chunks",
+    )
+    if candidate_ids != ranked:
+        raise Task21HybridEvalError("candidate trace order differs from ranked chunks")
     graph = exact_ids(observation["graph_chunk_ids"], "graph chunks")
     citations = set(exact_ids(observation["citation_evidence_chunk_ids"], "citations"))
     seeds = set(exact_ids(observation["seed_chunk_ids"], "seed chunks"))

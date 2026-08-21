@@ -12,11 +12,11 @@ from pathlib import Path
 try:
     from scripts import task21_hybrid_failure_bundle as _runtime
     from scripts.task21_hybrid_live_trace_artifact import (
-        validate_live_trace_artifact,
+        validate_live_trace_artifact_bytes,
     )
 except ImportError:
     import task21_hybrid_failure_bundle as _runtime
-    from task21_hybrid_live_trace_artifact import validate_live_trace_artifact
+    from task21_hybrid_live_trace_artifact import validate_live_trace_artifact_bytes
 
 SCHEMA = "task21-hybrid-live-observation-v1"
 _HEX32 = re.compile(r"[0-9a-f]{32}")
@@ -25,8 +25,11 @@ _HEX64 = re.compile(r"[0-9a-f]{64}")
 _ARTIFACTS = ("observations", "freshness", "backend_parity", "live_trace")
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _snapshots(artifacts) -> dict[str, bytes]:
+    try:
+        return {name: Path(artifacts[name]).read_bytes() for name in _ARTIFACTS}
+    except OSError as error:
+        raise ValueError("live observation artifact is unavailable") from error
 
 
 def verify_attestation(*, payload, captured, artifacts, run_id, source_commit) -> None:
@@ -59,16 +62,19 @@ def verify_attestation(*, payload, captured, artifacts, run_id, source_commit) -
         raise ValueError("live observation image digests changed")
     if set(artifacts) != set(_ARTIFACTS):
         raise ValueError("live observation artifacts are not exact")
-    expected_hashes = {name: _sha256(Path(artifacts[name])) for name in _ARTIFACTS}
+    snapshots = _snapshots(artifacts)
+    expected_hashes = {
+        name: hashlib.sha256(snapshots[name]).hexdigest() for name in _ARTIFACTS
+    }
     if payload["artifact_sha256"] != expected_hashes:
         raise ValueError("live observation artifact bytes changed")
-    validate_live_trace_artifact(
-        artifacts["live_trace"],
+    validate_live_trace_artifact_bytes(
+        snapshots["live_trace"],
         run_id=run_id,
         source_commit=source_commit,
-        observations_path=artifacts["observations"],
+        observations_body=snapshots["observations"],
     )
-    freshness = json.loads(Path(artifacts["freshness"]).read_text(encoding="utf-8"))
+    freshness = json.loads(snapshots["freshness"].decode("utf-8"))
     projections = {
         name: freshness.get(name) for name in ("generation_key", "projection_checksum")
     }

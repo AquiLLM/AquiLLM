@@ -9,6 +9,9 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from .task21_hybrid_live_trace_observations import (
+    validate_live_trace_observations as validate_live_trace_observations,
+)
 from .task21_hybrid_live_trace_schema import (
     CANDIDATE_FIELDS,
     CASE_FIELDS,
@@ -141,13 +144,13 @@ def _validate_candidate(value, *, arm, ordinal, fixture_chunks):
 def _validate_case(value, *, arm, fixture_chunks):
     row = _mapping(value, CASE_FIELDS, "case trace")
     case_id = _text(row["case_id"], "case id")
-    candidates = _sequence(row["candidate_trace"], "candidate trace")
-    for ordinal, candidate in enumerate(candidates, start=1):
-        _validate_candidate(
-            candidate, arm=arm, ordinal=ordinal, fixture_chunks=fixture_chunks
-        )
+    candidates = validate_candidate_trace(
+        row["candidate_trace"], arm=arm, fixture_chunk_ids=fixture_chunks
+    )
     timings = _mapping(row["timing_trace"], TIMING_FIELDS, "timing trace")
     exact_timings = tuple(_number(timings[field], field) for field in TIMING_FIELDS)
+    if exact_timings[-1] < max(exact_timings[:-1], default=0.0):
+        raise ValueError("total timing cannot be smaller than a stage timing")
     status = row["authorization_status"]
     if status not in {"current", "absent_negative"}:
         raise ValueError("authorization status is invalid")
@@ -160,6 +163,16 @@ def _validate_case(value, *, arm, fixture_chunks):
     elif row["graph_scheduled"] != (arm != "vector_only"):
         raise ValueError("graph scheduling differs from the evaluated arm")
     return case_id
+
+
+def validate_candidate_trace(value, *, arm, fixture_chunk_ids=()):
+    candidates = _sequence(value, "candidate trace")
+    fixture_chunks = frozenset(fixture_chunk_ids)
+    for ordinal, candidate in enumerate(candidates, start=1):
+        _validate_candidate(
+            candidate, arm=arm, ordinal=ordinal, fixture_chunks=fixture_chunks
+        )
+    return candidates
 
 
 def _validate_freshness(value):
@@ -222,32 +235,6 @@ def validate_live_trace(payload, *, expected_case_ids=(), fixture_chunk_ids=()):
         raise ValueError("live trace cases differ from the checked-in fixture")
     _validate_freshness(top["freshness_attestation"])
     _validate_parity(top["backend_parity_inputs"])
-    return payload
-
-
-def validate_live_trace_observations(payload, observations):
-    validate_live_trace(payload)
-    observed = _mapping(observations, TASK21_HYBRID_ARMS, "live observations")
-    for arm in TASK21_HYBRID_ARMS:
-        traces = _sequence(payload["arms"][arm], f"{arm} traces")
-        rows = _sequence(observed[arm], f"{arm} observations")
-        if len(traces) != len(rows):
-            raise ValueError("live trace and observation case counts differ")
-        for trace, row in zip(traces, rows, strict=True):
-            if not isinstance(row, Mapping) or trace["case_id"] != row.get("case_id"):
-                raise ValueError("live trace and observation case ids differ")
-            latency = _number(row.get("latency_ms"), "observation latency")
-            if trace["timing_trace"]["total_ms"] != latency:
-                raise ValueError(
-                    "live trace total timing differs from evaluator latency"
-                )
-            inaccessible = _sequence(
-                row.get("inaccessible_result_chunk_ids"), "inaccessible results"
-            )
-            if trace["inaccessible_candidate_count"] != len(inaccessible):
-                raise ValueError(
-                    "live trace inaccessible count differs from observations"
-                )
     return payload
 
 

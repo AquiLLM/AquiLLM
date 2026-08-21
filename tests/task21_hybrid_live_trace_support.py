@@ -1,3 +1,5 @@
+import hashlib
+
 ARMS = (
     "vector_only",
     "direct",
@@ -83,4 +85,29 @@ def valid_trace():
                 ("extended", 2, "9"),
             )
         ],
+    }
+
+
+def valid_observation_attestation(
+    trace_body,
+    *,
+    run_id,
+    source_commit,
+    config_sha256,
+    images,
+    projections,
+):
+    return {
+        "schema": "task21-hybrid-live-observation-v1",
+        "run_id": run_id,
+        "source_commit": source_commit,
+        "config_sha256": config_sha256,
+        "images": images,
+        "projection_checksums": projections,
+        "artifact_sha256": {
+            "observations": "1" * 64,
+            "freshness": "2" * 64,
+            "backend_parity": "3" * 64,
+            "live_trace": hashlib.sha256(trace_body).hexdigest(),
+        },
     }

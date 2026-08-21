@@ -104,21 +104,68 @@ def test_live_trace_enforces_exact_arm_candidate_policy(mutation):
 
 def test_live_trace_timing_and_leakage_match_metric_observations():
     module = _module()
+    payload = valid_trace()
     observations = {
         arm: [
             {
                 "case_id": "inaccessible_collection_is_excluded",
                 "latency_ms": 1.0,
                 "inaccessible_result_chunk_ids": [],
+                "ranked_chunk_ids": ["public-token-001"],
+                "candidate_trace": copy.deepcopy(
+                    payload["arms"][arm][0]["candidate_trace"]
+                ),
             }
         ]
         for arm in ARMS
     }
 
-    module.validate_live_trace_observations(valid_trace(), observations)
+    module.validate_live_trace_observations(payload, observations)
     observations["direct"][0]["latency_ms"] = 2.0
     with pytest.raises(ValueError, match="timing"):
-        module.validate_live_trace_observations(valid_trace(), observations)
+        module.validate_live_trace_observations(payload, observations)
+
+
+@pytest.mark.parametrize(
+    ("arm", "field", "value"),
+    (
+        ("direct", "chunk_id", "other-token"),
+        ("direct", "sources", ["baseline"]),
+        ("direct", "direct_rank", 2),
+        ("direct", "direct_score_hex", 0.25.hex()),
+        ("combined_reranked", "reranker_rank", 2),
+    ),
+)
+def test_live_trace_candidates_are_exactly_bound_to_observations(arm, field, value):
+    module = _module()
+    payload = valid_trace()
+    observations = {
+        name: [
+            {
+                "case_id": "inaccessible_collection_is_excluded",
+                "latency_ms": 1.0,
+                "inaccessible_result_chunk_ids": [],
+                "ranked_chunk_ids": ["public-token-001"],
+                "candidate_trace": copy.deepcopy(
+                    payload["arms"][name][0]["candidate_trace"]
+                ),
+            }
+        ]
+        for name in ARMS
+    }
+    observations[arm][0]["candidate_trace"][0][field] = value
+
+    with pytest.raises(ValueError, match="candidate"):
+        module.validate_live_trace_observations(payload, observations)
+
+
+def test_live_trace_total_timing_contains_every_stage():
+    module = _module()
+    payload = valid_trace()
+    payload["arms"]["direct"][0]["timing_trace"]["candidate_ms"] = 1.1
+
+    with pytest.raises(ValueError, match="total timing"):
+        module.validate_live_trace(payload)
 
 
 def test_live_trace_hash_binds_attestation_runtime_and_artifact_bytes(tmp_path):
@@ -132,6 +179,10 @@ def test_live_trace_hash_binds_attestation_runtime_and_artifact_bytes(tmp_path):
                 "case_id": "inaccessible_collection_is_excluded",
                 "latency_ms": 1.0,
                 "inaccessible_result_chunk_ids": [],
+                "ranked_chunk_ids": ["public-token-001"],
+                "candidate_trace": copy.deepcopy(
+                    valid_trace()["arms"][arm][0]["candidate_trace"]
+                ),
             }
         ]
         for arm in ARMS

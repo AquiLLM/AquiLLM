@@ -154,6 +154,38 @@ TASK23_ARMS = (
 )
 
 
+def task23_candidate_trace(arm, ranked, *, baseline_ids=("seed",)):
+    trace = []
+    for ordinal, chunk_id in enumerate(ranked, start=1):
+        baseline = chunk_id in baseline_ids
+        direct = not baseline and arm in {"direct", "combined", "combined_reranked"}
+        extended = not baseline and arm in {
+            "extended",
+            "combined",
+            "combined_reranked",
+        }
+        sources = ["baseline"] if baseline else []
+        if direct:
+            sources.append("direct")
+        if extended:
+            sources.append("extended")
+        trace.append(
+            {
+                "chunk_id": chunk_id,
+                "ordinal": ordinal,
+                "sources": sources,
+                "baseline_rank": ordinal if baseline else None,
+                "direct_rank": ordinal if direct else None,
+                "direct_score_hex": 0.5.hex() if direct else None,
+                "extended_rank": ordinal if extended else None,
+                "extended_score_hex": 0.25.hex() if extended else None,
+                "fusion_score_hex": 0.75.hex(),
+                "reranker_rank": ordinal if arm == "combined_reranked" else None,
+            }
+        )
+    return trace
+
+
 def task23_inputs():
     case = {
         "id": "task23-case",
@@ -189,6 +221,7 @@ def task23_inputs():
             {
                 "case_id": "task23-case",
                 "ranked_chunk_ids": ranked,
+                "candidate_trace": task23_candidate_trace(arm, ranked),
                 "graph_chunk_ids": graph,
                 "citation_evidence_chunk_ids": ranked,
                 "seed_chunk_ids": ["seed"],

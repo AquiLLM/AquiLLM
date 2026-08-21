@@ -9,7 +9,10 @@ import pytest
 
 from apps.knowledge_graph.evals import run_kg_eval
 from apps.knowledge_graph.tests import retrieval_eval_support as support
-from apps.knowledge_graph.tests.test_retrieval_eval_metrics import task23_inputs
+from apps.knowledge_graph.tests.test_retrieval_eval_metrics import (
+    task23_candidate_trace,
+    task23_inputs,
+)
 
 
 def test_stable_graph_but_nondeterministic_final_reranker_aborts_comparison():
@@ -178,6 +181,21 @@ def test_task23_hybrid_report_requires_privacy_fixture_in_every_arm():
         )
 
 
+def test_task23_hybrid_report_binds_candidate_trace_to_ranked_order():
+    cases, observations, freshness, parity = task23_inputs()
+    observations["direct"][0]["ranked_chunk_ids"].reverse()
+
+    with pytest.raises(
+        run_kg_eval.Task21HybridEvalError, match="candidate trace order"
+    ):
+        run_kg_eval.build_task21_hybrid_report(
+            cases=cases,
+            observations=observations,
+            freshness=freshness,
+            backend_parity=parity,
+        )
+
+
 def test_task23_hybrid_report_requires_each_intended_privacy_case_fixture():
     cases, observations, freshness, parity = task23_inputs()
     cases = list(cases)
@@ -202,6 +220,9 @@ def test_task23_hybrid_report_requires_each_intended_privacy_case_fixture():
         row.update(
             case_id="privacy-without-fixture",
             ranked_chunk_ids=["public-only"],
+            candidate_trace=task23_candidate_trace(
+                arm, ["public-only"], baseline_ids=("public-only",)
+            ),
             graph_chunk_ids=[],
             citation_evidence_chunk_ids=["public-only"],
             seed_chunk_ids=["public-only"],
@@ -241,11 +262,14 @@ def test_task23_hybrid_report_allows_empty_adversarial_for_nonprivacy_case():
             "quality_tags": ["relationship"],
         }
     )
-    for rows in observations.values():
+    for arm, rows in observations.items():
         row = copy.deepcopy(rows[0])
         row.update(
             case_id="public-only",
             ranked_chunk_ids=["public-only"],
+            candidate_trace=task23_candidate_trace(
+                arm, ["public-only"], baseline_ids=("public-only",)
+            ),
             graph_chunk_ids=[],
             citation_evidence_chunk_ids=["public-only"],
             seed_chunk_ids=["public-only"],

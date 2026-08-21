@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import math
 import os
 import re
 import shutil
@@ -13,11 +12,37 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 try:
+    from scripts.task21_hybrid_evidence_artifacts import (
+        OBSERVATION_ATTESTATION,
+        validate_observation_attestation,
+    )
+    from scripts.task21_hybrid_evidence_artifacts import (
+        projection_checksums as _projection_checksums,
+    )
+    from scripts.task21_hybrid_evidence_artifacts import (
+        snapshot_artifacts as _snapshot_artifacts,
+    )
+    from scripts.task21_hybrid_evidence_artifacts import (
+        validate_timings as _validate_timings,
+    )
     from scripts.task21_hybrid_live_trace_artifact import (
-        validate_live_trace_artifact,
+        validate_live_trace_artifact_bytes,
     )
 except ImportError:
-    from task21_hybrid_live_trace_artifact import validate_live_trace_artifact
+    from task21_hybrid_evidence_artifacts import (
+        OBSERVATION_ATTESTATION,
+        validate_observation_attestation,
+    )
+    from task21_hybrid_evidence_artifacts import (
+        projection_checksums as _projection_checksums,
+    )
+    from task21_hybrid_evidence_artifacts import (
+        snapshot_artifacts as _snapshot_artifacts,
+    )
+    from task21_hybrid_evidence_artifacts import (
+        validate_timings as _validate_timings,
+    )
+    from task21_hybrid_live_trace_artifact import validate_live_trace_artifact_bytes
 
 SCHEMA = "task21-hybrid-cloud-evidence-v1"
 _HEX32 = re.compile(r"[0-9a-f]{32}")
@@ -51,19 +76,6 @@ def _write_member(root: Path, relative: str, body: bytes) -> Path:
         os.fsync(handle.fileno())
     os.chmod(destination, 0o600)
     return destination
-
-
-def _projection_checksums(path: Path) -> dict[str, str]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if (
-        not isinstance(value, dict)
-        or not value
-        or not all(
-            type(key) is str and _HEX64.fullmatch(item) for key, item in value.items()
-        )
-    ):
-        raise ValueError("projection checksums must be a nonempty SHA-256 mapping")
-    return dict(sorted(value.items()))
 
 
 def _validate_publish_inputs(
@@ -103,43 +115,9 @@ def _validate_publish_inputs(
         raise ValueError("signing key version is invalid")
 
 
-def _validate_timings(path: Path) -> None:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError("timings artifact is unavailable") from error
-    expected = {
-        "elapsed_ms",
-        "finished_ns",
-        "original_exit_code",
-        "started_ns",
-        "status",
-    }
-    if not isinstance(value, dict) or set(value) != expected:
-        raise ValueError("timings artifact fields are not exact")
-    elapsed = value["elapsed_ms"]
-    started = value["started_ns"]
-    finished = value["finished_ns"]
-    original = value["original_exit_code"]
-    if (
-        type(elapsed) not in (int, float)
-        or not math.isfinite(float(elapsed))
-        or elapsed < 0
-        or type(started) is not int
-        or type(finished) is not int
-        or started < 0
-        or finished < started
-        or type(original) is not int
-    ):
-        raise ValueError("timings artifact values are invalid")
-    status = value["status"]
-    if status not in {"passed", "failed"} or (status == "passed") != (original == 0):
-        raise ValueError("timings artifact status is invalid")
-
-
-def _copy_members(staging: Path, captured, artifacts) -> dict[str, str]:
+def _copy_members(staging: Path, captured_members, artifacts) -> dict[str, str]:
     roles: dict[str, str] = {}
-    for relative, body in captured.members.items():
+    for relative, body in captured_members.items():
         _write_member(staging, relative, body)
         roles[relative] = (
             "service_log" if relative.startswith("logs/") else "runtime_capture"
@@ -151,10 +129,7 @@ def _copy_members(staging: Path, captured, artifacts) -> dict[str, str]:
         "live_trace": "trace/live-trace.json",
     }
     for role, relative in destinations.items():
-        source_path = Path(artifacts[role])
-        if not source_path.is_file():
-            raise ValueError(f"{role} artifact is unavailable")
-        _write_member(staging, relative, source_path.read_bytes())
+        _write_member(staging, relative, artifacts[role])
         roles[relative] = role
     return roles
 
@@ -218,11 +193,28 @@ def publish_bundle(
         signing_key=signing_key,
         signing_key_version=signing_key_version,
     )
-    _validate_timings(Path(artifacts["timings"]))
-    validate_live_trace_artifact(
-        artifacts["live_trace"],
+    snapshots = _snapshot_artifacts(artifacts)
+    captured_members = dict(captured.members)
+    captured_images = dict(captured.images)
+    captured_config = captured.config_sha256
+    _validate_timings(snapshots["timings"])
+    validate_live_trace_artifact_bytes(
+        snapshots["live_trace"],
         run_id=run_id,
         source_commit=expected_source_commit,
+    )
+    projections = _projection_checksums(snapshots["projection_checksums"])
+    attestation = captured_members.get(OBSERVATION_ATTESTATION)
+    if type(attestation) is not bytes:
+        raise ValueError("observation attestation snapshot is unavailable")
+    validate_observation_attestation(
+        attestation,
+        run_id=run_id,
+        source_commit=expected_source_commit,
+        config_sha256=captured_config,
+        images=captured_images,
+        projections=projections,
+        live_trace=snapshots["live_trace"],
     )
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -242,14 +234,14 @@ def publish_bundle(
         claim_acquired = True
         os.chmod(claim, 0o600)
         _fsync_directory(root)
-        roles = _copy_members(staging, captured, artifacts)
+        roles = _copy_members(staging, captured_members, snapshots)
         _write_member(
             staging,
             "cleanup/proof.json",
             canonical_json_bytes(cleanup_proof) + b"\n",
         )
         roles["cleanup/proof.json"] = "cleanup_proof"
-        config_match = _HEX64.fullmatch(captured.config_sha256)
+        config_match = _HEX64.fullmatch(captured_config)
         if config_match is None:
             raise ValueError("config checksum must be an exact SHA-256")
         manifest = {
@@ -257,11 +249,9 @@ def publish_bundle(
             "run_id": run_id,
             "claim_scope": claim_scope,
             "source": dict(sorted(source.items())),
-            "images": dict(sorted(captured.images.items())),
+            "images": dict(sorted(captured_images.items())),
             "config_sha256": config_match.group(),
-            "projection_checksums": _projection_checksums(
-                Path(artifacts["projection_checksums"])
-            ),
+            "projection_checksums": projections,
             "members": _member_manifest(staging, roles),
         }
         signature = hmac.new(

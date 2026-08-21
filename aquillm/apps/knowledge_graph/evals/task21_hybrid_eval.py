@@ -35,6 +35,7 @@ _OBSERVATION_FIELDS = frozenset(
     {
         "case_id",
         "ranked_chunk_ids",
+        "candidate_trace",
         "graph_chunk_ids",
         "citation_evidence_chunk_ids",
         "seed_chunk_ids",
@@ -110,7 +111,7 @@ def build_task21_hybrid_report(*, cases, observations, freshness, backend_parity
                 )
             if arm == "vector_only" and (row["graph_chunk_ids"] or projected):
                 raise Task21HybridEvalError("vector_only cannot contain graph material")
-            scored[case_id] = score_case(indexed[case_id], row)
+            scored[case_id] = score_case(indexed[case_id], row, arm=arm)
         ordered = [scored[case_id] for case_id in sorted(scored)]
         arm_adversarial = sum(
             int(item["adversarial_candidate_count"]) for item in ordered

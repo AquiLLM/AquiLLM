@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from task21_hybrid_live_trace_support import valid_trace
+from task21_hybrid_live_trace_support import (
+    valid_observation_attestation,
+    valid_trace,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "task21_hybrid_failure_bundle.py"
@@ -163,14 +166,32 @@ def test_publish_is_canonical_signed_0600_and_never_overwrites(tmp_path):
     trace_payload = valid_trace()
     trace_payload["run_id"] = "e" * 32
     trace_payload["source_commit"] = "f" * 40
-    live_trace.write_bytes(trace_contract.canonical_live_trace_bytes(trace_payload))
+    trace_body = trace_contract.canonical_live_trace_bytes(trace_payload)
+    live_trace.write_bytes(trace_body)
+    projections_value = {
+        "generation_key": "a" * 64,
+        "projection_checksum": "b" * 64,
+    }
+    images = {"web": "sha256:" + "c" * 64}
+    attestation = valid_observation_attestation(
+        trace_body,
+        run_id="e" * 32,
+        source_commit="f" * 40,
+        config_sha256="d" * 64,
+        images=images,
+        projections=projections_value,
+    )
     captured = module.CapturedRuntime(
         members={
             "runtime/config.redacted.yml": b"services: {}\n",
             "runtime/state.json": b"{}",
+            "runtime/observation-attestation.json": module.canonical_json_bytes(
+                attestation
+            )
+            + b"\n",
             "logs/web.log": b"failed before cleanup",
         },
-        images={"web": "sha256:" + "c" * 64},
+        images=images,
         config_sha256="d" * 64,
     )
     cleanup = {"zero_samples": [{"containers": "", "volumes": ""}] * 3}

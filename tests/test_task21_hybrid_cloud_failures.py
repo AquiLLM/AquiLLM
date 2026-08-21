@@ -190,7 +190,7 @@ def _publish_fixture(module, tmp_path):
         "arm_results": '{"arms":{}}',
         "timings": json.dumps(
             {
-                "elapsed_ms": 1.0,
+                "elapsed_ms": 0.000001,
                 "finished_ns": 2,
                 "original_exit_code": 0,
                 "started_ns": 1,
@@ -224,6 +224,26 @@ def test_publisher_rejects_not_completed_timings(tmp_path):
     arguments = _publish_fixture(module, tmp_path)
     arguments["artifacts"]["timings"].write_text(
         '{"status":"not_completed"}', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="timings"):
+        module.publish_bundle(**arguments)
+
+
+def test_publisher_rejects_elapsed_timing_inconsistent_with_clock_bounds(tmp_path):
+    module = _module("task21_hybrid_failure_bundle", SCRIPT)
+    arguments = _publish_fixture(module, tmp_path)
+    arguments["artifacts"]["timings"].write_text(
+        json.dumps(
+            {
+                "elapsed_ms": 999.0,
+                "finished_ns": 2,
+                "original_exit_code": 0,
+                "started_ns": 1,
+                "status": "passed",
+            }
+        ),
+        encoding="utf-8",
     )
 
     with pytest.raises(ValueError, match="timings"):
