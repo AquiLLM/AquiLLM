@@ -9,7 +9,10 @@ from math import isfinite
 from time import monotonic
 
 from apps.knowledge_graph.retrieval.topology import contracts as c
-from apps.knowledge_graph.retrieval.topology.failures import TopologyLoadError
+from apps.knowledge_graph.retrieval.topology.failures import (
+    TopologyLoadError,
+    TopologyResultCapError,
+)
 
 from .memgraph_driver import MemgraphDriverError
 from .memgraph_records import read_bundle
@@ -201,6 +204,8 @@ class Neo4jProjectedTopologyQueryAdapter:
             except MemgraphDriverError as error:
                 if error.code == "memgraph_timeout":
                     raise TimeoutError("projected topology read timed out") from error
+                if error.code == "memgraph_result_limit":
+                    raise TopologyResultCapError from error
                 raise TopologyLoadError(_failure(error.code)) from error
             except TimeoutError:
                 raise

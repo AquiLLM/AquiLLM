@@ -15,7 +15,7 @@ from apps.knowledge_graph.projection.topology_adapter import (
 )
 
 from .contracts import TopologyFailureReason, TopologyQueryName
-from .failures import TopologyLoadError
+from .failures import TopologyLoadError, TopologyResultCapError
 from .gateway_config import (
     TopologyGatewaySettings,
     load_topology_gateway_settings,
@@ -257,7 +257,7 @@ async def topology_read(scope, receive, send) -> None:
         payload = encode_response(response)
         if len(payload) > settings.max_response_bytes:
             raise OverflowError
-    except OverflowError:
+    except (OverflowError, TopologyResultCapError):
         await _failure(send, GatewayFailureReason.RESULT_CAP)
         return
     except TimeoutError:

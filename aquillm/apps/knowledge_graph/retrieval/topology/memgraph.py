@@ -6,8 +6,29 @@ from math import isfinite
 
 from .. import projected_types as t
 from . import contracts as c
-from .failures import TopologyLoadError
+from .failures import TopologyLoadError, TopologyResultCapError
+from .gateway_client import TopologyGatewayRequestError
+from .gateway_contracts import GatewayFailureReason
 from .projected_codec import compose_projected_snapshot_families
+
+_GATEWAY_LOCAL = {
+    (
+        c.HybridBranchKind.DIRECT,
+        GatewayFailureReason.RESULT_CAP,
+    ): c.TopologyFailureReason.DIRECT_TOPOLOGY_INVALID,
+    (
+        c.HybridBranchKind.EXTENDED,
+        GatewayFailureReason.RESULT_CAP,
+    ): c.TopologyFailureReason.EXTENDED_TOPOLOGY_INVALID,
+    (
+        c.HybridBranchKind.DIRECT,
+        GatewayFailureReason.DEADLINE,
+    ): c.TopologyFailureReason.DIRECT_TOPOLOGY_TIMEOUT,
+    (
+        c.HybridBranchKind.EXTENDED,
+        GatewayFailureReason.DEADLINE,
+    ): c.TopologyFailureReason.EXTENDED_TOPOLOGY_TIMEOUT,
+}
 
 
 def _canonical(value: object) -> str:
@@ -129,8 +150,19 @@ class MemgraphProjectedTopologyLoader:
                     deadline=deadline,
                     max_records=maximum,
                 )
+        except TopologyResultCapError as error:
+            reason = (
+                c.TopologyFailureReason.DIRECT_TOPOLOGY_INVALID
+                if caps.branch_kind is c.HybridBranchKind.DIRECT
+                else c.TopologyFailureReason.EXTENDED_TOPOLOGY_INVALID
+            )
+            raise TopologyLoadError(reason) from error
         except TopologyLoadError:
             raise
+        except TopologyGatewayRequestError as error:
+            raise TopologyLoadError(
+                _GATEWAY_LOCAL[(caps.branch_kind, error.reason)]
+            ) from error
         except TimeoutError as error:
             reason = (
                 c.TopologyFailureReason.DIRECT_TOPOLOGY_TIMEOUT

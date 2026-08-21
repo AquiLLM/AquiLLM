@@ -13,4 +13,11 @@ class TopologyLoadError(RuntimeError):
         super().__init__(reason.value)
 
 
-__all__ = ["TopologyLoadError"]
+class TopologyResultCapError(RuntimeError):
+    """Signal an attested request-local provider result limit."""
+
+    def __init__(self) -> None:
+        super().__init__("topology result cap reached")
+
+
+__all__ = ["TopologyLoadError", "TopologyResultCapError"]

@@ -10,7 +10,10 @@ from apps.knowledge_graph.retrieval.topology.contracts import (
     TopologyFailureReason,
     TopologyQueryName,
 )
-from apps.knowledge_graph.retrieval.topology.failures import TopologyLoadError
+from apps.knowledge_graph.retrieval.topology.failures import (
+    TopologyLoadError,
+    TopologyResultCapError,
+)
 from apps.knowledge_graph.retrieval.topology.gateway_config import (
     GatewayConfigError,
     load_topology_gateway_settings,
@@ -246,6 +249,7 @@ async def test_family_and_response_caps_are_local_failures(
     ("failure", "reason", "status"),
     (
         (TimeoutError(), GatewayFailureReason.DEADLINE, 504),
+        (TopologyResultCapError(), GatewayFailureReason.RESULT_CAP, 422),
         (
             TopologyLoadError(TopologyFailureReason.BACKEND_AUTHENTICATION),
             GatewayFailureReason.AUTHENTICATION,
