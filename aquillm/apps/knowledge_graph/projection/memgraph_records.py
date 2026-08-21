@@ -31,6 +31,18 @@ FAMILIES = (
     ("ArtifactProvenance", ProjectedArtifactProvenanceV1),
 )
 
+_ORDER_FIELDS = (
+    "entity_key",
+    "entity_key",
+    "document_key",
+    "document_key chunk_number chunk_key",
+    "artifact_key relation_type semantics_key",
+    "relation_key",
+    "evidence_key",
+    "entity_key provenance_key mention_key",
+    "scope_type scope_key artifact_key",
+)
+
 
 def _properties(row: object, name: str) -> dict:
     if type(row) is not dict:
@@ -106,7 +118,9 @@ def read_bundle(
         raise ValueError("generation marker is missing")
     marker = _dto(ProjectionGenerationMarkerV1, _properties(marker_rows[0], "record"))
     loaded = []
-    for (label, kind), maximum in zip(FAMILIES, maxima, strict=True):
+    for (label, kind), maximum, order_fields in zip(
+        FAMILIES, maxima, _ORDER_FIELDS, strict=True
+    ):
         rows = driver.execute_read(
             f"MATCH (n:{label} {{generation_key:$generation_key}}) "
             "RETURN n AS record ORDER BY n.opaque_key",
@@ -114,7 +128,16 @@ def read_bundle(
             timeout_seconds=timeout,
             max_records=maximum,
         )
-        loaded.append(tuple(_dto(kind, _properties(row, "record")) for row in rows))
+        decoded = tuple(_dto(kind, _properties(row, "record")) for row in rows)
+        fields = order_fields.split()
+        loaded.append(
+            tuple(
+                sorted(
+                    decoded,
+                    key=lambda row: tuple(getattr(row, field) for field in fields),
+                )
+            )
+        )
     (
         entities,
         memberships,

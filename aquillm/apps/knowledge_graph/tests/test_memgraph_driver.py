@@ -91,3 +91,52 @@ def test_driver_errors_are_fixed_and_do_not_expose_credentials_or_cypher() -> No
         driver.execute_read("RETURN private", {}, timeout_seconds=1.0, max_records=1)
     assert str(captured.value) == "memgraph_read_failed"
     assert "secret" not in repr(captured.value)
+
+
+@pytest.mark.parametrize(
+    ("backend_error", "expected"),
+    [
+        (
+            type(
+                "AuthError",
+                (RuntimeError,),
+                {"code": "Neo.ClientError.Security.Unauthorized"},
+            )("secret"),
+            "memgraph_authentication_failed",
+        ),
+        (TimeoutError("private query"), "memgraph_timeout"),
+        (
+            type(
+                "TransactionTimedOut",
+                (RuntimeError,),
+                {
+                    "code": (
+                        "Neo.ClientError.Transaction."
+                        "TransactionTimedOutClientConfiguration"
+                    )
+                },
+            )("private query"),
+            "memgraph_timeout",
+        ),
+        (
+            type(
+                "Unavailable",
+                (RuntimeError,),
+                {"code": "Neo.TransientError.General.DatabaseUnavailable"},
+            )("bolt://private"),
+            "memgraph_unavailable",
+        ),
+    ],
+)
+def test_driver_classifies_closed_read_failures(backend_error, expected) -> None:
+    class Broken:
+        def session(self, **_kwargs):
+            raise backend_error
+
+    driver = Neo4jMemgraphDriver(
+        "bolt://memgraph:7687", "reader", "secret", database="memgraph", driver=Broken()
+    )
+    with pytest.raises(MemgraphDriverError) as captured:
+        driver.execute_read("RETURN private", {}, timeout_seconds=1.0, max_records=1)
+    assert captured.value.code == expected
+    assert str(captured.value) == expected

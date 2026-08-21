@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from functools import partial
+from dataclasses import asdict
 from math import isfinite
 
 from .. import projected_types as t
@@ -10,20 +10,40 @@ from .failures import TopologyLoadError
 from .projected_codec import compose_projected_snapshot_families
 
 
-def _parameters(ready, seeds) -> dict[str, str]:
-    compact = partial(json.dumps, separators=(",", ":"))
+def _canonical(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _parameters(ready, seeds, caps) -> dict[str, str]:
     return {
         "bundle_checksum": ready.bundle_checksum,
-        "generation_keys_json": compact(
+        "generation_keys_json": _canonical(
             [row.generation_key for row in ready.selected_generations]
         ),
-        "document_keys_json": compact(
+        "document_keys_json": _canonical(
             [row.document_key for row in ready.authorized_documents]
         ),
-        "membership_checksums_json": compact(
+        "membership_checksums_json": _canonical(
             [row.membership_checksum for row in ready.selected_generations]
         ),
-        "seed_keys_json": compact([row.identity_key for row in seeds]),
+        "seed_keys_json": _canonical([row.identity_key for row in seeds]),
+        "selected_generations_json": _canonical(
+            [asdict(row) for row in ready.selected_generations]
+        ),
+        "authorized_documents_json": _canonical(
+            [asdict(row) for row in ready.authorized_documents]
+        ),
+        "authorization_context_signature": ready.authorization_context_signature,
+        "seeds_json": _canonical(
+            [
+                {"identity_key": row.identity_key, "mass": row.mass.hex()}
+                for row in seeds
+            ]
+        ),
+        "seed_checksum": c.projected_seed_checksum(seeds),
+        "caps_json": _canonical(
+            {**asdict(caps), "branch_kind": caps.branch_kind.value}
+        ),
     }
 
 
@@ -84,7 +104,7 @@ class MemgraphProjectedTopologyLoader:
             maximum=caps.max_seeds,
             expected_checksum=c.projected_seed_checksum(seeds),
         )
-        parameters = _parameters(ready, seeds)
+        parameters = _parameters(ready, seeds, caps)
         limits = (
             (c.TopologyQueryName.GENERATION_MANIFESTS, len(ready.selected_generations)),
             (c.TopologyQueryName.AUTOMATIC_MEMBERSHIPS, caps.max_nodes),
@@ -93,7 +113,16 @@ class MemgraphProjectedTopologyLoader:
         )
         responses = {}
         try:
-            for query, maximum in limits:
+            query, maximum = limits[0]
+            responses[query] = self.driver.execute_read(
+                query=query,
+                parameters=parameters,
+                deadline=deadline,
+                max_records=maximum,
+            )
+            if not _manifest_matches(responses[query], ready):
+                raise TopologyLoadError(c.TopologyFailureReason.READINESS_MISMATCH)
+            for query, maximum in limits[1:]:
                 responses[query] = self.driver.execute_read(
                     query=query,
                     parameters=parameters,
@@ -113,10 +142,6 @@ class MemgraphProjectedTopologyLoader:
             raise TopologyLoadError(
                 c.TopologyFailureReason.BACKEND_UNAVAILABLE
             ) from error
-        if not _manifest_matches(
-            responses[c.TopologyQueryName.GENERATION_MANIFESTS], ready
-        ):
-            raise TopologyLoadError(c.TopologyFailureReason.READINESS_MISMATCH)
         invalid = (
             c.TopologyFailureReason.DIRECT_TOPOLOGY_INVALID
             if caps.branch_kind is c.HybridBranchKind.DIRECT

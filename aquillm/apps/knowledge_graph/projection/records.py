@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, fields
 from math import isfinite
 
@@ -24,6 +25,8 @@ from .serialization import (
     _key,
     _token,
 )
+
+_RELATION_TYPE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,127}")
 
 
 def _finite_float(value: object, name: str) -> None:
@@ -58,6 +61,12 @@ class _ValidatedRecord:
                     raise TypeError(f"{field.name} must be a built-in str")
                 if value:
                     _token(value, field.name)
+            elif field.name == "relation_type":
+                if (
+                    type(value) is not str
+                    or _RELATION_TYPE_PATTERN.fullmatch(value) is None
+                ):
+                    raise ValueError("relation_type must be an exact canonical token")
             elif type(value) is str:
                 _token(value, field.name)
             elif type(value) is int:

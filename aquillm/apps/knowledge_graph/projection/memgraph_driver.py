@@ -76,6 +76,35 @@ def _cypher(value: object) -> str:
     return value
 
 
+def _read_failure_code(error: Exception) -> str:
+    code = getattr(error, "code", None)
+    if type(code) is str:
+        if code.startswith("Neo.ClientError.Security."):
+            return "memgraph_authentication_failed"
+        if code in {
+            "Neo.ClientError.Transaction.TransactionTimedOutClientConfiguration",
+            "Neo.ClientError.Transaction.TransactionTimedOut",
+            "Neo.TransientError.Transaction.TransactionTimedOut",
+            "Neo.TransientError.Transaction.TransactionTimedOutClientConfiguration",
+        }:
+            return "memgraph_timeout"
+        if code in {
+            "Neo.TransientError.General.DatabaseUnavailable",
+            "Neo.TransientError.General.ServiceUnavailable",
+        }:
+            return "memgraph_unavailable"
+    if isinstance(error, TimeoutError):
+        return "memgraph_timeout"
+    if isinstance(error, ConnectionError):
+        return "memgraph_unavailable"
+    if error.__class__.__module__.startswith("neo4j.") and error.__class__.__name__ in {
+        "ServiceUnavailable",
+        "SessionExpired",
+    }:
+        return "memgraph_unavailable"
+    return "memgraph_read_failed"
+
+
 class Neo4jMemgraphDriver:
     def __init__(
         self,
@@ -157,8 +186,8 @@ class Neo4jMemgraphDriver:
                 )
         except MemgraphDriverError:
             raise
-        except Exception:
-            raise MemgraphDriverError("memgraph_read_failed") from None
+        except Exception as error:
+            raise MemgraphDriverError(_read_failure_code(error)) from None
 
     def execute_write(
         self,

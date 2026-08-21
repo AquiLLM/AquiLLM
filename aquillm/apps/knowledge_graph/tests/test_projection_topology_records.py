@@ -22,6 +22,7 @@ from apps.knowledge_graph.projection.records import (
     ProjectedRelationSemanticsV1,
 )
 from apps.knowledge_graph.tests.test_django_projection_source import _snapshot
+from apps.knowledge_graph.tests.test_projection_records import _bundle as _closed_bundle
 
 
 def test_topology_input_records_are_closed_and_fail_closed() -> None:
@@ -43,6 +44,14 @@ def test_topology_input_records_are_closed_and_fail_closed() -> None:
         replace(semantics, direction="sideways")
     with pytest.raises(ValueError, match="unit interval"):
         replace(mention, confidence=1.01)
+
+
+@pytest.mark.parametrize("family", ("relations", "relation_semantics", "evidence"))
+def test_projected_relation_types_are_canonical_retrieval_tokens(family) -> None:
+    row = getattr(_closed_bundle(), family)[0]
+    assert row.relation_type == "knows"
+    with pytest.raises(ValueError, match="canonical token"):
+        replace(row, relation_type="Works At")
 
 
 def test_projection_encoding_binds_projection_semantics_and_isolated_mentions() -> None:
