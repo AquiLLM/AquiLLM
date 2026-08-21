@@ -65,7 +65,7 @@ class HybridRetrievalSettings:
     projection_queue: str; projection_schema_version: str; projection_format_version: str; projection_identifier_hmac_key: SecretSetting = field(repr=False)
     projection_identifier_key_version: str; projection_batch_size: int; projection_lease_seconds: int; projection_max_attempts: int; projection_retention: int
     projection_max_lag_seconds: int; query_extractor_url: str = field(repr=False); query_extractor_bearer_token: SecretSetting = field(repr=False)
-    query_extractor_model: str; query_extractor_model_revision: str; query_extractor_expected_schema_version: str; query_extractor_expected_schema_checksum: str
+    query_extractor_model: str; query_extractor_model_revision: str; query_extractor_build_hash: str; query_extractor_expected_schema_version: str; query_extractor_expected_schema_checksum: str
     query_extractor_timeout_ms: int; query_max_bytes: int; query_max_codepoints: int; query_max_spans: int
     graph_overall_timeout_ms: int; graph_direct_timeout_ms: int; graph_extended_timeout_ms: int; graph_direct_max_seeds: int
     graph_direct_max_depth: int; graph_direct_max_nodes: int; graph_direct_max_edges: int; graph_direct_max_candidates: int
@@ -91,7 +91,7 @@ _TEXT_DEFAULTS = {
     "KG_MEMGRAPH_QUERY_USERNAME": "", "KG_MEMGRAPH_QUERY_PASSWORD": "", "KG_MEMGRAPH_PROJECTION_USERNAME": "", "KG_MEMGRAPH_PROJECTION_PASSWORD": "",
     "KG_PROJECTION_POSTGRES_SOURCE_DSN": "", "KG_PROJECTION_POSTGRES_STATE_DSN": "", "KG_PROJECTION_QUEUE": "knowledge_graph_projection", "KG_PROJECTION_SCHEMA_VERSION": "collection-graph-v1",
     "KG_PROJECTION_FORMAT_VERSION": "projection-v1", "KG_PROJECTION_IDENTIFIER_HMAC_KEY": "", "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "", "KG_QUERY_EXTRACTOR_URL": "",
-    "KG_QUERY_EXTRACTOR_BEARER_TOKEN": "", "KG_QUERY_EXTRACTOR_MODEL": QUERY_EXTRACTOR_MODEL, "KG_QUERY_EXTRACTOR_MODEL_REVISION": QUERY_EXTRACTOR_MODEL_REVISION,
+    "KG_QUERY_EXTRACTOR_BEARER_TOKEN": "", "KG_QUERY_EXTRACTOR_MODEL": QUERY_EXTRACTOR_MODEL, "KG_QUERY_EXTRACTOR_MODEL_REVISION": QUERY_EXTRACTOR_MODEL_REVISION, "KG_QUERY_EXTRACTOR_BUILD_HASH": "",
     "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION": QUERY_SCHEMA_VERSION, "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": "", "KG_GRAPH_EVAL_PARITY_BACKEND": "postgres",
 }
 # fmt: on
@@ -220,7 +220,7 @@ def _validate_settings(settings: HybridRetrievalSettings) -> None:
     if settings.graph_direct_enabled:
         if not settings.memgraph_traversal_enabled:
             raise _error("KG_MEMGRAPH_TRAVERSAL_ENABLED", "is required for direct retrieval")
-        _require(settings, "KG_QUERY_EXTRACTOR_URL KG_QUERY_EXTRACTOR_BEARER_TOKEN")
+        _require(settings, "KG_QUERY_EXTRACTOR_URL KG_QUERY_EXTRACTOR_BEARER_TOKEN KG_QUERY_EXTRACTOR_BUILD_HASH")
         direct = {"KG_QUERY_EXTRACTOR_MODEL": QUERY_EXTRACTOR_MODEL, "KG_QUERY_EXTRACTOR_MODEL_REVISION": QUERY_EXTRACTOR_MODEL_REVISION, "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION": QUERY_SCHEMA_VERSION, "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": QUERY_SCHEMA_CHECKSUM}
         for direct_key, expected in direct.items():
             if getattr(settings, direct_key[3:].lower()) != expected:
@@ -281,9 +281,9 @@ def load_hybrid_retrieval_settings(source: Mapping[str, str]) -> HybridRetrieval
         raise _error("KG_QUERY_EXTRACTOR_MODEL", "must be a bounded model identifier")
     if _LOWER_REVISION.fullmatch(settings.query_extractor_model_revision) is None:
         raise _error("KG_QUERY_EXTRACTOR_MODEL_REVISION", "must be a lowercase revision")
-    checksum = settings.query_extractor_expected_schema_checksum
-    if checksum and _LOWER_CHECKSUM.fullmatch(checksum) is None:
-        raise _error("KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM", "must be a lowercase SHA-256")
+    for checksum_key in ("KG_QUERY_EXTRACTOR_BUILD_HASH", "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM"):
+        checksum = getattr(settings, checksum_key[3:].lower())
+        if checksum and _LOWER_CHECKSUM.fullmatch(checksum) is None: raise _error(checksum_key, "must be a lowercase SHA-256")
     _validate_settings(settings)
     return settings
 def load_django_hybrid_retrieval_settings(source: Mapping[str, str]) -> dict[str, object]:

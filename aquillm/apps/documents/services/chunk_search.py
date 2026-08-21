@@ -45,6 +45,7 @@ from apps.documents.services.hybrid_graph_authorization import (
     documents_match_retrieval_authorization,
     is_exact_authorization_context,
 )
+from apps.documents.services.hybrid_graph_dependencies import resolve
 from apps.documents.services.hybrid_graph_orchestration import (
     hybrid_graph_candidate_pool,
 )
@@ -244,7 +245,9 @@ def text_chunk_search(
     total_start = perf_counter()
     try:
         overlay_enabled = bool(getattr(django_settings, "KG_OVERLAY_ENABLED", False))
-        hybrid_requested = overlay_enabled and hybrid_graph_dependencies is not None
+        hybrid_graph_dependencies, hybrid_requested = resolve(
+            overlay_enabled, authorization_context, hybrid_graph_dependencies
+        )
         graph_config: object | None = None
         graph_scope: object | None = None
         graph_preflight_status: str | None = None
@@ -490,9 +493,4 @@ def text_chunk_search(
         raise
 
 
-__all__ = [
-    "CandidateRankingResult",
-    "HybridGraphRetrievalDependencies",
-    "materialize_and_rerank_candidates",
-    "text_chunk_search",
-]
+__all__ = ["materialize_and_rerank_candidates", "text_chunk_search"]

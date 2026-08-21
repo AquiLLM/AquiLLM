@@ -43,7 +43,7 @@ DEFAULTS: dict[str, object] = {
     "query_extractor_url": "",
     "query_extractor_bearer_token": "",
     "query_extractor_model": "fastino/gliner2-base-v1",
-    "query_extractor_model_revision": "8437ba583a733d87f56ae902f3b197934eedd58e",
+    "query_extractor_model_revision": "8437ba583a733d87f56ae902f3b197934eedd58e", "query_extractor_build_hash": "",
     "query_extractor_expected_schema_version": "query-entities-v1",
     "query_extractor_expected_schema_checksum": "",
     "query_extractor_timeout_ms": 75,
@@ -118,7 +118,7 @@ def _direct() -> dict[str, str]:
         **_traversal(),
         "KG_GRAPH_DIRECT_ENABLED": "1",
         "KG_QUERY_EXTRACTOR_URL": "https://extractor.internal/v1/entities",
-        "KG_QUERY_EXTRACTOR_BEARER_TOKEN": "extractor-secret",
+        "KG_QUERY_EXTRACTOR_BEARER_TOKEN": "extractor-secret", "KG_QUERY_EXTRACTOR_BUILD_HASH": "d" * 64,
         "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": config.QUERY_SCHEMA_CHECKSUM,
     }
 
@@ -177,7 +177,7 @@ def test_projection_requires_each_connection_and_secret_independently(key: str) 
 def test_traversal_requires_each_connection_and_secret_independently(key: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match=key):
         config.load_hybrid_retrieval_settings({**_traversal(), key: ""})
-@pytest.mark.parametrize(("key", "bad"), (("KG_MEMGRAPH_TRAVERSAL_ENABLED", "0"), ("KG_QUERY_EXTRACTOR_URL", ""), ("KG_QUERY_EXTRACTOR_BEARER_TOKEN", ""), ("KG_QUERY_EXTRACTOR_MODEL", "other/model"), ("KG_QUERY_EXTRACTOR_MODEL_REVISION", "a" * 40), ("KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION", "other-v1"), ("KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM", "b" * 64)))
+@pytest.mark.parametrize(("key", "bad"), (("KG_MEMGRAPH_TRAVERSAL_ENABLED", "0"), ("KG_QUERY_EXTRACTOR_URL", ""), ("KG_QUERY_EXTRACTOR_BEARER_TOKEN", ""), ("KG_QUERY_EXTRACTOR_BUILD_HASH", ""), ("KG_QUERY_EXTRACTOR_BUILD_HASH", "D" * 64), ("KG_QUERY_EXTRACTOR_BUILD_HASH", "d" * 63), ("KG_QUERY_EXTRACTOR_MODEL", "other/model"), ("KG_QUERY_EXTRACTOR_MODEL_REVISION", "a" * 40), ("KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION", "other-v1"), ("KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM", "b" * 64)))
 def test_direct_requires_exact_extractor_contract(key: str, bad: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match=key):
         config.load_hybrid_retrieval_settings({**_direct(), key: bad})
