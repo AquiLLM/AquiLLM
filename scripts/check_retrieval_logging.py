@@ -68,16 +68,13 @@ def _logger_expression(node: ast.AST, names: set[str]) -> bool:
     if not isinstance(node, ast.Call): return False
     function = node.func
     return (isinstance(function, ast.Name) and function.id in _LOGGER_FACTORIES) or (isinstance(function, ast.Attribute) and function.attr in _LOGGER_FACTORIES)
-
 def _getattr_level(node: ast.AST, logger_names: set[str] | frozenset[str]) -> str | None:
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr" and len(node.args) >= 2 and _logger_expression(node.args[0], set(logger_names))): return None
     level = node.args[1]
     if isinstance(level, ast.Constant) and type(level.value) is str: return level.value if level.value in _LOG_LEVELS else None
     return "dynamic"
-
 def _logging_function_expression(node: ast.AST, logger_names: set[str], functions: set[str]) -> bool:
     return any((isinstance(candidate, ast.Name) and candidate.id in functions) or (isinstance(candidate, ast.Attribute) and candidate.attr in _LOG_LEVELS and _logger_expression(candidate.value, logger_names)) or _getattr_level(candidate, logger_names) is not None for candidate in ast.walk(node))
-
 def _logging_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
     functions = set(alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module == "logging" for alias in node.names if alias.name in _LOG_LEVELS)
     logger_names = set(_LOGGER_NAMES)
@@ -90,7 +87,6 @@ def _logging_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
         functions.update(name for name, value in aliases if _logging_function_expression(value, logger_names, functions))
         changed = before != (len(functions), len(logger_names))
     return frozenset(functions), frozenset(logger_names)
-
 def _redaction_helpers(tree: ast.AST) -> frozenset[str]:
     imported = {alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module == "lib.retrieval_redaction" for alias in node.names if alias.name == "retrieval_log_fields"}
     rebound = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
@@ -269,13 +265,7 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
 def find_violations(repo: Path = REPO) -> tuple[LoggingViolation, ...]:
     findings: list[LoggingViolation] = []
     for relative in LANE_PATHS:
-        path = repo / relative
-        try:
-            source = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            findings.append(LoggingViolation(path, 0, "missing_lane_path"))
-            continue
-        findings.extend(scan_source(path=path, source=source))
+        findings.extend(_invalid_calls(repo / relative))
     return tuple(findings)
 
 
