@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from dataclasses import fields
 
+from .memgraph_pagination import (
+    FAMILY_IDENTITY_FIELDS,
+    PAGE_SIZE,
+    advance_cursor_parameters,
+    canonical_record_key,
+    initial_cursor_parameters,
+)
 from .records import (
     AutomaticCanonicalMembershipV1,
     CollectionGraphProjectionBundleV1,
@@ -43,6 +50,58 @@ _ORDER_FIELDS = (
     "entity_key provenance_key mention_key",
     "scope_type scope_key artifact_key",
 )
+
+
+def _read_topology_family(
+    driver,
+    *,
+    query,
+    parameters,
+    label,
+    kind,
+    maximum,
+    timeout,
+    reject_full_pages,
+):
+    cursor = initial_cursor_parameters(label)
+    loaded = []
+    previous_key = None
+    while True:
+        remaining = maximum - len(loaded)
+        if not reject_full_pages and remaining == 0:
+            break
+        page_limit = min(PAGE_SIZE, max(1, remaining + (1 if reject_full_pages else 0)))
+        page_parameters = {**parameters, **cursor, "page_limit": page_limit}
+        rows = driver.execute_read(
+            query,
+            page_parameters,
+            timeout_seconds=timeout,
+            max_records=page_limit,
+        )
+        if type(rows) is not tuple or len(rows) > page_limit:
+            raise ValueError("bounded Memgraph family page is invalid")
+        last_properties = None
+        for row in rows:
+            properties = _properties(row, "record")
+            decoded = _dto(kind, properties)
+            identity = FAMILY_IDENTITY_FIELDS[label]
+            if properties.get("opaque_key") != getattr(decoded, identity):
+                raise ValueError("bounded Memgraph family identity drifted")
+            key = canonical_record_key(label, decoded)
+            if previous_key is not None and key <= previous_key:
+                raise ValueError("bounded Memgraph family order drifted")
+            previous_key, last_properties = key, properties
+            loaded.append(decoded)
+            if reject_full_pages and len(loaded) > maximum:
+                raise ValueError("bounded Memgraph family read was truncated")
+        if len(rows) < page_limit:
+            break
+        if last_properties is None:
+            raise ValueError("bounded Memgraph pagination made no progress")
+        cursor = advance_cursor_parameters(
+            label, last_properties, rows[-1].get("cursor_id")
+        )
+    return tuple(loaded)
 
 
 def _properties(row: object, name: str) -> dict:
@@ -109,8 +168,9 @@ def read_bundle(
     reject_full_pages: bool = False,
     topology_parameters: dict[str, object] | None = None,
 ):
+    maximum_cap = 50_000 if topology_parameters is not None else 5_000
     if len(maxima) != len(FAMILIES) or any(
-        type(value) is not int or not 1 <= value <= 5_000 for value in maxima
+        type(value) is not int or not 1 <= value <= maximum_cap for value in maxima
     ):
         raise ValueError("Memgraph projection read maxima are invalid")
     parameters = {"generation_key": generation_key}
@@ -137,20 +197,25 @@ def read_bundle(
                 f"MATCH (n:{label} {{generation_key:$generation_key}}) "
                 "RETURN n AS record ORDER BY n.opaque_key"
             )
-        family_parameters = dict(parameters)
         if topology_parameters is not None:
-            family_parameters["family_limit"] = (
-                maximum + 1 if reject_full_pages else maximum
+            decoded = _read_topology_family(
+                driver,
+                query=query,
+                parameters=parameters,
+                label=label,
+                kind=kind,
+                maximum=maximum,
+                timeout=timeout,
+                reject_full_pages=reject_full_pages,
             )
-        rows = driver.execute_read(
-            query,
-            family_parameters,
-            timeout_seconds=timeout,
-            max_records=maximum + 1 if reject_full_pages else maximum,
-        )
-        if reject_full_pages and len(rows) > maximum:
-            raise ValueError("bounded Memgraph family read was truncated")
-        decoded = tuple(_dto(kind, _properties(row, "record")) for row in rows)
+        else:
+            rows = driver.execute_read(
+                query,
+                parameters,
+                timeout_seconds=timeout,
+                max_records=maximum,
+            )
+            decoded = tuple(_dto(kind, _properties(row, "record")) for row in rows)
         fields = order_fields.split()
         loaded.append(
             tuple(

@@ -1,14 +1,16 @@
-"""Read back and attest generation-scoped Memgraph topology relationships."""
+"""Stream and attest every relationship incident to a projection generation."""
 
 from __future__ import annotations
 
 from .memgraph_edges import (
     EDGE_FAMILIES,
+    TopologyEdgeAttestationV1,
     topology_edge_attestation,
-    topology_edge_attestation_from_rows,
-    topology_edge_rows,
+    topology_edge_attestation_from_iterables,
 )
+from .memgraph_pagination import PAGE_SIZE
 
+_EDGE_LIMITS = (50_000, 250_000, 250_000, 250_000, 250_000)
 _MARKER_QUERY = (
     "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
     "RETURN g.topology_checksum AS topology_checksum, "
@@ -17,51 +19,81 @@ _MARKER_QUERY = (
     )
 )
 
+
+def _query(source_label, relationship, target_label, cursor, returned):
+    del source_label, target_label
+    return (
+        f"MATCH (source)-[edge:{relationship}]->(target) "
+        "WHERE (source.generation_key = $generation_key"
+        " OR target.generation_key = $generation_key"
+        " OR edge.generation_key = $generation_key) "
+        f"AND (NOT $has_cursor OR {cursor} > $cursor_key "
+        f"OR ({cursor} = $cursor_key AND id(edge) > $cursor_id)) "
+        f"RETURN {returned}, {cursor} AS cursor_key, id(edge) AS cursor_id "
+        "ORDER BY cursor_key, cursor_id LIMIT $page_limit"
+    )
+
+
+_COMMON = (
+    "edge.generation_key AS generation_key, "
+    "source.generation_key AS source_generation_key, "
+    "target.generation_key AS target_generation_key, "
+)
 _EDGE_QUERIES = (
-    "MATCH (entity:ProjectedEntity {generation_key:$generation_key})"
-    "-[edge:ENTITY_MEMBERSHIP {generation_key:$generation_key}]->"
-    "(membership:AutomaticMembership {generation_key:$generation_key}) "
-    "RETURN edge.generation_key AS generation_key, "
-    "entity.opaque_key AS entity_key, "
-    "membership.automatic_membership_key AS automatic_membership_key "
-    "ORDER BY entity_key",
-    "MATCH (document:ProjectedDocument {generation_key:$generation_key})"
-    "-[edge:DOCUMENT_CHUNK {generation_key:$generation_key}]->"
-    "(chunk:ProjectedChunk {generation_key:$generation_key}) "
-    "RETURN edge.generation_key AS generation_key, "
-    "document.opaque_key AS document_key, chunk.opaque_key AS chunk_key, "
-    "edge.chunk_number AS chunk_number "
-    "ORDER BY document_key, chunk_number, chunk_key",
-    "MATCH (source:ProjectedEntity {generation_key:$generation_key})"
-    "-[edge:PROJECTED_RELATION {generation_key:$generation_key}]->"
-    "(target:ProjectedEntity {generation_key:$generation_key}) "
-    "RETURN edge.generation_key AS generation_key, "
-    "edge.relation_key AS relation_key, edge.artifact_key AS artifact_key, "
-    "source.opaque_key AS source_entity_key, edge.relation_type AS relation_type, "
-    "target.opaque_key AS target_entity_key, edge.direction AS direction "
-    "ORDER BY relation_key",
-    "MATCH (relation:ProjectedRelation {generation_key:$generation_key})"
-    "-[edge:RELATION_EVIDENCE {generation_key:$generation_key}]->"
-    "(chunk:ProjectedChunk {generation_key:$generation_key}) "
-    "RETURN edge.generation_key AS generation_key, "
-    "edge.evidence_key AS evidence_key, relation.opaque_key AS relation_key, "
-    "edge.relation_mention_key AS relation_mention_key, "
-    "chunk.opaque_key AS chunk_key, edge.document_key AS document_key, "
-    "edge.chunk_number AS chunk_number, edge.confidence AS confidence, "
-    "edge.provenance_key AS provenance_key, "
-    "edge.semantic_signature AS semantic_signature, "
-    "edge.head_mention_key AS head_mention_key, "
-    "edge.tail_mention_key AS tail_mention_key, edge.orientation AS orientation "
-    "ORDER BY evidence_key",
-    "MATCH (entity:ProjectedEntity {generation_key:$generation_key})"
-    "-[edge:ENTITY_MENTION {generation_key:$generation_key}]->"
-    "(chunk:ProjectedChunk {generation_key:$generation_key}) "
-    "RETURN edge.generation_key AS generation_key, "
-    "edge.mention_key AS mention_key, edge.provenance_key AS provenance_key, "
-    "entity.opaque_key AS entity_key, chunk.opaque_key AS chunk_key, "
-    "edge.document_key AS document_key, edge.chunk_number AS chunk_number, "
-    "edge.confidence AS confidence "
-    "ORDER BY entity_key, provenance_key, mention_key",
+    _query(
+        "ProjectedEntity",
+        "ENTITY_MEMBERSHIP",
+        "AutomaticMembership",
+        "coalesce(source.opaque_key, '')",
+        _COMMON
+        + "source.opaque_key AS entity_key, "
+        "target.automatic_membership_key AS automatic_membership_key",
+    ),
+    _query(
+        "ProjectedDocument",
+        "DOCUMENT_CHUNK",
+        "ProjectedChunk",
+        "coalesce(target.opaque_key, '')",
+        _COMMON
+        + "source.opaque_key AS document_key, target.opaque_key AS chunk_key, "
+        "edge.chunk_number AS chunk_number",
+    ),
+    _query(
+        "ProjectedEntity",
+        "PROJECTED_RELATION",
+        "ProjectedEntity",
+        "coalesce(edge.relation_key, '')",
+        _COMMON
+        + "edge.relation_key AS relation_key, edge.artifact_key AS artifact_key, "
+        "source.opaque_key AS source_entity_key, edge.relation_type AS relation_type, "
+        "target.opaque_key AS target_entity_key, edge.direction AS direction",
+    ),
+    _query(
+        "ProjectedRelation",
+        "RELATION_EVIDENCE",
+        "ProjectedChunk",
+        "coalesce(edge.evidence_key, '')",
+        _COMMON
+        + "edge.evidence_key AS evidence_key, source.opaque_key AS relation_key, "
+        "edge.relation_mention_key AS relation_mention_key, "
+        "target.opaque_key AS chunk_key, edge.document_key AS document_key, "
+        "edge.chunk_number AS chunk_number, edge.confidence AS confidence, "
+        "edge.provenance_key AS provenance_key, "
+        "edge.semantic_signature AS semantic_signature, "
+        "edge.head_mention_key AS head_mention_key, "
+        "edge.tail_mention_key AS tail_mention_key, edge.orientation AS orientation",
+    ),
+    _query(
+        "ProjectedEntity",
+        "ENTITY_MENTION",
+        "ProjectedChunk",
+        "coalesce(edge.mention_key, '')",
+        _COMMON
+        + "edge.mention_key AS mention_key, edge.provenance_key AS provenance_key, "
+        "source.opaque_key AS entity_key, target.opaque_key AS chunk_key, "
+        "edge.document_key AS document_key, edge.chunk_number AS chunk_number, "
+        "edge.confidence AS confidence",
+    ),
 )
 
 
@@ -71,65 +103,67 @@ def _mapping(row):
     value = row.get("edge", row)
     if not isinstance(value, dict):
         raise ValueError("Memgraph topology edge properties are invalid")
-    return dict(value)
-
-
-def _read_marker(driver, generation_key, timeout_seconds):
-    parameters = {"generation_key": generation_key}
-    marker_rows = driver.execute_read(
-        _MARKER_QUERY,
-        parameters,
-        timeout_seconds=timeout_seconds,
-        max_records=1,
-    )
-    return _mapping(marker_rows[0]) if len(marker_rows) == 1 else {}
-
-
-def _read_edges(driver, generation_key, counts, timeout_seconds):
-    parameters = {"generation_key": generation_key}
-    observed = []
-    for query, count in zip(_EDGE_QUERIES, counts, strict=True):
-        if type(count) is not int or not 0 <= count <= 4_999:
-            raise ValueError("Memgraph topology edge count is invalid")
-        rows = driver.execute_read(
-            query,
-            parameters,
-            timeout_seconds=timeout_seconds,
-            max_records=max(1, count + 1),
-        )
-        family = tuple(_mapping(row) for row in rows)
-        observed.append(family)
-    return tuple(observed)
-
-
-def _marker(attestation):
     return {
-        "topology_checksum": attestation.checksum,
-        **{
-            f"{family}_count": count
-            for family, count in zip(
-                EDGE_FAMILIES, attestation.counts, strict=True
-            )
-        },
+        key: item
+        for key, item in value.items()
+        if key not in {"cursor_key", "cursor_id"}
     }
 
 
-def validate_topology_edges(driver, bundle, *, timeout_seconds: float) -> bool:
-    generation_key = bundle.generation.generation_key
-    expected_rows = topology_edge_rows(bundle)
-    expected = topology_edge_attestation(bundle)
-    if _read_marker(driver, generation_key, timeout_seconds) != _marker(expected):
-        return False
-    observed = _read_edges(
-        driver, generation_key, expected.counts, timeout_seconds
+def _read_marker(driver, generation_key, timeout_seconds):
+    rows = driver.execute_read(
+        _MARKER_QUERY,
+        {"generation_key": generation_key},
+        timeout_seconds=timeout_seconds,
+        max_records=1,
     )
-    return (
-        observed == expected_rows
-        and topology_edge_attestation_from_rows(observed) == expected
-    )
+    return _mapping(rows[0]) if len(rows) == 1 else {}
 
 
-def validate_topology_marker(driver, generation_key, *, timeout_seconds: float) -> bool:
+def _stream_edge_family(
+    driver, generation_key, query, expected_count, maximum, timeout_seconds
+):
+    if type(expected_count) is not int or not 0 <= expected_count <= maximum:
+        raise ValueError("Memgraph topology edge count is invalid")
+    count, cursor_key, cursor_id = 0, "", -1
+    has_cursor = False
+    while True:
+        page_limit = min(PAGE_SIZE, max(1, expected_count - count + 1))
+        rows = driver.execute_read(
+            query,
+            {
+                "generation_key": generation_key,
+                "has_cursor": has_cursor,
+                "cursor_key": cursor_key,
+                "cursor_id": cursor_id,
+                "page_limit": page_limit,
+            },
+            timeout_seconds=timeout_seconds,
+            max_records=page_limit,
+        )
+        if type(rows) is not tuple or len(rows) > page_limit:
+            raise ValueError("Memgraph topology edge page is invalid")
+        for row in rows:
+            count += 1
+            if count > expected_count:
+                raise ValueError("Memgraph topology edge count drifted")
+            yield _mapping(row)
+        if len(rows) < page_limit:
+            break
+        last = rows[-1]
+        next_key, next_id = last.get("cursor_key"), last.get("cursor_id")
+        if type(next_key) is not str or type(next_id) is not int or next_id < 0:
+            raise ValueError("Memgraph topology edge cursor is invalid")
+        if has_cursor and (next_key, next_id) <= (cursor_key, cursor_id):
+            raise ValueError("Memgraph topology edge pagination made no progress")
+        has_cursor, cursor_key, cursor_id = True, next_key, next_id
+    if count != expected_count:
+        raise ValueError("Memgraph topology edge count drifted")
+
+
+def validated_topology_attestation(
+    driver, generation_key, *, timeout_seconds: float
+) -> TopologyEdgeAttestationV1 | None:
     marker = _read_marker(driver, generation_key, timeout_seconds)
     checksum = marker.get("topology_checksum")
     counts = tuple(marker.get(f"{family}_count") for family in EDGE_FAMILIES)
@@ -138,10 +172,45 @@ def validate_topology_marker(driver, generation_key, *, timeout_seconds: float) 
         or len(checksum) != 64
         or any(character not in "0123456789abcdef" for character in checksum)
     ):
-        return False
-    observed = _read_edges(driver, generation_key, counts, timeout_seconds)
-    attestation = topology_edge_attestation_from_rows(observed)
-    return attestation.checksum == checksum and attestation.counts == counts
+        return None
+    observed = topology_edge_attestation_from_iterables(
+        tuple(
+            _stream_edge_family(
+                driver,
+                generation_key,
+                query,
+                count,
+                maximum,
+                timeout_seconds,
+            )
+            for query, count, maximum in zip(
+                _EDGE_QUERIES, counts, _EDGE_LIMITS, strict=True
+            )
+        )
+    )
+    if observed.checksum == checksum and observed.counts == counts:
+        return observed
+    return None
 
 
-__all__ = ["validate_topology_edges", "validate_topology_marker"]
+def validate_topology_edges(driver, bundle, *, timeout_seconds: float) -> bool:
+    observed = validated_topology_attestation(
+        driver, bundle.generation.generation_key, timeout_seconds=timeout_seconds
+    )
+    return observed == topology_edge_attestation(bundle)
+
+
+def validate_topology_marker(driver, generation_key, *, timeout_seconds: float) -> bool:
+    return (
+        validated_topology_attestation(
+            driver, generation_key, timeout_seconds=timeout_seconds
+        )
+        is not None
+    )
+
+
+__all__ = [
+    "validate_topology_edges",
+    "validate_topology_marker",
+    "validated_topology_attestation",
+]

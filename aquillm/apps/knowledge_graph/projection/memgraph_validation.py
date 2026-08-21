@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from .memgraph_edge_validation import (
-    validate_topology_edges,
     validate_topology_marker,
+    validated_topology_attestation,
 )
-from .memgraph_edges import topology_edge_attestation
-from .memgraph_records import read_bundle
+from .memgraph_streaming import stream_projection_validation
 from .records import (
     ProjectionCountsV1,
     ProjectionGenerationManifestV1,
     ProjectionLifecycleState,
 )
-from .serialization import projection_checksum
-
-_MAX_VALIDATED_FAMILY = 4_999
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,20 +38,17 @@ def validate(repository, *, expected, timeout, empty_private_checksum):
         generation_key=repository.opaque_generation_key(expected.generation_key),
         timeout_seconds=timeout,
     )
-    count_values = tuple(asdict(expected.counts).values())
-    if any(value > _MAX_VALIDATED_FAMILY for value in count_values):
-        raise ValueError("expected projection count exceeds validation cap")
     try:
-        bundle = read_bundle(
+        streamed = stream_projection_validation(
             repository._driver,
             generation_key=expected.generation_key,
-            maxima=tuple(maximum + 1 for maximum in count_values),
-            timeout=timeout,
+            expected_counts=expected.counts,
+            timeout_seconds=timeout,
         )
-        checksum = projection_checksum(bundle)
+        checksum = streamed.checksum
     except (KeyError, TypeError, ValueError):
         return _invalid(expected, observed)
-    marker = bundle.generation
+    marker = streamed.marker
     core_matches = (
         observed.generation_key,
         observed.schema_version,
@@ -103,38 +96,43 @@ def validate(repository, *, expected, timeout, empty_private_checksum):
         core_matches
         and marker_matches
         and private_valid
-        and bundle.counts == expected.counts
+        and streamed.counts == expected.counts
         and checksum == expected.graph_checksum == expected.snapshot_checksum
     )
+    topology = None
     if valid:
         try:
-            valid = validate_topology_edges(
+            topology = validated_topology_attestation(
                 repository._driver,
-                bundle,
+                expected.generation_key,
                 timeout_seconds=timeout,
             )
+            valid = topology is not None
         except (KeyError, TypeError, ValueError):
             valid = False
     if not valid:
-        return _invalid(expected, observed, checksum, bundle.counts)
+        return _invalid(expected, observed, checksum, streamed.counts)
     if expected.state is ProjectionLifecycleState.READY:
         return ProjectionValidationV1(
             expected.generation_key,
             checksum,
-            bundle.counts,
+            streamed.counts,
             True,
         )
+    assert topology is not None
     values = {
         "generation_key": expected.generation_key,
         "validation_checksum": checksum,
         "private_mapping_checksum": expected.private_mapping_checksum,
         "validated_private_mapping_checksum": expected.private_mapping_checksum,
-        "validated_topology_checksum": topology_edge_attestation(bundle).checksum,
+        "topology_checksum": topology.checksum,
+        "validated_topology_checksum": topology.checksum,
     }
     repository._driver.execute_write(
         "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
         "WHERE g.state IN ['staging','building'] "
         "AND g.private_mapping_checksum=$private_mapping_checksum "
+        "AND g.topology_checksum=$topology_checksum "
         "SET g.validation_checksum=$validation_checksum, "
         "g.validated_private_mapping_checksum=$validated_private_mapping_checksum, "
         "g.validated_topology_checksum=$validated_topology_checksum",
@@ -148,7 +146,7 @@ def validate(repository, *, expected, timeout, empty_private_checksum):
     return ProjectionValidationV1(
         expected.generation_key,
         checksum,
-        bundle.counts,
+        streamed.counts,
         refreshed == expected,
     )
 

@@ -39,8 +39,8 @@ def test_native_adapter_maps_canonical_seed_and_bounds_all_families() -> None:
     ]
     assert canonical_seed in snapshot.identity_keys
     assert len(family_calls) == 9
-    assert all("RETURN DISTINCT" in call[0] for call in family_calls)
-    assert all("LIMIT $family_limit" in call[0] for call in family_calls)
+    assert all("WITH DISTINCT n" in call[0] for call in family_calls)
+    assert all("LIMIT $page_limit" in call[0] for call in family_calls)
     assert all(call[1]["seed_keys_csv"] == canonical_seed for call in family_calls)
     entity_query = next(
         call[0] for call in family_calls if "ProjectedEntity " in call[0]
@@ -50,6 +50,29 @@ def test_native_adapter_maps_canonical_seed_and_bounds_all_families() -> None:
     assert all(
         "opaque_key:physical.relation_key" not in call[0]
         for call in family_calls
+    )
+    relationship_queries = [
+        query
+        for query, *_rest in family_calls
+        if any(
+            relationship in query
+            for relationship in (
+                "ENTITY_MEMBERSHIP",
+                "PROJECTED_RELATION",
+                "DOCUMENT_CHUNK",
+                "RELATION_EVIDENCE",
+                "ENTITY_MENTION",
+            )
+        )
+    ]
+    assert relationship_queries
+    assert all("generation_key" in query for query in relationship_queries)
+    path_queries = [
+        call[0] for call in family_calls if "relationships(path)" in call[0]
+    ]
+    assert path_queries
+    assert all(
+        "edge.generation_key = $generation_key" in query for query in path_queries
     )
 
 

@@ -11,6 +11,7 @@ from apps.knowledge_graph.projection.memgraph_driver import (
 )
 from apps.knowledge_graph.projection.memgraph_edges import (
     EDGE_FAMILIES,
+    EDGE_ORDER_FIELDS,
     topology_edge_attestation,
     topology_edge_rows,
 )
@@ -23,10 +24,6 @@ from apps.knowledge_graph.projection.records import (
     ProjectionLifecycleState,
 )
 from apps.knowledge_graph.projection.serialization import projection_checksum
-from apps.knowledge_graph.retrieval.topology.contracts import (
-    HybridBranchKind,
-    TopologyCapsV1,
-)
 from apps.knowledge_graph.tests.test_projection_postgres_repository import _BundleSource
 from apps.knowledge_graph.tests.test_projection_records import _bundle as _closed_bundle
 
@@ -43,6 +40,8 @@ class _FakeDriver:
 
     def execute_read(self, cypher, parameters, *, timeout_seconds, max_records):
         self.reads.append((cypher, parameters, timeout_seconds, max_records))
+        if not self.read_results and "RETURN g AS marker" in cypher and self.writes:
+            return ({"marker": dict(self.writes[0][1])},)
         return self.read_results.pop(0) if self.read_results else ()
 
 
@@ -102,6 +101,22 @@ def _record_reads(bundle):
     ]
 
 
+def _stream_record_reads(bundle):
+    rows = _record_reads(bundle)
+    return [
+        rows[0],
+        rows[9],
+        rows[2],
+        rows[4],
+        rows[3],
+        rows[1],
+        rows[8],
+        rows[7],
+        rows[5],
+        rows[6],
+    ]
+
+
 def _topology_reads(bundle):
     attestation = topology_edge_attestation(bundle)
     counts = {
@@ -112,8 +127,13 @@ def _topology_reads(bundle):
     return [
         (marker,),
         *(
-            tuple({"edge": row} for row in family)
-            for family in topology_edge_rows(bundle)
+            tuple(
+                {"edge": row}
+                for row in sorted(family, key=lambda item: item[order_field])
+            )
+            for family, order_field in zip(
+                topology_edge_rows(bundle), EDGE_ORDER_FIELDS, strict=True
+            )
         ),
     ]
 
@@ -161,7 +181,7 @@ def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -
     staged = _manifest_row(expected)
     staged["state"] = "staging"
     driver.read_results.append((staged,))
-    driver.read_results.extend(_record_reads(bundle))
+    driver.read_results.extend(_stream_record_reads(bundle))
     driver.read_results.extend(_topology_reads(bundle))
     driver.read_results.append((_manifest_row(expected),))
 
@@ -202,11 +222,11 @@ def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -
     )
     ready_reads = [read[0] for read in driver.reads[reads_before_ready:]]
     assert any(
-        "ORDER BY document_key, chunk_number, chunk_key" in query
+        "DOCUMENT_CHUNK" in query and "ORDER BY cursor_key, cursor_id" in query
         for query in ready_reads
     )
     assert any(
-        "ORDER BY entity_key, provenance_key, mention_key" in query
+        "ENTITY_MENTION" in query and "ORDER BY cursor_key, cursor_id" in query
         for query in ready_reads
     )
 
@@ -217,7 +237,7 @@ def test_validation_rejects_count_or_endpoint_drift_without_publishing_token() -
     bundle = CollectionGraphProjectionBundleV1(**_bundle())
     expected = _expected_manifest(bundle)
     driver.read_results.append((_manifest_row(expected),))
-    records = _record_reads(bundle)
+    records = _stream_record_reads(bundle)
     records[1] = records[1] + records[1]
     driver.read_results.extend(records)
 
@@ -278,23 +298,3 @@ def test_generation_listing_supports_bounded_global_opaque_cursor_paging() -> No
     assert "g.generation_key > $after_generation_key" in cypher
     assert parameters == {"after_generation_key": "0" * 64, "limit": 17}
     assert maximum == 17
-
-
-def test_generation_records_are_bounded_and_endpoint_closed() -> None:
-    from apps.knowledge_graph.projection.records import (
-        CollectionGraphProjectionBundleV1,
-    )
-
-    bundle = CollectionGraphProjectionBundleV1(**_bundle())
-    driver = _FakeDriver()
-    driver.read_results = _record_reads(bundle)
-    caps = TopologyCapsV1(HybridBranchKind.DIRECT, 2, 1, 2, 2, 2)
-
-    observed = MemgraphProjectionRepository(driver).read_generation_records(
-        generation_key=MemgraphProjectionRepository.opaque_generation_key("1" * 64),
-        caps=caps,
-        timeout_seconds=1.0,
-    )
-
-    assert observed == bundle
-    assert all(call[3] <= 2 for call in driver.reads)

@@ -16,6 +16,17 @@ EDGE_FAMILIES = (
     "relation_evidence",
     "entity_mention",
 )
+EDGE_ORDER_FIELDS = (
+    "entity_key",
+    "chunk_key",
+    "relation_key",
+    "evidence_key",
+    "mention_key",
+)
+_STAGING_GUARD = (
+    "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
+    "WHERE g.state IN ['staging','building'] WITH g "
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,17 +44,27 @@ def topology_edge_rows(bundle: CollectionGraphProjectionBundleV1):
     memberships = tuple(
         {
             "generation_key": generation_key,
+            "source_generation_key": generation_key,
+            "target_generation_key": generation_key,
             "entity_key": row.entity_key,
             "automatic_membership_key": row.automatic_membership_key,
         }
         for row in bundle.automatic_memberships
     )
     chunks = tuple(
-        {"generation_key": generation_key, **asdict(row)} for row in bundle.chunks
+        {
+            "generation_key": generation_key,
+            "source_generation_key": generation_key,
+            "target_generation_key": generation_key,
+            **asdict(row),
+        }
+        for row in bundle.chunks
     )
     relations = tuple(
         {
             "generation_key": generation_key,
+            "source_generation_key": generation_key,
+            "target_generation_key": generation_key,
             **asdict(row),
             "direction": directions[(row.artifact_key, row.relation_type)],
         }
@@ -52,6 +73,8 @@ def topology_edge_rows(bundle: CollectionGraphProjectionBundleV1):
     evidence = tuple(
         {
             "generation_key": generation_key,
+            "source_generation_key": generation_key,
+            "target_generation_key": generation_key,
             "evidence_key": row.evidence_key,
             "relation_key": row.relation_key,
             "relation_mention_key": row.relation_mention_key,
@@ -68,47 +91,73 @@ def topology_edge_rows(bundle: CollectionGraphProjectionBundleV1):
         for row in bundle.evidence
     )
     mentions = tuple(
-        {"generation_key": generation_key, **asdict(row)}
+        {
+            "generation_key": generation_key,
+            "source_generation_key": generation_key,
+            "target_generation_key": generation_key,
+            **asdict(row),
+        }
         for row in bundle.entity_mentions
     )
     return memberships, chunks, relations, evidence, mentions
 
 
-def _canonical_rows(rows) -> bytes:
-    normalized = [
-        {
-            "family": family,
-            "rows": [
-                {
-                    key: value.hex() if type(value) is float else value
-                    for key, value in sorted(row.items())
-                }
-                for row in records
-            ],
-        }
-        for family, records in zip(EDGE_FAMILIES, rows, strict=True)
-    ]
-    return json.dumps(
-        normalized,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+def _normalized_row(row) -> dict:
+    return {
+        key: value.hex() if type(value) is float else value
+        for key, value in sorted(row.items())
+    }
+
+
+def _ordered(rows):
+    return tuple(
+        tuple(sorted(records, key=lambda row: row[order_field]))
+        for records, order_field in zip(rows, EDGE_ORDER_FIELDS, strict=True)
+    )
+
+
+def topology_edge_attestation_from_iterables(rows) -> TopologyEdgeAttestationV1:
+    if type(rows) is not tuple or len(rows) != len(EDGE_FAMILIES):
+        raise ValueError("Memgraph topology edge families are invalid")
+    digest = sha256()
+    counts = []
+    digest.update(b"[")
+    for family_index, (family, records) in enumerate(
+        zip(EDGE_FAMILIES, rows, strict=True)
+    ):
+        if family_index:
+            digest.update(b",")
+        digest.update(b'{"family":')
+        digest.update(json.dumps(family).encode("utf-8"))
+        digest.update(b',"rows":[')
+        count = 0
+        for row in records:
+            if count:
+                digest.update(b",")
+            digest.update(
+                json.dumps(
+                    _normalized_row(row),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            count += 1
+        counts.append(count)
+        digest.update(b"]}")
+    digest.update(b"]")
+    return TopologyEdgeAttestationV1(digest.hexdigest(), tuple(counts))
 
 
 def topology_edge_attestation(
     bundle: CollectionGraphProjectionBundleV1,
 ) -> TopologyEdgeAttestationV1:
-    rows = topology_edge_rows(bundle)
-    counts = tuple(len(family) for family in rows)
-    return TopologyEdgeAttestationV1(sha256(_canonical_rows(rows)).hexdigest(), counts)
+    rows = _ordered(topology_edge_rows(bundle))
+    return topology_edge_attestation_from_iterables(rows)
 
 
 def topology_edge_attestation_from_rows(rows) -> TopologyEdgeAttestationV1:
-    if type(rows) is not tuple or len(rows) != len(EDGE_FAMILIES):
-        raise ValueError("Memgraph topology edge families are invalid")
-    counts = tuple(len(family) for family in rows)
-    return TopologyEdgeAttestationV1(sha256(_canonical_rows(rows)).hexdigest(), counts)
+    return topology_edge_attestation_from_iterables(_ordered(rows))
 
 
 def _write(driver, cypher, parameters, *, timeout_seconds: float) -> None:
@@ -134,7 +183,8 @@ def write_topology_edges(
     for row in bundle.chunks:
         _write(
             driver,
-            "MATCH (d:ProjectedDocument {generation_key:$generation_key, "
+            _STAGING_GUARD
+            + "MATCH (d:ProjectedDocument {generation_key:$generation_key, "
             "opaque_key:$document_key}) "
             "MATCH (c:ProjectedChunk {generation_key:$generation_key, "
             "opaque_key:$chunk_key}) "
@@ -147,7 +197,8 @@ def write_topology_edges(
     for row in bundle.automatic_memberships:
         _write(
             driver,
-            "MATCH (entity:ProjectedEntity {generation_key:$generation_key, "
+            _STAGING_GUARD
+            + "MATCH (entity:ProjectedEntity {generation_key:$generation_key, "
             "opaque_key:$entity_key}) "
             "MATCH (membership:AutomaticMembership {generation_key:$generation_key, "
             "opaque_key:$entity_key}) "
@@ -162,7 +213,8 @@ def write_topology_edges(
             raise ValueError("physical relation has no projected semantics")
         _write(
             driver,
-            "MATCH (source:ProjectedEntity {generation_key:$generation_key, "
+            _STAGING_GUARD
+            + "MATCH (source:ProjectedEntity {generation_key:$generation_key, "
             "opaque_key:$source_entity_key}) "
             "MATCH (target:ProjectedEntity {generation_key:$generation_key, "
             "opaque_key:$target_entity_key}) "
@@ -176,7 +228,8 @@ def write_topology_edges(
     for row in bundle.entity_mentions:
         _write(
             driver,
-            "MATCH (entity:ProjectedEntity {generation_key:$generation_key, "
+            _STAGING_GUARD
+            + "MATCH (entity:ProjectedEntity {generation_key:$generation_key, "
             "opaque_key:$entity_key}) "
             "MATCH (chunk:ProjectedChunk {generation_key:$generation_key, "
             "opaque_key:$chunk_key}) "
@@ -190,7 +243,8 @@ def write_topology_edges(
     for row in bundle.evidence:
         _write(
             driver,
-            "MATCH (relation:ProjectedRelation {generation_key:$generation_key, "
+            _STAGING_GUARD
+            + "MATCH (relation:ProjectedRelation {generation_key:$generation_key, "
             "opaque_key:$relation_key}) "
             "MATCH (chunk:ProjectedChunk {generation_key:$generation_key, "
             "opaque_key:$chunk_key}) "

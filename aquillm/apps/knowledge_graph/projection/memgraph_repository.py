@@ -118,7 +118,7 @@ class MemgraphProjectionRepository:
             },
             **asdict(bundle.counts),
         }
-        self._driver.execute_write(
+        summary = self._driver.execute_write(
             "MERGE (g:CollectionGeneration {generation_key:$generation_key}) "
             "ON CREATE SET g.private_mapping_checksum=$private_mapping_checksum, "
             "g.state=$state WITH g WHERE "
@@ -128,6 +128,20 @@ class MemgraphProjectionRepository:
             parameters,
             timeout_seconds=timeout,
         )
+        if type(summary) is not MemgraphWriteSummaryV1:
+            raise TypeError("Memgraph staging fence summary is invalid")
+        fence_rows = self._driver.execute_read(
+            "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
+            "RETURN g AS marker",
+            {"generation_key": marker.generation_key},
+            timeout_seconds=timeout,
+            max_records=1,
+        )
+        if len(fence_rows) != 1:
+            raise ValueError("Memgraph staging generation fence was rejected")
+        fence = dict(fence_rows[0].get("marker", fence_rows[0]))
+        if any(fence.get(name) != value for name, value in parameters.items()):
+            raise ValueError("Memgraph staging generation fence was rejected")
         families = (
             ("ProjectedEntity", bundle.entities, "entity_key"),
             ("AutomaticMembership", bundle.automatic_memberships, "entity_key"),
@@ -150,6 +164,9 @@ class MemgraphProjectionRepository:
                     values["generation_key"] = marker.generation_key
                     values["opaque_key"] = values[identity]
                     self._driver.execute_write(
+                        "MATCH (g:CollectionGeneration "
+                        "{generation_key:$generation_key}) "
+                        "WHERE g.state IN ['staging','building'] WITH g "
                         f"MERGE (n:{label}:ProjectedRecord "
                         "{generation_key:$generation_key, opaque_key:$opaque_key}) "
                         + self._set_clause("n", values),

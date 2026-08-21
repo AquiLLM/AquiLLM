@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
+import pytest
+
 from apps.knowledge_graph.projection.memgraph_edges import (
     EDGE_FAMILIES,
     topology_edge_attestation,
@@ -16,7 +20,7 @@ from apps.knowledge_graph.projection.serialization import projection_checksum
 from apps.knowledge_graph.tests.test_memgraph_projection_repository import (
     _FakeDriver,
     _manifest_row,
-    _record_reads,
+    _stream_record_reads,
 )
 from apps.knowledge_graph.tests.test_projection_records import _bundle
 
@@ -49,6 +53,33 @@ def test_repository_projects_generation_scoped_topology_edges() -> None:
             )
         )
     )
+    child_writes = driver.writes[1:]
+    assert child_writes
+    assert all(
+        "g.state IN ['staging','building']" in statement
+        for statement, _parameters, _timeout in child_writes
+    )
+
+
+def test_rejected_staging_fence_prevents_every_child_mutation() -> None:
+    driver = _FakeDriver()
+    bundle = _bundle()
+    ready = {
+        **asdict(bundle.generation),
+        "graph_checksum": projection_checksum(bundle),
+        "state": "ready",
+    }
+    driver.read_results.append((ready,))
+
+    with pytest.raises(ValueError, match="staging generation fence"):
+        MemgraphProjectionRepository(driver).write_staging_generation(
+            bundle=bundle,
+            private_mapping_checksum="d" * 64,
+            batch_size=10,
+            timeout_seconds=1.0,
+        )
+
+    assert len(driver.writes) == 1
 
 
 def test_staging_marker_binds_derived_topology_counts_and_checksum() -> None:
@@ -88,7 +119,7 @@ def test_validation_rejects_missing_physical_topology_edge() -> None:
     staged = _manifest_row(expected)
     staged["state"] = "staging"
     driver.read_results.append((staged,))
-    driver.read_results.extend(_record_reads(bundle))
+    driver.read_results.extend(_stream_record_reads(bundle))
     driver.read_results.append(
         (
             {
