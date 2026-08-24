@@ -1,68 +1,37 @@
-"""Shared helpers for collection schema API stub views."""
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 
 from django.http import JsonResponse
 
 from apps.collections.models import Collection
-
-from .schema_api_fixtures import CONSTRAINTS, PUBLISHED_ENTITY, PUBLISHED_RELATION
-
-
-def permission_level(collection: Collection, user) -> str:
-    if collection.user_can_manage(user):
-        return "MANAGE"
-    if collection.user_can_edit(user):
-        return "EDIT"
-    return "VIEW"
+from apps.collections.services.schema import (
+    SchemaOperationError,
+    SchemaRevisionConflict,
+    permission_level,
+    workspace_envelope,
+)
 
 
 def permissions_snapshot(level: str) -> dict:
+    editable = level in {"EDIT", "MANAGE"}
+    manageable = level == "MANAGE"
     return {
         "level": level,
-        "can_create_draft": level in {"EDIT", "MANAGE"},
-        "can_edit_definitions": level in {"EDIT", "MANAGE"},
-        "can_validate": level in {"EDIT", "MANAGE"},
-        "can_publish": level == "MANAGE",
-        "can_discard_draft": level == "MANAGE",
-        "can_restore": level == "MANAGE",
+        "can_create_draft": editable,
+        "can_edit_definitions": editable,
+        "can_validate": editable,
+        "can_publish": manageable,
+        "can_discard_draft": manageable,
+        "can_restore": manageable,
         "can_view_history": True,
     }
 
 
-def draft_snapshot(level: str, revision: int = 2) -> dict | None:
-    if level == "VIEW":
-        return None
-    entity = deepcopy(PUBLISHED_ENTITY)
-    entity["change_state"] = "changed"
-    entity["values"] = {**entity["values"], "description": "Updated person description"}
-    return {
-        "draft_id": f"draft-{level.lower()}-1",
-        "revision": revision,
-        "base_published_checksum": "pub-edit-checksum",
-        "last_editor": "editor@example.test",
-        "updated_at": "2026-08-21T10:00:00Z",
-        "entities": [entity],
-        "relations": [deepcopy(PUBLISHED_RELATION)],
-    }
-
-
-def workspace_envelope(collection: Collection, user, revision: int = 2) -> dict:
-    level = permission_level(collection, user)
-    return {
-        "collection_id": str(collection.id),
-        "permissions": permissions_snapshot(level),
-        "published": {
-            "version": 4,
-            "checksum": "pub-edit-checksum",
-            "entities": [deepcopy(PUBLISHED_ENTITY)],
-            "relations": [deepcopy(PUBLISHED_RELATION)],
-        },
-        "draft": draft_snapshot(level, revision),
-        "constraints": deepcopy(CONSTRAINTS),
-    }
+def require_view(collection: Collection, user) -> JsonResponse | None:
+    if not collection.user_can_view(user):
+        return JsonResponse({"error": "forbidden"}, status=403)
+    return None
 
 
 def require_edit(collection: Collection, user) -> JsonResponse | None:
@@ -87,31 +56,40 @@ def parse_revision(request) -> int | None:
         return None
 
 
-def conflict_response(attempted: int, current: int = 6) -> JsonResponse:
+def conflict_response(conflict: SchemaRevisionConflict) -> JsonResponse:
     return JsonResponse(
         {
-            "attempted_revision": attempted,
-            "current_revision": current,
-            "draft_id": "draft-manage-1",
-            "definitions": [
-                {
-                    "kind": "entity",
-                    "key": "person",
-                    "fields": [
-                        {
-                            "field": "description",
-                            "server_value": "Server accepted description",
-                            "attempted_value": "Local unsaved description",
-                        }
-                    ],
-                }
-            ],
+            "attempted_revision": conflict.attempted,
+            "current_revision": conflict.draft.revision,
+            "draft_id": str(conflict.draft.pk),
+            "definitions": conflict.definitions,
         },
         status=409,
     )
 
 
+def error_response(error: SchemaOperationError) -> JsonResponse:
+    return JsonResponse({"error": error.code}, status=error.status)
+
+
 def load_body(request) -> dict:
     if not request.body:
         return {}
-    return json.loads(request.body)
+    value = json.loads(request.body)
+    if type(value) is not dict:
+        raise SchemaOperationError("invalid_body")
+    return value
+
+
+__all__ = [
+    "conflict_response",
+    "error_response",
+    "load_body",
+    "parse_revision",
+    "permission_level",
+    "permissions_snapshot",
+    "require_edit",
+    "require_manage",
+    "require_view",
+    "workspace_envelope",
+]
