@@ -64,4 +64,21 @@ describe('pollGenerationStatus', () => {
 
     await expect(controller.promise).resolves.toEqual({ status: 'cancelled' });
   });
+
+  it('settles immediately when cancelled during a pending backoff delay', async () => {
+    const controller = new AbortController();
+    const poll = vi.fn().mockResolvedValue(status('queued'));
+    const sleep = vi.fn(() => new Promise<void>(() => undefined));
+    const outcome = pollGenerationStatus({ poll, signal: controller.signal, sleep });
+
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(
+      Promise.race([
+        outcome,
+        new Promise((resolve) => setTimeout(() => resolve({ status: 'still_waiting' }), 20)),
+      ]),
+    ).resolves.toEqual({ status: 'cancelled' });
+  });
 });

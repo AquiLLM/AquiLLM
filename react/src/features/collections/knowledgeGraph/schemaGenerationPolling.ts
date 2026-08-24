@@ -13,6 +13,21 @@ export interface GenerationPollOptions {
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+function waitForBackoff(sleep: (ms: number) => Promise<void>, delay: number, signal?: AbortSignal): Promise<boolean> {
+  if (!signal) return sleep(delay).then(() => false);
+  if (signal.aborted) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    const finish = (aborted: boolean) => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(aborted);
+    };
+    const onAbort = () => finish(true);
+    signal.addEventListener('abort', onAbort, { once: true });
+    void sleep(delay).then(() => finish(false));
+  });
+}
+
 export async function pollGenerationStatus(options: GenerationPollOptions): Promise<GenerationPollOutcome> {
   const {
     poll,
@@ -30,8 +45,7 @@ export async function pollGenerationStatus(options: GenerationPollOptions): Prom
     if (signal?.aborted) return { status: 'cancelled' };
     if (result.status === 'succeeded' || result.status === 'failed') return result;
     if (attempt === maxAttempts - 1) break;
-    await sleep(delay);
-    if (signal?.aborted) return { status: 'cancelled' };
+    if (await waitForBackoff(sleep, delay, signal)) return { status: 'cancelled' };
     delay = Math.min(delay * 2, maxDelayMs);
   }
   return { status: 'exhausted' };

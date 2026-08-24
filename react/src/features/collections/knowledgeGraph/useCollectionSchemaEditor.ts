@@ -86,6 +86,7 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
 
   useEffect(
     () => () => {
+      requestGenerationRef.current += 1;
       generationPollRef.current?.cancel();
       generationPollRef.current = null;
     },
@@ -233,7 +234,7 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
         if (!result.ok) {
           return { run_id: runId, status: 'failed', error_code: result.kind, statistics: {} };
         }
-        if (generationRequest === requestGenerationRef.current) {
+        if (generationRequest === requestGenerationRef.current && !signal?.aborted) {
           setGeneration({
             status: result.data.status,
             runId: result.data.run_id,

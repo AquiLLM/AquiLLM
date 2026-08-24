@@ -239,4 +239,50 @@ describe('useCollectionSchemaEditor', () => {
     await waitFor(() => expect(api.loadWorkspace).toHaveBeenCalledWith('fast'));
     expect(api.getGenerationStatus).not.toHaveBeenCalled();
   });
+
+  it('does not create a poll when a deferred generation start resolves after unmount', async () => {
+    let resolveStart: ((value: unknown) => void) | undefined;
+    const api = createMockApi({
+      loadWorkspace: vi.fn().mockResolvedValue({ ok: true, data: emptyEditableEnvelope }),
+      startGeneration: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveStart = resolve;
+          }),
+      ) as unknown as CollectionSchemaApi['startGeneration'],
+    });
+    const { unmount } = renderHook(() => useCollectionSchemaEditor({ collectionId: 'col-empty', api }));
+
+    await waitFor(() => expect(api.startGeneration).toHaveBeenCalledWith('col-empty'));
+    unmount();
+    await act(async () => {
+      resolveStart?.({ ok: true, data: { run_id: 'late-run', status: 'queued', status_url: '/late-run/' } });
+    });
+
+    expect(api.getGenerationStatus).not.toHaveBeenCalled();
+  });
+
+  it('aborts and ignores a deferred generation status response after unmount', async () => {
+    let resolveStatus: ((value: unknown) => void) | undefined;
+    let statusSignal: AbortSignal | undefined;
+    const api = createMockApi({
+      loadWorkspace: vi.fn().mockResolvedValue({ ok: true, data: emptyEditableEnvelope }),
+      getGenerationStatus: vi.fn((_, __, signal) => {
+        statusSignal = signal;
+        return new Promise((resolve) => {
+          resolveStatus = resolve;
+        });
+      }) as unknown as CollectionSchemaApi['getGenerationStatus'],
+    });
+    const { unmount } = renderHook(() => useCollectionSchemaEditor({ collectionId: 'col-empty', api }));
+
+    await waitFor(() => expect(api.getGenerationStatus).toHaveBeenCalledTimes(1));
+    unmount();
+    expect(statusSignal?.aborted).toBe(true);
+    await act(async () => {
+      resolveStatus?.({ ok: true, data: { run_id: 'run-1', status: 'succeeded', error_code: null, statistics: {} } });
+    });
+
+    expect(api.loadWorkspace).toHaveBeenCalledTimes(1);
+  });
 });
