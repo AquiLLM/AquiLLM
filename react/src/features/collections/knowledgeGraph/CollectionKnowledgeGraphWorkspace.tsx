@@ -14,6 +14,7 @@ import type {
   SchemaDefinitionKind,
   SchemaHistoryPage,
   SchemaHistoryVersion,
+  SchemaGenerationState,
   ValidationIssue,
 } from './schemaTypes';
 import { panelClass } from './schemaUiShared';
@@ -33,6 +34,7 @@ export interface CollectionKnowledgeGraphWorkspaceProps {
   statusMessage?: string | null;
   projectionStatusLabel?: string | null;
   impactSummary?: string | null;
+  generation?: SchemaGenerationState;
   onSelectDefinition: (kind: SchemaDefinitionKind, key: string) => void;
   onCreateDraft?: () => void;
   onValidate?: () => void;
@@ -52,6 +54,7 @@ export interface CollectionKnowledgeGraphWorkspaceProps {
   onConfirmRestore?: () => void;
   onConflictDiscard?: () => void;
   onConflictReapply?: (resolutions: ReviewedRebaseResolution[]) => void;
+  onGenerateSchema?: () => void;
 }
 
 const CollectionKnowledgeGraphWorkspace: React.FC<CollectionKnowledgeGraphWorkspaceProps> = (props) => {
@@ -70,6 +73,7 @@ const CollectionKnowledgeGraphWorkspace: React.FC<CollectionKnowledgeGraphWorksp
     statusMessage,
     projectionStatusLabel,
     impactSummary,
+    generation = { status: 'idle' },
     onSelectDefinition,
     onCreateDraft,
     onValidate,
@@ -89,6 +93,7 @@ const CollectionKnowledgeGraphWorkspace: React.FC<CollectionKnowledgeGraphWorksp
     onConfirmRestore,
     onConflictDiscard,
     onConflictReapply,
+    onGenerateSchema,
   } = props;
 
   const [diffOpen, setDiffOpen] = useState(false);
@@ -154,12 +159,14 @@ const CollectionKnowledgeGraphWorkspace: React.FC<CollectionKnowledgeGraphWorksp
         projectionStatusLabel={projectionStatusLabel}
         canValidate={canValidate(editorState)}
         canPublish={canPublish(editorState)}
+        generation={generation}
         onCreateDraft={onCreateDraft}
         onValidate={onValidate}
         onPublish={() => setPublishOpen(true)}
         onDiscard={onDiscardDraft}
         onShowDiff={() => setDiffOpen(true)}
         onShowHistory={() => setHistoryOpen(true)}
+        onGenerate={onGenerateSchema}
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] gap-3">

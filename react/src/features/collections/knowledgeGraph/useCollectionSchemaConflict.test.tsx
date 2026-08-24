@@ -31,6 +31,8 @@ function createMockApi(overrides: Partial<CollectionSchemaApi> = {}): Collection
     fetchVersionDiff: vi.fn(),
     restoreVersion: vi.fn(),
     restoreReplace: vi.fn(),
+    startGeneration: vi.fn(),
+    getGenerationStatus: vi.fn(),
     ...overrides,
   };
 }

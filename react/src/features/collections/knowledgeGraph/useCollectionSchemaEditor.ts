@@ -5,6 +5,7 @@ import {
   definitionValues,
 } from './collectionSchemaEditorHelpers';
 import type { CollectionSchemaApi } from './collectionSchemaApi';
+import { createGenerationPollController, type GenerationPollController } from './schemaGenerationPolling';
 import {
   collectionSchemaReducer,
   createInitialCollectionSchemaState,
@@ -16,7 +17,14 @@ import {
   previewReviewedRebase,
   schemaFormBufferReducer,
 } from './schemaFormBuffer';
-import type { SchemaDefinitionKind, SchemaHistoryPage, SchemaHistoryVersion, ValidationIssue, ValidationResult } from './schemaTypes';
+import type {
+  SchemaDefinitionKind,
+  SchemaGenerationState,
+  SchemaHistoryPage,
+  SchemaHistoryVersion,
+  ValidationIssue,
+  ValidationResult,
+} from './schemaTypes';
 
 export interface UseCollectionSchemaEditorOptions {
   collectionId: string;
@@ -25,6 +33,8 @@ export interface UseCollectionSchemaEditorOptions {
   registerDirtyState?: (registration: { isDirty: boolean; discard: () => void } | null) => void;
   requestSelectionChange?: (next: () => void) => void;
 }
+
+const initialGenerationState: SchemaGenerationState = { status: 'idle' };
 
 export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOptions) {
   const { collectionId, registerDirtyState, requestSelectionChange } = options;
@@ -36,7 +46,10 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [restoreChallengeToken, setRestoreChallengeToken] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [generation, setGeneration] = useState<SchemaGenerationState>(initialGenerationState);
   const requestGenerationRef = useRef(0);
+  const automaticGenerationCollectionsRef = useRef(new Set<string>());
+  const generationPollRef = useRef<GenerationPollController | null>(null);
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
   const formBufferRef = useRef(formBuffer);
@@ -64,9 +77,20 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
 
   useEffect(() => {
     const generation = nextGeneration();
+    generationPollRef.current?.cancel();
+    generationPollRef.current = null;
+    setGeneration(initialGenerationState);
     dispatch({ type: 'collection/changed', collectionId, requestGeneration: generation });
     void reloadWorkspace(generation);
   }, [collectionId, api, nextGeneration, reloadWorkspace]);
+
+  useEffect(
+    () => () => {
+      generationPollRef.current?.cancel();
+      generationPollRef.current = null;
+    },
+    [collectionId],
+  );
 
   useEffect(() => {
     registerDirtyState?.({
@@ -180,6 +204,79 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
     await runEnvelopeMutation(nextGeneration(), 'discard', () => api.discardDraft(collectionId, draft.draft_id, draft.revision));
   }, [api, collectionId, nextGeneration, runEnvelopeMutation]);
 
+  const onGenerateSchema = useCallback(async () => {
+    generationPollRef.current?.cancel();
+    const generationRequest = nextGeneration();
+    setGeneration({ status: 'starting' });
+    const started = await api.startGeneration(collectionId);
+    if (generationRequest !== requestGenerationRef.current) return;
+    if (!started.ok) {
+      setGeneration({ status: 'failed', errorCode: started.kind });
+      return;
+    }
+
+    const { run_id: runId, status } = started.data;
+    setGeneration({ status, runId });
+    if (status === 'failed') {
+      setGeneration({ status: 'failed', runId });
+      return;
+    }
+    if (status === 'succeeded') {
+      setGeneration({ status: 'succeeded', runId });
+      await reloadWorkspace(generationRequest);
+      return;
+    }
+
+    const controller = createGenerationPollController({
+      poll: async (signal) => {
+        const result = await api.getGenerationStatus(collectionId, runId, signal);
+        if (!result.ok) {
+          return { run_id: runId, status: 'failed', error_code: result.kind, statistics: {} };
+        }
+        if (generationRequest === requestGenerationRef.current) {
+          setGeneration({
+            status: result.data.status,
+            runId: result.data.run_id,
+            errorCode: result.data.error_code,
+            statistics: result.data.statistics,
+          });
+        }
+        return result.data;
+      },
+    });
+    generationPollRef.current = controller;
+    const outcome = await controller.promise;
+    if (generationRequest !== requestGenerationRef.current) return;
+    if (outcome.status === 'cancelled') return;
+    if (outcome.status === 'exhausted') {
+      setGeneration({ status: 'failed', runId, errorCode: 'polling_exhausted' });
+      return;
+    }
+    if (!('run_id' in outcome)) return;
+    setGeneration({
+      status: outcome.status,
+      runId: outcome.run_id,
+      errorCode: outcome.error_code,
+      statistics: outcome.statistics,
+    });
+    if (outcome.status === 'succeeded') {
+      await reloadWorkspace(generationRequest);
+    }
+  }, [api, collectionId, nextGeneration, reloadWorkspace]);
+
+  useEffect(() => {
+    const envelope = editorState.envelope;
+    const canAutoGenerate =
+      editorState.phase === 'ready' &&
+      envelope?.collection_id === collectionId &&
+      envelope.published.version === 0 &&
+      envelope.draft === null &&
+      envelope.permissions.can_edit_definitions;
+    if (!canAutoGenerate || automaticGenerationCollectionsRef.current.has(collectionId)) return;
+    automaticGenerationCollectionsRef.current.add(collectionId);
+    void onGenerateSchema();
+  }, [collectionId, editorState.envelope, editorState.phase, onGenerateSchema]);
+
   const onSaveDefinition = useCallback(async () => {
     const draft = editorStateRef.current.envelope?.draft;
     const buffer = formBufferRef.current;
@@ -276,11 +373,13 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
     conflictPreview,
     restoreChallengeToken,
     statusMessage,
+    generation,
     onSelectDefinition: openDefinition,
     onCreateDraft,
     onValidate,
     onPublish,
     onDiscardDraft,
+    onGenerateSchema,
     onFieldChange: (field: string, value: unknown) => dispatchForm({ type: 'form/edit', field, value }),
     onSaveDefinition,
     onRevertDefinition: () => dispatchForm({ type: 'form/revert' }),

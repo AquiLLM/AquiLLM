@@ -11,6 +11,7 @@ import {
 import { createInitialSchemaFormBufferState } from './schemaFormBuffer';
 import {
   editDraftEnvelope,
+  emptyEditableEnvelope,
   historyPageFixture,
   manageDraftEnvelope,
   viewPublishedEnvelope,
@@ -122,5 +123,50 @@ describe('CollectionKnowledgeGraphWorkspace states', () => {
 
     renderWorkspace(state, { statusMessage: 'Validation succeeded.' });
     expect(screen.getByText('Validation succeeded.')).toBeTruthy();
+  });
+
+  it('renders an editor-only Generate from collection action', () => {
+    const onGenerateSchema = vi.fn();
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: emptyEditableEnvelope,
+      selection: null,
+    };
+
+    renderWorkspace(state, { onGenerateSchema });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate from collection' }));
+    expect(onGenerateSchema).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables Generate from collection and announces queued progress', () => {
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: emptyEditableEnvelope,
+      selection: null,
+    };
+
+    renderWorkspace(state, { generation: { status: 'queued', runId: 'run-1' }, onGenerateSchema: vi.fn() });
+    expect(screen.getByRole('button', { name: 'Generate from collection' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('Schema generation queued.')).toBeTruthy();
+  });
+
+  it('announces generation failure and exposes manual retry', () => {
+    const onGenerateSchema = vi.fn();
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: emptyEditableEnvelope,
+      selection: null,
+    };
+
+    renderWorkspace(state, {
+      generation: { status: 'failed', runId: 'run-1', errorCode: 'no_collection_text' },
+      onGenerateSchema,
+    });
+    expect(screen.getByText('Schema generation failed: no_collection_text.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry generation' }));
+    expect(onGenerateSchema).toHaveBeenCalledTimes(1);
   });
 });

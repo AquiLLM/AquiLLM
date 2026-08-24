@@ -4,6 +4,7 @@ import type {
   PublishedSchemaSnapshot,
   SchemaPermissionsSnapshot,
   PublishStatus,
+  SchemaGenerationState,
   ValidationResult,
 } from './schemaTypes';
 import { buttonDangerClass, buttonPrimaryClass, buttonSecondaryClass, panelClass } from './schemaUiShared';
@@ -21,12 +22,14 @@ export interface SchemaDraftToolbarProps {
   projectionStatusLabel?: string | null;
   canValidate: boolean;
   canPublish: boolean;
+  generation?: SchemaGenerationState;
   onCreateDraft?: () => void;
   onValidate?: () => void;
   onPublish?: () => void;
   onDiscard?: () => void;
   onShowDiff?: () => void;
   onShowHistory?: () => void;
+  onGenerate?: () => void;
 }
 
 const SchemaDraftToolbar: React.FC<SchemaDraftToolbarProps> = ({
@@ -42,12 +45,14 @@ const SchemaDraftToolbar: React.FC<SchemaDraftToolbarProps> = ({
   projectionStatusLabel,
   canValidate,
   canPublish,
+  generation = { status: 'idle' },
   onCreateDraft,
   onValidate,
   onPublish,
   onDiscard,
   onShowDiff,
   onShowHistory,
+  onGenerate,
 }) => {
   const level = permissions.level;
   const readOnlyMessage =
@@ -56,6 +61,17 @@ const SchemaDraftToolbar: React.FC<SchemaDraftToolbarProps> = ({
       : !draft
         ? 'No active draft. Create a draft to begin editing.'
         : null;
+  const generationBusy = generation.status === 'starting' || generation.status === 'queued' || generation.status === 'running';
+  const generationMessage =
+    generation.status === 'starting' || generation.status === 'running'
+      ? 'Generating schema from collection.'
+      : generation.status === 'queued'
+        ? 'Schema generation queued.'
+        : generation.status === 'succeeded'
+          ? 'Schema generation completed.'
+          : generation.status === 'failed'
+            ? `Schema generation failed${generation.errorCode ? `: ${generation.errorCode}` : ''}.`
+            : null;
 
   return (
     <section
@@ -100,10 +116,16 @@ const SchemaDraftToolbar: React.FC<SchemaDraftToolbarProps> = ({
               <span className="text-text-lower_contrast">Projection:</span> {projectionStatusLabel}
             </p>
           ) : null}
+          {generationMessage ? <p aria-live="polite">{generationMessage}</p> : null}
           {readOnlyMessage ? <p className="text-text-lower_contrast">{readOnlyMessage}</p> : null}
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {permissions.can_edit_definitions && !draft && onGenerate ? (
+            <button type="button" className={buttonSecondaryClass} disabled={generationBusy} onClick={onGenerate}>
+              {generation.status === 'failed' ? 'Retry generation' : 'Generate from collection'}
+            </button>
+          ) : null}
           {permissions.can_create_draft && !draft ? (
             <button type="button" className={buttonPrimaryClass} onClick={onCreateDraft}>
               Create draft

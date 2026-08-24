@@ -25,6 +25,8 @@ const routes: CollectionSchemaApiRouteMap = {
   versionDiff: '/api/collection/%(col_id)s/schema/versions/%(version_id)s/diff/',
   restore: '/api/collection/%(col_id)s/schema/versions/%(version_id)s/restore/',
   restoreReplace: '/api/collection/%(col_id)s/schema/restore-replace/',
+  generate: '/api/collection/%(col_id)s/schema/generate/',
+  generationStatus: '/api/collection/%(col_id)s/schema/generation/%(run_id)s/',
 };
 
 function createMockClient(): CollectionSchemaHttpClient & {
@@ -138,5 +140,48 @@ describe('createCollectionSchemaApi', () => {
     if (result.ok) {
       expect(result.data.draft?.draft_id).toBe('draft-edit-1');
     }
+  });
+
+  it('starts collection schema generation with a formatted POST request', async () => {
+    const client = createMockClient();
+    client.requestJson = vi.fn(async (url: string, init?: CollectionSchemaRequestOptions) => {
+      client.calls.push({ url, init });
+      return {
+        ok: true as const,
+        data: { run_id: 'run-1', status: 'queued', status_url: '/api/collection/7/schema/generation/run-1/' },
+      } as never;
+    }) as CollectionSchemaHttpClient['requestJson'];
+    const api = createCollectionSchemaApi(routes, client);
+
+    const result = await api.startGeneration('7');
+
+    expect(result).toEqual({
+      ok: true,
+      data: { run_id: 'run-1', status: 'queued', status_url: '/api/collection/7/schema/generation/run-1/' },
+    });
+    expect(client.calls[0]).toMatchObject({
+      url: '/api/collection/7/schema/generate/',
+      init: { method: 'POST', body: {} },
+    });
+  });
+
+  it('gets a UUID generation status from its formatted route', async () => {
+    const client = createMockClient();
+    client.requestJson = vi.fn(async (url: string, init?: CollectionSchemaRequestOptions) => {
+      client.calls.push({ url, init });
+      return {
+        ok: true as const,
+        data: { run_id: '44c4f7a2-50e6-42a2-a45a-45c4ca38e580', status: 'running', error_code: null, statistics: {} },
+      } as never;
+    }) as CollectionSchemaHttpClient['requestJson'];
+    const api = createCollectionSchemaApi(routes, client);
+
+    const result = await api.getGenerationStatus('7', '44c4f7a2-50e6-42a2-a45a-45c4ca38e580');
+
+    expect(result.ok).toBe(true);
+    expect(client.calls[0]).toMatchObject({
+      url: '/api/collection/7/schema/generation/44c4f7a2-50e6-42a2-a45a-45c4ca38e580/',
+      init: { signal: undefined },
+    });
   });
 });

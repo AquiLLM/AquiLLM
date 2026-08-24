@@ -10,7 +10,9 @@ export type CollectionSchemaApiCapability =
   | 'versions'
   | 'versionDiff'
   | 'restore'
-  | 'restoreReplace';
+  | 'restoreReplace'
+  | 'generate'
+  | 'generationStatus';
 
 export const SCHEMA_API_URL_KEYS: Record<CollectionSchemaApiCapability, string> = {
   workspace: 'api_collection_schema_workspace',
@@ -25,6 +27,8 @@ export const SCHEMA_API_URL_KEYS: Record<CollectionSchemaApiCapability, string> 
   versionDiff: 'api_collection_schema_version_diff',
   restore: 'api_collection_schema_restore',
   restoreReplace: 'api_collection_schema_restore_replace',
+  generate: 'api_collection_schema_generate',
+  generationStatus: 'api_collection_schema_generation_status',
 };
 
 export const REQUIRED_SCHEMA_API_CAPABILITIES: CollectionSchemaApiCapability[] = [
@@ -40,6 +44,8 @@ export const REQUIRED_SCHEMA_API_CAPABILITIES: CollectionSchemaApiCapability[] =
   'versionDiff',
   'restore',
   'restoreReplace',
+  'generate',
+  'generationStatus',
 ];
 
 /** Sync publish contract: no publishStatus route is required or exposed. */
