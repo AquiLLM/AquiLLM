@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.request import Request, urlopen
 from collections import defaultdict
 from math import isfinite
 
@@ -123,9 +124,17 @@ def _sample_text(sample: object) -> str:
     raise InvalidSchemaCandidate("samples must contain text")
 
 
-def _local_vllm_client(config: SchemaGenerationConfig):
-    from openai import OpenAI
-    return OpenAI(base_url=config.base_url, api_key=config.api_key, timeout=config.timeout_seconds)
+def _post_local_vllm_json(url: str, payload: dict, headers: dict[str, str], timeout: int) -> dict:
+    """Post JSON directly without an SDK logger that can render request bodies."""
+
+    request = Request(
+        url,
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - validated local Docker URL
+        return json.loads(response.read().decode("utf-8"))
 
 
 def generate_schema_candidate(samples, client=None) -> dict:
@@ -142,11 +151,13 @@ def generate_schema_candidate(samples, client=None) -> dict:
         + "\n\n".join(texts)
     )
     try:
-        response = (client or _local_vllm_client(config)).chat.completions.create(
-            model=config.model, messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}, temperature=0,
+        response = (client or _post_local_vllm_json)(
+            f"{config.base_url}/chat/completions",
+            {"model": config.model, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}, "temperature": 0},
+            {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"},
+            config.timeout_seconds,
         )
-        return normalize_schema_candidate(json.loads(response.choices[0].message.content))
+        return normalize_schema_candidate(json.loads(response["choices"][0]["message"]["content"]))
     except (IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise InvalidSchemaCandidate("local vLLM returned an invalid candidate") from exc
     except Exception as exc:

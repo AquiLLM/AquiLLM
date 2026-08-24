@@ -6,9 +6,12 @@ variables.  Callers receive only canonical definitions and aggregate evidence.
 from __future__ import annotations
 
 import hashlib
+import heapq
 import os
 import re
 from dataclasses import dataclass
+from itertools import islice
+from typing import Iterator
 from urllib.parse import urlparse
 
 _DEFAULT_MAX_CHUNKS = 32
@@ -92,21 +95,27 @@ def load_schema_generation_config() -> SchemaGenerationConfig:
     )
 
 
-def _completed_collection_documents(collection_id: int) -> list[dict[str, object]]:
+def _completed_collection_documents(
+    collection_id: int, *, for_update: bool = False
+) -> Iterator[dict[str, object]]:
+    """Stream completed document identities; never read document text here."""
+
     from django.apps import apps
 
-    records: list[dict[str, object]] = []
+    iterators = []
     for name in (
         "PDFDocument", "TeXDocument", "RawTextDocument", "VTTDocument",
         "HandwrittenNotesDocument", "ImageUploadDocument", "MediaUploadDocument",
         "DocumentFigure",
     ):
         model = apps.get_model("apps_documents", name)
-        records.extend(
-            model.objects.filter(collection_id=collection_id, ingestion_complete=True)
-            .values("id", "full_text_hash")
-        )
-    return sorted(records, key=lambda record: str(record["id"]))
+        queryset = model.objects.filter(
+            collection_id=collection_id, ingestion_complete=True
+        ).order_by("id")
+        if for_update:
+            queryset = queryset.select_for_update()
+        iterators.append(queryset.values("id", "full_text_hash").iterator())
+    yield from heapq.merge(*iterators, key=lambda record: str(record["id"]))
 
 
 def collection_source_signature(collection_id) -> str:
@@ -123,6 +132,45 @@ def collection_source_signature(collection_id) -> str:
     return digest.hexdigest()
 
 
+def _locked_collection_source_signature(collection_id: int) -> str:
+    """Compute a signature while holding completed source-document row locks."""
+
+    digest = hashlib.sha256()
+    for document in _completed_collection_documents(collection_id, for_update=True):
+        digest.update(str(document["id"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(document["full_text_hash"]).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _next_sample_chunk(
+    document_id: str, after_chunk_number: int, character_limit: int
+) -> SchemaSample | None:
+    """Materialize one deterministic chunk, truncated before it leaves PostgreSQL."""
+
+    from django.db.models.functions import Substr
+    from apps.documents.models.chunks import TextChunk
+
+    row = (
+        TextChunk.objects.filter(
+            doc_id=document_id,
+            modality=TextChunk.Modality.TEXT,
+            chunk_number__gt=after_chunk_number,
+            content__regex=r"\S",
+        )
+        .order_by("chunk_number", "pk")
+        .annotate(sample_content=Substr("content", 1, character_limit))
+        .values("pk", "doc_id", "chunk_number", "sample_content")
+        .first()
+    )
+    if row is None:
+        return None
+    return SchemaSample(
+        str(row["doc_id"]), int(row["pk"]), int(row["chunk_number"]), row["sample_content"]
+    )
+
+
 def sample_collection_chunks(collection_id, max_chunks, max_characters):
     """Select deterministic, round-robin text chunks without exceeding either cap."""
 
@@ -130,25 +178,30 @@ def sample_collection_chunks(collection_id, max_chunks, max_characters):
         raise ValueError("max_chunks must be a positive integer")
     if type(max_characters) is not int or max_characters <= 0:
         raise ValueError("max_characters must be a positive integer")
-    from apps.documents.models.chunks import TextChunk
-
-    document_ids = [row["id"] for row in _completed_collection_documents(collection_id)]
+    document_ids = [
+        str(row["id"])
+        for row in islice(_completed_collection_documents(collection_id), max_chunks)
+    ]
     if not document_ids:
         return []
-    groups: dict[str, list[SchemaSample]] = defaultdict(list)
-    rows = (
-        TextChunk.objects.filter(doc_id__in=document_ids, modality=TextChunk.Modality.TEXT)
-        .exclude(content="")
-        .order_by("doc_id", "chunk_number", "pk")
-        .values("pk", "doc_id", "chunk_number", "content")
-    )
-    for row in rows:
-        text = row["content"].strip()
-        if text:
-            groups[str(row["doc_id"])].append(
-                SchemaSample(str(row["doc_id"]), int(row["pk"]), int(row["chunk_number"]), text)
+    selected: list[SchemaSample] = []
+    cursors = {document_id: -1 for document_id in document_ids}
+    active_documents = list(document_ids)
+    used_characters = 0
+    while active_documents and len(selected) < max_chunks and used_characters < max_characters:
+        for document_id in tuple(active_documents):
+            if len(selected) >= max_chunks or used_characters >= max_characters:
+                break
+            sample = _next_sample_chunk(
+                document_id, cursors[document_id], max_characters - used_characters
             )
-    return balanced_samples(groups, max_chunks=max_chunks, max_characters=max_characters)
+            if sample is None:
+                active_documents.remove(document_id)
+                continue
+            selected.append(sample)
+            cursors[document_id] = sample.chunk_number
+            used_characters += len(sample.text)
+    return selected
 
 
 def balanced_samples(

@@ -11,6 +11,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.collections.services.schema_generation import (
+    _locked_collection_source_signature,
     InvalidSchemaCandidate,
     collection_source_signature,
     collect_candidate_evidence,
@@ -23,6 +24,10 @@ logger = structlog.stdlib.get_logger(__name__)
 _MAX_RETRIES = 3
 _RETRY_COUNTDOWN_SECONDS = 30
 _QUEUE = settings.KG_EXTRACTION_QUEUE
+
+
+class _SourceChanged(RuntimeError):
+    """The final source-document lock fence rejected a stale generation run."""
 
 
 def _canonical_run_id(value: object) -> uuid.UUID:
@@ -55,8 +60,10 @@ def _claim_run(run_id: uuid.UUID):
             .filter(id=run_id)
             .first()
         )
-        if run is None or run.status != "queued":
+        if run is None or run.status not in {"queued", "running"}:
             return None
+        if run.status == "running":
+            return run
         run.status = "running"
         run.started_at = timezone.now()
         run.error_code = ""
@@ -80,6 +87,29 @@ def _safe_log_failure(error_code: str, exc: BaseException | None = None) -> None
         error_code=error_code,
         error_type=None if exc is None else type(exc).__name__,
     )
+
+
+def _write_draft_with_source_fence(
+    run_id: uuid.UUID, collection_id: int, expected_signature: str, definitions: dict, statistics: dict
+):
+    """Lock source rows and draft persistence inside one enclosing transaction."""
+
+    from apps.collections.services.schema import canonicalize_definitions, write_generated_draft
+
+    with transaction.atomic():
+        if _locked_collection_source_signature(collection_id) != expected_signature:
+            raise _SourceChanged()
+        return write_generated_draft(run_id, canonicalize_definitions(definitions), statistics)
+
+
+def _retry_or_fail(task, run_id: uuid.UUID, exc: BaseException) -> None:
+    """Leave a live run resumable for retry; record only exhausted local failures."""
+
+    retry_count = int(getattr(task.request, "retries", 0))
+    if retry_count < task.max_retries:
+        raise task.retry(exc=exc, countdown=_RETRY_COUNTDOWN_SECONDS)
+    _fail_run(run_id, "local_inference_failed")
+    _safe_log_failure("local_inference_failed", exc)
 
 
 @shared_task(
@@ -119,17 +149,11 @@ def generate_collection_schema_task(self, run_id: str) -> None:
             return None
         candidate = generate_schema_candidate(samples)
         definitions, statistics = collect_candidate_evidence(candidate, samples)
-        # Task 1 owns persistent canonicalization and draft conflict semantics.
-        from apps.collections.services.schema import canonicalize_definitions, write_generated_draft
-
-        if collection_source_signature(run.collection_id) != run.source_signature:
-            _fail_run(parsed_run_id, "source_changed")
-            return None
-        write_generated_draft(
-            parsed_run_id,
-            canonicalize_definitions(definitions),
-            statistics,
+        _write_draft_with_source_fence(
+            parsed_run_id, run.collection_id, run.source_signature, definitions, statistics
         )
+    except _SourceChanged:
+        _fail_run(parsed_run_id, "source_changed")
     except InvalidSchemaCandidate as exc:
         _fail_run(parsed_run_id, "invalid_candidate")
         _safe_log_failure("invalid_candidate", exc)
@@ -140,11 +164,7 @@ def generate_collection_schema_task(self, run_id: str) -> None:
             _fail_run(parsed_run_id, "draft_conflict")
             _safe_log_failure("draft_conflict", exc)
             return None
-        retry_count = int(getattr(self.request, "retries", 0))
-        if retry_count < self.max_retries:
-            raise self.retry(exc=exc, countdown=_RETRY_COUNTDOWN_SECONDS)
-        _fail_run(parsed_run_id, "local_inference_failed")
-        _safe_log_failure("local_inference_failed", exc)
+        _retry_or_fail(self, parsed_run_id, exc)
     return None
 
 
