@@ -1,0 +1,207 @@
+"""Candidate parsing and evidence aggregation for local schema generation."""
+from __future__ import annotations
+
+import json
+import re
+from collections import defaultdict
+from math import isfinite
+
+import yaml
+
+from .schema_generation import (
+    InvalidSchemaCandidate,
+    SchemaGenerationConfig,
+    SchemaSample,
+    _MAX_ENTITY_TYPES,
+    _MAX_RELATION_TYPES,
+    _MIN_ENTITY_TYPES,
+    _MIN_RELATION_TYPES,
+    _SNAKE_CASE,
+    load_schema_generation_config,
+)
+
+
+def _snake_case(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidSchemaCandidate(f"{field} must be a nonempty string")
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+    if not _SNAKE_CASE.fullmatch(normalized):
+        raise InvalidSchemaCandidate(f"{field} must normalize to lowercase snake case")
+    return normalized
+
+
+def _description(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 512:
+        raise InvalidSchemaCandidate(f"{field} must be a nonempty string up to 512 characters")
+    return value.strip()
+
+
+def _aliases(value: object) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(alias, str) or not alias.strip() for alias in value):
+        raise InvalidSchemaCandidate("aliases must be a list of nonempty strings")
+    return sorted(set(alias.strip() for alias in value))
+
+
+def _candidate_ontology_yaml(definitions: dict) -> str:
+    entity_types = [
+        {
+            "name": item["key"], "description": item["values"]["description"],
+            "aliases": item["values"]["aliases"],
+            "default_retrieval_weight": item["values"]["default_retrieval_weight"],
+            "default_suppression_policy": item["values"]["default_suppression_policy"],
+            "default_suppression_threshold": item["values"]["default_suppression_threshold"],
+        } for item in definitions["entities"]
+    ]
+    relations = [
+        {
+            "name": item["key"], "description": item["values"]["description"],
+            "direction": item["values"]["direction"],
+            "allowed_head_types": item["values"]["allowed_head_types"],
+            "allowed_tail_types": item["values"]["allowed_tail_types"],
+        } for item in definitions["relations"]
+    ]
+    return yaml.safe_dump({"version": "1.0.0", "entity_types": entity_types, "relations": relations}, sort_keys=True)
+
+
+def normalize_schema_candidate(candidate: object) -> dict:
+    """Convert strict model JSON into the canonical editor definition shape."""
+
+    if not isinstance(candidate, dict):
+        raise InvalidSchemaCandidate("candidate must be a JSON object")
+    entity_records, relation_records = candidate.get("entities"), candidate.get("relations")
+    if not isinstance(entity_records, list) or not (_MIN_ENTITY_TYPES <= len(entity_records) <= _MAX_ENTITY_TYPES):
+        raise InvalidSchemaCandidate("candidate must contain 2-24 entities")
+    if not isinstance(relation_records, list) or not (_MIN_RELATION_TYPES <= len(relation_records) <= _MAX_RELATION_TYPES):
+        raise InvalidSchemaCandidate("candidate must contain 1-32 relations")
+    entities, entity_keys = [], set()
+    for record in entity_records:
+        if not isinstance(record, dict):
+            raise InvalidSchemaCandidate("entity definitions must be objects")
+        key = _snake_case(record.get("name"), "entity name")
+        if key in entity_keys:
+            raise InvalidSchemaCandidate("duplicate entity name")
+        entity_keys.add(key)
+        entities.append({
+            "key": key, "origin": "generated", "change_state": "added",
+            "capabilities": {"editable_fields": ["description", "aliases"], "removable": True, "renameable": True},
+            "values": {"name": key, "description": _description(record.get("description"), "entity description"), "aliases": _aliases(record.get("aliases")), "default_retrieval_weight": 0.5, "default_suppression_policy": "none", "default_suppression_threshold": 0.0},
+        })
+    relations, relation_keys = [], set()
+    for record in relation_records:
+        if not isinstance(record, dict):
+            raise InvalidSchemaCandidate("relation definitions must be objects")
+        key = _snake_case(record.get("name"), "relation name")
+        if key in relation_keys:
+            raise InvalidSchemaCandidate("duplicate relation name")
+        relation_keys.add(key)
+        direction = record.get("direction")
+        if direction not in {"directed", "undirected"}:
+            raise InvalidSchemaCandidate("relation direction must be directed or undirected")
+        heads = [_snake_case(value, "relation head endpoint") for value in record.get("allowed_head_types", [])]
+        tails = [_snake_case(value, "relation tail endpoint") for value in record.get("allowed_tail_types", [])]
+        if not heads or not tails or set(heads).union(tails).difference(entity_keys):
+            raise InvalidSchemaCandidate("relation has an unknown endpoint type")
+        relations.append({
+            "key": key, "origin": "generated", "change_state": "added",
+            "capabilities": {"editable_fields": ["description"], "removable": True, "renameable": True},
+            "values": {"name": key, "description": _description(record.get("description"), "relation description"), "direction": direction, "allowed_head_types": sorted(set(heads)), "allowed_tail_types": sorted(set(tails))},
+        })
+    definitions = {"entities": sorted(entities, key=lambda item: item["key"]), "relations": sorted(relations, key=lambda item: item["key"])}
+    try:
+        from apps.knowledge_graph.services.ontology import load_ontology_yaml
+        load_ontology_yaml(_candidate_ontology_yaml(definitions))
+    except Exception as exc:
+        raise InvalidSchemaCandidate("candidate fails ontology validation") from exc
+    return definitions
+
+
+def _sample_text(sample: object) -> str:
+    if isinstance(sample, SchemaSample):
+        return sample.text
+    if isinstance(sample, dict) and isinstance(sample.get("text"), str):
+        return sample["text"]
+    raise InvalidSchemaCandidate("samples must contain text")
+
+
+def _local_vllm_client(config: SchemaGenerationConfig):
+    from openai import OpenAI
+    return OpenAI(base_url=config.base_url, api_key=config.api_key, timeout=config.timeout_seconds)
+
+
+def generate_schema_candidate(samples, client=None) -> dict:
+    """Ask the configured local vLLM server for one strict JSON proposal."""
+
+    config = load_schema_generation_config()
+    texts = [_sample_text(sample) for sample in samples]
+    if not texts:
+        raise InvalidSchemaCandidate("at least one sample is required")
+    prompt = (
+        "Produce only JSON with entities and relations. Use 2-24 entity types and 1-32 relation types. "
+        "Every entity needs name, description, aliases. Every relation needs name, description, direction, "
+        "allowed_head_types, and allowed_tail_types. Names must be concise and endpoints must name entities.\n\n"
+        + "\n\n".join(texts)
+    )
+    try:
+        response = (client or _local_vllm_client(config)).chat.completions.create(
+            model=config.model, messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}, temperature=0,
+        )
+        return normalize_schema_candidate(json.loads(response.choices[0].message.content))
+    except (IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise InvalidSchemaCandidate("local vLLM returned an invalid candidate") from exc
+    except Exception as exc:
+        raise RuntimeError("local vLLM inference failed") from exc
+
+
+def _sample_reference(sample: object) -> dict[str, object]:
+    if isinstance(sample, SchemaSample):
+        return {"document_id": sample.document_id, "chunk_id": sample.chunk_id}
+    if isinstance(sample, dict) and isinstance(sample.get("document_id"), str) and type(sample.get("chunk_id")) is int:
+        return {"document_id": sample["document_id"], "chunk_id": sample["chunk_id"]}
+    raise InvalidSchemaCandidate("samples must contain source references")
+
+
+def _definitions_for_evidence(candidate: object) -> dict:
+    if isinstance(candidate, dict) and all(isinstance(candidate.get(kind), list) for kind in ("entities", "relations")):
+        if all(isinstance(item, dict) and "key" in item and "values" in item for kind in ("entities", "relations") for item in candidate[kind]):
+            return candidate
+    return normalize_schema_candidate(candidate)
+
+
+def _default_backend():
+    from lib.knowledge_graph.config import load_extraction_settings
+    from lib.knowledge_graph.extractors.factory import get_extraction_backend
+    return get_extraction_backend(settings=load_extraction_settings())
+
+
+def collect_candidate_evidence(candidate, samples, backend=None) -> tuple[dict, dict]:
+    """Keep evidence-backed definitions and aggregate text-free statistics only."""
+
+    definitions, samples = _definitions_for_evidence(candidate), list(samples)
+    from apps.knowledge_graph.services.ontology import load_ontology_yaml
+    ontology = load_ontology_yaml(_candidate_ontology_yaml(definitions))
+    results = (backend or _default_backend()).extract_batch(tuple(_sample_text(sample) for sample in samples), ontology=ontology)
+    if len(results) != len(samples):
+        raise RuntimeError("local GLiNER2 returned an invalid result batch")
+    entities, relations = defaultdict(list), defaultdict(list)
+    entity_sources, relation_sources = defaultdict(list), defaultdict(list)
+    for sample, result in zip(samples, results, strict=True):
+        reference = _sample_reference(sample)
+        for mention in result.entities:
+            if mention.entity_type in ontology.entity_types and isfinite(mention.confidence):
+                entities[mention.entity_type].append(float(mention.confidence))
+                if reference not in entity_sources[mention.entity_type] and len(entity_sources[mention.entity_type]) < 3:
+                    entity_sources[mention.entity_type].append(reference)
+        for mention in result.relations:
+            if mention.relation_type in ontology.relations and isfinite(mention.confidence):
+                relations[mention.relation_type].append(float(mention.confidence))
+                if reference not in relation_sources[mention.relation_type] and len(relation_sources[mention.relation_type]) < 3:
+                    relation_sources[mention.relation_type].append(reference)
+    kept_entities = [item for item in definitions["entities"] if entities[item["key"]]]
+    keys = {item["key"] for item in kept_entities}
+    kept_relations = [item for item in definitions["relations"] if relations[item["key"]] and set(item["values"]["allowed_head_types"]).union(item["values"]["allowed_tail_types"]).issubset(keys)]
+    if len(kept_entities) < _MIN_ENTITY_TYPES or len(kept_relations) < _MIN_RELATION_TYPES:
+        raise InvalidSchemaCandidate("candidate has insufficient local evidence")
+    def stats(values, sources, allowed):
+        return {key: {"count": len(confidences), "mean_confidence": sum(confidences) / len(confidences), "sources": sources[key]} for key, confidences in sorted(values.items()) if key in allowed}
+    return {"entities": kept_entities, "relations": kept_relations}, {"entities": stats(entities, entity_sources, keys), "relations": stats(relations, relation_sources, {item["key"] for item in kept_relations})}
