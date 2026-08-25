@@ -77,10 +77,9 @@ def test_example_environment_enables_mtp_speculation_by_default():
         line for line in environment.splitlines() if line.startswith("VLLM_EXTRA_ARGS=")
     )
 
-    assert "--kv-cache-dtype fp8_e5m2" in vllm_extra_args
-    assert "--attention-backend TURBOQUANT" not in vllm_extra_args
+    assert "--kv-cache-dtype turboquant_k8v4" in vllm_extra_args
     assert (
-        "--speculative-config '{\\\"method\\\":\\\"mtp\\\",\\\"num_speculative_tokens\\\":3}'"
+        "--speculative-config '{\\\"method\\\":\\\"mtp\\\",\\\"num_speculative_tokens\\\":4}'"
         in vllm_extra_args
     )
 
