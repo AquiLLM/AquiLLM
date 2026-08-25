@@ -150,8 +150,8 @@ class OpenAIInterface(LLMInterface):
             enable_thinking = (
                 getenv("OPENAI_COMPAT_ENABLE_THINKING", "1") or "1"
             ).strip().lower() in ("1", "true", "yes", "on")
-            arguments["chat_template_kwargs"] = {
-                "enable_thinking": enable_thinking
+            arguments["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": enable_thinking}
             }
         context_limit_raw = (
             (getenv("OPENAI_CONTEXT_LIMIT", "") or "").strip()
