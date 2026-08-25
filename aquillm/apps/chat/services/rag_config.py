@@ -40,7 +40,7 @@ def evidence_token_budget() -> int:
 
 
 def synthesis_max_tokens() -> int:
-    return _env_int("RAG_SYNTHESIS_MAX_TOKENS", 8192, minimum=256)
+    return _env_int("RAG_SYNTHESIS_MAX_TOKENS", 4096, minimum=256)
 
 
 def max_snippets_per_doc() -> int:

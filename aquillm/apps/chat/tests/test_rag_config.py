@@ -17,3 +17,9 @@ def test_direct_rag_enabled_when_flag_set(monkeypatch):
 def test_attach_tools_when_collections_selected_default(monkeypatch):
     monkeypatch.delenv("RAG_ATTACH_TOOLS_WHEN_COLLECTIONS_SELECTED", raising=False)
     assert rag_config.attach_tools_when_collections_selected() is True
+
+
+def test_synthesis_budget_keeps_thinking_but_bounds_completion(monkeypatch):
+    monkeypatch.delenv("RAG_SYNTHESIS_MAX_TOKENS", raising=False)
+
+    assert rag_config.synthesis_max_tokens() == 4096
