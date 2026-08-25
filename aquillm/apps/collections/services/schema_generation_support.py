@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 import re
-from urllib.request import Request, urlopen
 from collections import defaultdict
 from math import isfinite
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 import yaml
 
@@ -20,6 +21,26 @@ from .schema_generation import (
     _SNAKE_CASE,
     load_schema_generation_config,
 )
+
+_MAX_VLLM_RESPONSE_BYTES = 1_000_000
+
+
+class LocalVLLMTransportError(RuntimeError):
+    """The local adapter did not receive a bounded, successful JSON response."""
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    """A local vLLM request must not be redirected to another host."""
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+_LOCAL_URL_OPENER = build_opener(ProxyHandler({}), _RejectRedirects())
+
+
+def _open_local_request(request: Request, timeout: int):
+    return _LOCAL_URL_OPENER.open(request, timeout=timeout)
 
 
 def _snake_case(value: object, field: str) -> str:
@@ -133,8 +154,30 @@ def _post_local_vllm_json(url: str, payload: dict, headers: dict[str, str], time
         headers=headers,
         method="POST",
     )
-    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - validated local Docker URL
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with _open_local_request(request, timeout=timeout) as response:  # noqa: S310 - validated local Docker URL
+            status = getattr(response, "status", None)
+            if status is None:
+                status = response.getcode()
+            if not 200 <= status < 300:
+                raise LocalVLLMTransportError("local vLLM returned a non-success status")
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None and int(content_length) > _MAX_VLLM_RESPONSE_BYTES:
+                raise LocalVLLMTransportError("local vLLM response exceeded the size limit")
+            body = response.read(_MAX_VLLM_RESPONSE_BYTES + 1)
+    except LocalVLLMTransportError:
+        raise
+    except (HTTPError, URLError, OSError, TimeoutError, ValueError) as exc:
+        raise LocalVLLMTransportError("local vLLM transport failed") from exc
+    if len(body) > _MAX_VLLM_RESPONSE_BYTES:
+        raise LocalVLLMTransportError("local vLLM response exceeded the size limit")
+    try:
+        decoded = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LocalVLLMTransportError("local vLLM response was malformed") from exc
+    if not isinstance(decoded, dict):
+        raise LocalVLLMTransportError("local vLLM response must be a JSON object")
+    return decoded
 
 
 def generate_schema_candidate(samples, client=None) -> dict:

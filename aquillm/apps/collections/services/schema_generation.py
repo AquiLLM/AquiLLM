@@ -10,7 +10,6 @@ import heapq
 import os
 import re
 from dataclasses import dataclass
-from itertools import islice
 from typing import Iterator
 from urllib.parse import urlparse
 
@@ -95,10 +94,10 @@ def load_schema_generation_config() -> SchemaGenerationConfig:
     )
 
 
-def _completed_collection_documents(
-    collection_id: int, *, for_update: bool = False
+def _collection_source_documents(
+    collection_id: int, *, for_update: bool = False, include_incomplete: bool = False
 ) -> Iterator[dict[str, object]]:
-    """Stream completed document identities; never read document text here."""
+    """Stream text-free document identities, locking every source row when requested."""
 
     from django.apps import apps
 
@@ -109,13 +108,23 @@ def _completed_collection_documents(
         "DocumentFigure",
     ):
         model = apps.get_model("apps_documents", name)
-        queryset = model.objects.filter(
-            collection_id=collection_id, ingestion_complete=True
-        ).order_by("id")
+        filters = {"collection_id": collection_id}
+        if not include_incomplete:
+            filters["ingestion_complete"] = True
+        queryset = model.objects.filter(**filters).order_by("id")
         if for_update:
             queryset = queryset.select_for_update()
-        iterators.append(queryset.values("id", "full_text_hash").iterator())
+        fields = ("id", "full_text_hash", "ingestion_complete") if include_incomplete else ("id", "full_text_hash")
+        iterators.append(queryset.values(*fields).iterator())
     yield from heapq.merge(*iterators, key=lambda record: str(record["id"]))
+
+
+def _completed_collection_documents(
+    collection_id: int, *, for_update: bool = False
+) -> Iterator[dict[str, object]]:
+    """Stream completed document identities; never read document text here."""
+
+    yield from _collection_source_documents(collection_id, for_update=for_update)
 
 
 def collection_source_signature(collection_id) -> str:
@@ -133,10 +142,14 @@ def collection_source_signature(collection_id) -> str:
 
 
 def _locked_collection_source_signature(collection_id: int) -> str:
-    """Compute a signature while holding completed source-document row locks."""
+    """Lock all source rows, then hash only completed document identities."""
 
     digest = hashlib.sha256()
-    for document in _completed_collection_documents(collection_id, for_update=True):
+    for document in _collection_source_documents(
+        collection_id, for_update=True, include_incomplete=True
+    ):
+        if not document["ingestion_complete"]:
+            continue
         digest.update(str(document["id"]).encode("ascii"))
         digest.update(b"\0")
         digest.update(str(document["full_text_hash"]).encode("ascii"))
@@ -178,16 +191,24 @@ def sample_collection_chunks(collection_id, max_chunks, max_characters):
         raise ValueError("max_chunks must be a positive integer")
     if type(max_characters) is not int or max_characters <= 0:
         raise ValueError("max_characters must be a positive integer")
-    document_ids = [
-        str(row["id"])
-        for row in islice(_completed_collection_documents(collection_id), max_chunks)
-    ]
-    if not document_ids:
-        return []
     selected: list[SchemaSample] = []
-    cursors = {document_id: -1 for document_id in document_ids}
-    active_documents = list(document_ids)
+    document_ids = (str(row["id"]) for row in _completed_collection_documents(collection_id))
+    cursors: dict[str, int] = {}
+    active_documents: list[str] = []
     used_characters = 0
+
+    def fill_active_documents() -> None:
+        """Probe identities only; text remains bounded to accepted sample slots."""
+
+        while len(active_documents) < max_chunks:
+            try:
+                document_id = next(document_ids)
+            except StopIteration:
+                return
+            cursors[document_id] = -1
+            active_documents.append(document_id)
+
+    fill_active_documents()
     while active_documents and len(selected) < max_chunks and used_characters < max_characters:
         for document_id in tuple(active_documents):
             if len(selected) >= max_chunks or used_characters >= max_characters:
@@ -197,6 +218,8 @@ def sample_collection_chunks(collection_id, max_chunks, max_characters):
             )
             if sample is None:
                 active_documents.remove(document_id)
+                cursors.pop(document_id)
+                fill_active_documents()
                 continue
             selected.append(sample)
             cursors[document_id] = sample.chunk_number
