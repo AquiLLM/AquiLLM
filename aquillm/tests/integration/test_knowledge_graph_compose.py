@@ -98,6 +98,27 @@ def test_memgraph_healthcheck_uses_supported_non_interactive_input(
     assert "--execute" not in command
 
 
+@pytest.mark.parametrize(
+    "compose_file", MEMGRAPH_HEALTHCHECK_COMPOSE_FILES, ids=lambda path: path.name
+)
+def test_memgraph_uses_a_canonical_internal_dns_alias(compose_file: Path) -> None:
+    services = _compose(compose_file)["services"]
+    memgraph_network = services["memgraph_knowledge_graph"]["networks"][
+        "knowledge_graph_store"
+    ]
+
+    assert "memgraph-knowledge-graph" in memgraph_network["aliases"]
+    for service_name in (
+        "knowledge_graph_query_gateway",
+        "worker_knowledge_graph_projection",
+    ):
+        environment = _environment_map(services[service_name]["environment"])
+        assert (
+            environment["KG_MEMGRAPH_URI"]
+            == "bolt://memgraph-knowledge-graph:7687"
+        )
+
+
 @pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
 def test_graph_worker_is_an_optional_isolated_cpu_worker(compose_file: Path) -> None:
     services = _compose(compose_file)["services"]

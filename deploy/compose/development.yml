@@ -197,7 +197,9 @@ services:
       MEMGRAPH_USER: ${KG_MEMGRAPH_PROJECTION_USERNAME:-}
       MEMGRAPH_PASSWORD: ${KG_MEMGRAPH_PROJECTION_PASSWORD:-}
     volumes: [knowledge_graph_memgraph_data:/var/lib/memgraph]
-    networks: [knowledge_graph_store]
+    networks:
+      knowledge_graph_store:
+        aliases: [memgraph-knowledge-graph]
     healthcheck: &kg-memgraph-health
       test: ["CMD-SHELL", "test -n \"$$MEMGRAPH_USER\" && test -n \"$$MEMGRAPH_PASSWORD\" && echo 'RETURN 1;' | mgconsole --host 127.0.0.1 --port 7687 --username \"$$MEMGRAPH_USER\" --password \"$$MEMGRAPH_PASSWORD\" >/dev/null 2>&1"]
       interval: 10s
@@ -210,7 +212,7 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
-      KG_MEMGRAPH_URI: bolt://memgraph_knowledge_graph:7687
+      KG_MEMGRAPH_URI: bolt://memgraph-knowledge-graph:7687
       KG_MEMGRAPH_DATABASE: ${KG_MEMGRAPH_DATABASE:-memgraph}
       KG_MEMGRAPH_QUERY_USERNAME: ${KG_MEMGRAPH_QUERY_USERNAME:-}
       KG_MEMGRAPH_QUERY_PASSWORD: ${KG_MEMGRAPH_QUERY_PASSWORD:-}
@@ -275,7 +277,7 @@ services:
       POSTGRES_PORT: 1
       DJANGO_DEBUG: 0
       KG_MEMGRAPH_PROJECTION_ENABLED: ${KG_MEMGRAPH_PROJECTION_WORKER_ENABLED:-0}
-      KG_MEMGRAPH_URI: bolt://memgraph_knowledge_graph:7687
+      KG_MEMGRAPH_URI: bolt://memgraph-knowledge-graph:7687
       KG_MEMGRAPH_DATABASE: ${KG_MEMGRAPH_DATABASE:-memgraph}
       KG_MEMGRAPH_PROJECTION_USERNAME: ${KG_MEMGRAPH_PROJECTION_USERNAME:-}
       KG_MEMGRAPH_PROJECTION_PASSWORD: ${KG_MEMGRAPH_PROJECTION_PASSWORD:-}
