@@ -10,6 +10,7 @@ from apps.collections.models import (
 from apps.collections.services.schema import canonicalize_definitions
 from apps.collections.services.schema_generation import (
     _locked_collection_source_signature,
+    collection_has_eligible_text,
 )
 from apps.collections.tasks.schema_generation import enqueue_schema_generation
 
@@ -79,6 +80,9 @@ class Command(BaseCommand):
                 )
                 requester = _requester_for(collection, draft)
                 if any(definitions.values()) or requester is None:
+                    skipped += 1
+                    continue
+                if not collection_has_eligible_text(collection.pk):
                     skipped += 1
                     continue
                 source_signature = _locked_collection_source_signature(collection.pk)

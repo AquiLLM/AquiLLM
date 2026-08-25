@@ -16,6 +16,47 @@ def test_missing_schema_backfill_command_is_registered():
     assert "generate_missing_collection_schemas" in get_commands()
 
 
+@pytest.fixture(autouse=True)
+def assume_collection_has_eligible_text(monkeypatch):
+    monkeypatch.setattr(
+        "apps.collections.management.commands.generate_missing_collection_schemas.collection_has_eligible_text",
+        lambda collection_id: True,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backfill_skips_collection_without_eligible_text(monkeypatch):
+    editor = User.objects.create_user(username="schema-backfill-no-text-editor")
+    collection = Collection.objects.create(name="No text collection")
+    CollectionPermission.objects.create(
+        collection=collection,
+        user=editor,
+        permission="EDIT",
+    )
+    monkeypatch.setattr(
+        "apps.collections.management.commands.generate_missing_collection_schemas.collection_has_eligible_text",
+        lambda collection_id: False,
+        raising=False,
+    )
+    enqueued = []
+    monkeypatch.setattr(
+        "apps.collections.management.commands.generate_missing_collection_schemas.enqueue_schema_generation",
+        enqueued.append,
+    )
+    output = StringIO()
+
+    call_command(
+        "generate_missing_collection_schemas",
+        "--collection",
+        str(collection.pk),
+        stdout=output,
+    )
+
+    assert not CollectionSchemaGenerationRun.objects.exists()
+    assert enqueued == []
+    assert output.getvalue().strip() == "queued=0 reused=0 skipped=1"
+
+
 @pytest.mark.django_db(transaction=True)
 def test_backfill_queues_unchanged_empty_draft_and_skips_nonempty_draft(monkeypatch):
     editor = User.objects.create_user(username="schema-backfill-editor")

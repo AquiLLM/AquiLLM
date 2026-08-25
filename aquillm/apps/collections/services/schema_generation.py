@@ -157,6 +157,12 @@ def _eligible_collection_documents(collection_id: int) -> Iterator[dict[str, obj
     yield from heapq.merge(*iterators, key=lambda record: str(record["id"]))
 
 
+def collection_has_eligible_text(collection_id: int) -> bool:
+    """Return whether schema generation has any completed, usable source text."""
+
+    return next(_eligible_collection_documents(collection_id), None) is not None
+
+
 def collection_source_signature(collection_id) -> str:
     """Return a text-free signature for completed collection document content."""
 
