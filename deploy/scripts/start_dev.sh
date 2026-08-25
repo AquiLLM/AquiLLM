@@ -10,6 +10,7 @@ set -euo pipefail
 #   AQUILLM_COMPOSE_FILE=deploy/compose/development.yml
 #   USE_VLLM=1
 #   USE_KNOWLEDGE_GRAPH=0
+#   USE_KNOWLEDGE_GRAPH_PROJECTION=0
 #   USE_EDGE=0
 #   RUN_CERTBOT=0
 #   BUILD=0
@@ -20,6 +21,7 @@ AQUILLM_COMPOSE_FILE="${AQUILLM_COMPOSE_FILE:-deploy/compose/development.yml}"
 AQUILLM_ENV_FILE="${AQUILLM_ENV_FILE:-.env}"
 USE_VLLM="${USE_VLLM:-1}"
 USE_KNOWLEDGE_GRAPH="${USE_KNOWLEDGE_GRAPH:-0}"
+USE_KNOWLEDGE_GRAPH_PROJECTION="${USE_KNOWLEDGE_GRAPH_PROJECTION:-0}"
 USE_EDGE="${USE_EDGE:-0}"
 RUN_CERTBOT="${RUN_CERTBOT:-0}"
 BUILD="${BUILD:-0}"
@@ -134,8 +136,10 @@ if [ "$USE_KNOWLEDGE_GRAPH" = "1" ]; then
   compose_up worker_knowledge_graph
   wait_for_service_healthy worker_knowledge_graph
 
-  compose_up worker_knowledge_graph_projection
-  wait_for_service_healthy worker_knowledge_graph_projection
+  if [ "$USE_KNOWLEDGE_GRAPH_PROJECTION" = "1" ]; then
+    compose_up worker_knowledge_graph_projection
+    wait_for_service_healthy worker_knowledge_graph_projection
+  fi
 fi
 
 compose_up web worker
