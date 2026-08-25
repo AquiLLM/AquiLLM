@@ -108,6 +108,34 @@ class OpenAIMemoryPromptTests(SimpleTestCase):
             "chat_template_kwargs": {"enable_thinking": False}
         }
 
+    def test_local_vllm_thinking_budget_zero_overrides_enabled_default(self):
+        completions = self._CapturingCompletions(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(tool_calls=[], content="OK"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=2),
+            )
+        )
+        llm = OpenAIInterface(self._FakeOpenAIClient(completions), model="qwen3.6:27b")
+
+        with patch.dict(
+            os.environ, {"OPENAI_COMPAT_ENABLE_THINKING": "1"}, clear=False
+        ):
+            async_to_sync(llm.get_message)(
+                system="Choose one tool.",
+                messages=[{"role": "user", "content": "search the papers"}],
+                max_tokens=128,
+                thinking_budget=0,
+            )
+
+        assert completions.calls[0]["extra_body"] == {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
+
     def test_lingua2_skips_prompt_far_below_configured_context_limit(self):
         completions = self._CapturingCompletions(
             SimpleNamespace(

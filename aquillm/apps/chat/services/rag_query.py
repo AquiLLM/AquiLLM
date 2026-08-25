@@ -2,12 +2,9 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from apps.chat.services.rag_config import query_rewrite_enabled
-
-if TYPE_CHECKING:
-    from lib.llm.types.conversation import Conversation
 
 _RETRY_RE = re.compile(
     r"^\s*(?:try again|retry|please retry|run it again|do that again)\s*[.!?]*\s*$",
@@ -94,4 +91,35 @@ def build_retrieval_query(conversation: Any, latest_user_text: str) -> str:
     return text
 
 
-__all__ = ["build_retrieval_query"]
+def _query_key(text: str) -> str:
+    return re.sub(r"[\s?;]+", " ", text or "").strip().casefold()
+
+
+def build_retrieval_queries(
+    conversation: Any,
+    latest_user_text: str,
+    *,
+    max_queries: int,
+) -> list[str]:
+    """Return the primary query plus meaningful clauses for multi-part questions."""
+    primary = build_retrieval_query(conversation, latest_user_text)
+    if not primary:
+        return []
+
+    limit = max(1, min(3, int(max_queries)))
+    queries = [primary]
+    seen = {_query_key(primary)}
+    for raw_clause in re.split(r"[?;\n]+", primary):
+        clause = " ".join(raw_clause.split()).strip()
+        clause = re.sub(r"^(?:and|also|then)\s+", "", clause, flags=re.IGNORECASE)
+        key = _query_key(clause)
+        if len(clause) < 12 or not key or key in seen:
+            continue
+        seen.add(key)
+        queries.append(clause)
+        if len(queries) >= limit:
+            break
+    return queries
+
+
+__all__ = ["build_retrieval_queries", "build_retrieval_query"]

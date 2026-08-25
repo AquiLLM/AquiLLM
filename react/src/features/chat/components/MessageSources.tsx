@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronRight, FileText, Image as ImageIcon } from 'lucide-react';
 import { DOC_CHUNK_CITATION_RE } from '../../../utils/linkifyRagCitations';
+import { getCsrfCookie } from '../../../main';
 import { useCitationModal } from './CitationModalProvider';
 
 interface MessageSourcesProps {
@@ -64,7 +65,10 @@ const MessageSources: React.FC<MessageSourcesProps> = ({ content, messageUuid })
     fetch(apiUrl, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCsrfCookie(),
+      },
       body: JSON.stringify({ chunk_ids: chunkIds }),
     })
       .then((r) => (r.ok ? r.json() : null))

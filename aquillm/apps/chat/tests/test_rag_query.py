@@ -1,12 +1,9 @@
 """Tests for RAG retrieval query builder (Task 2)."""
 from __future__ import annotations
 
-import pytest
-
-from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
-from lib.llm.types.conversation import Conversation
-
 from apps.chat.services.rag_query import build_retrieval_query
+from lib.llm.types.conversation import Conversation
+from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
 
 def _make_convo(*messages) -> Conversation:
@@ -156,3 +153,36 @@ def test_rewrite_enabled_calls_rewrite_function(monkeypatch):
     result = build_retrieval_query(convo, "describe the calibration method")
     assert result == "REWRITTEN: describe the calibration method"
     assert rewrite_called_with == ["describe the calibration method"]
+
+
+def test_multi_part_question_keeps_full_query_and_question_clauses():
+    from apps.chat.services import rag_query
+
+    builder = getattr(rag_query, "build_retrieval_queries", None)
+    assert builder is not None, "build_retrieval_queries must support multi-part RAG"
+
+    convo = _make_convo()
+    result = builder(
+        convo,
+        "Explain what each paper is about? What overlaps between them?",
+        max_queries=3,
+    )
+
+    assert result == [
+        "Explain what each paper is about? What overlaps between them?",
+        "Explain what each paper is about",
+        "What overlaps between them",
+    ]
+
+
+def test_simple_question_uses_one_retrieval_query():
+    from apps.chat.services import rag_query
+
+    builder = getattr(rag_query, "build_retrieval_queries", None)
+    assert builder is not None, "build_retrieval_queries must support direct RAG"
+
+    assert builder(
+        _make_convo(),
+        "Explain the dark matter calibration method",
+        max_queries=3,
+    ) == ["Explain the dark matter calibration method"]

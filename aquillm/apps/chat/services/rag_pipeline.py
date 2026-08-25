@@ -10,24 +10,29 @@ Failures fail open: any retrieval/synthesis exception returns ``"skipped"`` with
 """
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from typing import Any, Literal
 
 import structlog
-from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 
-from lib.llm.providers import image_context as imgctx
-from lib.llm.types.conversation import Conversation
-from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
-
-from apps.chat.services.rag_config import direct_rag_top_k, is_direct_rag_enabled
+from apps.chat.services.rag_config import (
+    direct_rag_max_queries,
+    direct_rag_top_k,
+    is_direct_rag_enabled,
+)
 from apps.chat.services.rag_evidence import build_evidence_packet
 from apps.chat.services.rag_intent import classify_chat_message
 from apps.chat.services.rag_metrics import log_direct_rag_turn
-from apps.chat.services.rag_query import build_retrieval_query
+from apps.chat.services.rag_query import build_retrieval_queries
+from apps.chat.services.rag_retrieval import merge_ranked_tool_results
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.chat.services.tool_wiring.documents import vector_search_tool
+from lib.llm.providers import image_context as imgctx
+from lib.llm.types.conversation import Conversation
+from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -119,16 +124,50 @@ async def run_direct_rag_turn(
 
     try:
         t_query_start = time.perf_counter()
-        query = build_retrieval_query(convo, user_message.content or "")
+        queries = build_retrieval_queries(
+            convo,
+            user_message.content or "",
+            max_queries=direct_rag_max_queries(),
+        )
+        query = queries[0]
         t_query_end = time.perf_counter()
 
         top_k = direct_rag_top_k()
 
         t_retrieval_start = time.perf_counter()
-        raw_result = await sync_to_async(_run_vector_search, thread_sensitive=True)(
-            consumer, query, top_k
+        search_async = database_sync_to_async(
+            _run_vector_search,
+            thread_sensitive=False,
         )
+        search_outcomes = await asyncio.gather(
+            *(search_async(consumer, search_query, top_k) for search_query in queries),
+            return_exceptions=True,
+        )
+        search_results = [
+            outcome for outcome in search_outcomes if isinstance(outcome, dict)
+        ]
+        if not search_results:
+            first_error = next(
+                (
+                    outcome
+                    for outcome in search_outcomes
+                    if isinstance(outcome, BaseException)
+                ),
+                RuntimeError("all direct-RAG retrieval queries failed"),
+            )
+            raise first_error
+        failed_query_count = len(search_outcomes) - len(search_results)
+        if failed_query_count:
+            logger.warning(
+                "direct_rag_partial_retrieval_failure failed=%d total=%d",
+                failed_query_count,
+                len(search_outcomes),
+            )
+        raw_result = merge_ranked_tool_results(search_results, limit=top_k)
         t_retrieval_end = time.perf_counter()
+        retrieval_diagnostics = raw_result.get("_retrieval_diagnostics")
+        if not isinstance(retrieval_diagnostics, dict):
+            retrieval_diagnostics = {}
 
         t_evidence_start = time.perf_counter()
         packet = build_evidence_packet(
@@ -156,6 +195,16 @@ async def run_direct_rag_turn(
             total_ms=_ms(t_start, t_synthesis_end),
             retrieved_count=int(raw_result.get("retrieved_count", 0) or 0),
             retrieval_status=packet.retrieval_status,
+            graph_ms=retrieval_diagnostics.get("graph_ms"),
+            graph_seed_count=retrieval_diagnostics.get("graph_seed_count"),
+            graph_candidate_count=retrieval_diagnostics.get("graph_candidate_count"),
+            graph_status=retrieval_diagnostics.get("graph_status"),
+            graph_algorithm_signature=retrieval_diagnostics.get(
+                "graph_algorithm_signature"
+            ),
+            graph_version_signature=retrieval_diagnostics.get(
+                "graph_version_signature"
+            ),
         )
         logger.info(
             "direct_rag_turn_handled retrieved=%d retained=%d status=%s",

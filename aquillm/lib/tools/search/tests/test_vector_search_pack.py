@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
+from lib.llm.providers.image_context import serialize_tool_result_for_llm
 from lib.tools.search.vector_search import pack_chunk_search_results
 
 
@@ -151,6 +152,8 @@ class VectorSearchPackTests(SimpleTestCase):
 
         assert out["retrieval_status"] == "results_found"
         assert "retrieval_diagnostics" not in out
+        assert out["_retrieval_diagnostics"] == diag
+        assert "_retrieval_diagnostics" not in serialize_tool_result_for_llm(out)
 
     def test_graph_expanded_verbose_row_keeps_only_real_chunk_citation_shape(self):
         chunk = SimpleNamespace(
@@ -185,6 +188,8 @@ class VectorSearchPackTests(SimpleTestCase):
             }
         ]
         assert "retrieval_diagnostics" not in out
+        assert out["_retrieval_diagnostics"]["graph_status"] == "hit"
+        assert "graph_status" not in serialize_tool_result_for_llm(out)
 
     def test_graph_expanded_compact_row_keeps_existing_shape(self):
         chunk = SimpleNamespace(

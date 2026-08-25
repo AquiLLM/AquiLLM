@@ -31,6 +31,10 @@ def direct_rag_top_k() -> int:
     return _env_int("RAG_DIRECT_TOP_K", 10, minimum=1)
 
 
+def direct_rag_max_queries() -> int:
+    return min(3, _env_int("RAG_DIRECT_MAX_QUERIES", 3, minimum=1))
+
+
 def evidence_token_budget() -> int:
     return _env_int("RAG_EVIDENCE_TOKEN_BUDGET", 3500, minimum=256)
 
@@ -62,6 +66,7 @@ def direct_stage_logs_enabled() -> bool:
 __all__ = [
     "attach_tools_when_collections_selected",
     "direct_rag_top_k",
+    "direct_rag_max_queries",
     "direct_stage_logs_enabled",
     "evidence_token_budget",
     "is_direct_rag_enabled",
