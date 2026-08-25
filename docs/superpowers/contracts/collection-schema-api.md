@@ -1,7 +1,9 @@
 # Collection Schema API Contract
 
-**Backend:** persistent collection-scoped schema versions, draft, and generation runs  
-**Generation:** asynchronous on the self-hosted knowledge-graph worker  
+**Backend:** persistent collection-scoped schema versions, draft, and generation runs
+
+**Generation:** asynchronous on the self-hosted knowledge-graph worker
+
 **Publish mode:** synchronous — no `api_collection_schema_publish_status` route
 
 ## Verification commands
