@@ -23,7 +23,6 @@ def _entity(key: str, description: str | None = None) -> dict:
         "change_state": "added",
         "capabilities": {
             "editable_fields": [
-                "name",
                 "description",
                 "aliases",
                 "default_retrieval_weight",
@@ -31,7 +30,7 @@ def _entity(key: str, description: str | None = None) -> dict:
                 "default_suppression_threshold",
             ],
             "removable": True,
-            "renameable": True,
+            "renameable": False,
         },
         "values": {
             "name": key,
@@ -51,14 +50,13 @@ def _relation(key: str = "authored_by") -> dict:
         "change_state": "added",
         "capabilities": {
             "editable_fields": [
-                "name",
                 "description",
                 "direction",
                 "allowed_head_types",
                 "allowed_tail_types",
             ],
             "removable": True,
-            "renameable": True,
+            "renameable": False,
         },
         "values": {
             "name": key,
@@ -305,6 +303,63 @@ def test_workspace_and_entity_mutation_persist_across_requests(client, schema_us
     reloaded = client.get(workspace_url).json()
     assert reloaded["draft"]["draft_id"] == draft_id
     assert reloaded["draft"]["entities"] == [_entity("paper")]
+
+
+@pytest.mark.django_db
+def test_workspace_capabilities_do_not_advertise_unsupported_renames(
+    client, schema_users
+):
+    collection, _viewer, editor, _manager = schema_users
+    definitions = _definitions()
+    definitions["entities"][0]["origin"] = "generated"
+    definitions["entities"][0]["capabilities"] = {
+        "editable_fields": ["description"],
+        "removable": True,
+        "renameable": True,
+    }
+    CollectionSchemaDraft.objects.create(
+        collection=collection,
+        definitions=definitions,
+        last_editor=editor,
+    )
+    client.force_login(editor)
+
+    workspace = client.get(
+        reverse(
+            "api_collection_schema_workspace", kwargs={"col_id": collection.pk}
+        )
+    ).json()
+
+    entity = next(
+        row for row in workspace["draft"]["entities"] if row["key"] == "paper"
+    )
+    relation = next(
+        row
+        for row in workspace["draft"]["relations"]
+        if row["key"] == "authored_by"
+    )
+    assert entity["origin"] == "generated"
+    assert entity["capabilities"] == {
+        "editable_fields": [
+            "description",
+            "aliases",
+            "default_retrieval_weight",
+            "default_suppression_policy",
+            "default_suppression_threshold",
+        ],
+        "removable": True,
+        "renameable": False,
+    }
+    assert relation["capabilities"] == {
+        "editable_fields": [
+            "description",
+            "direction",
+            "allowed_head_types",
+            "allowed_tail_types",
+        ],
+        "removable": True,
+        "renameable": False,
+    }
 
 
 @pytest.mark.django_db

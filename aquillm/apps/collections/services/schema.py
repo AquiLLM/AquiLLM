@@ -135,7 +135,7 @@ def workspace_envelope(collection: Collection, user) -> dict[str, Any]:
     if level != "VIEW":
         draft = getattr(collection, "schema_draft", None)
         if draft is not None:
-            definitions = canonicalize_definitions(draft.definitions)
+            definitions = _editor_definitions(draft.definitions)
             draft_payload = {
                 "draft_id": str(draft.pk),
                 "revision": draft.revision,
@@ -164,7 +164,6 @@ def workspace_envelope(collection: Collection, user) -> dict[str, Any]:
 def _capabilities(kind: str) -> dict[str, Any]:
     fields = (
         [
-            "name",
             "description",
             "aliases",
             "default_retrieval_weight",
@@ -173,18 +172,27 @@ def _capabilities(kind: str) -> dict[str, Any]:
         ]
         if kind == "entity"
         else [
-            "name",
             "description",
             "direction",
             "allowed_head_types",
             "allowed_tail_types",
         ]
     )
-    return {"editable_fields": fields, "removable": True, "renameable": True}
+    return {"editable_fields": fields, "removable": True, "renameable": False}
+
+
+def _editor_definitions(definitions: dict[str, Any]) -> dict[str, list[dict]]:
+    """Derive truthful editor capabilities without mutating immutable snapshots."""
+
+    canonical = canonicalize_definitions(definitions)
+    for kind, rows in (("entity", canonical["entities"]), ("relation", canonical["relations"])):
+        for row in rows:
+            row["capabilities"] = _capabilities(kind)
+    return canonical
 
 
 def _published_definitions(definitions: dict[str, Any]) -> dict[str, list[dict]]:
-    canonical = canonicalize_definitions(definitions)
+    canonical = _editor_definitions(definitions)
     for kind in ("entities", "relations"):
         for row in canonical[kind]:
             row["change_state"] = "unchanged"
