@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import structlog
 from os import getenv
+from threading import RLock
 from typing import Any
 
 logger = structlog.stdlib.get_logger(__name__)
 
 _COMPRESSOR: Any | None = None
 _COMPRESSOR_FAILED = False
+_COMPRESSOR_LOCK = RLock()
 
 
 def _enabled() -> bool:
@@ -85,38 +87,46 @@ def _device_map() -> str:
 
 def _get_compressor():
     global _COMPRESSOR, _COMPRESSOR_FAILED
-    if _COMPRESSOR_FAILED:
-        return None
-    if _COMPRESSOR is not None:
-        return _COMPRESSOR
-    try:
-        from llmlingua import PromptCompressor
+    with _COMPRESSOR_LOCK:
+        if _COMPRESSOR_FAILED:
+            return None
+        if _COMPRESSOR is not None:
+            return _COMPRESSOR
+        try:
+            from llmlingua import PromptCompressor
 
-        _COMPRESSOR = PromptCompressor(
-            model_name=_model_name(),
-            device_map=_device_map(),
-            use_llmlingua2=True,
-        )
-    except Exception as exc:
-        logger.warning("obs.llm.lingua2_init_failed", error=str(exc), error_type=type(exc).__name__)
-        _COMPRESSOR_FAILED = True
-        return None
-    return _COMPRESSOR
+            _COMPRESSOR = PromptCompressor(
+                model_name=_model_name(),
+                device_map=_device_map(),
+                use_llmlingua2=True,
+            )
+        except Exception as exc:
+            logger.warning("obs.llm.lingua2_init_failed", error=str(exc), error_type=type(exc).__name__)
+            _COMPRESSOR_FAILED = True
+            return None
+        return _COMPRESSOR
 
 
 def _compress_plain_text(text: str) -> str | None:
-    comp = _get_compressor()
-    if comp is None or len(text) < _min_chars():
+    if len(text) < _min_chars():
         return None
-    try:
-        out = comp.compress_prompt(
-            [text],
-            target_token=_target_tokens(),
-            use_context_level_filter=True,
-        )
-    except Exception as exc:
-        logger.warning("obs.llm.lingua2_compress_failed", error=str(exc), error_type=type(exc).__name__)
-        return None
+    with _COMPRESSOR_LOCK:
+        comp = _get_compressor()
+        if comp is None:
+            return None
+        try:
+            out = comp.compress_prompt(
+                [text],
+                target_token=_target_tokens(),
+                use_context_level_filter=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "obs.llm.lingua2_compress_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return None
     if isinstance(out, dict):
         for key in ("compressed_prompt", "compressed_context", "compressed_prompt_list"):
             val = out.get(key)

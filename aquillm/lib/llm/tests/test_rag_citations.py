@@ -125,6 +125,63 @@ def test_collect_allowed_chunk_citations_accepts_explicit_ref_fields():
     assert "[doc:doc-d chunk:12]" in allowed
 
 
+def test_collect_allowed_chunk_citations_accepts_whole_document_metadata():
+    convo = Conversation(
+        system="sys",
+        messages=[
+            ToolMessage(
+                content="{}",
+                tool_name="whole_document",
+                for_whom="assistant",
+                result_dict={
+                    "result": "[doc:doc-paper chunk:21]\nA cited passage.",
+                    "citation_chunks": [
+                        {
+                            "doc_id": "doc-paper",
+                            "chunk_id": 21,
+                            "citation": "[doc:doc-paper chunk:21]",
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+
+    assert collect_allowed_chunk_citations(convo) == {
+        "[doc:doc-paper chunk:21]"
+    }
+
+
+def test_whole_document_citation_metadata_is_not_truncated_by_search_row_cap():
+    citation_chunks = [
+        {
+            "doc_id": "doc-paper",
+            "chunk_id": chunk_id,
+            "citation": f"[doc:doc-paper chunk:{chunk_id}]",
+        }
+        for chunk_id in range(1, 46)
+    ]
+    convo = Conversation(
+        system="sys",
+        messages=[
+            ToolMessage(
+                content="{}",
+                tool_name="whole_document",
+                for_whom="assistant",
+                result_dict={
+                    "result": "whole document",
+                    "citation_chunks": citation_chunks,
+                },
+            )
+        ],
+    )
+
+    allowed = collect_allowed_chunk_citations(convo, max_rows_per_message=1)
+
+    assert len(allowed) == 45
+    assert "[doc:doc-paper chunk:45]" in allowed
+
+
 def test_response_has_required_citations_and_rejects_unknown_refs():
     allowed = {"[doc:doc-a chunk:7]"}
     assert response_has_required_citations("Fact from source [doc:doc-a chunk:7].", allowed)

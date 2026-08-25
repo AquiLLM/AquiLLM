@@ -1,8 +1,9 @@
 """OpenAI LLM interface."""
-from typing import Optional, Any, override
-from os import getenv
+import asyncio
 import re
 import uuid
+from os import getenv
+from typing import Any, Optional, override
 
 from tiktoken import encoding_for_model
 
@@ -119,8 +120,6 @@ class OpenAIInterface(LLMInterface):
         tool_choice_raw = kwargs.pop('tool_choice', None)
         raw_tools = kwargs.get('tools')
 
-        maybe_compress_openai_style_messages(message_list)
-
         if "[User preferences and background]" in system_text or "[Historical conversation context]" in system_text:
             system_text = (
                 "You have access to retrieved user memory in the system context below. "
@@ -161,6 +160,17 @@ class OpenAIInterface(LLMInterface):
             context_limit = int(context_limit_raw)
         except Exception:
             context_limit = 0
+        should_compress = True
+        if context_limit > 0:
+            prompt_tokens = self._estimate_prompt_tokens(arguments["messages"])
+            available_prompt_tokens = max(1, context_limit - max(0, int(max_tokens)))
+            compression_trigger_tokens = max(1, int(available_prompt_tokens * 0.8))
+            should_compress = prompt_tokens >= compression_trigger_tokens
+        if should_compress:
+            await asyncio.to_thread(
+                maybe_compress_openai_style_messages,
+                message_list,
+            )
         try:
             from lib.llm.utils.prompt_budget import (
                 context_packer_enabled,
