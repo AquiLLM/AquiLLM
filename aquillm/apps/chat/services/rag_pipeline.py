@@ -8,6 +8,7 @@ then hands a post-tool conversation to :mod:`rag_synthesis` for the final answer
 Failures fail open: any retrieval/synthesis exception returns ``"skipped"`` with
 ``consumer.convo`` untouched so the normal tool loop can still run.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -50,6 +51,16 @@ def _latest_user_message(convo: Conversation) -> UserMessage | None:
         return None
     last = convo[-1]
     return last if isinstance(last, UserMessage) else None
+
+
+def _has_prior_vector_search(convo: Conversation) -> bool:
+    """Return whether this conversation contains a reusable retrieval query."""
+    return any(
+        getattr(message, "tool_call_name", None) == "vector_search"
+        and isinstance(getattr(message, "tool_call_input", None), dict)
+        and bool(message.tool_call_input.get("search_string"))
+        for message in convo.messages[:-1]
+    )
 
 
 def _run_vector_search(consumer: Any, query: str, top_k: int) -> dict:
@@ -108,17 +119,22 @@ async def run_direct_rag_turn(
     collection_ids = list(getattr(consumer.col_ref, "collections", []) or [])
 
     t_intent_start = time.perf_counter()
+    prior_vector_search = _has_prior_vector_search(convo)
     intent = classify_chat_message(
-        user_message.content or "", selected_collection_ids=collection_ids
+        user_message.content or "",
+        selected_collection_ids=collection_ids,
+        prior_tools=["vector_search"] if prior_vector_search else None,
     )
     t_intent_end = time.perf_counter()
 
-    if not intent.requires_rag or intent.requires_local_tools or intent.is_retry:
+    if not intent.requires_rag or intent.requires_local_tools:
         return "skipped"
 
     if not collection_ids:
         consumer.convo = convo + [
-            AssistantMessage(content=_SELECT_COLLECTIONS_MESSAGE, stop_reason="end_turn")
+            AssistantMessage(
+                content=_SELECT_COLLECTIONS_MESSAGE, stop_reason="end_turn"
+            )
         ]
         return "handled"
 
