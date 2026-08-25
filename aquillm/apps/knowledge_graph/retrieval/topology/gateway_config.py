@@ -13,7 +13,7 @@ from lib.knowledge_graph.retrieval_config import SecretSetting
 from .gateway_contracts import MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
-_INTERNAL_HOSTS = frozenset({"localhost", "memgraph_knowledge_graph"})
+_INTERNAL_HOSTS = frozenset({"localhost", "memgraph-knowledge-graph"})
 
 
 class GatewayConfigError(ValueError):

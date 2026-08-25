@@ -32,7 +32,7 @@ from apps.knowledge_graph.retrieval.topology.gateway_contracts import (
 
 ENV = {
     "KG_TOPOLOGY_GATEWAY_BEARER_TOKEN": "private-gateway-token",
-    "KG_MEMGRAPH_URI": "bolt://memgraph_knowledge_graph:7687",
+    "KG_MEMGRAPH_URI": "bolt://memgraph-knowledge-graph:7687",
     "KG_MEMGRAPH_DATABASE": "memgraph",
     "KG_MEMGRAPH_QUERY_USERNAME": "gateway",
     "KG_MEMGRAPH_QUERY_PASSWORD": "memgraph-secret",
@@ -121,14 +121,15 @@ def runtime(monkeypatch):
 def test_config_is_exact_internal_bounded_and_redacted() -> None:
     settings = _settings()
     rendered = repr(settings)
-    assert settings.memgraph_uri == "bolt://memgraph_knowledge_graph:7687"
+    assert settings.memgraph_uri == "bolt://memgraph-knowledge-graph:7687"
     assert settings.bearer_token.get_secret_value() == "private-gateway-token"
     assert "private-gateway-token" not in rendered
     assert "memgraph-secret" not in rendered
-    assert "memgraph_knowledge_graph" not in rendered
+    assert "memgraph-knowledge-graph" not in rendered
 
     for update in (
         {"KG_TOPOLOGY_GATEWAY_BEARER_TOKEN": ""},
+        {"KG_MEMGRAPH_URI": "bolt://memgraph_knowledge_graph:7687"},
         {"KG_MEMGRAPH_URI": "bolt://public.example:7687"},
         {"KG_TOPOLOGY_GATEWAY_TIMEOUT_MS": "0100"},
         {"KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": str(MAX_RESPONSE_BYTES + 1)},
