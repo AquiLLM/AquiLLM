@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from time import perf_counter
 from typing import Any
+
+import structlog
 
 from ..types.response import LLMResponse
 from .openai_tool_text import (
@@ -12,7 +15,17 @@ from .openai_tool_text import (
     extract_tool_call_from_text,
     is_textual_tool_call_only,
 )
+from .request_observability import (
+    UsageCounts,
+    authorized_tool_name,
+    extract_usage,
+    log_request_completed,
+    new_correlation_id,
+    safe_stage,
+)
 from .visibility import strip_thinking_blocks, visible_stream_content
+
+logger = structlog.stdlib.get_logger(__name__)
 
 
 async def consume_streaming_completion(
@@ -22,12 +35,26 @@ async def consume_streaming_completion(
     stream_message_uuid: str,
     raw_tools: list[dict] | None,
     model_name: str,
+    correlation_id: str | None = None,
+    stage: str = "general_answer",
+    configured_max_tokens: int = 0,
+    effective_max_tokens: int = 0,
+    thinking_requested: bool = False,
+    request_started_at: float | None = None,
+    monotonic: Callable[[], float] = perf_counter,
 ) -> LLMResponse:
+    request_started_at = (
+        request_started_at if request_started_at is not None else monotonic()
+    )
+    correlation_id = correlation_id or new_correlation_id()
+    stage = safe_stage(stage)
     text_parts: list[str] = []
     tool_call_parts: dict[int, dict[str, Any]] = {}
     finish_reason = "stop"
     input_usage = 0
     output_usage = 0
+    reasoning_usage: int | None = None
+    first_signal_at: float | None = None
 
     async for chunk in stream:
         choices = getattr(chunk, "choices", None) or []
@@ -36,6 +63,14 @@ async def consume_streaming_completion(
             delta = getattr(choice, "delta", None)
             if delta is not None:
                 content_piece = getattr(delta, "content", None)
+                reasoning_piece = getattr(delta, "reasoning_content", None) or getattr(
+                    delta, "reasoning", None
+                )
+                delta_tool_calls = getattr(delta, "tool_calls", None) or []
+                if first_signal_at is None and (
+                    content_piece or reasoning_piece or delta_tool_calls
+                ):
+                    first_signal_at = monotonic()
                 if content_piece:
                     piece = str(content_piece)
                     text_parts.append(piece)
@@ -54,7 +89,7 @@ async def consume_streaming_completion(
                             }
                         )
 
-                for tc in getattr(delta, "tool_calls", None) or []:
+                for tc in delta_tool_calls:
                     idx = int(getattr(tc, "index", 0) or 0)
                     entry = tool_call_parts.setdefault(
                         idx,
@@ -78,12 +113,10 @@ async def consume_streaming_completion(
 
         usage = getattr(chunk, "usage", None)
         if usage is not None:
-            input_usage = int(
-                getattr(usage, "prompt_tokens", input_usage) or input_usage
-            )
-            output_usage = int(
-                getattr(usage, "completion_tokens", output_usage) or output_usage
-            )
+            usage_counts = extract_usage(usage)
+            input_usage = usage_counts.prompt_tokens
+            output_usage = usage_counts.completion_tokens
+            reasoning_usage = usage_counts.reasoning_tokens
 
     text = strip_thinking_blocks("".join(text_parts)) or None
     tool_call_payload: dict | None = None
@@ -129,12 +162,34 @@ async def consume_streaming_completion(
             }
         )
 
+    completed_at = monotonic()
+    usage_counts = UsageCounts(
+        prompt_tokens=input_usage,
+        completion_tokens=output_usage,
+        reasoning_tokens=reasoning_usage,
+    )
+    log_request_completed(
+        logger=logger,
+        correlation_id=correlation_id,
+        stage=stage,
+        configured_max_tokens=configured_max_tokens,
+        effective_max_tokens=effective_max_tokens,
+        thinking_requested=thinking_requested,
+        usage=usage_counts,
+        finish_reason=finish_reason,
+        request_started_at=request_started_at,
+        first_signal_at=first_signal_at,
+        completed_at=completed_at,
+        tool_name=authorized_tool_name(tool_call_payload, raw_tools),
+    )
+
     return LLMResponse(
         text=text,
         tool_call=tool_call_payload or {},
         stop_reason=finish_reason,
         input_usage=input_usage,
         output_usage=output_usage,
+        reasoning_usage=reasoning_usage,
         model=model_name,
         message_uuid=stream_message_uuid,
     )

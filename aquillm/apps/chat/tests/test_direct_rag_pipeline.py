@@ -10,7 +10,7 @@ from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
 from apps.chat.refs import CollectionsRef
-from apps.chat.services import rag_pipeline
+from apps.chat.services import rag_metrics, rag_pipeline
 from apps.chat.services.rag_pipeline import run_direct_rag_turn
 from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
 from lib.llm.types.response import LLMResponse
@@ -259,6 +259,35 @@ async def test_multi_query_retrieval_uses_successful_variants_when_one_fails(
     assert outcome == "handled"
     assert len(synthesized) == 1
     assert synthesized[0].citation_tokens == ["[doc:doc-a chunk:1]"]
+
+
+def test_direct_rag_metrics_record_safe_stage_fields(monkeypatch):
+    captured: dict = {}
+
+    def capture(event, **fields):
+        captured["event"] = event
+        captured.update(fields)
+
+    monkeypatch.setattr(rag_metrics.logger, "info", capture)
+
+    rag_metrics.log_direct_rag_turn(
+        correlation_id="0f22db7309f04ab0a4676cdb5a76f962",
+        intent_ms=1.1,
+        query_ms=2.2,
+        retrieval_ms=3.3,
+        evidence_ms=4.4,
+        synthesis_ms=5.5,
+        persistence_ms=0.2,
+        total_ms=16.5,
+        retrieved_count=2,
+        retained_count=2,
+        retrieval_status="results_found",
+    )
+
+    assert captured["event"] == "rag_direct_turn"
+    assert captured["correlation_id"] == "0f22db7309f04ab0a4676cdb5a76f962"
+    assert captured["retained_count"] == 2
+    assert captured["persistence_ms"] == 0.2
 
 
 async def test_handled_appends_synthetic_tool_messages(monkeypatch):

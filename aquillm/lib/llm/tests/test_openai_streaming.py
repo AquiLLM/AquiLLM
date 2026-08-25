@@ -180,3 +180,36 @@ async def test_streaming_deferred_retrieval_phrase_is_suppressed_without_tools()
 
     assert response.text == "I'll retrieve the passage now."
     assert payloads == []
+
+
+async def test_streaming_usage_preserves_provider_reasoning_tokens(monkeypatch):
+    payloads: list[dict] = []
+
+    async def _capture(payload: dict) -> None:
+        payloads.append(payload)
+
+    usage = SimpleNamespace(
+        prompt_tokens=120,
+        completion_tokens=40,
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=31),
+    )
+    usage_chunk = SimpleNamespace(choices=[], usage=usage)
+
+    response = await consume_streaming_completion(
+        stream=_FakeStream([_chunk("Evidence-backed answer.", "stop"), usage_chunk]),
+        stream_callback=_capture,
+        stream_message_uuid="msg-usage",
+        raw_tools=None,
+        model_name="test-model",
+        correlation_id="0f22db7309f04ab0a4676cdb5a76f962",
+        stage="direct_synthesis",
+        configured_max_tokens=4096,
+        effective_max_tokens=4096,
+        thinking_requested=True,
+        request_started_at=10.0,
+        monotonic=lambda: 10.2,
+    )
+
+    assert response.input_usage == 120
+    assert response.output_usage == 40
+    assert response.reasoning_usage == 31
