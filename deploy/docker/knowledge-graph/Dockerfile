@@ -6,6 +6,9 @@ ENV PATH=/opt/venv/bin:$PATH
 ENV HF_HOME=/root/.cache/huggingface
 ENV KG_GLINER2_CACHE_DIR=/root/.cache/huggingface
 ENV KG_GLINER2_DEVICE=cpu
+ENV KG_GLINER2_LOCAL_FILES_ONLY=1
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
 ENV KG_EXTRACTION_QUEUE=knowledge-graph-extraction
 
 WORKDIR /app

@@ -1,9 +1,104 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+
+def _candidate_with_aliases(aliases: list[str]) -> dict:
+    return {
+        "entities": [
+            {"name": "Researcher", "description": "A person.", "aliases": aliases},
+            {"name": "Organization", "description": "A company.", "aliases": []},
+        ],
+        "relations": [{
+            "name": "Works For", "description": "Employment.", "direction": "directed",
+            "allowed_head_types": ["Researcher"], "allowed_tail_types": ["Organization"],
+        }],
+    }
+
+
+def test_default_backend_forces_a_local_gliner2_cache_only_factory_configuration(monkeypatch):
+    """Ambient extractor defaults must not let generated-schema evidence reach Hugging Face."""
+
+    from apps.collections.services import schema_generation
+    from apps.collections.services import schema_generation_support as support
+    from lib.knowledge_graph import config
+    from lib.knowledge_graph.extractors import factory
+    from lib.knowledge_graph.config import ExtractionSettings
+
+    ambient = ExtractionSettings(
+        build_enabled=False, provider="unsafe_remote", model_id="example/model", model_revision="",
+        device="cpu", batch_size=8, max_batch_characters=4_000, cache_dir=Path("C:/cache"),
+        local_files_only=False, fail_open=True,
+    )
+    captured = {}
+    sentinel = object()
+    monkeypatch.setattr(config, "load_extraction_settings", lambda: ambient)
+    monkeypatch.setattr(
+        factory,
+        "get_extraction_backend",
+        lambda *, settings: captured.setdefault("settings", settings) and sentinel,
+    )
+
+    assert schema_generation.collect_candidate_evidence is support.collect_candidate_evidence
+    assert support._default_backend() is sentinel
+    assert captured["settings"].provider == "gliner2_local"
+    assert captured["settings"].local_files_only is True
+    assert captured["settings"].fail_open is False
+
+
+def test_normalizer_rejects_aliases_that_exceed_persisted_dto_bounds():
+    """Removing alias limits could persist echoed collection text from a local response."""
+
+    from apps.collections.services.schema_generation import InvalidSchemaCandidate, normalize_schema_candidate
+
+    oversized_alias_sets = (
+        [f"alias_{index}" for index in range(17)],
+        ["a" * 129],
+        [f"{index:02d}" + ("a" * 63) for index in range(16)],
+    )
+
+    for aliases in oversized_alias_sets:
+        with pytest.raises(InvalidSchemaCandidate, match="aliases"):
+            normalize_schema_candidate(_candidate_with_aliases(aliases))
+
+
+def test_normalizer_accepts_aliases_at_each_persisted_dto_boundary():
+    """Tightening an alias boundary by one character must not reject a bounded candidate."""
+
+    from apps.collections.services.schema_generation import normalize_schema_candidate
+
+    aliases = [f"{index:02d}" + ("a" * 62) for index in range(16)]
+
+    definitions = normalize_schema_candidate(_candidate_with_aliases(aliases))
+
+    assert definitions["entities"][1]["values"]["aliases"] == sorted(aliases)
+
+
+def test_normalizer_emits_backend_editor_capabilities_without_atomic_renames():
+    """Generated definitions must expose exactly the fields the backend editor accepts."""
+
+    from apps.collections.services.schema_generation import normalize_schema_candidate
+
+    definitions = normalize_schema_candidate(_candidate_with_aliases([]))
+    entities = {item["key"]: item["capabilities"] for item in definitions["entities"]}
+
+    assert entities["researcher"] == {
+        "editable_fields": [
+            "description", "aliases", "default_retrieval_weight", "default_suppression_policy",
+            "default_suppression_threshold",
+        ],
+        "removable": True,
+        "renameable": False,
+    }
+    assert definitions["relations"][0]["capabilities"] == {
+        "editable_fields": ["description", "direction", "allowed_head_types", "allowed_tail_types"],
+        "removable": True,
+        "renameable": False,
+    }
 
 
 def test_public_sampler_does_not_probe_documents_rejected_by_eligibility(monkeypatch):

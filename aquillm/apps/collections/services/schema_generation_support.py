@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
+from dataclasses import replace
 from math import isfinite
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -23,6 +24,9 @@ from .schema_generation import (
 )
 
 _MAX_VLLM_RESPONSE_BYTES = 1_000_000
+_MAX_ALIASES_PER_ENTITY = 16
+_MAX_ALIAS_CHARACTERS = 128
+_MAX_ALIAS_TOTAL_CHARACTERS = 1_024
 
 
 class LocalVLLMTransportError(RuntimeError):
@@ -61,7 +65,14 @@ def _description(value: object, field: str) -> str:
 def _aliases(value: object) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(alias, str) or not alias.strip() for alias in value):
         raise InvalidSchemaCandidate("aliases must be a list of nonempty strings")
-    return sorted(set(alias.strip() for alias in value))
+    aliases = sorted(set(alias.strip() for alias in value))
+    if len(aliases) > _MAX_ALIASES_PER_ENTITY:
+        raise InvalidSchemaCandidate("aliases exceed the per-entity count limit")
+    if any(len(alias) > _MAX_ALIAS_CHARACTERS for alias in aliases):
+        raise InvalidSchemaCandidate("aliases exceed the per-alias character limit")
+    if sum(len(alias) for alias in aliases) > _MAX_ALIAS_TOTAL_CHARACTERS:
+        raise InvalidSchemaCandidate("aliases exceed the per-entity character limit")
+    return aliases
 
 
 def _candidate_ontology_yaml(definitions: dict) -> str:
@@ -105,7 +116,7 @@ def normalize_schema_candidate(candidate: object) -> dict:
         entity_keys.add(key)
         entities.append({
             "key": key, "origin": "generated", "change_state": "added",
-            "capabilities": {"editable_fields": ["description", "aliases"], "removable": True, "renameable": True},
+            "capabilities": {"editable_fields": ["description", "aliases", "default_retrieval_weight", "default_suppression_policy", "default_suppression_threshold"], "removable": True, "renameable": False},
             "values": {"name": key, "description": _description(record.get("description"), "entity description"), "aliases": _aliases(record.get("aliases")), "default_retrieval_weight": 0.5, "default_suppression_policy": "none", "default_suppression_threshold": 0.0},
         })
     relations, relation_keys = [], set()
@@ -125,7 +136,7 @@ def normalize_schema_candidate(candidate: object) -> dict:
             raise InvalidSchemaCandidate("relation has an unknown endpoint type")
         relations.append({
             "key": key, "origin": "generated", "change_state": "added",
-            "capabilities": {"editable_fields": ["description"], "removable": True, "renameable": True},
+            "capabilities": {"editable_fields": ["description", "direction", "allowed_head_types", "allowed_tail_types"], "removable": True, "renameable": False},
             "values": {"name": key, "description": _description(record.get("description"), "relation description"), "direction": direction, "allowed_head_types": sorted(set(heads)), "allowed_tail_types": sorted(set(tails))},
         })
     definitions = {"entities": sorted(entities, key=lambda item: item["key"]), "relations": sorted(relations, key=lambda item: item["key"])}
@@ -225,7 +236,14 @@ def _definitions_for_evidence(candidate: object) -> dict:
 def _default_backend():
     from lib.knowledge_graph.config import load_extraction_settings
     from lib.knowledge_graph.extractors.factory import get_extraction_backend
-    return get_extraction_backend(settings=load_extraction_settings())
+
+    settings = replace(
+        load_extraction_settings(),
+        provider="gliner2_local",
+        local_files_only=True,
+        fail_open=False,
+    )
+    return get_extraction_backend(settings=settings)
 
 
 def collect_candidate_evidence(candidate, samples, backend=None) -> tuple[dict, dict]:
