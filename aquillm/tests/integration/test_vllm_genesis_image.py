@@ -65,6 +65,11 @@ def test_example_environment_enables_the_turboquant_mtp_workspace_stack():
         "GENESIS_ENABLE_PN521_SPLIT_K=1",
         "GENESIS_P67_BLOCK_KV=32",
         "GENESIS_ENABLE_PN522_TQ_RAW_TAIL_WARMUP=1",
+        "GENESIS_ENABLE_PN33_SPEC_DECODE_WARMUP_K=1",
+        "GENESIS_ENABLE_PN126_V1_DECODE_WARMUP=1",
+        "GENESIS_ENABLE_PN128_SPEC_DECODE_WARMUP=1",
+        "GENESIS_ENABLE_PN129_SLOT_MAPPING_WARMUP=1",
+        "GENESIS_ENABLE_PN130_TQ_DECODE_WARMUP=1",
         "GENESIS_ENABLE_P82=0",
     ):
         assert setting in lines
