@@ -62,6 +62,7 @@ def test_example_environment_enables_the_turboquant_mtp_workspace_stack():
         "GENESIS_ENABLE_PN401_TQ_PREFILL_CONTINUATION_GUARD=1",
         "GENESIS_ENABLE_PN521_TQ_RAW_TAIL_VERIFY=1",
         "GENESIS_ENABLE_PN521_SPLIT_K=1",
+        "GENESIS_P67_BLOCK_KV=32",
         "GENESIS_ENABLE_PN522_TQ_RAW_TAIL_WARMUP=1",
         "GENESIS_ENABLE_P82=0",
     ):
