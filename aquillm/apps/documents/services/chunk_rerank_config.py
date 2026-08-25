@@ -114,6 +114,34 @@ def rerank_doc_char_limit() -> int:
         return 2000
 
 
+def rerank_pair_token_limit() -> int:
+    raw = (
+        getenv("APP_RERANK_PAIR_TOKEN_LIMIT")
+        or getenv("APP_RERANK_MAX_MODEL_LEN")
+        or "1024"
+    ).strip()
+    try:
+        return max(64, int(raw))
+    except Exception:
+        return 1024
+
+
+def rerank_template_reserve_tokens() -> int:
+    raw = (getenv("APP_RERANK_TEMPLATE_RESERVE_TOKENS") or "96").strip()
+    try:
+        return max(0, int(raw))
+    except Exception:
+        return 96
+
+
+def rerank_score_concurrency() -> int:
+    raw = (getenv("APP_RERANK_SCORE_CONCURRENCY") or "6").strip()
+    try:
+        return min(16, max(1, int(raw)))
+    except Exception:
+        return 6
+
+
 __all__ = [
     "rerank_api_key",
     "rerank_base_url",
@@ -126,12 +154,15 @@ __all__ = [
     "rerank_model_is_qwen3_vl",
     "rerank_model_revision",
     "rerank_max_model_len",
+    "rerank_pair_token_limit",
     "rerank_provider",
     "rerank_runner",
     "rerank_task",
     "rerank_tokenizer",
     "rerank_tokenizer_revision",
     "rerank_timeout_seconds",
+    "rerank_score_concurrency",
+    "rerank_template_reserve_tokens",
     "rerank_tensor_parallel_size",
     "rerank_trust_remote_code",
     "rerank_vllm_model",

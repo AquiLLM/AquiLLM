@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import isfinite
 from typing import TYPE_CHECKING, Any
 
@@ -9,12 +10,16 @@ import requests
 import structlog
 
 from apps.documents.services import rag_cache
+from apps.documents.services.chunk_rerank_budget import trim_rerank_pair
 from apps.documents.services.chunk_rerank_config import (
     rerank_api_key,
     rerank_base_url,
     rerank_doc_char_limit,
     rerank_model,
     rerank_model_is_qwen3_vl,
+    rerank_pair_token_limit,
+    rerank_score_concurrency,
+    rerank_template_reserve_tokens,
     rerank_timeout_seconds,
 )
 from apps.documents.services.chunk_rerank_parse import (
@@ -56,6 +61,83 @@ def _is_complete_finite_scoring(
     )
 
 
+def _score_one_document(
+    *,
+    endpoint: str,
+    index: int,
+    query: str,
+    document: str,
+    headers: dict[str, str],
+    timeout: int,
+    model_name: str,
+) -> tuple[int, float] | None:
+    try:
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json={"model": model_name, "text_1": query, "text_2": document},
+            timeout=timeout,
+        )
+        if response.status_code >= 400:
+            return None
+        score = parse_single_score(response.json())
+        if type(score) not in (int, float) or not isfinite(float(score)):
+            return None
+        return index, float(score)
+    except Exception:
+        return None
+
+
+def _score_documents_concurrently(
+    *,
+    endpoint: str,
+    query: str,
+    documents: list[str],
+    headers: dict[str, str],
+    timeout: int,
+    max_workers: int,
+    model_name: str,
+) -> list[tuple[int, float]]:
+    if not documents:
+        return []
+    workers = min(max(1, max_workers), len(documents))
+    scores: list[tuple[int, float]] = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(
+                _score_one_document,
+                endpoint=endpoint,
+                index=index,
+                query=query,
+                document=document,
+                headers=headers,
+                timeout=timeout,
+                model_name=model_name,
+            )
+            for index, document in enumerate(documents)
+        ]
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                scores.append(result)
+    return scores
+
+
+def _rank_complete_scores(
+    pairs: list[tuple[int, float]],
+    chunks_list,
+    top_k: int,
+) -> list[int]:
+    if not _is_complete_finite_scoring(pairs, len(chunks_list)):
+        return []
+    return [
+        chunks_list[index].pk
+        for index, _score in sorted(pairs, key=lambda item: item[1], reverse=True)[
+            :top_k
+        ]
+    ]
+
+
 def rerank_via_local_vllm(
     model_cls: type[TextChunk],
     query: str,
@@ -74,95 +156,133 @@ def rerank_via_local_vllm(
         return () if require_complete_scoring else model_cls.objects.none()
 
     base_v1 = rerank_base_url()
-    rm = rerank_model()
-    qsig = rag_cache.query_signature_for_rerank(query)
-    cand_ids = [c.pk for c in chunks_list]
-    cached_ranked = None
+    model_name = rerank_model()
+    query_signature = rag_cache.query_signature_for_rerank(query)
+    candidate_ids = [chunk.pk for chunk in chunks_list]
     if not require_complete_scoring:
-        cached_ranked = rag_cache.get_cached_rerank_result(qsig, cand_ids, top_k, rm)
-    if cached_ranked:
-        logger.info(
-            "obs.rag.rerank_cache_hit",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.COMPLETED,
-                count=0,
-                elapsed_ms=0.0,
-            ),
+        cached_ranked = rag_cache.get_cached_rerank_result(
+            query_signature,
+            candidate_ids,
+            top_k,
+            model_name,
         )
-        return ordered_queryset_from_ids(model_cls, cached_ranked)
+        if cached_ranked:
+            logger.info(
+                "obs.rag.rerank_cache_hit",
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.COMPLETED,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
+            )
+            return ordered_queryset_from_ids(model_cls, cached_ranked)
 
-    raw_documents = [chunk.content for chunk in chunks_list]
-    multimodal_documents = [rerank_document_payload(chunk) for chunk in chunks_list]
     char_limit = rerank_doc_char_limit()
-    documents = [
-        doc[:char_limit] if len(doc) > char_limit else doc for doc in raw_documents
+    raw_documents = [
+        chunk.content[:char_limit] if len(chunk.content) > char_limit else chunk.content
+        for chunk in chunks_list
     ]
-    multimodal_documents_trimmed: list[Any] = []
-    for mm_doc, text_doc in zip(multimodal_documents, documents):
-        if isinstance(mm_doc, list):
+    pair_limit = rerank_pair_token_limit()
+    reserve_tokens = rerank_template_reserve_tokens()
+    trimmed_pairs = [
+        trim_rerank_pair(query, document, pair_limit, reserve_tokens)
+        for document in raw_documents
+    ]
+    effective_query = trimmed_pairs[0][0]
+    effective_documents = [document for _query, document in trimmed_pairs]
+
+    multimodal_documents = [rerank_document_payload(chunk) for chunk in chunks_list]
+    effective_multimodal_documents: list[Any] = []
+    for mm_document, text_document in zip(
+        multimodal_documents,
+        effective_documents,
+    ):
+        if isinstance(mm_document, list):
             normalized: list[dict[str, Any]] = []
-            for part in mm_doc:
+            for part in mm_document:
                 if isinstance(part, dict) and part.get("type") == "text":
-                    normalized.append({"type": "text", "text": text_doc})
+                    normalized.append({"type": "text", "text": text_document})
                 else:
                     normalized.append(part)
-            multimodal_documents_trimmed.append(normalized)
+            effective_multimodal_documents.append(normalized)
         else:
-            multimodal_documents_trimmed.append(text_doc)
-    has_multimodal_docs = any(
-        isinstance(doc, list) for doc in multimodal_documents_trimmed
+            effective_multimodal_documents.append(text_document)
+    has_multimodal_documents = any(
+        isinstance(document, list) for document in effective_multimodal_documents
     )
-    if not documents:
-        return () if require_complete_scoring else model_cls.objects.none()
 
     base_root = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
-
-    def _finish(ranked_ids: list[int], winning_endpoint: str | None = None):
-        if ranked_ids and not require_complete_scoring:
-            rag_cache.set_cached_rerank_result(qsig, cand_ids, top_k, rm, ranked_ids)
-            if winning_endpoint:
-                rag_cache.set_cached_rerank_capability(base_v1, rm, winning_endpoint)
-        return ordered_queryset_from_ids(model_cls, ranked_ids)
-
     headers = {"Content-Type": "application/json"}
     api_key = rerank_api_key()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-
     timeout = rerank_timeout_seconds()
-    observed_http_error = False
 
-    effective_query = query
-    effective_documents = documents
-    effective_multimodal_documents = multimodal_documents_trimmed
+    def finish(
+        ranked_ids: list[int],
+        capability: rag_cache.RerankCapability | None = None,
+    ):
+        if ranked_ids and not require_complete_scoring:
+            rag_cache.set_cached_rerank_result(
+                query_signature,
+                candidate_ids,
+                top_k,
+                model_name,
+                ranked_ids,
+            )
+            if capability:
+                rag_cache.set_cached_rerank_capability(
+                    base_v1,
+                    model_name,
+                    capability,
+                )
+        return ordered_queryset_from_ids(model_cls, ranked_ids)
 
-    def _track_http_error():
-        nonlocal observed_http_error
-        observed_http_error = True
+    cached_capability = None
+    if not require_complete_scoring:
+        cached_capability = rag_cache.get_cached_rerank_capability(
+            base_v1,
+            model_name,
+        )
+
+    if cached_capability and cached_capability["shape"] == "score_single_text_pair":
+        scores = _score_documents_concurrently(
+            endpoint=cached_capability["endpoint"],
+            query=effective_query,
+            documents=effective_documents,
+            headers=headers,
+            timeout=timeout,
+            max_workers=rerank_score_concurrency(),
+            model_name=model_name,
+        )
+        ranked_ids = _rank_complete_scores(scores, chunks_list, top_k)
+        if ranked_ids:
+            return finish(ranked_ids, cached_capability)
+        rag_cache.delete_cached_rerank_capability(base_v1, model_name)
+        cached_capability = None
 
     rerank_endpoints = [
         f"{base_root}/rerank",
         f"{base_root}/v2/rerank",
         f"{base_v1}/rerank",
     ]
-    preferred = None
-    if not require_complete_scoring:
-        preferred = rag_cache.get_cached_rerank_capability(base_v1, rm)
-    if preferred:
-        rerank_endpoints = [preferred] + [e for e in rerank_endpoints if e != preferred]
-    if rerank_model_is_qwen3_vl():
+    if cached_capability and cached_capability["shape"] == "rerank_documents":
+        endpoint = cached_capability["endpoint"]
+        rerank_endpoints = [endpoint] + [
+            candidate for candidate in rerank_endpoints if candidate != endpoint
+        ]
+    if rerank_model_is_qwen3_vl() or require_complete_scoring:
         rerank_endpoints = []
-    if require_complete_scoring:
-        rerank_endpoints = []
-    rerank_payloads = (
+
+    rerank_payloads: tuple[dict[str, Any], ...] = (
         {
-            "model": rerank_model(),
+            "model": model_name,
             "query": effective_query,
             "documents": effective_documents,
             "top_n": top_k,
         },
         {
-            "model": rerank_model(),
+            "model": model_name,
             "query": effective_query,
             "documents": [{"text": doc} for doc in effective_documents],
             "top_n": top_k,
@@ -173,38 +293,55 @@ def rerank_via_local_vllm(
             "top_n": top_k,
         },
     )
-    if has_multimodal_docs:
-        rerank_payloads = rerank_payloads + (
+    if has_multimodal_documents:
+        rerank_payloads += (
             {
-                "model": rerank_model(),
+                "model": model_name,
                 "query": effective_query,
                 "documents": effective_multimodal_documents,
                 "top_n": top_k,
             },
         )
 
+    observed_http_error = False
     for endpoint in rerank_endpoints:
         try:
-            for rerank_payload in rerank_payloads:
+            for payload in rerank_payloads:
                 response = requests.post(
-                    endpoint, headers=headers, json=rerank_payload, timeout=timeout
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
                 )
                 if response.status_code in (404, 405):
                     continue
                 if response.status_code >= 400:
-                    _track_http_error()
+                    observed_http_error = True
                     continue
                 ranked_ids = parse_rerank_results(response.json(), chunks_list)
                 if ranked_ids:
-                    return _finish(ranked_ids, endpoint)
+                    return finish(
+                        ranked_ids,
+                        {"endpoint": endpoint, "shape": "rerank_documents"},
+                    )
         except Exception:
             continue
 
-    for endpoint in (f"{base_root}/score", f"{base_v1}/score"):
-        try:
-            batch_payloads = (
+    score_endpoints = [f"{base_root}/score", f"{base_v1}/score"]
+    if cached_capability and cached_capability["shape"] == "score_batch_text_pairs":
+        endpoint = cached_capability["endpoint"]
+        score_endpoints = [endpoint] + [
+            candidate for candidate in score_endpoints if candidate != endpoint
+        ]
+
+    # Qwen3-VL accepts independent text pairs but rejects the list payload. Go
+    # straight to the supported concurrent path instead of paying for a known 400.
+    skip_batch_scores = rerank_model_is_qwen3_vl()
+    for endpoint in score_endpoints:
+        if not skip_batch_scores:
+            batch_payloads: tuple[dict[str, Any], ...] = (
                 {
-                    "model": rerank_model(),
+                    "model": model_name,
                     "text_1": effective_query,
                     "text_2": effective_documents,
                 },
@@ -213,127 +350,61 @@ def rerank_via_local_vllm(
                     "text_2": effective_documents,
                 },
                 {
-                    "model": rerank_model(),
+                    "model": model_name,
                     "query": effective_query,
                     "documents": effective_documents,
                 },
             )
-            if has_multimodal_docs:
-                batch_payloads = batch_payloads + (
+            if has_multimodal_documents:
+                batch_payloads += (
                     {
-                        "model": rerank_model(),
+                        "model": model_name,
                         "query": [{"type": "text", "text": effective_query}],
                         "documents": effective_multimodal_documents,
                     },
-                    {
-                        "model": rerank_model(),
-                        "text_1": [{"type": "text", "text": effective_query}],
-                        "text_2": effective_multimodal_documents,
-                    },
                 )
-            for batch_payload in batch_payloads:
-                response = requests.post(
-                    endpoint, headers=headers, json=batch_payload, timeout=timeout
-                )
-                if response.status_code in (404, 405):
-                    continue
-                if response.status_code >= 400:
-                    _track_http_error()
-                    continue
-                pairs = parse_score_results(response.json())
-                if not pairs:
-                    continue
-                if require_complete_scoring and not _is_complete_finite_scoring(
-                    pairs,
-                    len(chunks_list),
-                ):
-                    continue
-                ranked_ids = [
-                    chunks_list[idx].pk
-                    for idx, _ in sorted(pairs, key=lambda item: item[1], reverse=True)[
-                        :top_k
-                    ]
-                ]
-                if ranked_ids:
-                    return _finish(ranked_ids, endpoint)
-
-            scored: list[tuple[int, float]] = []
-            for idx, doc in enumerate(effective_documents):
-                mm_doc = effective_multimodal_documents[idx]
-                score_payloads = (
-                    {
-                        "model": rerank_model(),
-                        "text_1": effective_query,
-                        "text_2": doc,
-                    },
-                    {
-                        "model": rerank_model(),
-                        "query": effective_query,
-                        "document": doc,
-                    },
-                    {
-                        "text_1": effective_query,
-                        "text_2": doc,
-                    },
-                )
-                if has_multimodal_docs and isinstance(mm_doc, list):
-                    score_payloads = score_payloads + (
-                        {
-                            "model": rerank_model(),
-                            "query": [{"type": "text", "text": effective_query}],
-                            "document": mm_doc,
-                        },
-                        {
-                            "model": rerank_model(),
-                            "text_1": [{"type": "text", "text": effective_query}],
-                            "text_2": mm_doc,
-                        },
-                        {
-                            "model": rerank_model(),
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": (
-                                        "Given a search query, retrieve "
-                                        "relevant candidates that answer the query."
-                                    ),
-                                },
-                                {"role": "query", "content": effective_query},
-                                {"role": "document", "content": mm_doc},
-                            ],
-                        },
-                    )
-                score_found = False
-                for score_payload in score_payloads:
+            try:
+                for payload in batch_payloads:
                     response = requests.post(
-                        endpoint, headers=headers, json=score_payload, timeout=timeout
+                        endpoint,
+                        headers=headers,
+                        json=payload,
+                        timeout=timeout,
                     )
                     if response.status_code in (404, 405):
                         continue
                     if response.status_code >= 400:
-                        _track_http_error()
+                        observed_http_error = True
                         continue
-                    score = parse_single_score(response.json())
-                    scored.append((idx, score))
-                    score_found = True
-                    break
-                if not score_found:
-                    continue
+                    pairs = parse_score_results(response.json())
+                    ranked_ids = _rank_complete_scores(pairs, chunks_list, top_k)
+                    if ranked_ids:
+                        return finish(
+                            ranked_ids,
+                            {
+                                "endpoint": endpoint,
+                                "shape": "score_batch_text_pairs",
+                            },
+                        )
+            except Exception:
+                pass
 
-            if not scored:
-                continue
-            if require_complete_scoring and not _is_complete_finite_scoring(
-                scored,
-                len(chunks_list),
-            ):
-                continue
-
-            scored.sort(key=lambda item: item[1], reverse=True)
-            ranked_ids = [chunks_list[idx].pk for idx, _ in scored[:top_k]]
-            if ranked_ids:
-                return _finish(ranked_ids, endpoint)
-        except Exception:
-            continue
+        scores = _score_documents_concurrently(
+            endpoint=endpoint,
+            query=effective_query,
+            documents=effective_documents,
+            headers=headers,
+            timeout=timeout,
+            max_workers=rerank_score_concurrency(),
+            model_name=model_name,
+        )
+        ranked_ids = _rank_complete_scores(scores, chunks_list, top_k)
+        if ranked_ids:
+            return finish(
+                ranked_ids,
+                {"endpoint": endpoint, "shape": "score_single_text_pair"},
+            )
+        observed_http_error = True
 
     if observed_http_error:
         logger.warning(
@@ -348,4 +419,4 @@ def rerank_via_local_vllm(
     return () if require_complete_scoring else model_cls.objects.none()
 
 
-__all__ = ["rerank_via_local_vllm"]
+__all__ = ["_score_documents_concurrently", "rerank_via_local_vllm"]

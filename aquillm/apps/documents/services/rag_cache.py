@@ -1,13 +1,15 @@
 """RAG-oriented Django cache helpers: normalized keys, fail-open get/set, metric logging."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-import structlog
 import uuid
 from collections import defaultdict
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any, TypedDict
 
+import structlog
 from django.conf import settings
 from django.core.cache import cache
 
@@ -19,6 +21,11 @@ _MET_DOC_LOOKUP = "rag_cache.document_lookup"
 _MET_IMAGE_URL = "rag_cache.image_data_url"
 _MET_RERANK_RES = "rag_cache.rerank_result"
 _MET_RERANK_CAP = "rag_cache.rerank_capability"
+
+
+class RerankCapability(TypedDict):
+    endpoint: str
+    shape: str
 
 
 def _rag_enabled() -> bool:
@@ -105,7 +112,9 @@ def set_cached_query_embedding(
     cache_set(key, embedding, query_embed_ttl())
 
 
-def doc_access_cache_key(user_id: int, collection_ids: tuple[int, ...], perm: str) -> str:
+def doc_access_cache_key(
+    user_id: int, collection_ids: tuple[int, ...], perm: str
+) -> str:
     return stable_cache_key("da", user_id, collection_ids, perm)
 
 
@@ -189,7 +198,9 @@ def get_cached_image_data_url(doc_id: uuid.UUID, image_file_name: str) -> str | 
     return None
 
 
-def set_cached_image_data_url(doc_id: uuid.UUID, image_file_name: str, data_url: str) -> None:
+def set_cached_image_data_url(
+    doc_id: uuid.UUID, image_file_name: str, data_url: str
+) -> None:
     if not _rag_enabled():
         return
     key = image_data_url_cache_key(doc_id, image_file_name)
@@ -204,23 +215,60 @@ def rerank_capability_ttl() -> int:
     return int(getattr(settings, "RAG_RERANK_CAPABILITY_TTL_SECONDS", 900))
 
 
-def get_cached_rerank_capability(base_url: str, model: str) -> str | None:
+def get_cached_rerank_capability(base_url: str, model: str) -> RerankCapability | None:
     if not _rag_enabled():
         return None
     key = rerank_capability_cache_key(base_url, model)
     val = cache_get(key)
-    if isinstance(val, str) and val:
+    if (
+        isinstance(val, dict)
+        and isinstance(val.get("endpoint"), str)
+        and val.get("endpoint")
+        and val.get("shape")
+        in {
+            "rerank_documents",
+            "score_batch_text_pairs",
+            "score_single_text_pair",
+        }
+    ):
         _log_hit_miss(_MET_RERANK_CAP, True)
-        return val
+        return {"endpoint": val["endpoint"], "shape": val["shape"]}
+    if isinstance(val, str) and val:
+        # Read legacy endpoint-only records during rolling deployments.
+        _log_hit_miss(_MET_RERANK_CAP, True)
+        return {"endpoint": val, "shape": "rerank_documents"}
     _log_hit_miss(_MET_RERANK_CAP, False)
     return None
 
 
-def set_cached_rerank_capability(base_url: str, model: str, endpoint: str) -> None:
+def set_cached_rerank_capability(
+    base_url: str, model: str, capability: Mapping[str, str]
+) -> None:
     if not _rag_enabled():
         return
     key = rerank_capability_cache_key(base_url, model)
-    cache_set(key, endpoint, rerank_capability_ttl())
+    endpoint = capability.get("endpoint")
+    shape = capability.get("shape")
+    if not endpoint or shape not in {
+        "rerank_documents",
+        "score_batch_text_pairs",
+        "score_single_text_pair",
+    }:
+        return
+    cache_set(
+        key,
+        {"endpoint": endpoint, "shape": shape},
+        rerank_capability_ttl(),
+    )
+
+
+def delete_cached_rerank_capability(base_url: str, model: str) -> None:
+    if not _rag_enabled():
+        return
+    try:
+        cache.delete(rerank_capability_cache_key(base_url, model))
+    except Exception:
+        return
 
 
 def rerank_result_cache_key(
@@ -341,10 +389,12 @@ def rehydrate_documents_from_refs(
 
 
 __all__ = [
+    "RerankCapability",
     "cache_get",
     "cache_set",
     "doc_access_cache_key",
     "document_lookup_cache_key",
+    "delete_cached_rerank_capability",
     "get_cached_doc_access_refs",
     "get_cached_document_ref",
     "get_cached_image_data_url",
