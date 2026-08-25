@@ -93,6 +93,8 @@ def test_memgraph_healthcheck_uses_supported_non_interactive_input(
 
     assert healthcheck[0] == "CMD-SHELL"
     assert "echo 'RETURN 1;' | mgconsole" in command
+    assert '--username "$$MEMGRAPH_USER"' in command
+    assert '--password "$$MEMGRAPH_PASSWORD"' in command
     assert "--execute" not in command
 
 

@@ -195,7 +195,7 @@ services:
     volumes: [knowledge_graph_memgraph_data:/var/lib/memgraph]
     networks: [knowledge_graph_store]
     healthcheck:
-      test: ["CMD-SHELL", "test -n \"$$MEMGRAPH_USER\" && test -n \"$$MEMGRAPH_PASSWORD\" && echo 'RETURN 1;' | mgconsole --host 127.0.0.1 --port 7687 --username '$$MEMGRAPH_USER' --password '$$MEMGRAPH_PASSWORD' >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "test -n \"$$MEMGRAPH_USER\" && test -n \"$$MEMGRAPH_PASSWORD\" && echo 'RETURN 1;' | mgconsole --host 127.0.0.1 --port 7687 --username \"$$MEMGRAPH_USER\" --password \"$$MEMGRAPH_PASSWORD\" >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 12
