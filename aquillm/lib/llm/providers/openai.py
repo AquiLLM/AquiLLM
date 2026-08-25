@@ -147,8 +147,8 @@ class OpenAIInterface(LLMInterface):
         }
         is_vllm_endpoint = "vllm" in base_url or "8000" in base_url
         if is_vllm_endpoint:
-            enable_thinking = getenv(
-                "OPENAI_COMPAT_ENABLE_THINKING", "0"
+            enable_thinking = (
+                getenv("OPENAI_COMPAT_ENABLE_THINKING", "1") or "1"
             ).strip().lower() in ("1", "true", "yes", "on")
             arguments["chat_template_kwargs"] = {
                 "enable_thinking": enable_thinking

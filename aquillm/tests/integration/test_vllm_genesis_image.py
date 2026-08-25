@@ -49,7 +49,7 @@ def test_genesis_entrypoint_requires_the_current_plugin_contract():
     assert "import vllm._genesis" not in entrypoint
 
 
-def test_example_environment_enables_the_turboquant_workspace_stack():
+def test_example_environment_enables_the_turboquant_mtp_workspace_stack():
     lines = set((REPO_ROOT / ".env.example").read_text(encoding="utf-8").splitlines())
 
     assert f"VLLM_GENESIS_BASE_IMAGE={VLLM_IMAGE}" in lines
@@ -63,15 +63,16 @@ def test_example_environment_enables_the_turboquant_workspace_stack():
         "GENESIS_ENABLE_PN521_TQ_RAW_TAIL_VERIFY=1",
         "GENESIS_ENABLE_PN521_SPLIT_K=1",
         "GENESIS_ENABLE_PN522_TQ_RAW_TAIL_WARMUP=1",
+        "GENESIS_ENABLE_P82=0",
     ):
         assert setting in lines
     assert "GENESIS_ENABLE_PN34_WORKSPACE_LOCK_RELAX=1" not in lines
 
 
-def test_example_environment_does_not_enable_mtp_speculation_by_default():
+def test_example_environment_enables_mtp_speculation_by_default():
     environment = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
     vllm_extra_args = next(
         line for line in environment.splitlines() if line.startswith("VLLM_EXTRA_ARGS=")
     )
 
-    assert "--speculative-config" not in vllm_extra_args
+    assert "--speculative-config" in vllm_extra_args
