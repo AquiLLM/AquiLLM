@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase
@@ -53,3 +55,55 @@ class OpenAIMemoryPromptTests(SimpleTestCase):
         assert "Do not claim you cannot remember past conversations when memory items are provided." in system_message
         assert "Do not describe internal memory tools, storage backends, or persistence mechanisms." in system_message
         assert "If the user asks you to remember something, acknowledge it naturally" in system_message
+
+    def test_local_vllm_disables_hidden_thinking_by_default(self):
+        completions = self._CapturingCompletions(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(tool_calls=[], content="OK"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=2),
+            )
+        )
+        llm = OpenAIInterface(self._FakeOpenAIClient(completions), model="qwen3.6:27b")
+
+        with patch.dict(os.environ, {"OPENAI_COMPAT_ENABLE_THINKING": ""}, clear=False):
+            async_to_sync(llm.get_message)(
+                system="Base system.",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=128,
+            )
+
+        assert completions.calls[0]["chat_template_kwargs"] == {
+            "enable_thinking": False
+        }
+
+    def test_local_vllm_can_explicitly_enable_thinking(self):
+        completions = self._CapturingCompletions(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(tool_calls=[], content="OK"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=2),
+            )
+        )
+        llm = OpenAIInterface(self._FakeOpenAIClient(completions), model="qwen3.6:27b")
+
+        with patch.dict(
+            os.environ, {"OPENAI_COMPAT_ENABLE_THINKING": "1"}, clear=False
+        ):
+            async_to_sync(llm.get_message)(
+                system="Base system.",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=128,
+            )
+
+        assert completions.calls[0]["chat_template_kwargs"] == {
+            "enable_thinking": True
+        }
