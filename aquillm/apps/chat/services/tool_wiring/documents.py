@@ -15,6 +15,7 @@ from apps.chat.refs import ChatRef, CollectionsRef
 from apps.collections.models import Collection
 from apps.documents.models import Document, DocumentChild, DocumentFigure, TextChunk
 from lib.tools.documents.ids import clean_and_parse_doc_id, resolve_doc_id_with_candidates
+from lib.llm.providers.image_context import serialize_tool_result_for_llm
 from lib.tools.documents.list_ids import titles_to_document_ids
 from lib.tools.documents.whole_document import image_document_instruction, image_document_tool_payload
 from lib.tools.search.context import format_adjacent_chunks_tool_result
@@ -26,6 +27,29 @@ _NO_DOCS_EXCEPTION = {
         "collections are empty."
     )
 }
+
+
+def _format_whole_document_citations(doc_id, chunks) -> tuple[str, list[dict]]:
+    """Tag whole-document passages with the exact chunk references used by the UI."""
+    document_id = str(doc_id)
+    passages: list[str] = []
+    citation_chunks: list[dict] = []
+    for chunk in chunks:
+        content = str(getattr(chunk, "content", "") or "").strip()
+        if not content:
+            continue
+        chunk_id = int(chunk.id)
+        citation = f"[doc:{document_id} chunk:{chunk_id}]"
+        passages.append(f"{citation}\n{content}")
+        citation_chunks.append(
+            {
+                "doc_id": document_id,
+                "chunk_id": chunk_id,
+                "chunk": int(chunk.chunk_number),
+                "citation": citation,
+            }
+        )
+    return "\n\n".join(passages), citation_chunks
 
 
 def _accessible_document_ids(user: User, col_ref: CollectionsRef) -> list:
@@ -204,6 +228,8 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
         other documents you are allowed to see can still be opened if the UUID is exact.
         For image documents, this includes both the extracted text and the image itself.
         When returning an image to the user, use markdown: ![description](image_url)
+        Text passages are prefixed with exact [doc:<doc_id> chunk:<chunk_id>] references.
+        Cite those references in the answer so the user can open the supporting passage.
         """
         doc_uuid, error_msg = _resolve_doc_uuid(doc_id, user, col_ref)
         if doc_uuid is None:
@@ -218,17 +244,20 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
             }
         if not doc.collection.user_can_view(user):
             return {"exception": f"User cannot access document {doc_id}!"}
-        token_count = async_to_sync(chat_ref.chat.llm_if.token_count)(chat_ref.chat.convo, doc.full_text)
-        if token_count > 150000:
-            return {"exception": f"Document {doc_id} is too large to open in this chat."}
-
-        ret: ToolResultDict = {"result": doc.full_text}
+        chunks = TextChunk.objects.filter(doc_id=doc.id).only(
+            "id", "chunk_number", "content"
+        ).order_by("chunk_number", "id")
+        cited_text, citation_chunks = _format_whole_document_citations(doc.id, chunks)
+        document_text = cited_text or doc.full_text
+        ret: ToolResultDict = {"result": document_text}
+        if citation_chunks:
+            ret["citation_chunks"] = citation_chunks
 
         image_file = getattr(doc, "image_file", None)
         if image_file:
             display_url = f"/aquillm/document_image/{doc.id}/"
             ret["result"] = image_document_tool_payload(
-                full_text=doc.full_text, title=doc.title, display_url=display_url
+                full_text=document_text, title=doc.title, display_url=display_url
             )
             ret["_image_instruction"] = image_document_instruction(title=doc.title, display_url=display_url)
         else:
@@ -236,13 +265,20 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
             if figures:
                 ret["result"] = {
                     "type": "document_with_figures",
-                    "text": doc.full_text,
+                    "text": document_text,
                     "figures": figures,
                 }
                 ret["_image_instruction"] = (
                     "Related figures include image_url fields. When the user asks for figures, "
                     "include relevant figures in markdown with ![description](image_url)."
                 )
+
+        serialized_result = serialize_tool_result_for_llm(ret)
+        token_count = async_to_sync(chat_ref.chat.llm_if.token_count)(
+            chat_ref.chat.convo, serialized_result
+        )
+        if token_count > 150000:
+            return {"exception": f"Document {doc_id} is too large to open in this chat."}
 
         return ret
 

@@ -24,6 +24,7 @@ type ToolResultDict = dict[
         'retrieval_message',
         'retrieved_count',
         'retrieved_documents',
+        'citation_chunks',
     ],
     ToolResultValue,
 ]
