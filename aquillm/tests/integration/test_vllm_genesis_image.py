@@ -10,6 +10,10 @@ VLLM_IMAGE = (
 GENESIS_REF = "34e269301cc3df71ae4b0da00a0a159b16b4e5d8"
 
 
+def _main_vllm_service(compose: str) -> str:
+    return compose.split("\n  vllm:\n", 1)[1].split("\n  vllm_ocr:\n", 1)[0]
+
+
 def test_genesis_image_pins_the_validated_vllm_and_plugin_pair():
     dockerfile = (
         REPO_ROOT / "deploy/docker/vllm/Dockerfile.genesis"
@@ -118,9 +122,11 @@ def test_main_vllm_compile_caches_persist_with_the_model_cache():
         compose = (REPO_ROOT / "deploy/compose" / compose_name).read_text(
             encoding="utf-8"
         )
+        main_vllm = _main_vllm_service(compose)
         for setting in cache_settings:
-            assert compose.count(setting) == 1
-        assert compose.count(
+            assert setting in main_vllm
+        assert (
             "vllm_compile_cache:/root/.cache/vllm/torch_compile_cache"
-        ) == 1
-        assert "VLLM_CACHE_ROOT=" not in compose
+            in main_vllm
+        )
+        assert "VLLM_CACHE_ROOT=" not in main_vllm

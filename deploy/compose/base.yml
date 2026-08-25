@@ -368,6 +368,7 @@ services:
       - VLLM_PORT=8000
       - TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton
       - VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/root/.cache/huggingface/aquillm-main/flashinfer
+      - VLLM_READINESS_PREWARM=1
       - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
       - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
     ports:
@@ -375,10 +376,11 @@ services:
     volumes:
       - vllm_data:/root/.cache/huggingface
       - vllm_compile_cache:/root/.cache/vllm/torch_compile_cache
+      - ../../deploy/scripts/vllm_readiness.py:/opt/aquillm/vllm_readiness.py:ro
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
+      test: ["CMD", "python3", "/opt/aquillm/vllm_readiness.py"]
       interval: 10s
-      timeout: 10s
+      timeout: 180s
       retries: 10
       start_period: 30s
 

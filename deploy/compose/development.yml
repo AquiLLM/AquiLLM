@@ -470,6 +470,8 @@ services:
       - vllm
     volumes:
       - /media/volume/aquillmdev2-vol/vllm:/root/.cache/huggingface
+      - vllm_compile_cache:/root/.cache/vllm/torch_compile_cache
+      - ../../deploy/scripts/vllm_readiness.py:/opt/aquillm/vllm_readiness.py:ro
     env_file:
       - ../../.env
     environment:
@@ -477,6 +479,7 @@ services:
       - VLLM_PORT=8000
       - TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton
       - VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/root/.cache/huggingface/aquillm-main/flashinfer
+      - VLLM_READINESS_PREWARM=1
       - VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.33}
       - VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-131072}
       - NVIDIA_VISIBLE_DEVICES=all
@@ -484,9 +487,9 @@ services:
       - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
       - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
+      test: ["CMD", "python3", "/opt/aquillm/vllm_readiness.py"]
       interval: 10s
-      timeout: 10s
+      timeout: 180s
       retries: 36
       start_period: 120s
 
@@ -509,7 +512,6 @@ services:
         condition: service_healthy
     volumes:
       - /media/volume/aquillmdev2-vol/vllm:/root/.cache/huggingface
-      - vllm_compile_cache:/root/.cache/vllm/torch_compile_cache
     env_file:
       - ../../.env
     environment:
