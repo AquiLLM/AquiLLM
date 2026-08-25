@@ -687,6 +687,10 @@ Expected: only approved source/tests/docs are changed; `.codex-ssh/` remains unt
 
 If integration required a scoped adjustment, repeat its failing/passing test cycle, stage only explicit source/test paths, and commit with `fix(rag): harden retrieval latency integration`. Otherwise retain the task commits as the complete local history.
 
+- [ ] **Step 6a: Verify ASGI vector-index prewarming**
+
+If the deployed ASGI process logs `obs.rag.hnsw_prewarm_failed` while synchronous management commands succeed, keep the ORM call off the running event loop by scheduling one named daemon prewarm thread. Cover synchronous-command and asynchronous-server startup paths with focused tests; retrieval output must remain unchanged.
+
 - [ ] **Step 7: Push local development commits**
 
 Run: `git push origin development`

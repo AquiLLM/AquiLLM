@@ -1,18 +1,23 @@
-from django.apps import AppConfig
+import asyncio
+from os import getenv
+from threading import Thread
 
-from django.template import Engine, Context
-import structlog
+import anthropic
 import cohere
 import openai
-import anthropic
-import google.generativeai as genai  # older google SDK — kept for OCR/image features already using it
-from google import genai as google_genai  # NEW: newer google-genai SDK used by GeminiInterface for chat
-from os import getenv
-from typing import TypedDict
+import structlog
+from django.apps import AppConfig
+from django.template import Engine
+from google import (
+    genai as google_genai,  # NEW: newer google-genai SDK used by GeminiInterface for chat
+)
 
-
-from .llm import LLMInterface, ClaudeInterface, OpenAIInterface, GeminiInterface  # GeminiInterface added for Gemini backend support
-from .settings import DEBUG
+from .llm import (  # GeminiInterface added for Gemini backend support
+    ClaudeInterface,
+    GeminiInterface,
+    LLMInterface,
+    OpenAIInterface,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -42,25 +47,27 @@ RAG Search Results:
 """
 
 
-
-
 def get_embedding_func(cohere_client):
 
-
-    def get_embedding(query: str, input_type: str='search_query'):
-        if input_type not in ('search_document', 'search_query', 'classification', 'clustering'):
-            raise ValueError(f'bad input type to embedding call: {input_type}')
+    def get_embedding(query: str, input_type: str = "search_query"):
+        if input_type not in (
+            "search_document",
+            "search_query",
+            "classification",
+            "clustering",
+        ):
+            raise ValueError(f"bad input type to embedding call: {input_type}")
         response = cohere_client.embed(
-            texts=[query],
-            model="embed-english-v3.0",
-            input_type=input_type
+            texts=[query], model="embed-english-v3.0", input_type=input_type
         )
         return response.embeddings[0]
+
     return get_embedding
 
+
 class AquillmConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'aquillm'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "aquillm"
     cohere_client = None
     openai_client = None
     anthropic_client = None
@@ -74,23 +81,21 @@ class AquillmConfig(AppConfig):
 
     google_genai_client = None
     default_llm = "CLAUDE"
-    
-    
-    vector_top_k = _env_int('VECTOR_TOP_K', 12)
-    trigram_top_k = _env_int('TRIGRAM_TOP_K', 12)
+
+    vector_top_k = _env_int("VECTOR_TOP_K", 12)
+    trigram_top_k = _env_int("TRIGRAM_TOP_K", 12)
     rag_prompt_template = Engine().from_string(RAG_PROMPT_STRING)
 
+    chunk_size = _env_int("CHUNK_SIZE", 2048)
+    chunk_overlap = _env_int("CHUNK_OVERLAP", 384)  # at each end.
 
-
-    chunk_size = _env_int('CHUNK_SIZE', 2048)
-    chunk_overlap = _env_int('CHUNK_OVERLAP', 384) # at each end.
-#   |-----------CHUNK-----------|
-#   <---------chunk_size-------->
-#                       <------->  chunk_overlap
-#                       |-----------CHUNK-----------|
+    #   |-----------CHUNK-----------|
+    #   <---------chunk_size-------->
+    #                       <------->  chunk_overlap
+    #                       |-----------CHUNK-----------|
     def ready(self):
-        cohere_key = (getenv('COHERE_KEY') or '').strip()
-        if cohere_key and not cohere_key.startswith('your-'):
+        cohere_key = (getenv("COHERE_KEY") or "").strip()
+        if cohere_key and not cohere_key.startswith("your-"):
             self.cohere_client = cohere.Client(cohere_key)
         else:
             self.cohere_client = None
@@ -98,34 +103,54 @@ class AquillmConfig(AppConfig):
         self.anthropic_client = anthropic.Anthropic()
         self.async_anthropic_client = anthropic.AsyncAnthropic()
         self.async_anthropic_bedrock_client = anthropic.AsyncAnthropicBedrock(
-            aws_region='us-east-1',
-            aws_access_key=getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_key=getenv('AWS_SECRET_ACCESS_KEY')
+            aws_region="us-east-1",
+            aws_access_key=getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_key=getenv("AWS_SECRET_ACCESS_KEY"),
         )
-        self.google_genai_client = google_genai.Client(api_key=getenv('GEMINI_API_KEY'))  # Gemini API client, initialized at startup regardless of LLM_CHOICE so it's available even when not the primary LLM
-        self.get_embedding = get_embedding_func(self.cohere_client) if self.cohere_client else None
-        llm_choice = getenv('LLM_CHOICE', self.default_llm)
-        local_base_url = getenv('VLLM_BASE_URL', 'http://vllm:8000/v1').rstrip('/')
-        if not local_base_url.endswith('/v1'):
+        self.google_genai_client = google_genai.Client(
+            api_key=getenv("GEMINI_API_KEY")
+        )  # Gemini API client, initialized at startup regardless of LLM_CHOICE so it's available even when not the primary LLM
+        self.get_embedding = (
+            get_embedding_func(self.cohere_client) if self.cohere_client else None
+        )
+        llm_choice = getenv("LLM_CHOICE", self.default_llm)
+        local_base_url = getenv("VLLM_BASE_URL", "http://vllm:8000/v1").rstrip("/")
+        if not local_base_url.endswith("/v1"):
             local_base_url = f"{local_base_url}/v1"
-        local_base_url = local_base_url + '/'
-        local_api_key = getenv('VLLM_API_KEY', 'EMPTY')
-        local_served_model_name = getenv('VLLM_SERVED_MODEL_NAME', 'qwen3.5:27b')
-        if llm_choice == 'CLAUDE':
+        local_base_url = local_base_url + "/"
+        local_api_key = getenv("VLLM_API_KEY", "EMPTY")
+        local_served_model_name = getenv("VLLM_SERVED_MODEL_NAME", "qwen3.5:27b")
+        if llm_choice == "CLAUDE":
             self.llm_interface = ClaudeInterface(self.async_anthropic_client)
-        elif llm_choice == 'OPENAI':
+        elif llm_choice == "OPENAI":
             self.llm_interface = OpenAIInterface(self.openai_client, "gpt-4o")
-        elif llm_choice == 'BEDROCK-CLAUDE':
-            self.llm_interface = ClaudeInterface(self.async_anthropic_bedrock_client, model_override='arn:aws:bedrock:us-east-1:744423739991:inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0')
-        elif llm_choice == 'GEMMA3':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key), "ebdm/gemma3-enhanced:12b")
-        elif llm_choice == 'LLAMA3.2':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key), "llama3.2")
-        elif llm_choice == 'GPT-OSS':
-            self.llm_interface = OpenAIInterface(openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key), "gpt-oss:120b")
-        elif llm_choice == 'GEMINI':  # set LLM_CHOICE=GEMINI in .env to use Google Gemini as the chat backend
-            self.llm_interface = GeminiInterface(self.google_genai_client, model='gemini-2.5-flash')  # gemini-2.5-flash is the faster/cheaper variant; swap model= here to use gemini-2.5-pro etc.
-        elif llm_choice == 'QWEN3_30B':
+        elif llm_choice == "BEDROCK-CLAUDE":
+            self.llm_interface = ClaudeInterface(
+                self.async_anthropic_bedrock_client,
+                model_override="arn:aws:bedrock:us-east-1:744423739991:inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0",
+            )
+        elif llm_choice == "GEMMA3":
+            self.llm_interface = OpenAIInterface(
+                openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key),
+                "ebdm/gemma3-enhanced:12b",
+            )
+        elif llm_choice == "LLAMA3.2":
+            self.llm_interface = OpenAIInterface(
+                openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key),
+                "llama3.2",
+            )
+        elif llm_choice == "GPT-OSS":
+            self.llm_interface = OpenAIInterface(
+                openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key),
+                "gpt-oss:120b",
+            )
+        elif (
+            llm_choice == "GEMINI"
+        ):  # set LLM_CHOICE=GEMINI in .env to use Google Gemini as the chat backend
+            self.llm_interface = GeminiInterface(
+                self.google_genai_client, model="gemini-2.5-flash"
+            )  # gemini-2.5-flash is the faster/cheaper variant; swap model= here to use gemini-2.5-pro etc.
+        elif llm_choice == "QWEN3_30B":
             self.llm_interface = OpenAIInterface(
                 openai.AsyncOpenAI(base_url=local_base_url, api_key=local_api_key),
                 local_served_model_name,
@@ -133,15 +158,36 @@ class AquillmConfig(AppConfig):
         else:
             raise ValueError(f"Invalid LLM choice: {llm_choice}")
 
-        self._prewarm_vector_index()
+        self._prewarm_vector_index_for_runtime()
+
+    def _prewarm_vector_index_for_runtime(self) -> Thread | None:
+        """Prewarm inline for commands and off-loop for ASGI startup."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self._prewarm_vector_index()
+            return None
+
+        thread = Thread(
+            target=self._prewarm_vector_index,
+            name="aquillm-hnsw-prewarm",
+            daemon=True,
+        )
+        thread.start()
+        logger.info("obs.rag.hnsw_prewarm_scheduled")
+        return thread
 
     def _prewarm_vector_index(self):
         """Run a dummy vector query to load the HNSW index into PostgreSQL's buffer cache."""
         try:
-            from apps.documents.models import TextChunk
             from pgvector.django import L2Distance
+
+            from apps.documents.models import TextChunk
+
             zero_vector = [0.0] * 1024
-            TextChunk.objects.order_by(L2Distance('embedding', zero_vector))[:1].exists()
+            TextChunk.objects.order_by(L2Distance("embedding", zero_vector))[
+                :1
+            ].exists()
             logger.info("obs.rag.hnsw_prewarmed")
         except Exception as e:
             logger.warning(
@@ -149,4 +195,3 @@ class AquillmConfig(AppConfig):
                 error=str(e),
                 error_type=type(e).__name__,
             )
-
