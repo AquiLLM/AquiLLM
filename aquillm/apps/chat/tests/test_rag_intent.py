@@ -1,14 +1,15 @@
 """Tests for RAG intent classification (Task 1)."""
+
 from __future__ import annotations
 
 import pytest
 
 from apps.chat.services.rag_intent import ChatIntent, classify_chat_message
 
-
 # ---------------------------------------------------------------------------
 # Explicit-search detection
 # ---------------------------------------------------------------------------
+
 
 def test_explicit_document_search_requires_rag():
     result = classify_chat_message(
@@ -32,6 +33,7 @@ def test_explicit_search_without_collections_still_requires_rag():
 # Figure-request detection
 # ---------------------------------------------------------------------------
 
+
 def test_figure_request_requires_rag():
     result = classify_chat_message(
         "Can you show me some of the figures from it with context please",
@@ -54,6 +56,7 @@ def test_followup_figure_request_no_source_word():
 # ---------------------------------------------------------------------------
 # Collection-backed document question (new expansion rule)
 # ---------------------------------------------------------------------------
+
 
 def test_collection_backed_question_requires_rag():
     result = classify_chat_message(
@@ -119,9 +122,50 @@ def test_selected_collection_management_command_does_not_require_rag():
     assert result.requires_rag is False
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what is attensity",
+        "attensity",
+        "explain calibration drift",
+        "compare the reported outcomes",
+    ],
+)
+def test_selected_collection_substantive_question_requires_rag(text):
+    """Dropping the literal document noun must not bypass selected evidence."""
+    result = classify_chat_message(text, selected_collection_ids=[203])
+
+    assert result.requires_rag is True
+    assert result.reason == "collection_backed_question"
+
+
+def test_attensity_without_selected_collection_remains_general_chat():
+    result = classify_chat_message("what is attensity", selected_collection_ids=[])
+
+    assert result.requires_rag is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "hi",
+        "thanks",
+        "open collection settings",
+        "what did we discuss in our previous chat?",
+        "run point source detection on this FITS file",
+    ],
+)
+def test_selected_collection_non_document_work_stays_out_of_rag(text):
+    """The evidence default must not capture small talk, UI, memory, or FITS work."""
+    result = classify_chat_message(text, selected_collection_ids=[203])
+
+    assert result.requires_rag is False
+
+
 # ---------------------------------------------------------------------------
 # Brand-new chat / no retrieval needed
 # ---------------------------------------------------------------------------
+
 
 def test_brand_new_chat_no_rag():
     result = classify_chat_message(
@@ -146,6 +190,7 @@ def test_regular_followup_no_rag():
 # Local-tool detection
 # ---------------------------------------------------------------------------
 
+
 def test_local_tool_request_sets_requires_local_tools():
     result = classify_chat_message(
         "Please subtract the sky from object file 1 using sky file 2.",
@@ -168,6 +213,7 @@ def test_fits_processing_requires_local_tools():
 # ---------------------------------------------------------------------------
 # Retry detection
 # ---------------------------------------------------------------------------
+
 
 def test_retry_request_is_retry():
     result = classify_chat_message(
@@ -205,6 +251,7 @@ def test_retry_with_prior_tools_requires_rag():
 # ---------------------------------------------------------------------------
 # Return type
 # ---------------------------------------------------------------------------
+
 
 def test_returns_chat_intent_dataclass():
     result = classify_chat_message("hello", selected_collection_ids=[])
