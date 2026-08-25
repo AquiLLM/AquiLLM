@@ -14,6 +14,15 @@ from apps.chat.tests.chat_message_test_support import _test_document_ids, _test_
 User = get_user_model()
 
 
+def test_collection_selection_is_isolated_per_websocket_consumer():
+    first = ChatConsumer()
+    second = ChatConsumer()
+
+    first.col_ref.collections = [101, 202, 303]
+
+    assert second.col_ref.collections == []
+
+
 @pytest.mark.asyncio
 @pytest.mark.django_db
 @patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")

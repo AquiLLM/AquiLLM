@@ -91,6 +91,34 @@ def test_collection_backed_question_no_collections_returns_false():
     assert result.requires_rag is False
 
 
+def test_selected_collection_clarification_requires_rag():
+    result = classify_chat_message(
+        "The ones in the selected collection",
+        selected_collection_ids=[1, 2, 3],
+    )
+
+    assert result.requires_rag is True
+    assert result.reason == "collection_backed_question"
+
+
+def test_selected_collection_clarification_without_selection_does_not_require_rag():
+    result = classify_chat_message(
+        "The ones in the selected collection",
+        selected_collection_ids=[],
+    )
+
+    assert result.requires_rag is False
+
+
+def test_selected_collection_management_command_does_not_require_rag():
+    result = classify_chat_message(
+        "Change the selected collection",
+        selected_collection_ids=[1, 2, 3],
+    )
+
+    assert result.requires_rag is False
+
+
 # ---------------------------------------------------------------------------
 # Brand-new chat / no retrieval needed
 # ---------------------------------------------------------------------------
