@@ -1,10 +1,12 @@
 """Single-turn conversation completion orchestration for LLMInterface."""
+
 from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from os import getenv
-from typing import Any, Awaitable, Callable, Literal, Optional
+from typing import Any, Literal
 
 from ..types.conversation import Conversation
 from ..types.messages import AssistantMessage, LLM_Message, ToolMessage, UserMessage
@@ -30,6 +32,9 @@ if DEBUG:
 
 
 _DOC_IMAGE_URL_RE = re.compile(r"/aquillm/document_image/([^/]+)/")
+_MECHANICAL_TOOL_MAX_TOKENS = 256
+
+
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
     try:
         value = int(getenv(name, str(default)))
@@ -146,18 +151,24 @@ def _tool_call_retry_max_tokens() -> int:
 
 
 def _resolve_tool_step_max_tokens(max_tokens: int, tool_choice_type: str) -> int:
-    requested = _env_optional_cap("LLM_TOOL_STEP_MAX_TOKENS", 2048, minimum=128)
+    requested = _env_optional_cap(
+        "LLM_TOOL_STEP_MAX_TOKENS",
+        _MECHANICAL_TOOL_MAX_TOKENS,
+        minimum=128,
+    )
     if requested <= 0:
-        requested = max_tokens
+        requested = _MECHANICAL_TOOL_MAX_TOKENS
     if tool_choice_type == "any":
         retry_cap = _tool_call_retry_max_tokens()
         if retry_cap > 0:
             requested = max(requested, retry_cap)
-    return min(max_tokens, requested)
+    return min(max_tokens, requested, _MECHANICAL_TOOL_MAX_TOKENS)
 
 
-def _visible_text_is_empty_or_interim(text: Optional[str]) -> bool:
-    visible = visibility.strip_tool_markup(visibility.strip_thinking_blocks(text)).strip()
+def _visible_text_is_empty_or_interim(text: str | None) -> bool:
+    visible = visibility.strip_tool_markup(
+        visibility.strip_thinking_blocks(text)
+    ).strip()
     return (not visible) or visibility.is_interim_assistant_text(visible)
 
 
@@ -217,13 +228,17 @@ def _latest_user_turn(conversation: Conversation) -> UserMessage | None:
 
 def _has_prior_assistant_context(conversation: Conversation) -> bool:
     for msg in conversation.messages[:-1]:
-        if isinstance(msg, AssistantMessage) and visibility.is_displayable_answer_text(msg.content):
+        if isinstance(msg, AssistantMessage) and visibility.is_displayable_answer_text(
+            msg.content
+        ):
             return True
     return False
 
 
-def _post_tool_synthesis_unsatisfied(text: Optional[str]) -> bool:
-    visible = visibility.strip_tool_markup(visibility.strip_thinking_blocks(text)).strip()
+def _post_tool_synthesis_unsatisfied(text: str | None) -> bool:
+    visible = visibility.strip_tool_markup(
+        visibility.strip_thinking_blocks(text)
+    ).strip()
     if not visible:
         return True
     if visibility.is_interim_assistant_text(visible):
@@ -278,7 +293,7 @@ async def _run_post_tool_synthesis_attempt(
     conversation: Conversation,
     post_tool_max_tokens: int,
     global_max_tokens: int,
-    stream_callback: Optional[Callable[[dict], Awaitable[Any]]],
+    stream_callback: Callable[[dict], Awaitable[Any]] | None,
     stream_message_uuid: str,
     attempt: int,
     allow_tools: bool,
@@ -315,7 +330,7 @@ async def _run_plain_followup_answer_retry(
     message_dicts: list[dict],
     messages_for_bot: list[LLM_Message],
     max_tokens: int,
-    stream_callback: Optional[Callable[[dict], Awaitable[Any]]],
+    stream_callback: Callable[[dict], Awaitable[Any]] | None,
     stream_message_uuid: str,
 ) -> LLMResponse:
     prompt = (
@@ -346,7 +361,7 @@ async def _run_hidden_tool_call_retry(
     messages_for_bot: list[LLM_Message],
     tools: dict[str, Any],
     current_max_tokens: int,
-    stream_callback: Optional[Callable[[dict], Awaitable[Any]]],
+    stream_callback: Callable[[dict], Awaitable[Any]] | None,
     stream_message_uuid: str,
 ) -> LLMResponse:
     prompt = (
@@ -362,7 +377,10 @@ async def _run_hidden_tool_call_retry(
                 "system": system_prompt,
                 "messages": message_dicts + [{"role": "user", "content": prompt}],
                 "messages_pydantic": messages_for_bot + [UserMessage(content=prompt)],
-                "max_tokens": max(current_max_tokens, _tool_call_retry_max_tokens()),
+                "max_tokens": min(
+                    current_max_tokens,
+                    _MECHANICAL_TOOL_MAX_TOKENS,
+                ),
                 "thinking_budget": 0,
                 "stream_callback": stream_callback,
                 "stream_message_uuid": stream_message_uuid,
@@ -380,7 +398,7 @@ async def _retry_post_tool_synthesis(
     messages_for_bot: list[LLM_Message],
     post_tool_max_tokens: int,
     global_max_tokens: int,
-    stream_callback: Optional[Callable[[dict], Awaitable[Any]]],
+    stream_callback: Callable[[dict], Awaitable[Any]] | None,
     stream_message_uuid: str,
     initial_response: LLMResponse,
 ) -> LLMResponse:
@@ -422,9 +440,9 @@ async def _last_resort_evidence_answer(
     conversation: Conversation,
     max_tokens: int,
     *,
-    stream_callback: Optional[Callable[[dict], Awaitable[Any]]] = None,
-    stream_message_uuid: Optional[str] = None,
-) -> Optional[str]:
+    stream_callback: Callable[[dict], Awaitable[Any]] | None = None,
+    stream_message_uuid: str | None = None,
+) -> str | None:
     """Optional fallbacks; default is synthesis-only (no chunk dumps in the UI)."""
     if _extractive_evidence_ui_enabled():
         if fb.extractive_fallback_enabled():
@@ -456,8 +474,12 @@ def _build_sources_block(allowed_citations: set[str]) -> str:
     return f"Sources:\n{source_lines}"
 
 
-def _select_source_refs_for_response(text: str, allowed_citations: set[str]) -> set[str]:
-    used = {c for c in citations.extract_citations(text or "") if c in allowed_citations}
+def _select_source_refs_for_response(
+    text: str, allowed_citations: set[str]
+) -> set[str]:
+    used = {
+        c for c in citations.extract_citations(text or "") if c in allowed_citations
+    }
     if used:
         return used
     return allowed_citations
@@ -505,7 +527,9 @@ def _collect_source_refs_from_tool_message(tool_message: ToolMessage) -> set[str
         if direct_doc_ref:
             refs.add(direct_doc_ref)
 
-    result_dict = tool_message.result_dict if isinstance(tool_message.result_dict, dict) else {}
+    result_dict = (
+        tool_message.result_dict if isinstance(tool_message.result_dict, dict) else {}
+    )
     payload = result_dict.get("result")
     payload_rows: list[dict[str, Any]] = []
     if isinstance(payload, dict):
@@ -517,7 +541,9 @@ def _collect_source_refs_from_tool_message(tool_message: ToolMessage) -> set[str
         row_doc_ref = _doc_ref(row.get("doc_id") or row.get("d"))
         if row_doc_ref:
             refs.add(row_doc_ref)
-        image_url_ref = _extract_doc_ref_from_image_url(row.get("image_url") or row.get("u"))
+        image_url_ref = _extract_doc_ref_from_image_url(
+            row.get("image_url") or row.get("u")
+        )
         if image_url_ref:
             refs.add(image_url_ref)
 
@@ -583,7 +609,9 @@ def _largest_common_prefix(left: str, right: str, min_chars: int = 1) -> int:
     return 0
 
 
-def _suffix_prefix_overlap_threshold(partial: str, continuation: str, overlap: int) -> int:
+def _suffix_prefix_overlap_threshold(
+    partial: str, continuation: str, overlap: int
+) -> int:
     if overlap <= 0:
         return 0
     if overlap <= 12:
@@ -604,7 +632,9 @@ def _repair_continuation_seam(partial_text: str, merged_text: str) -> str:
     return merged_text[:window_start] + repaired + merged_text[window_end:]
 
 
-def _trim_duplicate_continuation_prefix(partial_text: str, continuation_text: str) -> str:
+def _trim_duplicate_continuation_prefix(
+    partial_text: str, continuation_text: str
+) -> str:
     partial = partial_text or ""
     continuation = continuation_text or ""
     if (not partial) or (not continuation):
@@ -635,7 +665,7 @@ async def complete_conversation_turn(
     llm: Any,
     conversation: Conversation,
     max_tokens: int,
-    stream_func: Optional[Callable[[dict], Awaitable[Any]]] = None,
+    stream_func: Callable[[dict], Awaitable[Any]] | None = None,
 ) -> tuple[Conversation, Literal["changed", "unchanged"]]:
     """Complete one assistant turn: tools, LLM call, retries, and fallbacks."""
     if len(conversation) < 1:
@@ -647,7 +677,9 @@ async def complete_conversation_turn(
         if not (isinstance(message, ToolMessage) and message.for_whom == "user")
     ]
     last_message = conversation[-1]
-    message_dicts = [message.render(include={"role", "content"}) for message in messages_for_bot]
+    message_dicts = [
+        message.render(include={"role", "content"}) for message in messages_for_bot
+    ]
     if isinstance(last_message, ToolMessage) and last_message.for_whom == "user":
         return conversation, "unchanged"
     if isinstance(last_message, AssistantMessage):
@@ -695,6 +727,7 @@ async def complete_conversation_turn(
     )
     effective_stream_func = stream_func
     if use_live_citation_stream and callable(stream_func):
+
         async def _live_citation_stream(payload: dict) -> Any:
             out = dict(payload)
             content = str(out.get("content", ""))
@@ -705,16 +738,22 @@ async def complete_conversation_turn(
                 and (not is_cutoff_done)
                 and visibility.should_append_citation_sources(content)
             ):
-                out["content"] = _append_citation_sources_if_missing(content, source_allowlist)
+                out["content"] = _append_citation_sources_if_missing(
+                    content, source_allowlist
+                )
             await stream_func(out)
 
         effective_stream_func = _live_citation_stream
     provider_stream_func = None if defer_stream_until_final else effective_stream_func
     post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 8192, minimum=256)
     continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 4096, minimum=128)
-    citation_retry_prior_max_chars = _env_int("LLM_CITATION_RETRY_PRIOR_MAX_CHARS", 2400, minimum=512)
+    citation_retry_prior_max_chars = _env_int(
+        "LLM_CITATION_RETRY_PRIOR_MAX_CHARS", 2400, minimum=512
+    )
     request_max_tokens = max_tokens
-    tool_choice_type = str(getattr(last_message.tool_choice, "type", "") or "").strip().lower()
+    tool_choice_type = (
+        str(getattr(last_message.tool_choice, "type", "") or "").strip().lower()
+    )
     if isinstance(last_message, UserMessage) and last_message.tools:
         request_max_tokens = _resolve_tool_step_max_tokens(max_tokens, tool_choice_type)
     elif is_post_tool_result_turn:
@@ -749,6 +788,24 @@ async def complete_conversation_turn(
         sdk_args["thinking_budget"] = 0
 
     response = await llm.get_message(**sdk_args)
+    is_required_tool_cutoff = (
+        isinstance(last_message, UserMessage)
+        and bool(last_message.tools)
+        and bool(last_message.tool_choice)
+        and tool_choice_type == "any"
+        and not response.tool_call
+        and str(response.stop_reason or "").strip().lower() in {"length", "max_tokens"}
+    )
+    if is_required_tool_cutoff:
+        deterministic_response = _deterministic_required_tool_call(
+            last_message=last_message,
+            stream_message_uuid=stream_message_uuid,
+            input_usage=response.input_usage,
+            output_usage=response.output_usage,
+            model=response.model,
+        )
+        if deterministic_response is not None:
+            response = deterministic_response
     should_force_tool_retry = (
         bool(last_message.tools)
         and bool(last_message.tool_choice)
@@ -759,7 +816,8 @@ async def complete_conversation_turn(
     if should_force_tool_retry:
         retry_args = sdk_args | {
             "tool_choice": {"type": "any"},
-            "max_tokens": max(request_max_tokens, _tool_call_retry_max_tokens()),
+            "max_tokens": min(request_max_tokens, _MECHANICAL_TOOL_MAX_TOKENS),
+            "thinking_budget": 0,
         }
         response = await llm.get_message(**retry_args)
 
@@ -834,7 +892,9 @@ async def complete_conversation_turn(
         )
 
     allowed_tool_names = {tool.name for tool in (last_message.tools or [])}
-    response_text = visibility.strip_tool_markup(visibility.strip_thinking_blocks(response.text))
+    response_text = visibility.strip_tool_markup(
+        visibility.strip_thinking_blocks(response.text)
+    )
     response_tool_call = response.tool_call or {}
 
     if response_tool_call:
@@ -914,7 +974,7 @@ async def complete_conversation_turn(
         and fb.looks_cut_off(response_text)
     ):
         preserve_partial_response = fb.should_preserve_cutoff_partial(response_text)
-        continuation_response: Optional[LLMResponse] = None
+        continuation_response: LLMResponse | None = None
         continuation_text = ""
         if fb.continue_on_cutoff_enabled():
             post_tool_budget = _resolve_post_tool_max_tokens(
@@ -937,15 +997,24 @@ async def complete_conversation_turn(
                 stream_callback=provider_stream_func,
                 stream_message_uuid=stream_message_uuid,
             )
-            if continuation_response is not None and not continuation_response.message_uuid:
+            if (
+                continuation_response is not None
+                and not continuation_response.message_uuid
+            ):
                 continuation_response.message_uuid = stream_message_uuid
             raw_continuation_text = (
-                (continuation_response.text or "").strip() if continuation_response else ""
+                (continuation_response.text or "").strip()
+                if continuation_response
+                else ""
             )
-            continuation_text = _trim_duplicate_continuation_prefix(response_text, raw_continuation_text)
+            continuation_text = _trim_duplicate_continuation_prefix(
+                response_text, raw_continuation_text
+            )
             if raw_continuation_text and (not continuation_text):
                 preserve_partial_response = True
-        if continuation_text and not fb.looks_like_deferred_tool_intent(continuation_text):
+        if continuation_text and not fb.looks_like_deferred_tool_intent(
+            continuation_text
+        ):
             separator = _continuation_separator(response_text, continuation_text)
             merged = f"{response_text.rstrip()}{separator}{continuation_text}"
             response_text = _repair_continuation_seam(response_text, merged)
@@ -984,13 +1053,21 @@ async def complete_conversation_turn(
     if is_post_tool_result_turn and (not response_tool_call):
         retrieval_notice = document_retrieval_notice(last_message)
         if retrieval_notice:
-            response_text = append_retrieval_notice_if_missing(response_text, retrieval_notice)
+            response_text = append_retrieval_notice_if_missing(
+                response_text, retrieval_notice
+            )
     if enforce_citations and (not response_tool_call):
         is_streaming_turn = callable(provider_stream_func)
         original_response_text = (response_text or "").strip()
-        citations_valid = citations.response_has_required_citations(response_text, citation_allowlist)
-        original_invalid = citations.find_invalid_citations(original_response_text, citation_allowlist)
-        original_has_any_citation = bool(citations.extract_citations(original_response_text))
+        citations_valid = citations.response_has_required_citations(
+            response_text, citation_allowlist
+        )
+        original_invalid = citations.find_invalid_citations(
+            original_response_text, citation_allowlist
+        )
+        original_has_any_citation = bool(
+            citations.extract_citations(original_response_text)
+        )
         should_soft_accept_original = (
             (not citations_valid)
             and (not original_invalid)
@@ -1016,10 +1093,15 @@ async def complete_conversation_turn(
         ):
             citations_valid = True
         if (not citations_valid) and (not is_streaming_turn):
-            invalid = citations.find_invalid_citations(response_text, citation_allowlist)
+            invalid = citations.find_invalid_citations(
+                response_text, citation_allowlist
+            )
             prior_for_retry = response_text
             if len(prior_for_retry) > citation_retry_prior_max_chars:
-                prior_for_retry = prior_for_retry[:citation_retry_prior_max_chars].rstrip() + "\n[Truncated for citation retry.]"
+                prior_for_retry = (
+                    prior_for_retry[:citation_retry_prior_max_chars].rstrip()
+                    + "\n[Truncated for citation retry.]"
+                )
             retry_prompt = citations.build_citation_retry_prompt(
                 prior_answer=prior_for_retry,
                 allowed_citations=citation_allowlist,
@@ -1050,8 +1132,14 @@ async def complete_conversation_turn(
                 response = retry_response
                 response_text = (retry_response.text or "").strip()
                 response_tool_call = {}
-        retry_invalid = citations.find_invalid_citations(response_text, citation_allowlist)
-        if retry_invalid and (not citations.response_has_required_citations(response_text, citation_allowlist)):
+        retry_invalid = citations.find_invalid_citations(
+            response_text, citation_allowlist
+        )
+        if retry_invalid and (
+            not citations.response_has_required_citations(
+                response_text, citation_allowlist
+            )
+        ):
             if is_streaming_turn:
                 response_text = (
                     response_text.rstrip()
@@ -1059,9 +1147,10 @@ async def complete_conversation_turn(
                 )
             else:
                 if _extractive_evidence_ui_enabled():
-                    cited_extract = (
-                        citations.synthesize_cited_extract_from_results(conversation)
-                        or citations.synthesize_doc_level_extract_from_results(conversation)
+                    cited_extract = citations.synthesize_cited_extract_from_results(
+                        conversation
+                    ) or citations.synthesize_doc_level_extract_from_results(
+                        conversation
                     )
                     if cited_extract:
                         response_text = cited_extract
@@ -1075,10 +1164,9 @@ async def complete_conversation_turn(
                 == visibility.clean_response_failure_text(after_tool_result=True)
             )
         ):
-            cited_extract = (
-                citations.synthesize_cited_extract_from_results(conversation)
-                or citations.synthesize_doc_level_extract_from_results(conversation)
-            )
+            cited_extract = citations.synthesize_cited_extract_from_results(
+                conversation
+            ) or citations.synthesize_doc_level_extract_from_results(conversation)
             if cited_extract:
                 response_text = cited_extract
                 response_tool_call = {}
@@ -1103,7 +1191,9 @@ async def complete_conversation_turn(
                     continue
                 missing_markdown_images.append(line)
             if missing_markdown_images:
-                response_text = response_text.rstrip() + "\n\n" + "\n".join(missing_markdown_images)
+                response_text = (
+                    response_text.rstrip() + "\n\n" + "\n".join(missing_markdown_images)
+                )
     should_append_final_sources = bool(
         (use_live_citation_stream or defer_stream_until_final)
         and source_allowlist
@@ -1114,9 +1204,13 @@ async def complete_conversation_turn(
         and (not response_tool_call)
         and visibility.should_append_citation_sources(response_text)
     ):
-        response_text = _append_citation_sources_if_missing(response_text, source_allowlist)
+        response_text = _append_citation_sources_if_missing(
+            response_text, source_allowlist
+        )
     if response_tool_call:
-        response_text = visibility.strip_tool_markup(visibility.strip_thinking_blocks(response_text))
+        response_text = visibility.strip_tool_markup(
+            visibility.strip_thinking_blocks(response_text)
+        )
         if visibility.is_interim_assistant_text(response_text):
             response_text = ""
     else:
