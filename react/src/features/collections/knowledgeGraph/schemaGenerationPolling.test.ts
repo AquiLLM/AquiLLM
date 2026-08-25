@@ -41,15 +41,15 @@ describe('pollGenerationStatus', () => {
     expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([50, 100, 100]);
   });
 
-  it('keeps the default poll alive through the backend 180-second generation budget', async () => {
+  it('keeps the default poll alive through the backend retry budget', async () => {
     let elapsedMs = 0;
-    const poll = vi.fn(async () => (elapsedMs >= 180_000 ? status('succeeded') : status('running')));
+    const poll = vi.fn(async () => (elapsedMs > 810_000 ? status('succeeded') : status('running')));
     const sleep = vi.fn(async (delayMs: number) => {
       elapsedMs += delayMs;
     });
 
     await expect(pollGenerationStatus({ poll, sleep })).resolves.toMatchObject({ status: 'succeeded' });
-    expect(elapsedMs).toBeGreaterThanOrEqual(180_000);
+    expect(elapsedMs).toBeGreaterThan(810_000);
   });
 
   it('aborts without accepting a stale response', async () => {
