@@ -16,6 +16,11 @@ from . import fallback_heuristics as fb
 from . import final_stream, visibility
 from . import image_context as imgctx
 from . import rag_citations as citations
+from .request_observability import (
+    current_correlation_id,
+    current_stage,
+    new_correlation_id,
+)
 from .retrieval_status import (
     append_retrieval_notice_if_missing,
     document_retrieval_notice,
@@ -770,6 +775,15 @@ async def complete_conversation_turn(
     else:
         tools = {}
     stream_message_uuid = str(uuid.uuid4())
+    observability_correlation_id = current_correlation_id() or new_correlation_id()
+    observability_stage = current_stage()
+    if observability_stage is None:
+        if isinstance(last_message, UserMessage) and last_message.tools:
+            observability_stage = "tool_selection"
+        elif is_post_tool_result_turn:
+            observability_stage = "post_tool_synthesis"
+        else:
+            observability_stage = "general_answer"
     sdk_args = {
         **(
             llm.base_args
@@ -784,6 +798,12 @@ async def complete_conversation_turn(
             }
         )
     }
+    supports_request_observability = bool(
+        getattr(llm, "supports_request_observability", False)
+    )
+    if supports_request_observability:
+        sdk_args["_observability_correlation_id"] = observability_correlation_id
+        sdk_args["_observability_stage"] = observability_stage
     if isinstance(last_message, UserMessage) and last_message.tools:
         sdk_args["thinking_budget"] = 0
 
@@ -819,6 +839,8 @@ async def complete_conversation_turn(
             "max_tokens": min(request_max_tokens, _MECHANICAL_TOOL_MAX_TOKENS),
             "thinking_budget": 0,
         }
+        if supports_request_observability:
+            retry_args["_observability_stage"] = "tool_retry"
         response = await llm.get_message(**retry_args)
 
     if (

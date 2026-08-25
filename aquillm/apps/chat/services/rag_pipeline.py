@@ -32,6 +32,10 @@ from apps.chat.services.rag_retrieval import merge_ranked_tool_results
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.chat.services.tool_wiring.documents import vector_search_tool
 from lib.llm.providers import image_context as imgctx
+from lib.llm.providers.request_observability import (
+    new_correlation_id,
+    observability_scope,
+)
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
@@ -115,6 +119,7 @@ async def run_direct_rag_turn(
         return "skipped"
 
     t_start = time.perf_counter()
+    correlation_id = new_correlation_id()
 
     collection_ids = list(getattr(consumer.col_ref, "collections", []) or [])
 
@@ -194,22 +199,28 @@ async def run_direct_rag_turn(
         working_convo = _append_retrieval_messages(convo, query, raw_result, top_k)
 
         t_synthesis_start = time.perf_counter()
-        result_convo = await synthesize_from_evidence(
-            llm_if, working_convo, packet, stream_func=stream_func
-        )
+        with observability_scope(correlation_id, "direct_synthesis"):
+            result_convo = await synthesize_from_evidence(
+                llm_if, working_convo, packet, stream_func=stream_func
+            )
         t_synthesis_end = time.perf_counter()
 
+        t_persistence_start = time.perf_counter()
         consumer.convo = result_convo
+        t_persistence_end = time.perf_counter()
 
         _ms = lambda a, b: (b - a) * 1000.0  # noqa: E731
         log_direct_rag_turn(
+            correlation_id=correlation_id,
             intent_ms=_ms(t_intent_start, t_intent_end),
             query_ms=_ms(t_query_start, t_query_end),
             retrieval_ms=_ms(t_retrieval_start, t_retrieval_end),
             evidence_ms=_ms(t_evidence_start, t_evidence_end),
             synthesis_ms=_ms(t_synthesis_start, t_synthesis_end),
-            total_ms=_ms(t_start, t_synthesis_end),
+            persistence_ms=_ms(t_persistence_start, t_persistence_end),
+            total_ms=_ms(t_start, t_persistence_end),
             retrieved_count=int(raw_result.get("retrieved_count", 0) or 0),
+            retained_count=len(packet.chunks),
             retrieval_status=packet.retrieval_status,
             graph_ms=retrieval_diagnostics.get("graph_ms"),
             graph_seed_count=retrieval_diagnostics.get("graph_seed_count"),
@@ -223,14 +234,19 @@ async def run_direct_rag_turn(
             ),
         )
         logger.info(
-            "direct_rag_turn_handled retrieved=%d retained=%d status=%s",
-            int(raw_result.get("retrieved_count", 0) or 0),
-            len(packet.chunks),
-            packet.retrieval_status,
+            "direct_rag_turn_handled",
+            correlation_id=correlation_id,
+            retrieved_count=int(raw_result.get("retrieved_count", 0) or 0),
+            retained_count=len(packet.chunks),
+            retrieval_status=packet.retrieval_status,
         )
         return "handled"
-    except Exception:
-        logger.exception("direct_rag_turn_failed; falling back to tool loop")
+    except Exception as exc:
+        logger.warning(
+            "direct_rag_turn_failed",
+            correlation_id=correlation_id,
+            error_type=type(exc).__name__,
+        )
         return "skipped"
 
 

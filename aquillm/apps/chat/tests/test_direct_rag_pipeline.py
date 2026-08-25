@@ -413,7 +413,15 @@ async def test_direct_rag_logs_safe_graph_contribution(monkeypatch):
     assert outcome == "handled"
     assert captured["graph_status"] == "hit"
     assert captured["graph_candidate_count"] == 2
-    assert "private-node" not in repr(captured)
+    serialized = dumps(captured, sort_keys=True)
+    for forbidden in (
+        "private-node",
+        "calibration",
+        "Paper A",
+        "doc-a",
+        "search_string",
+    ):
+        assert forbidden not in serialized
 
 
 def test_direct_rag_metrics_accept_safe_optional_graph_fields(monkeypatch):
@@ -426,13 +434,16 @@ def test_direct_rag_metrics_accept_safe_optional_graph_fields(monkeypatch):
     monkeypatch.setattr(rag_metrics.logger, "info", capture)
 
     rag_metrics.log_direct_rag_turn(
+        correlation_id="0f22db7309f04ab0a4676cdb5a76f962",
         intent_ms=1.1,
         query_ms=2.2,
         retrieval_ms=3.3,
         evidence_ms=4.4,
         synthesis_ms=5.5,
+        persistence_ms=0.2,
         total_ms=16.5,
         retrieved_count=2,
+        retained_count=2,
         retrieval_status="results_found",
         graph_ms=0.7,
         graph_seed_count=3,
@@ -443,6 +454,9 @@ def test_direct_rag_metrics_accept_safe_optional_graph_fields(monkeypatch):
     )
 
     assert captured["event"] == "rag_direct_turn"
+    assert captured["correlation_id"] == "0f22db7309f04ab0a4676cdb5a76f962"
+    assert captured["retained_count"] == 2
+    assert captured["persistence_ms"] == 0.2
     assert captured["graph_status"] == "hit"
     assert captured["graph_seed_count"] == 3
     assert captured["graph_candidate_count"] == 1

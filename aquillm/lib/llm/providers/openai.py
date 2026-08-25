@@ -3,8 +3,10 @@
 import asyncio
 import uuid
 from os import getenv
+from time import perf_counter
 from typing import override
 
+import structlog
 from tiktoken import encoding_for_model
 
 from lib.llm.optimizations.lm_lingua2_adapter import (
@@ -35,6 +37,16 @@ from .openai_tool_text import (
     is_textual_tool_call_only,
 )
 from .openai_tools_format import transform_openai_tool_choice, transform_openai_tools
+from .request_observability import (
+    authorized_tool_name,
+    current_correlation_id,
+    current_stage,
+    extract_usage,
+    log_request_completed,
+    new_correlation_id,
+    safe_correlation_id,
+    safe_stage,
+)
 
 try:
     from aquillm.settings import DEBUG
@@ -46,10 +58,13 @@ if DEBUG:
 
 
 gpt_enc = encoding_for_model("gpt-4o")
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class OpenAIInterface(LLMInterface):
     """LLM interface for OpenAI models."""
+
+    supports_request_observability = True
 
     @override
     def __init__(self, openai_client, model: str):
@@ -124,6 +139,16 @@ class OpenAIInterface(LLMInterface):
     async def get_message(self, *args, **kwargs) -> LLMResponse:
         kwargs.pop("messages_pydantic", None)
         thinking_budget = kwargs.pop("thinking_budget", None)
+        correlation_id = safe_correlation_id(
+            kwargs.pop("_observability_correlation_id", None)
+            or current_correlation_id()
+            or new_correlation_id()
+        )
+        stage = safe_stage(
+            kwargs.pop("_observability_stage", None)
+            or current_stage()
+            or "general_answer"
+        )
         stream_callback = kwargs.pop("stream_callback", None)
         stream_message_uuid = str(
             kwargs.pop("stream_message_uuid", None) or uuid.uuid4()
@@ -131,6 +156,7 @@ class OpenAIInterface(LLMInterface):
         system_text = kwargs.pop("system")
         message_list = kwargs.pop("messages")
         max_tokens = kwargs.pop("max_tokens")
+        configured_max_tokens = max(0, int(max_tokens))
         tool_choice_raw = kwargs.pop("tool_choice", None)
         raw_tools = kwargs.get("tools")
 
@@ -164,6 +190,12 @@ class OpenAIInterface(LLMInterface):
             "max_tokens": max_tokens,
         }
         is_vllm_endpoint = "vllm" in base_url or "8000" in base_url
+        try:
+            thinking_requested = (
+                True if thinking_budget is None else int(thinking_budget) != 0
+            )
+        except Exception:
+            thinking_requested = True
         if is_vllm_endpoint:
             if thinking_budget is None:
                 enable_thinking = (
@@ -171,6 +203,7 @@ class OpenAIInterface(LLMInterface):
                 ).strip().lower() in ("1", "true", "yes", "on")
             else:
                 enable_thinking = int(thinking_budget) != 0
+            thinking_requested = enable_thinking
             arguments["extra_body"] = {
                 "chat_template_kwargs": {"enable_thinking": enable_thinking}
             }
@@ -277,6 +310,7 @@ class OpenAIInterface(LLMInterface):
         timeout_retries_used = 0
         max_total_retries = max_overflow_retries + max_timeout_retries
         for attempt in range(max_total_retries + 1):
+            request_started_at = perf_counter()
             try:
                 if stream_enabled:
                     stream = await self.client.chat.completions.create(
@@ -288,6 +322,15 @@ class OpenAIInterface(LLMInterface):
                         stream_message_uuid=stream_message_uuid,
                         raw_tools=raw_tools,
                         model_name=self.base_args["model"],
+                        correlation_id=correlation_id,
+                        stage=stage,
+                        configured_max_tokens=configured_max_tokens,
+                        effective_max_tokens=max(
+                            0,
+                            int(request_args.get("max_tokens", 0) or 0),
+                        ),
+                        thinking_requested=thinking_requested,
+                        request_started_at=request_started_at,
                     )
                 else:
                     response = await self.client.chat.completions.create(
@@ -324,14 +367,35 @@ class OpenAIInterface(LLMInterface):
                         text = parsed_args.get("message") or text
                         tool_call_payload = None
 
+                    completed_at = perf_counter()
+                    usage = extract_usage(getattr(response, "usage", None))
+
                     parsed_response = LLMResponse(
                         text=text,
                         tool_call=tool_call_payload or {},
                         stop_reason=response.choices[0].finish_reason,
-                        input_usage=response.usage.prompt_tokens,
-                        output_usage=response.usage.completion_tokens,
+                        input_usage=usage.prompt_tokens,
+                        output_usage=usage.completion_tokens,
+                        reasoning_usage=usage.reasoning_tokens,
                         model=self.base_args["model"],
                         message_uuid=stream_message_uuid,
+                    )
+                    log_request_completed(
+                        logger=logger,
+                        correlation_id=correlation_id,
+                        stage=stage,
+                        configured_max_tokens=configured_max_tokens,
+                        effective_max_tokens=max(
+                            0,
+                            int(request_args.get("max_tokens", 0) or 0),
+                        ),
+                        thinking_requested=thinking_requested,
+                        usage=usage,
+                        finish_reason=response.choices[0].finish_reason,
+                        request_started_at=request_started_at,
+                        first_signal_at=None,
+                        completed_at=completed_at,
+                        tool_name=authorized_tool_name(tool_call_payload, raw_tools),
                     )
                 break
             except Exception as exc:
