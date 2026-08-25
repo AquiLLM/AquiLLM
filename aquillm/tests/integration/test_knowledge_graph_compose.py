@@ -113,10 +113,7 @@ def test_memgraph_uses_a_canonical_internal_dns_alias(compose_file: Path) -> Non
         "worker_knowledge_graph_projection",
     ):
         environment = _environment_map(services[service_name]["environment"])
-        assert (
-            environment["KG_MEMGRAPH_URI"]
-            == "bolt://memgraph-knowledge-graph:7687"
-        )
+        assert environment["KG_MEMGRAPH_URI"] == "bolt://memgraph-knowledge-graph:7687"
 
 
 @pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)

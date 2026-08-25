@@ -238,6 +238,49 @@ def test_schema_generation_adopts_unchanged_empty_draft(
     assert enqueued == [str(run.pk)]
 
 
+@pytest.mark.django_db(transaction=True)
+def test_schema_generation_rebinds_legacy_active_run_to_empty_draft(
+    client, schema_users, monkeypatch
+):
+    collection, _viewer, editor, _manager = schema_users
+    client.force_login(editor)
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        definitions={"entities": [], "relations": []},
+        last_editor=editor,
+    )
+    run = CollectionSchemaGenerationRun.objects.create(
+        collection=collection,
+        requested_by=editor,
+        source_signature="a" * 64,
+        base_draft_id=None,
+        base_draft_revision=None,
+    )
+    monkeypatch.setattr(
+        "apps.collections.views.schema_api._locked_collection_source_signature",
+        lambda collection_id: "a" * 64,
+    )
+    enqueued = []
+    monkeypatch.setattr(
+        "apps.collections.views.schema_api.enqueue_schema_generation",
+        enqueued.append,
+    )
+
+    response = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_generate", kwargs={"col_id": collection.pk}),
+        body={},
+    )
+
+    run.refresh_from_db()
+    assert response.status_code == 202
+    assert response.json()["run_id"] == str(run.pk)
+    assert run.base_draft_id == draft.pk
+    assert run.base_draft_revision == draft.revision
+    assert enqueued == [str(run.pk)]
+
+
 @pytest.mark.django_db
 def test_schema_generation_rejects_nonempty_draft_and_changed_active_source(
     client, schema_users, monkeypatch

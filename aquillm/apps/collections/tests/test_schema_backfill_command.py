@@ -93,3 +93,49 @@ def test_backfill_uses_inherited_editor_for_collection_without_a_draft(monkeypat
     assert run.base_draft_id is None
     assert run.base_draft_revision is None
     assert enqueued == [str(run.pk)]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backfill_rebinds_legacy_active_run_to_empty_draft(monkeypatch):
+    editor = User.objects.create_user(username="schema-backfill-legacy-editor")
+    collection = Collection.objects.create(name="Legacy generation collection")
+    CollectionPermission.objects.create(
+        collection=collection,
+        user=editor,
+        permission="EDIT",
+    )
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        definitions={"entities": [], "relations": []},
+        last_editor=editor,
+    )
+    run = CollectionSchemaGenerationRun.objects.create(
+        collection=collection,
+        requested_by=editor,
+        source_signature="a" * 64,
+        base_draft_id=None,
+        base_draft_revision=None,
+    )
+    monkeypatch.setattr(
+        "apps.collections.management.commands.generate_missing_collection_schemas._locked_collection_source_signature",
+        lambda collection_id: "a" * 64,
+    )
+    enqueued = []
+    monkeypatch.setattr(
+        "apps.collections.management.commands.generate_missing_collection_schemas.enqueue_schema_generation",
+        enqueued.append,
+    )
+    output = StringIO()
+
+    call_command(
+        "generate_missing_collection_schemas",
+        "--collection",
+        str(collection.pk),
+        stdout=output,
+    )
+
+    run.refresh_from_db()
+    assert run.base_draft_id == draft.pk
+    assert run.base_draft_revision == draft.revision
+    assert enqueued == [str(run.pk)]
+    assert output.getvalue().strip() == "queued=0 reused=1 skipped=0"

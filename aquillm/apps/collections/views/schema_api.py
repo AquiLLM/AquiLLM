@@ -130,6 +130,19 @@ def schema_generate(request, col_id: int):
             )
             if run is not None and run.source_signature != source_signature:
                 raise schema_service.SchemaOperationError("source_changed", status=409)
+            legacy_run_rebound = False
+            if (
+                run is not None
+                and draft is not None
+                and run.base_draft_id is None
+                and run.base_draft_revision is None
+            ):
+                run.base_draft_id = base_draft_id
+                run.base_draft_revision = base_draft_revision
+                run.save(
+                    update_fields=("base_draft_id", "base_draft_revision", "updated_at")
+                )
+                legacy_run_rebound = True
             if run is not None and (
                 run.base_draft_id != base_draft_id
                 or run.base_draft_revision != base_draft_revision
@@ -143,6 +156,11 @@ def schema_generate(request, col_id: int):
                     base_draft_id=base_draft_id,
                     base_draft_revision=base_draft_revision,
                 )
+                run_id = str(run.pk)
+                transaction.on_commit(
+                    lambda run_id=run_id: _enqueue_generation_safely(run_id)
+                )
+            elif legacy_run_rebound:
                 run_id = str(run.pk)
                 transaction.on_commit(
                     lambda run_id=run_id: _enqueue_generation_safely(run_id)

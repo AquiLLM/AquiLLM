@@ -97,6 +97,20 @@ class Command(BaseCommand):
                 )
                 if run is not None:
                     if (
+                        draft is not None
+                        and run.base_draft_id is None
+                        and run.base_draft_revision is None
+                    ):
+                        run.base_draft_id = base_draft_id
+                        run.base_draft_revision = base_draft_revision
+                        run.save(
+                            update_fields=(
+                                "base_draft_id",
+                                "base_draft_revision",
+                                "updated_at",
+                            )
+                        )
+                    if (
                         run.source_signature != source_signature
                         or run.base_draft_id != base_draft_id
                         or run.base_draft_revision != base_draft_revision
