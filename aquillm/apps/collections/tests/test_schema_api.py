@@ -436,6 +436,52 @@ def test_malformed_json_returns_stable_json_error(client, schema_users):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("revision", ["1", True, [], {}, 0, -1, None])
+def test_validate_revision_requires_exact_positive_int(client, schema_users, revision):
+    collection, _viewer, editor, _manager = schema_users
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        definitions=_definitions(),
+        last_editor=editor,
+    )
+    client.force_login(editor)
+
+    response = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_validate", kwargs={"col_id": collection.pk}),
+        body={"draft_id": str(draft.pk), "revision": revision},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_revision"}
+    assert CollectionSchemaDraft.objects.filter(pk=draft.pk, revision=1).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("draft_id", [None, "", "not-a-uuid", 1, True, [], {}])
+def test_validate_draft_id_requires_uuid_string(client, schema_users, draft_id):
+    collection, _viewer, editor, _manager = schema_users
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        definitions=_definitions(),
+        last_editor=editor,
+    )
+    client.force_login(editor)
+
+    response = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_validate", kwargs={"col_id": collection.pk}),
+        body={"draft_id": draft_id, "revision": 1},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_draft_id"}
+    assert CollectionSchemaDraft.objects.filter(pk=draft.pk, revision=1).exists()
+
+
+@pytest.mark.django_db
 def test_validation_and_publish_use_exact_draft_identity(client, schema_users):
     collection, _viewer, _editor, manager = schema_users
     draft = CollectionSchemaDraft.objects.create(
@@ -479,6 +525,101 @@ def test_validation_and_publish_use_exact_draft_identity(client, schema_users):
     assert version.ontology_version_id is not None
     collection.refresh_from_db()
     assert collection.current_schema_version == version
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("body_revision", "header_revision", "error"),
+    [
+        ("1", 1, "invalid_revision"),
+        (True, 1, "invalid_revision"),
+        ([], 1, "invalid_revision"),
+        ({}, 1, "invalid_revision"),
+        (0, 1, "invalid_revision"),
+        (1, 2, "revision_mismatch"),
+    ],
+)
+def test_publish_revision_is_exact_positive_int_matching_if_match(
+    client, schema_users, body_revision, header_revision, error
+):
+    collection, _viewer, _editor, manager = schema_users
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        definitions=_definitions(),
+        last_editor=manager,
+    )
+    client.force_login(manager)
+    validation = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_validate", kwargs={"col_id": collection.pk}),
+        body={"draft_id": str(draft.pk), "revision": 1},
+    ).json()["identity"]
+
+    response = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_publish", kwargs={"col_id": collection.pk}),
+        body={
+            "draft_id": str(draft.pk),
+            "revision": body_revision,
+            "candidate_checksum": validation["candidate_checksum"],
+            "validation_result_id": validation["result_id"],
+        },
+        revision=header_revision,
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": error}
+    assert CollectionSchemaDraft.objects.filter(pk=draft.pk, revision=1).exists()
+    assert not CollectionSchemaVersion.objects.filter(collection=collection).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("draft_id", [], "invalid_draft_id"),
+        ("draft_id", "not-a-uuid", "invalid_draft_id"),
+        ("candidate_checksum", {}, "invalid_candidate_checksum"),
+        ("validation_result_id", True, "invalid_validation_result_id"),
+    ],
+)
+def test_publish_identity_fields_require_nonempty_strings(
+    client, schema_users, field, value, error
+):
+    collection, _viewer, _editor, manager = schema_users
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        definitions=_definitions(),
+        last_editor=manager,
+    )
+    client.force_login(manager)
+    validation = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_validate", kwargs={"col_id": collection.pk}),
+        body={"draft_id": str(draft.pk), "revision": 1},
+    ).json()["identity"]
+    body = {
+        "draft_id": str(draft.pk),
+        "revision": 1,
+        "candidate_checksum": validation["candidate_checksum"],
+        "validation_result_id": validation["result_id"],
+    }
+    body[field] = value
+
+    response = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_publish", kwargs={"col_id": collection.pk}),
+        body=body,
+        revision=1,
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": error}
+    assert CollectionSchemaDraft.objects.filter(pk=draft.pk, revision=1).exists()
 
 
 @pytest.mark.django_db
@@ -799,6 +940,31 @@ def test_discard_body_revision_is_exact_int_matching_if_match(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("draft_id", [None, "", "not-a-uuid", 1, True, [], {}])
+def test_discard_draft_id_requires_nonempty_string(client, schema_users, draft_id):
+    collection, _viewer, _editor, manager = schema_users
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        revision=3,
+        definitions=_definitions(),
+        last_editor=manager,
+    )
+    client.force_login(manager)
+
+    response = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_discard", kwargs={"col_id": collection.pk}),
+        body={"draft_id": draft_id, "revision": 3},
+        revision=3,
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_draft_id"}
+    assert CollectionSchemaDraft.objects.filter(pk=draft.pk).exists()
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     ("body_revision", "header_revision", "error"),
     [
@@ -858,6 +1024,105 @@ def test_restore_replace_revision_is_exact_int_matching_if_match(
     assert response.json() == {"error": error}
     draft.refresh_from_db()
     assert draft.revision == 3
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("version_id", [None, "", "1", True, [], {}, 0, -1])
+def test_restore_replace_version_id_requires_exact_positive_int(
+    client, schema_users, version_id
+):
+    collection, _viewer, _editor, manager = schema_users
+    version = CollectionSchemaVersion.objects.create(
+        collection=collection,
+        version=1,
+        checksum="9" * 64,
+        definitions=_definitions(),
+        ontology_version=_ontology_record("8.0.0+schema.restore.version.dto", "a" * 64),
+        published_by=manager,
+    )
+    collection.current_schema_version = version
+    collection.save(update_fields=("current_schema_version",))
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        revision=3,
+        definitions={"entities": [_entity("other")], "relations": []},
+        last_editor=manager,
+    )
+    client.force_login(manager)
+    challenge = _request(
+        client,
+        "post",
+        reverse(
+            "api_collection_schema_restore",
+            kwargs={"col_id": collection.pk, "version_id": version.version},
+        ),
+        body={},
+    ).json()
+
+    response = _request(
+        client,
+        "post",
+        reverse(
+            "api_collection_schema_restore_replace",
+            kwargs={"col_id": collection.pk},
+        ),
+        body={
+            "version_id": version_id,
+            "challenge_token": challenge["challenge_token"],
+            "existing_draft_revision": 3,
+        },
+        revision=3,
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_version_id"}
+    assert CollectionSchemaDraft.objects.filter(pk=draft.pk, revision=3).exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("challenge_token", [None, "", 1, True, [], {}])
+def test_restore_replace_challenge_requires_nonempty_string(
+    client, schema_users, challenge_token
+):
+    collection, _viewer, _editor, manager = schema_users
+    version = CollectionSchemaVersion.objects.create(
+        collection=collection,
+        version=1,
+        checksum="b" * 64,
+        definitions=_definitions(),
+        ontology_version=_ontology_record(
+            "8.0.0+schema.restore.challenge.dto", "c" * 64
+        ),
+        published_by=manager,
+    )
+    collection.current_schema_version = version
+    collection.save(update_fields=("current_schema_version",))
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        revision=3,
+        definitions={"entities": [_entity("other")], "relations": []},
+        last_editor=manager,
+    )
+    client.force_login(manager)
+
+    response = _request(
+        client,
+        "post",
+        reverse(
+            "api_collection_schema_restore_replace",
+            kwargs={"col_id": collection.pk},
+        ),
+        body={
+            "version_id": 1,
+            "challenge_token": challenge_token,
+            "existing_draft_revision": 3,
+        },
+        revision=3,
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_challenge_token"}
+    assert CollectionSchemaDraft.objects.filter(pk=draft.pk, revision=3).exists()
 
 
 @pytest.mark.django_db

@@ -14,6 +14,9 @@ class ImmutableSchemaVersionQuerySet(models.QuerySet):
     def bulk_update(self, objs, fields, batch_size=None):
         raise ValueError("published collection schema versions are immutable")
 
+    def delete(self):
+        raise ValueError("published collection schema versions are immutable")
+
 
 class CollectionSchemaVersion(models.Model):
     collection = models.ForeignKey(
@@ -61,6 +64,9 @@ class CollectionSchemaVersion(models.Model):
         if self.pk is not None and type(self)._base_manager.filter(pk=self.pk).exists():
             raise ValueError("published collection schema versions are immutable")
         return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("published collection schema versions are immutable")
 
 
 class CollectionSchemaDraft(models.Model):

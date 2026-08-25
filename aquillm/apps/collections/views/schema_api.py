@@ -21,6 +21,9 @@ from apps.collections.services.schema_generation import (
 from apps.collections.tasks.schema_generation import enqueue_schema_generation
 
 from .schema_api_helpers import (
+    body_nonempty_string,
+    body_positive_int,
+    body_uuid_string,
     conflict_response,
     error_response,
     load_body,
@@ -217,8 +220,12 @@ def schema_validate(request, col_id: int):
         return denied
     try:
         body = load_body(request)
+        draft_id = body_uuid_string(body, "draft_id", "invalid_draft_id")
+        revision = body_positive_int(body, "revision", "invalid_revision")
         result = schema_service.validate_draft(
-            collection, body.get("draft_id"), int(body.get("revision", 0))
+            collection,
+            draft_id,
+            revision,
         )
     except (
         schema_service.SchemaRevisionConflict,
@@ -247,11 +254,27 @@ def schema_publish(request, col_id: int):
     if denied := require_manage(collection, request.user):
         return denied
     try:
+        body = load_body(request)
+        revision = matching_body_revision(request, body, "revision")
+        operation = {
+            "draft_id": body_uuid_string(body, "draft_id", "invalid_draft_id"),
+            "revision": revision,
+            "candidate_checksum": body_nonempty_string(
+                body,
+                "candidate_checksum",
+                "invalid_candidate_checksum",
+            ),
+            "validation_result_id": body_nonempty_string(
+                body,
+                "validation_result_id",
+                "invalid_validation_result_id",
+            ),
+        }
         schema_service.publish_draft(
             collection,
             request.user,
-            load_body(request),
-            parse_revision(request),
+            operation,
+            revision,
         )
     except (
         schema_service.SchemaRevisionConflict,
@@ -270,7 +293,8 @@ def schema_discard(request, col_id: int):
     try:
         body = load_body(request)
         revision = matching_body_revision(request, body, "revision")
-        schema_service.discard_draft(collection, body.get("draft_id"), revision)
+        draft_id = body_uuid_string(body, "draft_id", "invalid_draft_id")
+        schema_service.discard_draft(collection, draft_id, revision)
     except (
         schema_service.SchemaRevisionConflict,
         schema_service.SchemaOperationError,
@@ -329,11 +353,17 @@ def schema_restore_replace(request, col_id: int):
     try:
         body = load_body(request)
         revision = matching_body_revision(request, body, "existing_draft_revision")
+        version_id = body_positive_int(body, "version_id", "invalid_version_id")
+        challenge_token = body_nonempty_string(
+            body,
+            "challenge_token",
+            "invalid_challenge_token",
+        )
         schema_service.replace_with_version(
             collection,
             request.user,
-            int(body.get("version_id", 0)),
-            str(body.get("challenge_token", "")),
+            version_id,
+            challenge_token,
             revision,
         )
     except (

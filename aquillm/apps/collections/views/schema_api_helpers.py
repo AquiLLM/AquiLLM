@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from django.http import JsonResponse
 
@@ -56,10 +57,31 @@ def parse_revision(request) -> int | None:
         return None
 
 
+def body_positive_int(body: dict, field: str, error_code: str) -> int:
+    value = body.get(field)
+    if type(value) is not int or value <= 0:
+        raise SchemaOperationError(error_code)
+    return value
+
+
+def body_nonempty_string(body: dict, field: str, error_code: str) -> str:
+    value = body.get(field)
+    if type(value) is not str or not value:
+        raise SchemaOperationError(error_code)
+    return value
+
+
+def body_uuid_string(body: dict, field: str, error_code: str) -> str:
+    value = body_nonempty_string(body, field, error_code)
+    try:
+        uuid.UUID(value)
+    except ValueError as exc:
+        raise SchemaOperationError(error_code) from exc
+    return value
+
+
 def matching_body_revision(request, body: dict, field: str) -> int:
-    revision = body.get(field)
-    if type(revision) is not int or revision <= 0:
-        raise SchemaOperationError("invalid_revision")
+    revision = body_positive_int(body, field, "invalid_revision")
     if parse_revision(request) != revision:
         raise SchemaOperationError("revision_mismatch")
     return revision
@@ -94,6 +116,9 @@ def load_body(request) -> dict:
 
 
 __all__ = [
+    "body_nonempty_string",
+    "body_positive_int",
+    "body_uuid_string",
     "conflict_response",
     "error_response",
     "load_body",

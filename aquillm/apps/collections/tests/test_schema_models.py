@@ -159,6 +159,60 @@ def test_published_schema_uses_mutable_collection_head_without_mutating_snapshot
 
 
 @pytest.mark.django_db
+def test_current_published_schema_rejects_direct_instance_delete():
+    user = User.objects.create_user(username="schema-current-delete-publisher")
+    collection = Collection.objects.create(name="Current schema delete collection")
+    version = CollectionSchemaVersion.objects.create(
+        collection=collection,
+        version=1,
+        checksum="8" * 64,
+        definitions=_definitions(),
+        ontology_version=_ontology("9.1.1+schema.current.delete", "9" * 64),
+        published_by=user,
+    )
+    collection.current_schema_version = version
+    collection.save(update_fields=("current_schema_version",))
+
+    with pytest.raises(ValueError, match="immutable"):
+        version.delete()
+
+    collection.refresh_from_db()
+    assert collection.current_schema_version == version
+    assert CollectionSchemaVersion.objects.filter(pk=version.pk).exists()
+
+
+@pytest.mark.django_db
+def test_historical_published_schema_rejects_direct_queryset_delete():
+    user = User.objects.create_user(username="schema-history-delete-publisher")
+    collection = Collection.objects.create(name="Historical schema delete collection")
+    historical = CollectionSchemaVersion.objects.create(
+        collection=collection,
+        version=1,
+        checksum="a" * 64,
+        definitions=_definitions(),
+        ontology_version=_ontology("9.1.2+schema.history.delete.1", "b" * 64),
+        published_by=user,
+    )
+    current = CollectionSchemaVersion.objects.create(
+        collection=collection,
+        version=2,
+        checksum="c" * 64,
+        definitions=_definitions("author"),
+        ontology_version=_ontology("9.1.2+schema.history.delete.2", "d" * 64),
+        published_by=user,
+    )
+    collection.current_schema_version = current
+    collection.save(update_fields=("current_schema_version",))
+
+    with pytest.raises(ValueError, match="immutable"):
+        CollectionSchemaVersion.objects.filter(pk=historical.pk).delete()
+
+    collection.refresh_from_db()
+    assert collection.current_schema_version == current
+    assert CollectionSchemaVersion.objects.filter(pk=historical.pk).exists()
+
+
+@pytest.mark.django_db
 def test_collection_delete_cascades_its_current_schema_without_head_cycle():
     user = User.objects.create_user(username="schema-delete-publisher")
     collection = Collection.objects.create(name="Schema delete collection")
@@ -170,6 +224,14 @@ def test_collection_delete_cascades_its_current_schema_without_head_cycle():
         ontology_version=_ontology("9.2.0+schema.delete.1", "7" * 64),
         published_by=user,
     )
+    historical = CollectionSchemaVersion.objects.create(
+        collection=collection,
+        version=2,
+        checksum="e" * 64,
+        definitions=_definitions("author"),
+        ontology_version=_ontology("9.2.0+schema.delete.2", "f" * 64),
+        published_by=user,
+    )
     collection.current_schema_version = version
     collection.save(update_fields=("current_schema_version",))
 
@@ -177,6 +239,7 @@ def test_collection_delete_cascades_its_current_schema_without_head_cycle():
 
     assert not Collection.objects.filter(pk=collection.pk).exists()
     assert not CollectionSchemaVersion.objects.filter(pk=version.pk).exists()
+    assert not CollectionSchemaVersion.objects.filter(pk=historical.pk).exists()
 
 
 @pytest.mark.django_db
