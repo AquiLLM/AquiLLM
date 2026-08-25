@@ -1,0 +1,294 @@
+"""Bounded, local-only collection schema proposal helpers.
+
+This module intentionally keeps collection text and inference output in local
+variables.  Callers receive only canonical definitions and aggregate evidence.
+"""
+from __future__ import annotations
+
+import hashlib
+import heapq
+import os
+import re
+from dataclasses import dataclass
+from itertools import islice
+from typing import Iterator
+from urllib.parse import urlparse
+
+_DEFAULT_MAX_CHUNKS = 32
+_DEFAULT_MAX_CHARACTERS = 48_000
+_DEFAULT_TIMEOUT_SECONDS = 180
+_MAX_ENTITY_TYPES = 24
+_MIN_ENTITY_TYPES = 2
+_MAX_RELATION_TYPES = 32
+_MIN_RELATION_TYPES = 1
+_SNAKE_CASE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+class SchemaGenerationConfigurationError(ValueError):
+    """The local-only generation configuration is unsafe or malformed."""
+
+
+class InvalidSchemaCandidate(ValueError):
+    """A model proposal cannot become a bounded collection draft."""
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaGenerationConfig:
+    base_url: str
+    api_key: str
+    model: str
+    max_chunks: int
+    max_characters: int
+    timeout_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaSample:
+    document_id: str
+    chunk_id: int
+    chunk_number: int
+    text: str
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    value = (os.environ.get(name) or "").strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value, 10)
+    except ValueError as exc:
+        raise SchemaGenerationConfigurationError(f"{name} must be a positive integer") from exc
+    if parsed <= 0:
+        raise SchemaGenerationConfigurationError(f"{name} must be a positive integer")
+    return parsed
+
+
+def _enabled_from_environment() -> bool:
+    return (os.environ.get("KG_SCHEMA_GENERATION_ENABLED") or "0").strip() == "1"
+
+
+def load_schema_generation_config() -> SchemaGenerationConfig:
+    """Load bounded settings and reject every endpoint outside the vLLM service."""
+
+    raw_url = (os.environ.get("VLLM_BASE_URL") or "http://vllm:8000/v1").strip()
+    parsed = urlparse(raw_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise SchemaGenerationConfigurationError("VLLM_BASE_URL must be an HTTP(S) URL")
+    if parsed.hostname.lower() != "vllm":
+        raise SchemaGenerationConfigurationError(
+            "VLLM_BASE_URL host must equal the configured Docker service host"
+        )
+    normalized_path = parsed.path.rstrip("/")
+    if not normalized_path:
+        normalized_path = "/v1"
+    elif normalized_path != "/v1":
+        raise SchemaGenerationConfigurationError("VLLM_BASE_URL must use the /v1 API path")
+    base_url = f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
+    model = (os.environ.get("VLLM_SERVED_MODEL_NAME") or "qwen3.5:27b").strip()
+    return SchemaGenerationConfig(
+        base_url=base_url,
+        api_key=(os.environ.get("VLLM_API_KEY") or "EMPTY").strip() or "EMPTY",
+        model=model,
+        max_chunks=min(_positive_env_int("KG_SCHEMA_GENERATION_MAX_CHUNKS", _DEFAULT_MAX_CHUNKS), _DEFAULT_MAX_CHUNKS),
+        max_characters=min(_positive_env_int("KG_SCHEMA_GENERATION_MAX_CHARACTERS", _DEFAULT_MAX_CHARACTERS), _DEFAULT_MAX_CHARACTERS),
+        timeout_seconds=_positive_env_int("KG_SCHEMA_GENERATION_TIMEOUT_SECONDS", _DEFAULT_TIMEOUT_SECONDS),
+    )
+
+
+def _collection_source_documents(
+    collection_id: int, *, for_update: bool = False, include_incomplete: bool = False
+) -> Iterator[dict[str, object]]:
+    """Stream text-free document identities, locking every source row when requested."""
+
+    from django.apps import apps
+
+    iterators = []
+    for name in (
+        "PDFDocument", "TeXDocument", "RawTextDocument", "VTTDocument",
+        "HandwrittenNotesDocument", "ImageUploadDocument", "MediaUploadDocument",
+        "DocumentFigure",
+    ):
+        model = apps.get_model("apps_documents", name)
+        filters = {"collection_id": collection_id}
+        if not include_incomplete:
+            filters["ingestion_complete"] = True
+        queryset = model.objects.filter(**filters).order_by("id")
+        if for_update:
+            queryset = queryset.select_for_update()
+        fields = ("id", "full_text_hash", "ingestion_complete") if include_incomplete else ("id", "full_text_hash")
+        iterators.append(queryset.values(*fields).iterator())
+    yield from heapq.merge(*iterators, key=lambda record: str(record["id"]))
+
+
+def _completed_collection_documents(
+    collection_id: int, *, for_update: bool = False
+) -> Iterator[dict[str, object]]:
+    """Stream completed document identities; never read document text here."""
+
+    yield from _collection_source_documents(collection_id, for_update=for_update)
+
+
+def _eligible_collection_documents(collection_id: int) -> Iterator[dict[str, object]]:
+    """Stream only completed documents with at least one usable text chunk."""
+
+    from django.apps import apps
+    from django.db.models import Exists, OuterRef
+    from apps.documents.models.chunks import TextChunk
+
+    usable_chunks = TextChunk.objects.filter(
+        doc_id=OuterRef("id"),
+        modality=TextChunk.Modality.TEXT,
+        content__regex=r"\S",
+    )
+    iterators = []
+    for name in (
+        "PDFDocument", "TeXDocument", "RawTextDocument", "VTTDocument",
+        "HandwrittenNotesDocument", "ImageUploadDocument", "MediaUploadDocument",
+        "DocumentFigure",
+    ):
+        model = apps.get_model("apps_documents", name)
+        queryset = (
+            model.objects.filter(collection_id=collection_id, ingestion_complete=True)
+            .annotate(has_usable_text=Exists(usable_chunks))
+            .filter(has_usable_text=True)
+            .order_by("id")
+        )
+        iterators.append(queryset.values("id").iterator())
+    yield from heapq.merge(*iterators, key=lambda record: str(record["id"]))
+
+
+def collection_source_signature(collection_id) -> str:
+    """Return a text-free signature for completed collection document content."""
+
+    if type(collection_id) is not int or collection_id <= 0:
+        raise ValueError("collection_id must be a positive database integer")
+    digest = hashlib.sha256()
+    for document in _completed_collection_documents(collection_id):
+        digest.update(str(document["id"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(document["full_text_hash"]).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _locked_collection_source_signature(collection_id: int) -> str:
+    """Lock all source rows, then hash only completed document identities."""
+
+    digest = hashlib.sha256()
+    for document in _collection_source_documents(
+        collection_id, for_update=True, include_incomplete=True
+    ):
+        if not document["ingestion_complete"]:
+            continue
+        digest.update(str(document["id"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(document["full_text_hash"]).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _next_sample_chunk(
+    document_id: str, after_chunk_number: int, character_limit: int
+) -> SchemaSample | None:
+    """Materialize one deterministic chunk, truncated before it leaves PostgreSQL."""
+
+    from django.db.models.functions import Substr
+    from apps.documents.models.chunks import TextChunk
+
+    row = (
+        TextChunk.objects.filter(
+            doc_id=document_id,
+            modality=TextChunk.Modality.TEXT,
+            chunk_number__gt=after_chunk_number,
+            content__regex=r"\S",
+        )
+        .order_by("chunk_number", "pk")
+        .annotate(sample_content=Substr("content", 1, character_limit))
+        .values("pk", "doc_id", "chunk_number", "sample_content")
+        .first()
+    )
+    if row is None:
+        return None
+    return SchemaSample(
+        str(row["doc_id"]), int(row["pk"]), int(row["chunk_number"]), row["sample_content"]
+    )
+
+
+def sample_collection_chunks(collection_id, max_chunks, max_characters):
+    """Select deterministic, round-robin text chunks without exceeding either cap."""
+
+    if type(max_chunks) is not int or max_chunks <= 0:
+        raise ValueError("max_chunks must be a positive integer")
+    if type(max_characters) is not int or max_characters <= 0:
+        raise ValueError("max_characters must be a positive integer")
+    selected: list[SchemaSample] = []
+    document_ids = [
+        str(row["id"])
+        for row in islice(_eligible_collection_documents(collection_id), max_chunks)
+    ]
+    if not document_ids:
+        return []
+    cursors = {document_id: -1 for document_id in document_ids}
+    active_documents = list(document_ids)
+    used_characters = 0
+    while active_documents and len(selected) < max_chunks and used_characters < max_characters:
+        for document_id in tuple(active_documents):
+            if len(selected) >= max_chunks or used_characters >= max_characters:
+                break
+            sample = _next_sample_chunk(
+                document_id, cursors[document_id], max_characters - used_characters
+            )
+            if sample is None:
+                active_documents.remove(document_id)
+                cursors.pop(document_id)
+                continue
+            selected.append(sample)
+            cursors[document_id] = sample.chunk_number
+            used_characters += len(sample.text)
+    return selected
+
+
+def balanced_samples(
+    groups: dict[str, list[SchemaSample]], *, max_chunks: int, max_characters: int
+) -> list[SchemaSample]:
+    """Round-robin ordered document groups and truncate only at the hard cap."""
+
+    selected: list[SchemaSample] = []
+    used_characters = 0
+    offsets = {document_id: 0 for document_id in sorted(groups)}
+    while len(selected) < max_chunks and used_characters < max_characters:
+        progressed = False
+        for document_id in sorted(groups):
+            offset = offsets[document_id]
+            if offset >= len(groups[document_id]) or len(selected) >= max_chunks:
+                continue
+            remaining = max_characters - used_characters
+            if remaining <= 0:
+                break
+            sample = groups[document_id][offset]
+            offsets[document_id] = offset + 1
+            selected.append(
+                SchemaSample(sample.document_id, sample.chunk_id, sample.chunk_number, sample.text[:remaining])
+            )
+            used_characters += len(selected[-1].text)
+            progressed = True
+            if used_characters >= max_characters:
+                break
+        if not progressed:
+            break
+    return selected
+
+
+from .schema_generation_support import (
+    collect_candidate_evidence,
+    generate_schema_candidate,
+    normalize_schema_candidate,
+)
+
+
+__all__ = [
+    "InvalidSchemaCandidate", "SchemaGenerationConfig", "SchemaGenerationConfigurationError",
+    "SchemaSample", "collect_candidate_evidence", "collection_source_signature",
+    "generate_schema_candidate", "load_schema_generation_config", "normalize_schema_candidate",
+    "balanced_samples", "sample_collection_chunks",
+]

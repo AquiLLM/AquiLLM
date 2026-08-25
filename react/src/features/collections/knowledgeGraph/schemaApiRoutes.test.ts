@@ -22,6 +22,8 @@ function completeApiUrls(): Record<string, string> {
     [SCHEMA_API_URL_KEYS.versionDiff]: '/api/collection/%(col_id)s/schema/versions/%(version_id)s/diff/',
     [SCHEMA_API_URL_KEYS.restore]: '/api/collection/%(col_id)s/schema/versions/%(version_id)s/restore/',
     [SCHEMA_API_URL_KEYS.restoreReplace]: '/api/collection/%(col_id)s/schema/restore-replace/',
+    [SCHEMA_API_URL_KEYS.generate]: '/api/collection/%(col_id)s/schema/generate/',
+    [SCHEMA_API_URL_KEYS.generationStatus]: '/api/collection/%(col_id)s/schema/generation/%(run_id)s/',
   };
 }
 
@@ -50,5 +52,11 @@ describe('readCollectionSchemaApiRoutes complete map', () => {
     if (result.available) {
       expect('publishStatus' in result.routes).toBe(false);
     }
+  });
+
+  it('requires collection schema generation routes', () => {
+    const urls = completeApiUrls();
+    delete urls[SCHEMA_API_URL_KEYS.generate];
+    expect(readCollectionSchemaApiRoutes(urls)).toEqual({ available: false, missing: ['generate'] });
   });
 });

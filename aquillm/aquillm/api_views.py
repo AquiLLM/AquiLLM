@@ -25,6 +25,8 @@ from apps.collections.views.schema_api import (
     schema_diff,
     schema_discard,
     schema_entity,
+    schema_generate,
+    schema_generation_status,
     schema_publish,
     schema_relation,
     schema_restore,
@@ -88,6 +90,16 @@ urlpatterns = [
     path("collection/<int:col_id>/", collection, name="api_collection"),
     path("collection/<int:col_id>/schema/", schema_workspace, name="api_collection_schema_workspace"),
     path("collection/<int:col_id>/schema/draft/", schema_create_draft, name="api_collection_schema_draft"),
+    path(
+        "collection/<int:col_id>/schema/generate/",
+        schema_generate,
+        name="api_collection_schema_generate",
+    ),
+    path(
+        "collection/<int:col_id>/schema/generation/<uuid:run_id>/",
+        schema_generation_status,
+        name="api_collection_schema_generation_status",
+    ),
     path(
         "collection/<int:col_id>/schema/entity/<str:entity_key>/",
         schema_entity,

@@ -119,6 +119,18 @@ export const editDraftEnvelope: CollectionSchemaEnvelope = {
   constraints,
 };
 
+export const emptyEditableEnvelope: CollectionSchemaEnvelope = {
+  ...editDraftEnvelope,
+  collection_id: 'col-empty',
+  published: {
+    version: 0,
+    checksum: '',
+    entities: [],
+    relations: [],
+  },
+  draft: null,
+};
+
 export const manageDraftEnvelope: CollectionSchemaEnvelope = {
   ...editDraftEnvelope,
   collection_id: 'col-manage',

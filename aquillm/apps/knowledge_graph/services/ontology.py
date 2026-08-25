@@ -788,9 +788,12 @@ def activate_ontology(definition: OntologyDefinition):
     with transaction.atomic():
         with connection.cursor() as cursor:
             _lock_graph_ontology_activation(cursor)
-        conflict_message = (
+        checksum_conflict_message = (
             f"version {definition.version} is already persisted with a different "
             "checksum"
+        )
+        scope_conflict_message = (
+            f"version {definition.version} is already persisted for another identity"
         )
         record = (
             OntologyVersion.objects.select_for_update()
@@ -798,7 +801,9 @@ def activate_ontology(definition: OntologyDefinition):
             .first()
         )
         if record is not None and record.checksum != definition.checksum:
-            raise OntologyValidationError(conflict_message)
+            raise OntologyValidationError(checksum_conflict_message)
+        if record is not None and "collection_id" in record.metadata:
+            raise OntologyValidationError(scope_conflict_message)
         if record is None:
             try:
                 with transaction.atomic():
@@ -814,9 +819,139 @@ def activate_ontology(definition: OntologyDefinition):
                     kind=OntologyVersion.Kind.GRAPH, version=definition.version
                 )
                 if record.checksum != definition.checksum:
+                    raise OntologyValidationError(checksum_conflict_message)
+                if "collection_id" in record.metadata:
+                    raise OntologyValidationError(scope_conflict_message)
+        OntologyVersion.objects.filter(
+            kind=OntologyVersion.Kind.GRAPH,
+            status=OntologyVersion.Status.ACTIVE,
+        ).exclude(metadata__has_key="collection_id").exclude(pk=record.pk).update(
+            status=OntologyVersion.Status.SUPERSEDED
+        )
+        if record.status != OntologyVersion.Status.ACTIVE:
+            record.status = OntologyVersion.Status.ACTIVE
+            record.activated_at = timezone.now()
+            record.save(update_fields=["status", "activated_at"])
+        return record
+
+
+def _definition_from_record(record):
+    metadata = record.metadata if type(record.metadata) is dict else {}
+    raw_yaml = metadata.get("yaml")
+    if type(raw_yaml) is not str:
+        raise OntologyValidationError("active ontology has no immutable YAML snapshot")
+    definition = load_ontology_yaml(raw_yaml)
+    if definition.version != record.version or definition.checksum != record.checksum:
+        raise OntologyValidationError(
+            "active ontology identity does not match its YAML"
+        )
+    return definition
+
+
+def deployment_ontology() -> OntologyDefinition:
+    """Resolve the single deployment-wide active graph ontology."""
+    from apps.knowledge_graph.models import OntologyVersion
+
+    records = tuple(
+        OntologyVersion.objects.filter(
+            kind=OntologyVersion.Kind.GRAPH,
+            status=OntologyVersion.Status.ACTIVE,
+        )
+        .exclude(metadata__has_key="collection_id")
+        .order_by("pk")[:2]
+    )
+    if len(records) != 1:
+        raise OntologyValidationError(
+            "graph build requires exactly one active ontology"
+        )
+    return _definition_from_record(records[0])
+
+
+def collection_ontology(collection_id: int) -> OntologyDefinition:
+    """Resolve a collection's active ontology, then the deployment fallback."""
+    if type(collection_id) is not int or collection_id <= 0:
+        raise ValueError("collection id must be a positive database integer")
+    from apps.knowledge_graph.models import OntologyVersion
+
+    records = tuple(
+        OntologyVersion.objects.filter(
+            kind=OntologyVersion.Kind.GRAPH,
+            status=OntologyVersion.Status.ACTIVE,
+            metadata__collection_id=collection_id,
+        ).order_by("pk")[:2]
+    )
+    if len(records) > 1:
+        raise OntologyValidationError(
+            "collection has multiple active ontology versions"
+        )
+    if not records:
+        return deployment_ontology()
+    return _definition_from_record(records[0])
+
+
+def activate_collection_ontology(
+    collection_id: int, definition: OntologyDefinition
+):
+    """Activate a graph ontology within exactly one collection scope."""
+    if type(collection_id) is not int or collection_id <= 0:
+        raise ValueError("collection id must be a positive database integer")
+    from django.db import IntegrityError, connection, transaction
+    from django.utils import timezone
+
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.models import OntologyVersion
+
+    if not Collection.objects.filter(pk=collection_id).exists():
+        raise ValueError("collection does not exist")
+    yaml_text = definition.raw_yaml or definition.canonical_yaml
+    if not yaml_text:
+        raise OntologyValidationError("ontology activation requires nonempty YAML")
+    metadata = {
+        "yaml": yaml_text,
+        "canonical_yaml": definition.canonical_yaml,
+        "provenance": dict(definition.provenance),
+        "checksum_algorithm": "sha256-canonical-json-v1",
+        "collection_id": collection_id,
+    }
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            _lock_graph_ontology_activation(cursor)
+        conflict_message = (
+            f"version {definition.version} is already persisted for another identity"
+        )
+        record = (
+            OntologyVersion.objects.select_for_update()
+            .filter(kind=OntologyVersion.Kind.GRAPH, version=definition.version)
+            .first()
+        )
+        if record is not None and (
+            record.checksum != definition.checksum
+            or record.metadata.get("collection_id") != collection_id
+        ):
+            raise OntologyValidationError(conflict_message)
+        if record is None:
+            try:
+                with transaction.atomic():
+                    record = OntologyVersion.objects.create(
+                        kind=OntologyVersion.Kind.GRAPH,
+                        version=definition.version,
+                        checksum=definition.checksum,
+                        metadata=metadata,
+                        status=OntologyVersion.Status.DRAFT,
+                    )
+            except IntegrityError:
+                record = OntologyVersion.objects.select_for_update().get(
+                    kind=OntologyVersion.Kind.GRAPH, version=definition.version
+                )
+                if (
+                    record.checksum != definition.checksum
+                    or record.metadata.get("collection_id") != collection_id
+                ):
                     raise OntologyValidationError(conflict_message)
         OntologyVersion.objects.filter(
-            kind=OntologyVersion.Kind.GRAPH, status=OntologyVersion.Status.ACTIVE
+            kind=OntologyVersion.Kind.GRAPH,
+            status=OntologyVersion.Status.ACTIVE,
+            metadata__collection_id=collection_id,
         ).exclude(pk=record.pk).update(status=OntologyVersion.Status.SUPERSEDED)
         if record.status != OntologyVersion.Status.ACTIVE:
             record.status = OntologyVersion.Status.ACTIVE

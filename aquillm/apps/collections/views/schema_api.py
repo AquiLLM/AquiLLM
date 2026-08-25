@@ -1,209 +1,374 @@
-"""Stub API views for collection schema editor development."""
 from __future__ import annotations
 
+import structlog
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
-from apps.collections.models import Collection
+from apps.collections.models import (
+    Collection,
+    CollectionSchemaDraft,
+    CollectionSchemaGenerationRun,
+)
+from apps.collections.services import schema as schema_service
+from apps.collections.services.schema_generation import (
+    _locked_collection_source_signature,
+)
+from apps.collections.tasks.schema_generation import enqueue_schema_generation
 
 from .schema_api_helpers import (
+    body_nonempty_string,
+    body_positive_int,
+    body_uuid_string,
     conflict_response,
+    error_response,
     load_body,
+    matching_body_revision,
     parse_revision,
     require_edit,
     require_manage,
+    require_view,
     workspace_envelope,
 )
+
+logger = structlog.stdlib.get_logger(__name__)
+
+
+def _collection(col_id: int) -> Collection:
+    return get_object_or_404(Collection, id=col_id)
+
+
+def _failure(exc: Exception):
+    if isinstance(exc, schema_service.SchemaRevisionConflict):
+        return conflict_response(exc)
+    if isinstance(exc, schema_service.SchemaOperationError):
+        return error_response(exc)
+    raise exc
+
+
+def _enqueue_generation_safely(run_id: str) -> None:
+    """Keep broker failures bounded and leave the collection immediately retryable."""
+
+    try:
+        enqueue_schema_generation(run_id)
+    except Exception as exc:  # Celery transports expose several broker exceptions.
+        CollectionSchemaGenerationRun.objects.filter(
+            pk=run_id,
+            status=CollectionSchemaGenerationRun.Status.QUEUED,
+        ).update(
+            status=CollectionSchemaGenerationRun.Status.FAILED,
+            error_code="local_inference_failed",
+            completed_at=timezone.now(),
+        )
+        logger.error(
+            "obs.collections.schema_generation_enqueue_failed",
+            error_type=type(exc).__name__,
+        )
 
 
 @login_required
 @require_http_methods(["GET"])
 def schema_workspace(request, col_id: int):
-    collection = get_object_or_404(Collection, id=col_id)
+    collection = _collection(col_id)
+    if denied := require_view(collection, request.user):
+        return denied
     return JsonResponse(workspace_envelope(collection, request.user))
 
 
 @login_required
 @require_http_methods(["POST"])
 def schema_create_draft(request, col_id: int):
-    collection = get_object_or_404(Collection, id=col_id)
+    collection = _collection(col_id)
     if denied := require_edit(collection, request.user):
         return denied
-    return JsonResponse(workspace_envelope(collection, request.user, revision=1))
+    schema_service.create_draft(collection, request.user)
+    return JsonResponse(workspace_envelope(collection, request.user))
+
+
+@login_required
+@require_http_methods(["POST"])
+def schema_generate(request, col_id: int):
+    collection = _collection(col_id)
+    if denied := require_edit(collection, request.user):
+        return denied
+    try:
+        if load_body(request):
+            raise schema_service.SchemaOperationError("invalid_body")
+        with transaction.atomic():
+            locked_collection = Collection.objects.select_for_update().get(
+                pk=collection.pk
+            )
+            if CollectionSchemaDraft.objects.filter(
+                collection=locked_collection
+            ).exists():
+                raise schema_service.SchemaOperationError(
+                    "draft_exists", status=409
+                )
+            source_signature = _locked_collection_source_signature(
+                locked_collection.pk
+            )
+            run = (
+                CollectionSchemaGenerationRun.objects.select_for_update()
+                .filter(
+                    collection=locked_collection,
+                    status__in=(
+                        CollectionSchemaGenerationRun.Status.QUEUED,
+                        CollectionSchemaGenerationRun.Status.RUNNING,
+                    ),
+                )
+                .first()
+            )
+            if run is not None and run.source_signature != source_signature:
+                raise schema_service.SchemaOperationError(
+                    "source_changed", status=409
+                )
+            if run is None:
+                run = CollectionSchemaGenerationRun.objects.create(
+                    collection=locked_collection,
+                    requested_by=request.user,
+                    source_signature=source_signature,
+                )
+                run_id = str(run.pk)
+                transaction.on_commit(
+                    lambda run_id=run_id: _enqueue_generation_safely(run_id)
+                )
+    except schema_service.SchemaOperationError as exc:
+        return error_response(exc)
+    return JsonResponse(
+        {
+            "run_id": str(run.pk),
+            "status": run.status,
+            "status_url": reverse(
+                "api_collection_schema_generation_status",
+                kwargs={"col_id": collection.pk, "run_id": run.pk},
+            ),
+        },
+        status=202,
+    )
+
+
+@login_required
+@require_http_methods(["GET"])
+def schema_generation_status(request, col_id: int, run_id):
+    collection = _collection(col_id)
+    if denied := require_view(collection, request.user):
+        return denied
+    run = get_object_or_404(
+        CollectionSchemaGenerationRun,
+        pk=run_id,
+        collection=collection,
+    )
+    payload = {
+        "run_id": str(run.pk),
+        "status": run.status,
+        "error_code": run.error_code or None,
+        "statistics": run.statistics,
+    }
+    if run.status == CollectionSchemaGenerationRun.Status.SUCCEEDED:
+        payload["workspace"] = workspace_envelope(collection, request.user)
+    return JsonResponse(payload)
+
+
+def _mutate(request, col_id: int, kind: str, key: str):
+    collection = _collection(col_id)
+    if denied := require_edit(collection, request.user):
+        return denied
+    try:
+        values = None
+        if request.method == "PUT":
+            body = load_body(request)
+            values = body.get("values")
+            if "values" not in body or type(values) is not dict:
+                raise schema_service.SchemaOperationError("invalid_definition")
+        schema_service.mutate_definition(
+            collection,
+            request.user,
+            kind,
+            key,
+            parse_revision(request),
+            values,
+        )
+    except (
+        schema_service.SchemaRevisionConflict,
+        schema_service.SchemaOperationError,
+    ) as exc:
+        return _failure(exc)
+    return JsonResponse(workspace_envelope(collection, request.user))
 
 
 @login_required
 @require_http_methods(["PUT", "DELETE"])
 def schema_entity(request, col_id: int, entity_key: str):
-    collection = get_object_or_404(Collection, id=col_id)
-    if denied := require_edit(collection, request.user):
-        return denied
-    revision = parse_revision(request)
-    if revision is not None and revision < 5:
-        return conflict_response(revision)
-    return JsonResponse(workspace_envelope(collection, request.user, revision=(revision or 2) + 1))
+    return _mutate(request, col_id, "entity", entity_key)
 
 
 @login_required
 @require_http_methods(["PUT", "DELETE"])
 def schema_relation(request, col_id: int, relation_key: str):
-    return schema_entity(request, col_id, relation_key)
+    return _mutate(request, col_id, "relation", relation_key)
 
 
 @login_required
 @require_http_methods(["POST"])
 def schema_validate(request, col_id: int):
-    collection = get_object_or_404(Collection, id=col_id)
+    collection = _collection(col_id)
     if denied := require_edit(collection, request.user):
         return denied
-    body = load_body(request)
-    draft_id = body.get("draft_id", "draft-manage-1")
-    revision = int(body.get("revision", 5))
-    return JsonResponse(
-        {
-            "identity": {
-                "draft_id": draft_id,
-                "revision": revision,
-                "candidate_checksum": "candidate-checksum-v5",
-                "result_id": "validation-result-1",
-            },
-            "issues": [
-                {
-                    "code": "alias_duplicate",
-                    "location": "entity.person.aliases",
-                    "message": "Alias already exists",
-                    "severity": "warning",
-                }
-            ],
-            "diff_summary": {
-                "base_version": 4,
-                "base_checksum": "pub-edit-checksum",
-                "candidate_version": revision,
-                "candidate_checksum": "candidate-checksum-v5",
-                "entities": {"added": 0, "changed": 1, "removed": 0},
-                "relations": {"added": 0, "changed": 0, "removed": 0},
-            },
-        }
-    )
+    try:
+        body = load_body(request)
+        draft_id = body_uuid_string(body, "draft_id", "invalid_draft_id")
+        revision = body_positive_int(body, "revision", "invalid_revision")
+        result = schema_service.validate_draft(
+            collection,
+            draft_id,
+            revision,
+        )
+    except (
+        schema_service.SchemaRevisionConflict,
+        schema_service.SchemaOperationError,
+    ) as exc:
+        return _failure(exc)
+    return JsonResponse(result)
 
 
 @login_required
 @require_http_methods(["GET"])
 def schema_diff(request, col_id: int):
-    get_object_or_404(Collection, id=col_id)
-    return JsonResponse(
-        {
-            "base_version": 4,
-            "base_checksum": "pub-edit-checksum",
-            "candidate_version": 5,
-            "candidate_checksum": "candidate-checksum-v5",
-            "entities": {"added": 0, "changed": 1, "removed": 0},
-            "relations": {"added": 0, "changed": 0, "removed": 0},
-        }
-    )
+    collection = _collection(col_id)
+    if denied := require_view(collection, request.user):
+        return denied
+    try:
+        return JsonResponse(schema_service.draft_diff(collection))
+    except schema_service.SchemaOperationError as exc:
+        return error_response(exc)
 
 
 @login_required
 @require_http_methods(["POST"])
 def schema_publish(request, col_id: int):
-    collection = get_object_or_404(Collection, id=col_id)
+    collection = _collection(col_id)
     if denied := require_manage(collection, request.user):
         return denied
-    envelope = workspace_envelope(collection, request.user)
-    envelope["draft"] = None
-    envelope["published"]["version"] = 5
-    envelope["published"]["checksum"] = "candidate-checksum-v5"
-    return JsonResponse(envelope)
+    try:
+        body = load_body(request)
+        revision = matching_body_revision(request, body, "revision")
+        operation = {
+            "draft_id": body_uuid_string(body, "draft_id", "invalid_draft_id"),
+            "revision": revision,
+            "candidate_checksum": body_nonempty_string(
+                body,
+                "candidate_checksum",
+                "invalid_candidate_checksum",
+            ),
+            "validation_result_id": body_nonempty_string(
+                body,
+                "validation_result_id",
+                "invalid_validation_result_id",
+            ),
+        }
+        schema_service.publish_draft(
+            collection,
+            request.user,
+            operation,
+            revision,
+        )
+    except (
+        schema_service.SchemaRevisionConflict,
+        schema_service.SchemaOperationError,
+    ) as exc:
+        return _failure(exc)
+    return JsonResponse(workspace_envelope(collection, request.user))
 
 
 @login_required
 @require_http_methods(["POST"])
 def schema_discard(request, col_id: int):
-    collection = get_object_or_404(Collection, id=col_id)
+    collection = _collection(col_id)
     if denied := require_manage(collection, request.user):
         return denied
-    revision = parse_revision(request)
-    if revision is not None and revision < 5:
-        return conflict_response(revision)
-    envelope = workspace_envelope(collection, request.user)
-    envelope["draft"] = None
-    return JsonResponse(envelope)
+    try:
+        body = load_body(request)
+        revision = matching_body_revision(request, body, "revision")
+        draft_id = body_uuid_string(body, "draft_id", "invalid_draft_id")
+        schema_service.discard_draft(collection, draft_id, revision)
+    except (
+        schema_service.SchemaRevisionConflict,
+        schema_service.SchemaOperationError,
+    ) as exc:
+        return _failure(exc)
+    return JsonResponse(workspace_envelope(collection, request.user))
 
 
 @login_required
 @require_http_methods(["GET"])
 def schema_versions(request, col_id: int):
-    get_object_or_404(Collection, id=col_id)
-    return JsonResponse(
-        {
-            "versions": [
-                {
-                    "version": 4,
-                    "checksum": "pub-edit-checksum",
-                    "published_at": "2026-08-20T12:00:00Z",
-                    "summary": "Published person description baseline",
-                },
-                {
-                    "version": 3,
-                    "checksum": "pub-view-checksum",
-                    "published_at": "2026-08-19T12:00:00Z",
-                    "summary": "Initial inherited schema",
-                },
-            ],
-            "next_cursor": "cursor-v2",
-            "has_more": True,
-        }
-    )
+    collection = _collection(col_id)
+    if denied := require_view(collection, request.user):
+        return denied
+    try:
+        return JsonResponse(
+            schema_service.history_page(collection, request.GET.get("cursor"))
+        )
+    except schema_service.SchemaOperationError as exc:
+        return error_response(exc)
 
 
 @login_required
 @require_http_methods(["GET"])
 def schema_version_diff(request, col_id: int, version_id: int):
-    get_object_or_404(Collection, id=col_id)
-    return JsonResponse(
-        {
-            "base_version": version_id - 1,
-            "base_checksum": "pub-view-checksum",
-            "candidate_version": version_id,
-            "candidate_checksum": "pub-edit-checksum",
-            "entities": {"added": 0, "changed": 1, "removed": 0},
-            "relations": {"added": 0, "changed": 0, "removed": 0},
-        }
-    )
+    collection = _collection(col_id)
+    if denied := require_view(collection, request.user):
+        return denied
+    try:
+        return JsonResponse(schema_service.version_diff(collection, version_id))
+    except schema_service.SchemaOperationError as exc:
+        return error_response(exc)
 
 
 @login_required
 @require_http_methods(["POST"])
 def schema_restore(request, col_id: int, version_id: int):
-    collection = get_object_or_404(Collection, id=col_id)
+    collection = _collection(col_id)
     if denied := require_manage(collection, request.user):
         return denied
-    envelope = workspace_envelope(collection, request.user)
-    if envelope.get("draft"):
-        return JsonResponse(
-            {
-                "challenge_token": "restore-challenge-token",
-                "existing_draft_revision": envelope["draft"]["revision"],
-                "existing_draft_id": envelope["draft"]["draft_id"],
-                "last_editor": envelope["draft"]["last_editor"],
-            },
-            status=409,
-        )
-    return JsonResponse(workspace_envelope(collection, request.user, revision=1))
+    try:
+        challenge = schema_service.restore_version(collection, request.user, version_id)
+    except schema_service.SchemaOperationError as exc:
+        return error_response(exc)
+    if challenge is not None:
+        return JsonResponse(challenge, status=409)
+    return JsonResponse(workspace_envelope(collection, request.user))
 
 
 @login_required
 @require_http_methods(["POST"])
 def schema_restore_replace(request, col_id: int):
-    collection = get_object_or_404(Collection, id=col_id)
+    collection = _collection(col_id)
     if denied := require_manage(collection, request.user):
         return denied
-    body = load_body(request)
-    revision = parse_revision(request) or int(body.get("existing_draft_revision", 0))
-    if revision < 5:
-        return conflict_response(revision)
-    if body.get("challenge_token") != "restore-challenge-token":
-        return JsonResponse({"error": "invalid_challenge"}, status=400)
-    return JsonResponse(workspace_envelope(collection, request.user, revision=1))
+    try:
+        body = load_body(request)
+        revision = matching_body_revision(request, body, "existing_draft_revision")
+        version_id = body_positive_int(body, "version_id", "invalid_version_id")
+        challenge_token = body_nonempty_string(
+            body,
+            "challenge_token",
+            "invalid_challenge_token",
+        )
+        schema_service.replace_with_version(
+            collection,
+            request.user,
+            version_id,
+            challenge_token,
+            revision,
+        )
+    except (
+        schema_service.SchemaRevisionConflict,
+        schema_service.SchemaOperationError,
+    ) as exc:
+        return _failure(exc)
+    return JsonResponse(workspace_envelope(collection, request.user))

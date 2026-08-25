@@ -56,6 +56,18 @@ def test_schema_api_urls_preserve_collection_placeholders():
     assert "api_collection_schema_publish_status" not in urls
 
 
+def test_schema_generation_urls_expose_collection_and_run_placeholders():
+    factory = RequestFactory()
+    request = factory.get("/")
+    request.user = AnonymousUser()
+    urls = api_urls(request)["api_urls"]
+
+    assert "%(col_id)s" in urls["api_collection_schema_generate"]
+    status_url = urls["api_collection_schema_generation_status"]
+    assert "%(col_id)s" in status_url
+    assert "%(run_id)s" in status_url
+
+
 def test_strict_reverse_raises_on_missing_route():
     with pytest.raises(NoReverseMatch):
         _strict_reverse("api_collection_schema_missing_route", {"col_id": 0})

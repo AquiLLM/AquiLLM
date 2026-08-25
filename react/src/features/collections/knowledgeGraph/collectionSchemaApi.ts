@@ -8,6 +8,8 @@ import type {
   PublishOperation,
   RelationTypeDefinition,
   SchemaDiffSummary,
+  SchemaGenerationStart,
+  SchemaGenerationStatus,
   SchemaHistoryPage,
   ValidationResult,
 } from './schemaTypes';
@@ -71,6 +73,12 @@ export interface CollectionSchemaApi {
     challengeToken: string,
     existingDraftRevision: number,
   ): Promise<CollectionSchemaHttpResult<CollectionSchemaEnvelope>>;
+  startGeneration(collectionId: string): Promise<CollectionSchemaHttpResult<SchemaGenerationStart>>;
+  getGenerationStatus(
+    collectionId: string,
+    runId: string,
+    signal?: AbortSignal,
+  ): Promise<CollectionSchemaHttpResult<SchemaGenerationStatus>>;
 }
 
 function routeUrl(pattern: string, params: Record<string, string | number>): string {
@@ -139,6 +147,8 @@ export function createCollectionSchemaApi(
       fetchVersionDiff: unavailable as CollectionSchemaApi['fetchVersionDiff'],
       restoreVersion: unavailable,
       restoreReplace: unavailable,
+      startGeneration: unavailable as CollectionSchemaApi['startGeneration'],
+      getGenerationStatus: unavailable as CollectionSchemaApi['getGenerationStatus'],
     };
   }
 
@@ -240,6 +250,18 @@ export function createCollectionSchemaApi(
           revision: existingDraftRevision,
           body: { version_id: versionId, challenge_token: challengeToken, existing_draft_revision: existingDraftRevision },
         }),
+      );
+    },
+    async startGeneration(collectionId) {
+      return httpClient.requestJson<SchemaGenerationStart>(routeUrl(routes.generate, col(collectionId)), {
+        method: 'POST',
+        body: {},
+      });
+    },
+    async getGenerationStatus(collectionId, runId, signal) {
+      return httpClient.requestJson<SchemaGenerationStatus>(
+        routeUrl(routes.generationStatus, { ...col(collectionId), run_id: runId }),
+        { signal },
       );
     },
   };

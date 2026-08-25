@@ -15,6 +15,7 @@ from .models import UserSettings, WSConversation
 logger = structlog.stdlib.get_logger(__name__)
 
 _PLACEHOLDER_DOC_ID = UUID("00000000-0000-0000-0000-000000000001")
+_PLACEHOLDER_SCHEMA_RUN_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
 
 def _safe_reverse(name: str, kwargs: dict[str, Any] | None = None) -> str | None:
@@ -88,6 +89,12 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
 _REQUIRED_SCHEMA_API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_collection_schema_workspace", "api_collection_schema_workspace", {"col_id": 0}),
     ("api_collection_schema_draft", "api_collection_schema_draft", {"col_id": 0}),
+    ("api_collection_schema_generate", "api_collection_schema_generate", {"col_id": 0}),
+    (
+        "api_collection_schema_generation_status",
+        "api_collection_schema_generation_status",
+        {"col_id": 7, "run_id": _PLACEHOLDER_SCHEMA_RUN_ID},
+    ),
     ("api_collection_schema_entity", "api_collection_schema_entity", {"col_id": 0, "entity_key": "placeholder"}),
     ("api_collection_schema_relation", "api_collection_schema_relation", {"col_id": 0, "relation_key": "placeholder"}),
     ("api_collection_schema_validate", "api_collection_schema_validate", {"col_id": 0}),

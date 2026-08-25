@@ -87,6 +87,13 @@ class Collection(models.Model):
     name = models.CharField(max_length=100)
     users = models.ManyToManyField(User, through='apps_collections.CollectionPermission')
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE, related_name='children')
+    current_schema_version = models.ForeignKey(
+        'apps_collections.CollectionSchemaVersion',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='+',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     objects = CollectionQuerySet.as_manager()

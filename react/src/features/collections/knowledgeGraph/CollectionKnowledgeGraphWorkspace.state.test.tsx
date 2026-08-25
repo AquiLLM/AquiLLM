@@ -11,6 +11,7 @@ import {
 import { createInitialSchemaFormBufferState } from './schemaFormBuffer';
 import {
   editDraftEnvelope,
+  emptyEditableEnvelope,
   historyPageFixture,
   manageDraftEnvelope,
   viewPublishedEnvelope,
@@ -97,6 +98,36 @@ describe('CollectionKnowledgeGraphWorkspace states', () => {
     expect(screen.queryByTestId('schema-nav-entity-person')).toBeNull();
   });
 
+  it('treats generated definitions as collection-scoped in the origin filter', () => {
+    const generatedEntity = {
+      ...manageDraftEnvelope.draft!.entities[0],
+      key: 'generated_topic',
+      origin: 'generated' as const,
+      values: {
+        ...manageDraftEnvelope.draft!.entities[0].values,
+        name: 'generated_topic',
+      },
+    };
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: {
+        ...manageDraftEnvelope,
+        draft: {
+          ...manageDraftEnvelope.draft!,
+          entities: [...manageDraftEnvelope.draft!.entities, generatedEntity],
+        },
+      },
+      selection: null,
+    };
+
+    renderWorkspace(state);
+    fireEvent.change(screen.getByLabelText('Filter by origin'), { target: { value: 'collection' } });
+
+    expect(screen.getByTestId('schema-nav-entity-generated_topic')).toBeTruthy();
+    expect(screen.queryByTestId('schema-nav-entity-person')).toBeNull();
+  });
+
   it('opens history panel when History is clicked', () => {
     const onLoadHistory = vi.fn();
     const state: CollectionSchemaEditorState = {
@@ -122,5 +153,50 @@ describe('CollectionKnowledgeGraphWorkspace states', () => {
 
     renderWorkspace(state, { statusMessage: 'Validation succeeded.' });
     expect(screen.getByText('Validation succeeded.')).toBeTruthy();
+  });
+
+  it('renders an editor-only Generate from collection action', () => {
+    const onGenerateSchema = vi.fn();
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: emptyEditableEnvelope,
+      selection: null,
+    };
+
+    renderWorkspace(state, { onGenerateSchema });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate from collection' }));
+    expect(onGenerateSchema).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables Generate from collection and announces queued progress', () => {
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: emptyEditableEnvelope,
+      selection: null,
+    };
+
+    renderWorkspace(state, { generation: { status: 'queued', runId: 'run-1' }, onGenerateSchema: vi.fn() });
+    expect(screen.getByRole('button', { name: 'Generate from collection' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('Schema generation queued.')).toBeTruthy();
+  });
+
+  it('announces generation failure and exposes manual retry', () => {
+    const onGenerateSchema = vi.fn();
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: emptyEditableEnvelope,
+      selection: null,
+    };
+
+    renderWorkspace(state, {
+      generation: { status: 'failed', runId: 'run-1', errorCode: 'no_collection_text' },
+      onGenerateSchema,
+    });
+    expect(screen.getByText('Schema generation failed: no_collection_text.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry generation' }));
+    expect(onGenerateSchema).toHaveBeenCalledTimes(1);
   });
 });

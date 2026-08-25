@@ -224,6 +224,27 @@ def test_every_django_producer_uses_the_same_resolved_graph_queue(
             assert environment["KG_EXTRACTION_QUEUE"] == GRAPH_QUEUE_ENVIRONMENT
 
 
+def test_development_projection_enablement_is_scoped_to_projection_worker() -> None:
+    services = _compose(COMPOSE_FILES[1])["services"]
+
+    for service_name in (
+        "web",
+        "worker",
+        GRAPH_WORKER,
+        "worker_memory_promotion",
+    ):
+        environment = _environment_map(services[service_name]["environment"])
+        assert environment["KG_MEMGRAPH_PROJECTION_ENABLED"] == "0"
+
+    projection_environment = _environment_map(
+        services["worker_knowledge_graph_projection"]["environment"]
+    )
+    assert (
+        projection_environment["KG_MEMGRAPH_PROJECTION_ENABLED"]
+        == "${KG_MEMGRAPH_PROJECTION_WORKER_ENABLED:-0}"
+    )
+
+
 @pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
 def test_rendered_compose_preserves_one_custom_queue_and_cache_contract(
     compose_file: Path,

@@ -538,27 +538,21 @@ class _DocumentContext:
     settings: object
 
 
-def _active_ontology():
-    from apps.knowledge_graph.models import OntologyVersion
-    from apps.knowledge_graph.services.ontology import load_ontology_yaml
-
-    records = tuple(
-        OntologyVersion.objects.filter(
-            kind=OntologyVersion.Kind.GRAPH,
-            status=OntologyVersion.Status.ACTIVE,
-        ).order_by("pk")[:2]
+def _active_ontology(collection_id: int | None = None):
+    from apps.knowledge_graph.services.ontology import (
+        OntologyValidationError,
+        collection_ontology,
+        deployment_ontology,
     )
-    if len(records) != 1:
-        raise StaleBuildError("graph build requires exactly one active ontology")
-    record = records[0]
-    metadata = record.metadata if type(record.metadata) is dict else {}
-    raw_yaml = metadata.get("yaml")
-    if type(raw_yaml) is not str:
-        raise StaleBuildError("active ontology has no immutable YAML snapshot")
-    definition = load_ontology_yaml(raw_yaml)
-    if definition.version != record.version or definition.checksum != record.checksum:
-        raise StaleBuildError("active ontology identity does not match its YAML")
-    return definition
+
+    try:
+        return (
+            deployment_ontology()
+            if collection_id is None
+            else collection_ontology(collection_id)
+        )
+    except OntologyValidationError as exc:
+        raise StaleBuildError(str(exc)) from exc
 
 
 def _ontology_activation_signature(ontology: object) -> str:
@@ -621,6 +615,9 @@ def _document_context(
         raise ValueError("document id must be an exact UUID")
     source_hash = _hash(expected_source_hash, "expected source hash")
     document = _get_concrete_document(document_id, for_update=for_update)
+    collection_id = getattr(document, "collection_id", None)
+    if type(collection_id) is not int or collection_id <= 0:
+        raise StaleBuildError("document has no concrete collection membership")
     try:
         _validate_source(document, source_hash)
     except Exception as exc:
@@ -630,7 +627,7 @@ def _document_context(
         chunks,
         concrete_model_label=document._meta.label_lower,
     )
-    ontology = _active_ontology() if ontology is None else ontology
+    ontology = _active_ontology(collection_id) if ontology is None else ontology
     settings = load_extraction_settings() if settings is None else settings
     identity = DocumentBuildIdentity(
         document_id=document_id,
@@ -669,9 +666,6 @@ def _document_context(
         assembly_checksum=ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
         ontology_activation_signature=_ontology_activation_signature(ontology),
     )
-    collection_id = getattr(document, "collection_id", None)
-    if type(collection_id) is not int or collection_id <= 0:
-        raise StaleBuildError("document has no concrete collection membership")
     return _DocumentContext(
         identity=identity,
         collection_id=collection_id,
@@ -4243,7 +4237,7 @@ def _collection_context(
     collection = Collection.objects.filter(pk=collection_id).first()
     if collection is None:
         raise StaleBuildError("collection no longer exists")
-    ontology = _active_ontology() if ontology is None else ontology
+    ontology = _active_ontology(collection_id) if ontology is None else ontology
     ontology_activation_signature = _ontology_activation_signature(ontology)
     filter_policy = FilterPolicy() if filter_policy is None else filter_policy
     resolution_config = (

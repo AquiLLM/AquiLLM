@@ -1,6 +1,6 @@
 export type SchemaPermissionLevel = 'VIEW' | 'EDIT' | 'MANAGE';
 
-export type SchemaDefinitionOrigin = 'inherited' | 'collection';
+export type SchemaDefinitionOrigin = 'inherited' | 'collection' | 'generated';
 
 export type SchemaDefinitionKind = 'entity' | 'relation';
 
@@ -99,6 +99,29 @@ export interface ValidationResult {
 }
 
 export type PublishStatus = 'idle' | 'pending' | 'polling' | 'succeeded' | 'failed';
+
+export type SchemaGenerationRunStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+
+export interface SchemaGenerationStart {
+  run_id: string;
+  status: SchemaGenerationRunStatus;
+  status_url: string;
+}
+
+export interface SchemaGenerationStatus {
+  run_id: string;
+  status: SchemaGenerationRunStatus;
+  error_code: string | null;
+  statistics: Record<string, unknown>;
+  workspace?: CollectionSchemaEnvelope;
+}
+
+export interface SchemaGenerationState {
+  status: 'idle' | 'starting' | SchemaGenerationRunStatus;
+  runId?: string;
+  errorCode?: string | null;
+  statistics?: Record<string, unknown>;
+}
 
 export interface PublishOperation {
   draft_id: string;

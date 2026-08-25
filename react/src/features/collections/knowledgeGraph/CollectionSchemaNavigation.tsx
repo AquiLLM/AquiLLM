@@ -9,8 +9,14 @@ import type {
 import { buttonPrimaryClass, changeStateBadgeClass, changeStateLabel, inputClass, originLabel, panelClass } from './schemaUiShared';
 
 export type SchemaNavKindFilter = 'all' | 'entity' | 'relation';
-export type SchemaNavOriginFilter = 'all' | SchemaDefinitionOrigin;
+export type SchemaNavOriginFilter = 'all' | 'inherited' | 'collection';
 export type SchemaNavChangeFilter = 'all' | SchemaDefinitionChangeState;
+
+function matchesOriginFilter(origin: SchemaDefinitionOrigin, filter: SchemaNavOriginFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'collection') return origin === 'collection' || origin === 'generated';
+  return origin === filter;
+}
 
 export interface CollectionSchemaNavigationProps {
   entities: EntityTypeDefinition[];
@@ -50,7 +56,7 @@ const CollectionSchemaNavigation: React.FC<CollectionSchemaNavigationProps> = ({
     const q = query.trim().toLowerCase();
     return entities.filter((entity) => {
       if (kindFilter === 'relation') return false;
-      if (originFilter !== 'all' && entity.origin !== originFilter) return false;
+      if (!matchesOriginFilter(entity.origin, originFilter)) return false;
       if (changeFilter !== 'all' && entity.change_state !== changeFilter) return false;
       if (!q) return true;
       return (
@@ -65,7 +71,7 @@ const CollectionSchemaNavigation: React.FC<CollectionSchemaNavigationProps> = ({
     const q = query.trim().toLowerCase();
     return relations.filter((relation) => {
       if (kindFilter === 'entity') return false;
-      if (originFilter !== 'all' && relation.origin !== originFilter) return false;
+      if (!matchesOriginFilter(relation.origin, originFilter)) return false;
       if (changeFilter !== 'all' && relation.change_state !== changeFilter) return false;
       if (!q) return true;
       return (
