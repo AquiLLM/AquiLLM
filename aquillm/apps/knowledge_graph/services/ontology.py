@@ -788,9 +788,12 @@ def activate_ontology(definition: OntologyDefinition):
     with transaction.atomic():
         with connection.cursor() as cursor:
             _lock_graph_ontology_activation(cursor)
-        conflict_message = (
+        checksum_conflict_message = (
             f"version {definition.version} is already persisted with a different "
             "checksum"
+        )
+        scope_conflict_message = (
+            f"version {definition.version} is already persisted for another identity"
         )
         record = (
             OntologyVersion.objects.select_for_update()
@@ -798,7 +801,9 @@ def activate_ontology(definition: OntologyDefinition):
             .first()
         )
         if record is not None and record.checksum != definition.checksum:
-            raise OntologyValidationError(conflict_message)
+            raise OntologyValidationError(checksum_conflict_message)
+        if record is not None and "collection_id" in record.metadata:
+            raise OntologyValidationError(scope_conflict_message)
         if record is None:
             try:
                 with transaction.atomic():
@@ -814,7 +819,9 @@ def activate_ontology(definition: OntologyDefinition):
                     kind=OntologyVersion.Kind.GRAPH, version=definition.version
                 )
                 if record.checksum != definition.checksum:
-                    raise OntologyValidationError(conflict_message)
+                    raise OntologyValidationError(checksum_conflict_message)
+                if "collection_id" in record.metadata:
+                    raise OntologyValidationError(scope_conflict_message)
         OntologyVersion.objects.filter(
             kind=OntologyVersion.Kind.GRAPH,
             status=OntologyVersion.Status.ACTIVE,

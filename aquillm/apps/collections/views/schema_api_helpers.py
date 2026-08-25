@@ -56,6 +56,15 @@ def parse_revision(request) -> int | None:
         return None
 
 
+def matching_body_revision(request, body: dict, field: str) -> int:
+    revision = body.get(field)
+    if type(revision) is not int or revision <= 0:
+        raise SchemaOperationError("invalid_revision")
+    if parse_revision(request) != revision:
+        raise SchemaOperationError("revision_mismatch")
+    return revision
+
+
 def conflict_response(conflict: SchemaRevisionConflict) -> JsonResponse:
     return JsonResponse(
         {
@@ -75,7 +84,10 @@ def error_response(error: SchemaOperationError) -> JsonResponse:
 def load_body(request) -> dict:
     if not request.body:
         return {}
-    value = json.loads(request.body)
+    try:
+        value = json.loads(request.body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise SchemaOperationError("invalid_json") from exc
     if type(value) is not dict:
         raise SchemaOperationError("invalid_body")
     return value
@@ -85,6 +97,7 @@ __all__ = [
     "conflict_response",
     "error_response",
     "load_body",
+    "matching_body_revision",
     "parse_revision",
     "permission_level",
     "permissions_snapshot",

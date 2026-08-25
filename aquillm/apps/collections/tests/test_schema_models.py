@@ -4,7 +4,9 @@ import uuid
 
 import pytest
 from django.contrib.auth.models import User
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 
 from apps.collections.models import (
     Collection,
@@ -124,6 +126,60 @@ def test_published_schema_identity_is_unique_and_snapshot_is_immutable():
 
 
 @pytest.mark.django_db
+def test_published_schema_uses_mutable_collection_head_without_mutating_snapshots():
+    user = User.objects.create_user(username="schema-head-publisher")
+    collection = Collection.objects.create(name="Schema head collection")
+    first = CollectionSchemaVersion.objects.create(
+        collection=collection,
+        version=1,
+        checksum="1" * 64,
+        definitions=_definitions(),
+        ontology_version=_ontology("9.1.0+schema.head.1", "4" * 64),
+        published_by=user,
+    )
+    second = CollectionSchemaVersion.objects.create(
+        collection=collection,
+        version=2,
+        checksum="2" * 64,
+        definitions=_definitions("author"),
+        ontology_version=_ontology("9.1.0+schema.head.2", "5" * 64),
+        published_by=user,
+    )
+
+    collection.current_schema_version = first
+    collection.save(update_fields=("current_schema_version",))
+    collection.current_schema_version = second
+    collection.save(update_fields=("current_schema_version",))
+
+    collection.refresh_from_db()
+    assert collection.current_schema_version == second
+    first.summary = "Mutable through the head"
+    with pytest.raises(ValueError, match="immutable"):
+        first.save()
+
+
+@pytest.mark.django_db
+def test_collection_delete_cascades_its_current_schema_without_head_cycle():
+    user = User.objects.create_user(username="schema-delete-publisher")
+    collection = Collection.objects.create(name="Schema delete collection")
+    version = CollectionSchemaVersion.objects.create(
+        collection=collection,
+        version=1,
+        checksum="6" * 64,
+        definitions=_definitions(),
+        ontology_version=_ontology("9.2.0+schema.delete.1", "7" * 64),
+        published_by=user,
+    )
+    collection.current_schema_version = version
+    collection.save(update_fields=("current_schema_version",))
+
+    collection.delete()
+
+    assert not Collection.objects.filter(pk=collection.pk).exists()
+    assert not CollectionSchemaVersion.objects.filter(pk=version.pk).exists()
+
+
+@pytest.mark.django_db
 def test_collection_has_at_most_one_queued_or_running_generation():
     user = User.objects.create_user(username="schema-generator")
     collection = Collection.objects.create(name="Generated schema collection")
@@ -183,15 +239,23 @@ def test_new_collection_workspace_has_empty_published_schema_not_fixture_data():
 @pytest.mark.django_db
 def test_generation_run_allows_system_requester():
     collection = Collection.objects.create(name="System generation collection")
+    lease_token = uuid.uuid4()
+    lease_expires_at = timezone.now()
 
     run = CollectionSchemaGenerationRun.objects.create(
         collection=collection,
         requested_by=None,
         status=CollectionSchemaGenerationRun.Status.QUEUED,
         source_signature="c" * 64,
+        base_draft_id=uuid.uuid4(),
+        lease_token=lease_token,
+        lease_expires_at=lease_expires_at,
     )
 
     assert run.requested_by is None
+    assert run.base_draft_id is not None
+    assert run.lease_token == lease_token
+    assert run.lease_expires_at == lease_expires_at
 
 
 @pytest.mark.django_db
@@ -214,6 +278,7 @@ def test_write_generated_draft_requires_running_exact_base_and_completes_run():
         requested_by=user,
         status=CollectionSchemaGenerationRun.Status.QUEUED,
         source_signature="d" * 64,
+        base_draft_id=draft.pk,
         base_draft_revision=3,
     )
     with pytest.raises(ValueError, match="running"):
@@ -241,3 +306,86 @@ def test_write_generated_draft_requires_running_exact_base_and_completes_run():
     assert queued.status == CollectionSchemaGenerationRun.Status.SUCCEEDED
     assert queued.statistics == {"entities": 1}
     assert queued.completed_at is not None
+
+
+@pytest.mark.django_db
+def test_generated_draft_rejects_same_revision_replacement_identity():
+    from apps.collections.services.schema import (
+        SchemaGenerationDraftConflict,
+        write_generated_draft,
+    )
+
+    user = User.objects.create_user(username="generation-fenced-writer")
+    collection = Collection.objects.create(name="Generation fenced collection")
+    original = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        revision=3,
+        definitions=_definitions("paper"),
+        last_editor=user,
+    )
+    run = CollectionSchemaGenerationRun.objects.create(
+        collection=collection,
+        requested_by=user,
+        status=CollectionSchemaGenerationRun.Status.RUNNING,
+        source_signature="e" * 64,
+        base_draft_id=original.pk,
+        base_draft_revision=3,
+    )
+    original.delete()
+    replacement = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        revision=3,
+        definitions=_definitions("replacement"),
+        last_editor=user,
+    )
+
+    with pytest.raises(SchemaGenerationDraftConflict):
+        write_generated_draft(run.pk, _definitions("generated"), {"entities": 1})
+
+    replacement.refresh_from_db()
+    run.refresh_from_db()
+    assert replacement.revision == 3
+    assert replacement.definitions["entities"][0]["key"] == "replacement"
+    assert run.status == CollectionSchemaGenerationRun.Status.RUNNING
+
+
+@pytest.mark.django_db
+def test_generated_draft_locks_collection_before_generation_run():
+    from apps.collections.services.schema import write_generated_draft
+
+    user = User.objects.create_user(username="generation-lock-order-writer")
+    collection = Collection.objects.create(name="Generation lock order collection")
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        revision=2,
+        definitions=_definitions("paper"),
+        last_editor=user,
+    )
+    run = CollectionSchemaGenerationRun.objects.create(
+        collection=collection,
+        requested_by=user,
+        status=CollectionSchemaGenerationRun.Status.RUNNING,
+        source_signature="f" * 64,
+        base_draft_id=draft.pk,
+        base_draft_revision=2,
+    )
+
+    with CaptureQueriesContext(connection) as queries:
+        write_generated_draft(run.pk, _definitions("generated"), {"entities": 1})
+
+    locking_queries = [
+        query["sql"].lower()
+        for query in queries
+        if "for update" in query["sql"].lower()
+    ]
+    collection_lock = next(
+        index
+        for index, sql in enumerate(locking_queries)
+        if 'from "aquillm_collection"' in sql
+    )
+    run_lock = next(
+        index
+        for index, sql in enumerate(locking_queries)
+        if 'from "apps_collections_collectionschemagenerationrun"' in sql
+    )
+    assert collection_lock < run_lock

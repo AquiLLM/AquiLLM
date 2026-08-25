@@ -33,7 +33,7 @@ CONSTRAINTS = {
 
 
 class SchemaGenerationDraftConflict(RuntimeError):
-    """The shared draft no longer matches a generation run's base revision."""
+    """The shared draft no longer matches a generation run's exact base."""
 
 
 class SchemaRevisionConflict(RuntimeError):
@@ -113,9 +113,19 @@ def _permissions(level: str) -> dict[str, bool | str]:
     }
 
 
+def _current_version(collection: Collection) -> CollectionSchemaVersion | None:
+    version_id = collection.current_schema_version_id
+    if version_id is None:
+        return None
+    return CollectionSchemaVersion.objects.filter(
+        collection=collection,
+        pk=version_id,
+    ).first()
+
+
 def workspace_envelope(collection: Collection, user) -> dict[str, Any]:
     level = _permission_level(collection, user)
-    published = CollectionSchemaVersion.objects.filter(collection=collection).first()
+    published = _current_version(collection)
     published_definitions = (
         _published_definitions(published.definitions)
         if published is not None
@@ -197,7 +207,7 @@ def _next_version(collection: Collection) -> int:
 
 def create_draft(collection: Collection, user) -> CollectionSchemaDraft:
     with transaction.atomic():
-        Collection.objects.select_for_update().get(pk=collection.pk)
+        locked_collection = Collection.objects.select_for_update().get(pk=collection.pk)
         existing = (
             CollectionSchemaDraft.objects.select_for_update()
             .filter(collection=collection)
@@ -205,7 +215,7 @@ def create_draft(collection: Collection, user) -> CollectionSchemaDraft:
         )
         if existing is not None:
             return existing
-        base = CollectionSchemaVersion.objects.filter(collection=collection).first()
+        base = _current_version(locked_collection)
         definitions = (
             _published_definitions(base.definitions)
             if base is not None
@@ -413,7 +423,7 @@ def publish_draft(
     revision: int | None,
 ) -> CollectionSchemaVersion:
     with transaction.atomic():
-        Collection.objects.select_for_update().get(pk=collection.pk)
+        locked_collection = Collection.objects.select_for_update().get(pk=collection.pk)
         draft = _locked_draft(collection, revision)
         if str(draft.pk) != str(operation.get("draft_id")):
             raise SchemaOperationError("draft_identity_mismatch", status=409)
@@ -427,29 +437,55 @@ def publish_draft(
             or operation.get("validation_result_id") != identity["result_id"]
         ):
             raise SchemaOperationError("validation_identity_mismatch", status=409)
-        version_number = _next_version(collection)
         definitions = _candidate_definitions(draft.definitions)
         from apps.knowledge_graph.services.ontology import (
             activate_collection_ontology,
             load_ontology_yaml,
         )
 
-        ontology = load_ontology_yaml(
-            yaml.safe_dump(
-                _ontology_document(collection.pk, version_number, definitions),
-                sort_keys=True,
+        version = (
+            CollectionSchemaVersion.objects.select_for_update()
+            .select_related("ontology_version")
+            .filter(
+                collection=collection,
+                checksum=identity["candidate_checksum"],
             )
+            .first()
         )
-        ontology_record = activate_collection_ontology(collection.pk, ontology)
-        version = CollectionSchemaVersion.objects.create(
-            collection=collection,
-            version=version_number,
-            checksum=identity["candidate_checksum"],
-            definitions=definitions,
-            ontology_version=ontology_record,
-            published_by=user,
-            summary=f"Published schema version {version_number}",
-        )
+        if version is None:
+            version_number = _next_version(collection)
+            ontology = load_ontology_yaml(
+                yaml.safe_dump(
+                    _ontology_document(collection.pk, version_number, definitions),
+                    sort_keys=True,
+                )
+            )
+            ontology_record = activate_collection_ontology(collection.pk, ontology)
+            version = CollectionSchemaVersion.objects.create(
+                collection=collection,
+                version=version_number,
+                checksum=identity["candidate_checksum"],
+                definitions=definitions,
+                ontology_version=ontology_record,
+                published_by=user,
+                summary=f"Published schema version {version_number}",
+            )
+        else:
+            metadata = version.ontology_version.metadata
+            yaml_snapshot = metadata.get("yaml") if type(metadata) is dict else None
+            if type(yaml_snapshot) is not str:
+                raise SchemaOperationError("published_ontology_snapshot_invalid")
+            ontology_record = activate_collection_ontology(
+                collection.pk,
+                load_ontology_yaml(yaml_snapshot),
+            )
+            if ontology_record.pk != version.ontology_version_id:
+                raise SchemaOperationError("published_ontology_identity_mismatch")
+
+        head_changed = locked_collection.current_schema_version_id != version.pk
+        locked_collection.current_schema_version = version
+        locked_collection.save(update_fields=("current_schema_version",))
+        collection.current_schema_version = version
         draft.delete()
 
         def schedule_rebuild():
@@ -468,7 +504,8 @@ def publish_draft(
                     error_code=getattr(exc, "error_code", type(exc).__name__.lower()),
                 )
 
-        transaction.on_commit(schedule_rebuild)
+        if head_changed:
+            transaction.on_commit(schedule_rebuild)
         return version
 
 
@@ -545,7 +582,7 @@ def _restore_challenge(collection_id: int, version: int, draft) -> str:
 
 def restore_version(collection: Collection, user, version: int):
     with transaction.atomic():
-        Collection.objects.select_for_update().get(pk=collection.pk)
+        locked_collection = Collection.objects.select_for_update().get(pk=collection.pk)
         source = CollectionSchemaVersion.objects.filter(
             collection=collection, version=version
         ).first()
@@ -565,9 +602,7 @@ def restore_version(collection: Collection, user, version: int):
             }
         CollectionSchemaDraft.objects.create(
             collection=collection,
-            base_version=CollectionSchemaVersion.objects.filter(
-                collection=collection
-            ).first(),
+            base_version=_current_version(locked_collection),
             definitions=_published_definitions(source.definitions),
             last_editor=user,
         )
@@ -582,7 +617,7 @@ def replace_with_version(
     revision: int | None,
 ) -> None:
     with transaction.atomic():
-        Collection.objects.select_for_update().get(pk=collection.pk)
+        locked_collection = Collection.objects.select_for_update().get(pk=collection.pk)
         draft = _locked_draft(collection, revision)
         if challenge_token != _restore_challenge(collection.pk, version, draft):
             raise SchemaOperationError("invalid_challenge")
@@ -594,9 +629,7 @@ def replace_with_version(
         draft.delete()
         CollectionSchemaDraft.objects.create(
             collection=collection,
-            base_version=CollectionSchemaVersion.objects.filter(
-                collection=collection
-            ).first(),
+            base_version=_current_version(locked_collection),
             definitions=_published_definitions(source.definitions),
             last_editor=user,
         )
@@ -611,13 +644,18 @@ def write_generated_draft(run_id, definitions, statistics):
     )
 
     canonical = canonicalize_definitions(definitions)
+    collection_id = CollectionSchemaGenerationRun.objects.values_list(
+        "collection_id", flat=True
+    ).get(pk=run_id)
     with transaction.atomic():
+        Collection.objects.select_for_update().get(pk=collection_id)
         run = (
             CollectionSchemaGenerationRun.objects.select_for_update()
             .select_related("collection")
             .get(pk=run_id)
         )
-        Collection.objects.select_for_update().get(pk=run.collection_id)
+        if run.collection_id != collection_id:
+            raise SchemaGenerationDraftConflict("run_collection_changed")
         if run.status != CollectionSchemaGenerationRun.Status.RUNNING:
             raise ValueError("schema generation run must be running")
         current = (
@@ -626,14 +664,18 @@ def write_generated_draft(run_id, definitions, statistics):
             .first()
         )
         current_revision = current.revision if current is not None else None
-        if current_revision != run.base_draft_revision:
+        current_id = current.pk if current is not None else None
+        if (
+            current_id != run.base_draft_id
+            or current_revision != run.base_draft_revision
+        ):
             raise SchemaGenerationDraftConflict("draft_conflict")
         if current is None:
             if run.requested_by is None:
                 raise ValueError("schema generation run requester is unavailable")
             draft = CollectionSchemaDraft.objects.create(
                 collection=run.collection,
-                base_version=run.collection.schema_versions.first(),
+                base_version=_current_version(run.collection),
                 definitions=canonical,
                 last_editor=run.requested_by,
             )

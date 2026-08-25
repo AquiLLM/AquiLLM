@@ -110,3 +110,40 @@ def test_collection_activation_supersedes_only_same_collection():
     assert new_a.status == OntologyVersion.Status.ACTIVE
     assert active_b.status == OntologyVersion.Status.ACTIVE
     assert global_record.status == OntologyVersion.Status.ACTIVE
+
+
+@pytest.mark.django_db(transaction=True)
+def test_global_activation_rejects_collection_scoped_identity_collision():
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.models import OntologyVersion
+    from apps.knowledge_graph.services.ontology import (
+        OntologyValidationError,
+        activate_collection_ontology,
+        activate_ontology,
+        deployment_ontology,
+        load_ontology_yaml,
+    )
+
+    collection = Collection.objects.create(name="Ontology collision collection")
+    fallback = activate_ontology(
+        load_ontology_yaml(_ontology_yaml("3.0.0", "fallback", "fallback_edge"))
+    )
+    collection_definition = load_ontology_yaml(
+        _ontology_yaml(
+            "3.0.0+collection.collision",
+            "collection_entity",
+            "collection_edge",
+        )
+    )
+    collection_record = activate_collection_ontology(
+        collection.pk, collection_definition
+    )
+
+    with pytest.raises(OntologyValidationError, match="another identity"):
+        activate_ontology(collection_definition)
+
+    fallback.refresh_from_db()
+    collection_record.refresh_from_db()
+    assert fallback.status == OntologyVersion.Status.ACTIVE
+    assert collection_record.status == OntologyVersion.Status.ACTIVE
+    assert set(deployment_ontology().entity_types) == {"fallback"}

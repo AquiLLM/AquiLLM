@@ -12,6 +12,7 @@ from .schema_api_helpers import (
     conflict_response,
     error_response,
     load_body,
+    matching_body_revision,
     parse_revision,
     require_edit,
     require_manage,
@@ -56,7 +57,12 @@ def _mutate(request, col_id: int, kind: str, key: str):
     if denied := require_edit(collection, request.user):
         return denied
     try:
-        values = load_body(request).get("values") if request.method == "PUT" else None
+        values = None
+        if request.method == "PUT":
+            body = load_body(request)
+            values = body.get("values")
+            if "values" not in body or type(values) is not dict:
+                raise schema_service.SchemaOperationError("invalid_definition")
         schema_service.mutate_definition(
             collection,
             request.user,
@@ -145,9 +151,8 @@ def schema_discard(request, col_id: int):
         return denied
     try:
         body = load_body(request)
-        schema_service.discard_draft(
-            collection, body.get("draft_id"), parse_revision(request)
-        )
+        revision = matching_body_revision(request, body, "revision")
+        schema_service.discard_draft(collection, body.get("draft_id"), revision)
     except (
         schema_service.SchemaRevisionConflict,
         schema_service.SchemaOperationError,
@@ -205,12 +210,13 @@ def schema_restore_replace(request, col_id: int):
         return denied
     try:
         body = load_body(request)
+        revision = matching_body_revision(request, body, "existing_draft_revision")
         schema_service.replace_with_version(
             collection,
             request.user,
             int(body.get("version_id", 0)),
             str(body.get("challenge_token", "")),
-            parse_revision(request),
+            revision,
         )
     except (
         schema_service.SchemaRevisionConflict,

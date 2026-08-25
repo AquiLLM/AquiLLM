@@ -123,7 +123,10 @@ class CollectionSchemaGenerationRun(models.Model):
         default=Status.QUEUED,
     )
     source_signature = models.CharField(max_length=64)
+    base_draft_id = models.UUIDField(null=True, blank=True)
     base_draft_revision = models.PositiveIntegerField(null=True, blank=True)
+    lease_token = models.UUIDField(null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
     statistics = models.JSONField(default=dict, blank=True)
     error_code = models.CharField(max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
