@@ -1,8 +1,8 @@
 """Single-turn conversation completion orchestration for LLMInterface."""
 from __future__ import annotations
 
-import uuid
 import re
+import uuid
 from os import getenv
 from typing import Any, Awaitable, Callable, Literal, Optional
 
@@ -11,11 +11,13 @@ from ..types.messages import AssistantMessage, LLM_Message, ToolMessage, UserMes
 from ..types.response import LLMResponse
 from ..types.tools import ToolChoice, dump_tool_choice
 from . import fallback_heuristics as fb
-from . import final_stream
+from . import final_stream, visibility
 from . import image_context as imgctx
 from . import rag_citations as citations
-from . import visibility
-from .retrieval_status import append_retrieval_notice_if_missing, document_retrieval_notice
+from .retrieval_status import (
+    append_retrieval_notice_if_missing,
+    document_retrieval_notice,
+)
 from .summary import generate_compact_tool_summary
 
 try:
@@ -361,6 +363,7 @@ async def _run_hidden_tool_call_retry(
                 "messages": message_dicts + [{"role": "user", "content": prompt}],
                 "messages_pydantic": messages_for_bot + [UserMessage(content=prompt)],
                 "max_tokens": max(current_max_tokens, _tool_call_retry_max_tokens()),
+                "thinking_budget": 0,
                 "stream_callback": stream_callback,
                 "stream_message_uuid": stream_message_uuid,
             }
@@ -742,6 +745,8 @@ async def complete_conversation_turn(
             }
         )
     }
+    if isinstance(last_message, UserMessage) and last_message.tools:
+        sdk_args["thinking_budget"] = 0
 
     response = await llm.get_message(**sdk_args)
     should_force_tool_retry = (

@@ -153,6 +153,7 @@ def pack_chunk_search_results(
             ),
         }
         if retrieval_diagnostics is not None:
+            no_results["_retrieval_diagnostics"] = dict(retrieval_diagnostics)
             no_results["retrieval_diagnostics"] = retrieval_diagnostics
         return no_results
 
@@ -172,6 +173,8 @@ def pack_chunk_search_results(
         ret["retrieved_documents"] = retrieved_documents
     if has_image_results:
         ret["_image_instruction"] = IMAGE_MARKDOWN_INSTRUCTION
+    if retrieval_diagnostics is not None:
+        ret["_retrieval_diagnostics"] = dict(retrieval_diagnostics)
 
     return ret
 

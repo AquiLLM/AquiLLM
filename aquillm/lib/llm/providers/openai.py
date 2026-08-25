@@ -3,20 +3,24 @@ import asyncio
 import re
 import uuid
 from os import getenv
-from typing import Any, Optional, override
+from typing import Optional, override
 
 from tiktoken import encoding_for_model
 
-from ..types.messages import AssistantMessage
+from lib.llm.optimizations.lm_lingua2_adapter import (
+    maybe_compress_openai_style_messages,
+)
+
 from ..types.conversation import Conversation
+from ..types.messages import AssistantMessage
 from ..types.response import LLMResponse
 from .base import LLMInterface
-from .openai_streaming import consume_streaming_completion
 from .openai_overflow import (
     retry_args_for_context_overflow,
     retry_args_for_timeout,
     strip_images_from_messages,
 )
+from .openai_streaming import consume_streaming_completion
 from .openai_tokens import (
     context_reserve_tokens,
     env_float,
@@ -27,8 +31,6 @@ from .openai_tokens import (
 )
 from .openai_tool_text import decode_json_dict, extract_tool_call_from_text
 from .openai_tools_format import transform_openai_tool_choice, transform_openai_tools
-from lib.llm.optimizations.lm_lingua2_adapter import maybe_compress_openai_style_messages
-
 
 try:
     from aquillm.settings import DEBUG
@@ -111,7 +113,7 @@ class OpenAIInterface(LLMInterface):
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
         kwargs.pop('messages_pydantic', None)
-        kwargs.pop('thinking_budget', None)
+        thinking_budget = kwargs.pop('thinking_budget', None)
         stream_callback = kwargs.pop('stream_callback', None)
         stream_message_uuid = str(kwargs.pop('stream_message_uuid', None) or uuid.uuid4())
         system_text = kwargs.pop('system')
@@ -146,9 +148,12 @@ class OpenAIInterface(LLMInterface):
         }
         is_vllm_endpoint = "vllm" in base_url or "8000" in base_url
         if is_vllm_endpoint:
-            enable_thinking = (
-                getenv("OPENAI_COMPAT_ENABLE_THINKING", "1") or "1"
-            ).strip().lower() in ("1", "true", "yes", "on")
+            if thinking_budget is None:
+                enable_thinking = (
+                    getenv("OPENAI_COMPAT_ENABLE_THINKING", "1") or "1"
+                ).strip().lower() in ("1", "true", "yes", "on")
+            else:
+                enable_thinking = int(thinking_budget) != 0
             arguments["extra_body"] = {
                 "chat_template_kwargs": {"enable_thinking": enable_thinking}
             }
@@ -173,8 +178,8 @@ class OpenAIInterface(LLMInterface):
             )
         try:
             from lib.llm.utils.prompt_budget import (
-                context_packer_enabled,
                 cap_completion_tokens,
+                context_packer_enabled,
                 maybe_pack_message_dicts_for_context,
                 prompt_budget_context_limit,
             )

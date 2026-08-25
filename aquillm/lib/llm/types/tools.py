@@ -20,6 +20,7 @@ type ToolResultDict = dict[
         'files',
         '_images',
         '_image_instruction',
+        '_retrieval_diagnostics',
         'retrieval_status',
         'retrieval_message',
         'retrieved_count',

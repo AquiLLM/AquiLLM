@@ -36,12 +36,18 @@ def _assistant_final_answer(text: str = "final synthesis answer") -> AssistantMe
     return AssistantMessage(content=text, stop_reason="stop")
 
 
-def _tool_result(call_number: int, *, exception: bool = False) -> ToolMessage:
+def _tool_result(
+    call_number: int,
+    *,
+    exception: bool = False,
+    query: str = "alpha",
+) -> ToolMessage:
     result_dict = {"exception": "Tool call timed out"} if exception else {"result": [{"id": call_number}]}
     return ToolMessage(
         content=str(result_dict),
         tool_name="vector_search",
         for_whom="assistant",
+        arguments={"q": query},
         result_dict=result_dict,
     )
 
@@ -55,7 +61,14 @@ def _convo_with_n_calls(
     messages: list = [UserMessage(content="Find relevant sources.")]
     for i in range(1, n_calls + 1):
         if i > 1:
-            messages.append(_tool_result(i - 1, exception=exception_results))
+            prior_query = "same-query" if same_query else f"query-{i - 1}"
+            messages.append(
+                _tool_result(
+                    i - 1,
+                    exception=exception_results,
+                    query=prior_query,
+                )
+            )
         query = "same-query" if same_query else f"query-{i}"
         messages.append(_assistant_tool_call(i, query=query))
     return Conversation(system="sys", messages=messages)
@@ -90,7 +103,8 @@ async def test_spin_allows_more_calls_with_per_tool_override(monkeypatch):
         max_tokens=256,
     )
 
-    assert llm.complete.await_count == 6
+    # The fourth identical pending call reuses the prior result, then synthesizes.
+    assert llm.complete.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -121,7 +135,8 @@ async def test_spin_breaks_when_configured_per_tool_limit_is_reached(monkeypatch
         max_tokens=256,
     )
 
-    assert llm.complete.await_count == 5
+    # The third identical pending call reuses the prior result, then synthesizes.
+    assert llm.complete.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -336,4 +351,42 @@ async def test_spin_preserves_final_synthesis_step_after_break(monkeypatch):
     final_sent_convo = send_func.await_args_list[-1].args[0]
     assert isinstance(final_sent_convo[-1], AssistantMessage)
     assert final_sent_convo[-1].content == "synthesized response"
+
+
+@pytest.mark.asyncio
+async def test_spin_reuses_cached_result_for_identical_pending_call(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_CALLS_PER_TOOL_NAME", "2")
+    monkeypatch.setenv("LLM_REPEAT_TOOL_BREAK_THRESHOLD", "99")
+    monkeypatch.setenv("LLM_TOOL_NO_PROGRESS_BREAK_THRESHOLD", "99")
+    monkeypatch.delenv("LLM_TOOL_CALL_LIMITS", raising=False)
+    monkeypatch.delenv("LLM_TOOL_BUDGET_UNITS_PER_TURN", raising=False)
+    monkeypatch.delenv("LLM_TOOL_COST_WEIGHTS", raising=False)
+
+    llm = _DummyLLMInterface()
+    final_convo = Conversation(
+        system="sys",
+        messages=[UserMessage(content="q"), _assistant_final_answer("cached synthesis")],
+    )
+    llm.complete = AsyncMock(
+        side_effect=[
+            (_convo_with_n_calls(1), "changed"),
+            (_convo_with_n_calls(2), "changed"),
+            (final_convo, "changed"),
+        ]
+    )
+    send_func = AsyncMock()
+
+    await llm.spin(
+        convo=Conversation(system="sys", messages=[UserMessage(content="start")]),
+        max_func_calls=10,
+        send_func=send_func,
+        max_tokens=256,
+    )
+
+    assert llm.complete.await_count == 3
+    cached_convo = send_func.await_args_list[-2].args[0]
+    assert isinstance(cached_convo[-1], ToolMessage)
+    assert cached_convo[-1].result_dict == {"result": [{"id": 1}]}
+    assert "already completed" in cached_convo[-1].content
+    assert send_func.await_args_list[-1].args[0][-1].content == "cached synthesis"
 

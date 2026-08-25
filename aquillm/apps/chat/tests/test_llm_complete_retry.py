@@ -1,20 +1,22 @@
 """LLMInterface.complete() retry behavior and max-token cutoff continuation."""
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
 from asgiref.sync import async_to_sync
+from django.test import SimpleTestCase
 
+from apps.chat.tests.chat_message_test_support import (
+    _FakeLLMInterface,
+    _test_document_ids,
+)
 from aquillm.llm import (
     AssistantMessage,
     Conversation,
-    ToolMessage,
-    UserMessage,
     LLMResponse,
     ToolChoice,
+    ToolMessage,
+    UserMessage,
     llm_tool,
 )
-
-from apps.chat.tests.chat_message_test_support import _FakeLLMInterface, _test_document_ids
 
 
 @llm_tool(
@@ -28,6 +30,35 @@ def vector_search(search_string: str, top_k: int):
 
 
 class ToolUseRetryTests(SimpleTestCase):
+    def test_required_tool_routing_disables_thinking(self):
+        llm = _FakeLLMInterface([
+            LLMResponse(
+                text=None,
+                tool_call={
+                    'tool_call_id': 'tool_1',
+                    'tool_call_name': '_test_document_ids',
+                    'tool_call_input': {},
+                },
+                stop_reason='tool_use',
+                input_usage=5,
+                output_usage=5,
+            ),
+        ])
+        convo = Conversation(
+            system='You are a test assistant.',
+            messages=[
+                UserMessage(
+                    content='Search these papers.',
+                    tools=[_test_document_ids],
+                    tool_choice=ToolChoice(type='any'),
+                )
+            ],
+        )
+
+        async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(llm.calls[0]['thinking_budget'], 0)
+
     def test_retries_with_required_tool_when_model_only_promises_to_search(self):
         llm = _FakeLLMInterface([
             LLMResponse(

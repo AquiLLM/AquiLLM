@@ -8,16 +8,16 @@ from json import dumps
 from os import getenv
 from typing import Any, Awaitable, Callable, Literal, Optional
 
-from pydantic import validate_call
 import structlog
+from pydantic import validate_call
 
 from ..types.conversation import Conversation
 from ..types.messages import AssistantMessage, LLM_Message, ToolMessage, UserMessage
 from ..types.response import LLMResponse
-from .tool_budget import ToolBudgetConfig, ToolBudgetPolicy, ToolCallObservation
+from ..utils.tool_call_kwargs import normalize_tool_call_kwargs
 from . import image_context as imgctx
 from .complete_turn import complete_conversation_turn
-from ..utils.tool_call_kwargs import normalize_tool_call_kwargs
+from .tool_budget import ToolBudgetConfig, ToolBudgetPolicy, ToolCallObservation
 
 try:
     from aquillm.settings import DEBUG
@@ -176,6 +176,7 @@ class LLMInterface(ABC):
         """Spin the conversation, executing tool calls until complete."""
         calls = 0
         stop_reason: Optional[str] = None
+        cached_tool_result: Optional[ToolMessage] = None
         budget_policy = ToolBudgetPolicy(ToolBudgetConfig.from_env(max_func_calls=max_func_calls))
         while calls < max_func_calls:
             convo, changed = await self.complete(convo, max_tokens, stream_func=stream_func)
@@ -202,6 +203,7 @@ class LLMInterface(ABC):
                 )
                 if not decision.should_continue:
                     stop_reason = decision.stop_reason
+                    cached_tool_result = _matching_tool_result(convo, last_message)
                     break
                 calls += 1
         if stop_reason is None and calls >= max_func_calls:
@@ -214,8 +216,26 @@ class LLMInterface(ABC):
         )
         last = convo[-1]
         if isinstance(last, AssistantMessage) and last.tool_call_id:
-            convo, _ = await self.complete(convo, max_tokens, stream_func=stream_func)
-            await send_func(convo)
+            if cached_tool_result is not None:
+                reused_result = cached_tool_result.model_copy(
+                    update={
+                        "content": (
+                            "This identical tool call was already completed; reuse the "
+                            "preceding result."
+                        ),
+                        "arguments": dict(last.tool_call_input or {}),
+                        "result_dict": dict(cached_tool_result.result_dict or {}),
+                    }
+                )
+                convo = convo + [reused_result]
+                await send_func(convo)
+            else:
+                convo, _ = await self.complete(
+                    convo,
+                    max_tokens,
+                    stream_func=stream_func,
+                )
+                await send_func(convo)
             convo[-1].tools = None
             convo[-1].tool_choice = None
             convo, _ = await self.complete(convo, max_tokens, stream_func=stream_func)
@@ -232,6 +252,33 @@ def _latest_tool_result_for_name(convo: Conversation, tool_name: str) -> Optiona
             and str(message.tool_name or "").strip().lower() == tool_name
         ):
             return message.result_dict if isinstance(message.result_dict, dict) else None
+    return None
+
+
+def _matching_tool_result(
+    convo: Conversation,
+    pending: AssistantMessage,
+) -> Optional[ToolMessage]:
+    tool_name = str(pending.tool_call_name or "").strip().lower()
+    if not tool_name:
+        return None
+    pending_arguments = dumps(
+        pending.tool_call_input or {},
+        sort_keys=True,
+        ensure_ascii=True,
+    )
+    for message in reversed(list(convo)[:-1]):
+        if not isinstance(message, ToolMessage) or message.for_whom != "assistant":
+            continue
+        if str(message.tool_name or "").strip().lower() != tool_name:
+            continue
+        message_arguments = dumps(
+            message.arguments or {},
+            sort_keys=True,
+            ensure_ascii=True,
+        )
+        if message_arguments == pending_arguments:
+            return message
     return None
 
 

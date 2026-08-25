@@ -116,6 +116,98 @@ async def test_handled_retrieves_before_llm(monkeypatch):
     assert "Answer" in consumer.convo[-1].content
 
 
+async def test_multi_part_direct_rag_searches_variants_before_one_synthesis(monkeypatch):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "3")
+    searched: list[str] = []
+    synthesized: list = []
+
+    def fake_search(consumer, query, top_k):
+        searched.append(query)
+        chunk_id = len(searched)
+        return {
+            "result": [
+                {
+                    "rank": 1,
+                    "chunk_id": chunk_id,
+                    "doc_id": f"doc-{chunk_id}",
+                    "title": f"Paper {chunk_id}",
+                    "text": f"Evidence for query {chunk_id}.",
+                    "citation": f"[doc:doc-{chunk_id} chunk:{chunk_id}]",
+                }
+            ],
+            "retrieval_status": "results_found",
+            "retrieved_count": 1,
+            "retrieved_documents": [f"Paper {chunk_id}"],
+        }
+
+    async def fake_synth(llm_if, convo, packet, *, stream_func=None):
+        synthesized.append(packet)
+        return convo + [AssistantMessage(content="Cited answer", stop_reason="end_turn")]
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", fake_search)
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", fake_synth)
+
+    convo = _user_convo(
+        "Explain what each paper is about? What overlaps between them?"
+    )
+    consumer = _consumer(convo, [1, 2, 3])
+
+    outcome = await run_direct_rag_turn(
+        consumer,
+        SimpleNamespace(get_message=AsyncMock()),
+        convo,
+        stream_func=None,
+    )
+
+    assert outcome == "handled"
+    assert searched == [
+        "Explain what each paper is about? What overlaps between them?",
+        "Explain what each paper is about",
+        "What overlaps between them",
+    ]
+    assert len(synthesized) == 1
+    assert len(synthesized[0].citation_tokens) == 3
+
+
+async def test_multi_query_retrieval_uses_successful_variants_when_one_fails(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "3")
+    synthesized: list = []
+
+    def fake_search(consumer, query, top_k):
+        if query == "What overlaps between them":
+            raise RuntimeError("one query backend failure")
+        return _results_payload()
+
+    async def fake_synth(llm_if, convo, packet, *, stream_func=None):
+        synthesized.append(packet)
+        return convo + [
+            AssistantMessage(content="Cited answer", stop_reason="end_turn")
+        ]
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", fake_search)
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", fake_synth)
+
+    convo = _user_convo(
+        "Explain what each paper is about? What overlaps between them?"
+    )
+    consumer = _consumer(convo, [1, 2, 3])
+
+    outcome = await run_direct_rag_turn(
+        consumer,
+        SimpleNamespace(get_message=AsyncMock()),
+        convo,
+        stream_func=None,
+    )
+
+    assert outcome == "handled"
+    assert len(synthesized) == 1
+    assert synthesized[0].citation_tokens == ["[doc:doc-a chunk:1]"]
+
+
 async def test_handled_appends_synthetic_tool_messages(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     raw = _results_payload()
@@ -234,6 +326,7 @@ async def test_end_to_end_real_synthesis_single_llm_call(monkeypatch):
     assert outcome == "handled"
     assert order[0] == "retrieval"
     assert order.count("get_message") == 1
+    assert "thinking_budget" not in llm_if.calls[0]
     assert "calibration" in consumer.convo[-1].content.lower()
     assert "[doc:doc-a chunk:1]" in consumer.convo[-1].content
 
