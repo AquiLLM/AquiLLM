@@ -27,6 +27,12 @@ _MAX_VLLM_RESPONSE_BYTES = 1_000_000
 _MAX_ALIASES_PER_ENTITY = 16
 _MAX_ALIAS_CHARACTERS = 128
 _MAX_ALIAS_TOTAL_CHARACTERS = 1_024
+_SEMANTIC_CORRECTION = (
+    "\n\nThe previous candidate failed semantic validation. Return a corrected, different "
+    "candidate. Entity and relation names must remain unique after lowercase snake_case "
+    "normalization. Every relation endpoint must exactly match an entity name in this "
+    "same response. Keep each entity's aliases at no more than 1024 total characters."
+)
 
 
 def _schema_response_format() -> dict:
@@ -255,7 +261,7 @@ def _post_local_vllm_json(url: str, payload: dict, headers: dict[str, str], time
 
 
 def generate_schema_candidate(samples, client=None) -> dict:
-    """Ask the configured local vLLM server for one strict JSON proposal."""
+    """Ask local vLLM for a strict proposal, with one bounded semantic repair."""
 
     config = load_schema_generation_config()
     texts = [_sample_text(sample) for sample in samples]
@@ -267,24 +273,36 @@ def generate_schema_candidate(samples, client=None) -> dict:
         "allowed_head_types, and allowed_tail_types. Names must be concise and endpoints must name entities.\n\n"
         + "\n\n".join(texts)
     )
-    try:
-        response = (client or _post_local_vllm_json)(
-            f"{config.base_url}/chat/completions",
-            {
-                "model": config.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": _schema_response_format(),
-                "chat_template_kwargs": {"enable_thinking": False},
-                "temperature": 0,
-            },
-            {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"},
-            config.timeout_seconds,
-        )
-        return normalize_schema_candidate(json.loads(response["choices"][0]["message"]["content"]))
-    except (IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise InvalidSchemaCandidate("local vLLM returned an invalid candidate") from exc
-    except Exception as exc:
-        raise RuntimeError("local vLLM inference failed") from exc
+    local_client = client or _post_local_vllm_json
+    for attempt in range(2):
+        try:
+            response = local_client(
+                f"{config.base_url}/chat/completions",
+                {
+                    "model": config.model,
+                    "messages": [{
+                        "role": "user",
+                        "content": prompt + (_SEMANTIC_CORRECTION if attempt else ""),
+                    }],
+                    "response_format": _schema_response_format(),
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "temperature": 0,
+                },
+                {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"},
+                config.timeout_seconds,
+            )
+        except Exception as exc:
+            raise RuntimeError("local vLLM inference failed") from exc
+        try:
+            return normalize_schema_candidate(
+                json.loads(response["choices"][0]["message"]["content"])
+            )
+        except (IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            if attempt == 1:
+                raise InvalidSchemaCandidate(
+                    "local vLLM returned an invalid candidate"
+                ) from exc
+    raise AssertionError("unreachable schema generation attempt state")
 
 
 def _sample_reference(sample: object) -> dict[str, object]:

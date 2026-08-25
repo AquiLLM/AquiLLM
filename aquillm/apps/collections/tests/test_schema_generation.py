@@ -71,6 +71,40 @@ def test_generate_schema_candidate_calls_only_supplied_local_client(monkeypatch)
     assert captured["payload"]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+def test_generate_schema_candidate_retries_once_with_semantic_correction(monkeypatch):
+    """A structurally valid response with bad endpoints should get one bounded repair."""
+
+    from apps.collections.services.schema_generation import generate_schema_candidate
+
+    payloads = []
+
+    def client(url, payload, headers, timeout):
+        payloads.append(payload)
+        tail = "missing" if len(payloads) == 1 else "organization"
+        return {"choices": [{"message": {"content": json.dumps({
+            "entities": [
+                {"name": "researcher", "description": "A person.", "aliases": []},
+                {"name": "organization", "description": "A company.", "aliases": []},
+            ],
+            "relations": [{
+                "name": "works_for",
+                "description": "Employment.",
+                "direction": "directed",
+                "allowed_head_types": ["researcher"],
+                "allowed_tail_types": [tail],
+            }],
+        })}}]}
+
+    candidate = generate_schema_candidate(
+        [{"document_id": "doc-1", "chunk_id": 1, "text": "Alice works at Acme."}],
+        client=client,
+    )
+
+    assert len(payloads) == 2
+    assert "failed semantic validation" in payloads[1]["messages"][0]["content"]
+    assert candidate["relations"][0]["values"]["allowed_tail_types"] == ["organization"]
+
+
 def test_candidate_rejects_duplicate_names_invalid_endpoints_and_invalid_ontology():
     """Dropping candidate validation would allow malformed schema drafts."""
 
