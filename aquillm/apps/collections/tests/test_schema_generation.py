@@ -58,7 +58,17 @@ def test_generate_schema_candidate_calls_only_supplied_local_client(monkeypatch)
     assert candidate["relations"][0]["key"] == "works_for"
     assert captured["url"] == "http://vllm:8000/v1/chat/completions"
     assert captured["payload"]["model"] == "local-test-model"
-    assert captured["payload"]["response_format"] == {"type": "json_object"}
+    response_format = captured["payload"]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "collection_schema"
+    assert response_format["json_schema"]["strict"] is True
+    schema = response_format["json_schema"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["entities"]["minItems"] == 2
+    assert schema["properties"]["entities"]["maxItems"] == 24
+    assert schema["properties"]["relations"]["minItems"] == 1
+    assert schema["properties"]["relations"]["maxItems"] == 32
+    assert captured["payload"]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_candidate_rejects_duplicate_names_invalid_endpoints_and_invalid_ontology():

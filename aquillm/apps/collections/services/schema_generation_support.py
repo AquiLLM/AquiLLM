@@ -29,6 +29,69 @@ _MAX_ALIAS_CHARACTERS = 128
 _MAX_ALIAS_TOTAL_CHARACTERS = 1_024
 
 
+def _schema_response_format() -> dict:
+    text = {"type": "string", "minLength": 1, "maxLength": 512}
+    name = {"type": "string", "minLength": 1, "maxLength": 64}
+    entity = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["name", "description", "aliases"],
+        "properties": {
+            "name": name,
+            "description": text,
+            "aliases": {
+                "type": "array",
+                "maxItems": _MAX_ALIASES_PER_ENTITY,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": _MAX_ALIAS_CHARACTERS,
+                },
+            },
+        },
+    }
+    endpoints = {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": _MAX_ENTITY_TYPES,
+        "items": name,
+    }
+    relation = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "name", "description", "direction",
+            "allowed_head_types", "allowed_tail_types",
+        ],
+        "properties": {
+            "name": name,
+            "description": text,
+            "direction": {"type": "string", "enum": ["directed", "undirected"]},
+            "allowed_head_types": endpoints,
+            "allowed_tail_types": endpoints,
+        },
+    }
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["entities", "relations"],
+        "properties": {
+            "entities": {
+                "type": "array", "minItems": _MIN_ENTITY_TYPES,
+                "maxItems": _MAX_ENTITY_TYPES, "items": entity,
+            },
+            "relations": {
+                "type": "array", "minItems": _MIN_RELATION_TYPES,
+                "maxItems": _MAX_RELATION_TYPES, "items": relation,
+            },
+        },
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "collection_schema", "strict": True, "schema": schema},
+    }
+
+
 class LocalVLLMTransportError(RuntimeError):
     """The local adapter did not receive a bounded, successful JSON response."""
 
@@ -207,7 +270,13 @@ def generate_schema_candidate(samples, client=None) -> dict:
     try:
         response = (client or _post_local_vllm_json)(
             f"{config.base_url}/chat/completions",
-            {"model": config.model, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}, "temperature": 0},
+            {
+                "model": config.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": _schema_response_format(),
+                "chat_template_kwargs": {"enable_thinking": False},
+                "temperature": 0,
+            },
             {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"},
             config.timeout_seconds,
         )
