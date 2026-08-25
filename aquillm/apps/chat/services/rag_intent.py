@@ -34,12 +34,19 @@ _RETRY_REQUEST_RE = re.compile(
     r"^\s*(?:try again|retry|please retry|run it again|do that again)\s*[.!?]*\s*$",
     flags=re.IGNORECASE,
 )
+_SELECTED_COLLECTION_CLARIFICATION_RE = re.compile(
+    r"^\s*(?:(?:the|those)\s+)?(?:ones?|documents?|docs?|files?|papers?)\s+in\s+"
+    r"(?:the\s+)?selected\s+collections?\s*[.!?]*\s*$",
+    flags=re.IGNORECASE,
+)
 
 
 def _collection_backed_document_question(text: str, collection_ids: list) -> bool:
     """True when the user asks a question about documents in the selected collections."""
     if not collection_ids:
         return False
+    if _SELECTED_COLLECTION_CLARIFICATION_RE.match(text):
+        return True
     lowered = text.lower()
     doc_cues = ("paper", "document", "doc", "article", "source", "collection", "this", "these")
     question_cues = ("what", "how", "why", "explain", "summarize", "describe", "tell me", "?")

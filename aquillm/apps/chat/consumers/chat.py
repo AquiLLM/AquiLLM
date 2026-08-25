@@ -47,8 +47,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     dead: bool = False
 
-    col_ref = CollectionsRef([])
+    col_ref: CollectionsRef
     last_sent_sequence: int = -1
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.col_ref = CollectionsRef([])
 
     async def _send_stream_payload(self, payload: dict) -> None:
         await self.send(text_data=dumps({"stream": payload}))
