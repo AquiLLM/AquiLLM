@@ -1,9 +1,11 @@
 """Tests for the direct RAG pipeline orchestrator (Tasks 4 and 5)."""
 from __future__ import annotations
 
+from json import dumps
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from apps.chat.consumers.chat_transport import best_effort_send
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
@@ -116,7 +118,58 @@ async def test_handled_retrieves_before_llm(monkeypatch):
     assert "Answer" in consumer.convo[-1].content
 
 
-async def test_multi_part_direct_rag_searches_variants_before_one_synthesis(monkeypatch):
+async def test_stream_disconnect_does_not_turn_direct_rag_into_tool_fallback(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    convo = _user_convo("what is attensity")
+    consumer = _consumer(convo, [203])
+    consumer.transport_connected = True
+
+    async def raw_send(*, text_data):
+        raise RuntimeError(
+            "Unexpected ASGI message 'websocket.send', after sending 'websocket.close'"
+        )
+
+    consumer.send = raw_send
+
+    async def safe_stream(payload):
+        await best_effort_send(
+            consumer,
+            text_data=dumps({"stream": payload}),
+        )
+
+    async def fake_synth(_llm_if, working_convo, _packet, *, stream_func=None):
+        await stream_func({"content": "partial", "done": False})
+        return working_convo + [
+            AssistantMessage(
+                content="Grounded answer [doc:doc-a chunk:1]",
+                stop_reason="end_turn",
+            )
+        ]
+
+    monkeypatch.setattr(
+        rag_pipeline,
+        "_run_vector_search",
+        lambda *_args: _results_payload(),
+    )
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", fake_synth)
+
+    outcome = await run_direct_rag_turn(
+        consumer,
+        SimpleNamespace(),
+        convo,
+        stream_func=safe_stream,
+    )
+
+    assert outcome == "handled"
+    assert consumer.transport_connected is False
+    assert consumer.convo[-1].content == "Grounded answer [doc:doc-a chunk:1]"
+
+
+async def test_multi_part_direct_rag_searches_variants_before_one_synthesis(
+    monkeypatch,
+):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "3")
     searched: list[str] = []
