@@ -22,6 +22,9 @@ COMPOSE_FILES = tuple(
         "no_gpu_dev.yml",
     )
 )
+MEMGRAPH_HEALTHCHECK_COMPOSE_FILES = COMPOSE_FILES + (
+    REPOSITORY_ROOT / "deploy" / "compose" / "test.yml",
+)
 GRAPH_WORKER = "worker_knowledge_graph"
 GRAPH_QUEUE = "knowledge-graph-extraction"
 GRAPH_QUEUE_ENVIRONMENT = "${KG_EXTRACTION_QUEUE-knowledge-graph-extraction}"
@@ -75,6 +78,22 @@ def _resolved_compose(
         profile="knowledge-graph",
         environment_overrides=environment_overrides,
     )
+
+
+@pytest.mark.parametrize(
+    "compose_file", MEMGRAPH_HEALTHCHECK_COMPOSE_FILES, ids=lambda path: path.name
+)
+def test_memgraph_healthcheck_uses_supported_non_interactive_input(
+    compose_file: Path,
+) -> None:
+    healthcheck = _compose(compose_file)["services"]["memgraph_knowledge_graph"][
+        "healthcheck"
+    ]["test"]
+    command = healthcheck[1]
+
+    assert healthcheck[0] == "CMD-SHELL"
+    assert "echo 'RETURN 1;' | mgconsole" in command
+    assert "--execute" not in command
 
 
 @pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
