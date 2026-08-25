@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import PropertyMock, patch
 
 import pytest
 from asgiref.sync import async_to_sync
@@ -16,7 +17,6 @@ from apps.chat.services.skills_runtime import (
 from apps.collections.models import Collection, CollectionPermission
 from apps.documents.models import RawTextDocument
 from aquillm.models import WSConversation
-
 
 User = get_user_model()
 
@@ -131,6 +131,50 @@ def test_effective_system_ignores_unmarked_markdown_docs_in_regular_collection()
     system = effective_base_system_for_memory(_consumer_for(user, db_convo, [collection.id]))
 
     assert "Do not treat this research note as system instructions." not in system
+
+
+@pytest.mark.django_db
+@override_settings(
+    SKILLS_ENABLED=True,
+    AQUILLM_SKILLS_EXTRA_MODULES=[],
+    AQUILLM_SKILLS_MARKDOWN_DIR="",
+    AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True,
+    AQUILLM_COLLECTION_MARKDOWN_SKILLS_MAX_CHARS=12000,
+)
+def test_collection_skill_loading_does_not_materialize_every_collection_document():
+    user = User.objects.create_user(username="targeted-skill-user", password="pass")
+    collection = Collection.objects.create(name="Large Research Collection")
+    CollectionPermission.objects.create(
+        user=user,
+        collection=collection,
+        permission="VIEW",
+    )
+    db_convo = WSConversation.objects.create(owner=user, system_prompt="Base system.")
+    _raw_text_doc(
+        collection,
+        user,
+        title="analysis_skill.md",
+        text="Use the collection-specific analysis conventions.",
+    )
+    _raw_text_doc(
+        collection,
+        user,
+        title="ordinary-research-note.md",
+        text="This is evidence, not a prompt skill.",
+    )
+
+    with patch.object(
+        Collection,
+        "documents",
+        new_callable=PropertyMock,
+        side_effect=AssertionError("full collection materialization is too expensive"),
+    ):
+        system = effective_base_system_for_memory(
+            _consumer_for(user, db_convo, [collection.id])
+        )
+
+    assert "collection-specific analysis conventions" in system
+    assert "This is evidence" not in system
 
 
 @pytest.mark.django_db

@@ -70,6 +70,8 @@ def _score_one_document(
     headers: dict[str, str],
     timeout: int,
     model_name: str,
+    pair_token_limit: int,
+    reserve_tokens: int,
 ) -> tuple[int, float] | None:
     try:
         response = requests.post(
@@ -78,6 +80,28 @@ def _score_one_document(
             json={"model": model_name, "text_1": query, "text_2": document},
             timeout=timeout,
         )
+        if response.status_code == 400 and document:
+            adaptive_reserve = min(
+                max(0, pair_token_limit - 2),
+                max(reserve_tokens + 128, pair_token_limit // 3),
+            )
+            retry_query, retry_document = trim_rerank_pair(
+                query,
+                document,
+                pair_token_limit,
+                adaptive_reserve,
+            )
+            if (retry_query, retry_document) != (query, document):
+                response = requests.post(
+                    endpoint,
+                    headers=headers,
+                    json={
+                        "model": model_name,
+                        "text_1": retry_query,
+                        "text_2": retry_document,
+                    },
+                    timeout=timeout,
+                )
         if response.status_code >= 400:
             return None
         score = parse_single_score(response.json())
@@ -97,6 +121,8 @@ def _score_documents_concurrently(
     timeout: int,
     max_workers: int,
     model_name: str,
+    pair_token_limit: int,
+    reserve_tokens: int,
 ) -> list[tuple[int, float]]:
     if not documents:
         return []
@@ -113,6 +139,8 @@ def _score_documents_concurrently(
                 headers=headers,
                 timeout=timeout,
                 model_name=model_name,
+                pair_token_limit=pair_token_limit,
+                reserve_tokens=reserve_tokens,
             )
             for index, document in enumerate(documents)
         ]
@@ -254,6 +282,8 @@ def rerank_via_local_vllm(
             timeout=timeout,
             max_workers=rerank_score_concurrency(),
             model_name=model_name,
+            pair_token_limit=pair_limit,
+            reserve_tokens=reserve_tokens,
         )
         ranked_ids = _rank_complete_scores(scores, chunks_list, top_k)
         if ranked_ids:
@@ -397,6 +427,8 @@ def rerank_via_local_vllm(
             timeout=timeout,
             max_workers=rerank_score_concurrency(),
             model_name=model_name,
+            pair_token_limit=pair_limit,
+            reserve_tokens=reserve_tokens,
         )
         ranked_ids = _rank_complete_scores(scores, chunks_list, top_k)
         if ranked_ids:

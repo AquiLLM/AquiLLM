@@ -723,6 +723,14 @@ Use `what is attensity` or an equivalent selected-collection UI request. Verify 
 - persisted answer with real `[doc:... chunk:...]` citations and working chunk expansion;
 - no duplicate generation if the browser reconnects.
 
+If the live trace shows collection prompt-skill loading materializing every document,
+replace it with candidate-only queries while preserving marked skills and skill-pack
+semantics. If a Qwen reranker pair still crosses the 1,024-token limit, raise the
+template reserve and retry only the overflowing pair with a tighter deterministic
+budget. Keep thinking enabled for direct synthesis, but bound total completion to
+4,096 tokens so reasoning cannot consume an unbounded latency tail before the cited
+answer.
+
 - [ ] **Step 12: Record rollout/rollback facts**
 
 Report local and remote commit SHA, commands/tests and their observed results, service health, measured stage timings, citation verification, transcription-stopped status, and the remote environment backup path. If acceptance fails, restore the prior commit and backed-up exact flags, recreate only web/worker with `--no-deps`, and report the failing stage without claiming completion.

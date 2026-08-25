@@ -141,6 +141,16 @@ LOGGING = {
             "level": "DEBUG",
             "propagate": True,
         },
+        "apps.chat": {
+            "handlers": _default_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.documents": {
+            "handlers": _default_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
         "celery": {
             "handlers": _default_handlers,
             "level": "DEBUG",
@@ -152,6 +162,11 @@ LOGGING = {
             "propagate": True,
         },
         "lib.llm.utils": {
+            "handlers": _default_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "lib.llm.providers": {
             "handlers": _default_handlers,
             "level": "INFO",
             "propagate": False,

@@ -127,11 +127,11 @@ def rerank_pair_token_limit() -> int:
 
 
 def rerank_template_reserve_tokens() -> int:
-    raw = (getenv("APP_RERANK_TEMPLATE_RESERVE_TOKENS") or "96").strip()
+    raw = (getenv("APP_RERANK_TEMPLATE_RESERVE_TOKENS") or "256").strip()
     try:
         return max(0, int(raw))
     except Exception:
-        return 96
+        return 256
 
 
 def rerank_score_concurrency() -> int:

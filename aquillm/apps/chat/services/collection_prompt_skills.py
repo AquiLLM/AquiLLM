@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from os import getenv
-from typing import Any, Iterable
+from typing import Any
 
 import structlog
 from django.conf import settings
@@ -97,8 +98,30 @@ def _render_skill_doc(doc: Any) -> str:
     return "\n\n".join(parts)
 
 
+def _candidate_collection_docs(
+    collection: Collection,
+    *,
+    marked_only: bool,
+) -> list[Any]:
+    """Load only documents that can possibly contribute prompt-skill text."""
+    from apps.collections.models.collection import _get_document_types
+
+    candidates: list[Any] = []
+    for model in _get_document_types():
+        queryset = model.objects.filter(collection=collection)
+        if marked_only:
+            queryset = queryset.filter(title__icontains="skill")
+        elif model is not RawTextDocument:
+            queryset = queryset.filter(title__iendswith=".md")
+        candidates.extend(queryset.only("title", "full_text"))
+    return candidates
+
+
 def _append_collection_docs(parts: list[str], collection: Collection, *, marked_only: bool) -> None:
-    for doc in sorted(collection.documents, key=lambda item: str(getattr(item, "title", "") or "")):
+    for doc in sorted(
+        _candidate_collection_docs(collection, marked_only=marked_only),
+        key=lambda item: str(getattr(item, "title", "") or ""),
+    ):
         title = str(getattr(doc, "title", "") or "")
         if marked_only and not _is_direct_skill_doc(title):
             continue
