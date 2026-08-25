@@ -88,7 +88,7 @@ def _claim_run(run_id: uuid.UUID):
         return _RunClaim(run=run, lease_token=lease_token)
 
 
-def _fail_run(run_id: uuid.UUID, error_code: str, lease_token: uuid.UUID) -> None:
+def _fail_run(run_id: uuid.UUID, error_code: str, lease_token: uuid.UUID) -> bool:
     from apps.collections.models import CollectionSchemaGenerationRun
 
     filters = {
@@ -97,10 +97,26 @@ def _fail_run(run_id: uuid.UUID, error_code: str, lease_token: uuid.UUID) -> Non
         "lease_token": lease_token,
         "lease_expires_at__gt": timezone.now(),
     }
-    CollectionSchemaGenerationRun.objects.filter(**filters).update(
+    return bool(CollectionSchemaGenerationRun.objects.filter(**filters).update(
         status="failed", error_code=error_code, completed_at=timezone.now(),
         lease_token=None, lease_expires_at=None,
-    )
+    ))
+
+
+def _fail_expired_run(run_id: uuid.UUID, error_code: str, lease_token: uuid.UUID) -> bool:
+    """Fail only the same running owner after its lease actually expired."""
+
+    from apps.collections.models import CollectionSchemaGenerationRun
+
+    return bool(CollectionSchemaGenerationRun.objects.filter(
+        id=run_id,
+        status="running",
+        lease_token=lease_token,
+        lease_expires_at__lte=timezone.now(),
+    ).update(
+        status="failed", error_code=error_code, completed_at=timezone.now(),
+        lease_token=None, lease_expires_at=None,
+    ))
 
 
 def _safe_log_failure(error_code: str, exc: BaseException | None = None) -> None:
@@ -174,16 +190,37 @@ def _release_lease_for_retry(run_id: uuid.UUID, lease_token: uuid.UUID) -> bool:
         return True
 
 
-def _retry_or_fail(task, run_id: uuid.UUID, lease_token: uuid.UUID, exc: BaseException) -> None:
-    """Leave a live run resumable for retry; record only exhausted local failures."""
+def _retry_after_lease_loss(task, run_id: uuid.UUID, lease_token: uuid.UUID, error_code: str, exc: BaseException) -> bool:
+    """Redeliver a stale owner, or fail only its own expired lease at exhaustion."""
+
+    if int(getattr(task.request, "retries", 0)) < task.max_retries:
+        raise task.retry(exc=exc, countdown=_RETRY_COUNTDOWN_SECONDS)
+    return _fail_expired_run(run_id, error_code, lease_token)
+
+
+def _fail_or_retry(task, run_id: uuid.UUID, lease_token: uuid.UUID, error_code: str, exc: BaseException) -> bool:
+    """Record a terminal result only for this owner, otherwise preserve delivery."""
+
+    if _fail_run(run_id, error_code, lease_token):
+        return True
+    return _retry_after_lease_loss(task, run_id, lease_token, error_code, exc)
+
+
+def _retry_or_fail(task, run_id: uuid.UUID, lease_token: uuid.UUID, exc: BaseException) -> bool:
+    """Release an owned retry attempt, or preserve a stale delivery for recovery."""
 
     retry_count = int(getattr(task.request, "retries", 0))
     if retry_count < task.max_retries:
         if _release_lease_for_retry(run_id, lease_token):
             raise task.retry(exc=exc, countdown=_RETRY_COUNTDOWN_SECONDS)
-        return
-    _fail_run(run_id, "local_inference_failed", lease_token)
-    _safe_log_failure("local_inference_failed", exc)
+        return _retry_after_lease_loss(task, run_id, lease_token, "local_inference_failed", exc)
+    if _fail_run(run_id, "local_inference_failed", lease_token):
+        _safe_log_failure("local_inference_failed", exc)
+        return True
+    if _fail_expired_run(run_id, "local_inference_failed", lease_token):
+        _safe_log_failure("local_inference_failed", exc)
+        return True
+    return False
 
 
 @shared_task(
@@ -209,18 +246,18 @@ def generate_collection_schema_task(self, run_id: str) -> None:
         return None
     run, lease_token = claim.run, claim.lease_token
     if not _generation_enabled():
-        _fail_run(parsed_run_id, "disabled", lease_token)
+        _fail_or_retry(self, parsed_run_id, lease_token, "disabled", _LeaseLost())
         return None
     try:
         if collection_source_signature(run.collection_id) != run.source_signature:
-            _fail_run(parsed_run_id, "source_changed", lease_token)
+            _fail_or_retry(self, parsed_run_id, lease_token, "source_changed", _SourceChanged())
             return None
         config = load_schema_generation_config()
         samples = sample_collection_chunks(
             run.collection_id, config.max_chunks, config.max_characters
         )
         if not samples:
-            _fail_run(parsed_run_id, "no_collection_text", lease_token)
+            _fail_or_retry(self, parsed_run_id, lease_token, "no_collection_text", _LeaseLost())
             return None
         candidate = generate_schema_candidate(samples)
         definitions, statistics = collect_candidate_evidence(candidate, samples)
@@ -228,18 +265,18 @@ def generate_collection_schema_task(self, run_id: str) -> None:
             parsed_run_id, run.collection_id, run.source_signature, lease_token, definitions, statistics
         )
     except _SourceChanged:
-        _fail_run(parsed_run_id, "source_changed", lease_token)
-    except _LeaseLost:
-        return None
+        _fail_or_retry(self, parsed_run_id, lease_token, "source_changed", _SourceChanged())
+    except _LeaseLost as exc:
+        _retry_after_lease_loss(self, parsed_run_id, lease_token, "local_inference_failed", exc)
     except InvalidSchemaCandidate as exc:
-        _fail_run(parsed_run_id, "invalid_candidate", lease_token)
-        _safe_log_failure("invalid_candidate", exc)
+        if _fail_or_retry(self, parsed_run_id, lease_token, "invalid_candidate", exc):
+            _safe_log_failure("invalid_candidate", exc)
     except Exception as exc:
         from apps.collections.services.schema import SchemaGenerationDraftConflict
 
         if isinstance(exc, SchemaGenerationDraftConflict):
-            _fail_run(parsed_run_id, "draft_conflict", lease_token)
-            _safe_log_failure("draft_conflict", exc)
+            if _fail_or_retry(self, parsed_run_id, lease_token, "draft_conflict", exc):
+                _safe_log_failure("draft_conflict", exc)
             return None
         _retry_or_fail(self, parsed_run_id, lease_token, exc)
     return None

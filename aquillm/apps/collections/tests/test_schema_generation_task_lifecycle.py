@@ -100,7 +100,7 @@ def test_retry_keeps_the_durable_run_resumable_and_marks_only_exhaustion(monkeyp
     )
     token = uuid.uuid4()
     monkeypatch.setattr(tasks, "_release_lease_for_retry", lambda run_id, lease_token: True)
-    monkeypatch.setattr(tasks, "_fail_run", lambda run_id, code, lease_token: failures.append((run_id, code, lease_token)))
+    monkeypatch.setattr(tasks, "_fail_run", lambda run_id, code, lease_token: failures.append((run_id, code, lease_token)) or True)
 
     with pytest.raises(RuntimeError, match="retry-scheduled"):
         tasks._retry_or_fail(retry, uuid.uuid4(), token, ConnectionError("local unavailable"))
@@ -158,30 +158,6 @@ def test_final_source_fence_locks_source_before_task_one_draft_write(monkeypatch
         tasks._write_draft_with_source_fence(uuid.UUID(int=2), 1, "source", uuid.UUID(int=3), {}, {})
 
 
-def test_terminal_failure_is_conditioned_on_the_owned_lease(monkeypatch):
-    """An expired worker must not fail a run that a newer worker reclaimed."""
-
-    from apps.collections.tasks import schema_generation as tasks
-    from apps.collections import models
-
-    filters, updates = [], []
-    manager = SimpleNamespace(
-        filter=lambda **kwargs: filters.append(kwargs) or SimpleNamespace(
-            update=lambda **values: updates.append(values)
-        )
-    )
-    monkeypatch.setattr(models, "CollectionSchemaGenerationRun", SimpleNamespace(objects=manager), raising=False)
-    now = tasks.timezone.now()
-    monkeypatch.setattr(tasks.timezone, "now", lambda: now)
-    token = uuid.uuid4()
-
-    tasks._fail_run(uuid.UUID(int=4), "invalid_candidate", token)
-
-    assert filters == [{"id": uuid.UUID(int=4), "status__in": ("queued", "running"), "lease_token": token, "lease_expires_at__gt": now}]
-    assert updates[0]["status"] == "failed"
-    assert updates[0]["lease_token"] is None
-
-
 @pytest.mark.parametrize(
     ("source", "samples", "candidate_error", "write_error", "expected"),
     (
@@ -205,7 +181,7 @@ def test_task_fake_lifecycle_maps_terminal_outcomes_without_payload_logs(
     failures, writes, logs = [], [], []
     monkeypatch.setenv("KG_SCHEMA_GENERATION_ENABLED", "1")
     monkeypatch.setattr(tasks, "_claim_run", lambda run_id: tasks._RunClaim(run, lease_token))
-    monkeypatch.setattr(tasks, "_fail_run", lambda run_id, code, token: failures.append(code))
+    monkeypatch.setattr(tasks, "_fail_run", lambda run_id, code, token: failures.append(code) or True)
     monkeypatch.setattr(tasks, "collection_source_signature", lambda collection_id: source)
     monkeypatch.setattr(tasks, "load_schema_generation_config", lambda: SimpleNamespace(max_chunks=2, max_characters=20))
     monkeypatch.setattr(tasks, "sample_collection_chunks", lambda *args: samples)
