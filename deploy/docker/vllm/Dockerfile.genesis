@@ -2,10 +2,10 @@
 #
 # Keep this separate from Dockerfile: Whisper/embed/rerank sidecars should stay
 # on the plain vLLM image unless they explicitly need Genesis.
-ARG VLLM_GENESIS_BASE_IMAGE=vllm/vllm-openai:v0.21.0
+ARG VLLM_GENESIS_BASE_IMAGE=vllm/vllm-openai@sha256:6a93ae4316826f3dd8a92bee5442cbed50184a9cbd688d310f9e56ecad1eabeb
 FROM ${VLLM_GENESIS_BASE_IMAGE}
 
-ARG GENESIS_REF=main
+ARG GENESIS_REF=34e269301cc3df71ae4b0da00a0a159b16b4e5d8
 
 USER root
 RUN apt-get update \
@@ -13,16 +13,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir soundfile
 
-RUN git clone --depth 1 --branch "${GENESIS_REF}" \
-        https://github.com/Sandermage/genesis-vllm-patches.git /tmp/genesis \
-    && cd /tmp/genesis \
-    && pip install --no-deps --no-cache-dir ./tools/genesis_vllm_plugin \
-    && VLLM_DIR="$(python3 -c 'import os, vllm; print(os.path.dirname(vllm.__file__))')" \
-    && rm -rf "${VLLM_DIR}/_genesis" \
-    && cp -r vllm/_genesis "${VLLM_DIR}/_genesis" \
-    && rm -rf /tmp/genesis
+RUN git init /opt/genesis \
+    && cd /opt/genesis \
+    && git remote add origin https://github.com/Sandermage/genesis-vllm-patches.git \
+    && git fetch --depth 1 origin "${GENESIS_REF}" \
+    && test "$(git rev-parse FETCH_HEAD)" = "${GENESIS_REF}" \
+    && git checkout --detach FETCH_HEAD \
+    && pip install --no-deps --no-cache-dir -e /opt/genesis
 
-RUN python3 -c 'import vllm._genesis; from importlib.metadata import entry_points; assert any(ep.name == "genesis_v7" for ep in entry_points(group="vllm.general_plugins")), "Genesis vLLM plugin entry point missing"; print("Genesis plugin installed and vllm._genesis importable")'
+RUN python3 -c 'import sndr; from importlib.metadata import entry_points; assert any(ep.value == "sndr.plugin:register" for ep in entry_points(group="vllm.general_plugins")), "Genesis vLLM plugin entry point missing"; print("Genesis sndr plugin installed and importable")'
 
 COPY --chmod=755 ./deploy/scripts/vllm_start.sh /vllm_start.sh
 COPY --chmod=755 ./deploy/scripts/genesis_vllm_entrypoint.sh /genesis_entrypoint.sh

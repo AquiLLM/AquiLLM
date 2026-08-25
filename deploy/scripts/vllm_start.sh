@@ -445,8 +445,13 @@ cmd=("${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --port "${PORT}"
   --model "${MODEL_TO_SERVE}"
   --served-model-name "${SERVED_MODEL_NAME}"
-  --disable-log-requests
 )
+
+if supports_arg "--no-enable-log-requests"; then
+  cmd+=(--no-enable-log-requests)
+elif supports_arg "--disable-log-requests"; then
+  cmd+=(--disable-log-requests)
+fi
 
 if [ -n "${VLLM_API_KEY:-}" ]; then
   cmd+=(--api-key "${VLLM_API_KEY}")
@@ -607,6 +612,12 @@ unset \
   VLLM_EXTRA_ARGS \
   VLLM_PYTHON_BIN \
   VLLM_BASE_URL \
+  VLLM_BUILD_URL \
+  VLLM_IMAGE_TAG \
+  VLLM_CACHE_PATH \
+  VLLM_BUILD_PIPELINE \
+  VLLM_BUILD_COMMIT \
+  VLLM_GENESIS_BASE_IMAGE \
   LMCACHE_ENABLED \
   LMCACHE_EXTRA_ARGS || true
 
