@@ -58,6 +58,7 @@ def test_example_environment_enables_the_turboquant_mtp_workspace_stack():
         "GENESIS_ENFORCE_VERSION_RANGE=1",
         "GENESIS_ENABLE_P98=1",
         "GENESIS_ENABLE_PN118=1",
+        "GENESIS_ENABLE_PN119=1",
         "GENESIS_ENABLE_PN399_TQ_DECODE_SCRATCH_IMA=1",
         "GENESIS_ENABLE_PN401_TQ_PREFILL_CONTINUATION_GUARD=1",
         "GENESIS_ENABLE_PN521_TQ_RAW_TAIL_VERIFY=1",
@@ -76,7 +77,11 @@ def test_example_environment_enables_mtp_speculation_by_default():
         line for line in environment.splitlines() if line.startswith("VLLM_EXTRA_ARGS=")
     )
 
-    assert "--speculative-config" in vllm_extra_args
+    assert "--kv-cache-dtype turboquant_k8v4" in vllm_extra_args
+    assert (
+        "--speculative-config '{\\\"method\\\":\\\"mtp\\\",\\\"num_speculative_tokens\\\":4}'"
+        in vllm_extra_args
+    )
 
 
 def test_main_vllm_context_limit_defaults_are_synced_with_the_ui_limit():
