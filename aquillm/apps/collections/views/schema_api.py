@@ -102,15 +102,21 @@ def schema_generate(request, col_id: int):
             locked_collection = Collection.objects.select_for_update().get(
                 pk=collection.pk
             )
-            if CollectionSchemaDraft.objects.filter(
-                collection=locked_collection
-            ).exists():
-                raise schema_service.SchemaOperationError(
-                    "draft_exists", status=409
-                )
-            source_signature = _locked_collection_source_signature(
-                locked_collection.pk
+            draft = (
+                CollectionSchemaDraft.objects.select_for_update()
+                .filter(collection=locked_collection)
+                .first()
             )
+            draft_definitions = (
+                schema_service.canonicalize_definitions(draft.definitions)
+                if draft is not None
+                else {"entities": [], "relations": []}
+            )
+            if draft is not None and any(draft_definitions.values()):
+                raise schema_service.SchemaOperationError("draft_exists", status=409)
+            base_draft_id = draft.pk if draft is not None else None
+            base_draft_revision = draft.revision if draft is not None else None
+            source_signature = _locked_collection_source_signature(locked_collection.pk)
             run = (
                 CollectionSchemaGenerationRun.objects.select_for_update()
                 .filter(
@@ -123,14 +129,19 @@ def schema_generate(request, col_id: int):
                 .first()
             )
             if run is not None and run.source_signature != source_signature:
-                raise schema_service.SchemaOperationError(
-                    "source_changed", status=409
-                )
+                raise schema_service.SchemaOperationError("source_changed", status=409)
+            if run is not None and (
+                run.base_draft_id != base_draft_id
+                or run.base_draft_revision != base_draft_revision
+            ):
+                raise schema_service.SchemaOperationError("draft_exists", status=409)
             if run is None:
                 run = CollectionSchemaGenerationRun.objects.create(
                     collection=locked_collection,
                     requested_by=request.user,
                     source_signature=source_signature,
+                    base_draft_id=base_draft_id,
+                    base_draft_revision=base_draft_revision,
                 )
                 run_id = str(run.pk)
                 transaction.on_commit(

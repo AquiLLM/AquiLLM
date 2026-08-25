@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CollectionSchemaApi } from './collectionSchemaApi';
 import {
   editDraftEnvelope,
+  emptyDraftEnvelope,
   emptyEditableEnvelope,
   historyPageFixture,
   manageDraftEnvelope,
@@ -165,9 +166,21 @@ describe('useCollectionSchemaEditor', () => {
     expect(result.current.generation.status).toBe('queued');
   });
 
+  it('automatically starts generation for an unchanged empty draft', async () => {
+    const api = createMockApi({
+      loadWorkspace: vi.fn().mockResolvedValue({ ok: true, data: emptyDraftEnvelope }),
+      getGenerationStatus: vi.fn(() => new Promise(() => undefined)) as unknown as CollectionSchemaApi['getGenerationStatus'],
+    });
+
+    renderHook(() => useCollectionSchemaEditor({ collectionId: 'col-empty-draft', api }));
+
+    await waitFor(() => expect(api.startGeneration).toHaveBeenCalledWith('col-empty-draft'));
+    expect(api.startGeneration).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ['VIEW workspace', viewPublishedEnvelope],
-    ['existing draft', editDraftEnvelope],
+    ['existing nonempty draft', editDraftEnvelope],
     ['existing published schema', manageDraftEnvelope],
   ])('does not auto-generate for a %s', async (_label, envelope) => {
     const api = createMockApi({ loadWorkspace: vi.fn().mockResolvedValue({ ok: true, data: envelope }) });

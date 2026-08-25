@@ -1,0 +1,95 @@
+from io import StringIO
+
+import pytest
+from django.contrib.auth.models import User
+from django.core.management import call_command, get_commands
+
+from apps.collections.models import (
+    Collection,
+    CollectionPermission,
+    CollectionSchemaDraft,
+    CollectionSchemaGenerationRun,
+)
+
+
+def test_missing_schema_backfill_command_is_registered():
+    assert "generate_missing_collection_schemas" in get_commands()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backfill_queues_unchanged_empty_draft_and_skips_nonempty_draft(monkeypatch):
+    editor = User.objects.create_user(username="schema-backfill-editor")
+    empty = Collection.objects.create(name="Empty draft collection")
+    nonempty = Collection.objects.create(name="Edited draft collection")
+    for collection in (empty, nonempty):
+        CollectionPermission.objects.create(
+            collection=collection,
+            user=editor,
+            permission="EDIT",
+        )
+    empty_draft = CollectionSchemaDraft.objects.create(
+        collection=empty,
+        definitions={"entities": [], "relations": []},
+        last_editor=editor,
+    )
+    CollectionSchemaDraft.objects.create(
+        collection=nonempty,
+        definitions={"entities": [{"key": "paper"}], "relations": []},
+        last_editor=editor,
+    )
+    monkeypatch.setattr(
+        "apps.collections.management.commands.generate_missing_collection_schemas._locked_collection_source_signature",
+        lambda collection_id: f"{collection_id:064x}",
+        raising=False,
+    )
+    enqueued = []
+    monkeypatch.setattr(
+        "apps.collections.management.commands.generate_missing_collection_schemas.enqueue_schema_generation",
+        enqueued.append,
+        raising=False,
+    )
+    output = StringIO()
+
+    call_command(
+        "generate_missing_collection_schemas",
+        "--all",
+        "--yes",
+        stdout=output,
+    )
+
+    run = CollectionSchemaGenerationRun.objects.get()
+    assert run.collection_id == empty.pk
+    assert run.requested_by_id == editor.pk
+    assert run.base_draft_id == empty_draft.pk
+    assert run.base_draft_revision == empty_draft.revision
+    assert enqueued == [str(run.pk)]
+    assert output.getvalue().strip() == "queued=1 reused=0 skipped=1"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backfill_uses_inherited_editor_for_collection_without_a_draft(monkeypatch):
+    manager = User.objects.create_user(username="schema-backfill-manager")
+    parent = Collection.objects.create(name="Schema parent")
+    child = Collection.objects.create(name="Schema child", parent=parent)
+    CollectionPermission.objects.create(
+        collection=parent,
+        user=manager,
+        permission="MANAGE",
+    )
+    monkeypatch.setattr(
+        "apps.collections.management.commands.generate_missing_collection_schemas._locked_collection_source_signature",
+        lambda collection_id: f"{collection_id:064x}",
+    )
+    enqueued = []
+    monkeypatch.setattr(
+        "apps.collections.management.commands.generate_missing_collection_schemas.enqueue_schema_generation",
+        enqueued.append,
+    )
+
+    call_command("generate_missing_collection_schemas", "--collection", str(child.pk))
+
+    run = CollectionSchemaGenerationRun.objects.get(collection=child)
+    assert run.requested_by_id == manager.pk
+    assert run.base_draft_id is None
+    assert run.base_draft_revision is None
+    assert enqueued == [str(run.pk)]

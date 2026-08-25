@@ -6,6 +6,7 @@ import {
 } from './collectionSchemaEditorHelpers';
 import type { CollectionSchemaApi } from './collectionSchemaApi';
 import { createGenerationPollController, type GenerationPollController } from './schemaGenerationPolling';
+import { isSchemaGenerationEligibleDraft } from './schemaGenerationEligibility';
 import {
   collectionSchemaReducer,
   createInitialCollectionSchemaState,
@@ -271,7 +272,7 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
       editorState.phase === 'ready' &&
       envelope?.collection_id === collectionId &&
       envelope.published.version === 0 &&
-      envelope.draft === null &&
+      isSchemaGenerationEligibleDraft(envelope.draft) &&
       envelope.permissions.can_edit_definitions;
     if (!canAutoGenerate || automaticGenerationCollectionsRef.current.has(collectionId)) return;
     automaticGenerationCollectionsRef.current.add(collectionId);

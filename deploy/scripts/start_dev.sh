@@ -9,6 +9,7 @@ set -euo pipefail
 # Optional env vars:
 #   AQUILLM_COMPOSE_FILE=deploy/compose/development.yml
 #   USE_VLLM=1
+#   USE_KNOWLEDGE_GRAPH=0
 #   USE_EDGE=0
 #   RUN_CERTBOT=0
 #   BUILD=0
@@ -18,6 +19,7 @@ set -euo pipefail
 AQUILLM_COMPOSE_FILE="${AQUILLM_COMPOSE_FILE:-deploy/compose/development.yml}"
 AQUILLM_ENV_FILE="${AQUILLM_ENV_FILE:-.env}"
 USE_VLLM="${USE_VLLM:-1}"
+USE_KNOWLEDGE_GRAPH="${USE_KNOWLEDGE_GRAPH:-0}"
 USE_EDGE="${USE_EDGE:-0}"
 RUN_CERTBOT="${RUN_CERTBOT:-0}"
 BUILD="${BUILD:-0}"
@@ -52,6 +54,10 @@ compose_cmd=(
 
 if [ "$USE_VLLM" = "1" ]; then
   compose_cmd+=(--profile vllm)
+fi
+
+if [ "$USE_KNOWLEDGE_GRAPH" = "1" ]; then
+  compose_cmd+=(--profile knowledge-graph)
 fi
 
 compose_up() {
@@ -113,6 +119,23 @@ if [ "$USE_VLLM" = "1" ]; then
 
   compose_up vllm_rerank
   wait_for_service_healthy vllm_rerank
+fi
+
+if [ "$USE_KNOWLEDGE_GRAPH" = "1" ]; then
+  compose_up memgraph_knowledge_graph
+  wait_for_service_healthy memgraph_knowledge_graph
+
+  compose_up knowledge_graph_query_extractor
+  wait_for_service_healthy knowledge_graph_query_extractor
+
+  compose_up knowledge_graph_query_gateway
+  wait_for_service_healthy knowledge_graph_query_gateway
+
+  compose_up worker_knowledge_graph
+  wait_for_service_healthy worker_knowledge_graph
+
+  compose_up worker_knowledge_graph_projection
+  wait_for_service_healthy worker_knowledge_graph_projection
 fi
 
 compose_up web worker

@@ -131,6 +131,20 @@ export const emptyEditableEnvelope: CollectionSchemaEnvelope = {
   draft: null,
 };
 
+export const emptyDraftEnvelope: CollectionSchemaEnvelope = {
+  ...emptyEditableEnvelope,
+  collection_id: 'col-empty-draft',
+  draft: {
+    draft_id: 'draft-empty-1',
+    revision: 1,
+    base_published_checksum: '',
+    last_editor: 'editor@example.test',
+    updated_at: '2026-08-24T20:00:00Z',
+    entities: [],
+    relations: [],
+  },
+};
+
 export const manageDraftEnvelope: CollectionSchemaEnvelope = {
   ...editDraftEnvelope,
   collection_id: 'col-manage',

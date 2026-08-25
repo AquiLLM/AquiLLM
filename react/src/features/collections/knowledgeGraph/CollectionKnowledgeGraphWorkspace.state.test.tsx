@@ -11,6 +11,7 @@ import {
 import { createInitialSchemaFormBufferState } from './schemaFormBuffer';
 import {
   editDraftEnvelope,
+  emptyDraftEnvelope,
   emptyEditableEnvelope,
   historyPageFixture,
   manageDraftEnvelope,
@@ -161,6 +162,20 @@ describe('CollectionKnowledgeGraphWorkspace states', () => {
       ...createInitialCollectionSchemaState(),
       phase: 'ready',
       envelope: emptyEditableEnvelope,
+      selection: null,
+    };
+
+    renderWorkspace(state, { onGenerateSchema });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate from collection' }));
+    expect(onGenerateSchema).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders Generate from collection for an unchanged empty draft', () => {
+    const onGenerateSchema = vi.fn();
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: emptyDraftEnvelope,
       selection: null,
     };
 

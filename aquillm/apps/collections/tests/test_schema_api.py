@@ -152,9 +152,7 @@ def test_schema_generation_start_is_idempotent_for_same_source(
         "apps.collections.views.schema_api.enqueue_schema_generation",
         enqueued.append,
     )
-    url = reverse(
-        "api_collection_schema_generate", kwargs={"col_id": collection.pk}
-    )
+    url = reverse("api_collection_schema_generate", kwargs={"col_id": collection.pk})
 
     first = _request(client, "post", url, body={})
     second = _request(client, "post", url, body={})
@@ -191,9 +189,7 @@ def test_schema_generation_broker_failure_marks_run_retryable(
         "apps.collections.views.schema_api.enqueue_schema_generation",
         enqueue,
     )
-    url = reverse(
-        "api_collection_schema_generate", kwargs={"col_id": collection.pk}
-    )
+    url = reverse("api_collection_schema_generate", kwargs={"col_id": collection.pk})
 
     first = _request(client, "post", url, body={})
     first_run = CollectionSchemaGenerationRun.objects.get(pk=first.json()["run_id"])
@@ -207,8 +203,43 @@ def test_schema_generation_broker_failure_marks_run_retryable(
     assert "private broker detail" not in caplog.text
 
 
+@pytest.mark.django_db(transaction=True)
+def test_schema_generation_adopts_unchanged_empty_draft(
+    client, schema_users, monkeypatch
+):
+    collection, _viewer, editor, _manager = schema_users
+    client.force_login(editor)
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection,
+        definitions={"entities": [], "relations": []},
+        last_editor=editor,
+    )
+    monkeypatch.setattr(
+        "apps.collections.views.schema_api._locked_collection_source_signature",
+        lambda collection_id: "a" * 64,
+    )
+    enqueued = []
+    monkeypatch.setattr(
+        "apps.collections.views.schema_api.enqueue_schema_generation",
+        enqueued.append,
+    )
+
+    response = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_generate", kwargs={"col_id": collection.pk}),
+        body={},
+    )
+
+    assert response.status_code == 202
+    run = CollectionSchemaGenerationRun.objects.get(pk=response.json()["run_id"])
+    assert run.base_draft_id == draft.pk
+    assert run.base_draft_revision == draft.revision
+    assert enqueued == [str(run.pk)]
+
+
 @pytest.mark.django_db
-def test_schema_generation_rejects_draft_and_changed_active_source(
+def test_schema_generation_rejects_nonempty_draft_and_changed_active_source(
     client, schema_users, monkeypatch
 ):
     collection, _viewer, editor, _manager = schema_users
@@ -222,9 +253,7 @@ def test_schema_generation_rejects_draft_and_changed_active_source(
         requested_by=editor,
         source_signature="a" * 64,
     )
-    url = reverse(
-        "api_collection_schema_generate", kwargs={"col_id": collection.pk}
-    )
+    url = reverse("api_collection_schema_generate", kwargs={"col_id": collection.pk})
 
     changed = _request(client, "post", url, body={})
     assert changed.status_code == 409
@@ -233,7 +262,7 @@ def test_schema_generation_rejects_draft_and_changed_active_source(
     CollectionSchemaGenerationRun.objects.all().delete()
     CollectionSchemaDraft.objects.create(
         collection=collection,
-        definitions={"entities": [], "relations": []},
+        definitions={"entities": [_entity("paper")], "relations": []},
         last_editor=editor,
     )
     draft_conflict = _request(client, "post", url, body={})
@@ -242,9 +271,7 @@ def test_schema_generation_rejects_draft_and_changed_active_source(
 
 
 @pytest.mark.django_db
-def test_schema_generation_status_is_visible_to_collection_viewer(
-    client, schema_users
-):
+def test_schema_generation_status_is_visible_to_collection_viewer(client, schema_users):
     collection, viewer, editor, _manager = schema_users
     run = CollectionSchemaGenerationRun.objects.create(
         collection=collection,
@@ -325,18 +352,14 @@ def test_workspace_capabilities_do_not_advertise_unsupported_renames(
     client.force_login(editor)
 
     workspace = client.get(
-        reverse(
-            "api_collection_schema_workspace", kwargs={"col_id": collection.pk}
-        )
+        reverse("api_collection_schema_workspace", kwargs={"col_id": collection.pk})
     ).json()
 
     entity = next(
         row for row in workspace["draft"]["entities"] if row["key"] == "paper"
     )
     relation = next(
-        row
-        for row in workspace["draft"]["relations"]
-        if row["key"] == "authored_by"
+        row for row in workspace["draft"]["relations"] if row["key"] == "authored_by"
     )
     assert entity["origin"] == "generated"
     assert entity["capabilities"] == {

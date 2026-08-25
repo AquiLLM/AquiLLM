@@ -8,6 +8,7 @@ import type {
   ValidationResult,
 } from './schemaTypes';
 import { buttonDangerClass, buttonPrimaryClass, buttonSecondaryClass, panelClass } from './schemaUiShared';
+import { isSchemaGenerationEligibleDraft } from './schemaGenerationEligibility';
 
 export interface SchemaDraftToolbarProps {
   collectionName: string;
@@ -62,6 +63,7 @@ const SchemaDraftToolbar: React.FC<SchemaDraftToolbarProps> = ({
         ? 'No active draft. Create a draft to begin editing.'
         : null;
   const generationBusy = generation.status === 'starting' || generation.status === 'queued' || generation.status === 'running';
+  const generationEligible = isSchemaGenerationEligibleDraft(draft);
   const generationMessage =
     generation.status === 'starting' || generation.status === 'running'
       ? 'Generating schema from collection.'
@@ -121,7 +123,7 @@ const SchemaDraftToolbar: React.FC<SchemaDraftToolbarProps> = ({
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {permissions.can_edit_definitions && !draft && onGenerate ? (
+          {permissions.can_edit_definitions && generationEligible && onGenerate ? (
             <button type="button" className={buttonSecondaryClass} disabled={generationBusy} onClick={onGenerate}>
               {generation.status === 'failed' ? 'Retry generation' : 'Generate from collection'}
             </button>
