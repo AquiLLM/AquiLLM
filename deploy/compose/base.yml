@@ -367,7 +367,6 @@ services:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
       - TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton
-      - VLLM_CACHE_ROOT=/root/.cache/huggingface/aquillm-main/vllm
       - VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/root/.cache/huggingface/aquillm-main/flashinfer
       - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
       - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
@@ -375,6 +374,7 @@ services:
       - "8000:8000"
     volumes:
       - vllm_data:/root/.cache/huggingface
+      - vllm_compile_cache:/root/.cache/vllm/torch_compile_cache
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\" >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -573,6 +573,7 @@ volumes:
   postgres_data:
   minio_data:
   vllm_data:
+  vllm_compile_cache:
   knowledge_graph_memgraph_data:
   knowledge_graph_hf_cache:
 

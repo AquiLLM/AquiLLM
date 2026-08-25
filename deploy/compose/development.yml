@@ -476,7 +476,6 @@ services:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
       - TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton
-      - VLLM_CACHE_ROOT=/root/.cache/huggingface/aquillm-main/vllm
       - VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/root/.cache/huggingface/aquillm-main/flashinfer
       - VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.33}
       - VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-131072}
@@ -510,6 +509,7 @@ services:
         condition: service_healthy
     volumes:
       - /media/volume/aquillmdev2-vol/vllm:/root/.cache/huggingface
+      - vllm_compile_cache:/root/.cache/vllm/torch_compile_cache
     env_file:
       - ../../.env
     environment:
@@ -685,6 +685,7 @@ volumes:
   postgres_data:
   minio_data:
   certs:
+  vllm_compile_cache:
   memgraph_data:
   knowledge_graph_memgraph_data:
   knowledge_graph_hf_cache:

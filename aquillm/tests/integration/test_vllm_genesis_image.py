@@ -110,7 +110,6 @@ def test_main_vllm_context_limit_defaults_are_synced_with_the_ui_limit():
 def test_main_vllm_compile_caches_persist_with_the_model_cache():
     cache_settings = (
         "TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton",
-        "VLLM_CACHE_ROOT=/root/.cache/huggingface/aquillm-main/vllm",
         "VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR="
         "/root/.cache/huggingface/aquillm-main/flashinfer",
     )
@@ -121,3 +120,7 @@ def test_main_vllm_compile_caches_persist_with_the_model_cache():
         )
         for setting in cache_settings:
             assert compose.count(setting) == 1
+        assert compose.count(
+            "vllm_compile_cache:/root/.cache/vllm/torch_compile_cache"
+        ) == 1
+        assert "VLLM_CACHE_ROOT=" not in compose
