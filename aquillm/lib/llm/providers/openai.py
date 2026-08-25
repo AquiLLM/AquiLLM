@@ -145,6 +145,14 @@ class OpenAIInterface(LLMInterface):
             "messages": [{"role": system_role, "content": system_text}] + message_list,
             "max_tokens": max_tokens,
         }
+        is_vllm_endpoint = "vllm" in base_url or "8000" in base_url
+        if is_vllm_endpoint:
+            enable_thinking = getenv(
+                "OPENAI_COMPAT_ENABLE_THINKING", "0"
+            ).strip().lower() in ("1", "true", "yes", "on")
+            arguments["chat_template_kwargs"] = {
+                "enable_thinking": enable_thinking
+            }
         context_limit_raw = (
             (getenv("OPENAI_CONTEXT_LIMIT", "") or "").strip()
             or (getenv("VLLM_MAX_MODEL_LEN", "") or "").strip()
