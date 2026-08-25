@@ -151,6 +151,26 @@ def test_vllm_start_uses_supported_log_requests_disable_flag(tmp_path: Path):
     assert "--disable-log-requests" not in final_args
 
 
+def test_vllm_start_unsets_deployment_only_vllm_metadata():
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy/scripts/vllm_start.sh").read_text(
+        encoding="utf-8"
+    )
+    unset_block = script.split(
+        "# Avoid vLLM env validation warnings for wrapper-only variables.", 1
+    )[1].split('echo "Starting vLLM', 1)[0]
+
+    for variable in (
+        "VLLM_BUILD_URL",
+        "VLLM_IMAGE_TAG",
+        "VLLM_CACHE_PATH",
+        "VLLM_BUILD_PIPELINE",
+        "VLLM_BUILD_COMMIT",
+        "VLLM_GENESIS_BASE_IMAGE",
+    ):
+        assert variable in unset_block
+
+
 def test_parser_normalizes_escaped_json_values():
     raw = (
         "--speculative-config "
