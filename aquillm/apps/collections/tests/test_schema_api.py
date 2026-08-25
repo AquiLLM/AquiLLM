@@ -10,6 +10,7 @@ from apps.collections.models import (
     Collection,
     CollectionPermission,
     CollectionSchemaDraft,
+    CollectionSchemaGenerationRun,
     CollectionSchemaVersion,
 )
 from apps.knowledge_graph.models import OntologyVersion
@@ -136,6 +137,140 @@ def _validate_and_publish(client, collection, draft):
     )
     assert response.status_code == 200, response.json()
     return response
+
+
+@pytest.mark.django_db(transaction=True)
+def test_schema_generation_start_is_idempotent_for_same_source(
+    client, schema_users, monkeypatch
+):
+    collection, _viewer, editor, _manager = schema_users
+    client.force_login(editor)
+    enqueued = []
+    monkeypatch.setattr(
+        "apps.collections.views.schema_api._locked_collection_source_signature",
+        lambda collection_id: "a" * 64,
+    )
+    monkeypatch.setattr(
+        "apps.collections.views.schema_api.enqueue_schema_generation",
+        enqueued.append,
+    )
+    url = reverse(
+        "api_collection_schema_generate", kwargs={"col_id": collection.pk}
+    )
+
+    first = _request(client, "post", url, body={})
+    second = _request(client, "post", url, body={})
+
+    assert first.status_code == second.status_code == 202
+    assert first.json()["run_id"] == second.json()["run_id"]
+    assert first.json()["status"] == "queued"
+    assert first.json()["status_url"] == reverse(
+        "api_collection_schema_generation_status",
+        kwargs={"col_id": collection.pk, "run_id": first.json()["run_id"]},
+    )
+    assert CollectionSchemaGenerationRun.objects.count() == 1
+    assert enqueued == [first.json()["run_id"]]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_schema_generation_broker_failure_marks_run_retryable(
+    client, schema_users, monkeypatch, caplog
+):
+    collection, _viewer, editor, _manager = schema_users
+    client.force_login(editor)
+    monkeypatch.setattr(
+        "apps.collections.views.schema_api._locked_collection_source_signature",
+        lambda collection_id: "a" * 64,
+    )
+    attempts = []
+
+    def enqueue(run_id):
+        attempts.append(run_id)
+        if len(attempts) == 1:
+            raise ConnectionError("private broker detail")
+
+    monkeypatch.setattr(
+        "apps.collections.views.schema_api.enqueue_schema_generation",
+        enqueue,
+    )
+    url = reverse(
+        "api_collection_schema_generate", kwargs={"col_id": collection.pk}
+    )
+
+    first = _request(client, "post", url, body={})
+    first_run = CollectionSchemaGenerationRun.objects.get(pk=first.json()["run_id"])
+    second = _request(client, "post", url, body={})
+
+    assert first.status_code == second.status_code == 202
+    assert first_run.status == CollectionSchemaGenerationRun.Status.FAILED
+    assert first_run.error_code == "local_inference_failed"
+    assert first.json()["run_id"] != second.json()["run_id"]
+    assert attempts == [first.json()["run_id"], second.json()["run_id"]]
+    assert "private broker detail" not in caplog.text
+
+
+@pytest.mark.django_db
+def test_schema_generation_rejects_draft_and_changed_active_source(
+    client, schema_users, monkeypatch
+):
+    collection, _viewer, editor, _manager = schema_users
+    client.force_login(editor)
+    monkeypatch.setattr(
+        "apps.collections.views.schema_api._locked_collection_source_signature",
+        lambda collection_id: "b" * 64,
+    )
+    CollectionSchemaGenerationRun.objects.create(
+        collection=collection,
+        requested_by=editor,
+        source_signature="a" * 64,
+    )
+    url = reverse(
+        "api_collection_schema_generate", kwargs={"col_id": collection.pk}
+    )
+
+    changed = _request(client, "post", url, body={})
+    assert changed.status_code == 409
+    assert changed.json() == {"error": "source_changed"}
+
+    CollectionSchemaGenerationRun.objects.all().delete()
+    CollectionSchemaDraft.objects.create(
+        collection=collection,
+        definitions={"entities": [], "relations": []},
+        last_editor=editor,
+    )
+    draft_conflict = _request(client, "post", url, body={})
+    assert draft_conflict.status_code == 409
+    assert draft_conflict.json() == {"error": "draft_exists"}
+
+
+@pytest.mark.django_db
+def test_schema_generation_status_is_visible_to_collection_viewer(
+    client, schema_users
+):
+    collection, viewer, editor, _manager = schema_users
+    run = CollectionSchemaGenerationRun.objects.create(
+        collection=collection,
+        requested_by=editor,
+        source_signature="a" * 64,
+        status=CollectionSchemaGenerationRun.Status.FAILED,
+        error_code="no_collection_text",
+        statistics={"sample_count": 0},
+    )
+    client.force_login(viewer)
+    url = reverse(
+        "api_collection_schema_generation_status",
+        kwargs={"col_id": collection.pk, "run_id": run.pk},
+    )
+
+    response = client.get(url)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": str(run.pk),
+        "status": "failed",
+        "error_code": "no_collection_text",
+        "statistics": {"sample_count": 0},
+    }
 
 
 @pytest.mark.django_db

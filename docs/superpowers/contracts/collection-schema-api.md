@@ -1,7 +1,7 @@
-# Collection Schema API Contract (Provisional)
+# Collection Schema API Contract
 
-**Branch:** `feat/collection-schema-editor-ui`  
-**Backend stub commit:** provisional Django stubs for URL reverse and local development  
+**Backend:** persistent collection-scoped schema versions, draft, and generation runs  
+**Generation:** asynchronous on the self-hosted knowledge-graph worker  
 **Publish mode:** synchronous — no `api_collection_schema_publish_status` route
 
 ## Verification commands
@@ -40,6 +40,8 @@ Oversized or malformed success payloads map to client error kind `invalid_respon
 | Version diff | `api_collection_schema_version_diff` | `api_collection_schema_version_diff` | GET | `col_id`, `version_id` | — | — | `SchemaDiffSummary` | 401/403/404/503 | VIEW+ | yes |
 | Restore | `api_collection_schema_restore` | `api_collection_schema_restore` | POST | `col_id`, `version_id` | `{}` | — | `CollectionSchemaEnvelope` or 409 challenge | 401/403/404/409/503 | MANAGE | yes |
 | Restore replace | `api_collection_schema_restore_replace` | `api_collection_schema_restore_replace` | POST | `col_id` | `{ version_id, challenge_token, existing_draft_revision }` | `If-Match: <existing_draft_revision>` | `CollectionSchemaEnvelope` | 401/403/409/503 | MANAGE | yes |
+| Generate draft | `api_collection_schema_generate` | `api_collection_schema_generate` | POST | `col_id` | `{}` | — | `202 { run_id, status, status_url }` | 401/403/409/422/503 | EDIT+ | yes |
+| Generation status | `api_collection_schema_generation_status` | `api_collection_schema_generation_status` | GET | `col_id`, `run_id` | — | — | `200 SchemaGenerationStatus` | 401/403/404/503 | VIEW+ | yes |
 
 **Not used (sync publish):** `api_collection_schema_publish_status`
 
@@ -56,3 +58,12 @@ Oversized or malformed success payloads map to client error kind `invalid_respon
 ## Restore challenge contract
 
 When restore is blocked by an existing draft, `409` returns `{ challenge_token, existing_draft_revision, existing_draft_id, last_editor }`. Atomic replacement uses `api_collection_schema_restore_replace` with the challenge token and exact existing draft revision in body and `If-Match`.
+
+## Generation contract
+
+- Starting generation is idempotent per collection while a queued/running run has the same source signature; repeated POSTs return that active run and a changed source returns 409.
+- Generation is rejected when an editable draft already exists, so generated output never overwrites manual work.
+- Status values are exactly `queued`, `running`, `succeeded`, and `failed`.
+- Status returns `{ run_id, status, error_code, statistics }`; successful runs also include the current `workspace` envelope.
+- The default caps are 32 chunks, 48,000 sampled characters, and 180 seconds.
+- Sampling, GLiNER2 evidence collection, and schema proposal run only against local Docker services. Collection text, prompts, raw model output, and credentials are never returned or logged.
