@@ -77,8 +77,8 @@ class OpenAIMemoryPromptTests(SimpleTestCase):
                 max_tokens=128,
             )
 
-        assert completions.calls[0]["chat_template_kwargs"] == {
-            "enable_thinking": True
+        assert completions.calls[0]["extra_body"] == {
+            "chat_template_kwargs": {"enable_thinking": True}
         }
 
     def test_local_vllm_can_explicitly_disable_thinking(self):
@@ -104,6 +104,6 @@ class OpenAIMemoryPromptTests(SimpleTestCase):
                 max_tokens=128,
             )
 
-        assert completions.calls[0]["chat_template_kwargs"] == {
-            "enable_thinking": False
+        assert completions.calls[0]["extra_body"] == {
+            "chat_template_kwargs": {"enable_thinking": False}
         }
