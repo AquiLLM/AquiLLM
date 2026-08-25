@@ -75,11 +75,18 @@ def test_web_gets_query_only_and_projection_worker_gets_split_credentials(
 ) -> None:
     services = _compose(path)["services"]
     web = services.get("web", services.get("web_test"))
+    extractor = services["knowledge_graph_query_extractor"]
     worker = services["worker_knowledge_graph_projection"]
     web_environment = _env(web)
     worker_environment = _env(worker)
     assert web_environment["KG_QUERY_EXTRACTOR_BUILD_HASH"] == BUILD_HASH
-    assert web_environment["KG_QUERY_EXTRACTOR_URL"].endswith(":8000")
+    assert (
+        web_environment["KG_QUERY_EXTRACTOR_URL"]
+        == "http://knowledge-graph-query-extractor:8000"
+    )
+    assert "knowledge-graph-query-extractor" in extractor["networks"][
+        "knowledge_graph_api"
+    ]["aliases"]
     assert web_environment["KG_TOPOLOGY_GATEWAY_URL"].endswith(":8092")
     assert web_environment["KG_TOPOLOGY_GATEWAY_BEARER_TOKEN"]
     assert web_environment.get("KG_MEMGRAPH_URI") in (None, "")

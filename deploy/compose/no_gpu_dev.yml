@@ -70,7 +70,7 @@ services:
       - ../../.env
     environment:
       <<: *common-env
-      KG_QUERY_EXTRACTOR_URL: http://knowledge_graph_query_extractor:8000
+      KG_QUERY_EXTRACTOR_URL: http://knowledge-graph-query-extractor:8000
       KG_QUERY_EXTRACTOR_BEARER_TOKEN: ${KG_QUERY_EXTRACTOR_BEARER_TOKEN:-}
       KG_QUERY_EXTRACTOR_BUILD_HASH: ${KG_QUERY_EXTRACTOR_BUILD_HASH:-}
       KG_TOPOLOGY_GATEWAY_URL: http://knowledge_graph_query_gateway:8092
@@ -230,7 +230,7 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
-      KG_QUERY_EXTRACTOR_URL: http://knowledge_graph_query_extractor:8000
+      KG_QUERY_EXTRACTOR_URL: http://knowledge-graph-query-extractor:8000
       KG_QUERY_EXTRACTOR_BEARER_TOKEN: ${KG_QUERY_EXTRACTOR_BEARER_TOKEN:-}
       KG_QUERY_EXTRACTOR_BUILD_HASH: ${KG_QUERY_EXTRACTOR_BUILD_HASH:-}
       KG_QUERY_EXTRACTOR_MODEL: fastino/gliner2-base-v1
@@ -246,7 +246,9 @@ services:
       KG_GLINER2_DEVICE: cpu
       HF_HOME: /root/.cache/huggingface
     volumes: [knowledge_graph_hf_cache:/root/.cache/huggingface]
-    networks: [knowledge_graph_api]
+    networks:
+      knowledge_graph_api:
+        aliases: [knowledge-graph-query-extractor]
     command: /opt/venv/bin/uvicorn lib.knowledge_graph.query_extractor.service:app --host 0.0.0.0 --port 8000 --no-access-log
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).read()\""]

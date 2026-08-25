@@ -77,3 +77,21 @@ def test_example_environment_enables_mtp_speculation_by_default():
     )
 
     assert "--speculative-config" in vllm_extra_args
+
+
+def test_main_vllm_context_limit_defaults_are_synced_with_the_ui_limit():
+    environment = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    production = (REPO_ROOT / "deploy/compose/production.yml").read_text(
+        encoding="utf-8"
+    )
+    development = (REPO_ROOT / "deploy/compose/development.yml").read_text(
+        encoding="utf-8"
+    )
+    page_view = (REPO_ROOT / "aquillm/apps/chat/views/pages.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "VLLM_MAX_MODEL_LEN=131072" in environment.splitlines()
+    assert "VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-131072}" in production
+    assert "VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-131072}" in development
+    assert 'os.getenv("VLLM_MAX_MODEL_LEN", "")' in page_view
