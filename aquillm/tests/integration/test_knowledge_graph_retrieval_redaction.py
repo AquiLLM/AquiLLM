@@ -234,6 +234,7 @@ def test_shared_sources_forbid_response_text_and_exception_rendering() -> None:
             ), relative
 
 
-def test_vllm_proxy_disables_request_body_logging_once() -> None:
+def test_vllm_proxy_disables_request_body_logging() -> None:
     script = (REPO / "deploy/scripts/vllm_start.sh").read_text(encoding="utf-8")
-    assert script.count("--disable-log-requests") == 1
+    assert "cmd+=(--no-enable-log-requests)" in script
+    assert "cmd+=(--disable-log-requests)" in script

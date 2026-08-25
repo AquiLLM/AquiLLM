@@ -141,6 +141,16 @@ def _strict_reranker_environment(**overrides: str) -> dict[str, str]:
     return environment
 
 
+def test_vllm_start_uses_supported_log_requests_disable_flag(tmp_path: Path):
+    final_args = _run_vllm_start(
+        tmp_path,
+        FAKE_VLLM_HELP_ARGS="--no-enable-log-requests",
+    )
+
+    assert "--no-enable-log-requests" in final_args
+    assert "--disable-log-requests" not in final_args
+
+
 def test_parser_normalizes_escaped_json_values():
     raw = (
         "--speculative-config "
