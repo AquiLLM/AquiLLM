@@ -475,6 +475,9 @@ services:
     environment:
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
+      - TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton
+      - VLLM_CACHE_ROOT=/root/.cache/huggingface/aquillm-main/vllm
+      - VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/root/.cache/huggingface/aquillm-main/flashinfer
       - VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.33}
       - VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-131072}
       - NVIDIA_VISIBLE_DEVICES=all

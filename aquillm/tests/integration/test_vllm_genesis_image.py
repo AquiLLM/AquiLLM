@@ -105,3 +105,19 @@ def test_main_vllm_context_limit_defaults_are_synced_with_the_ui_limit():
     assert "VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-131072}" in production
     assert "VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-131072}" in development
     assert 'os.getenv("VLLM_MAX_MODEL_LEN", "")' in page_view
+
+
+def test_main_vllm_compile_caches_persist_with_the_model_cache():
+    cache_settings = (
+        "TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton",
+        "VLLM_CACHE_ROOT=/root/.cache/huggingface/aquillm-main/vllm",
+        "VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR="
+        "/root/.cache/huggingface/aquillm-main/flashinfer",
+    )
+
+    for compose_name in ("base.yml", "development.yml", "production.yml"):
+        compose = (REPO_ROOT / "deploy/compose" / compose_name).read_text(
+            encoding="utf-8"
+        )
+        for setting in cache_settings:
+            assert compose.count(setting) == 1

@@ -366,6 +366,9 @@ services:
       # (Do not set VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS} here — empty Compose substitution would wipe .env.)
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
+      - TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton
+      - VLLM_CACHE_ROOT=/root/.cache/huggingface/aquillm-main/vllm
+      - VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/root/.cache/huggingface/aquillm-main/flashinfer
       - LMCACHE_ENABLED=${LMCACHE_ENABLED:-0}
       - LMCACHE_EXTRA_ARGS=${LMCACHE_EXTRA_ARGS:-}
     ports:
