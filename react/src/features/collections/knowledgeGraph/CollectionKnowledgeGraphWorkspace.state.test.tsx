@@ -98,6 +98,36 @@ describe('CollectionKnowledgeGraphWorkspace states', () => {
     expect(screen.queryByTestId('schema-nav-entity-person')).toBeNull();
   });
 
+  it('treats generated definitions as collection-scoped in the origin filter', () => {
+    const generatedEntity = {
+      ...manageDraftEnvelope.draft!.entities[0],
+      key: 'generated_topic',
+      origin: 'generated' as const,
+      values: {
+        ...manageDraftEnvelope.draft!.entities[0].values,
+        name: 'generated_topic',
+      },
+    };
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: {
+        ...manageDraftEnvelope,
+        draft: {
+          ...manageDraftEnvelope.draft!,
+          entities: [...manageDraftEnvelope.draft!.entities, generatedEntity],
+        },
+      },
+      selection: null,
+    };
+
+    renderWorkspace(state);
+    fireEvent.change(screen.getByLabelText('Filter by origin'), { target: { value: 'collection' } });
+
+    expect(screen.getByTestId('schema-nav-entity-generated_topic')).toBeTruthy();
+    expect(screen.queryByTestId('schema-nav-entity-person')).toBeNull();
+  });
+
   it('opens history panel when History is clicked', () => {
     const onLoadHistory = vi.fn();
     const state: CollectionSchemaEditorState = {

@@ -14,7 +14,9 @@ describe('pollGenerationStatus', () => {
     const poll = vi.fn().mockResolvedValueOnce(status(pendingStatus)).mockResolvedValueOnce(status('succeeded'));
     const sleep = vi.fn().mockResolvedValue(undefined);
 
-    await expect(pollGenerationStatus({ poll, sleep })).resolves.toMatchObject({ status: 'succeeded' });
+    await expect(pollGenerationStatus({ poll, sleep, initialDelayMs: 100 })).resolves.toMatchObject({
+      status: 'succeeded',
+    });
     expect(poll).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(100);
   });
@@ -37,6 +39,17 @@ describe('pollGenerationStatus', () => {
     ).resolves.toEqual({ status: 'exhausted' });
     expect(poll).toHaveBeenCalledTimes(4);
     expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([50, 100, 100]);
+  });
+
+  it('keeps the default poll alive through the backend 180-second generation budget', async () => {
+    let elapsedMs = 0;
+    const poll = vi.fn(async () => (elapsedMs >= 180_000 ? status('succeeded') : status('running')));
+    const sleep = vi.fn(async (delayMs: number) => {
+      elapsedMs += delayMs;
+    });
+
+    await expect(pollGenerationStatus({ poll, sleep })).resolves.toMatchObject({ status: 'succeeded' });
+    expect(elapsedMs).toBeGreaterThanOrEqual(180_000);
   });
 
   it('aborts without accepting a stale response', async () => {

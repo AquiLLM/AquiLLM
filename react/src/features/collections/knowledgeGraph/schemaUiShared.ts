@@ -14,7 +14,14 @@ export const buttonDangerClass =
   'h-[36px] px-3 rounded-[18px] bg-scheme-shade_5 text-red-300 border border-red-400/40 hover:bg-scheme-shade_6 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
 
 export function originLabel(origin: SchemaDefinitionOrigin): string {
-  return origin === 'inherited' ? 'Inherited' : 'Collection';
+  switch (origin) {
+    case 'inherited':
+      return 'Inherited';
+    case 'generated':
+      return 'Generated';
+    default:
+      return 'Collection';
+  }
 }
 
 export function changeStateLabel(state: SchemaDefinitionChangeState): string {

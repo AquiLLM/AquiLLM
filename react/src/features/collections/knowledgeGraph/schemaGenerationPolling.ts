@@ -32,9 +32,9 @@ export async function pollGenerationStatus(options: GenerationPollOptions): Prom
   const {
     poll,
     signal,
-    maxAttempts = 5,
-    initialDelayMs = 100,
-    maxDelayMs = 1000,
+    maxAttempts = 45,
+    initialDelayMs = 1000,
+    maxDelayMs = 5000,
     sleep = defaultSleep,
   } = options;
 

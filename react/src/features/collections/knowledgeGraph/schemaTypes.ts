@@ -1,6 +1,6 @@
 export type SchemaPermissionLevel = 'VIEW' | 'EDIT' | 'MANAGE';
 
-export type SchemaDefinitionOrigin = 'inherited' | 'collection';
+export type SchemaDefinitionOrigin = 'inherited' | 'collection' | 'generated';
 
 export type SchemaDefinitionKind = 'entity' | 'relation';
 
