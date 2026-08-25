@@ -37,7 +37,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from aquillm.llm import Conversation
 from apps.chat.consumers.chat import ChatConsumer, CollectionsRef
 from apps.chat.consumers.chat_receive import handle_chat_receive
 from apps.chat.services import rag_pipeline
@@ -45,6 +44,7 @@ from apps.chat.tests.chat_message_test_support import (
     _FakeLLMInterface,
     _test_document_ids,
 )
+from aquillm.llm import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage
 from lib.llm.types.response import LLMResponse
 
@@ -213,3 +213,82 @@ async def test_append_direct_rag_disabled_falls_back_to_spin(
     )
 
     mock_spin.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("apps.chat.consumers.chat.build_memory_tools", return_value=[])
+@patch("apps.chat.consumers.chat.build_document_tools", return_value=[])
+@patch("apps.chat.consumers.chat.build_astronomy_tools", return_value=[])
+@patch(
+    "apps.chat.consumers.chat.effective_base_system_for_memory_async",
+    new_callable=AsyncMock,
+    return_value="sys",
+)
+@patch(
+    "apps.chat.consumers.chat.augment_conversation_with_memory_async",
+    new_callable=AsyncMock,
+)
+@patch("apps.chat.consumers.chat.run_llm_spin", new_callable=AsyncMock)
+@patch(
+    "apps.chat.consumers.chat.run_direct_rag_turn",
+    new_callable=AsyncMock,
+    return_value="handled",
+)
+async def test_reconnect_pending_user_turn_uses_direct_rag_before_tool_spin(
+    mock_direct,
+    mock_spin,
+    _augment,
+    _memory_system,
+    _astronomy_tools,
+    _document_tools,
+    _memory_tools,
+    monkeypatch,
+):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    pending = Conversation(
+        system="sys",
+        messages=[{"role": "user", "content": "what is attensity"}],
+    )
+    user, db_convo = _mock_user_and_convo()
+    db_convo.selected_collection_ids = [203]
+    db_convo.system_prompt = "sys"
+
+    consumer = ChatConsumer()
+    consumer.scope = {
+        "user": user,
+        "url_route": {"kwargs": {"convo_id": db_convo.id}},
+    }
+    consumer.accept = AsyncMock()
+    consumer.send = AsyncMock()
+    consumer._save_conversation = AsyncMock()
+    consumer._ChatConsumer__get_all_user_collections = AsyncMock()
+    consumer._ChatConsumer__get_convo = AsyncMock(return_value=db_convo)
+
+    async def direct_sets_answer(*args, **kwargs):
+        consumer.convo = pending + [
+            AssistantMessage(
+                content="Reconnected answer [doc:doc-a chunk:1].",
+                stop_reason="end_turn",
+            )
+        ]
+        return "handled"
+
+    mock_direct.side_effect = direct_sets_answer
+
+    with patch(
+        "apps.chat.consumers.chat.load_conversation_from_db",
+        return_value=pending,
+    ), patch(
+        "apps.chat.consumers.chat.database_sync_to_async",
+        side_effect=lambda function: (
+            lambda *args, **kwargs: _await_value(function(*args, **kwargs))
+        ),
+    ):
+        await consumer.connect()
+
+    mock_direct.assert_awaited_once()
+    mock_spin.assert_not_awaited()
+
+
+async def _await_value(value):
+    return value

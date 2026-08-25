@@ -1,13 +1,14 @@
 """Build and send WebSocket conversation deltas after LLM turns."""
 from __future__ import annotations
 
-import structlog
 from json import dumps
 from time import perf_counter
 from typing import Any
 
+import structlog
 from channels.db import aclose_old_connections
 
+from apps.chat.consumers.chat_transport import best_effort_send
 from aquillm.llm import Conversation
 from aquillm.message_adapters import pydantic_message_to_frontend_dict
 
@@ -44,14 +45,18 @@ async def send_conversation_delta(
     }
     if usage is not None:
         delta["usage"] = usage
-    await consumer.send(text_data=dumps({"delta": delta}))
-    consumer.last_sent_sequence = len(convo) - 1
+    sent = await best_effort_send(
+        consumer,
+        text_data=dumps({"delta": delta}),
+    )
+    if sent:
+        consumer.last_sent_sequence = len(convo) - 1
     logger.info(
-        "obs.chat.delta_sent",
+        "obs.chat.delta_completed",
         duration_ms=(perf_counter() - save_start) * 1000,
         message_count=len(new_messages),
+        transport_sent=sent,
     )
-    logger.debug("obs.chat.delta_completed")
 
 
 __all__ = ["send_conversation_delta"]
