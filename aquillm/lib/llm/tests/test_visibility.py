@@ -1,4 +1,5 @@
 """Tests for assistant presentation policy (display vs persistence)."""
+
 from __future__ import annotations
 
 from aquillm.llm import AssistantMessage
@@ -81,8 +82,23 @@ def test_visible_stream_suppresses_tool_code_markup_fragment():
     assert visible == ""
 
 
+def test_same_line_tool_transcript_is_interim_and_never_visible():
+    text = 'Tool:vector_search {"search_string":"attensity","top_k":10}'
+
+    assert vis.is_interim_assistant_text(text)
+    assert (
+        vis.visible_stream_content(
+            text,
+            raw_tools=[{"name": "vector_search"}],
+            done=False,
+            tool_call_payload=None,
+        )
+        == ""
+    )
+
+
 def test_sanitize_strips_tool_code_from_persisted_answer():
-    text = "Overview text.\n\n<tool_code>{\"name\":\"vector_search\"}</tool_code>\n\nMore detail."
+    text = 'Overview text.\n\n<tool_code>{"name":"vector_search"}</tool_code>\n\nMore detail.'
     cleaned = vis.sanitize_assistant_text(text, suppress_interim=False)
     assert "<tool_code>" not in cleaned
     assert "Overview text" in cleaned

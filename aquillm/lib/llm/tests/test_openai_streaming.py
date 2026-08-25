@@ -1,4 +1,5 @@
 """Tests for OpenAI-compatible streaming visibility rules."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -55,7 +56,33 @@ async def test_streaming_textual_tool_call_is_not_sent_to_visible_stream():
     assert response.text is None
     assert response.tool_call["tool_call_name"] == "vector_search"
     assert all("<tool_call>" not in payload.get("content", "") for payload in payloads)
-    assert all("vector_search" not in payload.get("content", "") for payload in payloads)
+    assert all(
+        "vector_search" not in payload.get("content", "") for payload in payloads
+    )
+
+
+async def test_streaming_same_line_tool_call_is_structured_and_never_visible():
+    payloads: list[dict] = []
+
+    async def _capture(payload: dict) -> None:
+        payloads.append(payload)
+
+    tool_text = 'Tool:vector_search {"search_string":"attensity","top_k":10}'
+    response = await consume_streaming_completion(
+        stream=_FakeStream([_chunk(tool_text[:24]), _chunk(tool_text[24:], "stop")]),
+        stream_callback=_capture,
+        stream_message_uuid="msg-same-line",
+        raw_tools=[{"name": "vector_search"}],
+        model_name="test-model",
+    )
+
+    assert response.text is None
+    assert response.tool_call["tool_call_name"] == "vector_search"
+    assert response.tool_call["tool_call_input"] == {
+        "search_string": "attensity",
+        "top_k": 10,
+    }
+    assert payloads == []
 
 
 async def test_streaming_raw_tool_transcript_is_suppressed_when_tools_are_available():
@@ -73,7 +100,9 @@ async def test_streaming_raw_tool_transcript_is_suppressed_when_tools_are_availa
     )
 
     response = await consume_streaming_completion(
-        stream=_FakeStream([_chunk(raw_transcript[:70]), _chunk(raw_transcript[70:], "stop")]),
+        stream=_FakeStream(
+            [_chunk(raw_transcript[:70]), _chunk(raw_transcript[70:], "stop")]
+        ),
         stream_callback=_capture,
         stream_message_uuid="msg-2",
         raw_tools=[{"name": "whole_document"}],
@@ -82,7 +111,9 @@ async def test_streaming_raw_tool_transcript_is_suppressed_when_tools_are_availa
 
     assert response.text == raw_transcript
     assert payloads == []
-    assert all("Tool:retrieve" not in payload.get("content", "") for payload in payloads)
+    assert all(
+        "Tool:retrieve" not in payload.get("content", "") for payload in payloads
+    )
     assert all("I'll help" not in payload.get("content", "") for payload in payloads)
 
 
@@ -93,10 +124,12 @@ async def test_streaming_think_blocks_are_removed_from_visible_stream():
         payloads.append(payload)
 
     response = await consume_streaming_completion(
-        stream=_FakeStream([
-            _chunk("<think>I should inspect this first.</think>"),
-            _chunk("Final answer.", "stop"),
-        ]),
+        stream=_FakeStream(
+            [
+                _chunk("<think>I should inspect this first.</think>"),
+                _chunk("Final answer.", "stop"),
+            ]
+        ),
         stream_callback=_capture,
         stream_message_uuid="msg-3",
         raw_tools=None,
@@ -106,7 +139,9 @@ async def test_streaming_think_blocks_are_removed_from_visible_stream():
     assert response.text == "Final answer."
     assert payloads[-1]["content"] == "Final answer."
     assert all("<think>" not in payload.get("content", "") for payload in payloads)
-    assert all("inspect this first" not in payload.get("content", "") for payload in payloads)
+    assert all(
+        "inspect this first" not in payload.get("content", "") for payload in payloads
+    )
 
 
 async def test_streaming_tool_code_fragment_is_suppressed():
@@ -116,7 +151,9 @@ async def test_streaming_tool_code_fragment_is_suppressed():
         payloads.append(payload)
 
     await consume_streaming_completion(
-        stream=_FakeStream([_chunk("<tool_code> Tool"), _chunk("Real answer paragraph.", "stop")]),
+        stream=_FakeStream(
+            [_chunk("<tool_code> Tool"), _chunk("Real answer paragraph.", "stop")]
+        ),
         stream_callback=_capture,
         stream_message_uuid="msg-tool-code",
         raw_tools=[{"name": "whole_document"}],

@@ -1,9 +1,9 @@
 """OpenAI LLM interface."""
+
 import asyncio
-import re
 import uuid
 from os import getenv
-from typing import Optional, override
+from typing import override
 
 from tiktoken import encoding_for_model
 
@@ -29,7 +29,11 @@ from .openai_tokens import (
     preflight_trim_for_context,
     trim_messages_for_overflow,
 )
-from .openai_tool_text import decode_json_dict, extract_tool_call_from_text
+from .openai_tool_text import (
+    decode_json_dict,
+    extract_tool_call_from_text,
+    is_textual_tool_call_only,
+)
 from .openai_tools_format import transform_openai_tool_choice, transform_openai_tools
 
 try:
@@ -41,7 +45,7 @@ if DEBUG:
     from pprint import pp
 
 
-gpt_enc = encoding_for_model('gpt-4o')
+gpt_enc = encoding_for_model("gpt-4o")
 
 
 class OpenAIInterface(LLMInterface):
@@ -50,7 +54,7 @@ class OpenAIInterface(LLMInterface):
     @override
     def __init__(self, openai_client, model: str):
         self.client = openai_client
-        self.base_args = {'model': model}
+        self.base_args = {"model": model}
 
     @staticmethod
     def _trim_messages_for_overflow(arguments: dict, overflow_tokens: int) -> bool:
@@ -83,7 +87,9 @@ class OpenAIInterface(LLMInterface):
         return strip_images_from_messages(arguments)
 
     @staticmethod
-    def _retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional[dict]:
+    def _retry_args_for_context_overflow(
+        arguments: dict, exc: Exception
+    ) -> dict | None:
         return retry_args_for_context_overflow(arguments, exc)
 
     @staticmethod
@@ -95,34 +101,43 @@ class OpenAIInterface(LLMInterface):
             "ConnectTimeout",
         }
         seen_ids: set[int] = set()
-        current: Optional[BaseException] = exc
+        current: BaseException | None = exc
         while current and id(current) not in seen_ids:
             seen_ids.add(id(current))
             if current.__class__.__name__ in timeout_type_names:
                 return True
             message = str(current).lower()
-            if "request timed out" in message or "read timeout" in message or "timed out" in message:
+            if (
+                "request timed out" in message
+                or "read timeout" in message
+                or "timed out" in message
+            ):
                 return True
             current = current.__cause__ or current.__context__
         return False
 
     @staticmethod
-    def _retry_args_for_timeout(arguments: dict, attempt: int) -> Optional[dict]:
+    def _retry_args_for_timeout(arguments: dict, attempt: int) -> dict | None:
         return retry_args_for_timeout(arguments, attempt)
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
-        kwargs.pop('messages_pydantic', None)
-        thinking_budget = kwargs.pop('thinking_budget', None)
-        stream_callback = kwargs.pop('stream_callback', None)
-        stream_message_uuid = str(kwargs.pop('stream_message_uuid', None) or uuid.uuid4())
-        system_text = kwargs.pop('system')
-        message_list = kwargs.pop('messages')
-        max_tokens = kwargs.pop('max_tokens')
-        tool_choice_raw = kwargs.pop('tool_choice', None)
-        raw_tools = kwargs.get('tools')
+        kwargs.pop("messages_pydantic", None)
+        thinking_budget = kwargs.pop("thinking_budget", None)
+        stream_callback = kwargs.pop("stream_callback", None)
+        stream_message_uuid = str(
+            kwargs.pop("stream_message_uuid", None) or uuid.uuid4()
+        )
+        system_text = kwargs.pop("system")
+        message_list = kwargs.pop("messages")
+        max_tokens = kwargs.pop("max_tokens")
+        tool_choice_raw = kwargs.pop("tool_choice", None)
+        raw_tools = kwargs.get("tools")
 
-        if "[User preferences and background]" in system_text or "[Historical conversation context]" in system_text:
+        if (
+            "[User preferences and background]" in system_text
+            or "[Historical conversation context]" in system_text
+        ):
             system_text = (
                 "You have access to retrieved user memory in the system context below. "
                 "When relevant memory is present, use it directly. "
@@ -135,14 +150,16 @@ class OpenAIInterface(LLMInterface):
 
         configured_role = getenv("OPENAI_SYSTEM_ROLE", "").strip().lower()
         base_url = str(getattr(self.client, "base_url", "") or "").lower()
-        is_local_compatible_endpoint = any(token in base_url for token in ("ollama", "vllm", "11434", "8000"))
+        is_local_compatible_endpoint = any(
+            token in base_url for token in ("ollama", "vllm", "11434", "8000")
+        )
         if configured_role in ("system", "developer"):
             system_role = configured_role
         else:
             system_role = "system" if is_local_compatible_endpoint else "developer"
 
         arguments = {
-            "model": self.base_args['model'],
+            "model": self.base_args["model"],
             "messages": [{"role": system_role, "content": system_text}] + message_list,
             "max_tokens": max_tokens,
         }
@@ -157,10 +174,9 @@ class OpenAIInterface(LLMInterface):
             arguments["extra_body"] = {
                 "chat_template_kwargs": {"enable_thinking": enable_thinking}
             }
-        context_limit_raw = (
-            (getenv("OPENAI_CONTEXT_LIMIT", "") or "").strip()
-            or (getenv("VLLM_MAX_MODEL_LEN", "") or "").strip()
-        )
+        context_limit_raw = (getenv("OPENAI_CONTEXT_LIMIT", "") or "").strip() or (
+            getenv("VLLM_MAX_MODEL_LEN", "") or ""
+        ).strip()
         try:
             context_limit = int(context_limit_raw)
         except Exception:
@@ -184,7 +200,9 @@ class OpenAIInterface(LLMInterface):
                 prompt_budget_context_limit,
             )
 
-            pack_limit = context_limit if context_limit > 0 else prompt_budget_context_limit()
+            pack_limit = (
+                context_limit if context_limit > 0 else prompt_budget_context_limit()
+            )
             if pack_limit > 0 and context_packer_enabled():
                 sys_row = arguments["messages"][0]
                 tail = arguments["messages"][1:]
@@ -217,9 +235,9 @@ class OpenAIInterface(LLMInterface):
             except Exception:
                 pass
 
-        if 'tools' in kwargs:
+        if "tools" in kwargs:
             arguments["tools"] = await transform_openai_tools(
-                kwargs.pop('tools'),
+                kwargs.pop("tools"),
                 include_strict=not is_local_compatible_endpoint,
             )
             transformed_tool_choice = transform_openai_tool_choice(tool_choice_raw)
@@ -228,7 +246,9 @@ class OpenAIInterface(LLMInterface):
 
         request_timeout_s = float(getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "120"))
         try:
-            max_request_timeout_s = float(getenv("OPENAI_REQUEST_TIMEOUT_MAX_SECONDS", "360"))
+            max_request_timeout_s = float(
+                getenv("OPENAI_REQUEST_TIMEOUT_MAX_SECONDS", "360")
+            )
         except Exception:
             max_request_timeout_s = 360.0
         if max_request_timeout_s < request_timeout_s:
@@ -246,11 +266,10 @@ class OpenAIInterface(LLMInterface):
         if max_timeout_retries < 0:
             max_timeout_retries = 0
 
-        stream_enabled = (
-            callable(stream_callback)
-            and getenv("OPENAI_STREAM_RESPONSES", "1").strip().lower() in ("1", "true", "yes", "on")
-        )
-        parsed_response: Optional[LLMResponse] = None
+        stream_enabled = callable(stream_callback) and getenv(
+            "OPENAI_STREAM_RESPONSES", "1"
+        ).strip().lower() in ("1", "true", "yes", "on")
+        parsed_response: LLMResponse | None = None
         request_args = dict(arguments)
         if stream_enabled:
             request_args["stream"] = True
@@ -260,7 +279,9 @@ class OpenAIInterface(LLMInterface):
         for attempt in range(max_total_retries + 1):
             try:
                 if stream_enabled:
-                    stream = await self.client.chat.completions.create(timeout=request_timeout_s, **request_args)
+                    stream = await self.client.chat.completions.create(
+                        timeout=request_timeout_s, **request_args
+                    )
                     parsed_response = await consume_streaming_completion(
                         stream=stream,
                         stream_callback=stream_callback,
@@ -269,31 +290,38 @@ class OpenAIInterface(LLMInterface):
                         model_name=self.base_args["model"],
                     )
                 else:
-                    response = await self.client.chat.completions.create(timeout=request_timeout_s, **request_args)
+                    response = await self.client.chat.completions.create(
+                        timeout=request_timeout_s, **request_args
+                    )
                     if DEBUG:
                         print("OpenAI SDK Response:")
                         pp(response)
                     text = response.choices[0].message.content
-                    tool_call_payload: Optional[dict] = None
-                    raw_tool_call = response.choices[0].message.tool_calls[0] if response.choices[0].message.tool_calls else None
+                    tool_call_payload: dict | None = None
+                    raw_tool_call = (
+                        response.choices[0].message.tool_calls[0]
+                        if response.choices[0].message.tool_calls
+                        else None
+                    )
                     if raw_tool_call:
                         tool_call_payload = {
                             "tool_call_id": raw_tool_call.id or str(uuid.uuid4()),
                             "tool_call_name": raw_tool_call.function.name,
-                            "tool_call_input": decode_json_dict(raw_tool_call.function.arguments),
+                            "tool_call_input": decode_json_dict(
+                                raw_tool_call.function.arguments
+                            ),
                         }
                     elif text and raw_tools:
                         tool_call_payload = extract_tool_call_from_text(text, raw_tools)
-                        if tool_call_payload and re.fullmatch(
-                            r"\s*(```[\s\S]*```|<function_call>[\s\S]*</function_call>|<tool_call>[\s\S]*</tool_call>|<tool_code>[\s\S]*</tool_code>|<\w+>\s*\{[\s\S]*\}\s*</\w+>)\s*",
-                            text,
-                            flags=re.IGNORECASE,
-                        ):
+                        if tool_call_payload and is_textual_tool_call_only(text):
                             text = None
 
-                    if tool_call_payload and tool_call_payload.get("tool_call_name") == 'message_to_user':
+                    if (
+                        tool_call_payload
+                        and tool_call_payload.get("tool_call_name") == "message_to_user"
+                    ):
                         parsed_args = tool_call_payload.get("tool_call_input") or {}
-                        text = parsed_args.get('message') or text
+                        text = parsed_args.get("message") or text
                         tool_call_payload = None
 
                     parsed_response = LLMResponse(
@@ -302,7 +330,7 @@ class OpenAIInterface(LLMInterface):
                         stop_reason=response.choices[0].finish_reason,
                         input_usage=response.usage.prompt_tokens,
                         output_usage=response.usage.completion_tokens,
-                        model=self.base_args['model'],
+                        model=self.base_args["model"],
                         message_uuid=stream_message_uuid,
                     )
                 break
@@ -335,13 +363,19 @@ class OpenAIInterface(LLMInterface):
                 raise
         assert parsed_response is not None
         return parsed_response
-                        
-    @override 
-    async def token_count(self, conversation: Conversation, new_message: Optional[str] = None) -> int:
-        assistant_messages = [message for message in conversation if isinstance(message, AssistantMessage)]
+
+    @override
+    async def token_count(
+        self, conversation: Conversation, new_message: str | None = None
+    ) -> int:
+        assistant_messages = [
+            message for message in conversation if isinstance(message, AssistantMessage)
+        ]
         if assistant_messages:
-            return assistant_messages[-1].usage + (len(gpt_enc.encode(new_message)) if new_message else 0)
+            return assistant_messages[-1].usage + (
+                len(gpt_enc.encode(new_message)) if new_message else 0
+            )
         return len(gpt_enc.encode(new_message)) if new_message else 0
 
 
-__all__ = ['OpenAIInterface', 'gpt_enc']
+__all__ = ["OpenAIInterface", "gpt_enc"]

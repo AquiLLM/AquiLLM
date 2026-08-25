@@ -1,13 +1,17 @@
 """Streaming chat.completions consumption for OpenAI-compatible APIs."""
+
 from __future__ import annotations
 
-import re
 import uuid
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from ..types.response import LLMResponse
-
-from .openai_tool_text import decode_json_dict, extract_tool_call_from_text
+from .openai_tool_text import (
+    decode_json_dict,
+    extract_tool_call_from_text,
+    is_textual_tool_call_only,
+)
 from .visibility import strip_thinking_blocks, visible_stream_content
 
 
@@ -16,7 +20,7 @@ async def consume_streaming_completion(
     stream: Any,
     stream_callback: Callable[..., Any],
     stream_message_uuid: str,
-    raw_tools: Optional[list[dict]],
+    raw_tools: list[dict] | None,
     model_name: str,
 ) -> LLMResponse:
     text_parts: list[str] = []
@@ -74,11 +78,15 @@ async def consume_streaming_completion(
 
         usage = getattr(chunk, "usage", None)
         if usage is not None:
-            input_usage = int(getattr(usage, "prompt_tokens", input_usage) or input_usage)
-            output_usage = int(getattr(usage, "completion_tokens", output_usage) or output_usage)
+            input_usage = int(
+                getattr(usage, "prompt_tokens", input_usage) or input_usage
+            )
+            output_usage = int(
+                getattr(usage, "completion_tokens", output_usage) or output_usage
+            )
 
     text = strip_thinking_blocks("".join(text_parts)) or None
-    tool_call_payload: Optional[dict] = None
+    tool_call_payload: dict | None = None
     if tool_call_parts:
         first_idx = sorted(tool_call_parts.keys())[0]
         first_tool_call = tool_call_parts[first_idx]
@@ -92,14 +100,13 @@ async def consume_streaming_completion(
             }
     elif text and raw_tools:
         tool_call_payload = extract_tool_call_from_text(text, raw_tools)
-        if tool_call_payload and re.fullmatch(
-            r"\s*(```[\s\S]*```|<function_call>[\s\S]*</function_call>|<tool_call>[\s\S]*</tool_call>|<tool_code>[\s\S]*</tool_code>|<\w+>\s*\{[\s\S]*\}\s*</\w+>)\s*",
-            text,
-            flags=re.IGNORECASE,
-        ):
+        if tool_call_payload and is_textual_tool_call_only(text):
             text = None
 
-    if tool_call_payload and tool_call_payload.get("tool_call_name") == "message_to_user":
+    if (
+        tool_call_payload
+        and tool_call_payload.get("tool_call_name") == "message_to_user"
+    ):
         parsed_args = tool_call_payload.get("tool_call_input") or {}
         text = parsed_args.get("message") or text
         tool_call_payload = None

@@ -1,20 +1,20 @@
 """Heuristics for extractive fallback and deferred-tool detection."""
+
 from __future__ import annotations
 
 import re
 from os import getenv
-from typing import Optional
 
 from ..types.conversation import Conversation
 from ..types.messages import ToolMessage
 
-
 _RAW_TOOL_TRANSCRIPT_RE = re.compile(
-    r"(?im)(?:^|\n)\s*(?:Tool|Tool call|Called Tool)\s*:\s*[A-Za-z_][\w.-]*\s*(?:\n|$)"
+    r"(?im)(?:^|\n)\s*(?:Tool|Tool call|Called Tool)\s*:\s*"
+    r"[A-Za-z_][\w.-]*(?:\s*(?=\{)|\s*(?:\n|$))"
 )
 
 
-def looks_like_raw_tool_transcript(text: Optional[str]) -> bool:
+def looks_like_raw_tool_transcript(text: str | None) -> bool:
     """Detect tool-call/tool-result transcripts that should not be user-visible answers."""
     if not text:
         return False
@@ -29,7 +29,7 @@ def looks_like_raw_tool_transcript(text: Optional[str]) -> bool:
     return bool(_RAW_TOOL_TRANSCRIPT_RE.search(candidate))
 
 
-def looks_like_deferred_tool_intent(text: Optional[str]) -> bool:
+def looks_like_deferred_tool_intent(text: str | None) -> bool:
     """
     Heuristic: detect when the model says it will search/look something up
     instead of actually issuing a tool call in this turn.
@@ -68,7 +68,7 @@ def looks_like_deferred_tool_intent(text: Optional[str]) -> bool:
     return bool(re.search(action_pattern, normalized))
 
 
-def looks_like_post_tool_non_answer(text: Optional[str]) -> bool:
+def looks_like_post_tool_non_answer(text: str | None) -> bool:
     """
     Detect short post-tool placeholders that promise to answer but do not answer.
 
@@ -104,7 +104,12 @@ def looks_like_post_tool_non_answer(text: Optional[str]) -> bool:
 
 
 def extractive_fallback_enabled() -> bool:
-    return getenv("LLM_ALLOW_EXTRACTIVE_FALLBACK", "0").strip().lower() in ("1", "true", "yes", "on")
+    return getenv("LLM_ALLOW_EXTRACTIVE_FALLBACK", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def first_sentence(text: str, max_chars: int = 260) -> str:
@@ -151,7 +156,10 @@ def is_high_quality_summary(text: str) -> bool:
     lowered = candidate.lower()
     if lowered.startswith("here are the key points from the retrieved passages"):
         return False
-    if "i retrieved supporting passages but could not generate a final answer" in lowered:
+    if (
+        "i retrieved supporting passages but could not generate a final answer"
+        in lowered
+    ):
         return False
     if "please retry and i will provide a direct summary" in lowered:
         return False
@@ -175,10 +183,15 @@ def looks_cut_off(text: str) -> bool:
 
 
 def continue_on_cutoff_enabled() -> bool:
-    return getenv("LLM_CONTINUE_ON_CUTOFF", "1").strip().lower() in ("1", "true", "yes", "on")
+    return getenv("LLM_CONTINUE_ON_CUTOFF", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
-def should_preserve_cutoff_partial(text: Optional[str]) -> bool:
+def should_preserve_cutoff_partial(text: str | None) -> bool:
     candidate = (text or "").strip()
     if len(candidate) < 180:
         return False
@@ -187,7 +200,10 @@ def should_preserve_cutoff_partial(text: Optional[str]) -> bool:
     lowered = candidate.lower()
     if lowered.startswith("here are the key points from the retrieved passages"):
         return False
-    if "i retrieved supporting passages but could not generate a final answer" in lowered:
+    if (
+        "i retrieved supporting passages but could not generate a final answer"
+        in lowered
+    ):
         return False
     if "please retry and i will provide a full summary" in lowered:
         return False
@@ -196,10 +212,14 @@ def should_preserve_cutoff_partial(text: Optional[str]) -> bool:
     bullet_count = candidate.count("\n- ") + candidate.count("\n* ")
     citation_count = candidate.count("[doc:")
     nonempty_lines = len([line for line in candidate.splitlines() if line.strip()])
-    return bullet_count >= 3 or citation_count >= 3 or (len(candidate) >= 260 and nonempty_lines >= 4)
+    return (
+        bullet_count >= 3
+        or citation_count >= 3
+        or (len(candidate) >= 260 and nonempty_lines >= 4)
+    )
 
 
-def synthesize_from_recent_tool_results(conversation: Conversation) -> Optional[str]:
+def synthesize_from_recent_tool_results(conversation: Conversation) -> str | None:
     tool_messages = [
         msg
         for msg in reversed(conversation.messages)
@@ -214,7 +234,9 @@ def synthesize_from_recent_tool_results(conversation: Conversation) -> Optional[
     title_re = re.compile(r"--\s*(.*?)\s*chunk\s*#:", flags=re.IGNORECASE)
 
     for tool_msg in tool_messages[:3]:
-        result_dict = tool_msg.result_dict if isinstance(tool_msg.result_dict, dict) else {}
+        result_dict = (
+            tool_msg.result_dict if isinstance(tool_msg.result_dict, dict) else {}
+        )
         payload = result_dict.get("result")
         if isinstance(payload, dict):
             for k, v in list(payload.items())[:8]:
@@ -226,14 +248,22 @@ def synthesize_from_recent_tool_results(conversation: Conversation) -> Optional[
                     if title and title not in source_titles:
                         source_titles.append(title)
                 sentence = first_sentence(val_text)
-                if sentence and is_useful_fallback_sentence(sentence) and sentence not in seen:
+                if (
+                    sentence
+                    and is_useful_fallback_sentence(sentence)
+                    and sentence not in seen
+                ):
                     seen.add(sentence)
                     bullets.append(sentence)
                 if len(bullets) >= 6:
                     break
         elif isinstance(payload, str):
             sentence = first_sentence(payload)
-            if sentence and is_useful_fallback_sentence(sentence) and sentence not in seen:
+            if (
+                sentence
+                and is_useful_fallback_sentence(sentence)
+                and sentence not in seen
+            ):
                 seen.add(sentence)
                 bullets.append(sentence)
         if len(bullets) >= 6:
@@ -246,7 +276,11 @@ def synthesize_from_recent_tool_results(conversation: Conversation) -> Optional[
     bullet_lines = [f"- {point}" for point in bullets[:5]]
     if source_titles:
         sources = ", ".join(source_titles[:4])
-        return f"{header}\n" + "\n".join(bullet_lines) + f"\n\nSources consulted: {sources}"
+        return (
+            f"{header}\n"
+            + "\n".join(bullet_lines)
+            + f"\n\nSources consulted: {sources}"
+        )
     return f"{header}\n" + "\n".join(bullet_lines)
 
 
