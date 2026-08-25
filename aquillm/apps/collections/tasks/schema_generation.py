@@ -69,7 +69,6 @@ def _claim_run(run_id: uuid.UUID):
     with transaction.atomic():
         run = (
             CollectionSchemaGenerationRun.objects.select_for_update()
-            .select_related("collection")
             .filter(id=run_id)
             .first()
         )
@@ -89,12 +88,15 @@ def _claim_run(run_id: uuid.UUID):
         return _RunClaim(run=run, lease_token=lease_token)
 
 
-def _fail_run(run_id: uuid.UUID, error_code: str, lease_token: uuid.UUID | None = None) -> None:
+def _fail_run(run_id: uuid.UUID, error_code: str, lease_token: uuid.UUID) -> None:
     from apps.collections.models import CollectionSchemaGenerationRun
 
-    filters = {"id": run_id, "status__in": ("queued", "running")}
-    if lease_token is not None:
-        filters["lease_token"] = lease_token
+    filters = {
+        "id": run_id,
+        "status__in": ("queued", "running"),
+        "lease_token": lease_token,
+        "lease_expires_at__gt": timezone.now(),
+    }
     CollectionSchemaGenerationRun.objects.filter(**filters).update(
         status="failed", error_code=error_code, completed_at=timezone.now(),
         lease_token=None, lease_expires_at=None,
@@ -124,13 +126,21 @@ def _write_draft_with_source_fence(
         Collection.objects.select_for_update().get(pk=collection_id)
         if _locked_collection_source_signature(collection_id) != expected_signature:
             raise _SourceChanged()
+        now = timezone.now()
         run = (
             CollectionSchemaGenerationRun.objects.select_for_update()
-            .filter(id=run_id, status="running", lease_token=lease_token)
+            .filter(
+                id=run_id,
+                status="running",
+                lease_token=lease_token,
+                lease_expires_at__gt=now,
+            )
             .first()
         )
         if run is None:
             raise _LeaseLost()
+        run.lease_expires_at = now + _LEASE_DURATION
+        run.save(update_fields=["lease_expires_at"])
         draft = write_generated_draft(run_id, canonicalize_definitions(definitions), statistics)
         run.lease_token = None
         run.lease_expires_at = None
@@ -144,9 +154,15 @@ def _release_lease_for_retry(run_id: uuid.UUID, lease_token: uuid.UUID) -> bool:
     from apps.collections.models import CollectionSchemaGenerationRun
 
     with transaction.atomic():
+        now = timezone.now()
         run = (
             CollectionSchemaGenerationRun.objects.select_for_update()
-            .filter(id=run_id, status="running", lease_token=lease_token)
+            .filter(
+                id=run_id,
+                status="running",
+                lease_token=lease_token,
+                lease_expires_at__gt=now,
+            )
             .first()
         )
         if run is None:

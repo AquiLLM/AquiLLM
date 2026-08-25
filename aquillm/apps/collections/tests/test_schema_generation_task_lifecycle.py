@@ -21,7 +21,7 @@ def test_claim_resumes_a_running_run_after_retry_or_worker_redelivery(monkeypatc
     )
     manager = SimpleNamespace(
         select_for_update=lambda: manager,
-        select_related=lambda *args: manager,
+        select_related=lambda *args: pytest.fail("claiming a run must not lock a joined Collection row"),
         filter=lambda **kwargs: manager,
         first=lambda: run,
     )
@@ -47,7 +47,7 @@ def test_claim_excludes_live_duplicate_delivery_and_recovers_only_an_expired_lea
     )
     manager = SimpleNamespace(
         select_for_update=lambda: manager,
-        select_related=lambda *args: manager,
+        select_related=lambda *args: pytest.fail("claiming a run must not lock a joined Collection row"),
         filter=lambda **kwargs: manager,
         first=lambda: run,
     )
@@ -125,6 +125,8 @@ def test_final_source_fence_locks_source_before_task_one_draft_write(monkeypatch
     schema.write_generated_draft = lambda *args: calls.append(args) or "draft"
     monkeypatch.setitem(sys.modules, "apps.collections.services.schema", schema)
     monkeypatch.setattr(tasks.transaction, "atomic", nullcontext)
+    now = tasks.timezone.now()
+    monkeypatch.setattr(tasks.timezone, "now", lambda: now)
     monkeypatch.setattr(tasks, "_locked_collection_source_signature", lambda collection_id: "source")
     collection_locks = []
     collection_manager = SimpleNamespace(
@@ -148,7 +150,7 @@ def test_final_source_fence_locks_source_before_task_one_draft_write(monkeypatch
 
     assert tasks._write_draft_with_source_fence(uuid.UUID(int=2), 1, "source", uuid.UUID(int=3), {"entities": []}, {"counts": {}}) == "draft"
     assert collection_locks == [{"pk": 1}]
-    assert run_filters == [{"id": uuid.UUID(int=2), "status": "running", "lease_token": uuid.UUID(int=3)}]
+    assert run_filters == [{"id": uuid.UUID(int=2), "status": "running", "lease_token": uuid.UUID(int=3), "lease_expires_at__gt": now}]
     assert calls == [(uuid.UUID(int=2), {"canonical": {"entities": []}}, {"counts": {}})]
 
     monkeypatch.setattr(tasks, "_locked_collection_source_signature", lambda collection_id: "changed")
@@ -169,11 +171,13 @@ def test_terminal_failure_is_conditioned_on_the_owned_lease(monkeypatch):
         )
     )
     monkeypatch.setattr(models, "CollectionSchemaGenerationRun", SimpleNamespace(objects=manager), raising=False)
+    now = tasks.timezone.now()
+    monkeypatch.setattr(tasks.timezone, "now", lambda: now)
     token = uuid.uuid4()
 
     tasks._fail_run(uuid.UUID(int=4), "invalid_candidate", token)
 
-    assert filters == [{"id": uuid.UUID(int=4), "status__in": ("queued", "running"), "lease_token": token}]
+    assert filters == [{"id": uuid.UUID(int=4), "status__in": ("queued", "running"), "lease_token": token, "lease_expires_at__gt": now}]
     assert updates[0]["status"] == "failed"
     assert updates[0]["lease_token"] is None
 

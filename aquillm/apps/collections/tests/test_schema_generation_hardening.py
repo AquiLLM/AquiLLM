@@ -6,14 +6,14 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_public_sampler_skips_early_empty_documents_without_losing_later_text(monkeypatch):
-    """An empty leading document must not consume a bounded sample slot."""
+def test_public_sampler_does_not_probe_documents_rejected_by_eligibility(monkeypatch):
+    """The EXISTS identity filter must remove early empty documents before sampling."""
 
     from apps.collections.services import schema_generation
 
     rows = {"document-a": [], "document-b": [], "document-c": [(3, 0, "charlie")], "document-d": [(4, 0, "delta")]}
     calls = []
-    monkeypatch.setattr(schema_generation, "_completed_collection_documents", lambda collection_id, **kwargs: iter({"id": document_id, "full_text_hash": "a" * 64} for document_id in sorted(rows)))
+    monkeypatch.setattr(schema_generation, "_eligible_collection_documents", lambda collection_id: iter({"id": document_id} for document_id in ("document-c", "document-d")))
     monkeypatch.setattr(
         schema_generation,
         "_next_sample_chunk",
@@ -23,7 +23,88 @@ def test_public_sampler_skips_early_empty_documents_without_losing_later_text(mo
     samples = schema_generation.sample_collection_chunks(1, max_chunks=2, max_characters=20)
 
     assert [sample.document_id for sample in samples] == ["document-c", "document-d"]
-    assert calls == ["document-a", "document-b", "document-c", "document-d"]
+    assert calls == ["document-c", "document-d"]
+
+
+def test_public_sampler_uses_eligible_documents_for_true_round_robin(monkeypatch):
+    """Existence filtering must skip empties before the bounded chunk queries start."""
+
+    from apps.collections.services import schema_generation
+
+    rows = {"document-a": [(1, 0, "a1"), (3, 1, "a2")], "document-c": [(2, 0, "c1")]}
+    calls = []
+    monkeypatch.setattr(
+        schema_generation,
+        "_eligible_collection_documents",
+        lambda collection_id: iter({"id": document_id} for document_id in rows),
+    )
+    monkeypatch.setattr(
+        schema_generation,
+        "_next_sample_chunk",
+        lambda document_id, after_chunk_number, character_limit: calls.append(document_id) or next(
+            (schema_generation.SchemaSample(document_id, chunk_id, number, text) for chunk_id, number, text in rows[document_id] if number > after_chunk_number),
+            None,
+        ),
+    )
+
+    samples = schema_generation.sample_collection_chunks(1, max_chunks=3, max_characters=20)
+
+    assert [sample.text for sample in samples] == ["a1", "c1", "a2"]
+    assert calls == ["document-a", "document-c", "document-a"]
+
+
+def test_public_sampler_all_empty_uses_no_per_document_chunk_queries(monkeypatch):
+    """All-empty collections must end after the fixed eligibility queries."""
+
+    from apps.collections.services import schema_generation
+
+    monkeypatch.setattr(schema_generation, "_eligible_collection_documents", lambda collection_id: iter(()))
+    monkeypatch.setattr(schema_generation, "_next_sample_chunk", lambda *args: pytest.fail("empty documents were probed individually"))
+
+    assert schema_generation.sample_collection_chunks(1, max_chunks=32, max_characters=48_000) == []
+
+
+def test_eligible_document_lookup_is_bounded_for_an_all_empty_collection(monkeypatch):
+    """All-empty input performs one EXISTS-backed identity query per document type."""
+
+    from django.apps import apps
+    from apps.collections.services import schema_generation
+
+    names = ("PDFDocument", "TeXDocument", "RawTextDocument", "VTTDocument", "HandwrittenNotesDocument", "ImageUploadDocument", "MediaUploadDocument", "DocumentFigure")
+    filters, annotations, selections = [], [], []
+
+    class QuerySet:
+        def __init__(self, name):
+            self.name = name
+
+        def filter(self, **kwargs):
+            filters.append((self.name, kwargs))
+            return self
+
+        def annotate(self, **kwargs):
+            annotations.append((self.name, kwargs))
+            return self
+
+        def order_by(self, *fields):
+            return self
+
+        def values(self, *fields):
+            selections.append((self.name, fields))
+            return self
+
+        def iterator(self):
+            return iter(())
+
+    monkeypatch.setattr(apps, "get_model", lambda app_label, name: SimpleNamespace(objects=QuerySet(name)))
+
+    assert list(schema_generation._eligible_collection_documents(1)) == []
+    assert filters == [
+        item
+        for name in names
+        for item in ((name, {"collection_id": 1, "ingestion_complete": True}), (name, {"has_usable_text": True}))
+    ]
+    assert [name for name, _ in annotations] == list(names)
+    assert selections == [(name, ("id",)) for name in names]
 
 
 def test_locked_source_signature_locks_all_documents_but_hashes_only_completed(monkeypatch):

@@ -10,6 +10,7 @@ import heapq
 import os
 import re
 from dataclasses import dataclass
+from itertools import islice
 from typing import Iterator
 from urllib.parse import urlparse
 
@@ -127,6 +128,35 @@ def _completed_collection_documents(
     yield from _collection_source_documents(collection_id, for_update=for_update)
 
 
+def _eligible_collection_documents(collection_id: int) -> Iterator[dict[str, object]]:
+    """Stream only completed documents with at least one usable text chunk."""
+
+    from django.apps import apps
+    from django.db.models import Exists, OuterRef
+    from apps.documents.models.chunks import TextChunk
+
+    usable_chunks = TextChunk.objects.filter(
+        doc_id=OuterRef("id"),
+        modality=TextChunk.Modality.TEXT,
+        content__regex=r"\S",
+    )
+    iterators = []
+    for name in (
+        "PDFDocument", "TeXDocument", "RawTextDocument", "VTTDocument",
+        "HandwrittenNotesDocument", "ImageUploadDocument", "MediaUploadDocument",
+        "DocumentFigure",
+    ):
+        model = apps.get_model("apps_documents", name)
+        queryset = (
+            model.objects.filter(collection_id=collection_id, ingestion_complete=True)
+            .annotate(has_usable_text=Exists(usable_chunks))
+            .filter(has_usable_text=True)
+            .order_by("id")
+        )
+        iterators.append(queryset.values("id").iterator())
+    yield from heapq.merge(*iterators, key=lambda record: str(record["id"]))
+
+
 def collection_source_signature(collection_id) -> str:
     """Return a text-free signature for completed collection document content."""
 
@@ -192,23 +222,15 @@ def sample_collection_chunks(collection_id, max_chunks, max_characters):
     if type(max_characters) is not int or max_characters <= 0:
         raise ValueError("max_characters must be a positive integer")
     selected: list[SchemaSample] = []
-    document_ids = (str(row["id"]) for row in _completed_collection_documents(collection_id))
-    cursors: dict[str, int] = {}
-    active_documents: list[str] = []
+    document_ids = [
+        str(row["id"])
+        for row in islice(_eligible_collection_documents(collection_id), max_chunks)
+    ]
+    if not document_ids:
+        return []
+    cursors = {document_id: -1 for document_id in document_ids}
+    active_documents = list(document_ids)
     used_characters = 0
-
-    def fill_active_documents() -> None:
-        """Probe identities only; text remains bounded to accepted sample slots."""
-
-        while len(active_documents) < max_chunks:
-            try:
-                document_id = next(document_ids)
-            except StopIteration:
-                return
-            cursors[document_id] = -1
-            active_documents.append(document_id)
-
-    fill_active_documents()
     while active_documents and len(selected) < max_chunks and used_characters < max_characters:
         for document_id in tuple(active_documents):
             if len(selected) >= max_chunks or used_characters >= max_characters:
@@ -219,7 +241,6 @@ def sample_collection_chunks(collection_id, max_chunks, max_characters):
             if sample is None:
                 active_documents.remove(document_id)
                 cursors.pop(document_id)
-                fill_active_documents()
                 continue
             selected.append(sample)
             cursors[document_id] = sample.chunk_number

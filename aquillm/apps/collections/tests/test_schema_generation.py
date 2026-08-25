@@ -161,9 +161,9 @@ def test_public_sampler_reads_at_most_one_bounded_chunk_per_selected_slot(monkey
 
     monkeypatch.setattr(
         schema_generation,
-        "_completed_collection_documents",
-        lambda collection_id, **kwargs: iter(
-            {"id": document_id, "full_text_hash": "a" * 64}
+        "_eligible_collection_documents",
+        lambda collection_id: iter(
+            {"id": document_id}
             for document_id in sorted(rows)
         ),
     )
