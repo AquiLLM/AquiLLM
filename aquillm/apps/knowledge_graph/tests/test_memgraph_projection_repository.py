@@ -15,10 +15,12 @@ from apps.knowledge_graph.projection.memgraph_edges import (
     topology_edge_attestation,
     topology_edge_rows,
 )
+from apps.knowledge_graph.projection.memgraph_records import _dto
 from apps.knowledge_graph.projection.memgraph_repository import (
     MemgraphProjectionRepository,
 )
 from apps.knowledge_graph.projection.records import (
+    AutomaticCanonicalMembershipV1,
     CollectionGraphProjectionBundleV1,
     ProjectionGenerationManifestV1,
     ProjectionLifecycleState,
@@ -49,6 +51,20 @@ def _bundle():
     return _BundleSource().load_projection_rows(
         projection_id=uuid.uuid4(), batch_size=10
     )
+
+
+def test_memgraph_decoder_restores_omitted_optional_null_properties() -> None:
+    decoded = _dto(
+        AutomaticCanonicalMembershipV1,
+        {
+            "entity_key": "a" * 64,
+            "decision_checksum": "b" * 64,
+            "resolver_version": "resolver-v1",
+            "resolution_config_checksum": "c" * 64,
+        },
+    )
+
+    assert decoded.automatic_membership_key is None
 
 
 def _expected_manifest(bundle):

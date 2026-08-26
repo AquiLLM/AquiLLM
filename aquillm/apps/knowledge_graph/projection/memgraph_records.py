@@ -10,6 +10,7 @@ from .memgraph_pagination import (
     initial_cursor_parameters,
 )
 from .records import (
+    NULLABLE_RECORD_FIELDS,
     AutomaticCanonicalMembershipV1,
     CollectionGraphProjectionBundleV1,
     ProjectedArtifactProvenanceV1,
@@ -117,7 +118,12 @@ def _properties(row: object, name: str) -> dict:
 def _dto(kind, properties: dict):
     names = tuple(field.name for field in fields(kind))
     try:
-        values = {name: properties[name] for name in names}
+        values = {
+            name: properties.get(name)
+            if name in NULLABLE_RECORD_FIELDS
+            else properties[name]
+            for name in names
+        }
     except KeyError:
         raise ValueError("Memgraph projection record is incomplete") from None
     return kind(**values)

@@ -27,6 +27,9 @@ from .serialization import (
 )
 
 _RELATION_TYPE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,127}")
+NULLABLE_RECORD_FIELDS = frozenset(
+    {"automatic_membership_key", "rebuild_request_key"}
+)
 
 
 def _finite_float(value: object, name: str) -> None:
@@ -40,11 +43,10 @@ class _ValidatedRecord:
     __slots__ = ()
 
     def __post_init__(self) -> None:
-        optional = {"automatic_membership_key", "rebuild_request_key"}
         for field in fields(self):
             value = getattr(self, field.name)
             if value is None:
-                if field.name not in optional:
+                if field.name not in NULLABLE_RECORD_FIELDS:
                     raise TypeError(f"{field.name} must not be null")
                 continue
             if field.name.endswith(("_key", "_checksum")) or field.name in {
