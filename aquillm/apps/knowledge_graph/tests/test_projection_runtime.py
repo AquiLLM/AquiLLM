@@ -190,6 +190,11 @@ def test_enabled_activation_injects_frozen_membership_hmac_on_web_alias(
         "enqueue_collection_projection_locked",
         lambda **kwargs: observed.update(kwargs),
     )
+    monkeypatch.setattr(
+        runtime.transaction,
+        "on_commit",
+        lambda _callback, **_kwargs: None,
+    )
 
     enabled = runtime.enqueue_activated_collection_projection(
         7,
@@ -200,6 +205,42 @@ def test_enabled_activation_injects_frozen_membership_hmac_on_web_alias(
     assert enabled is True
     assert observed["using"] == "default"
     assert observed["codec"].key_version == "key-v7"
+
+
+def test_enabled_activation_dispatches_projection_outbox_after_commit(
+    monkeypatch,
+) -> None:
+    from apps.knowledge_graph.projection import lifecycle, tasks
+
+    callbacks = []
+    dispatched = []
+    monkeypatch.setattr(
+        lifecycle,
+        "enqueue_collection_projection_locked",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime.transaction,
+        "on_commit",
+        lambda callback, **_kwargs: callbacks.append(callback),
+    )
+    monkeypatch.setattr(
+        tasks.reconcile_knowledge_graph_projections,
+        "delay",
+        lambda **kwargs: dispatched.append(kwargs),
+    )
+
+    assert runtime.enqueue_activated_collection_projection(
+        7,
+        9,
+        source=_projection_environment(),
+    )
+    assert dispatched == []
+    assert len(callbacks) == 1
+
+    callbacks[0]()
+
+    assert dispatched == [{"collection_id": 7}]
 
 
 def test_worker_postgres_factory_uses_the_live_configured_repository(

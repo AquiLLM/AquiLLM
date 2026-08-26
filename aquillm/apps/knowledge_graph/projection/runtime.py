@@ -4,6 +4,8 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from django.db import transaction
+
 from lib.knowledge_graph.retrieval_config import (
     HybridRetrievalSettings,
     load_hybrid_retrieval_settings,
@@ -156,6 +158,19 @@ def enqueue_activated_collection_projection(
             using="default",
             codec=projection_identifier_codec(settings),
         )
+
+        def dispatch_projection_outbox() -> None:
+            try:
+                from .tasks import reconcile_knowledge_graph_projections
+
+                reconcile_knowledge_graph_projections.delay(
+                    collection_id=collection_id
+                )
+            except Exception:
+                # The durable outbox remains pending for a later reconciliation.
+                return
+
+        transaction.on_commit(dispatch_projection_outbox, using="default")
     except Exception:
         return False
     return True
