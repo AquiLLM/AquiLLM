@@ -14,6 +14,10 @@ _DOCUMENT_SEARCH_ACTION_RE = re.compile(
     r"\blook\s+(?:at|in|through|up)\b",
     flags=re.IGNORECASE,
 )
+_DOCUMENT_SYNTHESIS_ACTION_RE = re.compile(
+    r"\b(summari[sz]e|synthesi[sz]e|analy[sz]e|compare|review|describe|explain)\b",
+    flags=re.IGNORECASE,
+)
 _DOCUMENT_FIGURE_TARGET_RE = re.compile(
     r"\b(figures?|figs?\.?|images?|visuals?|plots?|graphs?|charts?|diagrams?)\b",
     flags=re.IGNORECASE,
@@ -130,9 +134,14 @@ def classify_chat_message(
         _DOCUMENT_FIGURE_TARGET_RE.search(text)
         and _DOCUMENT_FIGURE_ACTION_RE.search(text)
     )
-    explicit_search = bool(
+    explicit_search_action = bool(
         _DOCUMENT_TARGET_RE.search(text) and _DOCUMENT_SEARCH_ACTION_RE.search(text)
     )
+    explicit_synthesis = bool(
+        _DOCUMENT_TARGET_RE.search(text)
+        and _DOCUMENT_SYNTHESIS_ACTION_RE.search(text)
+    )
+    explicit_search = explicit_search_action or explicit_synthesis
     collection_backed = _collection_backed_document_question(
         text, selected_collection_ids
     )
@@ -141,7 +150,7 @@ def classify_chat_message(
 
     if wants_figures:
         reason = "figure_request"
-    elif explicit_search:
+    elif explicit_search_action or (explicit_synthesis and not collection_backed):
         reason = "explicit_search"
     elif collection_backed:
         reason = "collection_backed_question"
