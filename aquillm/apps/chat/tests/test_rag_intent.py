@@ -29,6 +29,17 @@ def test_explicit_search_without_collections_still_requires_rag():
     assert result.requires_rag is True
 
 
+def test_explicit_document_synthesis_without_collection_selection_requires_rag():
+    """A missing picker selection must produce the deterministic collection warning."""
+    result = classify_chat_message(
+        "Hi aquillm can you tell me about the documents in this collection and synthesize things?",
+        selected_collection_ids=[],
+    )
+
+    assert result.requires_rag is True
+    assert result.reason == "explicit_search"
+
+
 # ---------------------------------------------------------------------------
 # Figure-request detection
 # ---------------------------------------------------------------------------

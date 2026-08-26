@@ -151,6 +151,10 @@ def _direct_answer_retry_max_tokens() -> int:
     return _env_optional_cap("LLM_DIRECT_ANSWER_RETRY_MAX_TOKENS", 2048, minimum=256)
 
 
+def _general_answer_max_tokens() -> int:
+    return _env_optional_cap("LLM_GENERAL_ANSWER_MAX_TOKENS", 4096, minimum=256)
+
+
 def _tool_call_retry_max_tokens() -> int:
     return _env_optional_cap("LLM_TOOL_CALL_RETRY_MAX_TOKENS", 2048, minimum=256)
 
@@ -351,6 +355,38 @@ async def _run_plain_followup_answer_retry(
                 "messages": message_dicts + [{"role": "user", "content": prompt}],
                 "messages_pydantic": messages_for_bot + [UserMessage(content=prompt)],
                 "max_tokens": max(max_tokens, _direct_answer_retry_max_tokens()),
+                "stream_callback": stream_callback,
+                "stream_message_uuid": stream_message_uuid,
+            }
+        )
+    )
+
+
+async def _run_reasoning_cutoff_answer_retry(
+    llm: Any,
+    *,
+    system_prompt: str,
+    message_dicts: list[dict],
+    messages_for_bot: list[LLM_Message],
+    max_tokens: int,
+    stream_callback: Callable[[dict], Awaitable[Any]] | None,
+    stream_message_uuid: str,
+) -> LLMResponse:
+    prompt = (
+        "Your reasoning budget ended without a user-visible answer. "
+        "Answer the latest user message directly now. Do not include hidden analysis, "
+        "do not call tools, and do not mention the prior failed attempt."
+    )
+    retry_max_tokens = _direct_answer_retry_max_tokens() or max_tokens
+    return await llm.get_message(
+        **(
+            llm.base_args
+            | {
+                "system": system_prompt,
+                "messages": message_dicts + [{"role": "user", "content": prompt}],
+                "messages_pydantic": messages_for_bot + [UserMessage(content=prompt)],
+                "max_tokens": retry_max_tokens,
+                "thinking_budget": 0,
                 "stream_callback": stream_callback,
                 "stream_message_uuid": stream_message_uuid,
             }
@@ -784,6 +820,10 @@ async def complete_conversation_turn(
             observability_stage = "post_tool_synthesis"
         else:
             observability_stage = "general_answer"
+    if observability_stage == "general_answer":
+        general_answer_cap = _general_answer_max_tokens()
+        if general_answer_cap > 0:
+            request_max_tokens = min(request_max_tokens, general_answer_cap)
     sdk_args = {
         **(
             llm.base_args
@@ -918,6 +958,7 @@ async def complete_conversation_turn(
         visibility.strip_thinking_blocks(response.text)
     )
     response_tool_call = response.tool_call or {}
+    initial_stop_reason = str(response.stop_reason or "").strip().lower()
 
     if response_tool_call:
         called_tool_name = response_tool_call.get("tool_call_name")
@@ -935,6 +976,36 @@ async def complete_conversation_turn(
                     "I completed retrieval but received an unusable tool-call payload. "
                     "Please retry and I will provide a full summary."
                 )
+
+    should_retry_reasoning_only_cutoff = (
+        observability_stage == "general_answer"
+        and isinstance(last_message, UserMessage)
+        and not last_message.tools
+        and not response_tool_call
+        and not response_text.strip()
+        and initial_stop_reason in {"length", "max_tokens"}
+    )
+    if should_retry_reasoning_only_cutoff:
+        retry_response = await _run_reasoning_cutoff_answer_retry(
+            llm,
+            system_prompt=request_system_prompt,
+            message_dicts=message_dicts,
+            messages_for_bot=messages_for_bot,
+            max_tokens=request_max_tokens,
+            stream_callback=provider_stream_func,
+            stream_message_uuid=stream_message_uuid,
+        )
+        retry_text = visibility.strip_tool_markup(
+            visibility.strip_thinking_blocks(retry_response.text)
+        )
+        if (
+            not retry_response.tool_call
+            and retry_text.strip()
+            and not visibility.is_interim_assistant_text(retry_text)
+        ):
+            response = retry_response
+            response_text = retry_text
+            response_tool_call = {}
 
     should_plain_retry_auto_tool_followup = (
         _auto_tool_followup_direct_retry_enabled()

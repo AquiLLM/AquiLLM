@@ -514,6 +514,39 @@ class ToolUseRetryTests(SimpleTestCase):
 
 
 class CutoffContinuationTests(SimpleTestCase):
+    def test_reasoning_only_general_cutoff_retries_with_visible_answer_budget(self):
+        llm = _FakeLLMInterface(
+            [
+                LLMResponse(
+                    text="<think>I am still considering every possible angle.</think>",
+                    tool_call={},
+                    stop_reason="max_tokens",
+                    input_usage=473,
+                    output_usage=4096,
+                ),
+                LLMResponse(
+                    text="Here is the direct, user-visible answer.",
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=520,
+                    output_usage=80,
+                ),
+            ]
+        )
+        convo = Conversation(
+            system="You are a helpful assistant.",
+            messages=[UserMessage(content="Explain the idea clearly.")],
+        )
+
+        updated, changed = async_to_sync(llm.complete)(convo, 12288)
+
+        self.assertEqual(changed, "changed")
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(llm.calls[0]["max_tokens"], 4096)
+        self.assertEqual(llm.calls[1]["max_tokens"], 2048)
+        self.assertEqual(llm.calls[1]["thinking_budget"], 0)
+        self.assertEqual(updated[-1].content, "Here is the direct, user-visible answer.")
+
     @patch.dict(
         "os.environ",
         {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"},

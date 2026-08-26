@@ -71,6 +71,21 @@ async def test_skipped_when_intent_not_rag(monkeypatch):
     llm_if.get_message.assert_not_called()
 
 
+async def test_explicit_collection_synthesis_without_selection_is_handled(monkeypatch):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    convo = _user_convo(
+        "Hi aquillm can you tell me about the documents in this collection and synthesize things?"
+    )
+    consumer = _consumer(convo, [])
+    llm_if = SimpleNamespace(get_message=AsyncMock())
+
+    outcome = await run_direct_rag_turn(consumer, llm_if, convo, stream_func=None)
+
+    assert outcome == "handled"
+    llm_if.get_message.assert_not_called()
+    assert "no collections are selected" in consumer.convo[-1].content.lower()
+
+
 async def test_skipped_when_last_message_not_user(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     convo = Conversation(
