@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
+
+from django.utils import timezone
 
 from apps.knowledge_graph.projection import generation_audit, reconciler
 from apps.knowledge_graph.projection.records import (
@@ -118,6 +121,27 @@ def test_generation_audit_detects_empty_store_and_checksum_drift(monkeypatch):
     assert missing.replay_reason == "missing_generation"
     assert drift.replay_reason == "checksum_drift"
     assert purposes == ["audit", "audit", "audit"]
+
+
+def test_generation_audit_leaves_inflight_projection_for_queued_worker() -> None:
+    pending = generation_audit.audit_projection_generation(
+        row=SimpleNamespace(state="pending"),
+        postgres=object(),
+        graph=object(),
+        settings=_settings(),
+    )
+    building = generation_audit.audit_projection_generation(
+        row=SimpleNamespace(
+            state="building",
+            lease_expires_at=timezone.now() + timedelta(seconds=30),
+        ),
+        postgres=object(),
+        graph=object(),
+        settings=_settings(),
+    )
+
+    assert pending.replay_reason is None
+    assert building.replay_reason is None
 
 
 def test_ready_marker_does_not_hide_mutated_or_deleted_graph_records(monkeypatch):

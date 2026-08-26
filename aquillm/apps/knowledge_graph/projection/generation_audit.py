@@ -89,7 +89,7 @@ def audit_projection_generation(*, row, postgres, graph, settings) -> Generation
     if row is None:
         return GenerationAuditV1("missing_authority")
     if row.state == "pending":
-        return GenerationAuditV1("pending")
+        return GenerationAuditV1(None)
     if row.state == "failed":
         return GenerationAuditV1("failed")
     if row.state == "building":
