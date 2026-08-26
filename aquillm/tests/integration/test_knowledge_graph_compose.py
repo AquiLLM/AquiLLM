@@ -284,6 +284,23 @@ def test_development_projection_enablement_is_scoped_to_projection_worker() -> N
     )
 
 
+def test_production_projection_hook_and_worker_have_independent_flags() -> None:
+    services = _compose(COMPOSE_FILES[2])["services"]
+    web_environment = _environment_map(services["web"]["environment"])
+    projection_environment = _environment_map(
+        services["worker_knowledge_graph_projection"]["environment"]
+    )
+
+    assert (
+        web_environment["KG_MEMGRAPH_PROJECTION_ENABLED"]
+        == "${KG_MEMGRAPH_PROJECTION_HOOK_ENABLED:-0}"
+    )
+    assert (
+        projection_environment["KG_MEMGRAPH_PROJECTION_ENABLED"]
+        == "${KG_MEMGRAPH_PROJECTION_WORKER_ENABLED:-0}"
+    )
+
+
 @pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
 def test_rendered_compose_preserves_one_custom_queue_and_cache_contract(
     compose_file: Path,
