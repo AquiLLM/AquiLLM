@@ -267,12 +267,8 @@ def test_bundle_rejects_membership_provenance_and_evidence_incoherence(
 @pytest.mark.parametrize(
     "changes",
     [
-        {"resolver_version": "resolver-v2"},
-        {"resolution_config_checksum": "e" * 64},
         {"ontology_version": "ontology-v2"},
         {"ontology_checksum": "e" * 64},
-        {"filter_policy_version": "filter-v2"},
-        {"filter_policy_checksum": "e" * 64},
         {"extractor_version": "extractor-v2"},
         {"orchestration_version": 5},
     ],
@@ -282,6 +278,24 @@ def test_bundle_rejects_shared_provenance_identity_drift(changes) -> None:
     rows = _replace_row(bundle.artifact_provenance, 1, **changes)
     with pytest.raises(ValueError, match="shared provenance"):
         replace(bundle, artifact_provenance=rows)
+
+
+def test_document_provenance_allows_stage_specific_resolution_and_filtering() -> None:
+    bundle = _bundle()
+    document = replace(
+        bundle.artifact_provenance[1],
+        resolver_version="document-coreference-v1",
+        resolution_config_checksum="e" * 64,
+        filter_policy_version="pending-v1",
+        filter_policy_checksum="f" * 64,
+    )
+
+    updated = replace(
+        bundle,
+        artifact_provenance=(bundle.artifact_provenance[0], document),
+    )
+
+    assert updated.artifact_provenance[1] == document
 
 
 def test_document_provenance_allows_empty_embedding_signature() -> None:

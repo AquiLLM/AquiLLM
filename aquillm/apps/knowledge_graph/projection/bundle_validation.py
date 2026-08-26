@@ -100,9 +100,8 @@ def validate_bundle(bundle: object) -> None:
     ):
         raise ValueError("document provenance closure is broken")
     shared = (
-        "resolver_version resolution_config_checksum ontology_version "
-        "ontology_checksum filter_policy_version filter_policy_checksum "
-        "extractor_version orchestration_version"
+        "ontology_version ontology_checksum extractor_version "
+        "orchestration_version"
     ).split()
     if any(len({getattr(row, name) for row in provenance}) != 1 for name in shared):
         raise ValueError("shared provenance identity is inconsistent")
