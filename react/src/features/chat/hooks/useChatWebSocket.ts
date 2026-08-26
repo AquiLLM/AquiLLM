@@ -2,23 +2,23 @@ import { useRef, useState, useEffect, type Dispatch, type SetStateAction } from 
 import type { Message, Conversation, WebSocketMessage } from '../types';
 
 function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
-  const merged = [...existing];
-  const indexByUuid = new Map<string, number>();
-  merged.forEach((msg, idx) => {
-    if (msg.message_uuid) indexByUuid.set(msg.message_uuid, idx);
+  const existingByUuid = new Map<string, Message>();
+  existing.forEach((msg) => {
+    if (msg.message_uuid) existingByUuid.set(msg.message_uuid, msg);
+  });
+  const incomingUuids = new Set(
+    incoming.flatMap((msg) => msg.message_uuid ? [msg.message_uuid] : []),
+  );
+  const preserved = existing.filter(
+    (msg) => !msg.message_uuid || !incomingUuids.has(msg.message_uuid),
+  );
+
+  const authoritative = incoming.map((msg) => {
+    const prior = msg.message_uuid ? existingByUuid.get(msg.message_uuid) : undefined;
+    return prior ? { ...prior, ...msg } : msg;
   });
 
-  incoming.forEach((msg) => {
-    if (msg.message_uuid && indexByUuid.has(msg.message_uuid)) {
-      const existingIdx = indexByUuid.get(msg.message_uuid)!;
-      merged[existingIdx] = { ...merged[existingIdx], ...msg };
-    } else {
-      merged.push(msg);
-      if (msg.message_uuid) indexByUuid.set(msg.message_uuid, merged.length - 1);
-    }
-  });
-
-  return merged;
+  return [...preserved, ...authoritative];
 }
 
 export interface UseChatWebSocketParams {
