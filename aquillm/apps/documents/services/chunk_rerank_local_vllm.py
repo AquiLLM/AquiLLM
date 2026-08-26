@@ -90,7 +90,10 @@ def _score_one_document(
         # the same scored evidence while avoiding a guaranteed failed request.
         if (
             document
-            and count_rerank_tokens(query, document) >= initial_budget
+            # The lightweight estimator can land one token below Qwen's
+            # tokenizer/template count at this boundary (767 estimated became
+            # 1025 upstream). Include that single-token tolerance.
+            and count_rerank_tokens(query, document) >= max(0, initial_budget - 1)
             and adaptive_reserve > reserve_tokens
         ):
             request_query, request_document = trim_rerank_pair(

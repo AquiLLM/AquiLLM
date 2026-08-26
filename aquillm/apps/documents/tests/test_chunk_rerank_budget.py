@@ -147,3 +147,49 @@ def test_single_score_pretrims_near_limit_pair_before_first_request(monkeypatch)
     assert count_rerank_tokens(
         payloads[0]["text_1"], payloads[0]["text_2"]
     ) <= 512
+
+
+def test_single_score_pretrims_one_token_below_estimated_ceiling(monkeypatch):
+    payloads: list[dict] = []
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"score": 0.8}
+
+    def post(_endpoint, *, json, **_kwargs):
+        payloads.append(json)
+        return Response()
+
+    query, document = trim_rerank_pair(
+        "attensity calibration",
+        "dense evidence " * 1000,
+        max_pair_tokens=1024,
+        reserve_tokens=257,
+    )
+    assert count_rerank_tokens(query, document) == 767
+
+    monkeypatch.setattr(
+        "apps.documents.services.chunk_rerank_local_vllm.requests.post",
+        post,
+    )
+
+    result = _score_one_document(
+        endpoint="http://reranker/score",
+        index=4,
+        query=query,
+        document=document,
+        headers={},
+        timeout=10,
+        model_name="Qwen/Qwen3-VL-Reranker-2B",
+        pair_token_limit=1024,
+        reserve_tokens=256,
+    )
+
+    assert result == (4, 0.8)
+    assert len(payloads) == 1
+    assert count_rerank_tokens(
+        payloads[0]["text_1"], payloads[0]["text_2"]
+    ) <= 512
