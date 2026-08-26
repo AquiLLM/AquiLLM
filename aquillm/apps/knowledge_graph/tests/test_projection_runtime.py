@@ -32,6 +32,17 @@ def _projection_environment() -> dict[str, str]:
     }
 
 
+def _projection_hook_environment() -> dict[str, str]:
+    return {
+        "KG_MEMGRAPH_PROJECTION_ENABLED": "0",
+        "KG_MEMGRAPH_PROJECTION_HOOK_ENABLED": "1",
+        "KG_PROJECTION_IDENTIFIER_HMAC_KEY": "identifier-secret",
+        "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "key-v7",
+        "KG_PROJECTION_SCHEMA_VERSION": "collection-graph-v1",
+        "KG_PROJECTION_FORMAT_VERSION": "projection-v1",
+    }
+
+
 def test_runtime_consumes_only_frozen_projection_configuration_names() -> None:
     source = {**_projection_environment(), "KG_BUILD_ENABLED": "1"}
 
@@ -199,7 +210,7 @@ def test_enabled_activation_injects_frozen_membership_hmac_on_web_alias(
     enabled = runtime.enqueue_activated_collection_projection(
         7,
         9,
-        source=_projection_environment(),
+        source=_projection_hook_environment(),
     )
 
     assert enabled is True
@@ -233,7 +244,7 @@ def test_enabled_activation_dispatches_projection_outbox_after_commit(
     assert runtime.enqueue_activated_collection_projection(
         7,
         9,
-        source=_projection_environment(),
+        source=_projection_hook_environment(),
     )
     assert dispatched == []
     assert len(callbacks) == 1

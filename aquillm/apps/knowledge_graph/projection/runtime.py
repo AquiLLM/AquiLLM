@@ -41,6 +41,15 @@ _PROJECTION_SETTING_NAMES = frozenset(
 )
 
 
+def _projection_hook_enabled(source: Mapping[str, str]) -> bool:
+    value = source.get("KG_MEMGRAPH_PROJECTION_HOOK_ENABLED", "0")
+    if value not in {"0", "1"}:
+        raise ValueError(
+            "KG_MEMGRAPH_PROJECTION_HOOK_ENABLED must be exactly 0 or 1"
+        )
+    return value == "1"
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectionDatabaseAliases:
     source: str = "projection_source"
@@ -147,8 +156,9 @@ def enqueue_activated_collection_projection(
     """Best-effort optional projection hook inside the web activation transaction."""
 
     try:
-        settings = load_projection_runtime_settings(source)
-        if not settings.memgraph_projection_enabled:
+        values = os.environ if source is None else source
+        settings = load_projection_runtime_settings(values)
+        if not _projection_hook_enabled(values):
             return False
         from .lifecycle import enqueue_collection_projection_locked
 

@@ -291,8 +291,9 @@ def test_production_projection_hook_and_worker_have_independent_flags() -> None:
         services["worker_knowledge_graph_projection"]["environment"]
     )
 
+    assert web_environment["KG_MEMGRAPH_PROJECTION_ENABLED"] == "0"
     assert (
-        web_environment["KG_MEMGRAPH_PROJECTION_ENABLED"]
+        web_environment["KG_MEMGRAPH_PROJECTION_HOOK_ENABLED"]
         == "${KG_MEMGRAPH_PROJECTION_HOOK_ENABLED:-0}"
     )
     assert (
