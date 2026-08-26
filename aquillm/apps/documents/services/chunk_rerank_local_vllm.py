@@ -11,7 +11,6 @@ import structlog
 
 from apps.documents.services import rag_cache
 from apps.documents.services.chunk_rerank_budget import (
-    count_rerank_tokens,
     trim_rerank_pair,
 )
 from apps.documents.services.chunk_rerank_config import (
@@ -79,29 +78,10 @@ def _score_one_document(
     try:
         request_query = query
         request_document = document
-        initial_budget = max(0, pair_token_limit - reserve_tokens)
         adaptive_reserve = min(
             max(0, pair_token_limit - 2),
             max(reserve_tokens + 256, pair_token_limit // 2),
         )
-        # Pairs at the estimator's ceiling are the ones for which Qwen's score
-        # template adds enough hidden tokens to overflow. They were already
-        # retried at this tighter budget after a 400, so pre-trimming them keeps
-        # the same scored evidence while avoiding a guaranteed failed request.
-        if (
-            document
-            # The lightweight estimator can land one token below Qwen's
-            # tokenizer/template count at this boundary (767 estimated became
-            # 1025 upstream). Include that single-token tolerance.
-            and count_rerank_tokens(query, document) >= max(0, initial_budget - 1)
-            and adaptive_reserve > reserve_tokens
-        ):
-            request_query, request_document = trim_rerank_pair(
-                query,
-                document,
-                pair_token_limit,
-                adaptive_reserve,
-            )
         response = requests.post(
             endpoint,
             headers=headers,
@@ -109,6 +89,11 @@ def _score_one_document(
                 "model": model_name,
                 "text_1": request_query,
                 "text_2": request_document,
+                # Let vLLM make the final fit with the model's actual tokenizer
+                # and score template. The local cl100k estimate can otherwise
+                # undercount a Qwen pair by enough to turn 1024 into 1025.
+                "truncate_prompt_tokens": pair_token_limit,
+                "truncation_side": "right",
             },
             timeout=timeout,
         )
@@ -134,6 +119,8 @@ def _score_one_document(
                         "model": model_name,
                         "text_1": retry_query,
                         "text_2": retry_document,
+                        "truncate_prompt_tokens": pair_token_limit,
+                        "truncation_side": "right",
                     },
                     timeout=timeout,
                 )
