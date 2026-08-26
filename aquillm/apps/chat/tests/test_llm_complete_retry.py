@@ -551,6 +551,7 @@ class CutoffContinuationTests(SimpleTestCase):
         self.assertEqual(changed, "changed")
         self.assertEqual(len(llm.calls), 2)
         self.assertEqual(llm.calls[1]["max_tokens"], 640)
+        self.assertEqual(llm.calls[1]["thinking_budget"], 0)
         self.assertIn("1. Ingestion and preprocessing", updated[-1].content)
         self.assertIn(
             "2. Claim parsing and structured extraction.", updated[-1].content

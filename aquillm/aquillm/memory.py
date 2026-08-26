@@ -254,7 +254,13 @@ async def get_episodic_memories_async(
         )
         if mem0_results:
             return mem0_results
-    return await database_sync_to_async(_get_episodic_memories_pgvector)(
+    # Embedding is a blocking network call followed by ORM work. Keep it off
+    # Channels' thread-sensitive database lane so a latency-budget cancellation
+    # is not forced to wait for the underlying embedding request to return.
+    return await database_sync_to_async(
+        _get_episodic_memories_pgvector,
+        thread_sensitive=False,
+    )(
         user, query.strip(), top_k, exclude_conversation_id
     )
 
@@ -350,6 +356,8 @@ async def augment_conversation_with_memory_async(
     user: User,
     base_system: str,
     exclude_conversation_id: Optional[int] = None,
+    *,
+    include_episodic: bool = True,
 ) -> None:
     """
     Like augment_conversation_with_memory but overlaps profile ORM load with async Mem0/pgvector episodic fetch.
@@ -357,19 +365,24 @@ async def augment_conversation_with_memory_async(
     """
     query = get_last_user_message_text(convo)
     profile_task = database_sync_to_async(get_user_profile_facts)(user)
-    episodic_task = _get_episodic_memories_with_latency_budget(
-        user,
-        query,
-        top_k=EPISODIC_TOP_K,
-        exclude_conversation_id=exclude_conversation_id,
-    )
-    profile_facts, episodic = await asyncio.gather(profile_task, episodic_task)
+    if include_episodic:
+        episodic_task = _get_episodic_memories_with_latency_budget(
+            user,
+            query,
+            top_k=EPISODIC_TOP_K,
+            exclude_conversation_id=exclude_conversation_id,
+        )
+        profile_facts, episodic = await asyncio.gather(profile_task, episodic_task)
+    else:
+        profile_facts = await profile_task
+        episodic = []
     logger.info(
         "obs.memory.injection_async",
         user_id=user.id,
         query=query[:180] if isinstance(query, str) else "",
         profile_fact_count=len(profile_facts),
         episodic_memory_count=len(episodic),
+        episodic_lookup_skipped=not include_episodic,
     )
     block = format_memories_for_system(profile_facts, episodic)
     convo.system = (base_system or "").rstrip() + block

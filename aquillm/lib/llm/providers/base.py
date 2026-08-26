@@ -92,6 +92,11 @@ class LLMInterface(ABC):
                         "messages": continuation_messages,
                         "messages_pydantic": continuation_messages_pydantic,
                         "max_tokens": max_tokens,
+                        # The first pass already performed synthesis reasoning.
+                        # A cutoff continuation is a mechanical completion of
+                        # that answer, so another full reasoning pass only adds
+                        # latency and can restart the response.
+                        "thinking_budget": 0,
                         "stream_callback": continuation_stream_callback,
                         "stream_message_uuid": stream_message_uuid,
                     }

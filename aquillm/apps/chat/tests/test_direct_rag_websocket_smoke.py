@@ -169,6 +169,8 @@ async def test_append_direct_rag_skips_tool_selection_spin(
     )
 
     mock_spin.assert_not_called()
+    _augment.assert_awaited_once()
+    assert _augment.await_args.kwargs["include_episodic"] is False
     assert order.index("retrieval") < order.index("get_message")
     assert order.count("get_message") == 1
 

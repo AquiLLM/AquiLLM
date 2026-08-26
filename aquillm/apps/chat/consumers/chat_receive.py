@@ -227,6 +227,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                     consumer.user,
                     await effective_base_system_for_memory_async(consumer),
                     consumer.db_convo.id,
+                    include_episodic=not bool(consumer.col_ref.collections),
                 )
                 logger.info(
                     "obs.chat.memory_augmented",

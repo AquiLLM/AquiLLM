@@ -10,7 +10,10 @@ import requests
 import structlog
 
 from apps.documents.services import rag_cache
-from apps.documents.services.chunk_rerank_budget import trim_rerank_pair
+from apps.documents.services.chunk_rerank_budget import (
+    count_rerank_tokens,
+    trim_rerank_pair,
+)
 from apps.documents.services.chunk_rerank_config import (
     rerank_api_key,
     rerank_base_url,
@@ -74,24 +77,53 @@ def _score_one_document(
     reserve_tokens: int,
 ) -> tuple[int, float] | None:
     try:
-        response = requests.post(
-            endpoint,
-            headers=headers,
-            json={"model": model_name, "text_1": query, "text_2": document},
-            timeout=timeout,
+        request_query = query
+        request_document = document
+        initial_budget = max(0, pair_token_limit - reserve_tokens)
+        adaptive_reserve = min(
+            max(0, pair_token_limit - 2),
+            max(reserve_tokens + 256, pair_token_limit // 2),
         )
-        if response.status_code == 400 and document:
-            adaptive_reserve = min(
-                max(0, pair_token_limit - 2),
-                max(reserve_tokens + 256, pair_token_limit // 2),
-            )
-            retry_query, retry_document = trim_rerank_pair(
+        # Pairs at the estimator's ceiling are the ones for which Qwen's score
+        # template adds enough hidden tokens to overflow. They were already
+        # retried at this tighter budget after a 400, so pre-trimming them keeps
+        # the same scored evidence while avoiding a guaranteed failed request.
+        if (
+            document
+            and count_rerank_tokens(query, document) >= initial_budget
+            and adaptive_reserve > reserve_tokens
+        ):
+            request_query, request_document = trim_rerank_pair(
                 query,
                 document,
                 pair_token_limit,
                 adaptive_reserve,
             )
-            if (retry_query, retry_document) != (query, document):
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json={
+                "model": model_name,
+                "text_1": request_query,
+                "text_2": request_document,
+            },
+            timeout=timeout,
+        )
+        if response.status_code == 400 and request_document:
+            retry_reserve = min(
+                max(0, pair_token_limit - 2),
+                max(adaptive_reserve + 256, (pair_token_limit * 3) // 4),
+            )
+            retry_query, retry_document = trim_rerank_pair(
+                request_query,
+                request_document,
+                pair_token_limit,
+                retry_reserve,
+            )
+            if (retry_query, retry_document) != (
+                request_query,
+                request_document,
+            ):
                 response = requests.post(
                     endpoint,
                     headers=headers,
