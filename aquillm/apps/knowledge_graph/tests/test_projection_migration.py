@@ -92,3 +92,16 @@ def test_model_and_reserved_migration_have_exact_lifecycle_constraint_parity() -
     assert "artifact__isnull" in rendered
     assert "lease_owner" in rendered
     assert "lease_expires_at__isnull" in rendered
+
+
+def test_projection_outbox_claim_function_casts_operation_to_declared_text() -> None:
+    migration = importlib.import_module(
+        "apps.knowledge_graph.migrations.0009_fix_projection_outbox_operation_type"
+    )
+
+    assert migration.Migration.dependencies == [
+        ("apps_knowledge_graph", "0008_projection_worker_state_api")
+    ]
+    operation = migration.Migration.operations[0]
+    assert isinstance(operation, migrations.RunSQL)
+    assert "o.operation::text" in operation.sql
