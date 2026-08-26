@@ -83,7 +83,7 @@ def _score_one_document(
         if response.status_code == 400 and document:
             adaptive_reserve = min(
                 max(0, pair_token_limit - 2),
-                max(reserve_tokens + 128, pair_token_limit // 3),
+                max(reserve_tokens + 256, pair_token_limit // 2),
             )
             retry_query, retry_document = trim_rerank_pair(
                 query,

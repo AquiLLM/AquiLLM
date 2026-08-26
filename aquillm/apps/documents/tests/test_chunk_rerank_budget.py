@@ -108,4 +108,4 @@ def test_single_score_retries_context_overflow_with_tighter_pair(monkeypatch):
     assert len(payloads[1]["text_2"]) < len(payloads[0]["text_2"])
     assert count_rerank_tokens(
         payloads[1]["text_1"], payloads[1]["text_2"]
-    ) <= 640
+    ) <= 512

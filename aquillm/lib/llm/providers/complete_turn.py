@@ -755,13 +755,14 @@ async def complete_conversation_turn(
     citation_retry_prior_max_chars = _env_int(
         "LLM_CITATION_RETRY_PRIOR_MAX_CHARS", 2400, minimum=512
     )
+    observability_stage = current_stage()
     request_max_tokens = max_tokens
     tool_choice_type = (
         str(getattr(last_message.tool_choice, "type", "") or "").strip().lower()
     )
     if isinstance(last_message, UserMessage) and last_message.tools:
         request_max_tokens = _resolve_tool_step_max_tokens(max_tokens, tool_choice_type)
-    elif is_post_tool_result_turn:
+    elif is_post_tool_result_turn and observability_stage != "direct_synthesis":
         request_max_tokens = _resolve_post_tool_max_tokens(
             conversation,
             default_cap=post_tool_max_tokens,
@@ -776,7 +777,6 @@ async def complete_conversation_turn(
         tools = {}
     stream_message_uuid = str(uuid.uuid4())
     observability_correlation_id = current_correlation_id() or new_correlation_id()
-    observability_stage = current_stage()
     if observability_stage is None:
         if isinstance(last_message, UserMessage) and last_message.tools:
             observability_stage = "tool_selection"
