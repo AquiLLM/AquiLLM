@@ -93,6 +93,28 @@ describe('useCollectionSchemaEditor', () => {
     expect(api.createDraft).toHaveBeenCalledWith('col-edit');
   });
 
+  it('opens a published definition for inspection when no draft exists', async () => {
+    const publishedOnlyEnvelope = { ...editDraftEnvelope, draft: null };
+    const api = createMockApi({
+      loadWorkspace: vi.fn().mockResolvedValue({ ok: true, data: publishedOnlyEnvelope }),
+    });
+    const { result } = renderHook(() => useCollectionSchemaEditor({ collectionId: 'col-edit', api }));
+    await waitFor(() => expect(result.current.editorState.phase).toBe('ready'));
+
+    act(() => {
+      result.current.onSelectDefinition('entity', 'person');
+    });
+
+    expect(result.current.editorState.selection).toEqual({ kind: 'entity', key: 'person' });
+    expect(result.current.formBuffer).toMatchObject({
+      open: true,
+      definitionKind: 'entity',
+      definitionKey: 'person',
+      baseRevision: null,
+    });
+    expect(result.current.formBuffer.currentValues?.description).toBe('A person entity');
+  });
+
   it('validates using the loaded draft identity', async () => {
     const api = createMockApi();
     const { result } = renderHook(() => useCollectionSchemaEditor({ collectionId: 'col-manage', api }));

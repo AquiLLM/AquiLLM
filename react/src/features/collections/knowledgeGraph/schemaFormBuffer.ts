@@ -17,7 +17,7 @@ export type SchemaFormBufferAction =
       type: 'form/open';
       kind: SchemaDefinitionKind;
       key: string;
-      baseRevision: number;
+      baseRevision: number | null;
       values: Record<string, unknown>;
     }
   | { type: 'form/edit'; field: string; value: unknown }

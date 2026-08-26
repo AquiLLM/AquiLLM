@@ -71,6 +71,34 @@ describe('CollectionKnowledgeGraphWorkspace states', () => {
     expect(screen.queryByText(/Last editor/i)).toBeNull();
   });
 
+  it('keeps a published definition read-only when an editor has no active draft', () => {
+    const state: CollectionSchemaEditorState = {
+      ...createInitialCollectionSchemaState(),
+      phase: 'ready',
+      envelope: { ...editDraftEnvelope, draft: null },
+      selection: { kind: 'entity', key: 'person' },
+    };
+    const values: Record<string, unknown> = { ...editDraftEnvelope.published.entities[0].values };
+
+    renderWorkspace(state, {
+      formBuffer: {
+        ...createInitialSchemaFormBufferState(),
+        open: true,
+        definitionKind: 'entity',
+        definitionKey: 'person',
+        baseRevision: null,
+        initialValues: values,
+        currentValues: values,
+      },
+    });
+
+    expect(screen.getByRole('heading', { name: 'Entity type: person' })).toBeTruthy();
+    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add entity type' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add relation type' })).toBeNull();
+  });
+
   it('renders draft toolbar and navigation for EDIT draft', () => {
     const state: CollectionSchemaEditorState = {
       ...createInitialCollectionSchemaState(),

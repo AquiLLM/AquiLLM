@@ -106,7 +106,7 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
     (kind: SchemaDefinitionKind, key: string) => {
       const apply = () => {
         const envelope = editorStateRef.current.envelope;
-        if (!envelope?.draft) return;
+        if (!envelope) return;
         const source = definitionSource(envelope);
         const list = kind === 'entity' ? source.entities : source.relations;
         const definition = list.find((item) => item.key === key);
@@ -116,7 +116,7 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
           type: 'form/open',
           kind,
           key,
-          baseRevision: envelope.draft.revision,
+          baseRevision: envelope.draft?.revision ?? null,
           values: definitionValues(kind, definition),
         });
       };

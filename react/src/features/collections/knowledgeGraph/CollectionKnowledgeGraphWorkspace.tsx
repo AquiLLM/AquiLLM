@@ -135,7 +135,7 @@ const CollectionKnowledgeGraphWorkspace: React.FC<CollectionKnowledgeGraphWorksp
   }
 
   const permissions = envelope.permissions;
-  const showMutationControls = permissions.can_edit_definitions;
+  const showMutationControls = permissions.can_edit_definitions && Boolean(envelope.draft);
   const formValues = formBuffer.currentValues ?? {};
   const formDirty = formBuffer.dirtyFields.length > 0;
   const readOnlyEditor = !showMutationControls || !formBuffer.open;
