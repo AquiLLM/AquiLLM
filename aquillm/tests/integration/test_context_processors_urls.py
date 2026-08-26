@@ -1,4 +1,5 @@
 """Context processors expose reverse()-based URL maps for the React client."""
+
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 from django.urls import NoReverseMatch
@@ -54,6 +55,16 @@ def test_schema_api_urls_preserve_collection_placeholders():
     assert "%(relation_key)s" in urls["api_collection_schema_relation"]
     assert "%(version_id)s" in urls["api_collection_schema_version_diff"]
     assert "api_collection_schema_publish_status" not in urls
+
+
+def test_collection_graph_visualization_urls_preserve_collection_placeholders():
+    factory = RequestFactory()
+    request = factory.get("/")
+    request.user = AnonymousUser()
+    urls = api_urls(request)["api_urls"]
+
+    assert "%(col_id)s" in urls["api_collection_graph_visualization"]
+    assert "%(col_id)s" in urls["api_collection_graph_rebuild"]
 
 
 def test_schema_generation_urls_expose_collection_and_run_placeholders():

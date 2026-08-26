@@ -10,6 +10,7 @@ New code should import directly from the app-specific modules:
 - apps.chat.views.api
 - apps.core.views.api
 """
+
 from django.urls import path
 
 # Re-export collection views
@@ -36,6 +37,7 @@ from apps.collections.views.schema_api import (
     schema_versions,
     schema_workspace,
 )
+from apps.collections.views.graph_api import graph_rebuild, graph_visualization
 
 # Re-export document views
 from apps.documents.views.api import (
@@ -88,8 +90,26 @@ from apps.bug_reports.views.api import (
 urlpatterns = [
     path("collections/", collections, name="api_collections"),
     path("collection/<int:col_id>/", collection, name="api_collection"),
-    path("collection/<int:col_id>/schema/", schema_workspace, name="api_collection_schema_workspace"),
-    path("collection/<int:col_id>/schema/draft/", schema_create_draft, name="api_collection_schema_draft"),
+    path(
+        "collection/<int:col_id>/graph/visualization/",
+        graph_visualization,
+        name="api_collection_graph_visualization",
+    ),
+    path(
+        "collection/<int:col_id>/graph/rebuild/",
+        graph_rebuild,
+        name="api_collection_graph_rebuild",
+    ),
+    path(
+        "collection/<int:col_id>/schema/",
+        schema_workspace,
+        name="api_collection_schema_workspace",
+    ),
+    path(
+        "collection/<int:col_id>/schema/draft/",
+        schema_create_draft,
+        name="api_collection_schema_draft",
+    ),
     path(
         "collection/<int:col_id>/schema/generate/",
         schema_generate,
@@ -110,11 +130,31 @@ urlpatterns = [
         schema_relation,
         name="api_collection_schema_relation",
     ),
-    path("collection/<int:col_id>/schema/validate/", schema_validate, name="api_collection_schema_validate"),
-    path("collection/<int:col_id>/schema/diff/", schema_diff, name="api_collection_schema_diff"),
-    path("collection/<int:col_id>/schema/publish/", schema_publish, name="api_collection_schema_publish"),
-    path("collection/<int:col_id>/schema/discard/", schema_discard, name="api_collection_schema_discard"),
-    path("collection/<int:col_id>/schema/versions/", schema_versions, name="api_collection_schema_versions"),
+    path(
+        "collection/<int:col_id>/schema/validate/",
+        schema_validate,
+        name="api_collection_schema_validate",
+    ),
+    path(
+        "collection/<int:col_id>/schema/diff/",
+        schema_diff,
+        name="api_collection_schema_diff",
+    ),
+    path(
+        "collection/<int:col_id>/schema/publish/",
+        schema_publish,
+        name="api_collection_schema_publish",
+    ),
+    path(
+        "collection/<int:col_id>/schema/discard/",
+        schema_discard,
+        name="api_collection_schema_discard",
+    ),
+    path(
+        "collection/<int:col_id>/schema/versions/",
+        schema_versions,
+        name="api_collection_schema_versions",
+    ),
     path(
         "collection/<int:col_id>/schema/versions/<int:version_id>/diff/",
         schema_version_diff,
@@ -130,29 +170,59 @@ urlpatterns = [
         schema_restore_replace,
         name="api_collection_schema_restore_replace",
     ),
-    path("collections/permissions/<int:col_id>/", collection_permissions, name="api_collection_permissions"),
-    path("collections/move/<int:collection_id>/", move_collection, name="api_move_collection"),
-    path("collections/delete/<int:collection_id>/", delete_collection, name="api_delete_collection"),
+    path(
+        "collections/permissions/<int:col_id>/",
+        collection_permissions,
+        name="api_collection_permissions",
+    ),
+    path(
+        "collections/move/<int:collection_id>/",
+        move_collection,
+        name="api_move_collection",
+    ),
+    path(
+        "collections/delete/<int:collection_id>/",
+        delete_collection,
+        name="api_delete_collection",
+    ),
     path("ingest_arxiv/", ingest_arxiv, name="api_ingest_arxiv"),
     path("ingest_pdf/", ingest_pdf, name="api_ingest_pdf"),
     path("ingestion/monitor/", ingestion_monitor, name="api_ingestion_monitor"),
     path("documents/move/<uuid:doc_id>/", move_document, name="api_move_document"),
-    path("documents/delete/<uuid:doc_id>/", delete_document, name="api_delete_document"),
+    path(
+        "documents/delete/<uuid:doc_id>/", delete_document, name="api_delete_document"
+    ),
     path("chunks/<int:chunk_id>/", chunk_detail, name="api_chunk_detail"),
     path("citations/narrow/", citation_narrow, name="api_citation_narrow"),
     path("citations/sources/", citation_sources, name="api_citation_sources"),
     path("users/search/", search_users, name="api_search_users"),
-    path("whitelisted_email/<str:email>/", whitelisted_email, name="api_whitelist_email"),
+    path(
+        "whitelisted_email/<str:email>/", whitelisted_email, name="api_whitelist_email"
+    ),
     path("whitelisted_emails/", whitelisted_emails, name="api_whitelist_emails"),
     path("feedback/ratings.csv", feedback_ratings_csv, name="api_feedback_ratings_csv"),
     path("ingest_vtt/", ingest_vtt, name="api_ingest_vtt"),
     path("ingest_uploads/", ingest_uploads, name="api_ingest_uploads"),
-    path("ingest_uploads/<int:batch_id>/", ingest_uploads_status, name="api_ingest_uploads_status"),
-    path('user-settings/', user_settings_api, name='api-user-settings'),
-    path('conversation_file/<int:convo_file_id>/', conversation_file, name='api_conversation_file'),
+    path(
+        "ingest_uploads/<int:batch_id>/",
+        ingest_uploads_status,
+        name="api_ingest_uploads_status",
+    ),
+    path("user-settings/", user_settings_api, name="api-user-settings"),
+    path(
+        "conversation_file/<int:convo_file_id>/",
+        conversation_file,
+        name="api_conversation_file",
+    ),
     path("ingest_webpage/", ingest_webpage, name="api_ingest_webpage"),
     path("bug-reports/", submit_bug_report, name="api_bug_reports"),
     path("bug-reports/list/", list_bug_reports, name="api_bug_reports_list"),
-    path("bug-reports/<int:report_id>/", bug_report_detail, name="api_bug_report_detail"),
-    path("bug-reports/<int:report_id>/delete/", delete_bug_report, name="api_bug_report_delete"),
+    path(
+        "bug-reports/<int:report_id>/", bug_report_detail, name="api_bug_report_detail"
+    ),
+    path(
+        "bug-reports/<int:report_id>/delete/",
+        delete_bug_report,
+        name="api_bug_report_delete",
+    ),
 ]

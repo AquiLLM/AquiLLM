@@ -112,6 +112,20 @@ def normalize_source_text(value: str) -> str:
     return unicodedata.normalize("NFC", value)
 
 
+def sanitize_graph_source_text(value: str) -> str:
+    """Replace unsafe source controls without changing evidence coordinates."""
+
+    if type(value) is not str:
+        raise TypeError("graph source text must be a string")
+    allowed = {"\t", "\n", "\r"}
+    return "".join(
+        " "
+        if character not in allowed and unicodedata.category(character) in {"Cc", "Cs"}
+        else character
+        for character in value
+    )
+
+
 def batch_extraction_windows(
     windows: tuple[ExtractionWindow, ...],
     *,

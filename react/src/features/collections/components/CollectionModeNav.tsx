@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect } from "react";
 import {
   buildCollectionViewUrl,
   parseCollectionViewMode,
   type CollectionViewMode,
   type CollectionViewNavigationGuard,
-} from './collectionViewTypes';
+} from "./collectionViewTypes";
 
 export interface CollectionModeNavProps {
   activeMode: CollectionViewMode;
@@ -13,8 +13,9 @@ export interface CollectionModeNavProps {
 }
 
 const MODES: Array<{ mode: CollectionViewMode; label: string }> = [
-  { mode: 'files', label: 'Files' },
-  { mode: 'knowledge-graph', label: 'Knowledge Graph' },
+  { mode: "files", label: "Files" },
+  { mode: "knowledge-graph", label: "Knowledge Graph" },
+  { mode: "visualization", label: "Visualization" },
 ];
 
 const CollectionModeNav: React.FC<CollectionModeNavProps> = ({
@@ -28,35 +29,35 @@ const CollectionModeNav: React.FC<CollectionModeNavProps> = ({
         window.location.pathname,
         window.location.search,
         window.location.hash,
-        mode
+        mode,
       ),
-    []
+    [],
   );
 
   const navigateToMode = useCallback(
     (mode: CollectionViewMode) => {
       if (mode === activeMode) return;
-      if (guardNavigation?.({ type: 'mode', mode }) === false) return;
+      if (guardNavigation?.({ type: "mode", mode }) === false) return;
       const nextUrl = currentUrlForMode(mode);
-      window.history.pushState(null, '', nextUrl);
+      window.history.pushState(null, "", nextUrl);
       onActiveModeChange(mode);
     },
-    [activeMode, currentUrlForMode, guardNavigation, onActiveModeChange]
+    [activeMode, currentUrlForMode, guardNavigation, onActiveModeChange],
   );
 
   useEffect(() => {
     const handlePopState = () => {
       const nextMode = parseCollectionViewMode(window.location.search);
       if (nextMode === activeMode) return;
-      if (guardNavigation?.({ type: 'browser', mode: nextMode }) === false) {
-        window.history.pushState(null, '', currentUrlForMode(activeMode));
+      if (guardNavigation?.({ type: "browser", mode: nextMode }) === false) {
+        window.history.pushState(null, "", currentUrlForMode(activeMode));
         return;
       }
       onActiveModeChange(nextMode);
     };
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, [activeMode, currentUrlForMode, guardNavigation, onActiveModeChange]);
 
   return (
@@ -78,8 +79,8 @@ const CollectionModeNav: React.FC<CollectionModeNavProps> = ({
                 data-testid={`collection-mode-${mode}`}
                 className={`h-[36px] px-[14px] rounded-[18px] text-sm font-medium transition-colors cursor-pointer border ${
                   selected
-                    ? 'bg-accent text-white border-accent'
-                    : 'bg-transparent text-text-slightly_less_contrast border-transparent hover:text-text-normal hover:bg-scheme-shade_5'
+                    ? "bg-accent text-white border-accent"
+                    : "bg-transparent text-text-slightly_less_contrast border-transparent hover:text-text-normal hover:bg-scheme-shade_5"
                 }`}
                 onClick={() => navigateToMode(mode)}
               >

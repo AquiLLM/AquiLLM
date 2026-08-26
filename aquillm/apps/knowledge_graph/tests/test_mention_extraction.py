@@ -14,7 +14,10 @@ from apps.knowledge_graph.extraction.pipeline import (
     collect_document_evidence,
     serialize_entity_observations,
 )
-from apps.knowledge_graph.extraction.windows import ExtractionWindow
+from apps.knowledge_graph.extraction.windows import (
+    ExtractionWindow,
+    sanitize_graph_source_text,
+)
 from apps.knowledge_graph.services.ontology import (
     OntologyValidationError,
     load_ontology,
@@ -97,6 +100,34 @@ class _Backend:
         return tuple(next(self.results) for _text in texts)
 
 
+def test_graph_source_sanitizer_is_length_preserving_and_keeps_text_whitespace():
+    source = "A\x00B\x0bC\tD\nE\rF\u200dG"
+
+    sanitized = sanitize_graph_source_text(source)
+
+    assert sanitized == "A B C\tD\nE\rF\u200dG"
+    assert len(sanitized) == len(source)
+
+
+def test_collection_evidence_sanitizes_provider_text_without_shifting_spans():
+    source = "prefix\x00Orion uses MMLU"
+    backend = _Backend((_result(model_start=7, dataset_start=18, confidence=0.91),))
+
+    evidence = collect_document_evidence(
+        (_window(1, source, 0),),
+        full_text=source,
+        backend=backend,
+        ontology=_ontology(),
+        max_batch_count=1,
+        max_batch_characters=100,
+    )
+
+    assert backend.calls[0][0] == ("prefix Orion uses MMLU",)
+    by_text = {entity.raw_text: entity for entity in evidence.entities}
+    assert (by_text["Orion"].start, by_text["Orion"].end) == (7, 12)
+    assert (by_text["MMLU"].start, by_text["MMLU"].end) == (18, 22)
+
+
 def test_document_character_cap_rejects_before_provider_inference(monkeypatch):
     from apps.knowledge_graph.extraction import pipeline
 
@@ -120,7 +151,9 @@ def test_document_character_cap_rejects_before_provider_inference(monkeypatch):
 def test_provider_entity_cap_is_checked_before_candidate_iteration(monkeypatch):
     from apps.knowledge_graph.extraction import pipeline
 
-    monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_ENTITIES", 1)
+    monkeypatch.setattr(
+        pipeline, "DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS", 1
+    )
 
     class OverCapCandidates:
         def __len__(self):
@@ -144,6 +177,24 @@ def test_provider_entity_cap_is_checked_before_candidate_iteration(monkeypatch):
             (_window(1, "Orion", 0),),
             full_text="Orion",
             backend=Backend(),
+            ontology=_ontology(),
+            max_batch_count=1,
+            max_batch_characters=100,
+        )
+
+
+def test_deduplicated_entity_cap_rejects_genuine_unique_overflow(monkeypatch):
+    from apps.knowledge_graph.extraction import pipeline
+
+    monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_ENTITIES", 1)
+
+    with pytest.raises(StructuralExtractionError, match="deduplicated entity cap"):
+        collect_document_evidence(
+            (_window(1, "Orion uses MMLU", 0),),
+            full_text="Orion uses MMLU",
+            backend=_Backend(
+                (_result(model_start=0, dataset_start=11, confidence=0.9),)
+            ),
             ontology=_ontology(),
             max_batch_count=1,
             max_batch_characters=100,
@@ -299,6 +350,34 @@ def test_collect_deduplicates_overlapping_mentions_and_relations_by_global_ident
         ("Orion uses MMLU",),
         ("prefix Orion uses MMLU",),
     ]
+
+
+def test_raw_overlap_can_exceed_unique_entity_cap_after_bounded_deduplication(
+    monkeypatch,
+):
+    from apps.knowledge_graph.extraction import pipeline
+
+    monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_ENTITIES", 2)
+    full_text = "prefix Orion uses MMLU in evaluations."
+
+    evidence = collect_document_evidence(
+        (
+            _window(10, "Orion uses MMLU", 7),
+            _window(11, "prefix Orion uses MMLU", 0),
+        ),
+        full_text=full_text,
+        backend=_Backend(
+            (
+                _result(model_start=0, dataset_start=11, confidence=0.82),
+                _result(model_start=7, dataset_start=18, confidence=0.96),
+            )
+        ),
+        ontology=_ontology(),
+        max_batch_count=1,
+        max_batch_characters=100,
+    )
+
+    assert len(evidence.entities) == 2
 
 
 @pytest.mark.parametrize(

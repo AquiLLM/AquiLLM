@@ -13,6 +13,8 @@ from itertools import combinations, islice
 from math import isfinite
 from uuid import UUID
 
+from apps.knowledge_graph.extraction.windows import sanitize_graph_source_text
+
 from . import DOCUMENT_RESOLVER_VERSION
 from .normalization import normalize_entity_label, parse_stable_identifier
 
@@ -668,6 +670,8 @@ def _raw_source_context(mention: object) -> tuple[object, int]:
     if chunk is None:
         return "", validated_explicit_offset
     content = _value(chunk, "content", "")
+    if type(content) is str:
+        content = sanitize_graph_source_text(content)
     basis = _value(mention, "position_basis", "document_global")
     if explicit_offset is not _MISSING:
         return content, validated_explicit_offset

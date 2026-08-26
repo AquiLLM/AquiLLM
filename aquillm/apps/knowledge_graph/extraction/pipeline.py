@@ -21,6 +21,7 @@ from .windows import (
     batch_extraction_windows,
     deduplicate_mapped_entities,
     map_entity_candidate,
+    sanitize_graph_source_text,
 )
 
 if TYPE_CHECKING:
@@ -37,6 +38,8 @@ DOCUMENT_EXTRACTION_V1_MAX_CHUNKS = 10_000
 DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS = 10_000_000
 DOCUMENT_EXTRACTION_V1_MAX_ENTITIES = 512
 DOCUMENT_EXTRACTION_V1_MAX_RELATIONS = 4_096
+DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS = 4_096
+DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS = 32_768
 _QUERY_ITERATOR_BATCH_SIZE = 1_000
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -224,6 +227,11 @@ def collect_document_evidence(
         > DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS
     ):
         raise StructuralExtractionError("document extraction character cap exceeded")
+    full_text = sanitize_graph_source_text(full_text)
+    windows = tuple(
+        replace(window, content=sanitize_graph_source_text(window.content))
+        for window in windows
+    )
     batches = batch_extraction_windows(
         windows,
         max_count=max_batch_count,
@@ -246,14 +254,18 @@ def collect_document_evidence(
             )
         for window, result in zip(batch, results, strict=True):
             raw_entity_count += len(result.entities)
-            if raw_entity_count > DOCUMENT_EXTRACTION_V1_MAX_ENTITIES:
+            if raw_entity_count > DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS:
                 raise StructuralExtractionError(
-                    "provider entity cap exceeded before candidate materialization"
+                    "provider raw entity cap exceeded before candidate materialization"
                 )
             raw_relation_count += len(result.relations)
-            if raw_relation_count > DOCUMENT_EXTRACTION_V1_MAX_RELATIONS:
+            if (
+                raw_relation_count
+                > DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS
+            ):
                 raise StructuralExtractionError(
-                    "provider relation cap exceeded before candidate materialization"
+                    "provider raw relation cap exceeded before candidate "
+                    "materialization"
                 )
             fatal_codes = sorted(
                 diagnostic.code
@@ -304,9 +316,15 @@ def collect_document_evidence(
                     )
                 )
 
+    entities = deduplicate_mapped_entities(tuple(mapped_entities))
+    if len(entities) > DOCUMENT_EXTRACTION_V1_MAX_ENTITIES:
+        raise StructuralExtractionError("deduplicated entity cap exceeded")
+    relations = _deduplicate_relations(mapped_relations)
+    if len(relations) > DOCUMENT_EXTRACTION_V1_MAX_RELATIONS:
+        raise StructuralExtractionError("deduplicated relation cap exceeded")
     return ExtractedDocumentEvidence(
-        entities=deduplicate_mapped_entities(tuple(mapped_entities)),
-        relations=_deduplicate_relations(mapped_relations),
+        entities=entities,
+        relations=relations,
         diagnostic_counts=dict(sorted(diagnostic_counts.items())),
         window_count=len(windows),
         batch_count=len(batches),
@@ -1363,6 +1381,8 @@ __all__ = [
     "DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS",
     "DOCUMENT_EXTRACTION_V1_MAX_CHUNKS",
     "DOCUMENT_EXTRACTION_V1_MAX_ENTITIES",
+    "DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS",
+    "DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS",
     "DOCUMENT_EXTRACTION_V1_MAX_RELATIONS",
     "ExtractedDocumentEvidence",
     "DocumentResolutionError",

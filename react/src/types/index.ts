@@ -37,7 +37,7 @@ declare global {
     mountReactComponent: (
       elementId: string,
       componentName: string,
-      props?: Record<string, unknown>
+      props?: Record<string, unknown>,
     ) => void;
     apiUrls: {
       api_collection_schema_workspace?: string;
@@ -52,15 +52,17 @@ declare global {
       api_collection_schema_version_diff?: string;
       api_collection_schema_restore?: string;
       api_collection_schema_restore_replace?: string;
-    } & Record<string, string>
+      api_collection_graph_visualization?: string;
+      api_collection_graph_rebuild?: string;
+    } & Record<string, string>;
     pageUrls: {
       [key: string]: string;
-    }
+    };
     appFlags?: {
       /** When true, the chat eagerly LLM-narrows every citation in newly
        * arrived assistant messages so subsequent clicks open instantly. */
       eagerCitationNarrow?: boolean;
       [key: string]: unknown;
-    }
+    };
   }
 }

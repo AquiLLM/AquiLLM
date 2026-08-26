@@ -1318,6 +1318,20 @@ def test_adversarial_scalars_are_rejected_as_bounded_validation_errors():
         _mention("huge-type", "Orion", entity_type="x" * 129)
 
 
+def test_chunk_derived_source_context_sanitizes_controls_deterministically():
+    derived = _mapping_mention()
+    derived.pop("source_text")
+    derived["chunk"] = SimpleNamespace(
+        content="Orion\x00 is evaluated.",
+        start_position=0,
+    )
+    safe = _mapping_mention(source_text="Orion  is evaluated.")
+
+    assert resolution_input_fingerprint((derived,)) == resolution_input_fingerprint(
+        (safe,)
+    )
+
+
 def test_mapping_inputs_cannot_bypass_source_bounds():
     mention = {
         "mention_id": "mapping",

@@ -19,42 +19,44 @@ export interface CollectionBreadcrumb {
   fullPath: string;
 }
 
-export type CollectionViewMode = 'files' | 'knowledge-graph';
+export type CollectionViewMode = "files" | "knowledge-graph" | "visualization";
 
-export const COLLECTION_VIEW_QUERY_PARAM = 'view';
+export const COLLECTION_VIEW_QUERY_PARAM = "view";
 
 export type CollectionViewNavigationIntent =
-  | { type: 'mode'; mode: CollectionViewMode }
-  | { type: 'browser'; mode: CollectionViewMode };
+  | { type: "mode"; mode: CollectionViewMode }
+  | { type: "browser"; mode: CollectionViewMode };
 
 export type CollectionViewNavigationGuard = (
-  intent: CollectionViewNavigationIntent
+  intent: CollectionViewNavigationIntent,
 ) => boolean;
 
 export function parseCollectionViewMode(search: string): CollectionViewMode {
   const view = new URLSearchParams(search).get(COLLECTION_VIEW_QUERY_PARAM);
-  return view === 'knowledge-graph' ? 'knowledge-graph' : 'files';
+  return view === "knowledge-graph" || view === "visualization"
+    ? view
+    : "files";
 }
 
 export function buildCollectionViewSearch(
   currentSearch: string,
-  mode: CollectionViewMode
+  mode: CollectionViewMode,
 ): string {
   const params = new URLSearchParams(currentSearch);
-  if (mode === 'files') {
+  if (mode === "files") {
     params.delete(COLLECTION_VIEW_QUERY_PARAM);
   } else {
-    params.set(COLLECTION_VIEW_QUERY_PARAM, 'knowledge-graph');
+    params.set(COLLECTION_VIEW_QUERY_PARAM, mode);
   }
   const serialized = params.toString();
-  return serialized ? `?${serialized}` : '';
+  return serialized ? `?${serialized}` : "";
 }
 
 export function buildCollectionViewUrl(
   pathname: string,
   currentSearch: string,
   hash: string,
-  mode: CollectionViewMode
+  mode: CollectionViewMode,
 ): string {
   return `${pathname}${buildCollectionViewSearch(currentSearch, mode)}${hash}`;
 }

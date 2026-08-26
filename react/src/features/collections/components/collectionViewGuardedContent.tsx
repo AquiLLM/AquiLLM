@@ -1,12 +1,15 @@
-import React from 'react';
-import type { Collection } from '../../../components/CollectionsTree';
-import CollectionKnowledgeGraphWorkspace from '../knowledgeGraph/CollectionKnowledgeGraphWorkspace';
-import { useCollectionSchemaEditor } from '../knowledgeGraph/useCollectionSchemaEditor';
-import { useSchemaNavigationGuard } from './CollectionSchemaNavigationGuard';
-import type { CollectionContent } from './collectionViewTypes';
-import CollectionViewShell, { type CollectionViewShellProps } from './CollectionViewShell';
-import type { CollectionViewMode } from './collectionViewTypes';
-import type { FileSystemItem } from '../../../types/FileSystemItem';
+import React from "react";
+import type { Collection } from "../../../components/CollectionsTree";
+import CollectionKnowledgeGraphWorkspace from "../knowledgeGraph/CollectionKnowledgeGraphWorkspace";
+import { useCollectionSchemaEditor } from "../knowledgeGraph/useCollectionSchemaEditor";
+import { useSchemaNavigationGuard } from "./CollectionSchemaNavigationGuard";
+import type { CollectionContent } from "./collectionViewTypes";
+import CollectionViewShell, {
+  type CollectionViewShellProps,
+} from "./CollectionViewShell";
+import type { CollectionViewMode } from "./collectionViewTypes";
+import type { FileSystemItem } from "../../../types/FileSystemItem";
+import CollectionGraphVisualization from "../visualization/CollectionGraphVisualization";
 
 function KnowledgeGraphWorkspaceSection({
   collectionId,
@@ -19,7 +22,8 @@ function KnowledgeGraphWorkspaceSection({
   initialCanEdit: boolean;
   initialCanManage: boolean;
 }) {
-  const { registerDirtyState, requestSelectionChange } = useSchemaNavigationGuard();
+  const { registerDirtyState, requestSelectionChange } =
+    useSchemaNavigationGuard();
   const schemaEditor = useCollectionSchemaEditor({
     collectionId,
     collectionName,
@@ -41,9 +45,14 @@ function KnowledgeGraphWorkspaceSection({
 export interface CollectionViewGuardedContentProps {
   collection: Collection;
   collectionId: string;
-  breadcrumbs: Array<{ name: string; id: number | null; path: string; fullPath: string }>;
+  breadcrumbs: Array<{
+    name: string;
+    id: number | null;
+    path: string;
+    fullPath: string;
+  }>;
   contents: CollectionContent[];
-  permissionSource: CollectionViewShellProps['permissionSource'];
+  permissionSource: CollectionViewShellProps["permissionSource"];
   allCollections: Collection[];
   activeMode: CollectionViewMode;
   onActiveModeChange: (mode: CollectionViewMode) => void;
@@ -79,7 +88,9 @@ export interface CollectionViewGuardedContentProps {
   onUserManagementSave: () => void;
 }
 
-const CollectionViewGuardedContent: React.FC<CollectionViewGuardedContentProps> = (props) => {
+const CollectionViewGuardedContent: React.FC<
+  CollectionViewGuardedContentProps
+> = (props) => {
   const { guardNavigation } = useSchemaNavigationGuard();
   const {
     collection,
@@ -99,13 +110,18 @@ const CollectionViewGuardedContent: React.FC<CollectionViewGuardedContentProps> 
       initialCanEdit={initialCanEdit}
       initialCanManage={initialCanManage}
       knowledgeGraphContent={
-        activeMode === 'knowledge-graph' ? (
+        activeMode === "knowledge-graph" ? (
           <KnowledgeGraphWorkspaceSection
             collectionId={collectionId}
             collectionName={collection.name}
             initialCanEdit={initialCanEdit}
             initialCanManage={initialCanManage}
           />
+        ) : null
+      }
+      visualizationContent={
+        activeMode === "visualization" ? (
+          <CollectionGraphVisualization collectionId={collectionId} />
         ) : null
       }
       {...shellProps}
