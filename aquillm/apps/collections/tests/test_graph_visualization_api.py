@@ -151,6 +151,54 @@ def test_graph_visualization_returns_current_nodes_edges_and_bounded_evidence(cl
     ]
 
 
+@pytest.mark.django_db(transaction=True)
+def test_graph_visualization_prioritizes_relation_endpoints_over_isolated_nodes(
+    client, monkeypatch
+):
+    from apps.collections.services import graph_visualization
+    from apps.knowledge_graph.models import CollectionEntity, GraphArtifact
+    from apps.knowledge_graph.tests.test_models import (
+        _persist_collection_relation_fixture,
+    )
+
+    fixture = _persist_collection_relation_fixture()
+    artifact = fixture.collection_artifact
+    isolated = CollectionEntity.objects.create(
+        artifact=artifact,
+        collection=artifact.collection_scope,
+        cluster_key="f" * 64,
+        label="High utility isolated concept",
+        normalized_label="high utility isolated concept",
+        entity_type="concept",
+        extraction_confidence=1.0,
+        resolution_confidence=1.0,
+        retrieval_utility=1.0,
+        promotion_confidence=1.0,
+    )
+    artifact.status = GraphArtifact.Status.ACTIVE
+    artifact.save(update_fields=["status"])
+    viewer = User.objects.create_user(username="graph-connected-viewer")
+    CollectionPermission.objects.create(
+        user=viewer, collection=artifact.collection_scope, permission="VIEW"
+    )
+    monkeypatch.setattr(graph_visualization, "NODE_LIMIT", 2)
+    client.force_login(viewer)
+
+    payload = client.get(_url(artifact.collection_scope)).json()
+
+    assert {node["id"] for node in payload["nodes"]} == {
+        f"entity:{fixture.relation.source_id}",
+        f"entity:{fixture.relation.target_id}",
+    }
+    assert f"entity:{isolated.pk}" not in {
+        node["id"] for node in payload["nodes"]
+    }
+    assert [edge["id"] for edge in payload["edges"]] == [
+        f"relation:{fixture.relation.pk}"
+    ]
+    assert payload["truncated"] == {"nodes": True, "edges": False}
+
+
 @pytest.mark.django_db
 def test_graph_rebuild_requires_edit_and_queues_existing_service(
     client, graph_api_users, monkeypatch

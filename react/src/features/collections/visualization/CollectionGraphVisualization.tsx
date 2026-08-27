@@ -92,6 +92,20 @@ function filterGraph(graph: VisualizationGraph, query: string, type: string) {
   };
 }
 
+function connectedNodeIds(graph: VisualizationGraph) {
+  return new Set(
+    graph.edges.flatMap((edge) => [edge.source, edge.target]),
+  );
+}
+
+function connectedGraph(graph: VisualizationGraph): VisualizationGraph {
+  const connected = connectedNodeIds(graph);
+  return {
+    nodes: graph.nodes.filter((node) => connected.has(node.id)),
+    edges: graph.edges,
+  };
+}
+
 const CollectionGraphVisualization: React.FC<
   CollectionGraphVisualizationProps
 > = ({
@@ -111,6 +125,7 @@ const CollectionGraphVisualization: React.FC<
   const [type, setType] = useState("");
   const [selected, setSelected] = useState<SelectedElement>(null);
   const [rebuilding, setRebuilding] = useState(false);
+  const [includeUnconnected, setIncludeUnconnected] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,9 +193,18 @@ const CollectionGraphVisualization: React.FC<
     () => [...new Set((graph?.nodes ?? []).map((node) => node.type))].sort(),
     [graph],
   );
+  const instanceCounts = useMemo(() => {
+    if (!graph || mode !== "instance") return null;
+    const connected = connectedNodeIds(graph).size;
+    return { connected, unconnected: graph.nodes.length - connected };
+  }, [graph, mode]);
+  const scopedGraph = useMemo(() => {
+    if (!graph || mode !== "instance" || includeUnconnected) return graph;
+    return connectedGraph(graph);
+  }, [graph, includeUnconnected, mode]);
   const visibleGraph = useMemo(
-    () => (graph ? filterGraph(graph, query, type) : null),
-    [graph, query, type],
+    () => (scopedGraph ? filterGraph(scopedGraph, query, type) : null),
+    [query, scopedGraph, type],
   );
   const onSelect = useCallback(
     (element: VisualizationNode | VisualizationEdge) => {
@@ -195,6 +219,7 @@ const CollectionGraphVisualization: React.FC<
     setType("");
     setSelected(null);
     setError(null);
+    setIncludeUnconnected(false);
   };
 
   const rebuild = async () => {
@@ -274,6 +299,41 @@ const CollectionGraphVisualization: React.FC<
           </select>
         </div>
       </div>
+
+      {mode === "instance" && graph && instanceCounts && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[18px] border border-border-low_contrast bg-scheme-shade_4 p-[10px]">
+          <div className="flex gap-2" aria-label="Instance graph scope">
+            <button
+              type="button"
+              aria-pressed={!includeUnconnected}
+              onClick={() => {
+                setIncludeUnconnected(false);
+                setSelected(null);
+              }}
+              className={`h-[36px] rounded-[18px] border px-4 ${!includeUnconnected ? "bg-accent text-white border-accent" : "border-border-mid_contrast"}`}
+            >
+              Connected
+            </button>
+            <button
+              type="button"
+              aria-label="Include unconnected"
+              aria-pressed={includeUnconnected}
+              onClick={() => {
+                setIncludeUnconnected(true);
+                setSelected(null);
+              }}
+              className={`h-[36px] rounded-[18px] border px-4 ${includeUnconnected ? "bg-accent text-white border-accent" : "border-border-mid_contrast"}`}
+            >
+              All entities
+            </button>
+          </div>
+          <span className="text-sm text-text-lower_contrast">
+            {instanceCounts.connected} connected · {instanceCounts.unconnected}{" "}
+            unconnected
+            {instance?.truncated.nodes ? " in this bounded result" : ""}
+          </span>
+        </div>
+      )}
 
       {loading && (
         <p className="rounded-[18px] bg-scheme-shade_4 p-4">Loading graph…</p>

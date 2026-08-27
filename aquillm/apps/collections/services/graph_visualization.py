@@ -185,26 +185,20 @@ def collection_graph_envelope(collection, user, *, query: str = "") -> dict:
         node_query = node_query.filter(
             Q(label__icontains=query) | Q(entity_type__icontains=query)
         )
-    node_rows = list(
-        node_query.order_by("-retrieval_utility", "normalized_label", "pk").values(
-            "pk",
-            "label",
-            "entity_type",
-            "resolution_confidence",
-            "retrieval_utility",
-        )[: NODE_LIMIT + 1]
+    node_fields = (
+        "pk",
+        "label",
+        "entity_type",
+        "resolution_confidence",
+        "retrieval_utility",
     )
-    base["truncated"]["nodes"] = len(node_rows) > NODE_LIMIT
-    node_rows = node_rows[:NODE_LIMIT]
-    node_ids = tuple(row["pk"] for row in node_rows)
-    node_evidence = _node_evidence(node_ids)
-
-    edge_rows = list(
+    eligible_node_ids = node_query.values("pk")
+    edge_candidates = list(
         CollectionRelation.objects.current()
         .filter(
             artifact=active_artifact,
-            source_id__in=node_ids,
-            target_id__in=node_ids,
+            source_id__in=eligible_node_ids,
+            target_id__in=eligible_node_ids,
         )
         .order_by("-support_count", "-confidence", "pk")
         .values(
@@ -216,8 +210,43 @@ def collection_graph_envelope(collection, user, *, query: str = "") -> dict:
             "support_count",
         )[: EDGE_LIMIT + 1]
     )
-    base["truncated"]["edges"] = len(edge_rows) > EDGE_LIMIT
-    edge_rows = edge_rows[:EDGE_LIMIT]
+    base["truncated"]["edges"] = len(edge_candidates) > EDGE_LIMIT
+    edge_rows = []
+    connected_node_ids = []
+    connected_node_id_set = set()
+    for edge in edge_candidates[:EDGE_LIMIT]:
+        additions = tuple(
+            node_id
+            for node_id in (edge["source_id"], edge["target_id"])
+            if node_id not in connected_node_id_set
+        )
+        if len(connected_node_id_set) + len(additions) > NODE_LIMIT:
+            base["truncated"]["edges"] = True
+            continue
+        edge_rows.append(edge)
+        connected_node_ids.extend(additions)
+        connected_node_id_set.update(additions)
+
+    connected_by_id = {
+        row["pk"]: row
+        for row in node_query.filter(pk__in=connected_node_ids).values(*node_fields)
+    }
+    connected_rows = [
+        connected_by_id[node_id]
+        for node_id in connected_node_ids
+        if node_id in connected_by_id
+    ]
+    remaining = NODE_LIMIT - len(connected_rows)
+    other_rows = list(
+        node_query.exclude(pk__in=connected_node_id_set)
+        .order_by("-retrieval_utility", "normalized_label", "pk")
+        .values(*node_fields)[: remaining + 1]
+    )
+    base["truncated"]["nodes"] = len(other_rows) > remaining
+    node_rows = connected_rows + other_rows[:remaining]
+    node_ids = tuple(row["pk"] for row in node_rows)
+    node_evidence = _node_evidence(node_ids)
+
     evidence = _edge_evidence(tuple(row["pk"] for row in edge_rows))
 
     base["nodes"] = [

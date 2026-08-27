@@ -164,6 +164,21 @@ const readyGraph: CollectionGraphEnvelope = {
   truncated: { nodes: false, edges: false },
 };
 
+const graphWithIsolatedEntity: CollectionGraphEnvelope = {
+  ...readyGraph,
+  nodes: [
+    ...readyGraph.nodes,
+    {
+      id: "entity:3",
+      label: "Standalone concept",
+      entity_type: "concept",
+      confidence: 0.95,
+      retrieval_utility: 0.95,
+      evidence: [],
+    },
+  ],
+};
+
 afterEach(() => cleanup());
 
 describe("CollectionGraphVisualization", () => {
@@ -251,5 +266,33 @@ describe("CollectionGraphVisualization", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Aquilla" }));
 
     expect(screen.getByText("Aquilla evaluates MMLU.")).toBeTruthy();
+  });
+
+  it("shows connected entities by default and exposes isolated entities on demand", async () => {
+    render(
+      <CollectionGraphVisualization
+        collectionId="7"
+        loadSchema={vi.fn().mockResolvedValue(schema)}
+        loadInstance={vi.fn().mockResolvedValue(graphWithIsolatedEntity)}
+        requestRebuild={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Instance Graph" }));
+
+    expect(await screen.findByRole("button", { name: "Aquilla" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "MMLU" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Standalone concept" }),
+    ).toBeNull();
+    expect(screen.getByText(/2 connected · 1 unconnected/i)).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Include unconnected" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Standalone concept" }),
+    ).toBeTruthy();
   });
 });
