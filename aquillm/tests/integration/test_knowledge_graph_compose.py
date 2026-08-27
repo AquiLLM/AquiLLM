@@ -28,8 +28,11 @@ MEMGRAPH_HEALTHCHECK_COMPOSE_FILES = COMPOSE_FILES + (
 GRAPH_WORKER = "worker_knowledge_graph"
 GRAPH_QUEUE = "knowledge-graph-extraction"
 GRAPH_QUEUE_ENVIRONMENT = "${KG_EXTRACTION_QUEUE-knowledge-graph-extraction}"
-GRAPH_QUEUE_COMMAND = "$${KG_EXTRACTION_QUEUE}"
 GRAPH_DOCKERFILE = "deploy/docker/knowledge-graph/Dockerfile"
+GRAPH_WORKER_RUNTIME_COMMAND = (
+    '/opt/venv/bin/python -c "from lib.knowledge_graph.config import '
+    'run_extraction_worker; run_extraction_worker()"'
+)
 CACHE_DIR_ENVIRONMENT = "${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}"
 GRAPH_FLAGS = {
     "DJANGO_DEBUG": "${DJANGO_DEBUG:-0}",
@@ -120,15 +123,23 @@ def test_memgraph_uses_a_canonical_internal_dns_alias(compose_file: Path) -> Non
 def test_graph_worker_is_an_optional_isolated_cpu_worker(compose_file: Path) -> None:
     services = _compose(compose_file)["services"]
     worker = services[GRAPH_WORKER]
-    command = worker["command"]
 
     assert worker["profiles"] == ["knowledge-graph"]
     assert worker["build"]["dockerfile"] == GRAPH_DOCKERFILE
-    assert f'--queues="{GRAPH_QUEUE_COMMAND}"' in command
-    assert command.index("load_extraction_queue") < command.index("exec ")
-    assert command.startswith("/bin/sh -c ")
     assert "nvidia" not in repr(worker).lower()
     assert "gpu" not in repr(worker).lower()
+
+
+@pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
+def test_graph_worker_launches_the_cpu_scaled_runtime(compose_file: Path) -> None:
+    worker = _compose(compose_file)["services"][GRAPH_WORKER]
+    environment = _environment_map(worker["environment"])
+
+    assert worker["command"] == GRAPH_WORKER_RUNTIME_COMMAND
+    assert environment["KG_EXTRACTION_WORKER_CONCURRENCY"] == (
+        "${KG_EXTRACTION_WORKER_CONCURRENCY:-auto}"
+    )
+    assert environment["KG_GLINER2_CPU_THREADS"] == ("${KG_GLINER2_CPU_THREADS:-auto}")
 
 
 @pytest.mark.parametrize("compose_file", COMPOSE_FILES, ids=lambda path: path.name)
@@ -364,10 +375,8 @@ def test_only_graph_worker_image_installs_the_optional_ml_extra() -> None:
     assert "ENV PATH=/opt/venv/bin:$PATH" in graph_contents
     assert "WORKDIR /app/aquillm" in graph_contents
     assert f"ENV KG_EXTRACTION_QUEUE={GRAPH_QUEUE}" in graph_contents
-    assert "$KG_EXTRACTION_QUEUE" in graph_contents
-    assert graph_contents.index("load_extraction_queue") < graph_contents.index(
-        "exec celery"
-    )
+    assert "run_extraction_worker; run_extraction_worker()" in graph_contents
+    assert "--concurrency=1" not in graph_contents
     assert "torch.version.cuda is None" in graph_contents
     assert graph_contents.index("torch.version.cuda is None") > graph_contents.index(
         "uv sync --frozen --no-dev --extra knowledge-graph-local"

@@ -21,4 +21,4 @@ COPY . .
 
 WORKDIR /app/aquillm
 
-CMD ["sh", "-c", "export HF_HOME=\"$KG_GLINER2_CACHE_DIR\" && python -c \"from lib.knowledge_graph.config import load_extraction_queue; load_extraction_queue()\" && exec celery -A aquillm worker --loglevel=info --queues=\"$KG_EXTRACTION_QUEUE\" --concurrency=1 --prefetch-multiplier=1 --hostname=worker-knowledge-graph@%h"]
+CMD ["/opt/venv/bin/python", "-c", "from lib.knowledge_graph.config import run_extraction_worker; run_extraction_worker()"]
