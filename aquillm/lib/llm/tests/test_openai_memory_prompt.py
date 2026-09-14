@@ -56,7 +56,7 @@ class OpenAIMemoryPromptTests(SimpleTestCase):
         assert "Do not describe internal memory tools, storage backends, or persistence mechanisms." in system_message
         assert "If the user asks you to remember something, acknowledge it naturally" in system_message
 
-    def test_local_vllm_disables_hidden_thinking_by_default(self):
+    def test_local_vllm_enables_thinking_by_default(self):
         completions = self._CapturingCompletions(
             SimpleNamespace(
                 choices=[
@@ -78,10 +78,10 @@ class OpenAIMemoryPromptTests(SimpleTestCase):
             )
 
         assert completions.calls[0]["chat_template_kwargs"] == {
-            "enable_thinking": False
+            "enable_thinking": True
         }
 
-    def test_local_vllm_can_explicitly_enable_thinking(self):
+    def test_local_vllm_can_explicitly_disable_thinking(self):
         completions = self._CapturingCompletions(
             SimpleNamespace(
                 choices=[
@@ -96,7 +96,7 @@ class OpenAIMemoryPromptTests(SimpleTestCase):
         llm = OpenAIInterface(self._FakeOpenAIClient(completions), model="qwen3.6:27b")
 
         with patch.dict(
-            os.environ, {"OPENAI_COMPAT_ENABLE_THINKING": "1"}, clear=False
+            os.environ, {"OPENAI_COMPAT_ENABLE_THINKING": "0"}, clear=False
         ):
             async_to_sync(llm.get_message)(
                 system="Base system.",
@@ -105,5 +105,5 @@ class OpenAIMemoryPromptTests(SimpleTestCase):
             )
 
         assert completions.calls[0]["chat_template_kwargs"] == {
-            "enable_thinking": True
+            "enable_thinking": False
         }
