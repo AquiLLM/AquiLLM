@@ -222,7 +222,6 @@ async def run_direct_rag_turn(
             retrieved_count=int(raw_result.get("retrieved_count", 0) or 0),
             retained_count=len(packet.chunks),
             retrieval_status=packet.retrieval_status,
-
         )
         logger.info(
             "direct_rag_turn_handled",

@@ -216,7 +216,6 @@ async def test_append_direct_rag_disabled_falls_back_to_spin(
 
 
 @pytest.mark.asyncio
-@patch("apps.chat.consumers.chat.build_memory_tools", return_value=[])
 @patch("apps.chat.consumers.chat.build_document_tools", return_value=[])
 @patch("apps.chat.consumers.chat.build_astronomy_tools", return_value=[])
 @patch(
@@ -241,7 +240,6 @@ async def test_reconnect_pending_user_turn_uses_direct_rag_before_tool_spin(
     _memory_system,
     _astronomy_tools,
     _document_tools,
-    _memory_tools,
     monkeypatch,
 ):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")

@@ -138,4 +138,3 @@ class VectorSearchPackTests(SimpleTestCase):
         assert "retrieval_diagnostics" not in out
         assert out["_retrieval_diagnostics"] == diag
         assert "_retrieval_diagnostics" not in serialize_tool_result_for_llm(out)
-
