@@ -19,6 +19,7 @@ from typing import Any, Literal
 import structlog
 from channels.db import database_sync_to_async
 
+from apps.chat.services.manual_search_turn import run_manual_search_turn
 from apps.chat.services.rag_config import (
     direct_rag_max_queries,
     direct_rag_top_k,
@@ -111,6 +112,11 @@ async def run_direct_rag_turn(
     Returns ``"handled"`` when the turn was fully answered here (caller must skip
     the normal tool loop), or ``"skipped"`` to let the existing spin run.
     """
+    manual_outcome = await run_manual_search_turn(
+        consumer, llm_if, convo, stream_func=stream_func,
+    )
+    if manual_outcome == "handled":
+        return "handled"
     if not is_direct_rag_enabled():
         return "skipped"
 
