@@ -68,9 +68,14 @@ ASR deployment, conversation-search feature, or citation-sources UI rollout.
   `test_chat_consumer_append.py`, `test_collection_prompt_skills.py`,
   `test_conversation_persistence.py`, `test_feedback_capture.py`, and
   `test_message_adapters.py`. Run them with PostgreSQL/pgvector before release.
-- **The file-length gate still fails on 22 legacy files already over 300 lines
-  in main.** Seven existing oversized files grew with the imported fixes. No
-  additional file crosses the limit; the expanded direct-RAG tests were split.
+- **The file-length gate passes with development's exact-count baseline checker.**
+  Backported the checker and regression tests introduced in `3741bc40`, using
+  the checker from development at `4b604539`. The baseline records this patch's
+  exact counts for the 22 legacy files already over 300 lines in main; seven
+  grew with the imported fixes. No additional file crosses the limit. Further
+  growth fails, shrinking requires lowering the recorded count, and deleted
+  or newly compliant files must be removed from the baseline. Development-only
+  paths are excluded. The expanded direct-RAG tests remain split.
 
 Backend validation used Python 3.13, `aquillm.settings_test`, and dummy provider
 credentials. Frontend validation used Node 22.14.0. No live model calls or
