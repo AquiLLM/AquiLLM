@@ -10,6 +10,10 @@ VLLM_IMAGE = (
 GENESIS_REF = "34e269301cc3df71ae4b0da00a0a159b16b4e5d8"
 
 
+def _main_vllm_service(compose: str) -> str:
+    return compose.split("\n  vllm:\n", 1)[1].split("\n  vllm_ocr:\n", 1)[0]
+
+
 def test_genesis_image_pins_the_validated_vllm_and_plugin_pair():
     dockerfile = (
         REPO_ROOT / "deploy/docker/vllm/Dockerfile.genesis"
@@ -58,10 +62,53 @@ def test_example_environment_enables_the_turboquant_mtp_workspace_stack():
         "GENESIS_ENFORCE_VERSION_RANGE=1",
         "GENESIS_ENABLE_P98=1",
         "GENESIS_ENABLE_PN118=1",
+        "GENESIS_ENABLE_PN119=1",
         "GENESIS_ENABLE_PN399_TQ_DECODE_SCRATCH_IMA=1",
         "GENESIS_ENABLE_PN401_TQ_PREFILL_CONTINUATION_GUARD=1",
         "GENESIS_ENABLE_PN521_TQ_RAW_TAIL_VERIFY=1",
+        "GENESIS_ENABLE_PN521_SPLIT_K=1",
+        "GENESIS_P67_BLOCK_KV=32",
         "GENESIS_ENABLE_PN522_TQ_RAW_TAIL_WARMUP=1",
+        "GENESIS_ENABLE_PN33_SPEC_DECODE_WARMUP_K=1",
+        "GENESIS_ENABLE_PN126_V1_DECODE_WARMUP=1",
+        "GENESIS_ENABLE_PN128_SPEC_DECODE_WARMUP=1",
+        "GENESIS_ENABLE_PN129_SLOT_MAPPING_WARMUP=1",
+        "GENESIS_ENABLE_PN130_TQ_DECODE_WARMUP=1",
+        "GENESIS_ENABLE_P82=0",
     ):
         assert setting in lines
     assert "GENESIS_ENABLE_PN34_WORKSPACE_LOCK_RELAX=1" not in lines
+
+
+def test_example_environment_enables_mtp_speculation_by_default():
+    environment = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    vllm_extra_args = next(
+        line for line in environment.splitlines() if line.startswith("VLLM_EXTRA_ARGS=")
+    )
+
+    assert "--kv-cache-dtype turboquant_k8v4" in vllm_extra_args
+    assert (
+        "--speculative-config '{\\\"method\\\":\\\"mtp\\\",\\\"num_speculative_tokens\\\":4}'"
+        in vllm_extra_args
+    )
+
+
+def test_main_vllm_compile_caches_persist_with_the_model_cache():
+    cache_settings = (
+        "TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton",
+        "VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR="
+        "/root/.cache/huggingface/aquillm-main/flashinfer",
+    )
+
+    for compose_name in ("base.yml", "development.yml", "production.yml"):
+        compose = (REPO_ROOT / "deploy/compose" / compose_name).read_text(
+            encoding="utf-8"
+        )
+        main_vllm = _main_vllm_service(compose)
+        for setting in cache_settings:
+            assert setting in main_vllm
+        assert (
+            "vllm_compile_cache:/root/.cache/vllm/torch_compile_cache"
+            in main_vllm
+        )
+        assert "VLLM_CACHE_ROOT=" not in main_vllm
