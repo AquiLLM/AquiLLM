@@ -192,6 +192,12 @@ cmd=("${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --served-model-name "${SERVED_MODEL_NAME}"
 )
 
+if supports_arg "--no-enable-log-requests"; then
+  cmd+=(--no-enable-log-requests)
+elif supports_arg "--disable-log-requests"; then
+  cmd+=(--disable-log-requests)
+fi
+
 if [ -n "${VLLM_API_KEY:-}" ]; then
   cmd+=(--api-key "${VLLM_API_KEY}")
 fi
