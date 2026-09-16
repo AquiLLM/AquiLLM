@@ -113,6 +113,9 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
           </button>
         </div>
       </div>
+      <p className="mt-2 text-center text-xs text-text-low_contrast">
+        Search commands: <code>/search [document] question</code> or <code>/collection question</code>
+      </p>
     </div>
   </div>
 );

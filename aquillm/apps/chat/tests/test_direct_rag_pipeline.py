@@ -1,4 +1,5 @@
 """Tests for the direct RAG pipeline orchestrator (Tasks 4 and 5)."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -98,7 +99,9 @@ async def test_handled_retrieves_before_llm(monkeypatch):
     async def fake_synth(llm_if, convo, packet, *, stream_func=None):
         order.append("synthesis")
         return convo + [
-            AssistantMessage(content="Answer [doc:doc-a chunk:1].", stop_reason="end_turn")
+            AssistantMessage(
+                content="Answer [doc:doc-a chunk:1].", stop_reason="end_turn"
+            )
         ]
 
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", fake_search)
@@ -234,6 +237,7 @@ async def test_end_to_end_real_synthesis_single_llm_call(monkeypatch):
     assert outcome == "handled"
     assert order[0] == "retrieval"
     assert order.count("get_message") == 1
+    assert "thinking_budget" not in llm_if.calls[0]
     assert "calibration" in consumer.convo[-1].content.lower()
     assert "[doc:doc-a chunk:1]" in consumer.convo[-1].content
 

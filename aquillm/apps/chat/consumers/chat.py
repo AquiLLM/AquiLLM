@@ -1,12 +1,12 @@
 """WebSocket consumer for chat functionality."""
 from __future__ import annotations
 
-import structlog
 from json import dumps
 from os import getenv
 from time import perf_counter
-from typing import Any, Optional
+from typing import Any
 
+import structlog
 from anthropic._exceptions import OverloadedError
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -21,12 +21,14 @@ from aquillm.tasks import enqueue_conversation_memories_task
 from apps.chat.consumers.chat_delta import send_conversation_delta
 from apps.chat.consumers.chat_publish import run_llm_spin
 from apps.chat.consumers.chat_receive import handle_chat_receive
+from apps.chat.consumers.chat_transport import best_effort_send
 from apps.chat.consumers.chat_ws_errors import send_connect_error
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services.skills_runtime import build_skill_tools, effective_base_system_for_memory_async
 from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
+from apps.chat.services.rag_pipeline import run_direct_rag_turn
 from lib.tools.debug.weather import get_debug_weather_tool
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -34,18 +36,29 @@ logger = structlog.stdlib.get_logger(__name__)
 
 class ChatConsumer(AsyncWebsocketConsumer):
     llm_if: LLMInterface = apps.get_app_config("aquillm").llm_interface
-    db_convo: Optional[WSConversation] = None
-    convo: Optional[Any] = None
+    db_convo: WSConversation | None = None
+    convo: Any | None = None
     tools: list[LLMTool] = []
-    user: Optional[User] = None
+    user: User | None = None
 
     dead: bool = False
 
-    col_ref = CollectionsRef([])
+    col_ref: CollectionsRef
     last_sent_sequence: int = -1
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.col_ref = CollectionsRef([])
+        self.transport_connected = True
+
     async def _send_stream_payload(self, payload: dict) -> None:
-        await self.send(text_data=dumps({"stream": payload}))
+        await best_effort_send(
+            self,
+            text_data=dumps({"stream": payload}),
+        )
+
+    async def disconnect(self, close_code):
+        self.transport_connected = False
 
     @database_sync_to_async
     def _save_conversation(self, create_memories: bool = False):
@@ -94,6 +107,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         logger.debug("ChatConsumer.connect() called")
 
+        self.transport_connected = True
         await self.accept()
         logger.debug("WebSocket accepted")
         self.user = self.scope["user"]
@@ -149,18 +163,36 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.debug("About to call llm_if.spin() in connect()")
             before_spin_len = len(self.convo)
             llm_start = perf_counter()
-            await run_llm_spin(
+            direct_outcome = await run_direct_rag_turn(
                 self,
                 self.llm_if,
                 self.convo,
-                max_func_calls=CHAT_MAX_FUNC_CALLS,
-                max_tokens=CHAT_MAX_TOKENS,
-                send_func=lambda c: send_conversation_delta(
-                    self, c, create_memories=False, close_db=False
-                ),
                 stream_func=self._send_stream_payload,
             )
-            logger.info("LLM spin took %.1fms in connect()", (perf_counter() - llm_start) * 1000)
+            if direct_outcome == "handled":
+                await send_conversation_delta(
+                    self,
+                    self.convo,
+                    create_memories=False,
+                    close_db=False,
+                )
+            else:
+                await run_llm_spin(
+                    self,
+                    self.llm_if,
+                    self.convo,
+                    max_func_calls=CHAT_MAX_FUNC_CALLS,
+                    max_tokens=CHAT_MAX_TOKENS,
+                    send_func=lambda c: send_conversation_delta(
+                        self, c, create_memories=False, close_db=False
+                    ),
+                    stream_func=self._send_stream_payload,
+                )
+            logger.info(
+                "obs.chat.spin_completed",
+                phase="connect",
+                duration_ms=(perf_counter() - llm_start) * 1000,
+            )
             await self._save_conversation(create_memories=len(self.convo) > before_spin_len)
             logger.debug("llm_if.spin() completed in connect()")
             return

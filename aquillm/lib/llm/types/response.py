@@ -1,17 +1,19 @@
 """LLM response type."""
-from typing import Optional
+
 from pydantic import BaseModel
 
 
 class LLMResponse(BaseModel):
     """Standardized response from an LLM provider."""
-    text: Optional[str]
-    tool_call: Optional[dict]
+
+    text: str | None
+    tool_call: dict | None
     stop_reason: str
     input_usage: int
     output_usage: int
-    model: Optional[str] = None
-    message_uuid: Optional[str] = None
+    reasoning_usage: int | None = None
+    model: str | None = None
+    message_uuid: str | None = None
 
 
-__all__ = ['LLMResponse']
+__all__ = ["LLMResponse"]

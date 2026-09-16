@@ -1,10 +1,22 @@
 """JSON / XML tool-call extraction from model text (OpenAI-compatible)."""
+
 from __future__ import annotations
 
 import re
 import uuid
 from json import loads
-from typing import Any, Optional
+from typing import Any
+
+_SAME_LINE_TOOL_RE = re.compile(
+    r"^\s*Tool\s*:\s*([A-Za-z_][\w.-]*)\s+(\{[\s\S]*\})\s*$",
+    flags=re.IGNORECASE,
+)
+_TOOL_MARKUP_ONLY_RE = re.compile(
+    r"\s*(```[\s\S]*```|<function_call>[\s\S]*</function_call>|"
+    r"<tool_call>[\s\S]*</tool_call>|<tool_code>[\s\S]*</tool_code>|"
+    r"<\w+>\s*\{[\s\S]*\}\s*</\w+>)\s*",
+    flags=re.IGNORECASE,
+)
 
 
 def decode_json_dict(raw: Any) -> dict:
@@ -20,7 +32,7 @@ def decode_json_dict(raw: Any) -> dict:
     return {}
 
 
-def extract_first_json_object(text: str) -> Optional[str]:
+def extract_first_json_object(text: str) -> str | None:
     start = None
     depth = 0
     in_string = False
@@ -52,7 +64,7 @@ def extract_first_json_object(text: str) -> Optional[str]:
     return None
 
 
-def tool_call_from_payload(payload: dict, allowed_tools: set[str]) -> Optional[dict]:
+def tool_call_from_payload(payload: dict, allowed_tools: set[str]) -> dict | None:
     if not isinstance(payload, dict):
         return None
     name = payload.get("name") or payload.get("tool_name")
@@ -74,7 +86,11 @@ def tool_call_from_payload(payload: dict, allowed_tools: set[str]) -> Optional[d
     if len(payload) == 1:
         only_name = next(iter(payload.keys()))
         only_args = payload[only_name]
-        if isinstance(only_name, str) and only_name in allowed_tools and isinstance(only_args, dict):
+        if (
+            isinstance(only_name, str)
+            and only_name in allowed_tools
+            and isinstance(only_args, dict)
+        ):
             return {
                 "tool_call_id": str(uuid.uuid4()),
                 "tool_call_name": only_name,
@@ -83,7 +99,7 @@ def tool_call_from_payload(payload: dict, allowed_tools: set[str]) -> Optional[d
     return None
 
 
-def extract_tool_call_from_text(text: str, raw_tools: Optional[list[dict]]) -> Optional[dict]:
+def extract_tool_call_from_text(text: str, raw_tools: list[dict] | None) -> dict | None:
     if not text or not raw_tools:
         return None
     allowed_tools = {
@@ -95,11 +111,41 @@ def extract_tool_call_from_text(text: str, raw_tools: Optional[list[dict]]) -> O
     if not allowed_tools:
         return None
 
+    same_line_match = _SAME_LINE_TOOL_RE.fullmatch(text)
+    if same_line_match:
+        tool_name = same_line_match.group(1)
+        try:
+            arguments = loads(same_line_match.group(2))
+        except Exception:
+            arguments = None
+        if tool_name in allowed_tools and isinstance(arguments, dict):
+            return {
+                "tool_call_id": str(uuid.uuid4()),
+                "tool_call_name": tool_name,
+                "tool_call_input": arguments,
+            }
+
     candidates = [text]
-    candidates.extend(re.findall(r"```(?:json|xml)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE))
-    candidates.extend(re.findall(r"<function_call>\s*([\s\S]*?)\s*</function_call>", text, flags=re.IGNORECASE))
-    candidates.extend(re.findall(r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", text, flags=re.IGNORECASE))
-    candidates.extend(re.findall(r"<tool_code>\s*([\s\S]*?)\s*</tool_code>", text, flags=re.IGNORECASE))
+    candidates.extend(
+        re.findall(r"```(?:json|xml)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+    )
+    candidates.extend(
+        re.findall(
+            r"<function_call>\s*([\s\S]*?)\s*</function_call>",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    candidates.extend(
+        re.findall(
+            r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", text, flags=re.IGNORECASE
+        )
+    )
+    candidates.extend(
+        re.findall(
+            r"<tool_code>\s*([\s\S]*?)\s*</tool_code>", text, flags=re.IGNORECASE
+        )
+    )
 
     for candidate in candidates:
         payload = decode_json_dict(candidate)
@@ -131,9 +177,18 @@ def extract_tool_call_from_text(text: str, raw_tools: Optional[list[dict]]) -> O
     return None
 
 
+def is_textual_tool_call_only(text: str) -> bool:
+    """Return whether the complete response contains only tool-call markup."""
+    return bool(
+        text
+        and (_SAME_LINE_TOOL_RE.fullmatch(text) or _TOOL_MARKUP_ONLY_RE.fullmatch(text))
+    )
+
+
 __all__ = [
     "decode_json_dict",
     "extract_first_json_object",
     "extract_tool_call_from_text",
+    "is_textual_tool_call_only",
     "tool_call_from_payload",
 ]

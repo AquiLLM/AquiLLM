@@ -66,15 +66,23 @@ def collect_allowed_chunk_citations(
         if isinstance(msg, ToolMessage) and msg.for_whom == "assistant"
     ]
     for tool_msg in tool_messages[:max_tool_messages]:
-        payload = tool_msg.result_dict.get("result") if isinstance(tool_msg.result_dict, dict) else None
-        if not isinstance(payload, list):
-            continue
-        for row in payload[:max_rows_per_message]:
+        result_dict = tool_msg.result_dict if isinstance(tool_msg.result_dict, dict) else {}
+        payload = result_dict.get("result")
+        rows = list(payload) if isinstance(payload, list) else []
+        for row in rows[:max_rows_per_message]:
             if not isinstance(row, dict):
                 continue
             citation = _chunk_citation_from_row(row)
             if citation:
                 citations.add(citation)
+        citation_chunks = result_dict.get("citation_chunks")
+        if isinstance(citation_chunks, list):
+            for row in citation_chunks:
+                if not isinstance(row, dict):
+                    continue
+                citation = _chunk_citation_from_row(row)
+                if citation:
+                    citations.add(citation)
     return citations
 
 

@@ -1,9 +1,9 @@
 """RAG intent classification for chat messages."""
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 _DOCUMENT_TARGET_RE = re.compile(
     r"\b(documents?|docs?|papers?|files?|selected collections?|sources?)\b",
@@ -12,6 +12,10 @@ _DOCUMENT_TARGET_RE = re.compile(
 _DOCUMENT_SEARCH_ACTION_RE = re.compile(
     r"\b(search|check|find|scan|read|retrieve|query|consult)\b|"
     r"\blook\s+(?:at|in|through|up)\b",
+    flags=re.IGNORECASE,
+)
+_DOCUMENT_SYNTHESIS_ACTION_RE = re.compile(
+    r"\b(summari[sz]e|synthesi[sz]e|analy[sz]e|compare|review|describe|explain)\b",
     flags=re.IGNORECASE,
 )
 _DOCUMENT_FIGURE_TARGET_RE = re.compile(
@@ -34,16 +38,48 @@ _RETRY_REQUEST_RE = re.compile(
     r"^\s*(?:try again|retry|please retry|run it again|do that again)\s*[.!?]*\s*$",
     flags=re.IGNORECASE,
 )
+_SELECTED_COLLECTION_CLARIFICATION_RE = re.compile(
+    r"^\s*(?:(?:the|those)\s+)?(?:ones?|documents?|docs?|files?|papers?)\s+in\s+"
+    r"(?:the\s+)?selected\s+collections?\s*[.!?]*\s*$",
+    flags=re.IGNORECASE,
+)
+_SMALL_TALK_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:hi|hello|hey)(?:\s+there)?(?:\s*[,!]\s*(?:how\s+are\s+you|how(?:'s|\s+is)\s+it\s+going))?"
+    r"|thanks?(?:\s+you)?(?:\s+(?:so|very)\s+much)?"
+    r"|ok(?:ay)?|sounds?\s+good|got\s+it|understood"
+    r")\s*[.!?]*\s*$",
+    flags=re.IGNORECASE,
+)
+_UI_MANAGEMENT_RE = re.compile(
+    r"\b(?:open|show|change|select|deselect|manage|edit|rename|delete|create)\b"
+    r"[^.?!]*\b(?:collection\s+settings|collection\s+picker|collections?)\b|"
+    r"\b(?:upload|sign\s+in|log\s+in|account\s+settings)\b",
+    flags=re.IGNORECASE,
+)
+_CHAT_HISTORY_RE = re.compile(
+    r"\b(?:past|previous|prior|earlier|old(?:er)?|other|last(?:\s+time)?)\s+"
+    r"(?:chats?|conversations?|threads?|discussions?|sessions?)\b|"
+    r"\b(?:chat|conversation|thread|discussion)\s+history\b|"
+    r"\bwhat\s+did\s+we\s+(?:discuss|talk\s+about|say|decide|cover)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def _collection_backed_document_question(text: str, collection_ids: list) -> bool:
-    """True when the user asks a question about documents in the selected collections."""
+    """Treat selected collections as evidence for substantive knowledge turns."""
     if not collection_ids:
         return False
-    lowered = text.lower()
-    doc_cues = ("paper", "document", "doc", "article", "source", "collection", "this", "these")
-    question_cues = ("what", "how", "why", "explain", "summarize", "describe", "tell me", "?")
-    return any(c in lowered for c in doc_cues) and any(c in lowered for c in question_cues)
+    normalized = " ".join((text or "").split()).strip()
+    if not normalized:
+        return False
+    if _SMALL_TALK_RE.fullmatch(normalized):
+        return False
+    if _UI_MANAGEMENT_RE.search(normalized) or _CHAT_HISTORY_RE.search(normalized):
+        return False
+    if _SELECTED_COLLECTION_CLARIFICATION_RE.match(normalized):
+        return True
+    return bool(re.search(r"[A-Za-z0-9]", normalized))
 
 
 @dataclass
@@ -62,7 +98,7 @@ def classify_chat_message(
     text: str,
     *,
     selected_collection_ids: list,
-    prior_tools: Optional[list] = None,
+    prior_tools: list | None = None,
     prior_tool_choice=None,
 ) -> ChatIntent:
     """Classify a chat message to determine retrieval and tool intent.
@@ -95,18 +131,26 @@ def classify_chat_message(
         )
 
     wants_figures = bool(
-        _DOCUMENT_FIGURE_TARGET_RE.search(text) and _DOCUMENT_FIGURE_ACTION_RE.search(text)
+        _DOCUMENT_FIGURE_TARGET_RE.search(text)
+        and _DOCUMENT_FIGURE_ACTION_RE.search(text)
     )
-    explicit_search = bool(
+    explicit_search_action = bool(
         _DOCUMENT_TARGET_RE.search(text) and _DOCUMENT_SEARCH_ACTION_RE.search(text)
     )
-    collection_backed = _collection_backed_document_question(text, selected_collection_ids)
+    explicit_synthesis = bool(
+        _DOCUMENT_TARGET_RE.search(text)
+        and _DOCUMENT_SYNTHESIS_ACTION_RE.search(text)
+    )
+    explicit_search = explicit_search_action or explicit_synthesis
+    collection_backed = _collection_backed_document_question(
+        text, selected_collection_ids
+    )
 
     requires_rag = wants_figures or explicit_search or collection_backed
 
     if wants_figures:
         reason = "figure_request"
-    elif explicit_search:
+    elif explicit_search_action or (explicit_synthesis and not collection_backed):
         reason = "explicit_search"
     elif collection_backed:
         reason = "collection_backed_question"

@@ -14,6 +14,7 @@ from lib.llm.providers.rag_citations import (
     synthesize_cited_extract_from_results,
     synthesize_doc_level_extract_from_results,
 )
+from lib.llm.providers.request_observability import observability_scope
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
@@ -89,6 +90,63 @@ def test_collect_allowed_chunk_citations_accepts_explicit_ref_fields():
     allowed = collect_allowed_chunk_citations(convo)
     assert "[doc:doc-c chunk:11]" in allowed
     assert "[doc:doc-d chunk:12]" in allowed
+
+
+def test_collect_allowed_chunk_citations_accepts_whole_document_metadata():
+    convo = Conversation(
+        system="sys",
+        messages=[
+            ToolMessage(
+                content="{}",
+                tool_name="whole_document",
+                for_whom="assistant",
+                result_dict={
+                    "result": "[doc:doc-paper chunk:21]\nA cited passage.",
+                    "citation_chunks": [
+                        {
+                            "doc_id": "doc-paper",
+                            "chunk_id": 21,
+                            "citation": "[doc:doc-paper chunk:21]",
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+
+    assert collect_allowed_chunk_citations(convo) == {
+        "[doc:doc-paper chunk:21]"
+    }
+
+
+def test_whole_document_citation_metadata_is_not_truncated_by_search_row_cap():
+    citation_chunks = [
+        {
+            "doc_id": "doc-paper",
+            "chunk_id": chunk_id,
+            "citation": f"[doc:doc-paper chunk:{chunk_id}]",
+        }
+        for chunk_id in range(1, 46)
+    ]
+    convo = Conversation(
+        system="sys",
+        messages=[
+            ToolMessage(
+                content="{}",
+                tool_name="whole_document",
+                for_whom="assistant",
+                result_dict={
+                    "result": "whole document",
+                    "citation_chunks": citation_chunks,
+                },
+            )
+        ],
+    )
+
+    allowed = collect_allowed_chunk_citations(convo, max_rows_per_message=1)
+
+    assert len(allowed) == 45
+    assert "[doc:doc-paper chunk:45]" in allowed
 
 
 def test_response_has_required_citations_and_rejects_unknown_refs():
@@ -250,6 +308,56 @@ async def test_complete_turn_uses_higher_default_post_tool_token_budget(monkeypa
     assert changed == "changed"
     assert seen_max_tokens
     assert seen_max_tokens[0] == 6144
+
+
+@pytest.mark.asyncio
+async def test_direct_synthesis_honors_its_explicit_completion_budget(monkeypatch):
+    monkeypatch.setenv("LLM_POST_TOOL_OUTPUT_MAX_TOKENS", "12288")
+    seen_max_tokens: list[int] = []
+
+    async def _fake_get_message(**kwargs):
+        seen_max_tokens.append(int(kwargs.get("max_tokens", 0)))
+        return LLMResponse(
+            text="Cited answer [doc:doc-a chunk:7].",
+            tool_call={},
+            stop_reason="stop",
+            input_usage=1,
+            output_usage=1,
+            model="fake",
+        )
+
+    llm = SimpleNamespace(base_args={}, get_message=AsyncMock(side_effect=_fake_get_message))
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="What does the source say?"),
+            ToolMessage(
+                content="{}",
+                tool_name="vector_search",
+                for_whom="assistant",
+                result_dict={
+                    "result": [
+                        {
+                            "chunk_id": 7,
+                            "doc_id": "doc-a",
+                            "title": "Doc A",
+                            "text": "Alpha finding with supporting detail.",
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+
+    with observability_scope("0f22db7309f04ab0a4676cdb5a76f962", "direct_synthesis"):
+        _updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=4096,
+        )
+
+    assert changed == "changed"
+    assert seen_max_tokens == [4096]
 
 
 @pytest.mark.asyncio
