@@ -79,10 +79,11 @@ def selected_tool_result(packet) -> dict:
 
 def selection_metric_fields(config, turn: SelectionTurn | None, packet) -> dict:
     """Closed aggregate values only; no passages, identities, or score arrays."""
+    base = {"selection_mode": config.mode, "selection_config_error": config.error}
     if turn is None:
-        return {"selection_mode": config.mode}
-    return {
-        "selection_mode": config.mode,
+        return base
+    proposed = turn.selection.candidates
+    return base | {
         "selector_ms": turn.selection_duration_ms,
         "final_scoring_ms": turn.prepared.scoring_duration_ms,
         "candidate_count": turn.candidate_count,
@@ -94,6 +95,11 @@ def selection_metric_fields(config, turn: SelectionTurn | None, packet) -> dict:
         "new_pairs": turn.prepared.new_pairs,
         "profile_version": turn.selection.profile.version,
         "fixed_fallback_reason": turn.prepared.fallback_reason,
+        "proposed_selected_count": len(proposed),
+        "proposed_selected_doc_count": len({item.doc_id for item in proposed}),
+        "proposed_estimated_tokens": turn.selection.estimated_tokens,
+        "proposed_profile_name": turn.selection.profile.name,
+        "proposed_score_status": turn.selection.score_status,
     }
 
 

@@ -39,7 +39,7 @@ If adaptive profiles do not beat a fixed profile, use the simpler fixed policy. 
 ## Development sequence
 
 1. Verify the offline replay, current direct-RAG and score-contract tests, authorization, redaction, and strict-reranker checks. Development deployment may use `legacy` or `shadow` after code verification; deploying is a separate operational action.
-2. Observe `shadow` with shadow scoring off. Compare selected citation IDs and aggregate status/counts while serving legacy results.
+2. Observe `shadow` with shadow scoring off. Compare served and proposed aggregate counts, profile, and score status in ordinary logs while serving legacy results. Compare citation-level choices only through authorized private replay fixtures; ordinary shadow logs contain no citation IDs.
 3. In a bounded development experiment, explicitly set `RAG_EVIDENCE_SELECTION_SHADOW_SCORING=1`. Measure final-scoring reuse, new pairs, caller latency, provider work, and warm/cold/concurrent behavior. Return the switch to `0` when the experiment ends.
 4. After the real labeled and latency gates pass, approve a limited `adaptive` canary. Compare it with legacy and the best fixed profile using the same authorized candidate snapshots, then broaden only if the canary preserves the gates.
 
