@@ -27,6 +27,22 @@ _PROJECTION_INDEX_STATEMENTS = (
     "CREATE INDEX ON :ProjectedChunk(chunk_key)",
     "CREATE INDEX ON :ProjectedRelation(relation_key)",
     "CREATE INDEX ON :ProjectedRecord(generation_key, opaque_key)",
+    # Family-only readers must still observe malformed nodes missing the shared
+    # ProjectedRecord label. Index their existing selectors without narrowing them.
+    "CREATE INDEX ON :ProjectedEntity(generation_key)",
+    "CREATE INDEX ON :AutomaticMembership(generation_key)",
+    "CREATE INDEX ON :ProjectedDocument(generation_key)",
+    "CREATE INDEX ON :ProjectedChunk(generation_key)",
+    "CREATE INDEX ON :ProjectedRelationSemantics(generation_key)",
+    "CREATE INDEX ON :ProjectedRelation(generation_key)",
+    "CREATE INDEX ON :ProjectedEvidence(generation_key)",
+    "CREATE INDEX ON :ProjectedEntityMention(generation_key)",
+    "CREATE INDEX ON :ArtifactProvenance(generation_key)",
+    "CREATE EDGE INDEX ON :ENTITY_MEMBERSHIP",
+    "CREATE EDGE INDEX ON :DOCUMENT_CHUNK",
+    "CREATE EDGE INDEX ON :PROJECTED_RELATION",
+    "CREATE EDGE INDEX ON :RELATION_EVIDENCE",
+    "CREATE EDGE INDEX ON :ENTITY_MENTION",
 )
 
 

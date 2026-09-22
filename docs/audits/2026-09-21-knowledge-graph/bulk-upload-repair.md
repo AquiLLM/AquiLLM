@@ -369,3 +369,33 @@ pre-ready stages, consistently with heartbeat renewal. The post-ready recovery
 guard is unchanged. Eight regression cases reproduced the prior classification
 failure; **37 focused tests** passed after the change, with Ruff and independent
 review clear. No additional database permissions or configuration were needed.
+
+The subsequent observed target retry completed staging writes in 62.22 seconds,
+then failed during validation after 116.64 seconds. A read-only execution-plan
+probe found global scans in all nine node-family readers and all five edge
+attestation readers. At the deployed 300 ms transaction budget, the first entity
+mention edge page failed after the driver's retries (about 32 seconds); sanitized
+underlying diagnostics identified a transient timeout. The node mention page
+was already near the budget at 293 ms. These measurements isolate validation
+cost independently of lease renewal.
+
+The repair adds nine family-generation and five edge-type indexes to the fixed
+bootstrap allowlist. Existing family-only selectors remain unchanged so malformed
+nodes missing the shared `ProjectedRecord` label remain visible and rejected.
+Edge attestation retains its complete source-generation OR target-generation OR
+edge-generation predicate, including arbitrary endpoint labels and missing
+properties. It limits the ordered page before extracting wide properties and
+retains explicit final ordering. No authority, checksum or row-cap check is
+removed. The projection worker's long reconciliation scan finished naturally,
+and warm shutdown completed with exit zero; an identity-guarded soft-stop helper
+aborted before sending any signal because the worker had already exited.
+
+The combined driver, query-plan, pagination, validation, streaming and topology
+suite passed **35 tests**, including four real Memgraph regressions. All nine
+bounded topology plans use indexes and preserve their results. Exact legacy/new
+edge-page comparisons cover all five families, tied keys and duplicate edges,
+missing or foreign generation properties and arbitrary endpoint labels; checksum
+tests reject corruption and accept idempotent repair. Scoped Ruff and independent
+review passed. A separate 100,000-edge local benchmark returned identical first,
+second and later pages in 219, 220 and 110 ms under the unchanged 300 ms budget.
+Live deployment measurements remain required before claiming the target is ready.

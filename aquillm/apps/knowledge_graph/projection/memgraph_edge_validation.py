@@ -29,8 +29,13 @@ def _query(source_label, relationship, target_label, cursor, returned):
         " OR edge.generation_key = $generation_key) "
         f"AND (NOT $has_cursor OR {cursor} > $cursor_key "
         f"OR ({cursor} = $cursor_key AND id(edge) > $cursor_id)) "
-        f"RETURN {returned}, {cursor} AS cursor_key, id(edge) AS cursor_id "
-        "ORDER BY cursor_key, cursor_id LIMIT $page_limit"
+        # Materialize wide evidence properties only for the bounded page. Keep
+        # every incident edge visible, including malformed endpoint labels and
+        # generation properties; the attestation must still reject those rows.
+        f"WITH source, target, edge, {cursor} AS cursor_key, id(edge) AS cursor_id "
+        "ORDER BY cursor_key, cursor_id LIMIT $page_limit "
+        f"RETURN {returned}, cursor_key, cursor_id "
+        "ORDER BY cursor_key, cursor_id"
     )
 
 

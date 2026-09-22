@@ -170,6 +170,20 @@ def test_schema_bootstrap_uses_only_fixed_indexes_in_bounded_implicit_transactio
         "CREATE INDEX ON :ProjectedChunk(chunk_key)",
         "CREATE INDEX ON :ProjectedRelation(relation_key)",
         "CREATE INDEX ON :ProjectedRecord(generation_key, opaque_key)",
+        "CREATE INDEX ON :ProjectedEntity(generation_key)",
+        "CREATE INDEX ON :AutomaticMembership(generation_key)",
+        "CREATE INDEX ON :ProjectedDocument(generation_key)",
+        "CREATE INDEX ON :ProjectedChunk(generation_key)",
+        "CREATE INDEX ON :ProjectedRelationSemantics(generation_key)",
+        "CREATE INDEX ON :ProjectedRelation(generation_key)",
+        "CREATE INDEX ON :ProjectedEvidence(generation_key)",
+        "CREATE INDEX ON :ProjectedEntityMention(generation_key)",
+        "CREATE INDEX ON :ArtifactProvenance(generation_key)",
+        "CREATE EDGE INDEX ON :ENTITY_MEMBERSHIP",
+        "CREATE EDGE INDEX ON :DOCUMENT_CHUNK",
+        "CREATE EDGE INDEX ON :PROJECTED_RELATION",
+        "CREATE EDGE INDEX ON :RELATION_EVIDENCE",
+        "CREATE EDGE INDEX ON :ENTITY_MENTION",
     ]
     assert all(timeout == 0.5 for _, timeout in calls)
     assert client.transaction.calls == []
