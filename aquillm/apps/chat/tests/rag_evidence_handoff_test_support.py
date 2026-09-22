@@ -155,5 +155,3 @@ class _BoundaryLLM:
             output_usage=1,
             model="boundary-fixture",
         )
-
-

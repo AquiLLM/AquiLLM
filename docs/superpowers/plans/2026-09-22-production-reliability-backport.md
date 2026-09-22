@@ -35,7 +35,7 @@
 
 - [x] Backport 6689a20a's direct-RAG evidence budgeting, document balancing and request-only evidence handoff without graph dependencies; retain compatibility with main's recovery behavior.
 - [x] Run evidence/retrieval/synthesis regressions and frontend build/typecheck, plus appropriate backend integration checks.
-- [ ] Review task diffs and full branch; resolve actionable findings.
+- [x] Review task diffs and full branch; resolve actionable findings.
 - [x] Add rollout instructions covering source revision, application reload, image rebuild/recreate where required, existing .env reconciliation, health checks and rollback.
 - [ ] Commit and push the complete backport to existing PR #227 (`codex/backport-genesis-runtime`), then follow required CI/review checks to integration permitted by repository policy and user authorization.
 
