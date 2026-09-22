@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useRef, useState, useEffect, type Dispatch, type SetStateAction } from 'react';
 import type { Message, Conversation, WebSocketMessage } from '../types';
 
 function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
@@ -44,6 +44,17 @@ export function useChatWebSocket({
   const wsRef = useRef<WebSocket | null>(null);
   const [_isConnected, setIsConnected] = useState(false);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
+  const [terminalError, setTerminalError] = useState('');
+
+  const beginTurn = useCallback(() => {
+    setTerminalError('');
+    setException('');
+    setDebugHtml(null);
+  }, [setDebugHtml, setException]);
+
+  useEffect(() => {
+    setTerminalError('');
+  }, [convoId]);
 
   useEffect(() => {
     let connectTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -95,6 +106,7 @@ export function useChatWebSocket({
 
           if (data.exception) {
             console.error('Server error:', data.exception);
+            setTerminalError(data.exception);
             setException(data.exception);
             setDebugHtml(data.debug_html || null);
             setInputDisabled(false);
@@ -105,6 +117,7 @@ export function useChatWebSocket({
 
           if (data.conversation) {
             const updatedConversation = data.conversation;
+            setTerminalError('');
             if (Array.isArray(updatedConversation.selected_collections) && setSelectedCollections) {
               setSelectedCollections(new Set(updatedConversation.selected_collections.map(String)));
             }
@@ -192,5 +205,5 @@ export function useChatWebSocket({
     };
   }, [connectionAttempts, convoId, setConversation, setException, setDebugHtml, setInputDisabled, setSelectedCollections]);
 
-  return { wsRef };
+  return { wsRef, terminalError, beginTurn };
 }
