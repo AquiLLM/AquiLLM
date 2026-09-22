@@ -15,7 +15,7 @@ from apps.knowledge_graph.retrieval.topology.failures import (
 )
 
 from .memgraph_driver import MemgraphDriverError
-from .memgraph_records import read_bundle
+from .memgraph_records import MemgraphFamilyResultCapError, read_bundle
 from .topology_request import decode_topology_request
 from .topology_results import family_response
 from .topology_snapshot import build_projected_topology_snapshot
@@ -201,6 +201,8 @@ class Neo4jProjectedTopologyQueryAdapter:
                     reject_full_pages=True,
                     topology_parameters=bounded_parameters,
                 )
+            except MemgraphFamilyResultCapError as error:
+                raise TopologyResultCapError from error
             except MemgraphDriverError as error:
                 if error.code == "memgraph_timeout":
                     raise TimeoutError("projected topology read timed out") from error

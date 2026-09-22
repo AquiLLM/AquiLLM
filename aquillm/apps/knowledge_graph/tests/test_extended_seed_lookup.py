@@ -152,3 +152,86 @@ def test_authority_query_compiles_with_current_projection_and_membership(monkeyp
     assert '"graph_checksum" = %s' in sql
     assert '"generation_key" = %s' in sql
     assert '"active_artifact_id" = %s' in sql
+
+
+@pytest.mark.parametrize("source_rows", (360, 4999, 5000))
+def test_many_seed_chunks_have_independent_complete_source_budget(
+    monkeypatch, source_rows
+):
+    from apps.knowledge_graph.retrieval import extended_seed_repository as source
+    from apps.knowledge_graph.retrieval.branch_contracts import (
+        ExtendedBranchFailureReason,
+    )
+    from apps.knowledge_graph.retrieval.production_runtime_support import topology_caps
+    from apps.knowledge_graph.retrieval.scheduler_support import (
+        LocalBranchSchedulerFailure,
+    )
+    from apps.knowledge_graph.retrieval.topology.contracts import HybridBranchKind
+
+    scope = _ready_scope()
+    settings = SimpleNamespace(
+        graph_extended_enabled=True,
+        graph_extended_max_seeds=64,
+        graph_extended_max_nodes=200,
+        graph_extended_max_depth=2,
+        graph_extended_max_edges=1000,
+        graph_extended_max_candidates=20,
+    )
+    chunks = {chunk: _DOC_A for chunk in range(1, 37)}
+    by_chunk = {chunk: [] for chunk in chunks}
+    for index in range(source_rows):
+        by_chunk[index % 36 + 1].append((index + 1, None))
+    reads = []
+    monkeypatch.setattr(source, "_authority_is_current", lambda **_: True)
+    monkeypatch.setattr(source, "_chunk_documents", lambda **_: chunks)
+
+    def read_rows(*, chunk_id, limit, **kwargs):
+        reads.append(chunk_id)
+        # Match the SQL boundary's limit+1 overflow sentinel.
+        return tuple(by_chunk[chunk_id][: limit + 1])
+
+    monkeypatch.setattr(source, "_seed_rows", read_rows)
+    runtime = SimpleNamespace(
+        authorization=authorization(Policy()),
+        codec=HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v1"),
+        clock=lambda: 0.0,
+        projection_repository_factory=source.ExtendedSeedRepository,
+        _exact_request=lambda *args: None,
+        _shared_scope=lambda _: scope,
+    )
+
+    def prepare():
+        return prepare_extended_branch(
+            runtime,
+            baseline=SimpleNamespace(
+                graph_seeds=tuple(
+                    SimpleNamespace(chunk_id=chunk, restart_weight=1.0 / 36)
+                    for chunk in chunks
+                ),
+                baseline_candidates=tuple(
+                    SimpleNamespace(pk=chunk, doc_id=_DOC_A) for chunk in chunks
+                ),
+            ),
+            shared=object(),
+            authorization=runtime.authorization,
+            settings=settings,
+            deadline=1.0,
+        )
+
+    if source_rows == 5000:
+        with pytest.raises(LocalBranchSchedulerFailure) as captured:
+            prepare()
+        assert (
+            captured.value.reason is ExtendedBranchFailureReason.EXTENDED_SEED_INVALID
+        )
+        assert isinstance(captured.value.__cause__, ValueError)
+        assert "result exceeds its hard cap" in str(captured.value.__cause__)
+    else:
+        result = prepare()
+        assert len(result) == 64
+        assert sum(row.mass for row in result) == pytest.approx(1.0)
+        assert reads == list(range(1, 37))
+        # All source rows are considered before the existing deterministic
+        # top-seed selection; this does not enlarge the final graph.
+        assert topology_caps(settings, HybridBranchKind.EXTENDED).max_nodes == 200
+        assert prepare() == result

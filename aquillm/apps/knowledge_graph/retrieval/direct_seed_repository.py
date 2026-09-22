@@ -272,7 +272,21 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
         canonical_entity__version_signature=OuterRef("version_signature"),
     ).values("canonical_entity_id")[:1]
     tier = options["tier"]
-    alias_filters = {"document_links__document_entity__mention_links__status": "active", "document_links__document_entity__mention_links__resolver_version": scope.resolver_version, "document_links__document_entity__mention_links__mention__artifact_id__in": scope.selected_document_artifact_ids, "document_links__document_entity__mention_links__mention__document_id__in": scope.selected_document_ids, "document_links__document_entity__mention_links__mention__artifact__status__in": ("active", "superseded"), "document_links__document_entity__mention_links__mention__artifact__evaluation_only": False, "document_links__document_entity__mention_links__mention__artifact__ontology_checksum": scope.ontology_checksum, "document_links__document_entity__mention_links__mention__entity_type": options["ontology_type"], str(options["lookup_field"]): options["lookup"]} if tier is DirectResolutionTier.ALIAS else {}
+    alias_filters = {
+        "document_links__document_entity__mention_links__status": "active",
+        # Mention assignments belong to the document resolver, which can evolve
+        # independently of the selected collection's assembly resolver.
+        "document_links__document_entity__mention_links__resolver_version": F(
+            "document_links__document_entity__artifact__resolver_version"
+        ),
+        "document_links__document_entity__mention_links__mention__artifact_id__in": scope.selected_document_artifact_ids,
+        "document_links__document_entity__mention_links__mention__document_id__in": scope.selected_document_ids,
+        "document_links__document_entity__mention_links__mention__artifact__status__in": ("active", "superseded"),
+        "document_links__document_entity__mention_links__mention__artifact__evaluation_only": False,
+        "document_links__document_entity__mention_links__mention__artifact__ontology_checksum": scope.ontology_checksum,
+        "document_links__document_entity__mention_links__mention__entity_type": options["ontology_type"],
+        str(options["lookup_field"]): options["lookup"],
+    } if tier is DirectResolutionTier.ALIAS else {}
     query = (
         CollectionEntity.objects.using(options["using"])
         .filter(

@@ -57,9 +57,28 @@ _QUERIES = {
         + _return("ProjectedDocument")
     ),
     "ProjectedChunk": (
+        # Hydrate only chunks referenced by the same mention/evidence paths as
+        # the other families, then rejoin ownership without hiding duplicate
+        # chunk identities or malformed nodes missing ProjectedRecord.
+        "USING INDEX :ProjectedChunk(chunk_key) CALL { "
+        + _ROOT
+        + _NODE_PATH
+        + "MATCH (entity)-[:ENTITY_MENTION {generation_key:$generation_key}]->"
+        "(chunk:ProjectedChunk {generation_key:$generation_key}) "
+        "WHERE chunk.document_key IN split($authorized_document_keys_csv, ',') "
+        "RETURN chunk.chunk_key AS referenced_chunk_key UNION "
+        + _ROOT
+        + _EDGE_PATH
+        + "MATCH (relation:ProjectedRelation {generation_key:$generation_key})"
+        "-[:RELATION_EVIDENCE {generation_key:$generation_key}]->"
+        "(chunk:ProjectedChunk {generation_key:$generation_key}) "
+        "WHERE relation.opaque_key = physical.relation_key "
+        "AND chunk.document_key IN split($authorized_document_keys_csv, ',') "
+        "RETURN chunk.chunk_key AS referenced_chunk_key } "
         "MATCH (document:ProjectedDocument {generation_key:$generation_key})"
         "-[:DOCUMENT_CHUNK {generation_key:$generation_key}]->"
-        "(n:ProjectedChunk {generation_key:$generation_key}) "
+        "(n:ProjectedChunk {generation_key:$generation_key, "
+        "chunk_key:referenced_chunk_key}) "
         "WHERE document.document_key IN "
         "split($authorized_document_keys_csv, ',') "
         + _return("ProjectedChunk")

@@ -425,3 +425,64 @@ blocks further writes. The root verification passed all 23 batch, repository,
 edge and real-container tests in 43.82 seconds; Ruff and independent review are
 clear. Full target publication,
 retrieval and generated cited-answer verification remain required after deployment.
+
+The writer hint was pushed and deployed as
+`73ea8a0fb30882f9a9b318a0c099c50893f98de0`; the development checkout was clean and
+the official projection worker responded on its expected queue. The exact live
+membership plan used the composite index for both endpoints. The target's normal
+projection service published generation `10ecec38-4ccd-4944-a553-bae67869e1c5` at
+12:54:22 UTC: 125.11 seconds total, including 46.68 seconds staging, 44.23 seconds
+validation and 20.57 seconds graph-ready processing. Four transient graph-store
+timeouts were recovered by existing retries; this is a successful build, not a
+claim of timeout-free operation. Published counts are 23,536 entities, 277
+relations, 290 evidence records, 43,980 entity mentions and 2,168 chunks.
+All 31 document graphs are active with no current document failures. The original
+schema draft and its revision remain unchanged and unpublished.
+
+Actual production search then exposed additional query-stage mismatches. Extended
+seed loading used the final 200-node topology limit as its source-row budget;
+36 valid seed chunks exceeded it before ranking. The repair retains the source
+repository's existing 4,999-row hard ceiling per selected projection independently of final seed/node
+selection. Tests cover complete 36-chunk input at 360 and 4,999 rows and rejection
+at 5,000; final 64-seed and 200-node caps are unchanged. Direct alias lookup also
+incorrectly compared a document mention assignment to the collection resolver
+version. It now compares against that document artifact's resolver, with a real
+PostgreSQL regression proving valid independently versioned aliases work and
+stale assignments remain rejected. The combined root seed/runtime/PostgreSQL
+verification passed **47 tests**; scoped Ruff passed.
+
+A query about a model mentioned in ten uploaded documents resolved two direct
+seeds, then failed because the topology chunk reader loaded all 2,168 authorized
+chunks under a 1,000-row neighborhood cap. A read-only exact-request diagnostic
+isolated this to the chunk family; the surrounding neighborhood had only seven
+entities, five relations and 40 mentions. A diagnostic-only larger chunk input
+budget confirmed later families were valid. This diagnostic does not establish
+production retrieval success or change deployment configuration.
+
+The per-projection seed ceiling is not a global branch row budget; up to 64
+selected generations may each use it. The existing branch deadline and global
+64 seed-chunk selection bound remain enforced. This deployment does not add a
+shared raw-row accounting protocol across projections.
+
+Topology chunk hydration now unions chunks referenced by the same bounded
+entity-mention and relation-evidence neighborhoods, then rejoins their authorized
+document ownership using the existing chunk-key index. Generation, hop, document,
+cursor, duplicate detection and record/reference validation remain intact; the
+1,000-chunk source ceiling is unchanged. Real Memgraph tests include 1,500
+irrelevant authorized chunks, distinct mention/evidence chunks, one-row cursor
+pages, foreign document/generation exclusions, hop bounds and a duplicate chunk
+missing the shared record label, which still fails closed.
+
+Validated family overflow also now has a distinct exception mapped to the existing
+branch-local result-cap response. Previously it was mislabeled a shared backend
+schema mismatch and canceled the sibling branch. Tests follow the actual sentinel
+through the adapter, loader, scheduler and gateway in both branch directions;
+malformed records still produce shared schema failures. Root verification of the
+combined topology/index/pagination/adapter/gateway/isolation suite passed **47
+tests** in 74.05 seconds. Together with the separate 47-test seed/runtime/PostgreSQL
+run, scoped Ruff and independent review are clear. Live retrieval remains pending
+deployment of these query-stage repairs.
+
+The owned stopped projection canary and its detached d745 checkout were removed
+after identity, source, clean-tree and exited-state checks. The main development
+checkout and temporary SSH key were unchanged by that cleanup.

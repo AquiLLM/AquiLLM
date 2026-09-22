@@ -73,7 +73,7 @@ pytestmark = [
 
 
 @pytest.fixture
-def seeds():
+def seeds(request):
     assert connection.vendor == "postgresql"
     user = User.objects.create_user(username=f"seed-{uuid4()}")
     collection = Collection.objects.create(name="seed integration")
@@ -104,7 +104,12 @@ def seeds():
         scope_type="collection", scope_id=collection.pk, ontology_checksum="7" * 64
     )
     artifact.save()
-    document_artifact = _artifact(scope_id=document.id, ontology_checksum="7" * 64)
+    document_options = (
+        {"resolver_version": request.param} if hasattr(request, "param") else {}
+    )
+    document_artifact = _artifact(
+        scope_id=document.id, ontology_checksum="7" * 64, **document_options
+    )
     document_artifact.save()
     document_entities = []
     for index, (label, start, end) in enumerate(
@@ -308,6 +313,37 @@ def _lookup(fixture, chunks, max_rows):
         codec=fixture.codec,
         max_rows=max_rows,
     )
+
+
+@pytest.mark.parametrize("seeds", ("document-coreference-v3",), indirect=True)
+def test_direct_alias_uses_document_resolver_and_rejects_stale_mention_link(seeds):
+    assert seeds.document_artifact.resolver_version != seeds.artifact.resolver_version
+    span = seeds.spans[0]
+    name_matches = seeds.direct.canonical_name_matches(
+        span=span, ready=seeds.scope.ready, limit=2
+    )
+    alias_matches = seeds.direct.indexed_alias_matches(
+        span=span, ready=seeds.scope.ready, limit=2
+    )
+    assert len(name_matches) == len(alias_matches) == 1
+    assert alias_matches[0].entity_key == name_matches[0].entity_key
+    assert alias_matches[0].component_key == name_matches[0].component_key
+
+    # Simulate a legacy malformed/stale row bypassing the model's immutable
+    # provenance validation. Matching the collection resolver is insufficient.
+    link = DocumentEntityMention.objects.get(document_entity=seeds.document_entities[0])
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"UPDATE {DocumentEntityMention._meta.db_table} "
+            "SET resolver_version=%s WHERE id=%s",
+            [seeds.artifact.resolver_version, link.pk],
+        )
+    assert seeds.direct.indexed_alias_matches(
+        span=span, ready=seeds.scope.ready, limit=2
+    ) == ()
+    assert seeds.direct.canonical_name_matches(
+        span=span, ready=seeds.scope.ready, limit=2
+    ) == name_matches
 
 
 def test_real_seed_rows_match_projection_for_representative_and_observation(seeds):

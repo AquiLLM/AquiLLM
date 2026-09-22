@@ -53,6 +53,10 @@ _ORDER_FIELDS = (
 )
 
 
+class MemgraphFamilyResultCapError(ValueError):
+    """A validated sentinel row exceeds this request's bounded family budget."""
+
+
 def _read_topology_family(
     driver,
     *,
@@ -94,7 +98,9 @@ def _read_topology_family(
             previous_key, last_properties = key, properties
             loaded.append(decoded)
             if reject_full_pages and len(loaded) > maximum:
-                raise ValueError("bounded Memgraph family read was truncated")
+                raise MemgraphFamilyResultCapError(
+                    "bounded Memgraph family read was truncated"
+                )
         if len(rows) < page_limit:
             break
         if last_properties is None:

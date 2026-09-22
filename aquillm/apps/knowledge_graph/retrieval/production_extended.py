@@ -24,6 +24,10 @@ from .production_runtime_support import (
     topology_caps,
 )
 
+# Each projection's complete chunk-to-identity inputs have a bounded source
+# budget; final seed selection and topology admission retain smaller caps.
+_MAX_SEED_SOURCE_ROWS_PER_PROJECTION = 4_999
+
 
 def _projection_repository(runtime):
     if runtime.projection_repository_factory is not None:
@@ -99,7 +103,7 @@ def prepare_extended_branch(
                 chunks=chunks,
                 authorization=authorization,
                 codec=runtime.codec,
-                max_rows=min(4999, getattr(settings, "graph_extended_max_nodes", 4999)),
+                max_rows=_MAX_SEED_SOURCE_ROWS_PER_PROJECTION,
             )
             if set(by_chunk) - {pk for pk, _ in chunks}:
                 raise ValueError("extended source returned unrelated chunks")
