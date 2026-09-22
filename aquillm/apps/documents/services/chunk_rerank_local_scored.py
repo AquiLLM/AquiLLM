@@ -36,6 +36,7 @@ from apps.documents.services.chunk_rerank_results import (
     fingerprint_pair,
     fingerprint_pool,
     fingerprint_text,
+    rank_only_result_for_chunks,
 )
 from apps.documents.services.chunk_rerank_score_cache import (
     reusable_scored_result,
@@ -47,7 +48,6 @@ from apps.documents.services.chunk_rerank_score_cache import (
 def rerank_via_local_vllm_scored(
     model_cls, query: str, chunks_list, top_k: int
 ) -> ScoredRerankResult:
-    """Use one provider response per attempt; rank-only responses stay explicit."""
     chunks = list(chunks_list)
     candidate_ids = tuple(chunk.pk for chunk in chunks)
     query_fp = fingerprint_text(query)
@@ -111,7 +111,14 @@ def rerank_via_local_vllm_scored(
         headers["Authorization"] = f"Bearer {api_key}"
     timeout = rerank_timeout_seconds()
 
-    def finish(ranked_ids, endpoint, shape, indexed=(), successful_pairs=None):
+    def finish(
+        ranked_ids,
+        endpoint,
+        shape,
+        indexed=(),
+        successful_pairs=None,
+        model_verified=True,
+    ):
         kind = "listwise" if shape == "rerank_documents" else "pointwise"
         complete_order = (
             _complete_pairs(indexed, candidate_ids) if successful_pairs else None
@@ -135,11 +142,11 @@ def rerank_via_local_vllm_scored(
                 scores = ()
         status = "complete" if scores else "unavailable"
         result = ScoredRerankResult(
-            tuple(complete_order[:top_k] if scores else ranked_ids),
+            tuple((complete_order if scores else ranked_ids)[:top_k]),
             RerankScoreSet(
                 "v2",
                 query_fp,
-                scorer_fp(endpoint, shape),
+                scorer_fp(endpoint, shape) if model_verified else "",
                 pool_fp,
                 kind if scores else "rank_only",
                 status,
@@ -147,9 +154,10 @@ def rerank_via_local_vllm_scored(
                 scores,
             ),
         )
-        rag_cache.set_cached_rerank_capability(
-            base_v1, model_name, {"endpoint": endpoint, "shape": shape}
-        )
+        if model_verified:
+            rag_cache.set_cached_rerank_capability(
+                base_v1, model_name, {"endpoint": endpoint, "shape": shape}
+            )
         if (
             pinned
             and scores
@@ -165,8 +173,7 @@ def rerank_via_local_vllm_scored(
             )
         return result
 
-    # Listwise input must have one shared query. Shape probing preserves the
-    # existing adapter's text and multimodal variants.
+    # Listwise probes need one shared query; preserve text and multimodal shapes.
     same_query = len({prepared_query for prepared_query, _ in pairs}) == 1
     rerank_endpoints = [f"{root}/rerank", f"{root}/v2/rerank", f"{base_v1}/rerank"]
     if capability and capability["shape"] == "rerank_documents":
@@ -223,8 +230,13 @@ def rerank_via_local_vllm_scored(
                     if ranked:
                         effective = (
                             dict(enumerate(pairs))
-                            if payload is not payloads[-1]
-                            or not any(isinstance(item, list) for item in multimodal)
+                            if "model" in payload
+                            and (
+                                payload is not payloads[-1]
+                                or not any(
+                                    isinstance(item, list) for item in multimodal
+                                )
+                            )
                             else None
                         )
                         return finish(
@@ -233,6 +245,7 @@ def rerank_via_local_vllm_scored(
                             "rerank_documents",
                             _rerank_scores(body),
                             effective,
+                            "model" in payload,
                         )
                 except Exception:
                     continue
@@ -266,7 +279,8 @@ def rerank_via_local_vllm_scored(
                             endpoint,
                             "score_batch_text_pairs",
                             indexed,
-                            dict(enumerate(pairs)),
+                            dict(enumerate(pairs)) if "model" in payload else None,
+                            "model" in payload,
                         )
                 except Exception:
                     continue
@@ -283,16 +297,4 @@ def rerank_via_local_vllm_scored(
                 indexed,
                 {index: pair for index, _value, pair in results},
             )
-    return ScoredRerankResult(
-        (),
-        RerankScoreSet(
-            "v2",
-            query_fp,
-            scorer_fp(base_v1, "unavailable"),
-            pool_fp,
-            "rank_only",
-            "unavailable",
-            candidate_ids,
-            (),
-        ),
-    )
+    return rank_only_result_for_chunks(query, chunks, top_k=0)

@@ -84,6 +84,7 @@ def test_score_set_rejects_stale_duplicate_unrelated_and_nonfinite_values():
         score_set((PassageScore(10, DOC_A, 1, "source-a", "effective-a", True),)),
         score_set((base,), query_fingerprint="other"),
         score_set((base,), scorer_fingerprint="other"),
+        score_set((), scoring_kind="rank_only", status="complete"),
     )
     for invalid in bad:
         with pytest.raises(ValueError):

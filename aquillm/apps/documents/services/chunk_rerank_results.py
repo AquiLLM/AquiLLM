@@ -147,6 +147,8 @@ def validate_score_set(
         "rank_only",
     ) or score_set.status not in ("complete", "unavailable"):
         raise ValueError("invalid score set status")
+    if score_set.scoring_kind == "rank_only" and score_set.status != "unavailable":
+        raise ValueError("rank-only score set must be unavailable")
     identities = tuple(authorized_identities)
     if any(
         not isinstance(identity, tuple)
