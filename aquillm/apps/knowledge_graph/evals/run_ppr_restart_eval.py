@@ -12,7 +12,10 @@ from statistics import mean
 from time import perf_counter
 
 from apps.chat.evals.evidence_selection_metrics import paired_bootstrap_interval
-from apps.knowledge_graph.evals.ppr_restart_factorial import factorial_replay
+from apps.knowledge_graph.evals.ppr_restart_factorial import (
+    factorial_replay,
+    quality_strata,
+)
 from apps.knowledge_graph.evals.ppr_restart_fixtures import load_cases
 from apps.knowledge_graph.evals.ppr_restart_reference import reference_run
 from apps.knowledge_graph.retrieval.ppr import canonical_algorithm_json
@@ -142,6 +145,7 @@ def evaluate_case(case, policy):
         "abstained": policy == "adaptive_v1" and restart == 0.2,
         "snapshot_checksum": projected_snapshot_checksum(snapshot),
         "seed_checksum": projected_seed_checksum(seeds),
+        "seed_count": len(seeds),
         "algorithm_signature": signature,
         "execution_signature": execution,
         "policy_input_digest": policy_digest,
@@ -246,6 +250,10 @@ def main(argv=None):
             for status in ("supported", "insufficient", "unknown")
         },
         "factorial_replay": factorial_replay(cases, results),
+        "best_fixed_factorial_replay": (
+            factorial_replay(cases, results, baseline_policy=best) if best else None
+        ),
+        "quality_strata": quality_strata(rows),
         "limitations": (
             "Synthetic fixtures do not establish held-out quality. "
             "Timings include Python allocation tracing; native/server memory "

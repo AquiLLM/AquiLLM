@@ -90,3 +90,25 @@ def test_loader_rejects_duplicate_case_ids(tmp_path):
     path.write_text(json.dumps({"version": 1, "cases": [fixture(), fixture()]}))
     with pytest.raises(ValueError):
         load_cases(path)
+
+
+def test_factorial_replay_exercises_graph_only_evidence_and_frozen_control(tmp_path):
+    output = tmp_path / "factorial.json"
+    main(["--output", str(output), "--fixed-choice", "fixed_035"])
+    report = json.loads(output.read_text(encoding="utf-8"))
+    arms = report["factorial_replay"]["arms"]
+    selected = {
+        arm: next(
+            row["selected_chunk_ids"]
+            for row in value["cases"]
+            if row["id"] == "graph-sensitive"
+        )
+        for arm, value in arms.items()
+    }
+    assert selected["current"] == [7, 5]
+    assert selected["A_and_B"] == [1, 7]
+    assert selected["B_only"] != selected["current"]
+    assert report["best_fixed_factorial_replay"]["baseline_policy"] == "fixed_035"
+    assert report["factorial_replay"]["baseline_policy"] == "fixed_020"
+    assert "seed_count" in report["quality_strata"]
+    assert "policy_reason" in report["quality_strata"]
