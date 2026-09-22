@@ -6,6 +6,9 @@ from collections import defaultdict
 from math import isfinite
 from typing import Any
 
+from apps.chat.services.rag_config import max_snippets_per_doc
+from apps.chat.services.rag_evidence import diversify_evidence_chunks
+
 _RRF_K = 60
 _GRAPH_STATUS_PRIORITY = {"miss": 1, "error": 2, "timeout": 3, "hit": 4}
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -78,7 +81,6 @@ def merge_ranked_tool_results(
     scores: dict[str, float] = defaultdict(float)
     first_seen: dict[str, int] = {}
     rows_by_identity: dict[str, dict[str, Any]] = {}
-    documents: set[str] = set()
     image_instruction: str | None = None
     private_diagnostics: list[dict[str, Any]] = []
     sequence = 0
@@ -89,9 +91,6 @@ def merge_ranked_tool_results(
         diagnostics = payload.get("_retrieval_diagnostics")
         if isinstance(diagnostics, dict):
             private_diagnostics.append(dict(diagnostics))
-        for title in payload.get("retrieved_documents") or []:
-            if title:
-                documents.add(str(title))
         if image_instruction is None and payload.get("_image_instruction"):
             image_instruction = str(payload["_image_instruction"])
         for fallback_rank, row in enumerate(payload.get("result") or [], start=1):
@@ -114,10 +113,16 @@ def merge_ranked_tool_results(
     ordered_identities = sorted(
         rows_by_identity,
         key=lambda identity: (-scores[identity], first_seen[identity]),
+    )
+    # Balance the complete candidate union before the final cutoff; a later
+    # packet builder cannot recover another paper once its rows are discarded.
+    selected_rows = diversify_evidence_chunks(
+        [rows_by_identity[identity] for identity in ordered_identities],
+        max_snippets_per_doc(),
     )[:cap]
     merged_rows: list[dict[str, Any]] = []
-    for merged_rank, identity in enumerate(ordered_identities, start=1):
-        row = dict(rows_by_identity[identity])
+    for merged_rank, selected_row in enumerate(selected_rows, start=1):
+        row = dict(selected_row)
         if "r" in row and "rank" not in row:
             row["r"] = merged_rank
         else:
@@ -126,7 +131,8 @@ def merge_ranked_tool_results(
 
     if not merged_rows:
         for payload in results:
-            if isinstance(payload, dict) and payload.get("retrieval_status") == "no_results":
+            if (isinstance(payload, dict)
+                    and payload.get("retrieval_status") == "no_results"):
                 return dict(payload)
         return {"result": [], "retrieval_status": "no_results", "retrieved_count": 0}
 
@@ -134,6 +140,10 @@ def merge_ranked_tool_results(
         "result": merged_rows,
         "retrieval_status": "results_found",
         "retrieved_count": len(merged_rows),
+    }
+    documents = {
+        str(row.get("title") or row.get("n")) for row in merged_rows
+        if row.get("title") or row.get("n")
     }
     if documents:
         merged["retrieved_documents"] = sorted(documents)
