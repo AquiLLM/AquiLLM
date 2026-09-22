@@ -101,8 +101,10 @@ class _Runtime:
             self.barrier.wait(timeout=1.0)
         return self.direct
 
-    def prepare_extended(self, *, baseline, shared, authorization, settings, deadline):
-        self.calls.append(("extended-prep", baseline, deadline))
+    def prepare_extended(
+        self, *, query, baseline, shared, authorization, settings, deadline
+    ):
+        self.calls.append(("extended-prep", (query, baseline), deadline))
         if self.barrier is not None:
             self.barrier.wait(timeout=1.0)
         return ("seed", baseline)
@@ -128,7 +130,7 @@ def test_branches_run_concurrently_and_extended_alone_depends_on_baseline() -> N
     observed = {name: (value, deadline) for name, value, deadline in runtime.calls[1:]}
     assert observed == {
         "direct": ("private query", 100.125),
-        "extended-prep": (baseline, 100.225),
+        "extended-prep": (("private query", baseline), 100.225),
         "extended": (("seed", baseline), 100.225),
     }
 

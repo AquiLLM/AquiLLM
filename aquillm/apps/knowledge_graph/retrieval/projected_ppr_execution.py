@@ -69,7 +69,7 @@ def _digest(payload: dict[str, object]) -> str:
     ).hexdigest()
 
 
-def execute_adaptive_projected_ppr(
+def prepare_projected_ppr_policy(
     *,
     snapshot: ProjectedAuthorizedGraphSnapshotV1,
     seeds: tuple[ProjectedSeedV1, ...],
@@ -77,8 +77,8 @@ def execute_adaptive_projected_ppr(
     signals: PPRPolicySignalsV1,
     expected_branch: HybridBranchKind,
     deadline_check: Callable[[], None],
-) -> ProjectedPPRExecutionV1:
-    """Validate original topology, decide once, then run exactly one PPR kernel."""
+) -> tuple:
+    """Admit topology and derive one policy proposal without running PPR."""
     if not callable(deadline_check):
         raise TypeError("deadline_check must be callable")
     deadline_check()
@@ -113,6 +113,27 @@ def execute_adaptive_projected_ppr(
         signals, outward_seed_mass=outward_seed_mass, cap_pressure=cap_pressure
     )
     decision = choose_ppr_restart(admitted_signals, mode="adaptive")
+    return edges, admitted_signals, decision
+
+
+def execute_adaptive_projected_ppr(
+    *,
+    snapshot: ProjectedAuthorizedGraphSnapshotV1,
+    seeds: tuple[ProjectedSeedV1, ...],
+    base_config: PPRAlgorithmConfig,
+    signals: PPRPolicySignalsV1,
+    expected_branch: HybridBranchKind,
+    deadline_check: Callable[[], None],
+) -> ProjectedPPRExecutionV1:
+    """Validate original topology, decide once, then run exactly one PPR kernel."""
+    edges, admitted_signals, decision = prepare_projected_ppr_policy(
+        snapshot=snapshot,
+        seeds=seeds,
+        base_config=base_config,
+        signals=signals,
+        expected_branch=expected_branch,
+        deadline_check=deadline_check,
+    )
     effective_config = replace(base_config, ppr_restart=decision.restart)
     policy_digest = ppr_policy_input_digest(admitted_signals)
     algorithm_signature = _digest(
@@ -151,4 +172,8 @@ def execute_adaptive_projected_ppr(
     )
 
 
-__all__ = ["ProjectedPPRExecutionV1", "execute_adaptive_projected_ppr"]
+__all__ = [
+    "ProjectedPPRExecutionV1",
+    "execute_adaptive_projected_ppr",
+    "prepare_projected_ppr_policy",
+]

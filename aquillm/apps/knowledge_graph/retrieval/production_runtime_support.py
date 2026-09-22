@@ -133,7 +133,17 @@ def ppr_failure_envelope(
     )
 
 
-def success_envelope(kind, *, ready, seeds, snapshot, candidates, settings, elapsed_ms):
+def success_envelope(
+    kind,
+    *,
+    ready,
+    seeds,
+    snapshot,
+    candidates,
+    settings,
+    elapsed_ms,
+    execution_algorithm_signature: str | None = None,
+):
     maximum_ms = (
         settings.graph_direct_timeout_ms
         if kind is HybridBranchKind.DIRECT
@@ -145,7 +155,9 @@ def success_envelope(kind, *, ready, seeds, snapshot, candidates, settings, elap
         projected_seed_checksum(seeds),
         len(seeds),
         projected_snapshot_checksum(snapshot),
-        snapshot.algorithm.algorithm_signature,
+        snapshot.algorithm.algorithm_signature
+        if execution_algorithm_signature is None
+        else execution_algorithm_signature,
         len(candidates),
         branch_candidate_order_checksum(candidates),
         maximum_ms,

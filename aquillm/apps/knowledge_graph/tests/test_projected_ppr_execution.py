@@ -226,6 +226,28 @@ def test_kernel_runs_once_with_only_restart_changed(monkeypatch) -> None:
     assert result.decision.restart == 0.35
 
 
+def test_shadow_policy_proposal_matches_adaptive_without_running_kernel(monkeypatch):
+    snapshot, config = _fixture()
+    seeds = (ProjectedSeedV1(key("a"), 1.0),)
+    signals = _signals(intent="focused")
+    expected = _execute(snapshot, config, seeds, signals)
+    monkeypatch.setattr(
+        execution_module,
+        "run_ppr_kernel",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected PPR run")),
+    )
+    _edges, admitted_signals, proposal = execution_module.prepare_projected_ppr_policy(
+        snapshot=snapshot,
+        seeds=seeds,
+        base_config=config,
+        signals=signals,
+        expected_branch=HybridBranchKind.DIRECT,
+        deadline_check=lambda: None,
+    )
+    assert admitted_signals.outward_seed_mass == 1.0
+    assert proposal == expected.decision
+
+
 def test_execution_record_rejects_malformed_result_or_digest() -> None:
     snapshot, config = _fixture()
     result = _execute(snapshot, config, (ProjectedSeedV1(key("a"), 1.0),))

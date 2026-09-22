@@ -15,6 +15,11 @@ from apps.knowledge_graph.retrieval.direct_seed_repository import (
 from apps.knowledge_graph.retrieval.direct_seed_resolution import (
     resolve_direct_seed_components,
 )
+from apps.knowledge_graph.retrieval.ppr_policy import classify_ppr_intent
+from apps.knowledge_graph.retrieval.ppr_seed_support import (
+    PreparedPPRSeedsV1,
+    summarize_direct_support,
+)
 from apps.knowledge_graph.retrieval.scheduler_support import (
     LocalBranchSchedulerFailure,
 )
@@ -32,7 +37,7 @@ def _local(reason, error):
     raise LocalBranchSchedulerFailure(HybridBranchKind.DIRECT, reason) from error
 
 
-def prepare_direct_seeds(runtime, *, query, scope, deadline):
+def _prepare_direct(runtime, *, query, scope, deadline, with_policy):
     from apps.knowledge_graph.retrieval.query_ontology import load_query_ontology
 
     if runtime.clock() >= deadline:
@@ -120,12 +125,33 @@ def prepare_direct_seeds(runtime, *, query, scope, deadline):
         _local(DirectBranchFailureReason.DIRECT_SEED_INVALID, error)
     if outcome.failure_reason is not None:
         return DirectBranchFailureReason(outcome.failure_reason.value)
-    return tuple(
+    seeds = tuple(
         sorted(
             (ProjectedSeedV1(row.component_key, row.mass) for row in outcome.seeds),
             key=lambda row: row.identity_key,
         )
     )
+    if not with_policy:
+        return seeds
+    return PreparedPPRSeedsV1(
+        seeds,
+        summarize_direct_support(
+            outcome, max_seeds=runtime.settings.graph_direct_max_seeds
+        ),
+        classify_ppr_intent(query),
+    )
 
 
-__all__ = ["prepare_direct_seeds"]
+def prepare_direct_seeds(runtime, *, query, scope, deadline):
+    return _prepare_direct(
+        runtime, query=query, scope=scope, deadline=deadline, with_policy=False
+    )
+
+
+def prepare_direct_with_policy(runtime, *, query, scope, deadline):
+    return _prepare_direct(
+        runtime, query=query, scope=scope, deadline=deadline, with_policy=True
+    )
+
+
+__all__ = ["prepare_direct_seeds", "prepare_direct_with_policy"]

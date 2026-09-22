@@ -65,6 +65,7 @@ class HybridBranchRuntime(Protocol):
     def prepare_extended(
         self,
         *,
+        query: str,
         baseline: object,
         shared: object,
         authorization: object,

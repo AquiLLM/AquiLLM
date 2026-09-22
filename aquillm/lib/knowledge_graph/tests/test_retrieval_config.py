@@ -65,7 +65,7 @@ DEFAULTS: dict[str, object] = {
     "direct_embedding_enabled": False,
     "direct_min_similarity": 0.80,
     "direct_winner_margin": 0.05,
-    "graph_eval_parity_backend": "postgres",
+    "graph_eval_parity_backend": "postgres", "ppr_restart_mode": "fixed",
 }
 INT_LIMITS = {
     "KG_PROJECTION_BATCH_SIZE": (1, 5000),
@@ -108,7 +108,7 @@ def _traversal() -> dict[str, str]:
         "KG_TOPOLOGY_GATEWAY_URL": "http://knowledge_graph_query_gateway:8092",
         "KG_TOPOLOGY_GATEWAY_BEARER_TOKEN": "gateway-secret",
         "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS": "300",
-        "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": "16384",
+        "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": "4194304",
         "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": "1048576",
     }
 

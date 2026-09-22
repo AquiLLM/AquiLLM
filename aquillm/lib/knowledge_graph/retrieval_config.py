@@ -72,7 +72,7 @@ class HybridRetrievalSettings:
     graph_direct_max_depth: int; graph_direct_max_nodes: int; graph_direct_max_edges: int; graph_direct_max_candidates: int
     graph_extended_max_seeds: int; graph_extended_max_depth: int; graph_extended_max_nodes: int; graph_extended_max_edges: int
     graph_extended_max_candidates: int; graph_fusion_rrf_k: int; direct_embedding_enabled: bool; direct_min_similarity: float
-    direct_winner_margin: float; graph_eval_parity_backend: str
+    direct_winner_margin: float; graph_eval_parity_backend: str; ppr_restart_mode: str
 _BOOL_DEFAULTS = dict.fromkeys((
     "KG_MEMGRAPH_PROJECTION_ENABLED", "KG_MEMGRAPH_TRAVERSAL_ENABLED",
     "KG_GRAPH_DIRECT_ENABLED", "KG_GRAPH_EXTENDED_ENABLED", "KG_DIRECT_EMBEDDING_ENABLED",
@@ -93,7 +93,7 @@ _TEXT_DEFAULTS = {
     "KG_PROJECTION_POSTGRES_SOURCE_DSN": "", "KG_PROJECTION_POSTGRES_STATE_DSN": "", "KG_PROJECTION_QUEUE": "knowledge_graph_projection", "KG_PROJECTION_SCHEMA_VERSION": "collection-graph-v1",
     "KG_PROJECTION_FORMAT_VERSION": "projection-v1", "KG_PROJECTION_IDENTIFIER_HMAC_KEY": "", "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "", "KG_QUERY_EXTRACTOR_URL": "",
     "KG_QUERY_EXTRACTOR_BEARER_TOKEN": "", "KG_QUERY_EXTRACTOR_MODEL": QUERY_EXTRACTOR_MODEL, "KG_QUERY_EXTRACTOR_MODEL_REVISION": QUERY_EXTRACTOR_MODEL_REVISION, "KG_QUERY_EXTRACTOR_BUILD_HASH": "",
-    "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION": QUERY_SCHEMA_VERSION, "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": "", "KG_GRAPH_EVAL_PARITY_BACKEND": "postgres",
+    "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION": QUERY_SCHEMA_VERSION, "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": "", "KG_GRAPH_EVAL_PARITY_BACKEND": "postgres", "KG_PPR_RESTART_MODE": "fixed",
 }
 # fmt: on
 _ALLOWED_KEYS = (
@@ -153,8 +153,7 @@ def _host_port_identity(host_port: str) -> tuple[str, int] | None:
         port_text = port_text if delimiter else None
     if not host_text or "%" in host_text or "\\" in host_text: return None
     try:
-        address = ip_address(host_text)
-        normalized_host = address.compressed
+        address = ip_address(host_text); normalized_host = address.compressed
         if (address.version == 6) != bracketed: return None
     except ValueError:
         normalized_host = host_text.lower()
@@ -201,6 +200,7 @@ def _require(settings: HybridRetrievalSettings, keys: str) -> None:
         if not getattr(settings, required_key[3:].lower()):
             raise _error(required_key, "is required for the enabled path")
 def _validate_settings(settings: HybridRetrievalSettings) -> None:
+    if settings.ppr_restart_mode not in ("fixed", "shadow", "adaptive"): raise _error("KG_PPR_RESTART_MODE", "selects an unsupported mode")
     if settings.graph_topology_backend != "memgraph":
         raise _error("KG_GRAPH_TOPOLOGY_BACKEND", "must be memgraph in production")
     fixed = {"KG_GRAPH_ALGORITHM": "ppr_projected_v1", "KG_PROJECTION_SCHEMA_VERSION": "collection-graph-v1", "KG_PROJECTION_FORMAT_VERSION": "projection-v1", "KG_GRAPH_EVAL_PARITY_BACKEND": "postgres"}

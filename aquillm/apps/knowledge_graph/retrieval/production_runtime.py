@@ -11,13 +11,20 @@ from apps.collections.services.retrieval_authorization import (
 from apps.knowledge_graph.retrieval.branch_contracts import (
     BranchStatusV1,
     DirectBranchFailureReason,
+    ExtendedBranchFailureReason,
     SharedBranchFailureReason,
 )
-from apps.knowledge_graph.retrieval.production_direct import prepare_direct_seeds
+from apps.knowledge_graph.retrieval.ppr_seed_support import PreparedPPRSeedsV1
+from apps.knowledge_graph.retrieval.production_direct import (
+    prepare_direct_seeds,
+    prepare_direct_with_policy,
+)
 from apps.knowledge_graph.retrieval.production_extended import (
     prepare_extended_branch,
+    prepare_extended_with_policy,
     run_extended_branch,
 )
+from apps.knowledge_graph.retrieval.production_ppr_policy import rank_projected_for_mode
 from apps.knowledge_graph.retrieval.production_runtime_support import (
     ProductionSharedScopeV1,
     graph_candidates,
@@ -26,7 +33,6 @@ from apps.knowledge_graph.retrieval.production_runtime_support import (
     success_envelope,
     topology_caps,
 )
-from apps.knowledge_graph.retrieval.projected_ppr import ppr_projected_v1
 from apps.knowledge_graph.retrieval.ready_scope import (
     ReadyScopeError,
     ReadyScopeFailureReason,
@@ -120,9 +126,7 @@ class ProductionHybridBranchRuntime:
         return QueryExtractorClient(client_settings)
 
     def _direct_seeds(self, *, query, scope, deadline):
-        return prepare_direct_seeds(
-            self, query=query, scope=scope, deadline=deadline
-        )
+        return prepare_direct_seeds(self, query=query, scope=scope, deadline=deadline)
 
     def run_direct(self, *, query, shared, authorization, settings, deadline):
         self._exact_request(authorization, settings)
@@ -131,23 +135,50 @@ class ProductionHybridBranchRuntime:
             return failed_branch(
                 HybridBranchKind.DIRECT, DirectBranchFailureReason.DIRECT_NO_SEEDS
             )
-        seeds = self._direct_seeds(query=query, scope=scope, deadline=deadline)
-        if type(seeds) is DirectBranchFailureReason:
-            return failed_branch(HybridBranchKind.DIRECT, seeds)
+        mode = getattr(settings, "ppr_restart_mode", "fixed")
+        if mode == "fixed":
+            prepared = self._direct_seeds(query=query, scope=scope, deadline=deadline)
+        else:
+            try:
+                prepared = prepare_direct_with_policy(
+                    self, query=query, scope=scope, deadline=deadline
+                )
+            except (TypeError, ValueError):
+                return failed_branch(
+                    HybridBranchKind.DIRECT,
+                    DirectBranchFailureReason.DIRECT_SEED_INVALID,
+                )
+        if type(prepared) is DirectBranchFailureReason:
+            return failed_branch(HybridBranchKind.DIRECT, prepared)
+        if mode != "fixed" and type(prepared) is not PreparedPPRSeedsV1:
+            return failed_branch(
+                HybridBranchKind.DIRECT, DirectBranchFailureReason.DIRECT_SEED_INVALID
+            )
+        seeds = prepared if mode == "fixed" else prepared.seeds
         caps = topology_caps(settings, HybridBranchKind.DIRECT)
         snapshot = self.topology_loader.load(
             ready=scope.ready, seeds=seeds, caps=caps, deadline=deadline
         )
         try:
-            result = ppr_projected_v1(
+            result, execution_signature = rank_projected_for_mode(
                 snapshot=snapshot,
                 seeds=seeds,
                 config=ppr_config(snapshot, caps.max_results),
+                prepared=None if mode == "fixed" else prepared,
+                mode=mode,
+                branch=HybridBranchKind.DIRECT,
+                deadline_check=lambda: self._check_branch_deadline(deadline),
             )
             candidates = graph_candidates(
                 snapshot=snapshot,
                 identity_scores=result.scores,
                 maximum=caps.max_results,
+            )
+        except TimeoutError:
+            return failed_branch(
+                HybridBranchKind.DIRECT,
+                DirectBranchFailureReason.EXTRACTOR_TIMEOUT,
+                elapsed_ms=settings.graph_direct_timeout_ms,
             )
         except (TypeError, ValueError):
             return ppr_failure_envelope(
@@ -168,17 +199,39 @@ class ProductionHybridBranchRuntime:
             candidates=candidates,
             settings=settings,
             elapsed_ms=max(0, int((self.clock() - started) * 1000)),
+            execution_algorithm_signature=execution_signature,
         )
 
-    def prepare_extended(self, *, baseline, shared, authorization, settings, deadline):
-        return prepare_extended_branch(
-            self,
-            baseline=baseline,
-            shared=shared,
-            authorization=authorization,
-            settings=settings,
-            deadline=deadline,
-        )
+    def _check_branch_deadline(self, deadline):
+        if self.clock() >= deadline:
+            raise TimeoutError("graph branch deadline expired")
+
+    def prepare_extended(
+        self, *, query, baseline, shared, authorization, settings, deadline
+    ):
+        if getattr(settings, "ppr_restart_mode", "fixed") == "fixed":
+            return prepare_extended_branch(
+                self,
+                baseline=baseline,
+                shared=shared,
+                authorization=authorization,
+                settings=settings,
+                deadline=deadline,
+            )
+        self._exact_request(authorization, settings)
+        self._shared_scope(shared)
+        try:
+            return prepare_extended_with_policy(
+                self,
+                query=query,
+                baseline=baseline,
+                shared=shared,
+                authorization=authorization,
+                settings=settings,
+                deadline=deadline,
+            )
+        except (TypeError, ValueError):
+            return ExtendedBranchFailureReason.EXTENDED_SEED_INVALID
 
     def run_extended(self, *, prepared, shared, authorization, settings, deadline):
         return run_extended_branch(

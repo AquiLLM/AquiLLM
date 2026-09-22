@@ -57,8 +57,9 @@ class HybridGraphBranchScheduler:
             validate_envelope(envelope, HybridBranchKind.DIRECT), self._clock()
         )
 
-    def _extended(self, baseline, shared, authorization, settings, deadline):
+    def _extended(self, query, baseline, shared, authorization, settings, deadline):
         prepared = self._runtime.prepare_extended(
+            query=query,
             baseline=baseline,
             shared=shared,
             authorization=authorization,
@@ -131,6 +132,7 @@ class HybridGraphBranchScheduler:
             HybridBranchKind.EXTENDED: (
                 self._extended,
                 (
+                    query,
                     baseline,
                     shared,
                     authorization,
@@ -286,8 +288,6 @@ class HybridGraphBranchScheduler:
 
 
 def run_hybrid_graph_branches(*, runtime: HybridBranchRuntime, **request):
-    """Functional adapter for callers that do not retain a scheduler instance."""
-
     return HybridGraphBranchScheduler(runtime).run(**request)
 
 
