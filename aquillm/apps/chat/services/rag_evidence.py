@@ -7,9 +7,32 @@ from typing import Any
 
 from apps.chat.services.rag_config import evidence_token_budget, max_snippets_per_doc
 from apps.chat.services.rag_legacy_selection import diversify_evidence_chunks
+from apps.chat.services.rag_selection_types import EvidenceSelection
 from lib.llm.providers.rag_citations import _chunk_citation_from_row
 
 _CHARS_PER_TOKEN = 4
+_PUBLIC_ROW_KEYS = frozenset(
+    {
+        "rank",
+        "chunk_id",
+        "doc_id",
+        "chunk",
+        "title",
+        "citation",
+        "text",
+        "type",
+        "image_url",
+        "r",
+        "i",
+        "d",
+        "c",
+        "n",
+        "ref",
+        "x",
+        "ty",
+        "u",
+    }
+)
 
 
 @dataclass
@@ -33,6 +56,61 @@ def _estimate_tokens(text: str) -> int:
 def _chunk_text(chunk: dict) -> str:
     """Extract text from either compact or full chunk format."""
     return chunk.get("text") or chunk.get("x") or ""
+
+
+def _assemble_packet(
+    selected: list[dict],
+    *,
+    query: str,
+    search_scope: str,
+    retrieval_status: str,
+    diagnostic: str,
+    total_tokens: int,
+) -> EvidencePacket:
+    citation_tokens: list[str] = []
+    image_urls: list[str] = []
+    for chunk in selected:
+        token = _chunk_citation_from_row(chunk)
+        if token and token not in citation_tokens:
+            citation_tokens.append(token)
+        url = chunk.get("image_url") or chunk.get("u")
+        if (
+            isinstance(url, str)
+            and url.startswith("/aquillm/")
+            and url not in image_urls
+        ):
+            image_urls.append(url)
+    return EvidencePacket(
+        chunks=selected,
+        image_urls=image_urls,
+        citation_tokens=citation_tokens,
+        query=query,
+        search_scope=search_scope,
+        retrieval_status=retrieval_status if selected else "no_results",
+        diagnostic_message=diagnostic,
+        total_tokens=total_tokens,
+    )
+
+
+def build_selected_evidence_packet(
+    selection: EvidenceSelection,
+    *,
+    query: str,
+    search_scope: str,
+) -> EvidencePacket:
+    """Package already selected rows without another ordering or budget pass."""
+    rows = [
+        {key: value for key, value in candidate.row.items() if key in _PUBLIC_ROW_KEYS}
+        for candidate in selection.candidates
+    ]
+    return _assemble_packet(
+        rows,
+        query=query,
+        search_scope=search_scope,
+        retrieval_status="results_found",
+        diagnostic="" if rows else "No authorized evidence remains for this request.",
+        total_tokens=sum(_estimate_tokens(_chunk_text(row)) for row in rows),
+    )
 
 
 def build_evidence_packet(
@@ -87,38 +165,21 @@ def build_evidence_packet(
         selected.append(chunk)
         used_tokens += chunk_tokens
 
-    # Extract citation tokens.
-    citation_tokens: list[str] = []
-    for chunk in selected:
-        token = _chunk_citation_from_row(chunk)
-        if token and token not in citation_tokens:
-            citation_tokens.append(token)
-
-    # Collect image URLs.
-    image_urls: list[str] = []
-    for chunk in selected:
-        url = chunk.get("image_url") or chunk.get("u")
-        if (
-            isinstance(url, str)
-            and url.startswith("/aquillm/")
-            and url not in image_urls
-        ):
-            image_urls.append(url)
-
-    return EvidencePacket(
-        chunks=selected,
-        image_urls=image_urls,
-        citation_tokens=citation_tokens,
+    return _assemble_packet(
+        selected,
         query=query,
         search_scope=search_scope,
-        retrieval_status=retrieval_status if selected else "no_results",
-        diagnostic_message=(
-            ""
-            if selected
-            else "Retrieved passages could not fit within the evidence budget."
-        ),
+        retrieval_status=retrieval_status,
+        diagnostic=""
+        if selected
+        else "Retrieved passages could not fit within the evidence budget.",
         total_tokens=used_tokens,
     )
 
 
-__all__ = ["EvidencePacket", "build_evidence_packet", "diversify_evidence_chunks"]
+__all__ = [
+    "EvidencePacket",
+    "build_evidence_packet",
+    "build_selected_evidence_packet",
+    "diversify_evidence_chunks",
+]

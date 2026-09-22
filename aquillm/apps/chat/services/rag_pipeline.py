@@ -1,8 +1,7 @@
 """Direct RAG pipeline orchestration (backend-driven, deterministic).
 
-When ``RAG_DIRECT_ENABLED`` is on and the latest user turn is an obvious document
-question, this path retrieves evidence *before* asking the model anything. It runs
-retrieval directly (no LLM tool-selection round trip), packages the evidence, and
+When ``RAG_DIRECT_ENABLED`` is on for a document question, this path retrieves
+evidence before asking the model. It skips model tool selection, packages evidence,
 then hands a post-tool conversation to :mod:`rag_synthesis` for the final answer.
 
 Failures fail open: any retrieval/synthesis exception returns ``"skipped"`` with
@@ -24,6 +23,7 @@ from apps.chat.services.rag_config import (
     direct_rag_candidate_top_k,
     direct_rag_max_queries,
     direct_rag_top_k,
+    evidence_selection_config,
     is_direct_rag_enabled,
 )
 from apps.chat.services.rag_evidence import build_evidence_packet
@@ -31,6 +31,19 @@ from apps.chat.services.rag_intent import classify_chat_message
 from apps.chat.services.rag_metrics import log_direct_rag_turn
 from apps.chat.services.rag_query import build_retrieval_queries
 from apps.chat.services.rag_retrieval import merge_ranked_tool_results
+from apps.chat.services.rag_selection_coordinator import (
+    coordinate_selection,
+    selection_metric_fields,
+)
+from apps.chat.services.rag_selection_coordinator import (
+    prepare_selection_turn as _prepare_selection_sync,
+)
+from apps.chat.services.rag_selection_coordinator import (
+    revalidate_selection_turn as _revalidate_selection_sync,
+)
+from apps.chat.services.rag_selection_coordinator import (
+    selection_question as _selection_question,
+)
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.chat.services.tool_wiring.documents import vector_search_tool
 from lib.llm.providers import image_context as imgctx
@@ -42,7 +55,6 @@ from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
 logger = structlog.stdlib.get_logger(__name__)
-
 _SEARCH_SCOPE = "selected documents"
 _SELECT_COLLECTIONS_MESSAGE = (
     "I can search your documents, but no collections are selected for this chat. "
@@ -114,7 +126,10 @@ async def run_direct_rag_turn(
     the normal tool loop), or ``"skipped"`` to let the existing spin run.
     """
     manual_outcome = await run_manual_search_turn(
-        consumer, llm_if, convo, stream_func=stream_func,
+        consumer,
+        llm_if,
+        convo,
+        stream_func=stream_func,
     )
     if manual_outcome == "handled":
         return "handled"
@@ -162,6 +177,7 @@ async def run_direct_rag_turn(
 
         top_k = direct_rag_top_k()
         candidate_top_k = direct_rag_candidate_top_k()
+        selection_config = evidence_selection_config()
 
         t_retrieval_start = time.perf_counter()
         search_async = database_sync_to_async(
@@ -169,7 +185,10 @@ async def run_direct_rag_turn(
             thread_sensitive=False,
         )
         search_outcomes = await asyncio.gather(
-            *(search_async(consumer, search_query, candidate_top_k) for search_query in queries),
+            *(
+                search_async(consumer, search_query, candidate_top_k)
+                for search_query in queries
+            ),
             return_exceptions=True,
         )
         search_results = [
@@ -202,6 +221,24 @@ async def run_direct_rag_turn(
         packet = build_evidence_packet(
             raw_result, query=query, search_scope=_SEARCH_SCOPE
         )
+        selection_turn = None
+        if selection_config.mode in ("shadow", "adaptive"):
+            (
+                selection_turn,
+                selected_packet,
+                selected_result,
+            ) = await coordinate_selection(
+                consumer,
+                search_results,
+                query,
+                _selection_question(convo, user_message.content or ""),
+                selection_config,
+                top_k,
+                prepare_fn=_prepare_selection_sync,
+                revalidate_fn=_revalidate_selection_sync,
+            )
+            if selected_packet is not None:
+                packet, raw_result = selected_packet, selected_result
         t_evidence_end = time.perf_counter()
 
         working_convo = _append_retrieval_messages(convo, query, raw_result, top_k)
@@ -240,6 +277,7 @@ async def run_direct_rag_turn(
             graph_version_signature=retrieval_diagnostics.get(
                 "graph_version_signature"
             ),
+            **selection_metric_fields(selection_config, selection_turn, packet),
         )
         logger.info(
             "direct_rag_turn_handled",

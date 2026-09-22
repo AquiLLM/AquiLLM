@@ -16,6 +16,17 @@ _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _MAX_GRAPH_METRIC_MS = 60_000.0
 _MAX_GRAPH_SEEDS = 64
 _MAX_GRAPH_CANDIDATES = 20
+_SELECTION_MODES = frozenset({"legacy", "shadow", "adaptive"})
+_FALLBACK_REASONS = frozenset(
+    {
+        "scorer_unavailable",
+        "new_scores_disabled",
+        "score_incompatible",
+        "deadline",
+        "incomplete_scores",
+    }
+)
+_PROFILE_VERSION = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
 def _safe_graph_ms(value: object) -> float | None:
@@ -67,6 +78,16 @@ def log_direct_rag_turn(
     graph_status: str | None = None,
     graph_algorithm_signature: str | None = None,
     graph_version_signature: str | None = None,
+    selection_mode: str | None = None,
+    selector_ms: float | None = None,
+    final_scoring_ms: float | None = None,
+    candidate_count: int | None = None,
+    selected_doc_count: int | None = None,
+    estimated_tokens: int | None = None,
+    reused_pairs: int | None = None,
+    new_pairs: int | None = None,
+    profile_version: str | None = None,
+    fixed_fallback_reason: str | None = None,
 ) -> None:
     """Emit a structlog ``rag_direct_turn`` event with per-stage timing fields."""
     fields = {
@@ -104,6 +125,29 @@ def log_direct_rag_turn(
             for key, value in optional_graph_fields.items()
             if value is not None
         }
+    )
+    selection_fields = {
+        "selection_mode": selection_mode
+        if selection_mode in _SELECTION_MODES
+        else None,
+        "selector_ms": _safe_graph_ms(selector_ms),
+        "final_scoring_ms": _safe_graph_ms(final_scoring_ms),
+        "candidate_count": _safe_graph_count(candidate_count, maximum=45),
+        "selected_doc_count": _safe_graph_count(selected_doc_count, maximum=15),
+        "estimated_tokens": _safe_graph_count(estimated_tokens, maximum=100_000),
+        "reused_pairs": _safe_graph_count(reused_pairs, maximum=45),
+        "new_pairs": _safe_graph_count(new_pairs, maximum=45),
+        "profile_version": profile_version
+        if (
+            type(profile_version) is str and _PROFILE_VERSION.fullmatch(profile_version)
+        )
+        else None,
+        "fixed_fallback_reason": fixed_fallback_reason
+        if (fixed_fallback_reason in _FALLBACK_REASONS)
+        else None,
+    }
+    fields.update(
+        {key: value for key, value in selection_fields.items() if value is not None}
     )
     logger.info("rag_direct_turn", **fields)
 
