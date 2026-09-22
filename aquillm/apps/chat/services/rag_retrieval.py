@@ -86,6 +86,8 @@ def fuse_ranked_tool_results(
             if verified is None:
                 continue
             pk, doc_id, number, citation = verified
+            if pk in payload_coordinates:
+                continue
             coordinates = doc_id, number
             if pk in coordinates_by_pk and coordinates_by_pk[pk] != coordinates:
                 continue

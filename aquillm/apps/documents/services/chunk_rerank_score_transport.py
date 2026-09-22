@@ -67,6 +67,8 @@ def deserialize_score_set(value: object) -> RerankScoreSet | None:
             return None
         if status not in ("complete", "unavailable"):
             return None
+        if kind == "rank_only" and status == "complete":
+            return None
         order = value["candidate_order"]
         raw_scores = value["scores"]
         if type(order) is not list or type(raw_scores) is not list:
