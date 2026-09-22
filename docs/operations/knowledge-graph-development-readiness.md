@@ -36,8 +36,8 @@ checking an existing backlog; the default is 50 and the maximum is 500.
 `KG_MAINTENANCE_INTERVAL_SECONDS` defaults to 300 (minimum 60).
 
 Each sweep compares persisted document/collection source state with exact current
-graph build keys. Missing work is published to the extraction queue at priority 9;
-one bounded continuation advances the cursor. Lost publications or continuations
+graph build keys. Recovery tasks run on the extraction queue at priority 9 and
+publish missing builds; one bounded continuation advances the cursor. Lost publications or continuations
 are recovered by the next periodic sweep. Already current artifacts are reused.
 Malformed or capped scopes are counted and skipped so later scopes can progress.
 Projection reconciliation runs on its separate queue and publishes durable outbox

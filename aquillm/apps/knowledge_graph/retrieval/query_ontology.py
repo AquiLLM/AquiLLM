@@ -54,7 +54,9 @@ def _load_selected_artifact_rows(
     return tuple(rows)
 
 
-def _load_active_ontology_row(*, using: str) -> dict[str, object] | None:
+def _load_active_ontology_row(
+    *, using: str, version: str, checksum: str
+) -> dict[str, object] | None:
     from apps.knowledge_graph.models import OntologyVersion
 
     rows = tuple(
@@ -62,6 +64,8 @@ def _load_active_ontology_row(*, using: str) -> dict[str, object] | None:
         .filter(
             kind=OntologyVersion.Kind.GRAPH,
             status=OntologyVersion.Status.ACTIVE,
+            version=version,
+            checksum=checksum,
         )
         .order_by("id")
         .values("version", "checksum", "metadata")[:2]
@@ -99,7 +103,7 @@ def load_query_ontology(
     if len(identities) != 1:
         return _mixed(count)
     version, checksum = next(iter(identities))
-    active = _load_active_ontology_row(using=using)
+    active = _load_active_ontology_row(using=using, version=version, checksum=checksum)
     if (
         active is None
         or active.get("version") != version

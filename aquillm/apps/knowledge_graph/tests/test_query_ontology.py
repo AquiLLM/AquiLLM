@@ -73,6 +73,79 @@ def test_mixed_or_nonactive_ontology_is_a_direct_branch_local_failure(
     assert outcome.selected_artifact_count == 2
 
 
+@pytest.mark.parametrize(
+    "selected_state", ("active", "superseded", "wrong_checksum", "invalid_yaml")
+)
+@pytest.mark.parametrize("collection_scoped", (False, True))
+def test_unrelated_collection_ontology_does_not_change_selected_identity(
+    monkeypatch, selected_state, collection_scoped
+):
+    from apps.knowledge_graph.models import OntologyVersion
+
+    definition = load_ontology(ONTOLOGY_PATH)
+    metadata = {
+        "yaml": definition.raw_yaml if selected_state != "invalid_yaml" else "invalid"
+    }
+    if collection_scoped:
+        metadata["collection_id"] = 1
+    records = (
+        {
+            "kind": "graph",
+            "status": "superseded" if selected_state == "superseded" else "active",
+            "version": definition.version,
+            "checksum": "e" * 64
+            if selected_state == "wrong_checksum"
+            else definition.checksum,
+            "metadata": metadata,
+        },
+        {
+            "kind": "graph",
+            "status": "active",
+            "version": "0.0.1+collection.99",
+            "checksum": "f" * 64,
+            "metadata": {"collection_id": 99},
+        },
+    )
+
+    class Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def using(self, alias):
+            assert alias == "default"
+            return self
+
+        def filter(self, **kwargs):
+            return Rows(
+                tuple(
+                    row
+                    for row in self.rows
+                    if all(row[key] == value for key, value in kwargs.items())
+                )
+            )
+
+        def order_by(self, *fields):
+            return self
+
+        def values(self, *fields):
+            return tuple({key: row[key] for key in fields} for row in self.rows)
+
+    monkeypatch.setattr(OntologyVersion, "objects", Rows(records))
+    monkeypatch.setattr(
+        query_ontology,
+        "_load_selected_artifact_rows",
+        lambda **_: _artifact_rows((definition.checksum,)),
+    )
+    outcome = query_ontology.load_query_ontology(
+        selected_artifact_ids=(1,), using="default"
+    )
+    if selected_state == "active":
+        assert outcome.failure_reason is None
+        assert outcome.ontology.checksum == definition.checksum
+    else:
+        assert outcome.failure_reason is DirectFailureReason.MIXED_ONTOLOGY
+
+
 @pytest.mark.parametrize("artifact_ids", ((), (2, 1), (1, 1), (True,)))
 def test_selected_artifact_ids_are_bounded_canonical(artifact_ids) -> None:
     with pytest.raises((TypeError, ValueError)):

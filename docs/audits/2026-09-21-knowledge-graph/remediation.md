@@ -54,6 +54,16 @@ The development preflight found Redis stopped and the broker unreachable. The
 checkout was clean on `development`. Deployment observations will be recorded
 after the committed release is pulled and live fixtures complete.
 
+The first live run successfully generated and published a collection schema,
+built a document/collection graph, published a ready Memgraph projection, and
+rejected access after revoking a fixture permission. It exposed one additional
+direct-query defect: ontology selection counted all active ontologies globally,
+so unrelated collections with published schemas disabled direct retrieval. The
+lookup now selects the exact active version/checksum required by the selected
+artifacts. Eight regression cases retain mixed, stale, checksum, and invalid-YAML
+rejection; the focused ontology/runtime/readiness suite passed 25 tests and an
+independent review found no remaining issue in this change.
+
 Known pre-existing checks outside this change: the global frontend typecheck has
 nine errors in unrelated files; a global migration drift check reports existing
 chat/document model drift. The changed schema/KG applications have no pending
