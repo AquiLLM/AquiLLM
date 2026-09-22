@@ -1,5 +1,10 @@
 # Optional Nemotron ASR
 
+CPU contract test dependencies are declared separately in
+`deploy/vllm_plugins/nemotron_asr/requirements-test.txt`. Install them alongside
+the application test dependencies before running the plugin tests. These do not
+install vLLM or enable a GPU service; pinned-runtime tests remain opt-in.
+
 The standard GPU Compose files retain Whisper, its 0.08 GPU allocation, and the
 production Genesis image and 131072-token context. Nemotron is an explicit opt-in
 override, not enabled by updating this checkout. Existing deployments with

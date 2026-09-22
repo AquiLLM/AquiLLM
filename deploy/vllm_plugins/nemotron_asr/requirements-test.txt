@@ -1,0 +1,4 @@
+# CPU contract tests only; the optional GPU image supplies the pinned vLLM runtime.
+pytest
+numpy
+starlette
