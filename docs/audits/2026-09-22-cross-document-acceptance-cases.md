@@ -42,12 +42,13 @@ from apps.chat.tests.cross_document_acceptance_support import CASES, run_accepta
 reports = []
 for case in CASES:
     reports.append(await run_acceptance_case(
-        case, llm_if, preserve_citation_settings=True,
+        case, llm_if, preserve_citation_settings=True, stream_output=True,
     ))
     for paper in case.papers:
         reports.append(await run_acceptance_case(
             case, llm_if, omitted_doc_id=paper["doc_id"],
             preserve_citation_settings=True,
+            stream_output=True,
         ))
 ```
 
@@ -61,6 +62,10 @@ traffic. The harness creates no collections or documents and never records API
 credentials. `preserve_citation_settings=True` keeps the deployment's citation
 enforcement and Sources-append settings; deterministic unit tests use explicit
 citation defaults to avoid dependence on a developer's shell environment.
+`stream_output=True` supplies an in-memory async callback, matching the chat
+completion path, and reports whether a final assistant event arrived with content
+identical to the stored answer. This exercises callback delivery, not websocket
+transport. It preserves the deployment's final-answer streaming configuration.
 
 Review `outcome`, `evidence_coverage_passed`, `serialized_rows_match`,
 `exact_allowlist_passed`, and `answer_checks` in each report, together with the
@@ -118,6 +123,41 @@ The exact citation-scope guarantee applies at the synthesis handoff. Existing
 provider compression or overflow handling can subsequently shorten evidence near
 context limits. These changes do not redesign that provider behavior; live tests
 must distinguish the normal bounded request from extreme-context behavior.
+
+## Live checks and follow-up correction
+
+The first six real-provider runs used `qwen3.6:27b-mtp-awq`. All six retained the
+required passages and exact citation allowlist at the final OpenAI-compatible SDK
+boundary. Three met the lexical answer checks; the complete two-paper cases
+omitted citations on combined conclusions and included unsupported explanatory
+claims, and one disagreement ablation timed out. These were not an acceptance
+pass. Manual inspection also found unsupported background in answers that passed
+the narrow lexical checks.
+
+The initial probe used a 1,024-token synthesis limit and triggered empty-response
+retries. The deployment actually uses 4,096 synthesis tokens, a final retrieval
+limit of 12, and a 7,000-token approximate evidence-text budget. Repeating the
+capacity case with the deployed synthesis setting returned a concise answer in
+one call but still omitted citations on the computed difference. The live harness
+now preserves the deployed synthesis and citation settings and exercises the
+deferred final-stream callback; it still substitutes synthetic ranked retrieval.
+
+Two production causes were corrected: direct empty-response retries asked for
+400–900 words, and legacy citation exemptions accepted some fluent answers despite
+uncited factual bullets. Direct synthesis now carries request-only grounding
+instructions: proportional detail, all supporting citations at combined claims,
+explicit calculations, preserved conditions/disagreement, and no invented causes
+or missing facts. Its retries follow the same instructions. The citation
+exemptions remain available to the ordinary tool loop, but direct synthesis now
+attempts citation repair for detected omissions before deferred delivery. This
+does not add semantic entailment verification or guarantee citation completeness
+for every prose claim.
+
+After these corrections, 312 relevant tests passed with the same one pre-existing
+logging test deselected. The acceptance suite now has eighteen passing tests,
+including valid paraphrases and citation repair before the final stream callback.
+Independent review found no blocking issue. Final real-provider reruns are
+recorded below after deployment.
 
 After the production changes, the same acceptance test file passed all 16 tests
 in 0.18 seconds on 2026-09-22. This establishes the deterministic transport and

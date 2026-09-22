@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from apps.chat.services.rag_evidence import EvidencePacket
+from lib.llm.providers.complete_turn import DIRECT_SYNTHESIS_GROUNDING
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
 from lib.llm.providers.rag_citations import _chunk_citation_from_row
 from lib.llm.types.conversation import Conversation
@@ -104,6 +105,7 @@ def prepare_evidence_handoff(
     )
     # Providers may mutate message content while applying their context budget.
     request = persisted.model_copy(deep=True)
+    request.system = f"{persisted.system}\n\n{DIRECT_SYNTHESIS_GROUNDING}"
     for message in request.messages[:-1]:
         if isinstance(message, ToolMessage):
             message.content = _OMITTED_EVIDENCE

@@ -144,7 +144,7 @@ CASES = (
         claims=(
             ExpectedClaim(
                 "controlled-increase",
-                (r"\bcontrolled\b", r"\b12\b", r"increas|improv"),
+                (r"\bcontrolled\b", r"\b12\b", r"increas|improv|enhanc"),
                 (CONFLICT_A,),
             ),
             ExpectedClaim(
@@ -290,6 +290,7 @@ async def run_acceptance_case(
     retrieval_limit: int = 2,
     prior_tool_rows: list[dict] | None = None,
     preserve_citation_settings: bool = False,
+    stream_output: bool = False,
 ) -> dict[str, Any]:
     """Run one case against an actual provider instance or a request probe.
 
@@ -335,7 +336,11 @@ async def run_acceptance_case(
     queries = build_retrieval_queries(convo, case.question, max_queries=3)
     consumer = SimpleNamespace(user=object(), col_ref=CollectionsRef([1]), convo=convo)
     captured_requests: list[dict] = []
+    stream_payloads: list[dict] = []
     original_get_message = llm_if.get_message
+
+    async def capture_stream(payload: dict):
+        stream_payloads.append(copy.deepcopy(payload))
 
     async def capture_request(*args, **kwargs):
         tool_messages = [
@@ -385,7 +390,12 @@ async def run_acceptance_case(
         patch.object(rag_pipeline, "_run_vector_search", side_effect=fake_retrieval),
         patch.object(llm_if, "get_message", side_effect=capture_request),
     ):
-        outcome = await rag_pipeline.run_direct_rag_turn(consumer, llm_if, convo)
+        outcome = await rag_pipeline.run_direct_rag_turn(
+            consumer,
+            llm_if,
+            convo,
+            stream_func=capture_stream if stream_output else None,
+        )
 
     first_request = captured_requests[0] if captured_requests else {}
     payload = first_request.get("tool_payload") or {}
@@ -411,6 +421,11 @@ async def run_acceptance_case(
     ]
     retained_texts = [row.get("text") or row.get("x") or "" for row in visible_rows]
     answer = consumer.convo[-1].content if outcome == "handled" else ""
+    final_stream_payloads = [
+        payload
+        for payload in stream_payloads
+        if payload.get("done") is True and payload.get("role") == "assistant"
+    ]
     return {
         "case_id": case.case_id,
         "omitted_doc_id": omitted_doc_id,
@@ -419,6 +434,14 @@ async def run_acceptance_case(
         "provider_call_count": len(captured_requests),
         "requests": captured_requests,
         "answer": answer,
+        "stream_event_count": len(stream_payloads),
+        "final_stream_received": bool(final_stream_payloads) if stream_output else None,
+        "final_stream_content_matches_answer": (
+            bool(final_stream_payloads)
+            and final_stream_payloads[-1].get("content") == answer
+            if stream_output
+            else None
+        ),
         "evidence_citations": sorted(evidence_citations),
         "evidence_coverage_passed": (
             expected_citations <= evidence_citations

@@ -307,3 +307,26 @@ async def test_extractive_fallback_derives_citations_from_selected_chunk_ids():
         "[doc:a chunk:1]",
         "[doc:b chunk:2]",
     }
+
+
+async def test_grounding_rules_are_request_only_and_leave_stored_system_unchanged():
+    convo, packet = _fixture()
+    original_system = convo.system
+    llm = _BoundaryLLM()
+
+    result = await synthesize_from_evidence(llm, convo, packet)
+
+    prompt = llm.requests[0]["system"]
+    assert "selected evidence" in prompt.lower()
+    assert "only factual source" in prompt
+    assert "every supporting paper" in prompt
+    assert "computed comparison" in prompt
+    assert "at the claim" in prompt
+    assert "Preserve disagreements" in prompt
+    assert "conditions" in prompt
+    assert "Distinguish inference" in prompt
+    assert "do not establish causation" in prompt
+    assert "insufficient" in prompt
+    assert "Do not pad" in prompt
+    assert convo.system == original_system
+    assert result.system == original_system

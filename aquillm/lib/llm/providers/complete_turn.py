@@ -39,6 +39,32 @@ if DEBUG:
 _DOC_IMAGE_URL_RE = re.compile(r"/aquillm/document_image/([^/]+)/")
 _MECHANICAL_TOOL_MAX_TOKENS = 256
 
+# Shared with the direct-RAG handoff; provider code must not import app services.
+DIRECT_SYNTHESIS_GROUNDING = (
+    "Selected evidence grounding rules:\n"
+    "- The selected evidence in the current tool result is the only factual source "
+    "for this answer. Earlier conversation provides request context, not additional "
+    "document evidence.\n"
+    "- Answer the user's question directly and keep the answer concise, with detail "
+    "proportionate to the selected evidence. Do not pad the answer with general "
+    "background, recommendations, implications, or explanations beyond the question "
+    "and evidence.\n"
+    "- Cite every factual claim at the claim. A shared claim or comparison must cite "
+    "every supporting paper together at the claim, not only in a sources list. For "
+    "each computed comparison, show the calculation or its inputs and cite all input "
+    "sources. Identify computed values as calculations, not source-reported results; "
+    "do not combine incompatible units or conditions.\n"
+    "- Preserve disagreements and each paper's conditions, units, definitions, and "
+    "qualifications. Do not invent consensus or a reconciliation.\n"
+    "- Distinguish inference from source-reported fact. Contrasting study results "
+    "do not establish causation. Do not attribute differences to conditions, "
+    "mechanisms, or environmental dependence unless the selected passages explicitly "
+    "support that explanation.\n"
+    "- If a required paper or fact is absent, state that the selected evidence is "
+    "insufficient to answer that part. Never fill the gap from assumptions or prior "
+    "conversation claims."
+)
+
 
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
     try:
@@ -262,6 +288,15 @@ def _post_tool_synthesis_unsatisfied(text: str | None) -> bool:
 def _build_synthesis_retry_prompt(conversation: Conversation, attempt: int) -> str:
     user_turn = _latest_user_turn(conversation)
     query = (user_turn.content or "").strip() if user_turn else ""
+    if current_stage() == "direct_synthesis":
+        return "\n\n".join([
+            f"User request: {query or 'Answer using the selected evidence.'}",
+            DIRECT_SYNTHESIS_GROUNDING,
+            "Your previous reply was empty or incomplete. Give the supported answer "
+            "now, using only the selected evidence. Do not call tools, describe "
+            "future retrieval, or emit tool markup. Include a selected figure only "
+            "when it helps answer the user's request.",
+        ])
     wants_figures = _latest_user_requested_image(conversation)
     lines = [
         f"User request: {query or 'Answer using the retrieved documents above.'}",
@@ -747,13 +782,24 @@ async def complete_conversation_turn(
                 f"{citations.build_citation_system_suffix(citation_allowlist)}"
             )
     if is_post_tool_result_turn:
-        request_system_prompt = (
-            f"{request_system_prompt}\n\n"
-            "Final synthesis step: answer the user using retrieved document content already in "
-            "this thread. Write a thorough, well-structured user-facing answer with enough detail "
-            "to stand alone; finish every section and do not stop mid-sentence. Do not emit status "
-            "lines, tool markup, or promises to retrieve later."
-        )
+        if current_stage() == "direct_synthesis":
+            if DIRECT_SYNTHESIS_GROUNDING not in request_system_prompt:
+                request_system_prompt += f"\n\n{DIRECT_SYNTHESIS_GROUNDING}"
+            synthesis_instruction = (
+                "Final synthesis step: give a concise answer with detail proportionate "
+                "to the selected evidence. Complete the supported answer without "
+                "padding it. Do not emit status lines, tool markup, or promises to "
+                "retrieve later."
+            )
+        else:
+            synthesis_instruction = (
+                "Final synthesis step: answer the user using retrieved document content "
+                "already in this thread. Write a thorough, well-structured user-facing "
+                "answer with enough detail to stand alone; finish every section and do "
+                "not stop mid-sentence. Do not emit status lines, tool markup, or promises "
+                "to retrieve later."
+            )
+        request_system_prompt = f"{request_system_prompt}\n\n{synthesis_instruction}"
     source_allowlist = set(citation_allowlist)
     if is_post_tool_result_turn and not source_allowlist:
         source_allowlist = _collect_source_refs_from_tool_message(last_message)
@@ -1179,7 +1225,9 @@ async def complete_conversation_turn(
             and (not original_invalid)
             and bool(original_response_text)
         )
-        if (
+        # Direct synthesis must repair uncited claims before deferred delivery;
+        # fluent prose, figures, and compact summaries are not citation evidence.
+        if current_stage() != "direct_synthesis" and (
             should_soft_accept_original
             or should_soft_accept_image_display
             or should_soft_accept_compact_summary
@@ -1342,4 +1390,4 @@ async def complete_conversation_turn(
     return conversation + [new_msg], "changed"
 
 
-__all__ = ["complete_conversation_turn"]
+__all__ = ["DIRECT_SYNTHESIS_GROUNDING", "complete_conversation_turn"]

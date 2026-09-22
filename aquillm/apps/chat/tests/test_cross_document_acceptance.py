@@ -102,6 +102,38 @@ async def test_final_completion_repairs_citation_to_prior_evidence_outside_packe
     assert report["exact_allowlist_passed"]
 
 
+async def test_deferred_final_stream_delivers_the_repaired_stored_answer(monkeypatch):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "1")
+    case = CASES[0]
+    invalid_citation = "[doc:synthetic-unavailable chunk:999]"
+    invalid_answer = case.reference_answer.replace(
+        case.papers[0]["citation"],
+        invalid_citation,
+    )
+    llm = _FakeLLMInterface(
+        [
+            LLMResponse(
+                text=text,
+                tool_call={},
+                stop_reason="end_turn",
+                input_usage=1,
+                output_usage=1,
+            )
+            for text in [invalid_answer, case.reference_answer]
+        ]
+    )
+
+    report = await run_acceptance_case(case, llm, stream_output=True)
+
+    assert report["outcome"] == "handled"
+    assert report["provider_call_count"] == 2
+    assert invalid_citation not in report["answer"]
+    assert report["final_stream_received"] is True
+    assert report["final_stream_content_matches_answer"] is True
+    assert report["stream_event_count"] == 1
+    assert all(call.get("stream_callback") is None for call in llm.calls)
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.case_id)
 @pytest.mark.parametrize("omitted_index", [0, 1])
 async def test_single_paper_ablation_removes_its_evidence_and_citation(
@@ -156,6 +188,29 @@ def test_answer_checker_rejects_swapped_citations_and_source_inventory_only():
         allowed_citations=case.required_citations,
     )
     assert "wrong-or-missing-citation:cross-paper-difference" in report["errors"]
+
+
+def test_answer_checker_accepts_enhances_paraphrase_only_with_local_citation():
+    case = CASES[1]
+    first_citation = case.papers[0]["citation"]
+    answer_lines = case.reference_answer.splitlines()
+    answer_lines[0] = (
+        "Activating the coating enhances response by 12 percent in the "
+        f"controlled trial {first_citation}."
+    )
+    report = evaluate_answer(
+        case,
+        "\n".join(answer_lines),
+        allowed_citations=case.required_citations,
+    )
+    assert report["passed"], report["errors"]
+    answer_lines[0] = answer_lines[0].replace(first_citation, "")
+    uncited = evaluate_answer(
+        case,
+        "\n".join(answer_lines),
+        allowed_citations=case.required_citations,
+    )
+    assert "wrong-or-missing-citation:controlled-increase" in uncited["errors"]
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.case_id)
