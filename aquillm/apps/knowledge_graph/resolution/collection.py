@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from heapq import merge
 from itertools import islice
-from math import isfinite
+from math import isfinite, sqrt
 
 from .normalization import normalize_entity_label
 from .scoring import (
@@ -27,7 +27,6 @@ from .scoring import (
     ResolutionTier,
     classify_resolution_score,
     combine_resolution_scores,
-    cosine_similarity,
     validate_embedding,
 )
 
@@ -1358,6 +1357,20 @@ def _jaccard(left: frozenset[object], right: frozenset[object]) -> float:
     return len(left.intersection(right)) / len(left.union(right))
 
 
+def _cosine_similarity_from_validated(
+    left: tuple[float, ...],
+    left_norm: float,
+    right: tuple[float, ...],
+    right_norm: float,
+) -> float:
+    """Preserve public cosine arithmetic for already-validated build vectors."""
+
+    dot = sum(a * b for a, b in zip(left, right, strict=True))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return min(1.0, max(0.0, dot / (left_norm * right_norm)))
+
+
 def _representative(
     members: Sequence[DocumentEntityInput],
 ) -> DocumentEntityInput:
@@ -2084,6 +2097,10 @@ def resolve_collection_entities(
         texts = tuple(_embedding_text(group_members[root]) for root in roots_to_embed)
         embedded = embedding_session.embed(texts)
         embedded_by_root = dict(zip(roots_to_embed, embedded, strict=True))
+    embedding_norm_by_root = {
+        root: sqrt(sum(component * component for component in value.vector))
+        for root, value in embedded_by_root.items()
+    }
 
     scored: list[tuple[float, int, int, float, float, ResolutionTier]] = []
     for left, right in sorted(pair_pool):
@@ -2095,8 +2112,11 @@ def resolve_collection_entities(
             left_versions and right_versions and left_versions != right_versions
         ):
             continue
-        similarity = cosine_similarity(
-            embedded_by_root[left].vector, embedded_by_root[right].vector
+        similarity = _cosine_similarity_from_validated(
+            embedded_by_root[left].vector,
+            embedding_norm_by_root[left],
+            embedded_by_root[right].vector,
+            embedding_norm_by_root[right],
         )
         left_neighborhood = frozenset(
             signature

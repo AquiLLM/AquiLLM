@@ -49,6 +49,17 @@ requests. Polling also stopped after an unchanged building response.
   existing build identities. Independent old/new parity checks passed for 12
   mixed merge/rejection fixtures with reversed input and varied candidate limits.
   All 57 focused pure collection-resolution tests passed after this optimization.
+- Collection similarity scoring reuses the immutable float32-validated vectors
+  and caches one norm per embedded root. The public scoring function still
+  validates untrusted inputs. Dot-product accumulation, norm calculation,
+  zero handling and score clamping retain the original arithmetic. A regression
+  reproduced 870 redundant validations on 30 input vectors and pins the
+  pre-optimization complete-result checksum.
+  All 58 focused pure resolver tests and targeted Ruff checks pass. Independent
+  review found exact scores for 256 real vector pairs (including zero, opposite,
+  float32 extremes and threshold-adjacent inputs), full-result/checksum parity
+  on 12 mixed fixtures, identical invalid-vector rejection, and immutable
+  snapshots despite later mutation of the input list.
 
 ## Verification and limits
 
@@ -59,7 +70,7 @@ page, exact full checksums, retry/lease behavior and direct state-role writes
 remaining denied. Final integration and deployed collection results are recorded
 below after execution.
 
-The final non-database knowledge-graph/collections run passed 2,211 tests, with
+The main bulk-repair non-database knowledge-graph/collections run passed 2,211 tests, with
 four skipped checks. All 171 collection frontend tests
 passed, and the production frontend build passed. Independent resolver review
 passed nine adversarial/scaling probes, including 65,536 retained mentions in
@@ -102,6 +113,16 @@ pushed to `development` before the host pulled it. The outgoing source scan
 reported zero credential-pattern findings. Environment files and temporary
 access material were excluded. The remote checkout was clean at that commit.
 
+The follow-up collection-resolution optimization was pushed as
+`ffe14fc847910068fa850ed48a9db4004560a1c9`. The host fetched that approved commit,
+drained the document worker to a clean exit, fast-forwarded to that exact commit,
+rebuilt/restarted the worker and verified its extraction-queue subscription.
+No active document job was forcibly terminated. The focused suite passed 57
+tests and both changed files passed Ruff. A bounded synthetic probe with cosine
+and embedding-validation stubs took 57.718 seconds at 10,000 entities and 106.524
+seconds at 20,000; this isolates resolver work and is not production inference
+or end-user latency evidence.
+
 The development host applied migration 0011, rebuilt the graph service images,
 and restarted the application and workers. The rebuilt frontend bundle contains
 the new document-progress UI and matches the collected static asset. The web,
@@ -129,5 +150,9 @@ request was declined while the inference slot remained occupied. The warm
 repeat accepted both. This check does not establish cold-start or load latency.
 
 The uploaded collection rebuild uses the normal idempotent rebuild entry point
-with request `e87b2c01-3bda-49b0-8d03-a15f7d572fb4`. Final collection projection
-and retrieval evidence will be recorded after the rebuild completes.
+with request `e87b2c01-3bda-49b0-8d03-a15f7d572fb4`. All 31 document builds
+completed with zero terminal failures, covering all 2,168 embedded chunks,
+36,740 document entities and 355 raw relation mentions. The largest paper, with
+354 chunks, completed extraction and resolution. The generated draft still
+matches its original identity, revision and modification time. Final collection
+projection and retrieval evidence will be recorded after assembly completes.

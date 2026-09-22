@@ -19,6 +19,7 @@ from django.core.exceptions import ValidationError
 from django.db.models import CheckConstraint, UniqueConstraint
 
 from apps.knowledge_graph.resolution import collection as collection_resolution
+from apps.knowledge_graph.resolution import scoring as resolution_scoring
 from apps.knowledge_graph.resolution.collection import (
     AliasEvidence,
     CollectionBuildSnapshot,
@@ -268,7 +269,9 @@ def test_final_cluster_audit_work_is_linear_in_resolved_output(monkeypatch):
         normalize_counting_members,
     )
     monkeypatch.setattr(
-        collection_resolution, "cosine_similarity", lambda _left, _right: 0.0
+        collection_resolution,
+        "_cosine_similarity_from_validated",
+        lambda _left, _left_norm, _right, _right_norm: 0.0,
     )
     monkeypatch.setattr(
         collection_resolution, "validate_embedding", lambda value: tuple(value)
@@ -286,6 +289,40 @@ def test_final_cluster_audit_work_is_linear_in_resolved_output(monkeypatch):
     assert result.decisions
     assert contains_count <= entity_count
     assert set_count <= entity_count * 100
+
+
+def test_semantic_candidate_scoring_reuses_validated_vectors_and_norms(monkeypatch):
+    entities = tuple(
+        _document_entity(1_000 + offset, f"common semantic item {offset:02d}")
+        for offset in range(30)
+    )
+    vectors = {
+        entity.label: _unit_vector(1.0, ((index % 5) - 2) * 0.1)
+        for index, entity in enumerate(entities)
+    }
+    session, _backend = _session(vectors)
+    validation_calls = 0
+    real_validate = resolution_scoring.validate_embedding
+
+    def counting_validate(value, *, dimensions=EMBEDDING_DIMENSIONS):
+        nonlocal validation_calls
+        validation_calls += 1
+        return real_validate(value, dimensions=dimensions)
+
+    monkeypatch.setattr(resolution_scoring, "validate_embedding", counting_validate)
+
+    result = resolve_collection_entities(
+        _snapshot(),
+        entities,
+        _ontology(),
+        embedding_session=session,
+    )
+
+    assert result.checksum == (
+        "f463987385eb4681f718c9968d78c62765b441453c2b80363d4d6bebbbd60900"
+    )
+    assert result.audit.embedding_candidate_pair_count == 235
+    assert validation_calls <= len(entities)
 
 
 def test_stable_identifier_equality_is_first_tier_and_never_embeds():
