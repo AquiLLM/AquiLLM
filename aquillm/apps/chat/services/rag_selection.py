@@ -6,7 +6,10 @@ import math
 from collections import defaultdict
 from collections.abc import Iterable
 
-from apps.chat.services.rag_selection_similarity import snippet_redundancy
+from apps.chat.services.rag_selection_similarity import (
+    prepare_snippet,
+    prepared_redundancy,
+)
 from apps.chat.services.rag_selection_types import (
     EvidenceSelection,
     SelectionCandidate,
@@ -95,6 +98,10 @@ def select_evidence(
         if previous is None or _tie_break(candidate) < _tie_break(previous):
             by_identity[key] = candidate
     remaining = list(by_identity.values())
+    features = {
+        identity: prepare_snippet(candidate.text)
+        for identity, candidate in by_identity.items()
+    }
     selected: list[SelectionCandidate] = []
     document_counts: dict[str, int] = defaultdict(int)
     # Update each remaining candidate's maximum similarity once per pick.
@@ -139,7 +146,12 @@ def select_evidence(
         for candidate in remaining:
             identity = _identity(candidate)
             maximum_redundancy[identity] = max(
-                maximum_redundancy[identity], snippet_redundancy(candidate, best)
+                maximum_redundancy[identity],
+                prepared_redundancy(
+                    features[identity],
+                    features[_identity(best)],
+                    same_document=candidate.doc_id == best.doc_id,
+                ),
             )
 
     return EvidenceSelection(tuple(selected), estimated_tokens, profile, score_status)

@@ -1,10 +1,12 @@
 """Evidence packet building for direct RAG."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
 from apps.chat.services.rag_config import evidence_token_budget, max_snippets_per_doc
+from apps.chat.services.rag_legacy_selection import diversify_evidence_chunks
 from lib.llm.providers.rag_citations import _chunk_citation_from_row
 
 _CHARS_PER_TOKEN = 4
@@ -31,51 +33,6 @@ def _estimate_tokens(text: str) -> int:
 def _chunk_text(chunk: dict) -> str:
     """Extract text from either compact or full chunk format."""
     return chunk.get("text") or chunk.get("x") or ""
-
-
-def diversify_evidence_chunks(
-    chunks: list[dict],
-    per_doc_limit: int,
-) -> list[dict]:
-    """Round-robin across documents so no single doc consumes all snippet slots.
-
-    The strategy:
-    1. Group chunks by ``doc_id`` preserving original ranking order within each group.
-    2. Round-robin: take one chunk per doc per round until each doc hits its cap.
-
-    This guarantees that when multiple docs are present, all get at least one
-    snippet before any doc receives a second.
-    """
-    from collections import defaultdict
-
-    doc_order: list[str] = []
-    by_doc: dict[str, list[dict]] = defaultdict(list)
-    for chunk in chunks:
-        doc_id = chunk.get("doc_id") or chunk.get("d", "")
-        if doc_id not in doc_order:
-            doc_order.append(doc_id)
-        by_doc[doc_id].append(chunk)
-
-    result: list[dict] = []
-    doc_counts: dict[str, int] = {d: 0 for d in doc_order}
-    doc_iters = {d: iter(by_doc[d]) for d in doc_order}
-    exhausted: set[str] = set()
-
-    while len(exhausted) < len(doc_order):
-        for doc_id in doc_order:
-            if doc_id in exhausted:
-                continue
-            if doc_counts[doc_id] >= per_doc_limit:
-                exhausted.add(doc_id)
-                continue
-            try:
-                chunk = next(doc_iters[doc_id])
-                result.append(chunk)
-                doc_counts[doc_id] += 1
-            except StopIteration:
-                exhausted.add(doc_id)
-
-    return result
 
 
 def build_evidence_packet(
@@ -156,8 +113,9 @@ def build_evidence_packet(
         search_scope=search_scope,
         retrieval_status=retrieval_status if selected else "no_results",
         diagnostic_message=(
-            "" if selected else
-            "Retrieved passages could not fit within the evidence budget."
+            ""
+            if selected
+            else "Retrieved passages could not fit within the evidence budget."
         ),
         total_tokens=used_tokens,
     )
