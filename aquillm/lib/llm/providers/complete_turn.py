@@ -62,7 +62,10 @@ DIRECT_SYNTHESIS_GROUNDING = (
     "support that explanation.\n"
     "- If a required paper or fact is absent, state that the selected evidence is "
     "insufficient to answer that part. Never fill the gap from assumptions or prior "
-    "conversation claims."
+    "conversation claims.\n"
+    "- Scope absence and negative evidence to the selected excerpts and the cited "
+    "study. One paper not measuring an outcome does not establish that no other "
+    "study exists or that no other researcher measured it."
 )
 
 
@@ -1197,9 +1200,11 @@ async def complete_conversation_turn(
             )
     if enforce_citations and (not response_tool_call):
         is_streaming_turn = callable(provider_stream_func)
+        require_cited_numeric_claims = current_stage() == "direct_synthesis"
         original_response_text = (response_text or "").strip()
         citations_valid = citations.response_has_required_citations(
-            response_text, citation_allowlist
+            response_text, citation_allowlist,
+            require_cited_numeric_claims=require_cited_numeric_claims,
         )
         original_invalid = citations.find_invalid_citations(
             original_response_text, citation_allowlist
@@ -1248,6 +1253,12 @@ async def complete_conversation_turn(
                 allowed_citations=citation_allowlist,
                 invalid_citations=invalid,
             )
+            if require_cited_numeric_claims:
+                retry_prompt += (
+                    "\n\nNumeric factual sentences need citations at the claim. "
+                    "For a computed comparison, cite every source supplying an input "
+                    "at that comparison; a trailing Sources list is not sufficient."
+                )
             retry_messages = message_dicts + [
                 {"role": "assistant", "content": response_text},
                 {"role": "user", "content": retry_prompt},
@@ -1278,7 +1289,8 @@ async def complete_conversation_turn(
         )
         if retry_invalid and (
             not citations.response_has_required_citations(
-                response_text, citation_allowlist
+                response_text, citation_allowlist,
+                require_cited_numeric_claims=require_cited_numeric_claims,
             )
         ):
             if is_streaming_turn:

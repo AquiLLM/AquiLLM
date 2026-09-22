@@ -327,6 +327,8 @@ async def test_grounding_rules_are_request_only_and_leave_stored_system_unchange
     assert "Distinguish inference" in prompt
     assert "do not establish causation" in prompt
     assert "insufficient" in prompt
+    assert "Scope absence and negative evidence" in prompt
+    assert "does not establish that no other study exists" in prompt
     assert "Do not pad" in prompt
     assert convo.system == original_system
     assert result.system == original_system

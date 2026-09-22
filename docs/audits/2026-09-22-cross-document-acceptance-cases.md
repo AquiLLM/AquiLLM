@@ -159,6 +159,31 @@ including valid paraphrases and citation repair before the final stream callback
 Independent review found no blocking issue. Final real-provider reruns are
 recorded below after deployment.
 
+The next live run passed five of six cases, with all six passing final SDK
+evidence/citation checks and callback-to-stored-answer equality. The remaining
+capacity comparison was correct but uncited prose; the validator previously
+checked factual bullets more strictly than sentences. Direct synthesis now opts
+into a numeric-prose citation-presence check and requests repair for such
+omissions. Decimal values, adjacent citations, code, images, and source-list
+boundaries have regression coverage. This is intentionally a citation-presence
+check, not a semantic judge. Negative-evidence instructions also scope missing
+measurements or studies to the selected passages.
+
+Verification after the numeric-prose fix: 328 relevant tests passed, with the
+same pre-existing logging test deselected. Independent review caught and verified
+a regression fix for a bold Sources heading that could otherwise lend citations
+to preceding prose. No blocking review findings remained.
+
+A real collection probe using normal deployment limits retrieved twelve retained
+rows from ten documents and generated an answer citing nine chunks from seven
+documents. Both graph branches succeeded for that single-question probe; two
+cited chunks were also graph candidates. None of the cited chunks was exclusive
+to graph retrieval, so this does not prove a graph-specific quality improvement.
+A separate three-query run had direct-branch failures (`backend_unavailable`,
+`direct_no_seeds`, `extractor_provenance`) while extended retrieval returned
+evidence. Graph reliability across multiple queries remains a separate issue;
+this work does not declare the whole graph pipeline consistently healthy.
+
 After the production changes, the same acceptance test file passed all 16 tests
 in 0.18 seconds on 2026-09-22. This establishes the deterministic transport and
 citation regressions only; real-provider answer quality is assessed separately.

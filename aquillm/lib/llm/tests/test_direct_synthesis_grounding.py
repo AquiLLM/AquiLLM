@@ -170,3 +170,59 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
     assert len(stream_payloads) == 1
     assert stream_payloads[0]["done"] is True
     assert stream_payloads[0]["content"] == result[-1].content
+
+
+@pytest.mark.parametrize("stage", ["direct_synthesis", "post_tool_synthesis"])
+async def test_uncited_numeric_prose_is_repaired_only_for_direct_synthesis(
+    stage,
+    monkeypatch,
+):
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "1")
+    first = (
+        "Paper A reports 18 litres per cycle [doc:a chunk:1]. "
+        "Paper B reports 7 litres per cycle [doc:b chunk:2]. "
+        "The humid-mode capacity is 11 litres per cycle lower "
+        "(calculated as 18 - 7 = 11).\n\n"
+        "Sources:\n- [doc:a chunk:1]\n- [doc:b chunk:2]"
+    )
+    repaired = (
+        "Paper A reports 18 litres per cycle [doc:a chunk:1]. "
+        "Paper B reports 7 litres per cycle [doc:b chunk:2]. "
+        "The humid-mode capacity is 11 litres per cycle lower "
+        "(18 - 7 = 11) [doc:a chunk:1] [doc:b chunk:2]."
+    )
+    requests = []
+    streamed = []
+
+    class CapacityModel:
+        base_args = {}
+
+        async def get_message(self, **kwargs):
+            assert not streamed
+            requests.append(deepcopy(kwargs))
+            return LLMResponse(
+                text=first if len(requests) == 1 else repaired,
+                tool_call={},
+                stop_reason="stop",
+                input_usage=1,
+                output_usage=1,
+                model="numeric-prose-fixture",
+            )
+
+    async def capture(payload):
+        streamed.append(payload)
+
+    with observability_scope("numeric-comparison", stage):
+        result, _ = await complete_conversation_turn(
+            CapacityModel(),
+            _conversation(),
+            1024,
+            stream_func=capture,
+        )
+
+    assert len(requests) == (2 if stage == "direct_synthesis" else 1)
+    assert result[-1].content.startswith(
+        repaired if stage == "direct_synthesis" else first
+    )
+    assert len(streamed) == 1
+    assert streamed[0]["content"] == result[-1].content
