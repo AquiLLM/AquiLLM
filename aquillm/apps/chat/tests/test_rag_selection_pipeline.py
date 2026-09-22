@@ -234,3 +234,64 @@ async def test_adaptive_all_queries_failed_leaves_conversation_untouched(monkeyp
     )
     assert consumer.convo is convo
     synthesis.assert_not_called()
+
+
+async def test_adaptive_partial_query_failure_selects_surviving_union(monkeypatch):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    monkeypatch.setenv("RAG_EVIDENCE_SELECTION_MODE", "adaptive")
+    monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "2")
+    observed = {"searches": [], "synthesis": 0}
+    rows = [_row(2), _row(3)]
+    rows[0]["_retrieval_scores"] = [0.9]
+
+    def search(_consumer, query, _top_k):
+        observed["searches"].append(query)
+        if ";" in query:
+            raise RuntimeError("one subquery failed")
+        return {"result": rows}
+
+    def prepare(_consumer, pool, _query, _question, _config, _top_k):
+        observed["pool_ids"] = [row["chunk_id"] for row in pool.rows]
+        row = pool.rows[0]
+        candidate = SelectionCandidate(
+            2, row["doc_id"], 2, row["text"], 0.9, 1, "fp", row
+        )
+        return SimpleNamespace(
+            selection=EvidenceSelection(
+                (candidate,),
+                3,
+                SelectionProfile("breadth", 0.8, 0.15, "v1"),
+                "rank_fallback",
+            ),
+            authorization=object(),
+            candidate_count=len(pool.rows),
+            selection_duration_ms=1.0,
+            prepared=PreparedSelection((candidate,), "rank_fallback", 0, 0, 0.0, None),
+        )
+
+    async def synth(_llm, convo, packet, **_kwargs):
+        observed["synthesis"] += 1
+        observed["packet"] = packet
+        observed["persisted"] = convo[-1].result_dict
+        return convo + [AssistantMessage(content="Answer", stop_reason="end_turn")]
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", search)
+    monkeypatch.setattr(rag_pipeline, "_prepare_selection_sync", prepare)
+    monkeypatch.setattr(rag_pipeline, "_revalidate_selection_sync", lambda s, _a: s)
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", synth)
+    convo = Conversation(
+        system="sys",
+        messages=[UserMessage(content="compare papers; and summarize trials")],
+    )
+    consumer = SimpleNamespace(user=object(), col_ref=CollectionsRef([1]), convo=convo)
+    assert (
+        await rag_pipeline.run_direct_rag_turn(consumer, AsyncMock(), convo)
+        == "handled"
+    )
+    assert len(observed["searches"]) == 2
+    assert observed["pool_ids"] == [2, 3]
+    assert observed["synthesis"] == 1
+    assert [row["chunk_id"] for row in observed["packet"].chunks] == [2]
+    assert observed["persisted"]["retrieved_count"] == 1
+    assert observed["persisted"]["result"] == observed["packet"].chunks
+    assert "_retrieval_scores" not in observed["persisted"]["result"][0]
