@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
+import yaml
 
 
 def render_compose_with_reviewed_env(
@@ -22,7 +23,8 @@ def render_compose_with_reviewed_env(
     if docker is None:
         pytest.skip("Docker Compose is unavailable")
     # Only retain client/OS variables; ambient model/API settings must not leak
-    # into a defaults contract. --no-env-resolution avoids reading service .env.
+    # into a defaults contract. Service env files are redirected below because
+    # older Compose still stats them when --no-env-resolution is requested.
     allowed = {
         "PATH",
         "SYSTEMROOT",
@@ -61,9 +63,27 @@ def render_compose_with_reviewed_env(
             "\n".join(f"{key}={value}" for key, value in values.items()),
             encoding="utf-8",
         )
-        command = [docker, "compose", "--env-file", str(env_file)]
-        for path in compose_files:
-            command.extend(("-f", str(path)))
+        command = [
+            docker,
+            "compose",
+            "--env-file",
+            str(env_file),
+            "--project-directory",
+            str(compose_files[0].resolve().parent),
+        ]
+        for index, path in enumerate(compose_files):
+            config = yaml.safe_load(path.read_text(encoding="utf-8"))
+            for service in config.get("services", {}).values():
+                if "env_file" in service:
+                    service["env_file"] = [str(env_file)]
+            # Preserve all other values and interpolate them in Compose itself.
+            # --project-directory keeps relative builds/mounts anchored to the
+            # original first Compose file, just as with multiple real -f files.
+            reviewed_compose = Path(directory) / f"compose-{index}.yml"
+            reviewed_compose.write_text(
+                yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+            )
+            command.extend(("-f", str(reviewed_compose)))
         command.extend(
             ("--profile", profile, "config", "--format", "json", "--no-env-resolution")
         )
