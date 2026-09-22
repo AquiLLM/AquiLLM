@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from apps.knowledge_graph.projection.identifiers import (
+    OpaqueProjectionKey,
+    ProjectionIdentifierDomain,
+)
 from apps.knowledge_graph.projection.records import PrivateProjectionChunkReferenceV1
 from apps.knowledge_graph.retrieval.materialization import materialize_projected_chunks
 
 from .ready_scope import SelectedReadyScopeV1
+
+_MAX_SELECTED_CHUNKS = 40  # Two branches, each returning at most 20 candidates.
+_MATERIALIZATION_BATCH_SIZE = 20
 
 
 class DjangoPrivateChunkMapRepository:
@@ -85,10 +92,26 @@ def materialize_selected_ready_chunks(
 ):
     if type(scope) is not SelectedReadyScopeV1:
         raise TypeError("scope must be exact")
+    if (
+        type(chunk_keys) is not tuple
+        or not chunk_keys
+        or len(chunk_keys) > _MAX_SELECTED_CHUNKS
+    ):
+        raise ValueError(
+            "chunk_keys must be a nonempty exact tuple within its union cap"
+        )
+    if any(
+        type(key) is not OpaqueProjectionKey
+        or key.domain is not ProjectionIdentifierDomain.CHUNK
+        for key in chunk_keys
+    ):
+        raise TypeError("chunk_keys must contain exact opaque chunk keys")
+    raw_keys = tuple(key.value for key in chunk_keys)
+    if len(set(raw_keys)) != len(raw_keys):
+        raise ValueError("duplicate requested chunk keys")
     selected_repository = (
         DjangoPrivateChunkMapRepository() if repository is None else repository
     )
-    raw_keys = tuple(key.value for key in chunk_keys)
     projection_ids = tuple(row.projection_id for row in scope.projections)
     located = selected_repository.locate(
         projection_ids=projection_ids, chunk_keys=raw_keys
@@ -107,17 +130,18 @@ def materialize_selected_ready_chunks(
             key for key in chunk_keys if owners[key.value] == projection_id
         )
         authority = by_projection[projection_id]
-        rows = materialize_projected_chunks(
-            projection_id=projection_id,
-            expected_private_mapping_checksum=authority.private_mapping_checksum,
-            chunk_keys=selected_keys,
-            authorization=authorization,
-            repository=selected_repository,
-        )
-        for row in rows:
-            if row.chunk_key in materialized:
-                raise ValueError("duplicate materialized graph key")
-            materialized[row.chunk_key] = row
+        for offset in range(0, len(selected_keys), _MATERIALIZATION_BATCH_SIZE):
+            rows = materialize_projected_chunks(
+                projection_id=projection_id,
+                expected_private_mapping_checksum=authority.private_mapping_checksum,
+                chunk_keys=selected_keys[offset : offset + _MATERIALIZATION_BATCH_SIZE],
+                authorization=authorization,
+                repository=selected_repository,
+            )
+            for row in rows:
+                if row.chunk_key in materialized:
+                    raise ValueError("duplicate materialized graph key")
+                materialized[row.chunk_key] = row
     if set(materialized) != set(raw_keys):
         raise ValueError("materialized graph coverage is incomplete")
     return tuple(materialized[key] for key in raw_keys)

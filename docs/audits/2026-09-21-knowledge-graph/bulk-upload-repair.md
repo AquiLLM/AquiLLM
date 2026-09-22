@@ -526,3 +526,34 @@ passed, including the five aligned gateway defaults. Independent review is clear
 Root mention/adapter/isolation verification passed all **15 tests** in 26.24
 seconds. Ruff passed for all changed Python files, whitespace checks passed, and
 the 22 outgoing source/test/example/report files had zero credential findings.
+
+Those source and transport changes were pushed and deployed as
+`416cf0a18a1644e171e7101f1fb03cf74217a473`. Both restarted services were healthy,
+the checkout was clean, and the five intended private numeric settings matched;
+the helper proved all other environment bytes unchanged. The first cold 64-seed
+query completed direct retrieval but exhausted the extended branch deadline just
+after its topology snapshot loaded. A warm repeat completed both branches (12
+direct and 20 extended candidates), exposing a final handoff defect: the private
+materializer accepted only 20 keys although two successful branches can supply a
+union of up to 40. The single-branch path had already materialized graph evidence
+successfully. This is a union-cap mismatch, not evidence that the graph projection
+or its private mapping was stale.
+
+Development tuning with 16 extended seeds completed both branches while the
+extended snapshot was cold (2,580 ms direct, 1,865 ms extended, including gateway
+queueing). The planned development setting uses that existing bounded seed
+selection to leave room under the supported query deadlines. The general
+64-seed protocol remains supported and tested; it is not a cold-query latency
+guarantee for this collection.
+
+The selected-scope materializer now validates the complete union of at most 40
+unique opaque chunk keys before lookup, then delegates in batches of at most 20
+per projection to the existing low-level materializer. Each batch retains current
+authorization, mapping checksum and chunk-coordinate checks. Final exact coverage
+and original ordering prevent a successful partial return after later failure;
+no union candidates are silently truncated. Root verification passed all **34
+materialization, projection-read alias and production runtime tests**. Regression
+cases include 21/40-key unions, oversized and duplicate requests rejected before
+repository reads (including empty input), authorization revoked between batches, and later checksum or
+coordinate corruption. Scoped Ruff passed. Live cold-cache retrieval and cited
+answer verification remain pending the reviewed development deployment.
