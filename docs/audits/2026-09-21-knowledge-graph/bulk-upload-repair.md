@@ -354,3 +354,18 @@ owner-takeover rejection, unchanged attempt count and actual thread-connection
 closure. Ruff passed, and the five outgoing source/test/report files contained
 zero credential-pattern findings. Live target retrieval remains to be verified
 after this repair is deployed.
+
+The heartbeat repair was pushed as
+`ac7f3bda386f18c19b785a36e7e510f1eae84667`, then pulled, rebuilt and loaded by the
+official projection worker. Its queue subscription and clean checkout were
+verified. The large target's lease subsequently renewed without changing its
+attempt count. The published-schema fixture completed its replacement projection
+in 6.32 seconds through the normal service. Subsequent retrieval still timed out,
+and the large build encountered a separate transient graph-store timeout; these
+are unresolved verification findings, not successful end-to-end results.
+
+A follow-up makes Django connection interruptions retryable throughout the
+pre-ready stages, consistently with heartbeat renewal. The post-ready recovery
+guard is unchanged. Eight regression cases reproduced the prior classification
+failure; **37 focused tests** passed after the change, with Ruff and independent
+review clear. No additional database permissions or configuration were needed.

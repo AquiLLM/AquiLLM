@@ -67,9 +67,7 @@ class _ProjectionLeaseHeartbeat:
                 lease_seconds=self.lease_seconds,
             )
         except Exception as exc:
-            if _backend_transient(exc) or isinstance(
-                exc, (OperationalError, InterfaceError)
-            ):
+            if _backend_transient(exc):
                 raise TimeoutError("projection_backend_transient") from None
             raise _ProjectionLeaseLost(
                 "projection lease renewal was rejected"
@@ -187,7 +185,9 @@ def publish_projection_ready_compare_and_set(**kwargs):
 
 
 def _backend_transient(exc: BaseException) -> bool:
-    return isinstance(exc, (ConnectionError, TimeoutError)) or (
+    return isinstance(
+        exc, (ConnectionError, TimeoutError, OperationalError, InterfaceError)
+    ) or (
         isinstance(exc, MemgraphDriverError)
         and exc.code in {"memgraph_read_failed", "memgraph_write_failed"}
     )
