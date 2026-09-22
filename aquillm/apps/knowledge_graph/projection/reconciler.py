@@ -4,11 +4,15 @@ from __future__ import annotations
 from uuid import UUID
 
 from django.db import transaction
-from django.db.models import F, Subquery, Window
+from django.db.models import Exists, F, OuterRef, Subquery, Window
 from django.db.models.functions import RowNumber
 from django.utils import timezone
 
-from apps.knowledge_graph.models import CollectionGraphProjection, GraphArtifact
+from apps.knowledge_graph.models import (
+    CollectionGraphMembershipState,
+    CollectionGraphProjection,
+    GraphArtifact,
+)
 
 from .generation_audit import (
     audit_projection_generation as _generation_audit,
@@ -24,7 +28,10 @@ from .runtime import (
     postgres_projection_repository,
     projection_identifier_codec,
 )
-from .state_repository import FunctionProjectionStateRepository
+from .state_repository import (
+    FunctionProjectionStateRepository,
+    StaleProjectionAuthority,
+)
 
 _MAX_PAGE, _ALIASES = 5_000, ProjectionDatabaseAliases()
 
@@ -91,6 +98,12 @@ def _active_artifact_page(
     *, after_id: int, page_size: int, collection_id: int | None = None
 ):
     query = GraphArtifact.objects.using(_ALIASES.source).filter(
+        Exists(
+            CollectionGraphMembershipState.objects.filter(
+                collection_id=OuterRef("collection_scope_id"),
+                active_artifact_id=OuterRef("pk"),
+            )
+        ),
         pk__gt=after_id,
         scope_type="collection",
         status="active",
@@ -174,12 +187,18 @@ def reconcile_graph_projections(
                 replayed += 1
                 drift += int(reason in {"authority_drift", "checksum_drift"})
                 if not dry_run:
-                    _replay_projection(
-                        row=row,
-                        collection_id=active_collection_id,
-                        artifact_id=artifact_id,
-                        codec=codec,
-                    )
+                    try:
+                        _replay_projection(
+                            row=row,
+                            collection_id=active_collection_id,
+                            artifact_id=artifact_id,
+                            codec=codec,
+                        )
+                    except StaleProjectionAuthority:
+                        # Membership may change after the source page is read.
+                        # The state transaction has rolled back; continue only
+                        # for this specific rejection from the locked function.
+                        continue
                     enqueued += 1
         after = page[-1][1]
         if len(page) < size:

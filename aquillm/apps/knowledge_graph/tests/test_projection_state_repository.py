@@ -9,6 +9,25 @@ import pytest
 from apps.knowledge_graph.projection import state_repository
 
 
+def test_replay_does_not_reclassify_state_function_errors(monkeypatch):
+    repository = state_repository.FunctionProjectionStateRepository()
+    failure = RuntimeError("state backend failed")
+
+    def broken_state(*_args):
+        raise failure
+
+    monkeypatch.setattr(repository, "_one", broken_state)
+    with pytest.raises(RuntimeError) as caught:
+        repository.replay(
+            projection_id=None,
+            collection_id=1,
+            artifact_id=11,
+            versions=("collection-graph-v1", "projection-v1", "key-v1"),
+            now=datetime(2026, 8, 20, tzinfo=UTC),
+        )
+    assert caught.value is failure
+
+
 def test_stale_ready_validation_never_reads_source_or_calls_state(monkeypatch) -> None:
     class ForbiddenQuery:
         def using(self, _alias):

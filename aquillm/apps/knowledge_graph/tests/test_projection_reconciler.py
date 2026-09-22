@@ -248,7 +248,10 @@ def test_project_generation_does_not_swallow_transient_failure_recording(monkeyp
     assert "credential" not in repr(captured.value)
 
 
-def test_reconcile_handles_empty_store_drift_and_newer_artifact_in_pages(monkeypatch):
+@pytest.mark.parametrize("unexpected_failure", [False, True])
+def test_reconcile_handles_empty_store_drift_and_newer_artifact_in_pages(
+    monkeypatch, unexpected_failure
+):
     pages = [((1, 11), (2, 22)), ((3, 33),), ()]
     monkeypatch.setattr(
         reconciler, "_active_artifact_page", lambda **_kwargs: pages.pop(0)
@@ -268,14 +271,16 @@ def test_reconcile_handles_empty_store_drift_and_newer_artifact_in_pages(monkeyp
     monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
     monkeypatch.setattr(reconciler, "_memgraph_repository", lambda: object())
     enqueued = []
-    monkeypatch.setattr(
-        reconciler,
-        "enqueue_collection_projection_locked",
-        lambda **kwargs: enqueued.append(
-            (kwargs["collection_id"], kwargs["artifact_id"])
-        ),
-    )
+    def enqueue(**kwargs):
+        if unexpected_failure:
+            raise RuntimeError("state backend failed")
+        enqueued.append((kwargs["collection_id"], kwargs["artifact_id"]))
 
+    monkeypatch.setattr(reconciler, "enqueue_collection_projection_locked", enqueue)
+    if unexpected_failure:
+        with pytest.raises(RuntimeError, match="state backend failed"):
+            reconciler.reconcile_graph_projections(page_size=2, dry_run=False)
+        return
     summary = reconciler.reconcile_graph_projections(page_size=2, dry_run=False)
 
     assert summary.examined_count == 3

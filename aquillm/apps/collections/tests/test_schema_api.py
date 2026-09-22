@@ -741,6 +741,49 @@ def test_validation_and_publish_use_exact_draft_identity(client, schema_users):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("limit", ["entity_count", "schema_bytes"])
+def test_publish_rejects_schema_exceeding_query_transport_limits(
+    client, schema_users, limit
+):
+    collection, _viewer, _editor, manager = schema_users
+    definitions = _definitions()
+    count = 65 if limit == "entity_count" else 35
+    while len(definitions["entities"]) < count:
+        row = _entity(f"extra_{len(definitions['entities'])}")
+        if limit == "schema_bytes":
+            row["values"]["description"] = chr(0x1F600) * 512
+        definitions["entities"].append(row)
+    draft = CollectionSchemaDraft.objects.create(
+        collection=collection, definitions=definitions, last_editor=manager
+    )
+    client.force_login(manager)
+    validation = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_validate", kwargs={"col_id": collection.pk}),
+        body={"draft_id": str(draft.pk), "revision": draft.revision},
+    )
+    assert validation.status_code == 200
+    result = validation.json()
+    assert result["issues"][0]["code"] == "ontology_invalid"
+    published = _request(
+        client,
+        "post",
+        reverse("api_collection_schema_publish", kwargs={"col_id": collection.pk}),
+        body={
+            "draft_id": str(draft.pk),
+            "revision": draft.revision,
+            "candidate_checksum": result["identity"]["candidate_checksum"],
+            "validation_result_id": result["identity"]["result_id"],
+        },
+        revision=draft.revision,
+    )
+    assert published.status_code == 422
+    assert published.json()["error"] == "validation_failed"
+    assert not CollectionSchemaVersion.objects.filter(collection=collection).exists()
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     ("body_revision", "header_revision", "error"),
     [

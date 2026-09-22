@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
 import time
@@ -10,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from lib.knowledge_graph.query_extractor import service
 from lib.knowledge_graph.query_extractor.config import load_query_extractor_settings
@@ -172,7 +174,7 @@ async def test_service_enforces_body_and_contract_caps_without_echoing_payload()
 ):
     oversized = await _call(
         path="/v1/extract",
-        body=b"secret-canary" * 3_000,
+        body=b"secret-canary" * (_settings().max_request_body_bytes // 13 + 1),
         authorization=b"Bearer private-token",
     )
     assert oversized[0]["status"] == 413
@@ -297,3 +299,222 @@ def test_importing_service_does_not_import_ml_runtime() -> None:
         check=False,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def _custom_ontology(version="0.0.1+collection.223"):
+    from apps.knowledge_graph.services.ontology import load_ontology_yaml
+
+    return load_ontology_yaml(
+        yaml.safe_dump(
+            {
+                "version": version,
+                "entity_types": [
+                    {
+                        "name": "audit_entity",
+                        "description": "Audit entity.",
+                        "aliases": [],
+                        "default_retrieval_weight": 1.0,
+                        "default_suppression_policy": "never",
+                        "default_suppression_threshold": 0.0,
+                    }
+                ],
+                "relations": [
+                    {
+                        "name": "audit_related_to",
+                        "description": "Audit relation.",
+                        "direction": "directed",
+                        "allowed_head_types": ["audit_entity"],
+                        "allowed_tail_types": ["audit_entity"],
+                    }
+                ],
+            }
+        )
+    )
+
+
+def _custom_request(ontology):
+    payload = json.loads(_request())
+    payload["ontology_checksum"] = ontology.checksum
+    payload["ontology_definition"] = yaml.safe_load(ontology.canonical_yaml)
+    return json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+
+
+def test_custom_ontology_is_request_local_and_response_binds_its_checksum(monkeypatch):
+    seen = []
+
+    class CustomBackend:
+        def extract_batch(self, texts, *, ontology):
+            seen.append(ontology.checksum)
+            return (
+                ExtractionBatchResult(
+                    entities=(EntityCandidate("audit_entity", EMOJI, 1, 2, 0.75),),
+                    relations=(),
+                    diagnostics=(),
+                ),
+            )
+
+    pinned = service.QueryExtractorRuntime(
+        settings=_settings(),
+        ontology=SimpleNamespace(checksum=DIGEST),
+        backend=CustomBackend(),
+    )
+    monkeypatch.setattr(service, "_get_runtime", lambda *_args: pinned)
+    definitions = (_custom_ontology(), _custom_ontology("0.0.2+collection.224"))
+    for definition in definitions:
+        sent = asyncio.run(
+            _call(
+                path="/v1/extract",
+                body=_custom_request(definition),
+                authorization=b"Bearer private-token",
+            )
+        )
+        assert sent[0]["status"] == 200
+        response = parse_query_extraction_response(sent[1]["body"])
+        assert response.provenance.ontology_checksum == definition.checksum
+        assert response.spans[0].ontology_type == "audit_entity"
+        assert pinned.ontology.checksum == DIGEST
+    assert seen == [definition.checksum for definition in definitions]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "checksum",
+        "name",
+        "endpoint",
+        "number",
+        "extra",
+        "count",
+        "description",
+    ],
+)
+def test_invalid_dynamic_ontology_never_reaches_provider(monkeypatch, mutation):
+    body = json.loads(_custom_request(_custom_ontology()))
+    definition = body["ontology_definition"]
+    if mutation == "checksum":
+        body["ontology_checksum"] = "f" * 64
+    elif mutation == "name":
+        definition["entity_types"][0]["name"] = "entities"
+    elif mutation == "endpoint":
+        definition["relations"][0]["allowed_head_types"] = ["foreign"]
+    elif mutation == "number":
+        definition["entity_types"][0]["default_retrieval_weight"] = True
+    elif mutation == "extra":
+        definition["private_metadata"] = "not_allowed"
+    elif mutation == "count":
+        definition["entity_types"] *= 65
+    else:
+        definition["entity_types"][0]["description"] = "x" * 513
+    calls = []
+
+    class NeverBackend:
+        def extract_batch(self, *args, **kwargs):
+            calls.append(True)
+            raise AssertionError("invalid definition reached provider")
+
+    pinned = service.QueryExtractorRuntime(
+        settings=_settings(),
+        ontology=SimpleNamespace(checksum=DIGEST),
+        backend=NeverBackend(),
+    )
+    monkeypatch.setattr(service, "_get_runtime", lambda *_args: pinned)
+    sent = asyncio.run(
+        _call(
+            path="/v1/extract",
+            body=json.dumps(
+                body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            authorization=b"Bearer private-token",
+        )
+    )
+    assert sent[0]["status"] == 422
+    assert calls == []
+
+
+def test_custom_ontology_requires_authentication():
+    sent = asyncio.run(
+        _call(path="/v1/extract", body=_custom_request(_custom_ontology()))
+    )
+    assert sent[0]["status"] == 401
+
+
+@pytest.mark.parametrize("kind", ["checksum", "oversized", "caps"])
+def test_invalid_authenticated_request_does_not_initialize_backend(monkeypatch, kind):
+    calls = []
+
+    def runtime_loader(*_args):
+        calls.append(True)
+        raise AssertionError("invalid request initialized backend")
+
+    monkeypatch.setattr(service, "_get_runtime", runtime_loader)
+    payload = json.loads(_custom_request(_custom_ontology()))
+    if kind == "checksum":
+        payload["ontology_checksum"] = "f" * 64
+    else:
+        payload["max_spans"] = 3
+    body = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    if kind == "oversized":
+        body = b"x" * (_settings().max_request_body_bytes + 1)
+    sent = asyncio.run(
+        _call(path="/v1/extract", body=body, authorization=b"Bearer private-token")
+    )
+    assert sent[0]["status"] == (413 if kind == "oversized" else 422)
+    assert calls == []
+
+
+def test_real_client_and_service_agree_on_custom_schema_provenance(monkeypatch):
+    from lib.knowledge_graph.query_extractor.client import (
+        QueryExtractorClient,
+        QueryExtractorHTTPResponse,
+    )
+
+    ontology = _custom_ontology()
+
+    class CustomBackend:
+        def extract_batch(self, texts, *, ontology):
+            assert set(ontology.entity_types) == {"audit_entity"}
+            return (
+                ExtractionBatchResult(
+                    entities=(EntityCandidate("audit_entity", EMOJI, 1, 2, 0.75),),
+                    relations=(),
+                    diagnostics=(),
+                ),
+            )
+
+    pinned = service.QueryExtractorRuntime(
+        settings=_settings(),
+        ontology=SimpleNamespace(checksum=DIGEST),
+        backend=CustomBackend(),
+    )
+    monkeypatch.setattr(service, "_get_runtime", lambda *_args: pinned)
+
+    def request_once(**kwargs):
+        assert kwargs["url"] == "http://extractor:8080/v1/extract"
+        sent = asyncio.run(
+            _call(
+                path="/v1/extract",
+                body=kwargs["body"],
+                authorization=kwargs["headers"]["Authorization"].encode(),
+            )
+        )
+        return QueryExtractorHTTPResponse(sent[0]["status"], sent[1]["body"])
+
+    client = QueryExtractorClient(
+        replace(
+            _settings(),
+            ontology_checksum=ontology.checksum,
+            url="http://extractor:8080",
+        ),
+        request_once=request_once,
+    )
+    response = client.extract(
+        query=f"A{EMOJI}B",
+        ontology=ontology,
+        deadline=time.monotonic() + 1,
+    )
+    assert response.provenance.ontology_checksum == ontology.checksum
+    assert response.spans[0].ontology_type == "audit_entity"

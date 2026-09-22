@@ -50,6 +50,14 @@ scheduled repair. A running beat process alone does not establish this.
 
 ## Required development checks
 
+When upgrading the query extractor protocol, start the compatible extractor
+service before the updated web client. Existing checksum-only clients remain
+compatible. Updated clients send a bounded canonical definition for the selected
+collection ontology and verify response provenance. Draft publication enforces
+the same definition bounds; historical oversized ontologies must be reviewed and
+edited rather than silently truncated. Warm the extractor with the dedicated
+fixture before evaluating steady-state query latency.
+
 Use a dedicated collection and disposable documents belonging to test accounts.
 Do not run destructive probes against end-user data.
 

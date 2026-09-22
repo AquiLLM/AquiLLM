@@ -77,3 +77,28 @@
 - [ ] Pull the pushed development revision, apply needed migrations/builds, and restart affected development services without printing environment values.
 - [ ] Run live schema publication, build recovery, graph identity/traversal, permission revocation, and representative question/answer tests on development-only fixtures.
 - [ ] Record actual pass/fail evidence and any remaining gates. End-user readiness is conditional on these live checks passing.
+
+## Live integration follow-up: custom schema query extraction
+
+The development run exposed additional connections absent from isolated tests:
+web's required read-only projection source connection was blanked; direct ontology
+selection counted unrelated active collection schemas; the client posted to the
+extractor's service origin; and the extractor protocol carried only the deployment
+ontology checksum, preventing direct queries against published custom schemas.
+The connection and exact ontology-selection fixes have already been committed,
+pulled, and verified on development.
+
+The protocol repair adds an optional canonical ontology definition to the existing
+authenticated request. Legacy checksum-only requests remain supported. Validate
+the full definition and recomputed checksum before loading the backend, with a
+64 KiB definition cap, 64 entity types, 128 relations, bounded aliases/descriptions,
+and a 128 KiB total request cap. Inference receives immutable request-local schema
+state; model/build/schema/span provenance checks remain. The client accepts the
+documented service-origin URL by selecting `/v1/extract` when no path is provided.
+Deploy the compatible extractor service before the updated client.
+
+- [ ] Verify tampering, malformed names/endpoints, oversized input, legacy requests,
+  schema isolation between requests, and checksum parity with persisted ontologies.
+- [ ] Independently review the protocol and resolve findings before committing.
+- [ ] Commit/push, pull/rebuild, and query both the default-schema fixture and the
+  actually generated/published collection schema through direct and extended paths.

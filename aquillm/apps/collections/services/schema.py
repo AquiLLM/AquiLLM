@@ -38,6 +38,7 @@ CONSTRAINTS = {
     },
     "relation_fields": {
         "name": _NAME_CONSTRAINT,
+        "description": {"max_length": 512},
         "direction": {"allowed_values": ["directed", "undirected"]},
     },
 }
@@ -196,7 +197,10 @@ def _editor_definitions(definitions: dict[str, Any]) -> dict[str, list[dict]]:
     """Derive truthful editor capabilities without mutating immutable snapshots."""
 
     canonical = canonicalize_definitions(definitions)
-    for kind, rows in (("entity", canonical["entities"]), ("relation", canonical["relations"])):
+    for kind, rows in (
+        ("entity", canonical["entities"]),
+        ("relation", canonical["relations"]),
+    ):
         for row in rows:
             row["capabilities"] = _capabilities(kind)
     return canonical
@@ -408,13 +412,17 @@ def validate_draft(collection: Collection, draft_id, revision: int) -> dict[str,
     issues = []
     try:
         from apps.knowledge_graph.services.ontology import load_ontology_yaml
+        from lib.knowledge_graph.query_extractor.ontology_payload import (
+            ontology_definition_payload,
+        )
 
-        load_ontology_yaml(
+        definition = load_ontology_yaml(
             yaml.safe_dump(
                 _ontology_document(collection.pk, _next_version(collection), candidate),
                 sort_keys=True,
             )
         )
+        ontology_definition_payload(definition)
     except ValueError as exc:
         issues.append(
             {

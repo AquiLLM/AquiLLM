@@ -22,6 +22,7 @@ from .contracts import (
     canonical_query_extraction_response_bytes,
     parse_query_extraction_request,
 )
+from .ontology_payload import load_ontology_definition
 
 _JSON_HEADERS = [(b"content-type", b"application/json")]
 _inference_slots = asyncio.BoundedSemaphore(1)
@@ -201,12 +202,13 @@ def _release_worker(task: asyncio.Task[object], slots: asyncio.BoundedSemaphore)
     slots.release()
 
 
-async def _extract_batch(runtime: QueryExtractorRuntime, query: str, timeout_ms: int):
+async def _extract_batch(runtime: QueryExtractorRuntime, query: str, timeout_ms: int, *, ontology=None):
     slots = _inference_slots
     if slots.locked():
         raise _InferenceOverloaded
     await slots.acquire()
-    worker = asyncio.create_task(asyncio.to_thread(runtime.backend.extract_batch, (query,), ontology=runtime.ontology))  # type: ignore[union-attr]
+    selected = runtime.ontology if ontology is None else ontology
+    worker = asyncio.create_task(asyncio.to_thread(runtime.backend.extract_batch, (query,), ontology=selected))  # type: ignore[union-attr]
     deferred_release = False
     try:
         async with asyncio.timeout(timeout_ms / 1000.0):
@@ -236,13 +238,6 @@ async def extract_v1(scope, receive, send) -> None:
     if not compare_digest(_authorization(scope), expected_auth):
         await _respond(send, 401, b'{"reason":"extractor_auth"}')
         return
-    try:
-        runtime = _get_runtime(settings)
-        if runtime.settings != settings:
-            raise RuntimeError("runtime configuration drift")
-    except Exception:
-        await _respond(send, 503, b'{"reason":"extractor_provenance"}')
-        return
     body = await _read_body(receive, settings.max_request_body_bytes)
     if body is None:
         await _respond(send, 413, b'{"reason":"request_too_large"}')
@@ -250,17 +245,36 @@ async def extract_v1(scope, receive, send) -> None:
     try:
         request = parse_query_extraction_request(body)
         if (
-            request.ontology_checksum != settings.ontology_checksum
-            or request.max_query_utf8_bytes != settings.max_query_utf8_bytes
+            request.max_query_utf8_bytes != settings.max_query_utf8_bytes
             or request.max_query_code_points != settings.max_query_code_points
             or request.max_spans != settings.max_spans
         ):
             raise ValueError("request provenance or caps mismatch")
-        result = await _extract_batch(runtime, request.query, settings.timeout_ms)
+        if request.ontology_definition is None:
+            if request.ontology_checksum != settings.ontology_checksum:
+                raise ValueError("request ontology provenance mismatch")
+            ontology = None
+        else:
+            ontology = load_ontology_definition(
+                request.ontology_definition, expected_checksum=request.ontology_checksum
+            )
+    except Exception:
+        await _respond(send, 422, b'{"reason":"extractor_provenance"}')
+        return
+    # Authenticate and fully bound/validate the request before loading a model.
+    try:
+        runtime = _get_runtime(settings)
+        if runtime.settings != settings:
+            raise RuntimeError("runtime configuration drift")
+    except Exception:
+        await _respond(send, 503, b'{"reason":"extractor_provenance"}')
+        return
+    try:
+        result = await _extract_batch(runtime, request.query, settings.timeout_ms, ontology=ontology)
         if type(result) is not tuple or len(result) != 1:
             raise ValueError("invalid extraction batch")
         # fmt: off
-        provenance = QueryExtractorProvenanceV1(model_identifier=settings.model_identifier, model_revision=settings.model_revision, schema_version=settings.schema_version, schema_checksum=settings.schema_checksum, ontology_checksum=settings.ontology_checksum, build_hash=settings.build_hash)
+        provenance = QueryExtractorProvenanceV1(model_identifier=settings.model_identifier, model_revision=settings.model_revision, schema_version=settings.schema_version, schema_checksum=settings.schema_checksum, ontology_checksum=request.ontology_checksum, build_hash=settings.build_hash)
         response = QueryExtractionResponseV1(provenance=provenance, query_utf8_bytes=len(request.query.encode()), query_code_points=len(request.query), spans=_canonical_spans(result[0].entities, settings.max_spans))
         # fmt: on
         payload = canonical_query_extraction_response_bytes(response)

@@ -215,6 +215,66 @@ def test_canonical_name_length_boundary_is_accepted():
     assert "x" * 64 in load_ontology_yaml(yaml.safe_dump(document)).relations
 
 
+@pytest.mark.parametrize(
+    "limit",
+    [
+        None,
+        "entity_count",
+        "bytes",
+        "entity_description",
+        "relation_description",
+        "alias_length",
+        "alias_count",
+    ],
+)
+def test_query_transport_limits_are_structured_before_publication(monkeypatch, limit):
+    document = _document()
+    if limit in {"entity_count", "bytes"}:
+        count = 65 if limit == "entity_count" else 35
+        while len(document["entity_types"]) < count:
+            row = deepcopy(document["entity_types"][0])
+            row.update(name=f"extra_{len(document['entity_types'])}", aliases=[])
+            if limit == "bytes":
+                row["description"] = chr(0x1F600) * 512
+            document["entity_types"].append(row)
+    elif limit == "entity_description":
+        document["entity_types"][0]["description"] = "x" * 513
+    elif limit == "relation_description":
+        document["relations"][0]["description"] = "x" * 513
+    elif limit == "alias_length":
+        document["entity_types"][0]["aliases"] = ["a" * 129]
+    elif limit == "alias_count":
+        document["entity_types"][0]["aliases"] = [
+            f"alias{index}" for index in range(33)
+        ]
+    collection = SimpleNamespace(pk=1)
+    draft = SimpleNamespace(
+        pk=uuid.uuid4(),
+        collection=collection,
+        revision=1,
+        base_version=None,
+        definitions={
+            "entities": [
+                {"key": row["name"], "values": row} for row in document["entity_types"]
+            ],
+            "relations": [
+                {"key": row["name"], "values": row} for row in document["relations"]
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        schema, "CollectionSchemaDraft", SimpleNamespace(objects=Rows([draft]))
+    )
+    monkeypatch.setattr(schema, "_next_version", lambda _: 1)
+    result = schema.validate_draft(collection, draft.pk, 1)
+    if limit is None:
+        assert result["issues"] == []
+    else:
+        assert result["issues"]
+        assert result["issues"][0]["code"] == "ontology_invalid"
+        assert result["issues"][0]["severity"] == "error"
+
+
 @pytest.mark.parametrize("method", ["put", "delete"])
 def test_definition_mutations_require_draft_uuid(monkeypatch, method):
     monkeypatch.setattr(api, "_collection", lambda _: object())

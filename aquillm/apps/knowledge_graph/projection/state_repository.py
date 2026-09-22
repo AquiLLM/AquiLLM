@@ -31,6 +31,10 @@ _FUNCTIONS = {
 }
 
 
+class StaleProjectionAuthority(RuntimeError):
+    """The locked replay function rejected authority that is no longer current."""
+
+
 @dataclass(frozen=True, slots=True)
 class StateLeaseV1:
     projection_id: UUID
@@ -186,8 +190,8 @@ class FunctionProjectionStateRepository:
 
     def replay(self, *, projection_id: UUID | None, collection_id: int, artifact_id: int, versions: tuple[str, str, str], now: datetime) -> UUID:
         row = self._one("replay", (projection_id, uuid4(), collection_id, artifact_id, *versions, _instant(now)))
-        if row is None: raise RuntimeError("projection replay source is stale")
+        if row is None: raise StaleProjectionAuthority("projection replay source is stale")
         return row["projection_id"]
 
 
-__all__ = ["FunctionProjectionStateRepository"]
+__all__ = ["FunctionProjectionStateRepository", "StaleProjectionAuthority"]

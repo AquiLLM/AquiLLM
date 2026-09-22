@@ -18,7 +18,7 @@ QUERY_EXTRACTION_RESPONSE_SCHEMA_CHECKSUM = (
 MAX_QUERY_UTF8_BYTES = 16_384
 MAX_QUERY_CODE_POINTS = 8_192
 MAX_QUERY_SPANS = 128
-MAX_QUERY_REQUEST_BODY_BYTES = 32_768
+MAX_QUERY_REQUEST_BODY_BYTES = 131_072
 MAX_QUERY_RESPONSE_BODY_BYTES = 131_072
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
@@ -56,6 +56,7 @@ class QueryExtractionRequestV1:
     max_query_utf8_bytes: int
     max_query_code_points: int
     max_spans: int
+    ontology_definition: dict[str, object] | None = None
     def __post_init__(self) -> None:
         if type(self.schema_version) is not str:
             raise TypeError("schema_version must be an exact str")
@@ -70,6 +71,12 @@ class QueryExtractionRequestV1:
         if any(ord(character) < 32 or ord(character) == 127 for character in self.query):
             raise ValueError("query contains a forbidden C0/DEL control character")
         _digest(self.ontology_checksum, "ontology_checksum")
+        if self.ontology_definition is not None:
+            from .ontology_payload import load_ontology_definition
+
+            load_ontology_definition(
+                self.ontology_definition, expected_checksum=self.ontology_checksum
+            )
         _int(self.max_query_utf8_bytes, "max_query_utf8_bytes", 1, MAX_QUERY_UTF8_BYTES)
         _int(
             self.max_query_code_points,
@@ -159,8 +166,7 @@ def _canonical(payload: object) -> bytes:
 def canonical_query_extraction_request_bytes(value: QueryExtractionRequestV1) -> bytes:
     if type(value) is not QueryExtractionRequestV1:
         raise TypeError("value must be an exact QueryExtractionRequestV1")
-    return _canonical(
-        {
+    payload = {
             "max_query_code_points": value.max_query_code_points,
             "max_query_utf8_bytes": value.max_query_utf8_bytes,
             "max_spans": value.max_spans,
@@ -168,7 +174,14 @@ def canonical_query_extraction_request_bytes(value: QueryExtractionRequestV1) ->
             "query": value.query,
             "schema_version": value.schema_version,
         }
-    )
+    if value.ontology_definition is not None:
+        from .ontology_payload import load_ontology_definition
+
+        validated = load_ontology_definition(
+            value.ontology_definition, expected_checksum=value.ontology_checksum
+        )
+        payload["ontology_definition"] = json.loads(validated.canonical_json)
+    return _canonical(payload)
 def canonical_query_extraction_response_bytes(
     value: QueryExtractionResponseV1,
 ) -> bytes:
@@ -202,7 +215,7 @@ def canonical_query_extraction_response_bytes(
             "spans": spans,
         }
     )
-def _payload(data: bytes, fields: frozenset[str], maximum: int) -> dict[str, object]:
+def _payload(data: bytes, fields: frozenset[str], maximum: int, *, optional: frozenset[str] = frozenset()) -> dict[str, object]:
     if type(data) is not bytes:
         raise TypeError("wire data must be exact bytes")
     if len(data) > maximum:
@@ -211,7 +224,7 @@ def _payload(data: bytes, fields: frozenset[str], maximum: int) -> dict[str, obj
         value = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("wire data must be valid JSON") from error
-    if type(value) is not dict or set(value) != fields:
+    if type(value) is not dict or not fields <= set(value) <= fields | optional:
         raise ValueError("wire object has an invalid field set")
     try:
         canonical = _canonical(value)
@@ -234,7 +247,10 @@ def parse_query_extraction_request(data: bytes) -> QueryExtractionRequestV1:
             }
         ),
         MAX_QUERY_REQUEST_BODY_BYTES,
+        optional=frozenset({"ontology_definition"}),
     )
+    if "ontology_definition" in value and type(value["ontology_definition"]) is not dict:
+        raise ValueError("ontology_definition must be an exact object when present")
     return QueryExtractionRequestV1(**value)  # type: ignore[arg-type]
 def parse_query_extraction_response(data: bytes) -> QueryExtractionResponseV1:
     value = _payload(

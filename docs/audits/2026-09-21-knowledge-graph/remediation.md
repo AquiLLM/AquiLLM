@@ -64,6 +64,26 @@ artifacts. Eight regression cases retain mixed, stale, checksum, and invalid-YAM
 rejection; the focused ontology/runtime/readiness suite passed 25 tests and an
 independent review found no remaining issue in this change.
 
+Live custom-schema queries exposed two additional extractor integration gaps.
+The client now resolves a configured service origin to `/v1/extract`. Requests can
+carry the selected collection's canonical ontology definition, bounded to 64 KiB,
+64 entity types, 128 relations, 32 aliases per type, and 512-character descriptions.
+The authenticated service validates the definition and its checksum before loading
+the backend, then uses immutable request-local schema state. Legacy checksum-only
+requests remain supported; response model/build/schema/span provenance checks are
+unchanged. Draft validation and publication enforce the same transport bounds, so
+oversized manual edits receive structured errors before activation.
+
+The focused protocol/publication suite passed 121 tests. PostgreSQL schema API and
+audit regressions passed 109 tests, including rejection of oversized publication.
+These follow-up counts overlap the earlier combined run and are not additive.
+
+Scheduled live reconciliation also encountered a historical active artifact with
+no current membership record. Selection now requires matching current membership;
+if membership changes after selection, a specific rejection from the locked state
+function skips that stale scope without aborting later collections. Other errors
+still surface. This preserves the existing projection authority checks.
+
 Known pre-existing checks outside this change: the global frontend typecheck has
 nine errors in unrelated files; a global migration drift check reports existing
 chat/document model drift. The changed schema/KG applications have no pending

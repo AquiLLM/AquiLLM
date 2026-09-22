@@ -1,6 +1,7 @@
 # ruff: noqa: E501,E701,E702
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -130,6 +131,61 @@ def test_client_posts_one_canonical_body_and_reconstructs_code_point_spans() -> 
     )
     assert calls[0]["timeout_seconds"] == pytest.approx(0.05)
     assert reconstruct_entity_texts(query=query, response=response) == (EMOJI,)
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        ("https://extractor.internal", "https://extractor.internal/v1/extract"),
+        ("https://extractor.internal/", "https://extractor.internal/v1/extract"),
+        (
+            "https://extractor.internal/custom/extract",
+            "https://extractor.internal/custom/extract",
+        ),
+    ],
+)
+def test_client_resolves_service_origin_but_preserves_explicit_endpoint(
+    configured, expected
+):
+    calls = []
+    client = QueryExtractorClient(
+        load_query_extractor_settings(_environment(KG_QUERY_EXTRACTOR_URL=configured)),
+        request_once=lambda **kwargs: (
+            calls.append(kwargs) or QueryExtractorHTTPResponse(200, _response("ABC"))
+        ),
+        monotonic=lambda: 1.0,
+    )
+    client.extract(query="ABC", ontology=Ontology(), deadline=2.0)
+    assert calls[0]["url"] == expected
+
+
+def test_client_sends_selected_canonical_definition_with_bound_checksum():
+    from apps.knowledge_graph.services.ontology import load_ontology
+
+    ontology = load_ontology(
+        Path(__file__).resolve().parents[3]
+        / "apps/knowledge_graph/ontologies/research-v1.yaml"
+    )
+    calls = []
+    client = QueryExtractorClient(
+        load_query_extractor_settings(
+            _environment(KG_QUERY_EXTRACTOR_ONTOLOGY_CHECKSUM=ontology.checksum)
+        ),
+        request_once=lambda **kwargs: (
+            calls.append(kwargs)
+            or QueryExtractorHTTPResponse(
+                200, _response("ABC", provenance_checksum=ontology.checksum)
+            )
+        ),
+        monotonic=lambda: 1.0,
+    )
+    client.extract(query="ABC", ontology=ontology, deadline=2.0)
+    payload = json.loads(calls[0]["body"])
+    assert payload["ontology_checksum"] == ontology.checksum
+    assert payload["ontology_definition"]["version"] == ontology.version
+    assert {
+        row["name"] for row in payload["ontology_definition"]["entity_types"]
+    } == set(ontology.entity_types)
 
 
 def test_client_enforces_local_caps_before_io() -> None:

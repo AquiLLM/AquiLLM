@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Protocol
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .config import QueryExtractorSettings
@@ -18,6 +19,7 @@ from .contracts import (
     canonical_query_extraction_request_bytes,
     parse_query_extraction_response,
 )
+from .ontology_payload import ontology_definition_payload
 
 
 class OntologyDefinition(Protocol):
@@ -112,6 +114,7 @@ class QueryExtractorClient:
                 or ontology.checksum != settings.ontology_checksum
             ):
                 raise ValueError("runtime ontology differs from configured ontology")
+            definition = ontology_definition_payload(ontology)
         except (AttributeError, TypeError, ValueError):
             raise QueryExtractorClientError(
                 QueryExtractorFailureReason.EXTRACTOR_PROVENANCE
@@ -123,6 +126,7 @@ class QueryExtractorClient:
             max_query_utf8_bytes=settings.max_query_utf8_bytes,
             max_query_code_points=settings.max_query_code_points,
             max_spans=settings.max_spans,
+            ontology_definition=definition,
         )
         body = canonical_query_extraction_request_bytes(request)
         if len(body) > settings.max_request_body_bytes:
@@ -134,8 +138,14 @@ class QueryExtractorClient:
             )
         timeout = min(remaining, settings.timeout_ms / 1000.0)
         try:
+            endpoint = urlsplit(settings.url)
+            url = (
+                urlunsplit(endpoint._replace(path="/v1/extract"))
+                if endpoint.path in {"", "/"}
+                else settings.url
+            )
             wire = self._request_once(
-                url=settings.url,
+                url=url,
                 headers={
                     "Authorization": (
                         "Bearer " + settings.bearer_token.get_secret_value()
