@@ -36,7 +36,7 @@ MAX_COLLECTION_ENTITIES = 50_000
 MAX_COLLECTION_DOCUMENT_INPUTS = 10_000
 MAX_COLLECTION_MEMBERSHIPS = 250_000
 MAX_RELATIONS = 250_000
-MAX_COLLECTION_LINKS = 250_000
+MAX_COLLECTION_LINKS = 850_000
 MAX_TEXT_CHARACTERS = 8_192
 DEFAULT_EMBEDDING_BATCH_SIZE = 64
 _QUERY_PREDICATE_BATCH_SIZE = 5_000
@@ -948,7 +948,8 @@ class CollectionResolutionResult:
             type(value) is not int or value <= 0 for value in self.source_entity_ids
         ):
             raise ValueError("result source entity IDs must be an exact positive tuple")
-        if tuple(sorted(set(self.source_entity_ids))) != self.source_entity_ids:
+        source_entity_id_set = set(self.source_entity_ids)
+        if tuple(sorted(source_entity_id_set)) != self.source_entity_ids:
             raise ValueError("result source entity IDs must be sorted and unique")
         if type(self.clusters) is not tuple or any(
             type(value) is not CollectionEntityCluster for value in self.clusters
@@ -977,8 +978,8 @@ class CollectionResolutionResult:
         for decision in self.decisions:
             decision.__post_init__()
             if (
-                decision.left_entity_id not in self.source_entity_ids
-                or decision.right_entity_id not in self.source_entity_ids
+                decision.left_entity_id not in source_entity_id_set
+                or decision.right_entity_id not in source_entity_id_set
             ):
                 raise ValueError("result decision endpoint is outside source entities")
         pairs = tuple(

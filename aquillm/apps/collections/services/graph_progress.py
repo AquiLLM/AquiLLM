@@ -21,11 +21,7 @@ PUBLIC_DOCUMENT_FAILURE_CODES = DOCUMENT_CAPACITY_FAILURE_CODES | frozenset(
 )
 
 
-def document_graph_progress(collection_id: int) -> dict:
-    progress = dict.fromkeys(
-        ("total", "ingesting", "pending", "building", "active", "failed"), 0
-    )
-    failures = Counter()
+def selected_graph_ontology_identity(collection_id: int) -> dict | None:
     ontology_rows = OntologyVersion.objects.filter(kind="graph", status="active")
     selected = list(
         ontology_rows.filter(metadata__collection_id=collection_id).values(
@@ -38,6 +34,15 @@ def document_graph_progress(collection_id: int) -> dict:
                 "version", "checksum"
             )[:2]
         )
+    return selected[0] if len(selected) == 1 else None
+
+
+def document_graph_progress(collection_id: int) -> dict:
+    progress = dict.fromkeys(
+        ("total", "ingesting", "pending", "building", "active", "failed"), 0
+    )
+    failures = Counter()
+    selected = selected_graph_ontology_identity(collection_id)
     latest_error = (
         GraphBuildRun.objects.filter(
             artifact_id=OuterRef("pk"),
@@ -52,10 +57,10 @@ def document_graph_progress(collection_id: int) -> dict:
         source_hash=OuterRef("full_text_hash"),
         evaluation_only=False,
     ).order_by("-build_generation", "-pk")
-    if len(selected) == 1:
+    if selected is not None:
         artifacts = artifacts.filter(
-            ontology_version=selected[0]["version"],
-            ontology_checksum=selected[0]["checksum"],
+            ontology_version=selected["version"],
+            ontology_checksum=selected["checksum"],
         )
     artifacts = artifacts.annotate(latest_error=Subquery(latest_error))
     for model in DESCENDED_FROM_DOCUMENT:

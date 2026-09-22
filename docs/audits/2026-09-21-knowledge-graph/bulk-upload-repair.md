@@ -36,6 +36,12 @@ requests. Polling also stopped after an unchanged building response.
 - Collection graph status includes collection-scoped automatic build activity
   and safe failure categories. Polling continues through unchanged pending or
   building responses. Activity counts do not authorize graph retrieval.
+  A current collection retry also takes precedence over a historical terminal
+  rebuild request, after verifying production scope, source manifest, ontology
+  and live lease. Matching automatic collection failures are shown explicitly;
+  the earlier request's audit outcome is preserved.
+  Twenty PostgreSQL API/progress regressions pass, including newer queued
+  requests, source and ontology changes, evaluation runs and invalid leases.
 - Recovery suppresses inference for unchanged permanent extraction-capacity
   failures while permitting changed build identities and explicit rebuilds.
   Preflight capacity failures are counted per scope so other scopes continue.
@@ -60,6 +66,17 @@ requests. Polling also stopped after an unchanged building response.
   float32 extremes and threshold-adjacent inputs), full-result/checksum parity
   on 12 mixed fixtures, identical invalid-vector rejection, and immutable
   snapshots despite later mutation of the input list.
+- Collection resolution and assembly now share an 850,000-link ceiling: up to
+  50,000 source entities, each with one automatic assignment and at most 16
+  retained alternatives under the default configuration. Both caps participate
+  in collection build identity; document identities are unchanged. Projection
+  reads automatic memberships, so its detail limits and restricted SQL chunk
+  fence do not need expansion. Custom configurations that exceed the complete
+  link budget still fail explicitly. Result validation also reuses a source-ID
+  set for decision endpoint checks while preserving the sorted source tuple.
+  The focused resolver and assembly suites passed 90 tests with one expected
+  database skip; targeted Ruff passed. Independent downstream review confirmed
+  that projection limits and SQL permissions remain appropriate.
 
 ## Verification and limits
 
@@ -123,6 +140,15 @@ and embedding-validation stubs took 57.718 seconds at 10,000 entities and 106.52
 seconds at 20,000; this isolates resolver work and is not production inference
 or end-user latency evidence.
 
+The validated-vector optimization was then pushed as
+`fa1d24a2dfe18026b256c3993378317e291a6d06`. The host fetched the reviewed
+revision, let the existing worker exit cleanly, fast-forwarded to that exact
+revision, rebuilt/restarted the extraction worker and verified its queue
+subscription. The remote checkout was clean. On real 1,024-dimensional vectors,
+the unchanged public cosine path took 6.141 seconds for 10,000 comparisons;
+the prepared path took 0.431 seconds with exactly matching scores. This 14.3x
+comparison-speed measurement does not establish whole-pipeline latency.
+
 The development host applied migration 0011, rebuilt the graph service images,
 and restarted the application and workers. The rebuilt frontend bundle contains
 the new document-progress UI and matches the collected static asset. The web,
@@ -156,3 +182,20 @@ completed with zero terminal failures, covering all 2,168 embedded chunks,
 354 chunks, completed extraction and resolution. The generated draft still
 matches its original identity, revision and modification time. Final collection
 projection and retrieval evidence will be recorded after assembly completes.
+
+The first final collection assembly, still running under the earlier scoring
+path, failed after approximately 30 minutes with `collection_build_failed`.
+The exception class was not preserved in the build record; this timing alone
+does not establish a timeout. All completed document artifacts remained active.
+After deploying `fa1d24a2`, the normal `enqueue_current_collection_refresh`
+entry point queued collection assembly against those existing artifacts.
+The original rebuild request retains its historical `partial` outcome; this
+collection-only retry does not rewrite that audit record or republish document
+tasks.
+
+That retry ran from 05:58:53 to 06:09:03 UTC on September 22 and reproduced
+`CollectionResolutionPersistenceError: projected collection link cap exceeded`.
+This confirms the downstream 250,000-link mismatch on the uploaded collection.
+The failed attempt retained all 31 active document artifacts. The extraction
+worker subsequently drained to exit zero while the compatible limit repair was
+tested; no running job was killed.

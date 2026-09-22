@@ -10,10 +10,13 @@ from apps.knowledge_graph.graph import assembly
 
 
 def test_assembly_config_addresses_a_hard_v1_link_cap():
+    from apps.knowledge_graph.resolution.collection import MAX_COLLECTION_LINKS
+
     config = assembly.AssemblyConfig()
 
     assert hasattr(assembly, "ASSEMBLY_V1_MAX_LINKS")
     assert config.max_links == assembly.ASSEMBLY_V1_MAX_LINKS
+    assert config.max_links == MAX_COLLECTION_LINKS == 850_000
     default_checksum = assembly.assembly_config_checksum(config)
     lower_cap_checksum = assembly.assembly_config_checksum(
         replace(config, max_links=config.max_links - 1)

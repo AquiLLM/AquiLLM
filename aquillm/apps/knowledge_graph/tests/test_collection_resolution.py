@@ -319,10 +319,61 @@ def test_semantic_candidate_scoring_reuses_validated_vectors_and_norms(monkeypat
     )
 
     assert result.checksum == (
-        "f463987385eb4681f718c9968d78c62765b441453c2b80363d4d6bebbbd60900"
+        "1f968e3081eb98ea80ca0df87f3d5c449b6cd97bc94743ed9e7147063e084153"
     )
     assert result.audit.embedding_candidate_pair_count == 235
     assert validation_calls <= len(entities)
+
+
+def test_default_link_cap_retains_every_bounded_resolution_alternative():
+    config = CollectionResolutionConfig()
+
+    assert config.max_links == config.max_entities * (
+        config.max_candidates_per_entity + 1
+    )
+    assert config.max_links == 850_000
+
+
+def test_result_endpoint_validation_uses_bounded_membership_index(monkeypatch):
+    entities = tuple(
+        _document_entity(2_000 + offset, f"common validation item {offset:02d}")
+        for offset in range(30)
+    )
+    vectors = {
+        entity.label: _unit_vector(1.0, ((offset % 5) - 2) * 0.1)
+        for offset, entity in enumerate(entities)
+    }
+    session, _backend = _session(vectors)
+    result = resolve_collection_entities(
+        _snapshot(), entities, _ontology(), embedding_session=session
+    )
+    comparisons = 0
+
+    class CountingInt(int):
+        __hash__ = int.__hash__
+
+        def __eq__(self, other):
+            nonlocal comparisons
+            comparisons += 1
+            return int.__eq__(self, other)
+
+    for decision in result.decisions:
+        object.__setattr__(
+            decision, "left_entity_id", CountingInt(decision.left_entity_id)
+        )
+        object.__setattr__(
+            decision, "right_entity_id", CountingInt(decision.right_entity_id)
+        )
+    object.__setattr__(result, "checksum", "")
+    monkeypatch.setattr(
+        collection_resolution.CollectionPairDecision,
+        "__post_init__",
+        lambda _self: None,
+    )
+
+    result.__post_init__()
+
+    assert comparisons <= len(result.decisions) * 15
 
 
 def test_stable_identifier_equality_is_first_tier_and_never_embeds():
