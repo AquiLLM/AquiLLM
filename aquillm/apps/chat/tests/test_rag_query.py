@@ -1,6 +1,8 @@
 """Tests for RAG retrieval query builder (Task 2)."""
 from __future__ import annotations
 
+import pytest
+
 from apps.chat.services.rag_query import build_retrieval_query
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
@@ -186,3 +188,19 @@ def test_simple_question_uses_one_retrieval_query():
         "Explain the dark matter calibration method",
         max_queries=3,
     ) == ["Explain the dark matter calibration method"]
+
+
+@pytest.mark.parametrize(
+    ("max_queries", "expected_count"), ((0, 1), (1, 1), (2, 2), (3, 3), (4, 3))
+)
+def test_multi_part_question_honors_query_limit(max_queries, expected_count):
+    from apps.chat.services.rag_query import build_retrieval_queries
+
+    primary = "Explain the first paper? Compare the methods? Summarize the evidence?"
+    assert build_retrieval_queries(
+        _make_convo(), primary, max_queries=max_queries
+    ) == [
+        primary,
+        "Explain the first paper",
+        "Compare the methods",
+    ][:expected_count]

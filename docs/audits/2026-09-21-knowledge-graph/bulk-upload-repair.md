@@ -557,3 +557,36 @@ cases include 21/40-key unions, oversized and duplicate requests rejected before
 repository reads (including empty input), authorization revoked between batches, and later checksum or
 coordinate corruption. Scoped Ruff passed. Live cold-cache retrieval and cited
 answer verification remain pending the reviewed development deployment.
+
+The batching repair was pushed and deployed as
+d66ee27ab67116635fa40a01eac4187fab3cccb1. The exact source was pulled before
+restarting web and gateway; the private seed budget changed from 64 to 16 with
+all other environment bytes preserved. Both services became healthy. A cold
+gateway-cache production search passed in 7,116 ms overall: direct resolved two
+seeds and returned 12 candidates in 3,478 ms, extended returned 20 from 16 seeds
+in 2,781 ms, and all 32 union chunks materialized. Three graph-materialized
+chunks survived final top-five ranking, all overlapping baseline candidates;
+27 additional graph chunks had entered the candidate pool. This proves real
+execution and safe materialization, not additional final-answer recall.
+
+The published-custom-schema fixture also passed real retrieval after deployment:
+both branches succeeded and one authorized graph chunk materialized and survived
+ranking. Its baseline overlap correctly reports a graph miss. The uploaded
+collection still uses the default ontology; its custom draft remains unpublished.
+
+The initial generated-answer probe reached provider, substantive-body and valid
+citation checks, but its last-search-only branch assertion failed after two
+searches. A separate RAG query-builder defect appended a clause before checking
+a configured one-query limit. Concurrent extraction can trigger the bounded
+extractor's existing overload fallback; the envelope alone does not establish
+that as the observed cause. The two-line query-builder fix now returns the primary
+query immediately at limit one. Root verification passed **20 tests**, including
+limits zero through four and existing retry/follow-up behavior. Production-file
+Ruff passed; the test file retains its pre-existing long-docstring lint finding.
+The probe now preserves per-call scheduler and materializer evidence and requires
+a successful two-branch materialization plus an actual graph-evidence citation,
+independently of later retrieval order. A fresh generated-answer run remains
+required after the query-limit fix is deployed.
+
+The separate root direct-RAG orchestration suite also passed all **20 tests**.
+Independent source/probe/deployment review is clear.
