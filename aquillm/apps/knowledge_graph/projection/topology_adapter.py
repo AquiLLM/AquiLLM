@@ -20,6 +20,10 @@ from .topology_request import decode_topology_request
 from .topology_results import family_response
 from .topology_snapshot import build_projected_topology_snapshot
 
+# Hydrate complete raw inputs before deterministic top-two mention selection.
+# This per-projection source bound is independent of final topology node caps.
+_MAX_MENTION_SOURCE_ROWS_PER_PROJECTION = 4_999
+
 _MANIFEST_CYPHER = (
     "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
     "RETURN g.collection_key AS collection_key, "
@@ -194,7 +198,7 @@ class Neo4jProjectedTopologyQueryAdapter:
                         caps.max_edges,
                         caps.max_edges,
                         caps.max_edges,
-                        caps.max_nodes * 2,
+                        _MAX_MENTION_SOURCE_ROWS_PER_PROJECTION,
                         len(authorized_documents) + 1,
                     ),
                     timeout=self._remaining(deadline),

@@ -101,6 +101,9 @@ def test_gateway_has_only_query_client_authority(path: Path) -> None:
     assert environment["KG_MEMGRAPH_QUERY_USERNAME"]
     assert environment["KG_MEMGRAPH_QUERY_PASSWORD"]
     assert environment["KG_TOPOLOGY_GATEWAY_BEARER_TOKEN"]
+    assert environment["KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES"] == (
+        "${KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES:-4194304}"
+    )
     assert not (
         (PROJECTION_KEYS | PROVIDER_KEYS | {"KG_PROJECTION_IDENTIFIER_HMAC_KEY"})
         & environment.keys()

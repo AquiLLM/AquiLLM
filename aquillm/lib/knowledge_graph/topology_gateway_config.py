@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 
+from .topology_gateway_limits import MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES
+
 GATEWAY_SETTING_KEYS = frozenset(
     {
         "KG_TOPOLOGY_GATEWAY_URL",
@@ -20,8 +22,8 @@ _DEFAULTS = {
     "KG_TOPOLOGY_GATEWAY_URL": "",
     "KG_TOPOLOGY_GATEWAY_BEARER_TOKEN": "",
     "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS": "300",
-    "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": "16384",
-    "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": "1048576",
+    "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": str(MAX_REQUEST_BYTES),
+    "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": str(MAX_RESPONSE_BYTES),
 }
 
 
@@ -158,13 +160,17 @@ def load_topology_gateway_client_settings(
     if required and not url:
         raise _error("KG_TOPOLOGY_GATEWAY_URL", "is required for traversal")
     timeout = _integer(source, "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS", 5_000)
-    request_cap = _integer(source, "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES", 16_384)
-    response_cap = _integer(source, "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES", 1_048_576)
+    request_cap = _integer(
+        source, "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES", MAX_REQUEST_BYTES
+    )
+    response_cap = _integer(
+        source, "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES", MAX_RESPONSE_BYTES
+    )
     if not 10 <= timeout <= 5_000:
         raise _error("KG_TOPOLOGY_GATEWAY_TIMEOUT_MS", "is outside the supported range")
-    if request_cap != 16_384:
+    if request_cap != MAX_REQUEST_BYTES:
         raise _error("KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES", "must match the wire cap")
-    if response_cap != 1_048_576:
+    if response_cap != MAX_RESPONSE_BYTES:
         raise _error(
             "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES", "must match the wire cap"
         )

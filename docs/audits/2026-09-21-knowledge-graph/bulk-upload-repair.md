@@ -486,3 +486,43 @@ deployment of these query-stage repairs.
 The owned stopped projection canary and its detached d745 checkout were removed
 after identity, source, clean-tree and exited-state checks. The main development
 checkout and temporary SSH key were unchanged by that cleanup.
+
+The query-stage repair was committed and deployed as
+`0cf0fcc95a67bb7a67239995cc3b9f5da312a0d5`, with healthy rebuilt web/gateway
+services and a clean checkout. A direct model query then completed all four
+gateway reads, but its extended sibling's valid 64-seed, 31-document request
+contained 24,446 parameter bytes and exceeded the 16,384-byte transport cap
+before HTTP. This was incorrectly reported as a shared backend outage, canceling
+the direct result. The corrected transport admits the existing maximum scope
+within a 4 MiB outer and 3 MiB nested-JSON budget, preserving the 1 MiB response
+bound. Canonical fixtures with 128 generations, 10,000 documents, 64 seeds and
+maximum Unicode/escaped tokens use 4,002,142 parameter bytes plus their envelope.
+The gateway manifest cap now matches the existing 128-generation ready contract.
+The strict wire checksum changes with these limits; old/new peers cannot silently
+mix. Client/server configuration, five Compose defaults and the example settings
+are aligned. Actual outbound size overflow maps to a local result-cap error;
+malformed authority and backend corruption retain shared failure behavior.
+
+Root verification passed **111 gateway/request/config/isolation tests** on the
+frozen changes. A read-only extended-neighborhood diagnostic also found 1,567 raw
+mentions competing for a final two-per-identity selection. Applying the final
+400-mention output limit before selection rejected valid source evidence. A
+diagnostic 4,999-row input limit loaded all 1,567 mentions, with 105 entities, 844
+referenced chunks, 47 relations and 51 relation-evidence rows. Its family reads
+took about 2.26 seconds, exceeding the development gateway's old 1.5-second
+total budget. This diagnostic changed no production configuration or records.
+
+The adapter now gives raw mentions a separate 4,999-row budget per projection,
+then performs its existing deterministic top-two selection. Real Memgraph tests
+prove the best two mentions on a later page survive 1,501 inputs; 5,000 valid
+inputs still fail locally, and a malformed overflow sentinel remains a shared
+schema error. Final node, relation and mention output limits do not increase.
+The development rollout will align overall/branch/gateway timeouts to
+5,000/4,500/4,000 ms within the existing supported settings, preserving 64 extended
+seeds and the separate 300 ms graph transaction limit. Only those four nonsecret
+timeout settings and the request-byte cap change in the private environment;
+other bytes and credentials remain unchanged. All 26 Compose integration checks
+passed, including the five aligned gateway defaults. Independent review is clear.
+Root mention/adapter/isolation verification passed all **15 tests** in 26.24
+seconds. Ruff passed for all changed Python files, whitespace checks passed, and
+the 22 outgoing source/test/example/report files had zero credential findings.

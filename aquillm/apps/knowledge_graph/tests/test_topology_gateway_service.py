@@ -221,7 +221,7 @@ async def test_auth_and_wire_caps_precede_runtime_and_never_echo(
 async def test_family_and_response_caps_are_local_failures(
     runtime, monkeypatch
 ) -> None:
-    body = _request(TopologyQueryName.GENERATION_MANIFESTS, 65)
+    body = _request(TopologyQueryName.GENERATION_MANIFESTS, 129)
     capped = await _call(body=body, headers=_headers(body))
     assert capped[0]["status"] == 422 and runtime.adapter.calls == []
     runtime.adapter.rows = ({"value": "x" * 64},)

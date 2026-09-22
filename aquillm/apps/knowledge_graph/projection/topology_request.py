@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 
 from apps.knowledge_graph.retrieval.topology import contracts as c
+from lib.knowledge_graph.topology_gateway_limits import MAX_PARAMETER_JSON_BYTES
 
 _PARAMETER_KEYS = frozenset(
     {
@@ -26,7 +27,7 @@ _PARAMETER_KEYS = frozenset(
 
 def _json(parameters: Mapping[str, c.TopologyScalar], name: str):
     raw = parameters[name]
-    if type(raw) is not str or len(raw.encode("utf-8")) > 2_000_000:
+    if type(raw) is not str or len(raw.encode("utf-8")) > MAX_PARAMETER_JSON_BYTES:
         raise ValueError(f"{name} must be bounded exact JSON")
     value = json.loads(raw)
     if (

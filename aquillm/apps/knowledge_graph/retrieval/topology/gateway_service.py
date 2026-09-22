@@ -31,7 +31,7 @@ from .gateway_contracts import (
 )
 
 _FAMILY_CAPS: Final = {
-    TopologyQueryName.GENERATION_MANIFESTS: 64,
+    TopologyQueryName.GENERATION_MANIFESTS: 128,
     TopologyQueryName.AUTOMATIC_MEMBERSHIPS: 200,
     TopologyQueryName.RELATION_TOPOLOGY: 1_000,
     TopologyQueryName.EVIDENCE_MENTIONS: 3_400,

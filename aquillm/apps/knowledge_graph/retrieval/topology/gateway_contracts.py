@@ -8,11 +8,15 @@ from math import isfinite
 from types import MappingProxyType
 from typing import Final
 
+from lib.knowledge_graph.topology_gateway_limits import (
+    MAX_PARAMETER_JSON_BYTES,
+    MAX_REQUEST_BYTES,
+    MAX_RESPONSE_BYTES,
+)
+
 from .contracts import TopologyQueryName, TopologyScalar
 
 MAX_RESULT_ROWS: Final = 5_000
-MAX_REQUEST_BYTES: Final = 16_384
-MAX_RESPONSE_BYTES: Final = 1_048_576
 MAX_MAPPING_ITEMS: Final = 512
 INT64_MIN: Final = -(2**63)
 INT64_MAX: Final = 2**63 - 1
@@ -20,6 +24,10 @@ _REQUEST_FIELDS = frozenset({"query", "parameters", "deadline", "max_records"})
 SCHEMA_VERSION: Final = "topology-gateway-v1"
 MALFORMED_REQUEST_STATUS: Final = 400
 OVERSIZED_REQUEST_STATUS: Final = 413
+
+
+class GatewayRequestSizeError(ValueError):
+    """A locally encoded request exceeds the bounded wire resource budget."""
 
 
 class GatewayFailureReason(StrEnum):
@@ -91,23 +99,32 @@ SCHEMA_DESCRIPTOR_V1: Final = (
     ("oversized_request_status", OVERSIZED_REQUEST_STATUS),
     ("max_result_rows", MAX_RESULT_ROWS),
     ("max_request_bytes", MAX_REQUEST_BYTES),
+    ("max_parameter_json_bytes", MAX_PARAMETER_JSON_BYTES),
     ("max_response_bytes", MAX_RESPONSE_BYTES),
     ("max_mapping_items", MAX_MAPPING_ITEMS),
 )
 SCHEMA_CHECKSUM: Final = sha256(_canonical(SCHEMA_DESCRIPTOR_V1)).hexdigest()
 
 
-def _safe_text(value: object, name: str, limit: int) -> None:
+def _safe_text(value: object, name: str, limit: int, *, size_error=ValueError) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact string")
-    if len(value) > limit or any(
+    if len(value) > limit:
+        raise size_error(f"{name} exceeds its text cap")
+    if any(
         ord(char) < 0x20 or ord(char) == 0x7F or 0xD800 <= ord(char) <= 0xDFFF
         for char in value
     ):
         raise ValueError(f"{name} contains forbidden control text")
 
 
-def _mapping(value: Mapping[str, TopologyScalar], name: str, limit: int) -> Mapping:
+def _mapping(
+    value: Mapping[str, TopologyScalar],
+    name: str,
+    limit: int,
+    *,
+    request=False,
+) -> Mapping:
     if not isinstance(value, Mapping):
         raise TypeError(f"{name} must be a mapping")
     try:
@@ -118,20 +135,21 @@ def _mapping(value: Mapping[str, TopologyScalar], name: str, limit: int) -> Mapp
     except Exception:
         raise ValueError("invalid topology mapping") from None
     size = 1
+    size_error = GatewayRequestSizeError if request else ValueError
     for key, item in copied.items():
-        _safe_text(key, f"{name} key", limit)
+        _safe_text(key, f"{name} key", limit, size_error=size_error)
         if item is None or type(item) is bool:
             pass
         elif type(item) is int:
             if not INT64_MIN <= item <= INT64_MAX:
                 raise ValueError(f"{name} value exceeds signed 64-bit range")
         elif type(item) is str:
-            _safe_text(item, f"{name} value", limit)
+            _safe_text(item, f"{name} value", limit, size_error=size_error)
         elif type(item) is not float or not isfinite(item):
             raise TypeError(f"{name} value must be an exact topology scalar")
         size += len(_canonical(key)) + len(_canonical(item)) + 2
         if size > limit:
-            raise ValueError("topology mapping exceeds its byte cap")
+            raise size_error("topology mapping exceeds its byte cap")
     return MappingProxyType(copied)
 
 
@@ -151,7 +169,12 @@ class TopologyGatewayRequestV1:
             raise ValueError("deadline must be a positive finite monotonic float")
         if type(max_records) is not int or not 1 <= max_records <= MAX_RESULT_ROWS:
             raise ValueError("max_records exceeds the result cap")
-        parameters = _mapping(self.parameters, "parameters", MAX_REQUEST_BYTES)
+        parameters = _mapping(
+            self.parameters,
+            "parameters",
+            MAX_REQUEST_BYTES,
+            request=True,
+        )
         object.__setattr__(self, "parameters", parameters)
         encode_request(self)
 
@@ -247,7 +270,7 @@ def encode_request(value: TopologyGatewayRequestV1) -> bytes:
     }
     encoded = _canonical(payload)
     if len(encoded) > MAX_REQUEST_BYTES:
-        raise ValueError("gateway request exceeds its byte cap")
+        raise GatewayRequestSizeError("gateway request exceeds its byte cap")
     return encoded
 
 

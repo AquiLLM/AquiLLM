@@ -20,6 +20,7 @@ from .gateway_contracts import (
     SCHEMA_CHECKSUM,
     SCHEMA_VERSION,
     GatewayFailureReason,
+    GatewayRequestSizeError,
     TopologyGatewayFailureV1,
     TopologyGatewayRequestV1,
     TopologyGatewaySuccessV1,
@@ -152,13 +153,19 @@ class TopologyGatewayClient:
         deadline: float,
         max_records: int,
     ) -> tuple[Mapping[str, TopologyScalar], ...]:
-        request_dto = TopologyGatewayRequestV1(query, parameters, deadline, max_records)
+        try:
+            request_dto = TopologyGatewayRequestV1(
+                query, parameters, deadline, max_records
+            )
+            body = encode_request(request_dto)
+        except GatewayRequestSizeError:
+            raise TopologyGatewayRequestError(GatewayFailureReason.RESULT_CAP) from None
         remaining = deadline - time.monotonic()
         if not isfinite(remaining) or remaining <= 0.0:
             raise TopologyGatewayRequestError(GatewayFailureReason.DEADLINE)
         request = Request(
             self._endpoint,
-            data=encode_request(request_dto),
+            data=body,
             headers={
                 "Authorization": f"Bearer {self.bearer_token}",
                 "Content-Type": "application/json",

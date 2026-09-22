@@ -40,7 +40,7 @@ def test_schema_checksum_is_an_exact_digest_of_an_immutable_complete_descriptor(
     assert type(SCHEMA_DESCRIPTOR_V1) is tuple
     assert (
         SCHEMA_CHECKSUM
-        == "8d72b91f7391475da31747426b6b7e6b4fbe4ec8f4af921adcf2a6769d00d4ec"
+        == "8c8ae96f5f4a555823e9821cd82e5c02245a84479ae1037e1768a277b26a21f1"
     )
     assert sha256(descriptor_bytes).hexdigest() == SCHEMA_CHECKSUM
     assert (
@@ -244,7 +244,7 @@ def test_mapping_caps_fail_before_large_materialization(monkeypatch):
         TopologyGatewaySuccessV1(
             tuple({"x": "v" * 300} for _ in range(MAX_RESULT_ROWS))
         )
-    huge = "x" * (MAX_RESPONSE_BYTES + 1)
+    huge = "x" * (max(MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES) + 1)
 
     def no_huge_canonical(value):
         if value is huge:
