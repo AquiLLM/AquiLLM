@@ -69,7 +69,7 @@ Files: `aquillm/apps/collections/services/graph_visualization.py`, a focused pro
 ## Task 5: Integration, deployment, and collection repair
 
 - [x] Review all changes, run targeted PostgreSQL and frontend checks, and scan outgoing files for secrets.
-- [ ] Commit/push development, then pull/rebuild/migrate/restart the development host.
+- [x] Commit/push development, then pull/rebuild/migrate/restart the development host.
 - [ ] Replay exact current collection document builds through normal service entry points; preserve the user's generated draft and any later edits.
 - [ ] Verify all uploaded documents, collection assembly, projection readiness, real retrieval, and cited answers. Report any remaining limitation explicitly.
 - [ ] Record evidence and final revisions; revoke only the temporary key created for this repair after work completes.

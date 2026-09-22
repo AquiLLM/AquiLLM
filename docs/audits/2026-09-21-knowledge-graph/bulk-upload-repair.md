@@ -43,6 +43,12 @@ requests. Polling also stopped after an unchanged building response.
   including sources no longer in the current snapshot. A broader PostgreSQL
   regression exposed a lookup crash in that historical path; the repair retains
   the original link-only lock scope and idempotent notification behavior.
+- Final collection resolution indexes decisions and contributing embeddings by
+  final cluster once, avoiding two repeated full-list scans per cluster. This
+  preserves merge rules, audit decisions, embedding accumulation order and
+  existing build identities. Independent old/new parity checks passed for 12
+  mixed merge/rejection fixtures with reversed input and varied candidate limits.
+  All 57 focused pure collection-resolution tests passed after this optimization.
 
 ## Verification and limits
 
@@ -91,4 +97,37 @@ browser authentication, WebSocket, multi-user load or isolated failure testing.
 
 ## Deployment evidence
 
-Pending final integration verification and source-first development deployment.
+Source commit `672b9ac9b47d230769b1329af8c2cf60a28e3898` was committed and
+pushed to `development` before the host pulled it. The outgoing source scan
+reported zero credential-pattern findings. Environment files and temporary
+access material were excluded. The remote checkout was clean at that commit.
+
+The development host applied migration 0011, rebuilt the graph service images,
+and restarted the application and workers. The rebuilt frontend bundle contains
+the new document-progress UI and matches the collected static asset. The web,
+query extractor, query gateway and Redis health checks pass. Five Celery workers
+respond on the expected default, extraction, schema, projection and memory queues;
+exactly one graph maintenance scheduler runs. The extraction worker uses two
+processes with eight inference threads each within its 16-CPU budget.
+
+Restricted projection source/state role checks pass. The web process retains
+read-only projection access. The schema worker has no projection source/state
+DSNs, graph-database credentials or enabled cloud-provider credentials. A real
+fixture schema generation succeeded during the document rebuild, and the
+dedicated schema worker recorded one successful schema task.
+
+The existing small graph fixture passes both deployed retrieval branches. The
+published custom-schema fixture also passes real hybrid search: both branches
+succeeded, its one graph chunk was materialized, and final retrieval stayed in
+that collection. It reports a graph miss after deduplication because baseline
+retrieval already contains that same chunk. A broader fixture question with no
+recognized query entity correctly declined the direct branch with `direct_no_seeds`;
+the named method/dataset query exercised both branches successfully.
+Default and published custom ontologies are accepted by the query extractor
+after warm-up. Its first cold request timed out; the immediately following
+request was declined while the inference slot remained occupied. The warm
+repeat accepted both. This check does not establish cold-start or load latency.
+
+The uploaded collection rebuild uses the normal idempotent rebuild entry point
+with request `e87b2c01-3bda-49b0-8d03-a15f7d572fb4`. Final collection projection
+and retrieval evidence will be recorded after the rebuild completes.

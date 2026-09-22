@@ -113,6 +113,11 @@ be inferred from offline tests alone.
 
 ## Development verification — 2026-09-22 UTC
 
+Subsequent testing with the uploaded research collection exposed bulk ingestion
+and schema scheduling gaps. See the [bulk upload repair](bulk-upload-repair.md)
+for the later deployment, regression coverage and verification of that collection.
+The fixture-only results below describe the earlier revision.
+
 Application revision: `525b71a3823ea729f7ddeb7dbb3f96e3b52204ab`, pulled from
 `development` after push. Migration `0010_projection_prune_completion` is applied.
 The development pipeline is ready for controlled end-user testing within the

@@ -18,6 +18,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import CheckConstraint, UniqueConstraint
 
+from apps.knowledge_graph.resolution import collection as collection_resolution
 from apps.knowledge_graph.resolution.collection import (
     AliasEvidence,
     CollectionBuildSnapshot,
@@ -191,6 +192,100 @@ def _decision(result, left: str | int, right: str | int):
         for decision in result.decisions
         if {decision.left_entity_id, decision.right_entity_id} == {left_pk, right_pk}
     )
+
+
+def test_final_cluster_audit_work_is_linear_in_resolved_output(monkeypatch):
+    """Final cluster metadata must not rescan every global group and decision."""
+
+    entity_count = 600
+    config = CollectionResolutionConfig(
+        max_candidates_per_entity=1,
+        max_candidate_pool_per_entity=1,
+        exact_semantic_scan_limit=2,
+    )
+    entities = tuple(
+        _document_entity(
+            index,
+            (
+                "common token shared"
+                if index <= entity_count // 2
+                else f"common token item{index:08x}"
+            ),
+            normalized_label=(
+                "common token shared"
+                if index <= entity_count // 2
+                else f"common token item{index:08x}"
+            ),
+        )
+        for index in range(1, entity_count + 1)
+    )
+    vectors = {entity.label: _unit_vector(0.0) for entity in entities}
+    session, _backend = _session(vectors)
+
+    contains_count = 0
+    set_count = 0
+
+    class CountingMembers(tuple):
+        def __contains__(self, value):
+            nonlocal contains_count
+            contains_count += 1
+            return super().__contains__(value)
+
+    real_groups = collection_resolution._DisjointSet.groups
+    group_calls = 0
+
+    def counting_groups(self):
+        nonlocal group_calls
+        group_calls += 1
+        groups = real_groups(self)
+        if group_calls == 2:
+            return {
+                root: CountingMembers(members) for root, members in groups.items()
+            }
+        return groups
+
+    real_set = set
+
+    def counting_set(*args, **kwargs):
+        nonlocal set_count
+        set_count += 1
+        return real_set(*args, **kwargs)
+
+    real_cluster_post_init = collection_resolution.CollectionEntityCluster.__post_init__
+
+    def normalize_counting_members(self):
+        if isinstance(self.document_entity_ids, CountingMembers):
+            object.__setattr__(
+                self, "document_entity_ids", tuple(self.document_entity_ids)
+            )
+        real_cluster_post_init(self)
+
+    monkeypatch.setattr(collection_resolution._DisjointSet, "groups", counting_groups)
+    monkeypatch.setattr(collection_resolution, "set", counting_set, raising=False)
+    monkeypatch.setattr(
+        collection_resolution.CollectionEntityCluster,
+        "__post_init__",
+        normalize_counting_members,
+    )
+    monkeypatch.setattr(
+        collection_resolution, "cosine_similarity", lambda _left, _right: 0.0
+    )
+    monkeypatch.setattr(
+        collection_resolution, "validate_embedding", lambda value: tuple(value)
+    )
+
+    result = resolve_collection_entities(
+        _snapshot(config=config),
+        entities,
+        _ontology(),
+        config=config,
+        embedding_session=session,
+    )
+
+    assert len(result.clusters) == entity_count // 2 + 1
+    assert result.decisions
+    assert contains_count <= entity_count
+    assert set_count <= entity_count * 100
 
 
 def test_stable_identifier_equality_is_first_tier_and_never_embeds():

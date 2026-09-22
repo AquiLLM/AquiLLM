@@ -2198,27 +2198,37 @@ def resolve_collection_entities(
         )
 
     final_groups = dsu.groups()
+    final_root_by_member = {
+        member_id: root
+        for root, member_ids in final_groups.items()
+        for member_id in member_ids
+    }
+    automatic_decisions_by_root: dict[int, list[CollectionPairDecision]] = (
+        defaultdict(list)
+    )
+    for decision in decisions.values():
+        if decision.outcome is not ResolutionOutcome.AUTOMATIC:
+            continue
+        left_root = final_root_by_member[decision.left_entity_id]
+        if left_root == final_root_by_member[decision.right_entity_id]:
+            automatic_decisions_by_root[left_root].append(decision)
+    embedded_groups_by_root: dict[int, list[EmbeddedText]] = defaultdict(list)
+    for deterministic_root, deterministic_members in deterministic_groups.items():
+        embedded = embedded_by_root.get(deterministic_root)
+        if embedded is not None:
+            embedded_groups_by_root[
+                final_root_by_member[deterministic_members[0]]
+            ].append(embedded)
     clusters: list[CollectionEntityCluster] = []
-    for _root, member_ids in final_groups.items():
+    for root, member_ids in final_groups.items():
         members = tuple(by_id[item] for item in member_ids)
         representative = _representative(members)
-        accepted = tuple(
-            item
-            for item in decisions.values()
-            if item.outcome is ResolutionOutcome.AUTOMATIC
-            and item.left_entity_id in member_ids
-            and item.right_entity_id in member_ids
-        )
+        accepted = tuple(automatic_decisions_by_root.get(root, ()))
         identifiers = sorted({item.identifier for item in members if item.identifier})
         versions = sorted(
             {item.version_signature for item in members if item.version_signature}
         )
-        contributing = tuple(
-            embedded_by_root[root]
-            for root, deterministic_members in deterministic_groups.items()
-            if root in embedded_by_root
-            and set(deterministic_members).intersection(member_ids)
-        )
+        contributing = tuple(embedded_groups_by_root.get(root, ()))
         embedding: tuple[float, ...] | None = None
         embedding_input_hash: str | None = None
         if contributing:
