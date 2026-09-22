@@ -68,6 +68,9 @@ consistent and record any environment-specific increases.
 
 Use a dedicated collection and disposable documents belonging to test accounts.
 Do not run destructive probes against end-user data.
+The matrix includes safe shared-development checks and isolated fault cases;
+worker termination, broker interruption, rollover, and destructive cleanup races
+belong in an isolated environment as described under readiness evidence.
 
 | Area | Check | Expected outcome |
 |---|---|---|
@@ -95,5 +98,11 @@ do not silently rename historical graph artifacts.
 Record the deployed commit, migration state, service/queue health, fixture outcomes,
 and any failure codes without prompts, document contents, credentials, or private
 identifiers. Passing offline tests or a successful container build alone does not
-establish development readiness. Keep the end-user gate closed until the live
-pipeline and authorization checks above pass.
+establish development readiness. Controlled development testing requires successful
+live schema publication, extraction, projection, default/custom schema retrieval,
+cited-answer generation, permission revocation, database role checks, and consumed
+maintenance jobs. Record which fault cases were verified in isolated tests. Avoid
+interrupting shared workers, the broker, or pruning unrelated development data to
+exercise those cases. Production qualification additionally requires load testing
+and the remaining broker/worker-loss, version-rollover, and pruning scenarios in
+an isolated full-stack environment.

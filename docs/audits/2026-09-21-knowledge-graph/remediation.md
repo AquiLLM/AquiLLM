@@ -50,9 +50,9 @@ production frontend build and **four browser flows** passed. Restricted source a
 state role tests execute actual SQL, including source authorization, seed identity
 parity, bounded lookups, prune completion, and denied direct table writes.
 
-The development preflight found Redis stopped and the broker unreachable. The
-checkout was clean on `development`. Deployment observations will be recorded
-after the committed release is pulled and live fixtures complete.
+The development preflight found Redis stopped and the broker unreachable. Redis
+was restored, restart policies were added, and the clean `development` checkout
+was advanced only after each reviewed commit was pushed.
 
 The first live run successfully generated and published a collection schema,
 built a document/collection graph, published a ready Memgraph projection, and
@@ -110,3 +110,53 @@ Deployment follows the [development verification runbook](../../operations/knowl
 commit and push `development`, then fast-forward the remote checkout, migrate,
 restart, and exercise dedicated live fixtures. No end-user readiness claim should
 be inferred from offline tests alone.
+
+## Development verification — 2026-09-22 UTC
+
+Application revision: `525b71a3823ea729f7ddeb7dbb3f96e3b52204ab`, pulled from
+`development` after push. Migration `0010_projection_prune_completion` is applied.
+The development pipeline is ready for controlled end-user testing within the
+limits below. The verification fixtures use synthetic documents and dedicated
+accounts; existing document contents and credentials are absent from this report.
+
+| Live check | Result |
+|---|---|
+| Generate/publish a collection schema | Passed with the real generation model; published schema produced a graph with 7 entities and 5 relations and a ready projection. |
+| Schema mutation controls | Invalid names rejected; revision and replacement-draft UUID conflicts rejected. |
+| Default and generated schema queries | Both direct and extended branches succeeded and materialized expected fixture chunks with persistent server flags, without process-only query overrides. |
+| Full hybrid search | Both real branches succeeded for both fixtures; vector/trigram/final results stayed in the selected fixture. Three default-schema and one custom-schema graph chunks materialized. |
+| Cited answer | Real retrieval and configured LLM produced the expected fixture fact and two valid citations in two provider calls. This exercised the capped in-memory chat service path; no conversation was persisted. |
+| Revoked permission | Baseline became empty and extended seed access was rejected; fixture permission restored afterward. |
+| Missing-build recovery | Dedicated missing document build recovered; repeating recovery on its exact current artifact was a no-op. |
+| Projection reconciliation | Read-only global reconciliation passed across 64 current scopes; live reconciliation jobs subsequently completed without the former missing-membership failure. |
+| Database isolation | Actual source/state roles passed read, function privilege, and denied direct-write checks. Web has only the source connection, with projection writes disabled and no Bolt credentials. |
+| Existing ontologies | Four active ontologies checked; zero malformed definitions, invalid names, or transport-bound violations. |
+| Services | Web, extractor, gateway, and Redis healthy; Redis PONG; four workers consume default, extraction, projection, and memory queues. Maintenance scheduler running. |
+
+After the final deployment, the scheduler dispatched both maintenance jobs. The
+observed window contained 25 successful recovery pages and one successful
+projection reconciliation, with zero failures in those maintenance tasks.
+
+All four graph retrieval flags are enabled in the host's private configuration.
+Tested development settings: four query CPU threads; 500 ms extractor timeout;
+1,500 ms gateway timeout; 2,000 ms per branch and 2,500 ms overall graph budget.
+Warm direct branches took roughly 469–589 ms in final probes, including database
+and traversal work. These observations do not establish a throughput or latency
+SLA. The extractor requires warm-up after restart; its health endpoint is liveness.
+
+The tiny fixtures already fit entirely in baseline retrieval, so full search
+correctly reports `graph_status=miss` after deduplication despite successful graph
+branches and verified graph materialization. No graph result was fabricated to
+turn that status into a hit.
+
+Background recovery continues through the existing backlog. Some older documents
+hit the intentional deduplicated-entity cap and remain failed for review; their
+failure does not stop later scopes. Resource bounds were preserved. Historical
+failed build/projection rows remain as audit history.
+
+Worker-loss, broker publication failure, version rollover, and destructive
+prune/retry races have isolated regression coverage. Shared development workers
+and data were not subjected to destructive chaos tests. Full-stack fault/load
+qualification and live browser WebSocket transport remain outside this verification.
+The existing unrelated frontend typecheck and chat/document migration drift
+limitations above also remain.
