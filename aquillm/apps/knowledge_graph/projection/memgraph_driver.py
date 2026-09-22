@@ -20,6 +20,14 @@ _COUNTERS = (
     "relationships_created",
     "relationships_deleted",
 )
+_PROJECTION_INDEX_STATEMENTS = (
+    "CREATE INDEX ON :CollectionGeneration(generation_key)",
+    "CREATE INDEX ON :ProjectedRecord(generation_key)",
+    "CREATE INDEX ON :ProjectedEntity(entity_key)",
+    "CREATE INDEX ON :ProjectedChunk(chunk_key)",
+    "CREATE INDEX ON :ProjectedRelation(relation_key)",
+    "CREATE INDEX ON :ProjectedRecord(generation_key, opaque_key)",
+)
 
 
 class MemgraphDriverError(RuntimeError):
@@ -226,5 +234,17 @@ class Neo4jMemgraphDriver:
                 )
         except MemgraphDriverError:
             raise
+        except Exception:
+            raise MemgraphDriverError("memgraph_write_failed") from None
+
+    def ensure_projection_schema(self, *, timeout_seconds: float) -> None:
+        """Install only our fixed indexes in Memgraph's required implicit mode."""
+        timeout = _timeout(timeout_seconds)
+        from neo4j import Query
+
+        try:
+            with self._connection().session(database=self._database) as session:
+                for statement in _PROJECTION_INDEX_STATEMENTS:
+                    session.run(Query(statement, timeout=timeout)).consume()
         except Exception:
             raise MemgraphDriverError("memgraph_write_failed") from None

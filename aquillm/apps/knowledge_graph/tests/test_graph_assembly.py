@@ -597,6 +597,8 @@ def test_locked_projection_persistence_uses_batched_trusted_base_managers():
 @database_required
 def test_postgres_assembly_reuses_task9_rows_and_activates_atomically():
     from django.contrib.auth.models import User
+    from django.db import connection, transaction
+    from django.test.utils import CaptureQueriesContext
 
     from apps.collections.models import Collection
     from apps.documents.models import RawTextDocument, TextChunk
@@ -619,6 +621,7 @@ def test_postgres_assembly_reuses_task9_rows_and_activates_atomically():
     from apps.knowledge_graph.resolution.collection import (
         CollectionEmbeddingSession,
         CollectionResolutionConfig,
+        _collection_link_row_audit,
         build_collection_snapshot,
         load_collection_filter_inputs,
         load_collection_resolution_inputs,
@@ -790,6 +793,34 @@ def test_postgres_assembly_reuses_task9_rows_and_activates_atomically():
         filter_policy=policy,
         ontology=_ontology(),
     )
+    run.refresh_from_db()
+    from apps.knowledge_graph.graph.assembly import (
+        AssemblyConfig,
+        _load_locked_task9_rows,
+    )
+
+    with transaction.atomic():
+        _locked_entities, locked_links = _load_locked_task9_rows(
+            artifact,
+            run,
+            AssemblyConfig(),
+        )
+        assert locked_links
+        assert all(
+            "embedding" in row.collection_entity.get_deferred_fields()
+            for row in locked_links
+        )
+        with CaptureQueriesContext(connection) as related_field_queries:
+            for row in locked_links:
+                _collection_link_row_audit(row)
+                assert row.collection_entity.status
+                assert row.document_entity.status
+                assert row.document_entity.artifact_id
+                assert row.document_entity.document_id
+                assert row.manifest_input.artifact_id == artifact.pk
+                assert row.manifest_input.document_artifact_id
+                assert row.manifest_input.document_id
+        assert related_field_queries.captured_queries == []
     entity_ids_before = tuple(
         CollectionEntity.objects.filter(artifact=artifact)
         .order_by("pk")

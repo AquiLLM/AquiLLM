@@ -35,6 +35,49 @@ def test_task9_links_are_counted_before_they_are_materialized():
     assert "tuple(link_query)" not in source
 
 
+def test_task9_link_hydration_loads_only_fields_used_by_assembly_validation():
+    expected = {
+        "id",
+        "artifact_id",
+        "manifest_input_id",
+        "document_entity_id",
+        "collection_entity_id",
+        "score",
+        "identifier_score",
+        "alias_score",
+        "embedding_similarity",
+        "neighborhood_agreement",
+        "method",
+        "resolver_version",
+        "outcome",
+        "candidate_rank",
+        "decision_checksum",
+        "status",
+        "reason",
+        "metadata",
+        "collection_entity__id",
+        "collection_entity__cluster_key",
+        "collection_entity__status",
+        "document_entity__id",
+        "document_entity__status",
+        "document_entity__artifact_id",
+        "document_entity__document_id",
+        "manifest_input__id",
+        "manifest_input__artifact_id",
+        "manifest_input__document_artifact_id",
+        "manifest_input__document_id",
+    }
+
+    assert set(assembly._ASSEMBLY_LINK_READ_FIELDS) == expected
+    for loader in (
+        assembly._load_locked_task9_rows,
+        assembly._load_filter_source_lineage,
+    ):
+        source = inspect.getsource(loader)
+        assert ".only(*_ASSEMBLY_LINK_READ_FIELDS)" in source
+    assert "collection_entity__embedding" not in expected
+
+
 def test_task9_entities_are_counted_before_they_are_materialized():
     source = inspect.getsource(assembly._load_locked_task9_rows)
 

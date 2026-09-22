@@ -99,6 +99,32 @@ requests. Polling also stopped after an unchanged building response.
   entity insertion; the outer transaction rolled back every attempted row.
   Three focused write-contract tests and targeted Ruff checks also passed.
 
+- Assembly link reads load only the related entity, document and manifest fields
+  used by lineage/provenance validation. This applies to both current Task 9 rows
+  and filter-source lineage rows. The separately loaded entity family retains
+  its vectors for the full audit; locks, ordering, bounds and output checksums
+  remain unchanged. A PostgreSQL assembly regression confirms the repeated
+  link-side vector is deferred, all consumed related fields need zero extra
+  queries, and relation/evidence results remain unchanged. The focused field
+  contract regression and targeted Ruff checks pass.
+
+- Projection writes now send bounded batches of up to 128 nodes or edges in each
+  managed Bolt transaction, with complete scalar parameterization and explicit
+  query-byte/parameter ceilings. The deployed graph database had no indexes:
+  schema setup was never called in production and used an explicit transaction
+  that Memgraph rejects for index creation. Normal projection writes now install
+  a fixed index allowlist using the required implicit transaction mode. A
+  composite generation/opaque-key index and matching endpoint labels replace
+  full scans with indexed lookups while preserving existing indexes, staging
+  guards, full-family checksums, topology validation and publication fences.
+  Real Memgraph 3.8.1 tests at the deployed 300 ms transaction timeout cover
+  128/128/1 mention batches, complete roundtrip, replay, missing endpoints,
+  ready-generation rejection and whole-batch constraint rollback. Every child
+  write plan uses the composite index; the widest 128-row provenance batch took
+  59.55 ms in the disposable test. The final focused suite passed 69 offline
+  tests and two real Memgraph tests; Ruff and independent review were clear.
+  This is not a whole-projection latency claim.
+
 ## Verification and limits
 
 Regression-first tests reproduced extraction, projection paging, schema source
@@ -143,6 +169,11 @@ Deployment must preserve the generated schema draft and any later edits. Until
 that draft is published, repair and retrieval use the collection's currently
 configured ontology. Live service-level retrieval/citation checks do not replace
 browser authentication, WebSocket, multi-user load or isolated failure testing.
+The answer probe requires nonempty provider text, no extractive fallback, a
+substantive body and citations belonging to retrieved evidence. It records
+graph-only retained/cited chunks separately from successful graph evidence that
+already appears in baseline search. These are operational and source-membership
+checks, not a semantic faithfulness benchmark.
 
 ## Deployment evidence
 
@@ -252,3 +283,28 @@ Its transaction rolled back before heartbeat cleanup; the run terminalized at
 graphs and the original draft remained intact; no lingering database lock was
 observed. This was a controlled maintenance cancellation, not an unexplained
 application failure.
+
+The collection persistence repair was committed and pushed as
+`f195a733feed4d7d5b28517bffd967571ec3b3df` before the host fetched and
+fast-forwarded to it. The already-drained extraction worker was rebuilt and
+restarted, and its queue subscription was verified. The checkout was clean,
+all application health checks passed, and the collection-only retry began at
+07:07:53 UTC with all 31 completed document graphs and the original draft intact.
+The three outgoing source/report files had zero credential-pattern findings.
+
+At 07:26:17 UTC, the live retry had committed collection resolution and advanced
+to assembly, with 27,211 collection entities and 334,642 complete resolution
+links. All 31 document graphs and the generated draft remained intact.
+
+At 07:28:28 UTC, assembly had persisted 277 relations and entered final
+validation. The projection worker drained to exit zero while the indexed batch
+writer was tested, preventing the queued large projection from using the old
+per-row unindexed path.
+
+The collection build succeeded at 07:33:48 UTC after 25 minutes 55 seconds.
+It contains 27,211 persisted entities and 277 relations. Its complete resolution
+audit retains 36,740 automatic, 92,774 candidate and 205,128 rejected links;
+31,332 automatic links are current/active after filtering. Collection membership
+points to the active artifact. Projection remained pending while its worker was
+held for the final writer/index deployment; assembly success alone does not
+establish graph retrieval readiness.

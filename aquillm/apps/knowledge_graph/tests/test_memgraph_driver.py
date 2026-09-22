@@ -140,3 +140,49 @@ def test_driver_classifies_closed_read_failures(backend_error, expected) -> None
         driver.execute_read("RETURN private", {}, timeout_seconds=1.0, max_records=1)
     assert captured.value.code == expected
     assert str(captured.value) == expected
+
+
+def test_schema_bootstrap_uses_only_fixed_indexes_in_bounded_implicit_transactions():
+    calls = []
+
+    class SchemaSession(_Session):
+        def run(self, query):
+            calls.append((query.text, query.timeout))
+            return _Result()
+
+    class SchemaClient(_Neo4jClient):
+        def session(self, *, database):
+            assert database == "memgraph"
+            session = SchemaSession(self.transaction)
+            self.sessions.append(session)
+            return session
+
+    client = SchemaClient()
+    driver = Neo4jMemgraphDriver(
+        "bolt://memgraph:7687", "", "", database="memgraph", driver=client
+    )
+    driver.ensure_projection_schema(timeout_seconds=0.5)
+
+    assert [query for query, _ in calls] == [
+        "CREATE INDEX ON :CollectionGeneration(generation_key)",
+        "CREATE INDEX ON :ProjectedRecord(generation_key)",
+        "CREATE INDEX ON :ProjectedEntity(entity_key)",
+        "CREATE INDEX ON :ProjectedChunk(chunk_key)",
+        "CREATE INDEX ON :ProjectedRelation(relation_key)",
+        "CREATE INDEX ON :ProjectedRecord(generation_key, opaque_key)",
+    ]
+    assert all(timeout == 0.5 for _, timeout in calls)
+    assert client.transaction.calls == []
+    assert all(session.callbacks == [] for session in client.sessions)
+
+
+def test_schema_bootstrap_redacts_backend_failure():
+    class Broken:
+        def session(self, **kwargs):
+            raise RuntimeError("secret schema details")
+
+    driver = Neo4jMemgraphDriver(
+        "bolt://memgraph:7687", "", "", database="memgraph", driver=Broken()
+    )
+    with pytest.raises(MemgraphDriverError, match="^memgraph_write_failed$"):
+        driver.ensure_projection_schema(timeout_seconds=0.5)

@@ -35,6 +35,10 @@ class _FakeDriver:
         self.writes = []
         self.reads = []
         self.read_results = []
+        self.schema_calls = []
+
+    def ensure_projection_schema(self, *, timeout_seconds):
+        self.schema_calls.append((timeout_seconds, len(self.writes)))
 
     def execute_write(self, cypher, parameters, *, timeout_seconds):
         self.writes.append((cypher, parameters, timeout_seconds))
@@ -177,6 +181,7 @@ def test_repository_uses_parameterized_idempotent_staging_and_ready_last() -> No
     assert any("ProjectedRelationSemantics" in call[0] for call in driver.writes)
     assert any("ProjectedEntityMention" in call[0] for call in driver.writes)
     assert not any(call[1].get("state") == "ready" for call in driver.writes)
+    assert driver.schema_calls == [(1.0, 0)]
 
 
 def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -> None:
@@ -233,8 +238,7 @@ def test_ready_marker_requires_matching_validated_manifest_and_is_last_write() -
     assert driver.writes[-1][1]["state"] == "ready"
     assert "MATCH" in driver.writes[-1][0]
     assert any(
-        "PROJECTED_RELATION" in read[0]
-        for read in driver.reads[reads_before_ready:]
+        "PROJECTED_RELATION" in read[0] for read in driver.reads[reads_before_ready:]
     )
     ready_reads = [read[0] for read in driver.reads[reads_before_ready:]]
     assert any(

@@ -34,6 +34,37 @@ ASSEMBLY_V1_MAX_FILTER_LINEAGE_DEPTH = 32
 _ASSEMBLY_INSERT_BATCH_SIZE = 1_000
 _QUERY_PREDICATE_BATCH_SIZE = 5_000
 _ENDPOINT_ID_BATCH_SIZE = _QUERY_PREDICATE_BATCH_SIZE
+_ASSEMBLY_LINK_READ_FIELDS = (
+    "id",
+    "artifact_id",
+    "manifest_input_id",
+    "document_entity_id",
+    "collection_entity_id",
+    "score",
+    "identifier_score",
+    "alias_score",
+    "embedding_similarity",
+    "neighborhood_agreement",
+    "method",
+    "resolver_version",
+    "outcome",
+    "candidate_rank",
+    "decision_checksum",
+    "status",
+    "reason",
+    "metadata",
+    "collection_entity__id",
+    "collection_entity__cluster_key",
+    "collection_entity__status",
+    "document_entity__id",
+    "document_entity__status",
+    "document_entity__artifact_id",
+    "document_entity__document_id",
+    "manifest_input__id",
+    "manifest_input__artifact_id",
+    "manifest_input__document_artifact_id",
+    "manifest_input__document_id",
+)
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_TOKEN_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 _ACTIVE = "active"
@@ -1331,6 +1362,7 @@ def _load_filter_source_lineage(
     source_link_query = (
         CollectionEntityDocumentLink.objects.select_for_update()
         .select_related("collection_entity", "document_entity", "manifest_input")
+        .only(*_ASSEMBLY_LINK_READ_FIELDS)
         .filter(artifact=source)
         .order_by("pk")
     )
@@ -1769,6 +1801,7 @@ def _load_locked_task9_rows(artifact: object, run: object, config: AssemblyConfi
             "document_entity",
             "manifest_input",
         )
+        .only(*_ASSEMBLY_LINK_READ_FIELDS)
         .filter(artifact=artifact)
         .order_by("pk")
     )

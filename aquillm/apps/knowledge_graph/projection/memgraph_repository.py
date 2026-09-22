@@ -12,6 +12,7 @@ from .memgraph_driver import MemgraphWriteSummaryV1, Neo4jMemgraphDriver
 from .memgraph_edges import (
     EDGE_FAMILIES,
     topology_edge_attestation,
+    write_parameterized_batches,
     write_topology_edges,
 )
 from .memgraph_records import manifest_from_row, read_bundle
@@ -59,15 +60,7 @@ class MemgraphProjectionRepository:
         return OpaqueProjectionKey(ProjectionIdentifierDomain.COLLECTION, value)
 
     def ensure_schema(self, *, timeout_seconds: float) -> None:
-        timeout = _timeout(timeout_seconds)
-        for statement in (
-            "CREATE INDEX ON :CollectionGeneration(generation_key)",
-            "CREATE INDEX ON :ProjectedRecord(generation_key)",
-            "CREATE INDEX ON :ProjectedEntity(entity_key)",
-            "CREATE INDEX ON :ProjectedChunk(chunk_key)",
-            "CREATE INDEX ON :ProjectedRelation(relation_key)",
-        ):
-            self._driver.execute_write(statement, {}, timeout_seconds=timeout)
+        self._driver.ensure_projection_schema(timeout_seconds=_timeout(timeout_seconds))
 
     def write_staging_generation(
         self,
@@ -112,12 +105,11 @@ class MemgraphProjectionRepository:
             "topology_checksum": topology.checksum,
             **{
                 f"{family}_count": count
-                for family, count in zip(
-                    EDGE_FAMILIES, topology.counts, strict=True
-                )
+                for family, count in zip(EDGE_FAMILIES, topology.counts, strict=True)
             },
             **asdict(bundle.counts),
         }
+        self.ensure_schema(timeout_seconds=timeout)
         summary = self._driver.execute_write(
             "MERGE (g:CollectionGeneration {generation_key:$generation_key}) "
             "ON CREATE SET g.private_mapping_checksum=$private_mapping_checksum, "
@@ -158,22 +150,30 @@ class MemgraphProjectionRepository:
             ("ArtifactProvenance", bundle.artifact_provenance, "scope_key"),
         )
         for label, records, identity in families:
-            for start in range(0, len(records), size):
-                for record in records[start : start + size]:
-                    values = asdict(record)
-                    values["generation_key"] = marker.generation_key
-                    values["opaque_key"] = values[identity]
-                    self._driver.execute_write(
-                        "MATCH (g:CollectionGeneration "
-                        "{generation_key:$generation_key}) "
-                        "WHERE g.state IN ['staging','building'] WITH g "
-                        f"MERGE (n:{label}:ProjectedRecord "
-                        "{generation_key:$generation_key, opaque_key:$opaque_key}) "
-                        + self._set_clause("n", values),
-                        values,
-                        timeout_seconds=timeout,
-                    )
-        write_topology_edges(self._driver, bundle, timeout_seconds=timeout)
+            if not records:
+                continue
+            assignments = ", ".join(
+                f"n.{name} = row.{name}"
+                for name in sorted(asdict(records[0]))
+                if name != "generation_key"
+            )
+            write_parameterized_batches(
+                self._driver,
+                f"MERGE (n:{label}:ProjectedRecord "
+                "{generation_key:$generation_key, opaque_key:row.opaque_key}) "
+                + "SET "
+                + assignments,
+                (
+                    {**asdict(record), "opaque_key": getattr(record, identity)}
+                    for record in records
+                ),
+                generation_key=marker.generation_key,
+                batch_size=size,
+                timeout_seconds=timeout,
+            )
+        write_topology_edges(
+            self._driver, bundle, batch_size=size, timeout_seconds=timeout
+        )
 
     @staticmethod
     def _set_clause(alias: str, values: dict[str, object]) -> str:
