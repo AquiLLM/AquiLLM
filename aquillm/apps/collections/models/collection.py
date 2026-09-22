@@ -135,7 +135,10 @@ class Collection(models.Model):
         if getattr(settings, "RAG_CACHE_ENABLED", False):
             cached_refs = rag_cache.get_cached_doc_access_refs(user.id, collection_ids, perm)
             if cached_refs is not None:
-                return rag_cache.rehydrate_documents_from_refs(cached_refs)
+                return rag_cache.rehydrate_documents_from_refs(
+                    cached_refs,
+                    allowed_collection_ids=collection_ids,
+                )
 
         doc_types = _get_document_types()
         documents = functools.reduce(

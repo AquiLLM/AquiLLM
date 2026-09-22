@@ -1,4 +1,5 @@
 """Hybrid vector + trigram chunk retrieval with reranking."""
+
 from __future__ import annotations
 
 import re
@@ -13,6 +14,7 @@ from django.core.exceptions import ValidationError
 from django.db import DatabaseError
 from django.db.models import Q
 from pgvector.django import L2Distance
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 from apps.documents.services.chunk_rerank import _fallback_rerank, rerank_chunks
 
@@ -92,7 +94,9 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
     q_len = len(qstrip)
     short_len = int(getattr(django_settings, "RAG_QUERY_SHORT_LEN", 48))
     long_len = int(getattr(django_settings, "RAG_QUERY_LONG_LEN", 160))
-    short_scale = float(getattr(django_settings, "RAG_SHORT_QUERY_CANDIDATE_SCALE", 0.9))
+    short_scale = float(
+        getattr(django_settings, "RAG_SHORT_QUERY_CANDIDATE_SCALE", 0.9)
+    )
     long_scale = float(getattr(django_settings, "RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1))
     if q_len <= short_len:
         len_scale = short_scale
@@ -108,7 +112,9 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
     vector_limit = max(top_k + 2, vector_min, min(vector_top_k, raw_cap))
     trigram_limit = max(top_k + 2, trigram_min, min(trigram_top_k, raw_cap))
     exact_limit = max(top_k + 2, min(trigram_top_k, raw_cap))
-    tri_sim_min = float(getattr(django_settings, "RAG_TRIGRAM_SIMILARITY_MIN", 0.000001))
+    tri_sim_min = float(
+        getattr(django_settings, "RAG_TRIGRAM_SIMILARITY_MIN", 0.000001)
+    )
     total_start = perf_counter()
 
     try:
@@ -116,25 +122,35 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
         try:
             vector_start = perf_counter()
             _embed_base, _embed_key, embed_model = get_local_embed_config()
-            cached_vec = rag_cache.get_cached_query_embedding(query, "search_query", embed_model)
+            cached_vec = rag_cache.get_cached_query_embedding(
+                query, "search_query", embed_model
+            )
             if cached_vec is not None:
                 query_embedding = cached_vec
             else:
                 query_embedding = get_embedding(query)
-                rag_cache.set_cached_query_embedding(query, "search_query", embed_model, query_embedding)
+                rag_cache.set_cached_query_embedding(
+                    query, "search_query", embed_model, query_embedding
+                )
             vector_results = (
                 model_cls.objects.filter_by_documents(docs)
                 .exclude(embedding__isnull=True)
                 .defer("embedding")
                 .order_by(L2Distance("embedding", query_embedding))[:vector_limit]
             )  # type: ignore
+            vec_list = list(vector_results)
             vector_ms = (perf_counter() - vector_start) * 1000
         except Exception as exc:
-            vector_error = str(exc)
+            vector_error = RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
             logger.warning(
-                "Vector embed/search failed; continuing with trigram-only retrieval. Error: %s",
-                exc,
+                "obs.rag.vector_search_failed",
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.EMBEDDING_UNAVAILABLE,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
             )
+            vec_list = []
             vector_results = model_cls.objects.none()
             vector_ms = (perf_counter() - total_start) * 1000
         trigram_start = perf_counter()
@@ -158,7 +174,6 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
         else:
             exact_results = model_cls.objects.none()
         exact_ms = (perf_counter() - exact_start) * 1000
-        vec_list = list(vector_results)
         tri_list = list(trigram_results)
         exact_list = list(exact_results)
         combined_candidates = vec_list + tri_list + exact_list
@@ -176,22 +191,18 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
             rerank_ms = 0.0
         else:
             rerank_start = perf_counter()
-            reranked_results = rerank_chunks(model_cls, query, combined_candidates, top_k)
+            reranked_results = rerank_chunks(
+                model_cls, query, combined_candidates, top_k
+            )
             rerank_ms = (perf_counter() - rerank_start) * 1000
         total_ms = (perf_counter() - total_start) * 1000
         logger.info(
-            "text_chunk_search latency %.1fms (vector=%.1fms trigram=%.1fms exact=%.1fms rerank=%.1fms "
-            "docs=%d top_k=%d exact_terms=%d pre_dedupe=%d candidates=%d)",
-            total_ms,
-            vector_ms,
-            trigram_ms,
-            exact_ms,
-            rerank_ms,
-            len(docs),
-            top_k,
-            len(exact_terms),
-            pre_dedupe_count,
-            len(combined_candidates),
+            "obs.rag.search",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.COMPLETED,
+                count=0,
+                elapsed_ms=total_ms,
+            ),
         )
         chunks_with_embeddings: int | None = None
         if not reranked_results:
@@ -202,34 +213,54 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
                     .count()
                 )
             except Exception as count_exc:
-                logger.warning("Could not count chunks_with_embeddings: %s", count_exc)
+                logger.warning(
+                    "obs.rag.chunk_count_failed",
+                    **retrieval_log_fields(
+                        reason=RetrievalLogReason.INTERNAL_FAILURE,
+                        count=0,
+                        elapsed_ms=0.0,
+                    ),
+                )
         diagnostics: dict = {
             "doc_count": len(docs),
             "chunks_with_embeddings": chunks_with_embeddings,
             "vector_error": vector_error,
             "trigram_candidates": len(tri_list),
-            "exact_terms": exact_terms,
+            "exact_term_count": len(exact_terms),
         }
         if not reranked_results:
             logger.info(
-                "text_chunk_search returned no results",
-                extra={
-                    "doc_count": diagnostics["doc_count"],
-                    "chunks_with_embeddings": chunks_with_embeddings,
-                    "vector_error": vector_error,
-                    "trigram_candidates": diagnostics["trigram_candidates"],
-                    "exact_terms": exact_terms,
-                },
+                "obs.rag.search_empty",
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.NO_SEEDS,
+                    count=0,
+                    elapsed_ms=total_ms,
+                ),
             )
         return vector_results, trigram_results, reranked_results, diagnostics
     except DatabaseError as e:
-        logger.error(f"Database error during search: {str(e)}")
+        logger.error(
+            "obs.rag.search_db_error",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE, count=0, elapsed_ms=0.0
+            ),
+        )
         raise e
     except ValidationError as e:
-        logger.error(f"Validation error during search: {str(e)}")
+        logger.error(
+            "obs.rag.search_validation_error",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.INVALID_REQUEST, count=0, elapsed_ms=0.0
+            ),
+        )
         raise e
     except Exception as e:
-        logger.error(f"Unexpected error during search: {str(e)}")
+        logger.error(
+            "obs.rag.search_error",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.INTERNAL_FAILURE, count=0, elapsed_ms=0.0
+            ),
+        )
         raise e
 
 

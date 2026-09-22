@@ -108,6 +108,8 @@ def build_retrieval_queries(
 
     limit = max(1, min(3, int(max_queries)))
     queries = [primary]
+    if limit == 1:
+        return queries
     seen = {_query_key(primary)}
     for raw_clause in re.split(r"[?;\n]+", primary):
         clause = " ".join(raw_clause.split()).strip()

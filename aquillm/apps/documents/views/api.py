@@ -4,12 +4,12 @@ import structlog
 
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 
 from apps.collections.models import Collection
-from apps.documents.models import Document, TextChunk
+from apps.documents.models import DESCENDED_FROM_DOCUMENT, Document, TextChunk
 from apps.documents.services.citation_narrow import narrow_citation
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -36,7 +36,12 @@ def delete_document(request, doc_id):
             'message': f'{title} deleted successfully'
         })
     except Exception as e:
-        logger.error(f"Error deleting document {doc_id}: {e}")
+        logger.error(
+            "obs.documents.delete_failed",
+            doc_id=doc_id,
+            error=str(e),
+            error_type=type(e).__name__,
+        )
         return JsonResponse({'error': f'Failed to delete document: {str(e)}'}, status=500)
 
 
@@ -62,7 +67,9 @@ def move_document(request, doc_id):
         return JsonResponse({"error": "Target collection not found"}, status=404)
 
     try:
-        document.move_to(new_collection)
+        document.move_to(new_collection, actor=request.user)
+    except PermissionDenied as e:
+        return JsonResponse({"error": str(e)}, status=403)
     except ValidationError as e:
         return JsonResponse({"error": str(e)}, status=400)
 
@@ -80,6 +87,18 @@ FULL_TEXT_WINDOW_THRESHOLD = 500_000
 FULL_TEXT_WINDOW_PADDING = 5_000
 
 
+def _get_chunk_document(chunk, *, include_full_text):
+    if include_full_text:
+        return chunk.document
+
+    for doc_type in DESCENDED_FROM_DOCUMENT:
+        doc = doc_type.objects.defer("full_text").filter(id=chunk.doc_id).first()
+        if doc:
+            return doc
+
+    raise ValidationError(f"TextChunk {chunk.pk} is not associated with a document!")
+
+
 @require_http_methods(["GET"])
 @login_required
 def chunk_detail(request, chunk_id):
@@ -93,8 +112,13 @@ def chunk_detail(request, chunk_id):
     if not chunk:
         return JsonResponse({"error": "Chunk not found"}, status=404)
 
+    include_full_text = request.GET.get("include_full_text", "1").lower() not in {
+        "0",
+        "false",
+        "no",
+    }
     try:
-        doc = chunk.document
+        doc = _get_chunk_document(chunk, include_full_text=include_full_text)
     except ValidationError:
         return JsonResponse({"error": "Chunk's document not found"}, status=404)
 
@@ -108,14 +132,30 @@ def chunk_detail(request, chunk_id):
         getattr(doc, "pdf_file", None) or getattr(doc, "rendered_pdf", None)
     )
 
-    full_text = doc.full_text or ""
-    text_offset = 0
-    # Window very long docs around the chunk so the response stays bounded.
-    if len(full_text) > FULL_TEXT_WINDOW_THRESHOLD:
-        window_start = max(0, chunk.start_position - FULL_TEXT_WINDOW_PADDING)
-        window_end = min(len(full_text), chunk.end_position + FULL_TEXT_WINDOW_PADDING)
-        full_text = full_text[window_start:window_end]
-        text_offset = window_start
+    document_payload = {
+        "id": str(doc.id),
+        "title": doc.title,
+        "type": doc.__class__.__name__,
+        "has_pdf": has_pdf,
+        "source_url": getattr(doc, "source_url", None),
+    }
+    if include_full_text:
+        full_text = doc.full_text or ""
+        text_offset = 0
+        # Window very long docs around the chunk so the response stays bounded.
+        if len(full_text) > FULL_TEXT_WINDOW_THRESHOLD:
+            window_start = max(0, chunk.start_position - FULL_TEXT_WINDOW_PADDING)
+            window_end = min(len(full_text), chunk.end_position + FULL_TEXT_WINDOW_PADDING)
+            full_text = full_text[window_start:window_end]
+            text_offset = window_start
+        document_payload["full_text"] = full_text
+        document_payload["text_offset"] = text_offset
+
+    # Image chunks point at a DocumentFigure (a Document subclass) whose binary
+    # is served by the document_image view; the modal renders it directly.
+    image_url = None
+    if chunk.modality == TextChunk.Modality.IMAGE:
+        image_url = f"/aquillm/document_image/{doc.id}/"
 
     return JsonResponse({
         "content": chunk.content,
@@ -123,15 +163,9 @@ def chunk_detail(request, chunk_id):
         "start_position": chunk.start_position,
         "end_position": chunk.end_position,
         "start_time": chunk.start_time,
-        "document": {
-            "id": str(doc.id),
-            "title": doc.title,
-            "type": doc.__class__.__name__,
-            "has_pdf": has_pdf,
-            "source_url": getattr(doc, "source_url", None),
-            "full_text": full_text,
-            "text_offset": text_offset,
-        },
+        "modality": chunk.modality,
+        "image_url": image_url,
+        "document": document_payload,
     })
 
 
@@ -188,13 +222,77 @@ def citation_narrow(request):
         return JsonResponse({"quote": cached, "cached": True})
 
     quote = narrow_citation(message.content, chunk.content) or ""
+    if not quote:
+        # Narrowing fell back to the whole chunk. Logged (not surfaced) so we
+        # can tell whether the eager prefetch is actually warming the cache or
+        # silently degrading to full-chunk highlights everywhere.
+        logger.warning(
+            "citation_narrow_empty",
+            message_uuid=message_uuid,
+            chunk_id=chunk.pk,
+            doc_type=doc.__class__.__name__,
+        )
     cache.set(cache_key, quote, CITATION_NARROW_CACHE_TTL)
     return JsonResponse({"quote": quote, "cached": False})
+
+
+@require_http_methods(["POST"])
+@login_required
+def citation_sources(request):
+    """Resolve a batch of cited chunk ids to their document for the per-message
+    "Sources" footer, in a single request instead of one chunk_detail call per
+    citation.
+
+    Body: {chunk_ids: int[]}
+    Returns: {sources: [{chunk_id, doc_id, title, modality}]}
+    Chunks the user can't view (or that no longer exist) are silently dropped
+    rather than failing the whole batch.
+    """
+    try:
+        body = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    raw_ids = body.get("chunk_ids")
+    if not isinstance(raw_ids, list):
+        return JsonResponse({"error": "chunk_ids must be a list"}, status=400)
+
+    chunk_ids = []
+    for value in raw_ids:
+        try:
+            chunk_ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+
+    sources = []
+    # Cache per-document view permission so a doc cited by many chunks is only
+    # checked once.
+    doc_visible: dict = {}
+    for chunk in TextChunk.objects.filter(pk__in=set(chunk_ids)):
+        try:
+            doc = chunk.document
+        except ValidationError:
+            continue
+        visible = doc_visible.get(doc.id)
+        if visible is None:
+            visible = doc.collection.user_can_view(request.user)
+            doc_visible[doc.id] = visible
+        if not visible:
+            continue
+        sources.append({
+            "chunk_id": chunk.pk,
+            "doc_id": str(doc.id),
+            "title": doc.title,
+            "modality": chunk.modality,
+        })
+
+    return JsonResponse({"sources": sources})
 
 
 __all__ = [
     'chunk_detail',
     'citation_narrow',
+    'citation_sources',
     'delete_document',
     'move_document',
 ]

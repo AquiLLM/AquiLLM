@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 import structlog
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 from apps.documents.services import chunk_rerank_score, rag_cache
 from apps.documents.services.chunk_rerank_budget import trim_rerank_documents
@@ -52,9 +53,10 @@ def rerank_via_local_vllm(
     )
     if cached_ranked:
         logger.info(
-            "rerank_local_vllm cache_hit=1 candidates=%d top_k=%d",
-            len(candidate_ids),
-            top_k,
+            "obs.rag.rerank_cache_hit",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.COMPLETED, count=0, elapsed_ms=0.0
+            ),
         )
         return ordered_queryset_from_ids(model_cls, cached_ranked)
 
@@ -71,9 +73,7 @@ def rerank_via_local_vllm(
 
     multimodal_documents = [rerank_document_payload(chunk) for chunk in chunks_list]
     effective_multimodal_documents: list[Any] = []
-    for mm_document, text_document in zip(
-        multimodal_documents, effective_documents
-    ):
+    for mm_document, text_document in zip(multimodal_documents, effective_documents):
         if isinstance(mm_document, list):
             normalized: list[dict[str, Any]] = []
             for part in mm_document:
@@ -104,9 +104,7 @@ def rerank_via_local_vllm(
                 query_signature, candidate_ids, top_k, model_name, ranked_ids
             )
             if capability:
-                rag_cache.set_cached_rerank_capability(
-                    base_v1, model_name, capability
-                )
+                rag_cache.set_cached_rerank_capability(base_v1, model_name, capability)
         return ordered_queryset_from_ids(model_cls, ranked_ids)
 
     observed_http_error = False
@@ -130,9 +128,7 @@ def rerank_via_local_vllm(
                 if response.status_code >= 400:
                     observed_http_error = True
                     continue
-                ranked_ids = _parse_batch_scores(
-                    response.json(), chunks_list, top_k
-                )
+                ranked_ids = _parse_batch_scores(response.json(), chunks_list, top_k)
             except Exception:
                 observed_http_error = True
                 continue
@@ -260,7 +256,12 @@ def rerank_via_local_vllm(
         observed_http_error = True
 
     if observed_http_error:
-        logger.warning("All local rerank requests failed")
+        logger.warning(
+            "obs.rag.rerank_requests_failed",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE, count=0, elapsed_ms=0.0
+            ),
+        )
     return model_cls.objects.none()
 
 

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+from json import dumps
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
-from lib.llm.types.conversation import Conversation
-from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
-
+from apps.chat.consumers.chat_transport import best_effort_send
 from apps.chat.refs import CollectionsRef
 from apps.chat.services import rag_pipeline
 from apps.chat.services.rag_pipeline import run_direct_rag_turn
 from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
+from lib.llm.types.conversation import Conversation
+from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
 
 
@@ -70,6 +71,38 @@ async def test_skipped_when_intent_not_rag(monkeypatch):
     llm_if.get_message.assert_not_called()
 
 
+async def test_history_tool_choice_is_not_preempted_by_selected_collection(monkeypatch):
+    from apps.chat.refs import ChatRef
+    from apps.chat.services.tool_wiring.memory import search_past_chats_tool
+    from lib.llm.types.tools import ToolChoice
+
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    for query in ("Remind me what we said about the papers before.", "retry"):
+        convo = _user_convo(query)
+        convo[-1].tools = [search_past_chats_tool(None, ChatRef(None))]
+        convo[-1].tool_choice = ToolChoice(type="any")
+        consumer = _consumer(convo, [1])
+        search = Mock(return_value=_results_payload())
+        monkeypatch.setattr(rag_pipeline, "_run_vector_search", search)
+        assert await run_direct_rag_turn(consumer, object(), convo) == "skipped"
+        search.assert_not_called()
+
+
+async def test_explicit_collection_synthesis_without_selection_is_handled(monkeypatch):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    convo = _user_convo(
+        "Hi aquillm can you tell me about the documents in this collection and synthesize things?"
+    )
+    consumer = _consumer(convo, [])
+    llm_if = SimpleNamespace(get_message=AsyncMock())
+
+    outcome = await run_direct_rag_turn(consumer, llm_if, convo, stream_func=None)
+
+    assert outcome == "handled"
+    llm_if.get_message.assert_not_called()
+    assert "no collections are selected" in consumer.convo[-1].content.lower()
+
+
 async def test_skipped_when_last_message_not_user(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     convo = Conversation(
@@ -117,6 +150,267 @@ async def test_handled_retrieves_before_llm(monkeypatch):
     assert order == ["retrieval", "synthesis"]
     llm_if.get_message.assert_not_called()
     assert "Answer" in consumer.convo[-1].content
+
+
+async def test_candidate_pool_is_larger_than_final_packet(monkeypatch):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    monkeypatch.setenv("RAG_DIRECT_TOP_K", "2")
+    monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "1")
+    observed = []
+
+    def search(_consumer, _query, top_k):
+        observed.append(top_k)
+        rows = [dict(_results_payload()["result"][0], chunk_id=i,
+                     citation=f"[doc:doc-a chunk:{i}]") for i in range(1, 6)]
+        rows.append(dict(rows[0], doc_id="doc-b", chunk_id=6,
+                         title="Paper B", citation="[doc:doc-b chunk:6]"))
+        return {"result": rows[:top_k]}
+
+    async def synth(_llm_if, convo, packet, **kwargs):
+        assert [row["doc_id"] for row in packet.chunks] == ["doc-a", "doc-b"]
+        return convo + [AssistantMessage(content="Answer", stop_reason="end_turn")]
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", search)
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", synth)
+    convo = _user_convo("compare the selected papers")
+    consumer = _consumer(convo, [1])
+    assert await run_direct_rag_turn(consumer, object(), convo) == "handled"
+    assert observed == [6]
+
+
+async def test_selected_collection_definition_uses_direct_rag(monkeypatch):
+    """A terse selected-collection question must skip model tool selection."""
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    searched_queries: list[str] = []
+
+    def fake_search(_consumer, query, _top_k):
+        searched_queries.append(query)
+        return _results_payload()
+
+    async def fake_synth(_llm_if, working_convo, _packet, *, stream_func=None):
+        return working_convo + [
+            AssistantMessage(
+                content="Attensity answer [doc:doc-a chunk:1].",
+                stop_reason="end_turn",
+            )
+        ]
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", fake_search)
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", fake_synth)
+
+    convo = _user_convo("what is attensity")
+    consumer = _consumer(convo, [203])
+    llm_if = SimpleNamespace(get_message=AsyncMock())
+
+    outcome = await run_direct_rag_turn(consumer, llm_if, convo, stream_func=None)
+
+    assert outcome == "handled"
+    assert searched_queries == ["what is attensity"]
+    llm_if.get_message.assert_not_called()
+
+
+async def test_retry_reuses_last_direct_vector_query(monkeypatch):
+    """Retrying a direct retrieval reuses its resolved query, not the word retry."""
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    searched_queries: list[str] = []
+
+    def fake_search(_consumer, query, _top_k):
+        searched_queries.append(query)
+        return _results_payload()
+
+    async def fake_synth(_llm_if, working_convo, _packet, *, stream_func=None):
+        return working_convo + [
+            AssistantMessage(
+                content="Retried answer [doc:doc-a chunk:1].",
+                stop_reason="end_turn",
+            )
+        ]
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", fake_search)
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", fake_synth)
+
+    convo = Conversation(
+        system="sys",
+        messages=[
+            UserMessage(content="what is attensity"),
+            AssistantMessage(
+                content="",
+                stop_reason="tool_use",
+                tool_call_id="call-1",
+                tool_call_name="vector_search",
+                tool_call_input={"search_string": "attensity", "top_k": 10},
+            ),
+            ToolMessage(
+                tool_name="vector_search",
+                for_whom="assistant",
+                content="evidence",
+                arguments={"search_string": "attensity", "top_k": 10},
+                result_dict=_results_payload(),
+            ),
+            AssistantMessage(content="Earlier answer.", stop_reason="end_turn"),
+            UserMessage(content="retry"),
+        ],
+    )
+    consumer = _consumer(convo, [203])
+
+    outcome = await run_direct_rag_turn(
+        consumer,
+        SimpleNamespace(get_message=AsyncMock()),
+        convo,
+        stream_func=None,
+    )
+
+    assert outcome == "handled"
+    assert searched_queries == ["attensity"]
+
+
+async def test_stream_disconnect_does_not_turn_direct_rag_into_tool_fallback(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    convo = _user_convo("what is attensity")
+    consumer = _consumer(convo, [203])
+    consumer.transport_connected = True
+
+    async def raw_send(*, text_data):
+        raise RuntimeError(
+            "Unexpected ASGI message 'websocket.send', after sending 'websocket.close'"
+        )
+
+    consumer.send = raw_send
+
+    async def safe_stream(payload):
+        await best_effort_send(
+            consumer,
+            text_data=dumps({"stream": payload}),
+        )
+
+    async def fake_synth(_llm_if, working_convo, _packet, *, stream_func=None):
+        await stream_func({"content": "partial", "done": False})
+        return working_convo + [
+            AssistantMessage(
+                content="Grounded answer [doc:doc-a chunk:1]",
+                stop_reason="end_turn",
+            )
+        ]
+
+    monkeypatch.setattr(
+        rag_pipeline,
+        "_run_vector_search",
+        lambda *_args: _results_payload(),
+    )
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", fake_synth)
+
+    outcome = await run_direct_rag_turn(
+        consumer,
+        SimpleNamespace(),
+        convo,
+        stream_func=safe_stream,
+    )
+
+    assert outcome == "handled"
+    assert consumer.transport_connected is False
+    assert consumer.convo[-1].content == "Grounded answer [doc:doc-a chunk:1]"
+
+
+async def test_multi_part_direct_rag_searches_variants_before_one_synthesis(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "3")
+    searched: list[str] = []
+    synthesized: list = []
+
+    def fake_search(consumer, query, top_k):
+        searched.append(query)
+        chunk_id = len(searched)
+        return {
+            "result": [
+                {
+                    "rank": 1,
+                    "chunk_id": chunk_id,
+                    "doc_id": f"doc-{chunk_id}",
+                    "title": f"Paper {chunk_id}",
+                    "text": f"Evidence for query {chunk_id}.",
+                    "citation": f"[doc:doc-{chunk_id} chunk:{chunk_id}]",
+                }
+            ],
+            "retrieval_status": "results_found",
+            "retrieved_count": 1,
+            "retrieved_documents": [f"Paper {chunk_id}"],
+        }
+
+    async def fake_synth(llm_if, convo, packet, *, stream_func=None):
+        synthesized.append(packet)
+        return convo + [
+            AssistantMessage(content="Cited answer", stop_reason="end_turn")
+        ]
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", fake_search)
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", fake_synth)
+
+    convo = _user_convo("Explain what each paper is about? What overlaps between them?")
+    consumer = _consumer(convo, [1, 2, 3])
+
+    outcome = await run_direct_rag_turn(
+        consumer,
+        SimpleNamespace(get_message=AsyncMock()),
+        convo,
+        stream_func=None,
+    )
+
+    assert outcome == "handled"
+    assert searched == [
+        "Explain what each paper is about? What overlaps between them?",
+        "Explain what each paper is about",
+        "What overlaps between them",
+    ]
+    assert len(synthesized) == 1
+    assert len(synthesized[0].citation_tokens) == 3
+
+
+async def test_multi_query_retrieval_uses_successful_variants_when_one_fails(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "3")
+    synthesized: list = []
+
+    def fake_search(consumer, query, top_k):
+        if query == "What overlaps between them":
+            raise RuntimeError("one query backend failure")
+        return _results_payload()
+
+    async def fake_synth(llm_if, convo, packet, *, stream_func=None):
+        synthesized.append(packet)
+        return convo + [
+            AssistantMessage(content="Cited answer", stop_reason="end_turn")
+        ]
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", fake_search)
+    monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", fake_synth)
+
+    convo = _user_convo("Explain what each paper is about? What overlaps between them?")
+    consumer = _consumer(convo, [1, 2, 3])
+
+    outcome = await run_direct_rag_turn(
+        consumer,
+        SimpleNamespace(get_message=AsyncMock()),
+        convo,
+        stream_func=None,
+    )
+
+    assert outcome == "handled"
+    assert len(synthesized) == 1
+    assert synthesized[0].citation_tokens == ["[doc:doc-a chunk:1]"]
+
+
+
+
+
+
+
+
 
 
 async def test_handled_appends_synthetic_tool_messages(monkeypatch):
@@ -251,6 +545,10 @@ async def test_direct_rag_no_results_returns_notice_without_llm(monkeypatch):
             'I searched the selected documents for "dark matter", '
             "but retrieval returned no relevant passages."
         ),
+        "retrieval_diagnostics": {
+            "doc_count": 1,
+            "vector_error": None,
+        },
     }
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", lambda c, q, k: raw)
 

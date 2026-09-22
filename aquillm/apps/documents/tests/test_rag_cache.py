@@ -37,7 +37,21 @@ def test_cache_set_swallows_errors():
 
 
 def test_rehydrate_documents_from_refs_empty():
-    assert rag_cache.rehydrate_documents_from_refs([]) == []
+    assert rag_cache.rehydrate_documents_from_refs([], allowed_collection_ids=()) == []
+
+
+@pytest.mark.parametrize(
+    "allowed_collection_ids",
+    [None, (True,), ("1",), (1.0,), (0,), (-1,), (2**63,)],
+)
+def test_rehydrate_documents_from_refs_rejects_invalid_signed_bigint_allowlists(
+    allowed_collection_ids,
+):
+    with pytest.raises(ValueError, match="positive integers"):
+        rag_cache.rehydrate_documents_from_refs(
+            [],
+            allowed_collection_ids=allowed_collection_ids,
+        )
 
 
 @patch("django.apps.apps.get_model")
@@ -76,13 +90,68 @@ def test_rehydrate_documents_from_refs_batches_queries_by_model(mock_get_model):
         {"model": "AlphaDoc", "pkid": 1},
         {"model": "AlphaDoc", "pkid": 3},
     ]
-    out = rag_cache.rehydrate_documents_from_refs(refs)
+    out = rag_cache.rehydrate_documents_from_refs(
+        refs,
+        allowed_collection_ids=(4, 9),
+    )
 
     assert mock_alpha.objects.filter.call_count == 1
     assert mock_beta.objects.filter.call_count == 1
     alpha_call = mock_alpha.objects.filter.call_args
     assert set(alpha_call.kwargs["pkid__in"]) == {1, 2, 3}
+    assert alpha_call.kwargs["collection_id__in"] == (4, 9)
+    assert mock_beta.objects.filter.call_args.kwargs["collection_id__in"] == (4, 9)
     assert [d.pkid for d in out] == [1, 10, 2, 1, 3]
+
+
+@patch("django.apps.apps.get_model")
+def test_rehydrate_documents_from_refs_drops_rows_outside_current_allowlist(
+    mock_get_model,
+):
+    allowed_doc = MagicMock(pkid=7, collection_id=11)
+    moved_doc = MagicMock(pkid=8, collection_id=12)
+    model = MagicMock()
+
+    def _filter(**kwargs):
+        assert kwargs == {
+            "pkid__in": [7, 8],
+            "collection_id__in": (11,),
+        }
+        return [
+            doc
+            for doc in (allowed_doc, moved_doc)
+            if doc.pkid in kwargs["pkid__in"]
+            and doc.collection_id in kwargs["collection_id__in"]
+        ]
+
+    model.objects.filter.side_effect = _filter
+    mock_get_model.return_value = model
+
+    result = rag_cache.rehydrate_documents_from_refs(
+        [
+            {"model": "RawTextDocument", "pkid": 7},
+            {"model": "RawTextDocument", "pkid": 8},
+        ],
+        allowed_collection_ids=(11,),
+    )
+
+    assert result == [allowed_doc]
+
+
+@patch("django.apps.apps.get_model")
+def test_rehydrate_documents_from_refs_canonicalizes_collection_allowlist(
+    mock_get_model,
+):
+    model = MagicMock()
+    model.objects.filter.return_value = []
+    mock_get_model.return_value = model
+
+    rag_cache.rehydrate_documents_from_refs(
+        [{"model": "RawTextDocument", "pkid": 7}],
+        allowed_collection_ids=(9, 3, 9),
+    )
+
+    assert model.objects.filter.call_args.kwargs["collection_id__in"] == (3, 9)
 
 
 def test_document_refs_roundtrip_keys():

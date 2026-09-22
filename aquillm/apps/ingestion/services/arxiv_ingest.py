@@ -21,11 +21,14 @@ logger = structlog.stdlib.get_logger(__name__)
 def insert_one_from_arxiv(arxiv_id: str, collection: Collection, user: Any) -> dict:
     """Ingest a paper from arXiv; returns ``{"message": str, "errors": list[str]}``."""
 
+    abs_url = f"https://arxiv.org/abs/{arxiv_id}"
+
     def save_pdf_doc(content: bytes, title: str) -> None:
         doc = PDFDocument(
             collection=collection,
             title=title,
             ingested_by=user,
+            source_url=abs_url,
         )
         doc.pdf_file.save(f"arxiv:{arxiv_id}.pdf", ContentFile(content), save=False)
         doc.save()
@@ -46,7 +49,13 @@ def insert_one_from_arxiv(arxiv_id: str, collection: Collection, user: Any) -> d
             f"ERROR -- DOI {arxiv_id}: LaTeX status code {tex_req.status_code}, "
             f"PDF status code {pdf_req.status_code}, metadata status code {metadata_req.status_code}"
         )
-        logger.error(error_str)
+        logger.error(
+            "obs.ingest.arxiv_fetch_error",
+            arxiv_id=arxiv_id,
+            tex_status=tex_req.status_code,
+            pdf_status=pdf_req.status_code,
+            metadata_status=metadata_req.status_code,
+        )
         status["errors"].append(error_str)  # type: ignore[union-attr]
     else:
         xmldoc = minidom.parseString(metadata_req.content)
@@ -84,6 +93,7 @@ def insert_one_from_arxiv(arxiv_id: str, collection: Collection, user: Any) -> d
                     title=title,
                     full_text=tex_str,
                     ingested_by=user,
+                    source_url=abs_url,
                 )
                 if pdf_req.status_code == 200:
                     status["message"] += f"Got PDF for {arxiv_id}\n"  # type: ignore[operator]

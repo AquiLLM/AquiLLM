@@ -61,7 +61,7 @@ def extract_figures_from_document(
         yield from extract_figures_epub(data, filename)
         
     else:
-        logger.debug("No figure extraction available for format: %s", source_format)
+        logger.debug("obs.figures.unsupported_format", source_format=source_format)
 
 
 def generate_figure_caption(figure: ExtractedFigure, doc_title: str, source_format: str) -> str:
@@ -115,5 +115,5 @@ def enhance_figure_with_ocr(figure: ExtractedFigure) -> tuple[str, str, str]:
         
         return ocr_text, provider, model
     except Exception as exc:
-        logger.debug("OCR failed for figure: %s", exc)
+        logger.debug("obs.figures.ocr_failed", error=str(exc), error_type=type(exc).__name__)
         return "", "", ""

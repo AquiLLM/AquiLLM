@@ -35,13 +35,13 @@ services:
       retries: 5
       start_period: 20s
 
-  storage:
+  storage_test:
     image: localstack/localstack:4.0.3
     env_file:
       - ../../.env
     volumes:
       - ../../aws:/etc/localstack/init/ready.d
-      - localstack_data:/var/lib/localstack
+      - localstack_data_test:/var/lib/localstack
     healthcheck:
       test:
         - CMD

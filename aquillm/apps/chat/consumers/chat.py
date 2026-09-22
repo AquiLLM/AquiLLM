@@ -13,11 +13,6 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.apps import apps
 from django.contrib.auth.models import User
 
-from aquillm.llm import LLMInterface, LLMTool, message_to_user
-from aquillm.memory import augment_conversation_with_memory_async
-from aquillm.message_adapters import load_conversation_from_db, pydantic_message_to_frontend_dict
-from aquillm.settings import DEBUG, SKILLS_ENABLED
-from aquillm.tasks import enqueue_conversation_memories_task
 from apps.chat.consumers.chat_delta import send_conversation_delta
 from apps.chat.consumers.chat_publish import run_llm_spin
 from apps.chat.consumers.chat_receive import handle_chat_receive
@@ -26,9 +21,25 @@ from apps.chat.consumers.chat_ws_errors import send_connect_error
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
-from apps.chat.services.skills_runtime import build_skill_tools, effective_base_system_for_memory_async
-from apps.chat.services.tool_wiring import build_astronomy_tools, build_document_tools
 from apps.chat.services.rag_pipeline import run_direct_rag_turn
+from apps.chat.services.skills_runtime import (
+    build_skill_tools,
+    effective_base_system_for_memory_async,
+)
+from apps.chat.services.tool_wiring import (
+    build_astronomy_tools,
+    build_document_tools,
+    build_memory_tools,
+)
+from apps.chat.tasks import enqueue_index_conversation_task
+from aquillm.llm import LLMInterface, LLMTool, message_to_user
+from aquillm.memory import augment_conversation_with_memory_async
+from aquillm.message_adapters import (
+    load_conversation_from_db,
+    pydantic_message_to_frontend_dict,
+)
+from aquillm.settings import DEBUG, SKILLS_ENABLED
+from aquillm.tasks import enqueue_conversation_memories_task
 from lib.tools.debug.weather import get_debug_weather_tool
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -39,6 +50,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     db_convo: WSConversation | None = None
     convo: Any | None = None
     tools: list[LLMTool] = []
+    memory_tools: list[LLMTool] = []
     user: User | None = None
 
     dead: bool = False
@@ -74,7 +86,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 )
             except Exception as exc:
                 logger.warning(
-                    "Failed to queue memory extraction task for convo %s: %s",
+                    "obs.chat.memory_enqueue_failed",
+                    conversation_id=self.db_convo.id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            try:
+                enqueue_index_conversation_task(
+                    conversation_id=self.db_convo.id,
+                    queued_updated_at=self.db_convo.updated_at.isoformat(),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to queue conversation indexing task for convo %s: %s",
                     self.db_convo.id,
                     exc,
                 )
@@ -105,27 +129,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.col_ref.collections = list(self.db_convo.selected_collection_ids or [])
 
     async def connect(self):
-        logger.debug("ChatConsumer.connect() called")
+        logger.debug("obs.chat.connect")
 
         self.transport_connected = True
         await self.accept()
-        logger.debug("WebSocket accepted")
+        logger.debug("obs.chat.ws_accepted")
         self.user = self.scope["user"]
         assert self.user is not None
-        logger.debug("User: %s", self.user)
+        logger.debug("obs.chat.user_resolved", user_id=getattr(self.user, "id", None))
         await self.__get_all_user_collections()
-        logger.debug("Collections loaded: %s", self.col_ref.collections)
+        logger.debug("obs.chat.collections_loaded", collection_count=len(self.col_ref.collections))
         self.doc_tools = build_document_tools(self.user, self.col_ref, ChatRef(self))
-        self.tools = self.doc_tools + build_astronomy_tools(self)
+        self.memory_tools = build_memory_tools(self.user, ChatRef(self))
+        self.tools = self.doc_tools + build_astronomy_tools(self) + self.memory_tools
         if getenv("LLM_CHOICE") == "GEMMA3":
             self.tools.append(message_to_user)
         if DEBUG:
             self.tools.append(get_debug_weather_tool())
         convo_id = self.scope["url_route"]["kwargs"]["convo_id"]
-        logger.debug("Convo ID: %s", convo_id)
+        logger.debug("obs.chat.convo_id_resolved", conversation_id=convo_id)
         self.db_convo = await self.__get_convo(convo_id, self.user)
         if self.db_convo is None:
-            logger.error("Invalid conversation ID: %s", convo_id)
+            logger.error("obs.chat.invalid_conversation", conversation_id=convo_id)
             self.dead = True
             await self.send('{"exception": "Invalid chat_id"}')
             return
@@ -157,11 +182,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 include_episodic=not bool(self.col_ref.collections),
             )
             logger.info(
-                "Memory augmentation took %.1fms in connect()",
-                (perf_counter() - augment_start) * 1000,
+                "obs.chat.memory_augmented",
+                phase="connect",
+                duration_ms=(perf_counter() - augment_start) * 1000,
             )
             self.convo.rebind_tools(self.tools)
-            logger.debug("About to call llm_if.spin() in connect()")
+            logger.debug("obs.chat.spin_starting", phase="connect")
             before_spin_len = len(self.convo)
             llm_start = perf_counter()
             direct_outcome = await run_direct_rag_turn(
@@ -195,15 +221,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 duration_ms=(perf_counter() - llm_start) * 1000,
             )
             await self._save_conversation(create_memories=len(self.convo) > before_spin_len)
-            logger.debug("llm_if.spin() completed in connect()")
+            logger.debug("obs.chat.spin_done", phase="connect")
             return
         except OverloadedError as e:
-            logger.error("LLM overloaded: %s", e)
+            logger.error("obs.chat.llm_overloaded", error=str(e), error_type=type(e).__name__)
             self.dead = True
             await self.send('{"exception": "LLM provider is currently overloaded. Try again later."}')
             return
         except Exception as e:
-            logger.error("Exception in connect(): %s", e, exc_info=True)
+            logger.error(
+                "obs.chat.connect_error",
+                error=str(e),
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
             await send_connect_error(self, e)
             return
 

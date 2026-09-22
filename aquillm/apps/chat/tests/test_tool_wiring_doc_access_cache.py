@@ -25,3 +25,28 @@ def test_get_user_accessible_documents_hits_cache_second_call(mock_doc_types):
     Collection.get_user_accessible_documents(user, col_qs)
     Collection.get_user_accessible_documents(user, col_qs)
     assert mock_doc_types.call_count == 1
+
+
+@override_settings(RAG_CACHE_ENABLED=True)
+@patch("apps.documents.services.rag_cache.rehydrate_documents_from_refs")
+@patch("apps.documents.services.rag_cache.get_cached_doc_access_refs")
+def test_cached_document_refs_are_rehydrated_with_fresh_authorized_collection_ids(
+    mock_get_cached_refs,
+    mock_rehydrate,
+):
+    cached_refs = [{"model": "RawTextDocument", "pkid": 7}]
+    mock_get_cached_refs.return_value = cached_refs
+    mock_rehydrate.return_value = []
+
+    permitted = MagicMock()
+    permitted.values_list.return_value = [9, 3]
+    selected = MagicMock()
+    selected.filter_by_user_perm.return_value = permitted
+    user = MagicMock(id=42)
+
+    Collection.get_user_accessible_documents(user, selected)
+
+    mock_rehydrate.assert_called_once_with(
+        cached_refs,
+        allowed_collection_ids=(3, 9),
+    )

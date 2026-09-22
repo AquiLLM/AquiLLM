@@ -35,9 +35,9 @@ async def end_spin_publish(consumer: Any, convo: Conversation) -> None:
         return
     await consumer.send(text_data=dumps({"delta": {"messages": refresh_messages}}))
     logger.debug(
-        "spin_finalize_publish messages=%d epoch=%d",
-        len(refresh_messages),
-        epoch,
+        "obs.chat.spin_finalize_publish",
+        message_count=len(refresh_messages),
+        epoch=epoch,
     )
 
 

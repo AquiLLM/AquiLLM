@@ -3,6 +3,8 @@ import { X, ExternalLink } from 'lucide-react';
 import formatUrl from '../../../utils/formatUrl';
 import { getCsrfCookie } from '../../../main';
 import type { CitationChunkDetail } from './citationTypes';
+import { findNormalizedOffset, normalizeForSearch } from '../../../utils/textOffsetMatch';
+import CitationPinButton from './CitationPinButton';
 
 interface TextCitationModalProps {
   docId: string;
@@ -12,53 +14,9 @@ interface TextCitationModalProps {
   /** Optional chunk prefetched by the provider, skipping the initial fetch. */
   preloadedChunk?: CitationChunkDetail | null;
   onClose: () => void;
-}
-
-/** Normalize whitespace and case for substring search so a quote that
- *  differs only in collapsed spaces / smart quotes still matches. */
-function normalizeForSearch(s: string): string {
-  return s
-    .normalize('NFKC')
-    .replace(/[‘’‚‛]/g, "'")
-    .replace(/[“”„‟]/g, '"')
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
-}
-
-/** Find `needle` inside `haystack` using normalized matching but return
- *  an offset into the ORIGINAL haystack. Returns null on miss. */
-function findNormalizedOffset(haystack: string, needle: string): { start: number; end: number } | null {
-  const normNeedle = normalizeForSearch(needle).trim();
-  if (!normNeedle) return null;
-  // Build a parallel array of original-index per normalized character.
-  const indexMap: number[] = [];
-  let norm = '';
-  let prevWasSpace = false;
-  for (let i = 0; i < haystack.length; i++) {
-    const ch = haystack[i].normalize('NFKC');
-    for (const c of ch) {
-      let mapped = c;
-      if (c === '‘' || c === '’' || c === '‚' || c === '‛') mapped = "'";
-      else if (c === '“' || c === '”' || c === '„' || c === '‟') mapped = '"';
-      if (/\s/.test(mapped)) {
-        if (prevWasSpace) continue;
-        prevWasSpace = true;
-        norm += ' ';
-        indexMap.push(i);
-      } else {
-        prevWasSpace = false;
-        norm += mapped.toLowerCase();
-        indexMap.push(i);
-      }
-    }
-  }
-  const hit = norm.indexOf(normNeedle);
-  if (hit < 0) return null;
-  const start = indexMap[hit];
-  const endIdx = hit + normNeedle.length - 1;
-  if (endIdx >= indexMap.length) return null;
-  const end = indexMap[endIdx] + 1; // exclusive
-  return { start, end };
+  /** Pin state for the slide-out panel. */
+  pinned?: boolean;
+  onTogglePin?: () => void;
 }
 
 function formatTimestamp(seconds: number): string {
@@ -74,6 +32,8 @@ export const TextCitationModal: React.FC<TextCitationModalProps> = ({
   messageUuid,
   preloadedChunk,
   onClose,
+  pinned = false,
+  onTogglePin,
 }) => {
   const [chunk, setChunk] = useState<CitationChunkDetail | null>(preloadedChunk ?? null);
   const [chunkError, setChunkError] = useState<string | null>(null);
@@ -173,8 +133,23 @@ export const TextCitationModal: React.FC<TextCitationModalProps> = ({
     const text = chunk.document.full_text;
     const localStart = chunk.start_position - chunk.document.text_offset;
     const localEnd = chunk.end_position - chunk.document.text_offset;
-    const chunkStart = Math.max(0, Math.min(localStart, text.length));
-    const chunkEnd = Math.max(chunkStart, Math.min(localEnd, text.length));
+    let chunkStart = Math.max(0, Math.min(localStart, text.length));
+    let chunkEnd = Math.max(chunkStart, Math.min(localEnd, text.length));
+
+    // The offsets are trusted as long as the slice actually matches the chunk
+    // content. If they've drifted from the displayed text (windowing edge,
+    // re-extraction, etc.) the offset highlight would be silently wrong, so
+    // fall back to locating chunk.content directly — same approach the PDF
+    // modal uses.
+    const sliceNorm = normalizeForSearch(text.slice(chunkStart, chunkEnd)).trim();
+    const contentNorm = normalizeForSearch(chunk.content).trim();
+    if (contentNorm && sliceNorm !== contentNorm) {
+      const located = findNormalizedOffset(text, chunk.content);
+      if (located) {
+        chunkStart = located.start;
+        chunkEnd = located.end;
+      }
+    }
 
     let tightStart: number | null = null;
     let tightEnd: number | null = null;
@@ -340,6 +315,7 @@ export const TextCitationModal: React.FC<TextCitationModalProps> = ({
               <ExternalLink className="w-4 h-4" />
             </a>
           )}
+          {onTogglePin && <CitationPinButton pinned={pinned} onToggle={onTogglePin} />}
           <button
             type="button"
             onClick={onClose}

@@ -26,7 +26,13 @@ def _safe_reverse(name: str, kwargs: dict[str, Any] | None = None) -> str | None
             return url
         return reverse(name)
     except NoReverseMatch as exc:
-        logger.warning("Could not reverse URL name=%s kwargs=%s: %s", name, kwargs, exc)
+        logger.warning(
+            "obs.core.url_reverse_failed",
+            url_name=name,
+            kwargs=kwargs,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return None
 
 
@@ -62,6 +68,7 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_conversation_file", "api_conversation_file", {"convo_file_id": 0}),
     ("api_chunk_detail", "api_chunk_detail", {"chunk_id": 0}),
     ("api_citation_narrow", "api_citation_narrow", None),
+    ("api_citation_sources", "api_citation_sources", None),
     ("api_ingest_webpage", "api_ingest_webpage", None),
     # Page-backed ingest (not under /api/ but consumed like an API URL by the React app)
     ("api_ingest_handwritten_notes", "ingest_handwritten_notes", None),
@@ -125,7 +132,7 @@ def page_urls(request):
 
 def user_conversations(request):
     if request.user.is_authenticated:
-        convos = WSConversation.objects.filter(owner=request.user).order_by("-updated_at")
+        convos = WSConversation.objects.filter(owner=request.user).order_by("-created_at")
         return {"conversations": convos}
     return {}
 

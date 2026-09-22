@@ -104,7 +104,12 @@ def find_invalid_citations(answer_text: str | None, allowed_citations: set[str])
     return invalid
 
 
-def response_has_required_citations(answer_text: str | None, allowed_citations: set[str]) -> bool:
+def response_has_required_citations(
+    answer_text: str | None,
+    allowed_citations: set[str],
+    *,
+    require_cited_numeric_claims: bool = False,
+) -> bool:
     if not allowed_citations:
         return True
     citations = extract_citations(answer_text)
@@ -112,7 +117,65 @@ def response_has_required_citations(answer_text: str | None, allowed_citations: 
         return False
     if find_invalid_citations(answer_text, allowed_citations):
         return False
-    return not find_uncited_factual_lines(answer_text)
+    if find_uncited_factual_lines(answer_text):
+        return False
+    return not (
+        require_cited_numeric_claims and find_uncited_numeric_claims(answer_text)
+    )
+
+
+def find_uncited_numeric_claims(answer_text: str | None) -> list[str]:
+    """Find numeric prose without a citation in its sentence or adjoining suffix.
+
+    This checks citation presence, not entailment. Paragraph and list boundaries
+    prevent a sources inventory from supplying citations to earlier claims.
+    Decimal points and digits inside citation tokens are not sentence boundaries
+    or numeric evidence, respectively.
+    """
+    paragraphs: list[list[str]] = [[]]
+    fence: str | None = None
+    for raw_line in (answer_text or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith(("```", "~~~")):
+            if fence is None:
+                fence = line[:3]
+            elif line.startswith(fence):
+                fence = None
+            paragraphs.append([])
+            continue
+        if fence is not None:
+            continue
+        source_heading = re.fullmatch(r"(?:\*\*)?Sources:?(?:\*\*)?:?", line, re.I)
+        if not line or line.startswith(("#", "![")) or source_heading:
+            paragraphs.append([])
+            continue
+        if _BULLET_OR_ENUM_RE.match(line):
+            paragraphs.append([])
+            line = _BULLET_OR_ENUM_RE.sub("", line, count=1)
+        paragraphs[-1].append(line)
+
+    uncited: list[str] = []
+    for lines in paragraphs:
+        # A nonnumeric marker also protects punctuation inside document IDs.
+        marked = _CITATION_RE.sub(" \x00", " ".join(lines))
+        sentences = re.split(r"(?<=[.!?])\s+|(?<=[.!?][\"')\u201d\u2019])\s+", marked)
+        claims: list[str] = []
+        for sentence in sentences:
+            # Accept: "Capacity is 18 litres. [doc:a chunk:1]". The citation
+            # belongs to the preceding claim, not an unrelated following one.
+            leading_refs = re.match(r"^(?:\s*\x00[\s.,;:]*)+", sentence)
+            if leading_refs and claims:
+                claims[-1] += " \x00"
+                sentence = sentence[leading_refs.end():]
+            if sentence.strip():
+                claims.append(sentence.strip())
+        uncited.extend(
+            claim for claim in claims
+            if "\x00" not in claim
+            and re.search(r"\d", claim)
+            and re.search(r"[A-Za-z]{2,}", claim)
+        )
+    return uncited
 
 
 def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
@@ -340,6 +403,7 @@ __all__ = [
     "collect_allowed_chunk_citations",
     "extract_citations",
     "find_uncited_factual_lines",
+    "find_uncited_numeric_claims",
     "find_invalid_citations",
     "response_has_required_citations",
     "synthesize_cited_extract_from_results",

@@ -35,12 +35,12 @@ def _markdown_skills_root() -> Path | None:
     if p.is_absolute():
         if p.is_dir():
             return p
-        logger.warning("markdown_skills_dir_not_a_directory", path=str(p))
+        logger.warning("obs.chat.markdown_skills_dir_not_a_directory", path=str(p))
         return None
     candidate = (_repo_root() / raw).resolve()
     if candidate.is_dir():
         return candidate
-    logger.warning("markdown_skills_dir_not_found", path=str(candidate))
+    logger.warning("obs.chat.markdown_skills_dir_not_found", path=str(candidate))
     return None
 
 

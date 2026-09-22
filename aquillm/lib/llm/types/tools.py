@@ -1,7 +1,7 @@
 """LLM tool types and utilities."""
-from typing import Literal, Optional, Callable, Any
-from pydantic import BaseModel, model_validator
+from typing import Any, Callable, Literal, Optional
 
+from pydantic import BaseModel, model_validator
 
 type ToolResultValue = (
     str
@@ -22,9 +22,9 @@ type ToolResultDict = dict[
         '_images',
         '_image_instruction',
         '_retrieval_diagnostics',
-        'retrieval_diagnostics',
         'retrieval_status',
         'retrieval_message',
+        'retrieval_diagnostics',
         'retrieved_count',
         'retrieved_documents',
         'citation_chunks',

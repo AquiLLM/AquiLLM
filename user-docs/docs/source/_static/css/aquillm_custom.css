@@ -1,0 +1,130 @@
+/*
+ * AquiLLM custom overrides for the sphinx_rtd_theme
+ * Matches the AquiLLM app color palette
+ */
+
+/* Primary accent color */
+wy-side-nav-search,
+.wy-nav-top {
+    background: #1C79D8 !important;
+}
+
+/* Sidebar active link */
+.wy-menu-vertical li.current > a,
+.wy-menu-vertical li.current > a:hover {
+    background: #1B4979 !important;
+    color: #ffffff !important;
+    border-left: 3px solid #F16C43 !important;
+}
+
+/* Links */
+a {
+    color: #1C79D8 !important;
+}
+
+a:hover {
+    color: #1B4979 !important;
+}
+
+/* Secondary accent for highlights */
+.rst-content .note,
+.rst-content .seealso,
+.rst-content .hint {
+    background: #e8f4fd !important;
+    border-left: 4px solid #1C79D8 !important;
+}
+
+.rst-content .warning,
+.rst-content .attention,
+.rst-content .caution {
+    background: #fef3ee !important;
+    border-left: 4px solid #F16C43 !important;
+}
+
+.rst-content .important,
+.rst-content .error,
+.rst-content .danger {
+    background: #fde8e8 !important;
+    border-left: 4px solid #EC3D3D !important;
+}
+
+.rst-content .tip {
+    background: #e8fde8 !important;
+    border-left: 4px solid #69E665 !important;
+}
+
+/* Search box */
+.wy-side-nav-search input[type=text] {
+    border-radius: 8px !important;
+    border: 1px solid #cccccc !important;
+}
+
+/* Breadcrumbs */
+.wy-breadcrumbs > li a {
+    color: #1C79D8 !important;
+}
+
+/* Code blocks */
+.rst-content div.highlight {
+    background: #f5f5f5 !important;
+    border: 1px solid #dddddd !important;
+    border-radius: 8px !important;
+}
+
+/* Header */
+.wy-header {
+    background: #1B4979 !important;
+}
+
+/* Footer */
+.wy-footer {
+    background: #f8f9fa !important;
+    color: #666666 !important;
+}
+
+/* Logo sizing */
+.wy-side-nav-search img {
+    width: 48px !important;
+    height: 48px !important;
+    padding: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+/* Section headings */
+.rst-content h1 {
+    color: #1B4979 !important;
+    border-bottom: 2px solid #1C79D8 !important;
+}
+
+.rst-content h2 {
+    color: #1C79D8 !important;
+    border-bottom: 1px solid #dddddd !important;
+}
+
+.rst-content h3 {
+    color: #1B4979 !important;
+}
+
+/* Figures */
+.rst-content .figure {
+    margin: 1.5em 0 !important;
+}
+
+.rst-content .figure p.caption,
+.rst-content .figure .caption-text {
+    font-size: 0.85em !important;
+    color: #666666 !important;
+    margin-top: 0.5em !important;
+}
+
+/* Table of contents in sidebar */
+.wy-menu-vertical header,
+.wy-menu-vertical p.caption {
+    color: #1B4979 !important;
+    font-weight: 600 !important;
+}
+
+/* Version badge */
+.wy-nav-content .version {
+    color: #F16C43 !important;
+}

@@ -23,6 +23,12 @@ class WSConversation(models.Model):
     selected_collection_ids = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(editable=False)
     updated_at = models.DateTimeField()
+    # Re-index guard for ConversationChunk: SHA256 of the ordered transcript that was
+    # last indexed, plus whether that indexing finished. Mirrors Document.full_text_hash.
+    indexed_transcript_hash = models.CharField(max_length=64, null=True, blank=True)
+    # db_default so inserts that omit this column (e.g. a stale process mid-deploy)
+    # don't violate the NOT NULL constraint on this table.
+    index_complete = models.BooleanField(default=False, db_default=False)
 
     class Meta:
         app_label = 'apps_chat'
@@ -99,7 +105,12 @@ class WSConversation(models.Model):
         try:
             title_text = get_title()
         except Exception as exc:
-            logger.warning("Failed to auto-title conversation %s: %s", self.pk, exc)
+            logger.warning(
+                "obs.chat.auto_title_failed",
+                conversation_id=self.pk,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
         title_text = self._clean_generated_title(title_text)
         if self._is_generic_title(title_text):

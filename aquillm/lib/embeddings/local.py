@@ -2,19 +2,21 @@
 Local OpenAI-compatible embedding provider.
 """
 
-import structlog
 from typing import Any
 
+import structlog
 from openai import OpenAI
 
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+
 from .config import (
+    _env_int,
+    allow_embed_dimensions_override,
+    extract_context_limit_tokens,
     get_local_embed_config,
     get_target_dims,
-    allow_embed_dimensions_override,
-    max_embed_input_chars,
     is_context_limit_error,
-    extract_context_limit_tokens,
-    _env_int,
+    max_embed_input_chars,
 )
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -51,7 +53,9 @@ def _dims_kwargs() -> dict:
     return {"dimensions": dims} if dims else {}
 
 
-def _embed_local_with_context_retry(client: OpenAI, model: str, query: Any) -> list[float]:
+def _embed_local_with_context_retry(
+    client: OpenAI, model: str, query: Any
+) -> list[float]:
     """Embed with automatic retry on context limit errors."""
     dims_kw = _dims_kwargs()
     if not isinstance(query, str):
@@ -85,20 +89,22 @@ def _embed_local_with_context_retry(client: OpenAI, model: str, query: Any) -> l
             if limit_tokens:
                 reserve = _env_int("APP_EMBED_TOKEN_RESERVE", 16)
                 token_based_cap = max(128, limit_tokens - reserve)
-                next_candidate = candidate[:token_based_cap] if len(candidate) > token_based_cap else _shrink_text_for_retry(candidate)
+                next_candidate = (
+                    candidate[:token_based_cap]
+                    if len(candidate) > token_based_cap
+                    else _shrink_text_for_retry(candidate)
+                )
             else:
                 next_candidate = _shrink_text_for_retry(candidate)
             if next_candidate == candidate:
                 break
-            token_note = f" (model limit={limit_tokens} tokens)" if limit_tokens else ""
             logger.warning(
-                "Local embed input exceeded context; retrying with shorter text %d -> %d chars "
-                "(attempt %d/%d)%s.",
-                len(candidate),
-                len(next_candidate),
-                attempt,
-                max_retries,
-                token_note,
+                "obs.embed.input_retry_truncate",
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.INVALID_REQUEST,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
             )
             candidate = next_candidate
     if last_exc is not None:
@@ -136,13 +142,58 @@ def get_embeddings_via_local_openai(queries: list[Any]) -> list[list[float]]:
         if not is_context_limit_error(exc):
             raise
         logger.warning(
-            "Local embed batch exceeded context limits; retrying per item with adaptive truncation. Error: %s",
-            exc,
+            "obs.embed.batch_context_retry",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.INVALID_REQUEST,
+                count=0,
+                elapsed_ms=0.0,
+            ),
         )
-        return [_embed_local_with_context_retry(client, model, query) for query in queries]
+        return [
+            _embed_local_with_context_retry(client, model, query) for query in queries
+        ]
+
+
+def get_strict_indexed_embeddings_via_local_openai(
+    queries: list[str],
+) -> list[tuple[int, list[float]]]:
+    """Embed an exact durable batch once and preserve provider indices.
+
+    Unlike the availability-oriented helpers above, this seam never truncates,
+    retries with transformed text, or falls back to another provider.
+    """
+
+    if type(queries) is not list or any(type(query) is not str for query in queries):
+        raise ValueError("strict embedding inputs must be an exact list of strings")
+    if not queries:
+        return []
+    base_url, api_key, model = get_local_embed_config()
+    client = _get_local_openai_client(base_url, api_key)
+    response = client.embeddings.create(
+        model=model,
+        input=queries,
+        dimensions=1024,
+    )
+    response_model = getattr(response, "model", None)
+    if type(response_model) is not str or response_model != model:
+        raise RuntimeError(
+            "Local embedding response model identity differs from configured model"
+        )
+    data = response.data
+    if not isinstance(data, (list, tuple)):
+        raise RuntimeError("Local embedding endpoint returned invalid indexed data")
+    indexed: list[tuple[int, list[float]]] = []
+    for item in data:
+        index = getattr(item, "index", None)
+        vector = getattr(item, "embedding", None)
+        if type(index) is not int or not isinstance(vector, (list, tuple)):
+            raise RuntimeError("Local embedding response lacks index/vector binding")
+        indexed.append((index, list(vector)))
+    return indexed
 
 
 __all__ = [
-    'get_embedding_via_local_openai',
-    'get_embeddings_via_local_openai',
+    "get_embedding_via_local_openai",
+    "get_embeddings_via_local_openai",
+    "get_strict_indexed_embeddings_via_local_openai",
 ]

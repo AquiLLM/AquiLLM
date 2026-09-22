@@ -104,14 +104,11 @@ class TextChunk(models.Model):
     def document(self):
         """Get the parent document for this chunk."""
         descended_from_document = _get_descended_from_document()
-        ret = None
         for t in descended_from_document:
             doc = t.objects.filter(id=self.doc_id).first()
             if doc:
-                ret = doc
-        if not ret:
-            raise ValidationError(f"TextChunk {self.pk} is not associated with a document!")
-        return ret
+                return doc
+        raise ValidationError(f"TextChunk {self.pk} is not associated with a document!")
 
     @document.setter
     def document(self, doc):
@@ -125,10 +122,11 @@ class TextChunk(models.Model):
                 self.get_chunk_embedding()
             except Exception as exc:
                 logger.warning(
-                    "Chunk embedding failed (doc_id=%s chunk=%s); saving without embedding. Error: %s",
-                    self.doc_id,
-                    self.chunk_number,
-                    exc,
+                    "obs.documents.chunk_embed_failed",
+                    doc_id=self.doc_id,
+                    chunk_number=self.chunk_number,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
                 )
 
         super().save(*args, **kwargs)

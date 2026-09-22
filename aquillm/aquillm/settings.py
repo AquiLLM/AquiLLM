@@ -228,6 +228,9 @@ POSTGRES_USER = os.environ.get("POSTGRES_USER", "aquillm")
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "db")
 POSTGRES_NAME = os.environ.get("POSTGRES_NAME", "aquillm")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "aquillm")
+POSTGRES_PORT = env_int("POSTGRES_PORT", 5432)
+if not 1 <= POSTGRES_PORT <= 65_535:
+    POSTGRES_PORT = 5432
 
 DATABASES = {
     "default": {
@@ -236,7 +239,7 @@ DATABASES = {
         "USER": POSTGRES_USER,
         "PASSWORD": POSTGRES_PASSWORD,
         "HOST": POSTGRES_HOST,
-        "PORT": "5432",
+        "PORT": str(POSTGRES_PORT),
         "TEST": {
             'NAME': 'test'
         }
@@ -377,6 +380,13 @@ CELERY_RESULT_BACKEND = "redis://redis:6379"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+CELERY_TASK_PUBLISH_RETRY = True
+CELERY_TASK_PUBLISH_RETRY_POLICY = {
+    "max_retries": 3,
+    "interval_start": 0,
+    "interval_step": 0.5,
+    "interval_max": 5,
+}
 
 # Zotero Integration Settings
 # OAuth credentials should be set in environment variables:

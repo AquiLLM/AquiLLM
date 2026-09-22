@@ -34,6 +34,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
 
   const fetchCollectionData = useCallback(() => {
     setLoading(true);
+    setError(null);
     fetch(formatUrl(window.apiUrls.api_collection, { col_id: collectionId }), {
       headers: { Accept: 'application/json' },
     })
@@ -47,7 +48,7 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
       })
       .then((data) => {
         if (!data.collection) throw new Error('Invalid response format');
-        if (data.permission_source) setPermissionSource(data.permission_source);
+        setPermissionSource(data.permission_source || null);
         setCollection({
           id: data.collection.id,
           name: data.collection.name,
@@ -74,11 +75,18 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
       .catch((err) => {
         console.error('Error refetching collection:', err);
         setError(err.message);
+        setCollection(null);
+        setContents([]);
+        setPermissionSource(null);
         setLoading(false);
       });
   }, [collectionId]);
 
   useEffect(() => {
+    setCollection(null);
+    setContents([]);
+    setPermissionSource(null);
+    setError(null);
     fetchCollectionData();
   }, [fetchCollectionData]);
 

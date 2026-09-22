@@ -98,7 +98,7 @@ Key env vars:
 
 | Variable | Default | Description |
 |---|---|---|
-| `RAG_DIRECT_ENABLED` | `0` | Enable backend-driven retrieval (off by default) |
+| `RAG_DIRECT_ENABLED` | `1` in Compose | Enable bounded backend-driven retrieval; set `0` explicitly to opt out. Standalone Python defaults to `0`. |
 | `RAG_DIRECT_TOP_K` | `10` | Chunks retrieved per turn |
 | `RAG_EVIDENCE_TOKEN_BUDGET` | `3500` | Max tokens of evidence passed to synthesis |
 | `RAG_ATTACH_TOOLS_WHEN_COLLECTIONS_SELECTED` | `1` | Auto-attach document tools when collections are selected and intent requires RAG |
@@ -483,3 +483,24 @@ We welcome contributions! AquiLLM is an open-source project, and we appreciate h
 *   **Code style and structure**: Follow [docs/code-style-guide.md](docs/code-style-guide.md) for repository standards and quality gates.
 
 
+
+## Conversation history, citations, and optional ASR
+
+Completed conversations are indexed by the existing Celery worker for authorized
+history search. `CONVERSATION_INDEX_IDLE_SECONDS` defaults to 60; existing history
+can be populated with `python manage.py index_conversations`. Document questions
+use the bounded retrieval route enabled by Compose, while explicit history recall
+keeps its conversation-search tool route.
+
+Citation previews stream PDFs, render a bounded page window, and expose source
+links and extracted figures. Run database migrations before updating the app and
+workers together; document chunk tasks retain compatibility with old queued calls.
+
+The standard GPU profile retains Whisper and the production Genesis, embedding,
+and reranker memory allocations. [Nemotron ASR](deploy/NEMOTRON_ASR.md) is an
+explicit optional Compose override with a separate image and GPU budget. Its CPU
+contract tests do not replace validation on the deployment GPU.
+
+The [user documentation source](user-docs/readme.md) covers collections, ingestion,
+chat, and citations. See the [nongraph parity audit](docs/backports/2026-09-22-non-graph-parity.md)
+for the source revision, retained production fixes, exclusions, and rollout checks.

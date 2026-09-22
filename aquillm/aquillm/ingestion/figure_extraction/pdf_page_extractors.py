@@ -83,7 +83,7 @@ def extract_raster_images(doc, page, page_num: int, extracted_xrefs: set) -> Ite
             )
 
         except Exception as exc:
-            logger.debug("Failed to extract raster image from page %d: %s", page_num, exc)
+            logger.debug("obs.figures.raster_extract_failed", page=page_num, error=str(exc), error_type=type(exc).__name__)
             continue
 
 
@@ -93,7 +93,7 @@ def extract_rendered_figures(page, page_num: int, raster_regions: list) -> Itera
 
     captions = find_figure_captions(page, page_num)
     if captions:
-        logger.info("Found %d figure captions on page %d", len(captions), page_num)
+        logger.info("obs.figures.captions_found", caption_count=len(captions), page=page_num)
 
     for caption_info in captions:
         caption_text = caption_info["caption_text"]
@@ -108,13 +108,13 @@ def extract_rendered_figures(page, page_num: int, raster_regions: list) -> Itera
                 break
 
         if overlaps_raster:
-            logger.debug("Skipping rendered figure %s - overlaps with raster image", figure_label)
+            logger.debug("obs.figures.rendered_skipped", figure_label=figure_label, reason="overlaps_raster")
             continue
 
         figure_rect = refine_figure_region(page, initial_figure_rect, caption_rect)
         result = render_region(page, figure_rect)
         if result is None:
-            logger.debug("Failed to render figure region for %s", figure_label)
+            logger.debug("obs.figures.render_failed", figure_label=figure_label)
             continue
 
         image_bytes, width, height = result

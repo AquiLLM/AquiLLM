@@ -21,15 +21,15 @@ def fit_embedding_dims(embedding: list[float]) -> list[float]:
         return embedding
     if current > target_dims:
         logger.warning(
-            "Embedding dims (%d) exceed APP_EMBED_DIMS (%d); truncating.",
-            current,
-            target_dims,
+            "obs.embed.dims_truncate",
+            current_dims=current,
+            target_dims=target_dims,
         )
         return embedding[:target_dims]
     logger.warning(
-        "Embedding dims (%d) below APP_EMBED_DIMS (%d); zero-padding.",
-        current,
-        target_dims,
+        "obs.embed.dims_pad",
+        current_dims=current,
+        target_dims=target_dims,
     )
     return embedding + [0.0] * (target_dims - current)
 
