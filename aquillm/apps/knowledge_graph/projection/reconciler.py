@@ -4,8 +4,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from django.db import transaction
-from django.db.models import Exists, F, OuterRef, Subquery, Window
-from django.db.models.functions import RowNumber
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
 from apps.knowledge_graph.models import (
@@ -21,6 +20,12 @@ from .generation_audit import (
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
 from .inspection import inspect_projection_authority as inspect_projection_authority
 from .reconciliation_types import PruneSummaryV1, ReconcileSummaryV1
+from .projection_pruning_ops import (
+    _delete_projection_generation as _pruning_delete_projection_generation,
+    _prepare_prune,
+    _prune_candidates,
+    _record_pruned,
+)
 from .runtime import (
     ProjectionDatabaseAliases,
     load_projection_runtime_settings,
@@ -218,78 +223,13 @@ def reconcile_graph_projections(
     )
 
 
-def _prune_candidates(
-    *,
-    page_size: int,
-    retain: int,
-    projection_id: UUID | None,
-    collection_id: int | None,
-):
-    query = CollectionGraphProjection.objects.using(_ALIASES.source).filter(
-        state__in=("failed", "superseded")
-    )
-    if projection_id is not None:
-        return tuple(
-            query.filter(pk=projection_id, pruned_at__isnull=True).order_by("id")[
-                :page_size
-            ]
-        )
-    if collection_id is not None:
-        query = query.filter(collection_pk_snapshot=collection_id)
-    # Rank all historical generations before excluding completed deletions;
-    # otherwise each pass would retain another group of already old rows.
-    eligible = (
-        query.annotate(
-            generation_rank=Window(
-                expression=RowNumber(),
-                partition_by=[F("collection_pk_snapshot")],
-                order_by=[F("created_at").desc(), F("id").desc()],
-            )
-        )
-        .filter(generation_rank__gt=retain)
-        .values("pk")
-    )
-    return tuple(
-        query.filter(pk__in=Subquery(eligible), pruned_at__isnull=True).order_by(
-            "collection_pk_snapshot", "-created_at", "id"
-        )[:page_size]
-    )
-
-
 def _opaque_generation(value: str) -> OpaqueProjectionKey:
     return OpaqueProjectionKey(ProjectionIdentifierDomain.COLLECTION, value)
 
 
 def _delete_projection_generation(*, row, graph, settings) -> bool | None:
-    if row.state not in {"failed", "superseded"}:
-        raise ValueError("only terminal projection authority may be pruned")
-    generation_key = projection_identifier_codec(
-        settings,
-        key_version=row.identifier_key_version,
-    ).encode(
-        ProjectionIdentifierDomain.COLLECTION,
-        generation=row.generation_key,
-        source=row.generation_key,
-    )
-    return graph.delete_generation(
-        generation_key=generation_key,
-        timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
-    )
-
-
-def _record_pruned(row) -> None:
-    FunctionProjectionStateRepository().record_pruned(
-        projection_id=row.id,
-        generation_key=row.generation_key,
-        now=timezone.now(),
-    )
-
-
-def _prepare_prune(row) -> bool:
-    return FunctionProjectionStateRepository().begin_prune(
-        projection_id=row.id,
-        generation_key=row.generation_key,
-        now=timezone.now(),
+    return _pruning_delete_projection_generation(
+        row=row, graph=graph, settings=settings, codec=projection_identifier_codec
     )
 
 

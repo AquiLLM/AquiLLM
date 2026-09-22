@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-import math
 import os
 import socket
 import struct
@@ -13,10 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ValidationError
-from django.db.models import CheckConstraint, QuerySet, UniqueConstraint
+from django.db.models import QuerySet
 
 from apps.knowledge_graph.resolution import collection as collection_resolution
 from apps.knowledge_graph.resolution import scoring as resolution_scoring
@@ -1655,245 +1652,22 @@ def test_initial_persistence_projection_rejects_recomputed_row_audit_corruption(
     assert not _collection_resolution_link_matches(forged_link, expected_link)
 
 
-def test_embedding_session_rejects_provider_or_model_signature_drift():
-    expected = (
-        f"local:model-a@rev:endpoint={'e' * 64}:dims=1024:"
-        "prep=kg-entity-v1:max_chars=8192:batch=64"
-    )
-    backend = _RecordingBackend(
-        {"Atlas": _unit_vector(1.0)},
-        signature=(
-            f"cohere:model-b@rev:endpoint={'f' * 64}:dims=1024:"
-            "prep=kg-entity-v1:max_chars=8192:batch=64"
-        ),
-    )
-    session = CollectionEmbeddingSession(
-        expected_model_signature=expected,
-        backend=backend,
-    )
-
-    with pytest.raises(ValueError, match="signature.*drift"):
-        session.embed(("Atlas",))
 
 
-@pytest.mark.parametrize(
-    "batch_factory, message",
-    [
-        (
-            lambda texts, signature: SignedEmbeddingBatch(
-                vectors=(),
-                text_hashes=(),
-                indices=(),
-                model_signature=signature,
-            ),
-            "one vector",
-        ),
-        (
-            lambda texts, signature: SignedEmbeddingBatch(
-                vectors=(tuple([math.nan] + [0.0] * 1023),),
-                text_hashes=(embedding_text_hash(texts[0]),),
-                indices=(0,),
-                model_signature=signature,
-            ),
-            "finite",
-        ),
-        (
-            lambda texts, signature: SignedEmbeddingBatch(
-                vectors=(tuple(_unit_vector(1.0)),),
-                text_hashes=("f" * 64,),
-                indices=(0,),
-                model_signature=signature,
-            ),
-            "order|hash",
-        ),
-    ],
-)
-def test_embedding_session_validates_count_finiteness_and_output_order(
-    batch_factory, message
-):
-    signature = (
-        f"local:model@rev:endpoint={'e' * 64}:dims=1024:"
-        "prep=kg-entity-v1:max_chars=8192:batch=64"
-    )
-
-    def backend(texts):
-        return batch_factory(texts, signature)
-
-    session = CollectionEmbeddingSession(
-        expected_model_signature=signature,
-        backend=backend,
-    )
-
-    with pytest.raises(ValueError, match=message):
-        session.embed(("Atlas",))
 
 
-def test_embedding_session_rejects_missing_or_duplicate_provider_indices():
-    def backend(texts):
-        return SignedEmbeddingBatch(
-            vectors=tuple(tuple(_unit_vector(1.0)) for _ in texts),
-            text_hashes=tuple(embedding_text_hash(texts[0]) for _ in texts),
-            indices=tuple(0 for _ in texts),
-            model_signature=_EMBEDDING_SIGNATURE,
-        )
-
-    session = CollectionEmbeddingSession(
-        expected_model_signature=_EMBEDDING_SIGNATURE,
-        backend=backend,
-    )
-
-    with pytest.raises(ValueError, match="indices|binding|order"):
-        session.embed(("Atlas", "Zephyr"))
 
 
-def test_embedding_session_binds_reversed_provider_indices_to_exact_texts():
-    atlas_vector = tuple(_unit_vector(1.0, 0.0))
-    zephyr_vector = tuple(_unit_vector(0.0, 1.0))
-
-    def backend(texts):
-        assert texts == ("Atlas", "Zephyr")
-        return SignedEmbeddingBatch(
-            vectors=(zephyr_vector, atlas_vector),
-            text_hashes=(
-                embedding_text_hash("Zephyr"),
-                embedding_text_hash("Atlas"),
-            ),
-            indices=(1, 0),
-            model_signature=_EMBEDDING_SIGNATURE,
-        )
-
-    session = CollectionEmbeddingSession(
-        expected_model_signature=_EMBEDDING_SIGNATURE,
-        backend=backend,
-    )
-
-    result = session.embed(("Zephyr", "Atlas"))
-
-    assert tuple(item.text for item in result) == ("Zephyr", "Atlas")
-    assert result[0].vector == zephyr_vector
-    assert result[1].vector == atlas_vector
 
 
-def test_embedding_session_rejects_overlong_text_without_truncation_or_provider_call():
-    calls = []
-
-    def backend(texts):
-        calls.append(texts)
-        return SignedEmbeddingBatch(
-            vectors=(tuple(_unit_vector(1.0)),),
-            text_hashes=(embedding_text_hash(texts[0]),),
-            indices=(0,),
-            model_signature=_EMBEDDING_SIGNATURE,
-        )
-
-    session = CollectionEmbeddingSession(
-        expected_model_signature=_EMBEDDING_SIGNATURE,
-        backend=backend,
-    )
-    boundary = "x" * 8_192
-    accepted = session.embed((boundary,))
-    assert calls == [(boundary,)]
-    assert accepted[0].text == boundary
-    assert accepted[0].input_hash == embedding_text_hash(boundary)
-
-    with pytest.raises(ValueError, match="maximum|8192|long"):
-        session.embed(("x" * 8_193,))
-    assert calls == [(boundary,)]
 
 
-def test_embedding_session_batches_deterministically_and_fails_atomically():
-    calls = []
-
-    def backend(texts):
-        calls.append(texts)
-        if len(calls) == 2:
-            raise RuntimeError("provider failed")
-        return SignedEmbeddingBatch(
-            vectors=tuple(tuple(_unit_vector(1.0)) for _ in texts),
-            text_hashes=tuple(embedding_text_hash(text) for text in texts),
-            indices=tuple(range(len(texts))),
-            model_signature=_EMBEDDING_SIGNATURE.replace("batch=64", "batch=2"),
-        )
-
-    signature = _EMBEDDING_SIGNATURE.replace("batch=64", "batch=2")
-    session = CollectionEmbeddingSession(
-        expected_model_signature=signature,
-        backend=backend,
-        batch_size=2,
-    )
-
-    with pytest.raises(RuntimeError, match="provider failed"):
-        session.embed(("Delta", "Alpha", "Charlie"))
-    assert calls == [("Alpha", "Charlie"), ("Delta",)]
-
-    calls.clear()
-    with pytest.raises(RuntimeError, match="provider failed"):
-        session.embed(("Delta", "Alpha", "Charlie"))
-    assert calls[0] == ("Alpha", "Charlie")
 
 
-def test_embedding_session_deduplicates_stably_and_records_input_hashes():
-    session, backend = _session(
-        {
-            "Atlas": _unit_vector(1.0),
-            "Zephyr": _unit_vector(0.0, 1.0),
-        }
-    )
-
-    embedded = session.embed(("Zephyr", "Atlas", "Atlas"))
-
-    assert backend.calls == [("Atlas", "Zephyr")]
-    assert tuple(item.text for item in embedded) == ("Zephyr", "Atlas", "Atlas")
-    assert embedded[1].input_hash == embedded[2].input_hash
-    assert embedded[0].input_hash == embedding_text_hash("Zephyr")
 
 
-def test_resolver_rejects_a_prewarmed_embedding_session():
-    session, backend = _session({"Atlas": _unit_vector(1.0)})
-    session.embed(("Atlas",))
-
-    with pytest.raises(ValueError, match="fresh|prewarmed|cache"):
-        resolve_collection_entities(
-            _snapshot(),
-            (_document_entity("a", "Atlas"),),
-            _ontology(),
-            embedding_session=session,
-        )
-    assert backend.calls == [("Atlas",)]
 
 
-def test_embedding_candidate_decisions_remain_fanout_bounded():
-    entities = tuple(
-        _document_entity(index, f"Atlas variant {index}") for index in range(10, 110)
-    )
-    vectors = {
-        entity.label: _unit_vector(1.0, (entity.entity_id % 10) / 1000)
-        for entity in entities
-    }
-    session, _backend = _session(vectors)
-    config = CollectionResolutionConfig(max_candidates_per_entity=3)
-    result = resolve_collection_entities(
-        _snapshot(config=config),
-        entities,
-        _ontology(),
-        config=config,
-        embedding_session=session,
-    )
-
-    embedding_decisions = tuple(
-        decision
-        for decision in result.decisions
-        if decision.embedding_similarity is not None
-        and "candidate_fanout_capped" not in decision.reason_codes
-    )
-    observed: dict[int, int] = {}
-    for decision in embedding_decisions:
-        observed[decision.left_entity_id] = observed.get(decision.left_entity_id, 0) + 1
-        observed[decision.right_entity_id] = (
-            observed.get(decision.right_entity_id, 0) + 1
-        )
-    assert max(observed.values(), default=0) <= 3
-    assert len(result.decisions) <= len(entities) * 3
 
 
 def test_resolution_outputs_recursively_reject_forged_exact_types():
@@ -1965,215 +1739,16 @@ def test_locked_source_replay_rejects_forged_result_with_recomputed_checksum():
         )
 
 
-def test_kg_schema_uses_real_collection_fk_typed_scores_and_manifest():
-    from apps.collections.models import Collection
-    from apps.knowledge_graph.models import (
-        CollectionEntity,
-        CollectionEntityDocumentLink,
-        DocumentEntity,
-        GraphArtifact,
-        GraphBuildRun,
-    )
-
-    collection_input = apps.get_model("apps_knowledge_graph", "CollectionArtifactInput")
-    assert GraphArtifact._meta.get_field("scope_id").get_internal_type() == "CharField"
-    assert GraphBuildRun._meta.get_field("scope_id").get_internal_type() == "CharField"
-    for model in (GraphArtifact, GraphBuildRun):
-        signature = model._meta.get_field("embedding_model_signature")
-        assert signature.blank is True
-        for checksum_field in (
-            "ontology_checksum",
-            "filter_policy_checksum",
-            "resolution_config_checksum",
-        ):
-            field = model._meta.get_field(checksum_field)
-            assert field.max_length == 64
-            assert field.editable is False
-    assert (
-        CollectionEntity._meta.get_field("collection").remote_field.model is Collection
-    )
-    assert (
-        collection_input._meta.get_field("collection").remote_field.model is Collection
-    )
-    assert (
-        collection_input._meta.get_field("document_artifact").remote_field.model
-        is GraphArtifact
-    )
-    assert collection_input._meta.get_field("membership_signature").max_length == 64
-    assert (
-        CollectionEntityDocumentLink._meta.get_field("artifact").remote_field.model
-        is GraphArtifact
-    )
-    assert (
-        CollectionEntityDocumentLink._meta.get_field(
-            "manifest_input"
-        ).remote_field.model
-        is collection_input
-    )
-    assert DocumentEntity._meta.get_field("resolution_confidence").null is False
-    for name in (
-        "cluster_key",
-        "version_signature",
-        "extraction_confidence",
-        "resolution_confidence",
-        "retrieval_utility",
-        "promotion_confidence",
-        "filter_reason",
-        "embedding_model_signature",
-        "embedding_input_hash",
-    ):
-        assert CollectionEntity._meta.get_field(name) is not None
 
 
-def test_scope_identity_and_embedding_signature_have_conditional_db_checks():
-    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
-
-    artifact_constraint_names = {
-        constraint.name
-        for constraint in GraphArtifact._meta.constraints
-        if isinstance(constraint, CheckConstraint)
-    }
-    run_constraint_names = {
-        constraint.name
-        for constraint in GraphBuildRun._meta.constraints
-        if isinstance(constraint, CheckConstraint)
-    }
-
-    assert "kg_artifact_typed_scope_id" in artifact_constraint_names
-    assert "kg_artifact_embedding_signature_scope" in artifact_constraint_names
-    assert "kg_run_typed_scope_id" in run_constraint_names
-    assert "kg_run_embedding_signature_scope" in run_constraint_names
 
 
-def test_polymorphic_scope_ids_canonicalize_document_uuid_and_collection_pk():
-    from apps.knowledge_graph.models import GraphArtifact
-
-    common = {
-        "status": GraphArtifact.Status.BUILDING,
-        "source_hash": "a" * 64,
-        "ontology_version": "ontology-v1",
-        "extractor_version": "extractor-v1",
-        "resolver_version": "resolver-v1",
-        "filter_policy_version": "filter-v1",
-    }
-    document_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
-    document = GraphArtifact(
-        scope_type=GraphArtifact.ScopeType.DOCUMENT,
-        scope_id=document_id,
-        embedding_model_signature="",
-        **common,
-    )
-    collection = GraphArtifact(
-        scope_type=GraphArtifact.ScopeType.COLLECTION,
-        scope_id=7,
-        embedding_model_signature=_EMBEDDING_SIGNATURE,
-        **common,
-    )
-
-    document.prepare_for_persistence()
-    collection.prepare_for_persistence()
-
-    assert document.scope_id == str(document_id)
-    assert collection.scope_id == "7"
-    document.clean()
-    collection.clean()
 
 
-@pytest.mark.parametrize(
-    "scope_type, scope_id, signature",
-    [
-        ("document", "not-a-uuid", ""),
-        (
-            "collection",
-            "007",
-            "local:model@rev:dims=1024:prep=kg-entity-v1:max_chars=8192:batch=64",
-        ),
-        (
-            "collection",
-            "0",
-            "local:model@rev:dims=1024:prep=kg-entity-v1:max_chars=8192:batch=64",
-        ),
-        ("document", str(uuid.uuid4()), "must-be-empty"),
-        (
-            "collection",
-            "7",
-            "local:model@rev:dims=1024:prep=kg-entity-v1:max_chars=8192:batch=64",
-        ),
-        ("collection", "7", ""),
-    ],
-)
-def test_invalid_typed_scope_or_embedding_signature_is_rejected(
-    scope_type, scope_id, signature
-):
-    from apps.knowledge_graph.models import GraphArtifact
-
-    artifact = GraphArtifact(
-        scope_type=scope_type,
-        scope_id=scope_id,
-        status=GraphArtifact.Status.BUILDING,
-        source_hash="a" * 64,
-        ontology_version=_ontology().version,
-        extractor_version="extractor-v1",
-        resolver_version="resolver-v1",
-        filter_policy_version="filter-v1",
-        embedding_model_signature=signature,
-    )
-
-    with pytest.raises(ValidationError, match="scope|embedding"):
-        artifact.clean()
 
 
-def test_document_link_has_explicit_outcomes_component_scores_and_auto_uniqueness():
-    from apps.knowledge_graph.models import CollectionEntityDocumentLink
-
-    fields = {field.name for field in CollectionEntityDocumentLink._meta.fields}
-    assert {
-        "artifact",
-        "manifest_input",
-        "outcome",
-        "identifier_score",
-        "alias_score",
-        "embedding_similarity",
-        "neighborhood_agreement",
-        "candidate_rank",
-        "decision_checksum",
-    } <= fields
-    assert any(
-        isinstance(constraint, UniqueConstraint)
-        and constraint.name == "kg_one_auto_collection_assignment"
-        and constraint.condition is not None
-        for constraint in CollectionEntityDocumentLink._meta.constraints
-    )
 
 
-def test_collection_cluster_key_is_stable_across_database_ids_and_rebuild_artifacts():
-    first_entity = _document_entity(
-        10,
-        "Atlas",
-        document_cluster_key="c" * 64,
-    )
-    second_entity = _document_entity(
-        20,
-        "Atlas",
-        document_cluster_key="c" * 64,
-    )
-    first_session, _ = _session({})
-    second_session, _ = _session({})
-
-    first = resolve_collection_entities(
-        _snapshot(),
-        (first_entity,),
-        _ontology(),
-        embedding_session=first_session,
-    )
-    second = resolve_collection_entities(
-        replace(_snapshot(), destination_artifact_id=102),
-        (second_entity,),
-        _ontology(),
-        embedding_session=second_session,
-    )
-
-    assert first.clusters[0].cluster_key == second.clusters[0].cluster_key
 
 
 def test_large_exact_label_block_records_linear_deterministic_edges():
@@ -2228,141 +1803,14 @@ def test_result_audits_the_exact_supported_relation_snapshot():
     assert len(result.source_relation_fingerprint) == 64
 
 
-def test_strict_embedding_adapter_rejects_raw_dimension_mismatch(monkeypatch):
-    from aquillm import utils
-
-    monkeypatch.setenv("APP_EMBED_MODEL_REVISION", "rev")
-    monkeypatch.setattr(
-        utils,
-        "get_local_embed_config",
-        lambda: ("http://local", "key", "embed-model"),
-    )
-    monkeypatch.setattr(utils, "get_target_dims", lambda: 1024)
-    monkeypatch.setattr(
-        utils,
-        "get_strict_indexed_embeddings_via_local_openai",
-        lambda _queries: [(0, [1.0, 2.0, 3.0])],
-    )
-
-    signature = utils.strict_index_embedding_signature()
-    with pytest.raises(RuntimeError, match="invalid vector|1024"):
-        utils.get_strict_index_embeddings(["Atlas"], expected_model_signature=signature)
 
 
-def test_strict_local_embedding_adapter_rejects_served_model_drift(monkeypatch):
-    from lib.embeddings import local
-
-    requests = []
-
-    class Embeddings:
-        def create(self, **kwargs):
-            requests.append(kwargs)
-            return SimpleNamespace(
-                model="different-model",
-                data=[SimpleNamespace(index=0, embedding=[0.0] * 1024)],
-            )
-
-    monkeypatch.setattr(
-        local,
-        "get_local_embed_config",
-        lambda: ("https://embeddings.example.test/v1", "secret", "embed-model"),
-    )
-    monkeypatch.setattr(
-        local,
-        "_get_local_openai_client",
-        lambda _base_url, _api_key: SimpleNamespace(embeddings=Embeddings()),
-    )
-    monkeypatch.setattr(local, "_dims_kwargs", lambda: {})
-
-    with pytest.raises(RuntimeError, match="model|identity"):
-        local.get_strict_indexed_embeddings_via_local_openai(["Atlas"])
-    assert requests == [
-        {"model": "embed-model", "input": ["Atlas"], "dimensions": 1024}
-    ]
 
 
-def test_strict_embedding_signature_requires_an_immutable_model_revision(
-    monkeypatch,
-):
-    from aquillm import utils
-
-    monkeypatch.delenv("APP_EMBED_MODEL_REVISION", raising=False)
-    monkeypatch.setattr(
-        utils,
-        "get_local_embed_config",
-        lambda: ("http://local", "key", "embed-model"),
-    )
-    monkeypatch.setattr(utils, "get_target_dims", lambda: 1024)
-
-    with pytest.raises(RuntimeError, match="revision|digest|immutable"):
-        utils.strict_index_embedding_signature()
 
 
-def test_strict_embedding_signature_binds_normalized_provider_endpoint(monkeypatch):
-    from aquillm import utils
-
-    monkeypatch.setenv("APP_EMBED_MODEL_REVISION", "rev")
-    monkeypatch.setattr(utils, "get_target_dims", lambda: 1024)
-    monkeypatch.setattr(
-        utils,
-        "get_local_embed_config",
-        lambda: ("HTTPS://Embeddings.Example.test/v1/", "secret", "embed-model"),
-    )
-    normalized = utils.strict_index_embedding_signature()
-    monkeypatch.setattr(
-        utils,
-        "get_local_embed_config",
-        lambda: ("https://embeddings.example.test/v1", "other-secret", "embed-model"),
-    )
-    assert utils.strict_index_embedding_signature() == normalized
-
-    monkeypatch.setattr(
-        utils,
-        "get_local_embed_config",
-        lambda: ("https://other.example.test/v1", "secret", "embed-model"),
-    )
-    drifted = utils.strict_index_embedding_signature()
-    assert drifted != normalized
-    with pytest.raises(RuntimeError, match="signature drift"):
-        utils.get_strict_index_embeddings(
-            ["Atlas"], expected_model_signature=normalized
-        )
 
 
-def test_embedding_revision_is_documented_and_passed_fail_closed_to_compose():
-    repository = Path(__file__).resolve().parents[4]
-    env_example = (repository / ".env.example").read_text(encoding="utf-8")
-    runbook = (
-        repository / "docs/documents/operations/knowledge-graph-overlay-runbook.md"
-    ).read_text(encoding="utf-8")
-
-    assert "APP_EMBED_MODEL_REVISION=" in env_example
-    assert "immutable" in env_example.lower()
-    assert "APP_EMBED_ALLOW_DIMENSIONS_OVERRIDE=0" in env_example
-    assert "provider-side dimensions=1024" in env_example.lower()
-    assert "APP_EMBED_MODEL_REVISION" in runbook
-    assert "fail" in runbook.lower()
-    for compose_path in (
-        "deploy/compose/base.yml",
-        "deploy/compose/development.yml",
-        "deploy/compose/production.yml",
-        "deploy/compose/no_gpu_dev.yml",
-    ):
-        compose = (repository / compose_path).read_text(encoding="utf-8")
-        assert "APP_EMBED_MODEL_REVISION" in compose
-        assert "${APP_EMBED_MODEL_REVISION:-}" in compose
-    no_gpu = (repository / "deploy/compose/no_gpu_dev.yml").read_text(encoding="utf-8")
-    assert "APP_EMBED_ALLOW_DIMENSIONS_OVERRIDE: 1" in no_gpu
-    for compose_path in (
-        "deploy/compose/base.yml",
-        "deploy/compose/development.yml",
-        "deploy/compose/production.yml",
-    ):
-        compose = (repository / compose_path).read_text(encoding="utf-8")
-        assert "VLLM_REVISION=${APP_EMBED_MODEL_REVISION:-}" in compose
-        assert "VLLM_MODEL=${APP_EMBED_MODEL:-" in compose
-        assert "VLLM_SERVED_MODEL_NAME=${APP_EMBED_MODEL:-" in compose
-        assert "VLLM_TOKENIZER=${APP_EMBED_MODEL:-" in compose
 
 
 @pytest.mark.django_db(transaction=True)

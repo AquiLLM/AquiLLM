@@ -1,43 +1,40 @@
+# ruff: noqa: E402, I001 - support imports follow shared sample types
 """Bounded, local-only collection schema proposal helpers.
 
 This module intentionally keeps collection text and inference output in local
 variables.  Callers receive only canonical definitions and aggregate evidence.
 """
+
 from __future__ import annotations
 
-import hashlib
 import heapq
-import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import islice
-from typing import Iterator
-from urllib.parse import urlparse
 
-_DEFAULT_MAX_CHUNKS = 32
-_DEFAULT_MAX_CHARACTERS = 48_000
-_DEFAULT_TIMEOUT_SECONDS = 180
+from .schema_generation_config import (
+    SchemaGenerationConfig,
+    SchemaGenerationConfigurationError,
+    _enabled_from_environment as _enabled_from_environment,
+    _positive_env_int as _positive_env_int,
+    load_schema_generation_config,
+)
+from .schema_generation_sources import (
+    _collection_source_documents as _collection_source_documents,
+    _completed_collection_documents as _completed_collection_documents,
+    _locked_collection_source_signature as _locked_collection_source_signature,
+    collection_ingestion_pending as collection_ingestion_pending,
+    collection_source_signature as collection_source_signature,
+)
+
 _MAX_ENTITY_TYPES = 24
 _MIN_ENTITY_TYPES = 2
 _MAX_RELATION_TYPES = 32
 _MIN_RELATION_TYPES = 1
 
 
-class SchemaGenerationConfigurationError(ValueError):
-    """The local-only generation configuration is unsafe or malformed."""
-
-
 class InvalidSchemaCandidate(ValueError):
     """A model proposal cannot become a bounded collection draft."""
-
-
-@dataclass(frozen=True, slots=True)
-class SchemaGenerationConfig:
-    base_url: str
-    api_key: str
-    model: str
-    max_chunks: int
-    max_characters: int
-    timeout_seconds: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,82 +45,8 @@ class SchemaSample:
     text: str
 
 
-def _positive_env_int(name: str, default: int) -> int:
-    value = (os.environ.get(name) or "").strip()
-    if not value:
-        return default
-    try:
-        parsed = int(value, 10)
-    except ValueError as exc:
-        raise SchemaGenerationConfigurationError(f"{name} must be a positive integer") from exc
-    if parsed <= 0:
-        raise SchemaGenerationConfigurationError(f"{name} must be a positive integer")
-    return parsed
 
 
-def _enabled_from_environment() -> bool:
-    return (os.environ.get("KG_SCHEMA_GENERATION_ENABLED") or "0").strip() == "1"
-
-
-def load_schema_generation_config() -> SchemaGenerationConfig:
-    """Load bounded settings and reject every endpoint outside the vLLM service."""
-
-    raw_url = (os.environ.get("VLLM_BASE_URL") or "http://vllm:8000/v1").strip()
-    parsed = urlparse(raw_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise SchemaGenerationConfigurationError("VLLM_BASE_URL must be an HTTP(S) URL")
-    if parsed.hostname.lower() != "vllm":
-        raise SchemaGenerationConfigurationError(
-            "VLLM_BASE_URL host must equal the configured Docker service host"
-        )
-    normalized_path = parsed.path.rstrip("/")
-    if not normalized_path:
-        normalized_path = "/v1"
-    elif normalized_path != "/v1":
-        raise SchemaGenerationConfigurationError("VLLM_BASE_URL must use the /v1 API path")
-    base_url = f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
-    model = (os.environ.get("VLLM_SERVED_MODEL_NAME") or "qwen3.5:27b").strip()
-    return SchemaGenerationConfig(
-        base_url=base_url,
-        api_key=(os.environ.get("VLLM_API_KEY") or "EMPTY").strip() or "EMPTY",
-        model=model,
-        max_chunks=min(_positive_env_int("KG_SCHEMA_GENERATION_MAX_CHUNKS", _DEFAULT_MAX_CHUNKS), _DEFAULT_MAX_CHUNKS),
-        max_characters=min(_positive_env_int("KG_SCHEMA_GENERATION_MAX_CHARACTERS", _DEFAULT_MAX_CHARACTERS), _DEFAULT_MAX_CHARACTERS),
-        timeout_seconds=_positive_env_int("KG_SCHEMA_GENERATION_TIMEOUT_SECONDS", _DEFAULT_TIMEOUT_SECONDS),
-    )
-
-
-def _collection_source_documents(
-    collection_id: int, *, for_update: bool = False, include_incomplete: bool = False
-) -> Iterator[dict[str, object]]:
-    """Stream text-free document identities, locking every source row when requested."""
-
-    from django.apps import apps
-
-    iterators = []
-    for name in (
-        "PDFDocument", "TeXDocument", "RawTextDocument", "VTTDocument",
-        "HandwrittenNotesDocument", "ImageUploadDocument", "MediaUploadDocument",
-        "DocumentFigure",
-    ):
-        model = apps.get_model("apps_documents", name)
-        filters = {"collection_id": collection_id}
-        if not include_incomplete:
-            filters["ingestion_complete"] = True
-        queryset = model.objects.filter(**filters).order_by("id")
-        if for_update:
-            queryset = queryset.select_for_update()
-        fields = ("id", "full_text_hash", "ingestion_complete") if include_incomplete else ("id", "full_text_hash")
-        iterators.append(queryset.values(*fields).iterator())
-    yield from heapq.merge(*iterators, key=lambda record: str(record["id"]))
-
-
-def _completed_collection_documents(
-    collection_id: int, *, for_update: bool = False
-) -> Iterator[dict[str, object]]:
-    """Stream completed document identities; never read document text here."""
-
-    yield from _collection_source_documents(collection_id, for_update=for_update)
 
 
 def _eligible_collection_documents(collection_id: int) -> Iterator[dict[str, object]]:
@@ -141,8 +64,13 @@ def _eligible_collection_documents(collection_id: int) -> Iterator[dict[str, obj
     )
     iterators = []
     for name in (
-        "PDFDocument", "TeXDocument", "RawTextDocument", "VTTDocument",
-        "HandwrittenNotesDocument", "ImageUploadDocument", "MediaUploadDocument",
+        "PDFDocument",
+        "TeXDocument",
+        "RawTextDocument",
+        "VTTDocument",
+        "HandwrittenNotesDocument",
+        "ImageUploadDocument",
+        "MediaUploadDocument",
         "DocumentFigure",
     ):
         model = apps.get_model("apps_documents", name)
@@ -162,55 +90,10 @@ def collection_has_eligible_text(collection_id: int) -> bool:
     return next(_eligible_collection_documents(collection_id), None) is not None
 
 
-def collection_source_signature(collection_id) -> str:
-    """Return a text-free signature for completed collection document content."""
-
-    if type(collection_id) is not int or collection_id <= 0:
-        raise ValueError("collection_id must be a positive database integer")
-    digest = hashlib.sha256()
-    for document in _completed_collection_documents(collection_id):
-        digest.update(str(document["id"]).encode("ascii"))
-        digest.update(b"\0")
-        digest.update(str(document["full_text_hash"]).encode("ascii"))
-        digest.update(b"\n")
-    return digest.hexdigest()
 
 
-def collection_ingestion_pending(collection_id: int) -> bool:
-    """Include queued uploads that have not created document rows yet."""
-
-    from apps.ingestion.models import IngestionBatchItem
-
-    if IngestionBatchItem.objects.filter(
-        batch__collection_id=collection_id,
-        status__in=(
-            IngestionBatchItem.Status.QUEUED,
-            IngestionBatchItem.Status.PROCESSING,
-        ),
-    ).exists():
-        return True
-    return any(
-        not document["ingestion_complete"]
-        for document in _collection_source_documents(
-            collection_id, include_incomplete=True
-        )
-    )
 
 
-def _locked_collection_source_signature(collection_id: int) -> str:
-    """Lock all source rows, then hash only completed document identities."""
-
-    digest = hashlib.sha256()
-    for document in _collection_source_documents(
-        collection_id, for_update=True, include_incomplete=True
-    ):
-        if not document["ingestion_complete"]:
-            continue
-        digest.update(str(document["id"]).encode("ascii"))
-        digest.update(b"\0")
-        digest.update(str(document["full_text_hash"]).encode("ascii"))
-        digest.update(b"\n")
-    return digest.hexdigest()
 
 
 def _next_sample_chunk(
@@ -237,7 +120,10 @@ def _next_sample_chunk(
     if row is None:
         return None
     return SchemaSample(
-        str(row["doc_id"]), int(row["pk"]), int(row["chunk_number"]), row["sample_content"]
+        str(row["doc_id"]),
+        int(row["pk"]),
+        int(row["chunk_number"]),
+        row["sample_content"],
     )
 
 
@@ -258,7 +144,11 @@ def sample_collection_chunks(collection_id, max_chunks, max_characters):
     cursors = {document_id: -1 for document_id in document_ids}
     active_documents = list(document_ids)
     used_characters = 0
-    while active_documents and len(selected) < max_chunks and used_characters < max_characters:
+    while (
+        active_documents
+        and len(selected) < max_chunks
+        and used_characters < max_characters
+    ):
         for document_id in tuple(active_documents):
             if len(selected) >= max_chunks or used_characters >= max_characters:
                 break
@@ -295,7 +185,12 @@ def balanced_samples(
             sample = groups[document_id][offset]
             offsets[document_id] = offset + 1
             selected.append(
-                SchemaSample(sample.document_id, sample.chunk_id, sample.chunk_number, sample.text[:remaining])
+                SchemaSample(
+                    sample.document_id,
+                    sample.chunk_id,
+                    sample.chunk_number,
+                    sample.text[:remaining],
+                )
             )
             used_characters += len(selected[-1].text)
             progressed = True
@@ -313,9 +208,16 @@ from .schema_generation_support import (
 )
 
 __all__ = [
-    "InvalidSchemaCandidate", "SchemaGenerationConfig", "SchemaGenerationConfigurationError",
-    "SchemaSample", "collect_candidate_evidence", "collection_source_signature",
+    "InvalidSchemaCandidate",
+    "SchemaGenerationConfig",
+    "SchemaGenerationConfigurationError",
+    "SchemaSample",
+    "collect_candidate_evidence",
+    "collection_source_signature",
     "collection_ingestion_pending",
-    "generate_schema_candidate", "load_schema_generation_config", "normalize_schema_candidate",
-    "balanced_samples", "sample_collection_chunks",
+    "generate_schema_candidate",
+    "load_schema_generation_config",
+    "normalize_schema_candidate",
+    "balanced_samples",
+    "sample_collection_chunks",
 ]

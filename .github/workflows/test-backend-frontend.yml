@@ -124,6 +124,87 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_projected_ppr_caps.py
           aquillm/apps/knowledge_graph/tests/test_ppr_restart_eval.py
           -q --tb=short
+      - name: Refactored subsystem regression contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/chat/tests/test_direct_rag_graph_observability.py
+          aquillm/apps/chat/tests/test_direct_rag_retries.py
+          aquillm/apps/chat/tests/test_llm_complete_retry.py
+          aquillm/apps/chat/tests/test_llm_streaming_continuation.py
+          aquillm/apps/collections/tests/test_graph_visualization_api.py
+          aquillm/apps/collections/tests/test_graph_visualization_edges.py
+          aquillm/apps/collections/tests/test_schema_api.py
+          aquillm/apps/collections/tests/test_schema_api_editor.py
+          aquillm/apps/collections/tests/test_schema_api_generation.py
+          aquillm/apps/collections/tests/test_schema_api_history.py
+          aquillm/apps/collections/tests/test_schema_api_publication.py
+          aquillm/apps/collections/tests/test_schema_api_restore_inputs.py
+          aquillm/apps/collections/tests/test_schema_api_validation.py
+          aquillm/apps/collections/tests/test_schema_audit_inputs.py
+          aquillm/apps/collections/tests/test_schema_audit_regressions.py
+          aquillm/apps/collections/tests/test_schema_generation.py
+          aquillm/apps/collections/tests/test_schema_generation_models.py
+          aquillm/apps/collections/tests/test_schema_generation_transport_evidence.py
+          aquillm/apps/collections/tests/test_schema_models.py
+          aquillm/apps/documents/tests/test_rerank_http_cache.py
+          aquillm/apps/documents/tests/test_rerank_pointwise_cache.py
+          aquillm/apps/knowledge_graph/tests/test_canonical_embedding_audit.py
+          aquillm/apps/knowledge_graph/tests/test_canonical_resolution.py
+          aquillm/apps/knowledge_graph/tests/test_collection_embedding_adapter.py
+          aquillm/apps/knowledge_graph/tests/test_collection_embedding_session.py
+          aquillm/apps/knowledge_graph/tests/test_collection_resolution.py
+          aquillm/apps/knowledge_graph/tests/test_collection_resolution_schema.py
+          aquillm/apps/knowledge_graph/tests/test_coreference.py
+          aquillm/apps/knowledge_graph/tests/test_coreference_chunk_coordinates.py
+          aquillm/apps/knowledge_graph/tests/test_coreference_document_coordinates.py
+          aquillm/apps/knowledge_graph/tests/test_coreference_sparse_partition.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_repository.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_scoped_lookup.py
+          aquillm/apps/knowledge_graph/tests/test_extraction_commit_marker.py
+          aquillm/apps/knowledge_graph/tests/test_graph_activation_evaluation.py
+          aquillm/apps/knowledge_graph/tests/test_graph_assembly.py
+          aquillm/apps/knowledge_graph/tests/test_graph_assembly_limits.py
+          aquillm/apps/knowledge_graph/tests/test_graph_assembly_lineage_config.py
+          aquillm/apps/knowledge_graph/tests/test_graph_maintenance_tasks.py
+          aquillm/apps/knowledge_graph/tests/test_graph_recovery.py
+          aquillm/apps/knowledge_graph/tests/test_graph_recovery_publication.py
+          aquillm/apps/knowledge_graph/tests/test_memgraph_projection_repository.py
+          aquillm/apps/knowledge_graph/tests/test_memgraph_projection_validation_and_deletion.py
+          aquillm/apps/knowledge_graph/tests/test_mention_extraction.py
+          aquillm/apps/knowledge_graph/tests/test_mention_relation_provenance.py
+          aquillm/apps/knowledge_graph/tests/test_projection_document_provenance.py
+          aquillm/apps/knowledge_graph/tests/test_projection_reconcile_drift.py
+          aquillm/apps/knowledge_graph/tests/test_projection_reconciler.py
+          aquillm/apps/knowledge_graph/tests/test_projection_reconciliation_control.py
+          aquillm/apps/knowledge_graph/tests/test_projection_reconciliation_orphans.py
+          aquillm/apps/knowledge_graph/tests/test_projection_records.py
+          aquillm/apps/knowledge_graph/tests/test_projection_runtime.py
+          aquillm/apps/knowledge_graph/tests/test_projection_runtime_dispatch.py
+          aquillm/apps/knowledge_graph/tests/test_projection_worker_heartbeat.py
+          aquillm/apps/knowledge_graph/tests/test_projection_worker_lease_failures.py
+          aquillm/apps/knowledge_graph/tests/test_tasks.py
+          aquillm/lib/knowledge_graph/tests/test_gliner2_local.py
+          aquillm/lib/knowledge_graph/tests/test_gliner2_relation_orientation.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_client.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_service.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_service_client_parity.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_service_dynamic.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_transport.py
+          aquillm/lib/llm/tests/test_rag_citation_validation.py
+          aquillm/lib/llm/tests/test_rag_citations.py
+          aquillm/lib/llm/tests/test_spin_tool_budget.py
+          aquillm/tests/integration/test_knowledge_graph_packaging.py
+          aquillm/tests/integration/test_vllm_extra_args_parser.py
+          aquillm/tests/integration/test_vllm_profiles.py
+          -q --tb=short
+
+      - name: PostgreSQL seed identity and permission contracts
+        env:
+          KG_REQUIRE_POSTGRES_TESTS: "1"
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_seed_lookup_postgres.py
+          --ds=aquillm.settings_projection_test -q --tb=short
 
   frontend-build:
     runs-on: ubuntu-latest

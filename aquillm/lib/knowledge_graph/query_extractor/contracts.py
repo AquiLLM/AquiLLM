@@ -10,6 +10,8 @@ from enum import StrEnum
 from math import isfinite
 from typing import final
 
+from .query_wire_json import parse_canonical_payload
+
 QUERY_EXTRACTION_REQUEST_SCHEMA_VERSION = "query-request-v1"
 QUERY_EXTRACTION_RESPONSE_SCHEMA_VERSION = "query-entities-v1"
 QUERY_EXTRACTION_RESPONSE_SCHEMA_CHECKSUM = (
@@ -216,23 +218,7 @@ def canonical_query_extraction_response_bytes(
         }
     )
 def _payload(data: bytes, fields: frozenset[str], maximum: int, *, optional: frozenset[str] = frozenset()) -> dict[str, object]:
-    if type(data) is not bytes:
-        raise TypeError("wire data must be exact bytes")
-    if len(data) > maximum:
-        raise ValueError("wire data exceeds its byte cap")
-    try:
-        value = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("wire data must be valid JSON") from error
-    if type(value) is not dict or not fields <= set(value) <= fields | optional:
-        raise ValueError("wire object has an invalid field set")
-    try:
-        canonical = _canonical(value)
-    except UnicodeEncodeError as error:
-        raise ValueError("wire object must contain valid UTF-8") from error
-    if data != canonical:
-        raise ValueError("wire object must use canonical JSON")
-    return value
+    return parse_canonical_payload(data, fields, maximum, optional=optional, canonical=_canonical)
 def parse_query_extraction_request(data: bytes) -> QueryExtractionRequestV1:
     value = _payload(
         data,

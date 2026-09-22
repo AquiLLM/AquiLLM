@@ -13,13 +13,19 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from hashlib import sha256
 from itertools import combinations
 from math import isfinite
 
 from apps.knowledge_graph.resolution.normalization import (
-    normalize_entity_label,
     parse_stable_identifier,
+)
+
+from .canonical_validation import (
+    _bounded_text,
+    _hash_payload,
+    _is_acronym,
+    _normalized_key,
+    _positive_int,
 )
 
 CANONICAL_RESOLVER_VERSION = "canonical-resolution-v1"
@@ -36,7 +42,6 @@ CANONICAL_EMBEDDING_PROJECTION_WINDOW = 4
 
 _HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 _VERSION_PATTERN = re.compile(r"[a-z0-9][a-z0-9.+:/_-]*")
-_ACRONYM_PATTERN = re.compile(r"[A-Z][A-Z0-9-]{1,11}")
 _METHOD_PRIORITY = {
     "stable_identifier": 0,
     "exact_name_or_alias": 1,
@@ -45,45 +50,6 @@ _METHOD_PRIORITY = {
 }
 
 
-def _positive_int(value: object, label: str) -> int:
-    if type(value) is not int or not 1 <= value <= 2**63 - 1:
-        raise ValueError(f"{label} must be a positive database integer")
-    return value
-
-
-def _bounded_text(
-    value: object,
-    label: str,
-    *,
-    maximum: int,
-    allow_empty: bool = False,
-) -> str:
-    if type(value) is not str or value != value.strip() or "\x00" in value:
-        raise ValueError(f"{label} must be an exact trimmed string")
-    if (not value and not allow_empty) or len(value) > maximum:
-        emptiness = "possibly empty" if allow_empty else "nonempty"
-        raise ValueError(f"{label} must be a bounded {emptiness} string")
-    return value
-
-
-def _hash_payload(payload: object) -> str:
-    return sha256(
-        json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
-
-
-def _normalized_key(value: str) -> str:
-    return normalize_entity_label(value).key
-
-
-def _is_acronym(value: str) -> bool:
-    return bool(_ACRONYM_PATTERN.fullmatch(value))
 
 
 class CanonicalOutcome(StrEnum):
