@@ -133,6 +133,40 @@ def test_vllm_start_uses_supported_log_requests_disable_flag(tmp_path: Path):
     assert "--disable-log-requests" not in final_args
 
 
+def test_pooling_embedding_preserves_bitsandbytes_quantization(tmp_path: Path):
+    loader_config = '{"load_in_4bit":true,"bnb_4bit_compute_dtype":"float16"}'
+    final_args = _run_vllm_start(
+        tmp_path,
+        VLLM_MODEL="Qwen/Qwen3-VL-Embedding-2B",
+        VLLM_RUNNER="pooling",
+        VLLM_EXTRA_ARGS=(
+            "--quantization bitsandbytes --load-format bitsandbytes "
+            f"--model-loader-extra-config '{loader_config}' --dtype float16"
+        ),
+    )
+
+    assert final_args[final_args.index("--quantization") + 1] == "bitsandbytes"
+    assert final_args[final_args.index("--load-format") + 1] == "bitsandbytes"
+    assert final_args[final_args.index("--model-loader-extra-config") + 1] == loader_config
+
+
+def test_pooling_reranker_still_removes_incompatible_quantization(tmp_path: Path):
+    final_args = _run_vllm_start(
+        tmp_path,
+        VLLM_MODEL="Qwen/Qwen3-VL-Reranker-2B",
+        VLLM_RUNNER="pooling",
+        VLLM_EXTRA_ARGS=(
+            "--quantization bitsandbytes --load-format bitsandbytes "
+            "--model-loader-extra-config '{\"load_in_4bit\":true}'"
+        ),
+    )
+
+    assert "--quantization" not in final_args
+    assert "--load-format" not in final_args
+    assert "--model-loader-extra-config" not in final_args
+    assert final_args[final_args.index("--dtype") + 1] == "float16"
+
+
 def test_vllm_start_unsets_deployment_only_vllm_metadata():
     repo_root = Path(__file__).resolve().parents[3]
     script = (repo_root / "deploy/scripts/vllm_start.sh").read_text(

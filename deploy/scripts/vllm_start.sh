@@ -242,14 +242,14 @@ fi
 
 # bitsandbytes + Qwen3-VL sequence-classification reranker can fail loading
 # classifier weights. Use fp16 for rerank until that path is proven stable.
-# Match rerank intents broadly: score task, reranker model id, pooling runner, or known reranker hf_overrides marker.
+# Match explicit rerank intents only. Embedding sidecars also use the pooling
+# runner, so pooling alone must never strip their required quantization payload.
 _vllm_task_trim="${VLLM_TASK:-}"
 _vllm_task_trim="${_vllm_task_trim%%[$'\r']}"
 _rerank_bnb_strip=0
 if [[ "${VLLM_EXTRA_ARGS:-}" == *[Bb]itsandbytes* ]]; then
   if [ "${_vllm_task_trim}" = "score" ] \
     || [[ "${VLLM_MODEL:-}" == *[Rr]eranker* ]] \
-    || [[ "${VLLM_RUNNER:-}" == "pooling" ]] \
     || [[ "${VLLM_EXTRA_ARGS:-}" == *is_original_qwen3_reranker* ]]; then
     _rerank_bnb_strip=1
   fi
