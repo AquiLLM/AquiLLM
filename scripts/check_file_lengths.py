@@ -12,7 +12,7 @@ MAX_LINES = 300
 # Exact reviewed maxima for already-tracked hotspots. New files never enter this
 # map. A path must match its count: shrinking ratchets down; growth always fails.
 _BASELINE_MAX_LINES: dict[str, int] = {
-    "aquillm/apps/chat/services/tool_wiring/documents.py": 341,
+    "aquillm/apps/chat/services/tool_wiring/documents.py": 328,
     "aquillm/apps/chat/tests/test_direct_rag_pipeline.py": 390,
     "aquillm/apps/chat/tests/test_llm_complete_retry.py": 663,
     "aquillm/apps/chat/tests/test_multimodal_messages.py": 348,
@@ -20,7 +20,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/documents/models/document.py": 343,
     "aquillm/apps/documents/models/document_types/figure.py": 386,
     "aquillm/apps/documents/services/chunk_rerank_local_vllm.py": 351,
-    "aquillm/apps/documents/services/chunk_search.py": 493,
+    "aquillm/apps/documents/services/chunk_search.py": 492,
     "aquillm/apps/documents/services/chunk_search_candidates.py": 343,
     "aquillm/apps/documents/services/rag_cache.py": 365,
     "aquillm/apps/documents/tasks/chunking.py": 430,

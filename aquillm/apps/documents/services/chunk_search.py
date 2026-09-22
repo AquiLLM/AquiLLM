@@ -468,31 +468,20 @@ def text_chunk_search(
             reranked_results,
             diagnostics,
         )
-    except DatabaseError:
+    except Exception as error:
+        if isinstance(error, DatabaseError):
+            event = "obs.rag.search_db_error"
+            reason = RetrievalLogReason.UPSTREAM_UNAVAILABLE
+        elif isinstance(error, ValidationError):
+            event = "obs.rag.search_validation_error"
+            reason = RetrievalLogReason.INVALID_REQUEST
+        else:
+            event = "obs.rag.search_error"
+            reason = RetrievalLogReason.INTERNAL_FAILURE
         logger.error(
-            "obs.rag.search_db_error",
+            event,
             **retrieval_log_fields(
-                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
-                count=0,
-                elapsed_ms=0.0,
-            ),
-        )
-        raise
-    except ValidationError:
-        logger.error(
-            "obs.rag.search_validation_error",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.INVALID_REQUEST,
-                count=0,
-                elapsed_ms=0.0,
-            ),
-        )
-        raise
-    except Exception:
-        logger.error(
-            "obs.rag.search_error",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.INTERNAL_FAILURE,
+                reason=reason,
                 count=0,
                 elapsed_ms=0.0,
             ),

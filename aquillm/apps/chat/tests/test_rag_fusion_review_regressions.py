@@ -3,6 +3,7 @@
 import pytest
 
 from apps.chat.services.rag_retrieval import fuse_ranked_tool_results
+from apps.documents.services.chunk_rerank_results import RerankScoreSet
 from apps.documents.services.chunk_rerank_score_transport import deserialize_score_set
 
 
@@ -42,3 +43,17 @@ def test_transport_rejects_complete_rank_only_sidecar():
         "scores": [],
     }
     assert deserialize_score_set(sidecar) is None
+
+
+def test_typed_sidecar_cannot_bypass_status_validation():
+    malformed = RerankScoreSet(
+        "v2",
+        "query",
+        "scorer",
+        "pool",
+        "rank_only",
+        "complete",
+        (1,),
+        (),
+    )
+    assert deserialize_score_set(malformed) is None

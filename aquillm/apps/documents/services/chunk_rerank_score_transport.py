@@ -35,8 +35,11 @@ def serialize_score_set(score_set: RerankScoreSet) -> dict[str, object]:
 
 def deserialize_score_set(value: object) -> RerankScoreSet | None:
     """Reject malformed or extraneous score fields without exposing their values."""
-    if isinstance(value, RerankScoreSet):
-        return value
+    if type(value) is RerankScoreSet:
+        try:
+            value = serialize_score_set(value)
+        except (AttributeError, TypeError, ValueError):
+            return None
     if not isinstance(value, Mapping) or set(value) != {
         "schema_version",
         "query_fingerprint",
