@@ -1,18 +1,20 @@
-# Scientific evidence preservation design
+# Evidence preservation and responsive retrieval design
 
 **Status:** Planning only. Implement on `development`, validate there, then prepare a separate non-graph backport to `main`. This document does not authorize feature activation or a production deployment.
 
-**Implementation plan:** [Scientific evidence preservation](../plans/2026-09-22-scientific-evidence-preservation.md).
+**Implementation plan:** [Evidence preservation and responsive retrieval](../plans/2026-09-22-evidence-preservation.md).
 
 ## Purpose and scope
 
-Preserve the evidence needed to answer scientific questions, including qualifications, numerical results, contrary findings and information recovered during follow-up searches. Resource limits remain necessary; hitting a limit must not silently turn partial coverage into a claim that the evidence does not exist.
+Preserve the evidence needed to answer questions accurately across supported source types, including qualifications, numerical results, exceptions, contrary findings and information recovered during follow-up searches. Scientific research illustrates the standard required for serious work; it is not the boundary of this design. Apply the same standard to technical documentation, reports, policies, records and other supported material, without a science-specific retrieval mode.
+
+Trustworthy evidence and responsive answers are joint requirements. Routine questions should avoid unnecessary model calls; additional retrieval should address a specific unresolved need. Resource limits remain necessary, but reaching a limit must not silently turn partial coverage into a claim that evidence does not exist. Faster answers obtained by dropping required support fail acceptance just as accurate answers with avoidable stalls do.
 
 Address the four gaps identified in the production investigation:
 
 1. Reranker and tool-result prefix truncation can remove decisive evidence.
-2. A fixed three-passage ceiling discards complementary evidence from one paper.
-4. Follow-up questions can lose previously retrieved evidence and plural paper references.
+2. A fixed three-passage ceiling discards complementary evidence from one document.
+4. Follow-up questions can lose previously retrieved evidence and plural source references.
 5. The direct path performs an initial retrieval batch without a targeted second acquisition round.
 
 Gap 3, relevance versus document diversity, belongs to the separate adaptive evidence selection workstream. This plan integrates with its selector; it does not introduce another relevance/diversity algorithm. Knowledge graph retrieval, PageRank, graph expansion, embeddings, ingestion chunking and model replacement are outside scope. Answer quality is not measured by response length alone.
@@ -75,7 +77,7 @@ Cache exact successful pairs. Aggregate caches additionally bind all required wi
 
 Measure the actual model pair, including its template and special tokens, with a verified model/tokenizer revision using existing infrastructure. If unavailable, use a conservative estimate and report `unknown` coverage; an estimate must not become an exact guarantee. Disable silent server truncation where supported; otherwise do not claim verified full coverage without a tested server contract.
 
-Send the full query and full chunk when the pair fits. For an oversized chunk, construct deterministic overlapping contiguous source windows, with an end-anchored final window. Prefer paragraph/sentence boundaries, retain exact offsets, and use 64 tokens of overlap where capacity permits (at most one quarter of window capacity). Verify every source character is covered; token decoding must not alter scientific symbols. Overlap mitigates boundary loss but does not prove that arbitrary long-range dependencies fit together.
+Send the full query and full chunk when the pair fits. For an oversized chunk, construct deterministic overlapping contiguous source windows, with an end-anchored final window. Prefer paragraph/sentence boundaries, retain exact offsets, and use 64 tokens of overlap where capacity permits (at most one quarter of window capacity). Verify every source character is covered; token decoding must not alter symbols, identifiers, quantities or other source content. Overlap mitigates boundary loss but does not prove that arbitrary long-range dependencies fit together.
 
 Do not shorten the user's question based on the first candidate. If the question itself cannot fit with useful evidence, use rank fallback for primary-question scoring, retain the entire question for synthesis, and mark the limitation. Aspect-specific acquisition queries remain distinct queries, not interchangeable primary-question scores.
 
@@ -93,7 +95,7 @@ The prepared representation's exact text and fingerprint are the selector's redu
 
 Compute the evidence ceiling as the smaller of the configured evidence allocation and the answer model's remaining context after the question, history, tools, citation metadata, images, output reserve and safety margin. Keep the initial 3500-token allocation for controlled evaluation; increasing it is a separate measured tuning decision. Unknown tokenization requires conservative estimation and visible approximation. Do not count only `len(text)/4` and assume the full request fits.
 
-Keep the verified output limits and cutoff recovery. Synthesis instructions should answer the requested scientific depth and preserve relevant qualifications; unconditional brevity must not override the user's question. No new blanket answer shortening is part of this work.
+Keep the verified output limits and cutoff recovery. Match the depth requested and preserve relevant qualifications: a narrow lookup can receive a short complete answer, while a comparison or analysis may require more detail. Unconditional brevity must not override the question, and verbosity is not evidence quality. No new blanket answer shortening is part of this work.
 
 ## Gap 2: capacity governed by evidence and real budgets
 
@@ -101,19 +103,23 @@ Introduce `RAG_DOCUMENT_CAPACITY_MODE=legacy|budgeted` (default `legacy`) and `R
 
 This is an explicit opt-in semantic change: existing `RAG_MAX_SNIPPETS_PER_DOC` is not silently reinterpreted. Operators who need its old ceiling in budgeted mode copy it into `RAG_DOCUMENT_HARD_CAP`. Update configuration validation and documentation together. The separate selector's relevance/diversity policy, token feasibility and total passage limit determine allocation; this plan adds no forced round-robin or per-document minimum.
 
-Five complementary passages from one paper may therefore survive when they fit; five duplicates should not win merely because capacity exists. Explicit hard ceilings remain enforced and reported as a possible source of incomplete coverage.
+Five complementary passages from one document may therefore survive when they fit; five duplicates should not win merely because capacity exists. Explicit hard ceilings remain enforced and reported as a possible source of incomplete coverage.
 
 ## Gap 4: evidence continuity across follow-ups
 
-Build ordered source anchors from explicit citations/document identities and recent answer/tool evidence in conversational order. Resolve “both,” “their,” “these papers,” “the second paper,” explicit titles and citations against that structure. Preserve plural references. Duplicate titles or conflicting conversational anchors are ambiguous, not a reason to choose the alphabetically first title.
+Build ordered source anchors from explicit citations/document identities and recent answer/tool evidence in conversational order. Resolve “both,” “their,” “these documents,” “the second report,” equivalent paper references, explicit titles and citations against that structure. Preserve plural references. Duplicate titles or conflicting conversational anchors are ambiguous, not a reason to choose the alphabetically first title.
 
 Rehydrate relevant prior chunk identities under the current user and selected collection scope. Revoked, deleted or moved-out-of-scope sources are excluded; changed sources are reread and rescored. Carry their current text into the same bounded candidate pool as new retrieval. Do not restore all historical tool bodies or reuse old assistant claims as source evidence. Keep stored history immutable.
 
-Prior evidence consumes the same candidate, token and scoring budgets as new evidence. It may be reused for a resolved reference or current-question relevance, not solely because it is recent. Unresolved references with materially different possible answers produce an honest clarification or limited answer, with no guessed paper identity. Preserve current citations and allow only currently authorized selected evidence into synthesis.
+Prior evidence consumes the same candidate, token and scoring budgets as new evidence. It may be reused for a resolved reference or current-question relevance, not solely because it is recent. Unresolved references with materially different possible answers produce an honest clarification or limited answer, with no guessed source identity. Preserve current citations and allow only currently authorized selected evidence into synthesis.
 
 ## Gap 5: bounded retrieval that responds to missing evidence
 
-Start with one acquisition query, then permit up to two targeted acquisition actions if needed. An action is an authorized vector query, single-document query or adjacent-context expansion. Existing manual search semantics remain explicit. A structured coverage planner may suggest a next action from the current question, resolved sources and budgeted evidence views; it does not rank candidates or write draft answers.
+Start with one acquisition query, then permit up to two targeted acquisition actions if needed. An action is an authorized vector query, single-document query or adjacent-context expansion. Existing manual search semantics remain explicit. Use the unchanged primary question initially where appropriate so compatible successful scores can be reused in final selection; never relax source, input, model or coverage fingerprints to gain a cache hit.
+
+Do not call a coverage planner unconditionally. A tested decision gate uses the question's requested scope, resolved references and evidence state to identify missing requested fields/aspects, contradictory evidence, empty results, unresolved references or broader synthesis needing assessment. A narrow, unambiguous lookup with adequate support can proceed directly to final selection and synthesis with zero planner calls. High similarity alone does not establish adequacy, and short question length does not establish simplicity. Validate false fast-path decisions against the held-out support labels; where adequacy is uncertain, assess rather than claiming completion.
+
+When assessment is warranted, a structured coverage planner may suggest a next action from the question, resolved sources and budgeted evidence views; it does not rank candidates or write draft answers. Check each suggested action addresses a named unresolved aspect and can finish within the remaining acquisition allowance. Reserve the remaining final-scoring allowance plus measured p95 authorization/packet-assembly time before starting optional planner or acquisition work. If that reserve would be consumed, finish from authorized evidence and state material limitations instead of launching work that prevents a timely answer.
 
 Planner output contains requested aspects, support references to actual candidate spans, unresolved aspects and at most one next action. Validate its schema, source identities and scope; reject invented source IDs, repeated normalized action signatures and out-of-scope requests. Model-declared coverage is a heuristic, not proof. A budgeted view that omitted evidence is `unknown`, not proof of absence. Syntactically valid support still needs empirical faithfulness evaluation.
 
@@ -121,11 +127,11 @@ Stop when the planner identifies no unresolved aspect, the next action makes no 
 
 The first planner call can propose action two; the second can propose action three. After action three, make no third planner call. Mark new support as unassessed and use deterministic identity/span checks for already recorded support. The final answer model can answer from newly delivered evidence in its normal synthesis call; the controller must not assert semantic completeness for evidence no planner inspected. Test this exact three-action/two-planner sequence.
 
-Gather first, perform comparable final scoring/selection once, then synthesize once. Inspect final packet coverage against requested aspects using source revision and containment of supporting offset ranges in the actual delivered spans; a retained chunk ID alone is insufficient. Support excluded during final selection is still missing from the answer model, even if retrieved earlier. Answer supported portions and state material remaining gaps; never equate “budget exhausted” with “no literature exists.” Do not begin a new unbudgeted legacy tool loop on exhaustion.
+Gather first, perform comparable final scoring/selection once, then synthesize once. Inspect final packet coverage against requested aspects using source revision and containment of supporting offset ranges in the actual delivered spans; a retained chunk ID alone is insufficient. Support excluded during final selection is still missing from the answer model, even if retrieved earlier. Answer supported portions and state material remaining gaps; never equate “budget exhausted” with “no supporting information exists.” Do not begin a new unbudgeted legacy tool loop on exhaustion.
 
 ### Provisional pilot limits
 
-These limits are proposed starting values for development experiments, not settings changed by this document or claims that production latency will improve.
+These limits are proposed starting values for development experiments, not settings changed by this document or claims that production latency will improve. They are safety ceilings, not target wait times or work quotas to consume. In particular, the 15-second retrieval ceiling does not establish acceptable responsiveness for a routine query.
 
 | Limit | Initial value and accounting |
 | --- | --- |
@@ -150,18 +156,20 @@ Independent flags allow attribution: `RAG_RERANK_TEXT_MODE=legacy|shadow|windowe
 
 Supported combinations require the shared selector implementation plus its compatibility adapter whenever any preservation feature is active. `baseline` uses legacy ordering/text/capacity; `selection-only` uses adaptive ordering with legacy preservation settings; `preservation-only` uses the shared legacy ordering adapter with preservation settings enabled, including resolved budgeted capacity; `combined` uses adaptive ordering and preservation. Reject active preservation configuration when the shared selector/adapter is unavailable, rather than falling back to the old doubly pruned path. Follow-up and iterative modes require source-evidence mode. Source-evidence mode may use legacy or windowed reranking, allowing separate attribution of scorer improvements.
 
-Log counts, durations, mode/config versions, score-coverage state, cache reuse, aggregate fallback reason, source-span coverage, excluded-candidate reasons, round count and budget stop reason. Do not log paper text, questions, titles or raw identifiers. Preserve existing retrieval log redaction conventions.
+Log counts, durations, mode/config versions, score-coverage state, cache reuse, aggregate fallback reason, source-span coverage, excluded-candidate reasons, round count and budget stop reason. Do not log source text, questions, titles or raw identifiers. Preserve existing retrieval log redaction conventions.
 
-Use the selection workstream's planned 80-case corpus (40 development / 40 held out) once committed, adding labels/cases for tail evidence, boundaries, same-paper detail, plural follow-ups and retrieval refinement. If unavailable, create the equivalent split in this workstream's fixture file and reconcile by stable case ID. Freeze labels before tuning. Human-verified required support spans, factual qualifications and permissible citations are the quality targets; token counts and source count are diagnostics.
+Use the selection workstream's planned 80-case corpus (40 development / 40 held out) once committed, adding labels/cases for tail evidence, boundaries, same-document detail, plural follow-ups and retrieval refinement. If unavailable, create the equivalent split in this workstream's fixture file and reconcile by stable case ID. Include research papers, technical documentation, reports and policies/records in both splits, without changing the total case count merely to broaden scope. Cover version-specific instructions, policy exceptions, dates/quantities and contradictory records alongside scientific units, negation and findings. Label routine lookup versus deeper comparison/synthesis by required evidence, not document genre. Freeze labels before tuning. Human-verified required support spans, factual qualifications and permissible citations are the quality targets; token counts and source count are diagnostics.
 
 Compare baseline, selection-only, preservation-only and combined modes on the same sources and model revisions. Require all deterministic regressions to pass; zero authorization/citation violations; a positive paired supporting-evidence recall improvement on the targeted loss cases; and no observed aggregate decline in citation faithfulness, numerical/condition accuracy, support recall or the other selector's nDCG metric. Report paired bootstrap intervals and inconclusive results honestly; a small sample is not proof of equivalence.
 
-Record per-stage p50/p95, pair counts, rounds, tokens, timeout rates and rank-fallback frequency. Within each rollout mode, p95 retrieval must stay within the 15-second deadline plus measured cancellation overhead, and end-to-end p95 must not exceed baseline by more than 20% for the same cohort. No mode advances if a quality gain depends on unreported excessive latency; tune or keep the feature disabled. Preserve one-acquisition early exit on sufficient evidence and include concurrent-load tests, not only isolated queries.
+Record per-stage p50/p95, time to first substantive grounded answer output, full-answer completion time, pair counts, rounds, tokens, timeout rates and rank-fallback frequency. A spinner, progress status or unvalidated draft does not count as an answer. Preserve the existing citation-safe delivery policy; measuring first output is not permission to stream unvalidated claims.
+
+Report routine and deeper-query cohorts separately under identical model/hardware and concurrent load. Routine queries must show no demonstrated p95 regression in either first substantive output or completion time, while preserving support recall and faithfulness; test zero planner calls and zero extra final-scoring requests when acquisition scores are fully compatible. For deeper questions needing additional evidence, retain the <=20% end-to-end p95 allowance only alongside measured support improvement. All cohorts retain the retrieval deadline plus measured cancellation overhead. Report absolute times as well as deltas: a slow baseline is not proof of an acceptable experience. Record numeric user-facing latency targets from the measured development deployment before activation, and keep a feature disabled if those targets cannot be met. Preserve early exit and completion reserves rather than treating ceilings as normal latency budgets.
 
 ## Delivery and later backport
 
 Implement as separately reviewable commits: source/provenance and budget contracts; window preparation/scoring; full evidence/capacity; follow-up continuity; adaptive acquisition; evaluation and rollout documentation. Each commit carries regression tests and stays disabled until its gate passes. The separate selection workstream is an integration dependency, not a bundled graph backport.
 
-After development validation, inventory exact commits and dependencies against then-current `main`. Port only graph-independent evidence/runtime changes and the compatible selector pieces they require. Adapt authorization to the target branch's established interfaces; never remove checks just to make a cherry-pick compile. Test both branches with the same scientific fixtures, keep production timeout/citation safeguards, and document configuration differences.
+After development validation, inventory exact commits and dependencies against then-current `main`. Port only graph-independent evidence/runtime changes and the compatible selector pieces they require. Adapt authorization to the target branch's established interfaces; never remove checks just to make a cherry-pick compile. Test both branches with the same general and scientific evidence fixtures, keep production timeout/citation safeguards, and document configuration differences.
 
 Use a separate backport PR, then the normal merge/deployment workflow with backup, immutable image/revision verification, health checks, representative real retrieval and rollback instructions. This planning task ends with the documentation commit on development; implementation, backport, activation and production deployment remain later steps.

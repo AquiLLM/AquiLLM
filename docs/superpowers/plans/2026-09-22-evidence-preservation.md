@@ -1,16 +1,18 @@
-# Scientific Evidence Preservation Implementation Plan
+# Evidence Preservation and Responsive Retrieval Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prevent avoidable loss of scientific evidence during reranking, packing, follow-ups and retrieval refinement, with measurable quality and bounded work.
+**Goal:** Preserve relevant evidence and produce trustworthy answers across supported document types while keeping routine responses fast and deeper retrieval purposeful.
 
-**Architecture:** Retain authorized source text and provenance until a shared final selector chooses the evidence. Add verified scoring windows, explicit capacity policy, source continuity and a turn-level acquisition controller around the separately owned relevance/diversity selector. Validate on development before preparing a non-graph main backport.
+**Architecture:** Retain authorized source text and provenance until a shared final selector chooses the evidence. Add verified scoring windows, explicit capacity policy, source continuity and a turn-level acquisition controller around the separately owned relevance/diversity selector. Use a validated fast path for routine questions and spend additional retrieval work on identifiable gaps; validate quality and responsiveness on development before preparing a non-graph main backport.
 
 **Tech Stack:** Python >=3.12, Django, existing LLM/reranker providers and cache, pytest/pytest-django, current retrieval evaluation runner.
 
-**Spec:** [Scientific evidence preservation design](../specs/2026-09-22-scientific-evidence-preservation-design.md).
+**Spec:** [Evidence preservation and responsive retrieval design](../specs/2026-09-22-evidence-preservation-design.md).
 
 **Status:** Plan only. No application behavior or deployment is changed by committing these documents. The user requested implementation on development and a later backport; this task records the plan first.
+
+Scientific research is a demanding example of AquiLLM's serious use, not a domain restriction. Apply the same evidence standard to technical documentation, reports, policies, records and other supported sources. Preserve scientific regression cases while adding representative general evidence cases; do not introduce a science-specific retrieval mode or weaken quality to obtain a faster benchmark.
 
 ## Global Constraints
 
@@ -33,7 +35,7 @@ Existing paths below are relative to the repository root. New types live in thei
 
 Use process-local `DJANGO_DEBUG=1`, `DJANGO_TESTING=1`, `DJANGO_SETTINGS_MODULE=aquillm.settings_test`, `LLM_CHOICE=OPENAI`, `MEM0_ENABLED=0`, dummy provider API keys, and explicit isolated local PostgreSQL settings. Do not source operator `.env` or use production. Django fixes its test database name to `test`: changing `POSTGRES_NAME` alone does not isolate concurrent runs. Use a separate PostgreSQL instance or reviewed per-run test settings with database/extension creation permission. Do not weaken authorization or skip database tests to obtain green results.
 
-All test commands below assume that environment and use `--ds=aquillm.settings_test`. Start with `rtk proxy python aquillm/manage.py check --settings=aquillm.settings_test`. The existing `run_rag_eval.py` and WebSocket smoke tests use mocked retrieval/provider behavior; retain them as routing regressions, never as proof of scientific answer quality.
+All test commands below assume that environment and use `--ds=aquillm.settings_test`. Start with `rtk proxy python aquillm/manage.py check --settings=aquillm.settings_test`. The existing `run_rag_eval.py` and WebSocket smoke tests use mocked retrieval/provider behavior; retain them as routing regressions, never as proof of evidence or answer quality.
 
 ## Task 1: source, coverage and shared work contracts
 
@@ -41,7 +43,7 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
 
 **Interfaces:** Immutable `SourceEvidence(chunk_id: int, document_id: str, chunk_number: int, source_fingerprint: str, text: str)`; `SourceSpan(chunk_id: int, source_fingerprint: str, start: int, end: int, text: str)`; `PreparedEvidence(source: SourceEvidence, spans: tuple[SourceSpan, ...], evidence_fingerprint: str, estimated_tokens: int, source_coverage: str)`. Separately record `prepared_input_scoring_coverage` on score results. Both coverage fields validate the literal values `complete`, `partial`, `unknown`; scoring all of a chosen span does not mean the full source was covered.
 
-`TurnBudget(limits, *, clock)` exposes `reserve_action(signature) -> bool`, `admit_source(identity) -> bool`, `reserve_pairs(count, *, phase) -> bool`, `reserve_text(count, *, kind) -> bool`, `remaining_ms() -> int`, `close(reason) -> None`, `can_publish() -> bool`. `TurnLimits` carries the numerical pilot limits from the spec; phases are `acquisition` or `final`; text kinds are `materialized` or `tokenized`. Source identities include revision; duplicate admission returns true without charging twice. Reservations are atomic across concurrent callers. No caller receives a fresh ledger during fallback. `can_publish` governs late retrieval/cache writes; closing retrieval does not forbid answering from an already validated frozen packet.
+`TurnBudget(limits, *, clock)` exposes `reserve_action(signature) -> bool`, `admit_source(identity) -> bool`, `reserve_pairs(count, *, phase) -> bool`, `reserve_text(count, *, kind) -> bool`, `remaining_ms() -> int`, `can_start_optional(worst_case_ms, completion_reserve_ms) -> bool`, `close(reason) -> None`, `can_publish() -> bool`. `TurnLimits` carries the numerical pilot limits from the spec; phases are `acquisition` or `final`; text kinds are `materialized` or `tokenized`. Source identities include revision; duplicate admission returns true without charging twice. Reservations are atomic across concurrent callers. No caller receives a fresh ledger during fallback. `can_publish` governs late retrieval/cache writes; closing retrieval does not forbid answering from an already validated frozen packet.
 
 - [ ] Add tests before implementation for exact Unicode span slicing, fingerprint changes, duplicate admissions, 45 cumulative unique sources, 3 actions, reserved final pairs, retry charges, 250,000 materialized/1,000,000 tokenized code-point limits, closure and a fake monotonic deadline. Oversized sources must be rejected before full hydration, without a silent prefix substitute. Include this concrete budget assertion:
 
@@ -66,7 +68,7 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
   return True
   ```
 
-- [ ] Repeat the focused tests, including concurrent reservation and late-publication tests. Commit only task-owned files as `feat: define source evidence and bounded retrieval contracts`.
+- [ ] Repeat the focused tests, including concurrent reservation, late-publication and completion-reserve tests. Optional work is admitted only if its bounded duration plus remaining final-scoring allowance and measured p95 authorization/packet time fit the remaining deadline. Commit only task-owned files as `feat: define source evidence and bounded retrieval contracts`.
 
 ## Task 2: score complete source windows with truthful coverage
 
@@ -97,7 +99,7 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
   ```
 
 - [ ] Wire global pair reservations, <=6 in-flight pairs and finite transport deadlines into every request/retry. Charge repeated tokenization input, reuse offset mappings and check time between source/window operations. Cache only the exact successful query/window inputs. Unknown or incomplete final prepared-input scoring coverage maps to whole-pool rank fallback. Closed ledgers reject late cache writes/results.
-- [ ] Run new and existing reranker budget/cache tests. Verify shadow mode requires a separate explicit scoring opt-in and cannot spend unbounded extra inference. Commit as `feat: preserve source coverage in reranker preparation`.
+- [ ] Run new and existing reranker budget/cache tests. Add a primary-query single-search fixture with unchanged full evidence and assert final selection issues zero extra scoring requests when all fingerprints/coverage match; changed text/revision must still rescore or fall back. Verify shadow mode requires a separate explicit scoring opt-in and cannot spend unbounded extra inference. Commit as `feat: preserve source coverage in reranker preparation`.
 
 ## Task 3: full evidence delivery and explicit document capacity
 
@@ -105,7 +107,7 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
 
 **Interfaces:** `prepare_evidence(source, *, question, windows, token_ceiling) -> PreparedEvidence` retains full text if it fits the ceiling, otherwise exact qualified spans. `available_evidence_tokens(*, model_context, prompt_tokens, output_reserve, safety_margin, configured_budget) -> int`. `resolve_document_cap(*, mode, legacy_cap, explicit_hard_cap, final_passage_limit) -> int` supplies the shared selector; no quota filter after selection.
 
-- [ ] Add fixtures proving tail text survives retrieval -> selection -> synthesis input; five complementary same-paper passages fit; explicit hard cap remains enforced; an oversized skipped candidate does not consume slots; a later candidate still fits; small-context requests include image/tool/history/citation overhead. Preserve public citation IDs and full/compact tool shapes.
+- [ ] Add fixtures proving tail text survives retrieval -> selection -> synthesis input; five complementary same-document passages fit; explicit hard cap remains enforced; an oversized skipped candidate does not consume slots; a later candidate still fits; small-context requests include image/tool/history/citation overhead. Include a policy exception near the end of a passage and a version-specific technical instruction alongside the scientific tail-result case. Preserve public citation IDs and full/compact tool shapes.
 
   ```python
   assert resolve_document_cap(mode="budgeted", legacy_cap=3,
@@ -127,7 +129,7 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
   ```
 
 - [ ] Delegate relevance/order to the shared selector once, using its legacy compatibility adapter or adaptive policy according to the supported mode matrix in the design. Both consume the resolved cap; no old top-k/quota pruning precedes them. Reject unsupported feature combinations at configuration validation. Revalidate at handoff; if scope/content changed, exclude or rehydrate within remaining budget, never refill from stale cached text. Keep stored history unchanged. Zero available context yields an explicit limited outcome instead of sending an overflowing prompt.
-- [ ] Run focused tests plus `test_document_tool_figures.py` and the selection workstream's tests. Demonstrate five necessary short passages survive while redundant passages are handled by the existing selector. Commit as `feat: preserve scientific evidence within explicit context budgets`.
+- [ ] Run focused tests plus `test_document_tool_figures.py` and the selection workstream's tests. Demonstrate five necessary short passages survive while redundant passages are handled by the existing selector. Commit as `feat: preserve relevant evidence within explicit context budgets`.
 
 ## Task 4: resolve follow-up sources and rehydrate relevant evidence
 
@@ -135,7 +137,7 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
 
 **Interfaces:** `resolve_source_anchors(question, history) -> SourceAnchors`, carrying ordered document/chunk identities, resolution basis and unresolved references. `rehydrate_prior_evidence(anchors, *, user, selected_scope, budget) -> tuple[SourceEvidence, ...]` uses current authorization/storage and charges the common ledger. History supplies references, never raw trusted evidence or authorization.
 
-- [ ] Add two papers with reversed alphabetical/display order and different measurements. Test “compare their measurements,” “both papers,” “the second paper,” an explicit citation, duplicate titles, a topic switch, and ambiguous references. Add revoked/deleted/moved/edited source fixtures and an immutable original-conversation assertion.
+- [ ] Add two papers with reversed alphabetical/display order and different measurements. Test “compare their measurements,” “both papers,” “the second paper,” an explicit citation, duplicate titles, a topic switch, and ambiguous references. Repeat identity/order assertions with two reports and “compare their totals” / “the second report” to prevent paper-specific resolution. Add revoked/deleted/moved/edited source fixtures and an immutable original-conversation assertion.
 
   ```python
   anchors = resolve_source_anchors("Compare their measurements", two_paper_history)
@@ -160,9 +162,9 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
 
 **Files:** Create `aquillm/apps/chat/services/rag_acquisition.py`, `rag_coverage.py`; modify `rag_pipeline.py`, `rag_synthesis.py`, `rag_metrics.py`, and the document tool adapters. Extract a focused helper from `aquillm/lib/llm/providers/complete_turn.py` if the provider seam needs extension; do not grow its reviewed limit. Create `aquillm/apps/chat/tests/test_rag_acquisition.py`, `test_rag_coverage.py`; extend direct pipeline and synthesis tests.
 
-**Interfaces:** `assess_coverage(question, evidence_views, anchors, *, llm, budget) -> CoverageAssessment`; record `requested_aspects`, validated support span references, `unresolved_aspects`, optional `next_action`, and assessment certainty. `AcquisitionAction(kind, query, document_id, chunk_id)` permits only vector/single-document/adjacent actions valid for the selected scope. `acquire_evidence(..., budget) -> AcquiredEvidence` returns sources, assessment, budget stop reason and rounds; it does not synthesize. Recheck coverage by source revision and containment of support offsets in actual delivered spans, not merely by selected chunk IDs.
+**Interfaces:** `needs_coverage_assessment(question, evidence_views, anchors) -> bool` is a tested decision gate, not a similarity threshold or short-question heuristic. `assess_coverage(question, evidence_views, anchors, *, llm, budget) -> CoverageAssessment` records `requested_aspects`, validated support span references, `unresolved_aspects`, optional `next_action`, and assessment certainty. `AcquisitionAction(kind, query, document_id, chunk_id)` permits only vector/single-document/adjacent actions valid for the selected scope. `acquire_evidence(..., budget) -> AcquiredEvidence` returns sources, assessment, budget stop reason and rounds; it does not synthesize. Recheck coverage by source revision and containment of support offsets in actual delivered spans, not merely by selected chunk IDs.
 
-- [ ] Create scripted fake-search/fake-planner fixtures: initial method-only result then second query finds the requested measurement; sufficient first-round result; zero initial results then recovery; follow-up with no new spans; duplicate query; invented/out-of-scope ID; malformed planner JSON; planner timeout; cancellation; global budget exhaustion; direct-path fallback. Include a retained chunk whose supporting tail span was omitted, and a third-action recovery with exactly two planner calls. Spy on final selection/synthesis counts.
+- [ ] Create scripted fake-search/fake-planner fixtures: initial method-only result then second query finds the requested measurement; sufficient narrow lookup with zero planner calls; zero initial results then recovery; follow-up with no new spans; duplicate query; invented/out-of-scope ID; malformed planner JSON; planner timeout; cancellation; global budget exhaustion; direct-path fallback. Add high-similarity text missing the requested field, a conflicting policy exception, and a short but multi-source question that must not take a false fast path. Include a retained chunk whose supporting tail span was omitted, and a third-action recovery with exactly two planner calls. Spy on final selection/synthesis counts.
 
   ```python
   result = await run_scripted_turn("What was the measured yield?", scenario="second_search")
@@ -174,14 +176,18 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
   ```
 
 - [ ] Run `rtk proxy python -m pytest --ds=aquillm.settings_test aquillm/apps/chat/tests/test_rag_acquisition.py aquillm/apps/chat/tests/test_rag_coverage.py aquillm/apps/chat/tests/test_direct_rag_pipeline.py aquillm/apps/chat/tests/test_rag_synthesis.py -q`; verify missing refinement and incorrect stop behavior fail before implementation.
-- [ ] Run one initial action, then validate at most two planner-proposed actions. Pass budgeted evidence views with exact source references and omission state; no unbounded full-pool planner prompt. Use the same provider without a new selection judge. Enforce the spec's action, planner, pair, source, concurrency and monotonic time limits throughout.
+- [ ] Run one initial action, preferring the unchanged primary question where appropriate. Invoke the planner only when the decision gate identifies a need for assessment, then validate at most two proposed actions against named unresolved aspects. Pass budgeted evidence views with exact source references and omission state; no unbounded full-pool planner prompt. Use the same provider without a new selection judge. Enforce the spec's action, planner, pair, source, concurrency and monotonic time limits throughout, reserving finalization time before optional work.
 
   ```python
   for decision_index in range(2):  # Calls can propose actions two and three.
-      if budget.remaining_ms() <= 0:
+      if not needs_coverage_assessment(question, evidence_views, anchors):
+          break
+      if not budget.can_start_optional(planner_timeout_ms, completion_reserve_ms):
           break
       assessment = await assess_current_pool()
       if not assessment.next_action or not reserve_valid_action(assessment.next_action):
+          break
+      if not budget.can_start_optional(action_timeout_ms, completion_reserve_ms):
           break
       additions = await execute_scoped_action(assessment.next_action)
       if not adds_new_authorized_source_or_span(additions):
@@ -192,16 +198,16 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
 - [ ] After action three, make no additional planner call. Validate already known support structurally and label new evidence unassessed; final synthesis may use it normally without the controller claiming semantic completeness. Add assertions for two planner calls, three actions and honest final coverage state.
 
 - [ ] Convert deadline/provider failure into an explicit partial/unknown retrieval outcome; preserve the available authorized evidence. Cancellation propagates and fences late work. A normal-loop fallback inherits the ledger and existing stricter tool limits; it cannot restart exhausted retrieval.
-- [ ] Synthesize supported portions at the depth requested, retaining units, conditions and limitations. Do not claim complete support based on a planner decision if final selection omitted its cited spans. Keep output reserves, numeric/citation validation and bounded repair/continuation; remove only unconditional brevity conflicting with the user's request.
-- [ ] Run focused tests, existing direct WebSocket smoke tests and `aquillm/lib/llm/tests/test_spin_tool_budget.py`. Commit as `feat: refine retrieval within a shared scientific evidence budget`.
+- [ ] Synthesize supported portions at the depth requested, retaining conditions, exceptions, versions, dates, units and limitations. A simple lookup should receive a complete direct answer without forced verbosity. Do not claim complete support based on a planner decision if final selection omitted its cited spans. Keep output reserves, numeric/citation validation and bounded repair/continuation; remove only unconditional brevity conflicting with the user's request.
+- [ ] Run focused tests, existing direct WebSocket smoke tests and `aquillm/lib/llm/tests/test_spin_tool_budget.py`. Assert the routine fast path preserves authorization/citation/support checks and optional work cannot consume its finalization reserve. Commit as `feat: refine retrieval within a shared evidence budget`.
 
 ## Task 6: quality gates, rollout evidence and future backport manifest
 
-**Files:** Create `aquillm/apps/chat/evals/run_scientific_evidence_eval.py`, focused helpers `scientific_evidence_eval.py` and `scientific_evidence_cases.json` in that directory, `aquillm/apps/chat/tests/test_scientific_evidence_eval.py`, and `docs/runbooks/scientific-evidence-preservation.md`. Leave the existing canned routing runner intact. Extend existing redaction tests and `.env.example` comments. Reuse the selection corpus by stable case ID when committed; do not silently change its held-out labels.
+**Files:** Create `aquillm/apps/chat/evals/run_evidence_quality_eval.py`, focused helpers `evidence_quality_eval.py` and `evidence_quality_cases.json` in that directory, `aquillm/apps/chat/tests/test_evidence_quality_eval.py`, and `docs/runbooks/evidence-preservation.md`. Leave the existing canned routing runner intact. Extend existing redaction tests and `.env.example` comments. Reuse the selection corpus by stable case ID when committed; do not silently change its held-out labels.
 
 **Evaluation interface:** The new runner accepts `--cases PATH`, `--report PATH`, `--split development|heldout`, `--mode baseline|selection|preservation|combined`, and `--backend fixture|live`. Fixture mode tests metric/plumbing behavior; only live mode with actual isolated retrieval, reranking and answer providers can qualify an activation gate. Live mode uses a dedicated evaluation collection and licensed/public/synthetic content, not a production user's data. Fixtures record case ID, split, question/turns, authorized source revisions, gold support offsets, required numerical qualifications, permitted citations and expected missing aspects. Results record packet support recall, human-reviewed answer faithfulness, numerical/condition accuracy, nDCG where available, stage timings, inference pairs, coverage/fallback state and stop reason. Report run revisions and label fixture-mode results ineligible for quality claims.
 
-- [ ] Create 40 development and 40 held-out cases, stratified across the four gaps, boundary/contradiction cases and authorization failures. Use licensed/public or synthetic papers; no production private content. Freeze held-out labels before tuning. Define six mandatory regression classes: tail/boundary; >3 complementary same-paper passages; plural/ordinal follow-up; second-search recovery; revoked/stale evidence; cancellation/global limits.
+- [ ] Create 40 development and 40 held-out cases, stratified across the four gaps, boundary/contradiction cases and authorization failures. Include licensed/public or synthetic research papers, technical documentation, reports and policies/records in both splits; no production private content. Label routine lookups versus deeper comparisons/synthesis by evidence requirements, with examples of each in both splits. Freeze held-out labels before tuning. Define six mandatory regression classes: tail/boundary; >3 complementary same-document passages; plural/ordinal follow-up; second-search recovery; revoked/stale evidence; cancellation/global limits. Cover policy exceptions, version-specific instructions and conflicting dated records alongside scientific units/negation.
 - [ ] Write evaluator tests with deliberately omitted support, swapped units, dropped negation and unsupported citations. Verify metrics catch each failure and paired comparisons join by case ID rather than file order.
 
   ```python
@@ -212,18 +218,18 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
                         delivered={"tail-result", "dose-condition"}) == 1.0
   ```
 
-- [ ] Run `rtk proxy python -m pytest --ds=aquillm.settings_test aquillm/apps/chat/tests/test_scientific_evidence_eval.py aquillm/apps/chat/tests/test_rag_eval_runner.py -q`, first red then green. Implement the separate runner with the specified flags and source-span metrics; save versioned JSON reports outside tracked private data. Example after configuring the isolated evaluation environment: `rtk proxy python aquillm/apps/chat/evals/run_scientific_evidence_eval.py --cases aquillm/apps/chat/evals/scientific_evidence_cases.json --report artifacts/evidence-preservation/development-combined.json --split development --mode combined --backend live`.
+- [ ] Run `rtk proxy python -m pytest --ds=aquillm.settings_test aquillm/apps/chat/tests/test_evidence_quality_eval.py aquillm/apps/chat/tests/test_rag_eval_runner.py -q`, first red then green. Implement the separate runner with the specified flags and source-span metrics; save versioned JSON reports outside tracked private data. Example after configuring the isolated evaluation environment: `rtk proxy python aquillm/apps/chat/evals/run_evidence_quality_eval.py --cases aquillm/apps/chat/evals/evidence_quality_cases.json --report artifacts/evidence-preservation/development-combined.json --split development --mode combined --backend live`.
 - [ ] Evaluate baseline, selection-only, preservation-only and combined modes on identical model/source revisions. Record positive paired support-recall change on targeted cases, no observed aggregate quality decline, bootstrap uncertainty and zero authorization/citation violations. Include reranker window-count bias and the rate at which incomplete windows force rank fallback. Inconclusive evidence does not justify activation.
-- [ ] Run concurrent-load and cancellation tests. Record p50/p95 per stage and end-to-end; enforce the 15-second retrieval deadline plus measured cancellation overhead and <=20% end-to-end p95 regression versus the matching baseline cohort. Verify first-round sufficient answers stop early and no late work publishes after closure.
+- [ ] Run concurrent-load and cancellation tests. Record p50/p95 per stage, first substantive grounded output and full completion, separately for routine/deeper cohorts on matching models/hardware. Exclude spinners/status/unvalidated drafts from first-output metrics and preserve citation-safe delivery. Require no demonstrated routine p95 regression for either first output or completion with unchanged support/faithfulness; permit <=20% deeper-query end-to-end p95 regression only with measured support improvement. Report absolute times, record numeric user-facing targets from the development deployment before activation, and fail rollout if they are unmet even when a slow baseline is matched. The 15-second retrieval deadline is a safety ceiling, not a routine target. Verify zero-planner sufficient lookups, compatible score reuse, completion reserves and no late publication after closure.
 - [ ] Run the existing CI checks and targeted Python suites; review code independently before enabling anything. Run `rtk git diff --check`, `rtk proxy python scripts/check_file_lengths.py`, `rtk proxy python scripts/check_import_boundaries.py`, `rtk proxy python scripts/check_logging_conventions.py`, `rtk proxy python scripts/check_retrieval_logging.py`. Resolve actual findings without expanding unrelated scope.
 - [ ] Explicitly run tests not discovered by `pytest.ini`: `rtk proxy python -m pytest --ds=aquillm.settings_test aquillm/lib/tools/search/tests/test_vector_search_pack.py aquillm/apps/collections/tests/test_retrieval_authorization.py aquillm/apps/collections/tests/test_django_retrieval_authorization.py -q --tb=short`. Also run current citation/context/answer-completion regressions: `test_citation_api.py`, `test_document_move.py`, `test_conversation_persistence.py`, `test_numeric_rag_citations.py`, `test_direct_synthesis_grounding.py`, `test_context_packer.py`, `test_prompt_budget.py`, and `test_llm_complete_retry.py` in their existing test directories. On development include `aquillm/tests/integration/test_retrieval_authorization_propagation.py`, `test_production_retrieval_authorization_reachability.py`, and existing document graph-overlay/reranker-authority tests to detect integration regressions without porting graph code to main.
 - [ ] Write the runbook with default-off flags, exact tested revisions/configurations, metrics, limits, disable/rollback procedure and independent activation order: source/windowing -> capacity -> follow-ups -> iterative acquisition. Shadow scoring needs its own workload allowance; record user-visible effects of each flag.
-- [ ] Create a backport manifest listing exact development commits, required selector dependencies, target-main authorization adapters, tests and configuration differences. Keep graph/PageRank changes excluded. Commit evaluation/runbook work as `test: gate scientific evidence preservation on quality and latency`.
+- [ ] Create a backport manifest listing exact development commits, required selector dependencies, target-main authorization adapters, tests and configuration differences. Keep graph/PageRank changes excluded. Commit evaluation/runbook work as `test: gate evidence preservation on quality and responsiveness`.
 
 ## Later integration and deployment checklist
 
 - [ ] After development acceptance, create a separate main-based backport branch/PR. Review every dependency and adapt authorization without introducing graph imports or weakening production safeguards.
-- [ ] Run identical scientific fixtures on development and the backport, plus target-main runtime/deployment checks. Explain any measured differences in the PR; do not use a successful build as evidence of retrieval quality.
+- [ ] Run identical general and scientific evidence fixtures on development and the backport, plus target-main runtime/deployment checks. Explain any measured differences in the PR; do not use a successful build as evidence of retrieval quality.
 - [ ] After the backport is merged and deployment is authorized, take a verified backup, deploy the exact merged revision, verify runtime config/image identity, health/worker state and a representative real retrieval including tail/follow-up evidence.
 - [ ] Record rollback commands and deployed revision. Enable only modes that passed the development and target-main quality/latency gates.
 
