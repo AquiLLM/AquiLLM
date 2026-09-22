@@ -4,6 +4,7 @@ from collections import defaultdict
 
 from django.db.models import Q
 
+from apps.collections.services.graph_progress import document_graph_progress
 from apps.knowledge_graph.extraction.windows import sanitize_graph_source_text
 from apps.knowledge_graph.models import (
     CollectionEntity,
@@ -51,7 +52,7 @@ def _latest_request(collection):
     )
 
 
-def _status(active_artifact, request):
+def _status(active_artifact, request, progress):
     if active_artifact is not None:
         return {
             "state": "ready",
@@ -60,9 +61,16 @@ def _status(active_artifact, request):
             "updated_at": _iso(active_artifact.updated_at),
         }
     if request is None:
+        state = "empty"
+        error_code = None
+        if progress["failed"]:
+            state = "partial" if progress["active"] else "failed"
+            error_code = "document_builds_failed"
+        elif progress["total"]:
+            state = "building"
         return {
-            "state": "empty",
-            "error_code": None,
+            "state": state,
+            "error_code": error_code,
             "request_id": None,
             "updated_at": None,
         }
@@ -165,10 +173,12 @@ def _node_evidence(node_ids: tuple[int, ...]):
 def collection_graph_envelope(collection, user, *, query: str = "") -> dict:
     active_artifact = _active_artifact(collection)
     request = _latest_request(collection)
+    progress = document_graph_progress(collection.pk)
     base = {
         "collection_id": str(collection.pk),
         "artifact_id": str(active_artifact.pk) if active_artifact is not None else None,
-        "status": _status(active_artifact, request),
+        "status": _status(active_artifact, request, progress),
+        "progress": progress,
         "permissions": {"can_rebuild": collection.user_can_edit(user)},
         "nodes": [],
         "edges": [],

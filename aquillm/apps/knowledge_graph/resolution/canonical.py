@@ -2175,7 +2175,10 @@ def _reconcile_locked_registry(
         )
     link_rows = _bounded_locked_rows(
         CanonicalEntityLink.objects.using(using)
-        .select_for_update()
+        .select_for_update(of=("self",))
+        .annotate(
+            source_collection_id=django_models.F("collection_entity__collection_id")
+        )
         .filter(resolver_version=resolution.resolver_version)
         .exclude(status=CanonicalEntityLink.Status.SUPERSEDED)
         .order_by("pk")
@@ -2341,7 +2344,29 @@ def _reconcile_locked_registry(
         )
         if changed != len(supersede_entity_ids):
             raise RuntimeError("canonical registry supersession changed concurrently")
-    changed_collection_ids = tuple(sorted({source_entities_by_id[row.collection_entity_id].collection_id for row in links_to_create if row.outcome == CanonicalEntityLink.Outcome.AUTOMATIC} | {source_entities_by_id[row.collection_entity_id].collection_id for row in link_rows if row.pk in supersede_link_ids and row.outcome == CanonicalEntityLink.Outcome.AUTOMATIC})); changed_collection_ids and __import__("apps.knowledge_graph.projection.runtime", fromlist=["enqueue_automatic_membership_projections"]).enqueue_automatic_membership_projections(changed_collection_ids, using=using)  # noqa: E501, E702
+    superseded_link_ids = set(supersede_link_ids)
+    changed_collection_ids = tuple(
+        sorted(
+            {
+                source_entities_by_id[row.collection_entity_id].collection_id
+                for row in links_to_create
+                if row.outcome == CanonicalEntityLink.Outcome.AUTOMATIC
+            }
+            | {
+                # Historical sources can be absent from the current snapshot.
+                row.source_collection_id
+                for row in link_rows
+                if row.pk in superseded_link_ids
+                and row.outcome == CanonicalEntityLink.Outcome.AUTOMATIC
+            }
+        )
+    )
+    if changed_collection_ids:
+        from apps.knowledge_graph.projection.runtime import (
+            enqueue_automatic_membership_projections,
+        )
+
+        enqueue_automatic_membership_projections(changed_collection_ids, using=using)
     return CanonicalRebuildResult(
         resolver_version=resolution.resolver_version,
         resolution_checksum=resolution.checksum,

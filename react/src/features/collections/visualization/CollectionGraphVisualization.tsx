@@ -51,6 +51,25 @@ function statusMessage(envelope: CollectionGraphEnvelope) {
   }
 }
 
+function needsProgressPoll(envelope: CollectionGraphEnvelope | null) {
+  return envelope?.status.state === "building" || Boolean(envelope?.progress && (
+    envelope.progress.ingesting + envelope.progress.pending + envelope.progress.building > 0
+  ));
+}
+
+function failureMessage(code: string) {
+  switch (code) {
+    case "extraction_chunk_limit":
+    case "extraction_character_limit":
+    case "extraction_entity_limit":
+    case "extraction_relation_limit":
+    case "extraction_observation_limit":
+      return "The document exceeds the current graph processing limit.";
+    default:
+      return "Document graph processing failed. A rebuild can retry it.";
+  }
+}
+
 function filterGraph(graph: VisualizationGraph, query: string, type: string) {
   const normalized = query.trim().toLocaleLowerCase();
   const matchingEdges = new Set(
@@ -160,13 +179,18 @@ const CollectionGraphVisualization: React.FC<
     };
   }, [collectionId, instance, loadInstance, loadSchema, mode, schema]);
 
+  const shouldPoll = needsProgressPoll(instance);
   useEffect(() => {
-    if (mode !== "instance" || instance?.status.state !== "building") return;
+    if (mode !== "instance" || !shouldPoll) return;
     let cancelled = false;
-    const timeout = window.setTimeout(() => {
+    let timeout: number;
+    const poll = () => {
       void loadInstance(collectionId)
         .then((value) => {
-          if (!cancelled) setInstance(value);
+          if (!cancelled) {
+            setInstance(value);
+            if (needsProgressPoll(value)) timeout = window.setTimeout(poll, 5000);
+          }
         })
         .catch((pollError: unknown) => {
           if (!cancelled) {
@@ -177,12 +201,13 @@ const CollectionGraphVisualization: React.FC<
             );
           }
         });
-    }, 5000);
+    };
+    timeout = window.setTimeout(poll, 5000);
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [collectionId, instance?.status.state, loadInstance, mode]);
+  }, [collectionId, shouldPoll, loadInstance, mode]);
 
   const graph = useMemo(() => {
     if (mode === "schema")
@@ -342,6 +367,19 @@ const CollectionGraphVisualization: React.FC<
         <p role="alert" className="rounded-[18px] border border-red-400 p-4">
           {error}
         </p>
+      )}
+      {mode === "instance" && instance?.progress && instance.progress.total > 0 && (
+        <div role="status" className="rounded-[18px] border border-border-mid_contrast bg-scheme-shade_4 p-4">
+          <p>{instance.progress.active} of {instance.progress.total} document graphs complete.</p>
+          <p className="mt-1 text-sm text-text-lower_contrast">
+            {instance.progress.ingesting} ingesting · {instance.progress.pending} waiting · {instance.progress.building} processing · {instance.progress.failed} failed
+          </p>
+          {instance.progress.failures.map((failure) => (
+            <p key={failure.code} className="mt-1 text-sm">
+              {failure.count} {failure.count === 1 ? "document" : "documents"}: {failureMessage(failure.code)}
+            </p>
+          ))}
+        </div>
       )}
       {mode === "instance" && instanceMessage && (
         <div className="rounded-[18px] border border-border-mid_contrast bg-scheme-shade_4 p-4">

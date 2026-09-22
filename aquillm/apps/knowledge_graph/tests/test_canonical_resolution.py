@@ -899,12 +899,26 @@ def _create_active_collection_entity(
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_registry_rebuild_is_idempotent_preserves_pk_and_splits_after_bridge_unlink():
+def test_registry_rebuild_is_idempotent_preserves_pk_and_splits_after_bridge_unlink(
+    monkeypatch,
+):
     from apps.collections.models import Collection
     from apps.knowledge_graph.models import GraphArtifact
+    from apps.knowledge_graph.projection import runtime
     from apps.knowledge_graph.resolution.canonical import (
         CANONICAL_RESOLVER_VERSION,
         rebuild_canonical_registry,
+    )
+
+    invalidations = []
+    enqueue_memberships = runtime.enqueue_automatic_membership_projections
+
+    def capture_invalidation(collection_ids, *, using):
+        invalidations.append(collection_ids)
+        return enqueue_memberships(collection_ids, using=using)
+
+    monkeypatch.setattr(
+        runtime, "enqueue_automatic_membership_projections", capture_invalidation
     )
 
     collections = [
@@ -954,6 +968,8 @@ def test_registry_rebuild_is_idempotent_preserves_pk_and_splits_after_bridge_unl
     assert second.created_entity_count == 0
     assert second.created_link_count == 0
     assert second.canonical_entity_ids == first.canonical_entity_ids
+    assert invalidations == [tuple(collection.pk for collection in collections)]
+    invalidations.clear()
 
     GraphArtifact.objects.filter(pk=artifacts[2].pk).update(
         status=GraphArtifact.Status.SUPERSEDED
@@ -972,6 +988,17 @@ def test_registry_rebuild_is_idempotent_preserves_pk_and_splits_after_bridge_unl
     assert current_links[entities[3].pk] == current_links[entities[4].pk]
     assert current_links[entities[3].pk] != original_canonical_id
     assert entities[2].pk not in current_links
+    # Retiring the bridge must invalidate its historical collection even though
+    # that entity is absent from the new active registry snapshot.
+    first_link_ids = {row.pk for row in first_links}
+    changed_collection_ids = {
+        row.collection_entity.collection_id
+        for row in CanonicalEntityLink.objects.select_related("collection_entity")
+        if row.pk not in first_link_ids
+        or row.status == CanonicalEntityLink.Status.SUPERSEDED
+    }
+    assert collections[2].pk in changed_collection_ids
+    assert invalidations == [tuple(sorted(changed_collection_ids))]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1177,9 +1204,14 @@ def _restore_latest_knowledge_graph_schema(request):
     from django.db import connection
     from django.db.migrations.executor import MigrationExecutor
 
+    # Reversing KG dependencies also unapplies migrations in other apps (for
+    # example collection schema heads). Restore the whole original target set.
+    original_targets = MigrationExecutor(connection).loader.graph.leaf_nodes()
+
     def restore_latest() -> None:
         executor = MigrationExecutor(connection)
-        executor.migrate(executor.loader.graph.leaf_nodes("apps_knowledge_graph"))
+        executor.migrate(original_targets)
+        assert not MigrationExecutor(connection).migration_plan(original_targets)
         from apps.knowledge_graph.models import GraphRebuildRequest
 
         GraphRebuildRequest.objects.exists()

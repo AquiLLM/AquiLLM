@@ -22,6 +22,9 @@ def test_expired_final_write_raises_lease_loss_without_writing(monkeypatch):
     monkeypatch.setitem(sys.modules, "apps.collections.services.schema", schema)
     monkeypatch.setattr(tasks.transaction, "atomic", nullcontext)
     monkeypatch.setattr(tasks, "_locked_collection_source_signature", lambda collection_id: "source")
+    monkeypatch.setattr(
+        tasks, "collection_ingestion_pending", lambda collection_id: False
+    )
     collection_manager = SimpleNamespace(select_for_update=lambda: collection_manager, get=lambda **kwargs: None)
     run_manager = SimpleNamespace(select_for_update=lambda: run_manager, filter=lambda **kwargs: run_manager, first=lambda: None)
     monkeypatch.setattr(models, "Collection", SimpleNamespace(objects=collection_manager))
@@ -104,7 +107,7 @@ def test_lease_lost_final_write_reschedules_the_task(monkeypatch):
     token = uuid.uuid4()
     monkeypatch.setenv("KG_SCHEMA_GENERATION_ENABLED", "1")
     monkeypatch.setattr(tasks, "_claim_run", lambda run_id: tasks._RunClaim(run, token))
-    monkeypatch.setattr(tasks, "collection_source_signature", lambda collection_id: "source")
+    monkeypatch.setattr(tasks, "_prepare_run_source", lambda run, lease_token: "source")
     monkeypatch.setattr(tasks, "load_schema_generation_config", lambda: SimpleNamespace(max_chunks=1, max_characters=1))
     monkeypatch.setattr(tasks, "sample_collection_chunks", lambda *args: ["sample"])
     monkeypatch.setattr(tasks, "generate_schema_candidate", lambda samples: {"candidate": True})

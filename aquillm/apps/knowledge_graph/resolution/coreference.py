@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
@@ -13,12 +14,18 @@ from itertools import combinations, islice
 from math import isfinite
 from uuid import UUID
 
+from apps.knowledge_graph.extraction.pipeline import (
+    ExtractionCapacityCode,
+    ExtractionCapacityError,
+)
 from apps.knowledge_graph.extraction.windows import sanitize_graph_source_text
 
 from . import DOCUMENT_RESOLVER_VERSION
 from .normalization import normalize_entity_label, parse_stable_identifier
 
-MAX_DOCUMENT_MENTIONS = 512
+MAX_DOCUMENT_MENTIONS = 65_536
+MAX_DOCUMENT_DECISIONS = 524_288
+_EXHAUSTIVE_PAIR_LIMIT = 512
 _MAX_SOURCE_TEXT_CHARACTERS = 1_000_000
 _MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS = 2_000_000
 _MAX_IDENTIFIER_CHARACTERS = 2_048
@@ -451,13 +458,41 @@ class ResolutionResult:
         )
         if sorted(memberships) != sorted(self.mention_ids):
             raise ValueError("clusters must partition all result mentions exactly once")
-        expected_pairs = {frozenset(pair) for pair in combinations(self.mention_ids, 2)}
+        mention_id_set = set(self.mention_ids)
         actual_pairs = {
             frozenset((decision.left_mention_id, decision.right_mention_id))
             for decision in self.decisions
         }
-        if len(actual_pairs) != len(self.decisions) or actual_pairs != expected_pairs:
-            raise ValueError("decisions must audit every mention pair exactly once")
+        if (
+            len(self.decisions) > MAX_DOCUMENT_DECISIONS
+            or len(actual_pairs) != len(self.decisions)
+            or any(
+                decision.left_mention_id == decision.right_mention_id
+                or decision.left_mention_id not in mention_id_set
+                or decision.right_mention_id not in mention_id_set
+                for decision in self.decisions
+            )
+        ):
+            raise ValueError("decisions must be unique bounded mention pairs")
+        if len(self.mention_ids) <= _EXHAUSTIVE_PAIR_LIMIT:
+            expected_pairs = {
+                frozenset(pair) for pair in combinations(self.mention_ids, 2)
+            }
+            if actual_pairs != expected_pairs:
+                raise ValueError("decisions must audit every mention pair exactly once")
+        accepted_pairs = {
+            frozenset((decision.left_mention_id, decision.right_mention_id))
+            for decision in self.decisions
+            if decision.accepted
+        }
+        membership_edges = {
+            frozenset((membership.mention_id, membership.parent_mention_id))
+            for cluster in self.clusters
+            for membership in cluster.memberships
+            if membership.parent_mention_id is not None
+        }
+        if not membership_edges.issubset(accepted_pairs):
+            raise ValueError("membership parent edges require accepted decisions")
         if type(self.checksum) is not str or not _HASH.fullmatch(self.checksum):
             raise ValueError("checksum must be a lowercase SHA-256 digest")
 
@@ -526,6 +561,7 @@ class _AcronymDefinition:
 class _DisjointSet:
     def __init__(self, size: int) -> None:
         self._parents = list(range(size))
+        self._sizes = [1] * size
 
     def find(self, item: int) -> int:
         parent = self._parents[item]
@@ -540,9 +576,14 @@ class _DisjointSet:
         right_root = self.find(right)
         if left_root == right_root:
             return left_root
-        smaller, larger = sorted((left_root, right_root))
-        self._parents[larger] = smaller
-        return smaller
+        if self._sizes[left_root] < self._sizes[right_root] or (
+            self._sizes[left_root] == self._sizes[right_root]
+            and left_root > right_root
+        ):
+            left_root, right_root = right_root, left_root
+        self._parents[right_root] = left_root
+        self._sizes[left_root] += self._sizes[right_root]
+        return left_root
 
 
 def _value(source: object, name: str, default: object = None) -> object:
@@ -1029,13 +1070,89 @@ def _acronym_expansions(
     mentions: tuple[_MentionView, ...],
 ) -> dict[tuple[str, str], tuple[_AcronymDefinition, ...]]:
     definitions: dict[tuple[str, str], list[_AcronymDefinition]] = defaultdict(list)
-    full_mentions = [mention for mention in mentions if not mention.is_acronym]
-    acronym_mentions = [mention for mention in mentions if mention.is_acronym]
-    for full in full_mentions:
-        for acronym in acronym_mentions:
-            if full.entity_type == acronym.entity_type and _is_parenthetical_definition(
-                full, acronym
+    full_by_key: dict[tuple[str, str, str], list[_MentionView]] = defaultdict(list)
+    contexts: dict[tuple[str, str, int], str] = {}
+    acronym_positions = {
+        (mention.coordinate_scope, mention.start)
+        for mention in mentions
+        if mention.is_acronym
+    }
+    for mention in mentions:
+        contexts.setdefault(
+            (mention.coordinate_scope, mention.source_key, mention.source_offset),
+            mention.source_text,
+        )
+        if mention.is_acronym:
+            continue
+        initialism = _initialism(mention.display_label)
+        if initialism:
+            full_by_key[
+                (mention.entity_type, initialism, mention.coordinate_scope)
+            ].append(mention)
+    for group in full_by_key.values():
+        group.sort(key=lambda item: (item.end, item.sort_key))
+    full_ends_by_key = {
+        key: tuple(full.end for full in group)
+        for key, group in full_by_key.items()
+    }
+    parenthetical_intervals: dict[
+        tuple[str, int], set[tuple[int, int]]
+    ] = defaultdict(set)
+    for (
+        coordinate_scope,
+        _source_key,
+        source_offset,
+    ), source_text in contexts.items():
+        for opening_index, character in enumerate(source_text):
+            if character != "(":
+                continue
+            full_end = opening_index
+            while full_end > 0 and source_text[full_end - 1].isspace():
+                full_end -= 1
+            acronym_start = opening_index + 1
+            while (
+                acronym_start < len(source_text)
+                and source_text[acronym_start].isspace()
             ):
+                acronym_start += 1
+            position_key = (coordinate_scope, source_offset + acronym_start)
+            if position_key in acronym_positions:
+                parenthetical_intervals[position_key].add(
+                    (source_offset + full_end, source_offset + opening_index)
+                )
+    candidate_checks = 0
+    for acronym in mentions:
+        if not acronym.is_acronym:
+            continue
+        full_key = (
+            acronym.entity_type,
+            _acronym_key(acronym.display_label),
+            acronym.coordinate_scope,
+        )
+        full_group = full_by_key.get(full_key, ())
+        full_ends = full_ends_by_key.get(full_key, ())
+        candidates_by_id: dict[str, _MentionView] = {}
+        for minimum_end, maximum_end in sorted(
+            parenthetical_intervals.get(
+                (acronym.coordinate_scope, acronym.start),
+                (),
+            )
+        ):
+            start_index = bisect_left(full_ends, minimum_end)
+            stop_index = bisect_right(full_ends, maximum_end)
+            for full in full_group[start_index:stop_index]:
+                candidates_by_id[full.mention_id] = full
+        candidates = tuple(
+            sorted(candidates_by_id.values(), key=lambda item: item.sort_key)
+        )
+        candidate_checks += len(candidates)
+        if candidate_checks > MAX_DOCUMENT_DECISIONS:
+            raise ExtractionCapacityError(
+                ExtractionCapacityCode.ENTITY_LIMIT,
+                "document acronym definition audit cap exceeded",
+            )
+        for full in candidates:
+            if _is_parenthetical_definition(full, acronym):
                 definitions[
                     (acronym.entity_type, _acronym_key(acronym.display_label))
                 ].append(
@@ -1047,10 +1164,25 @@ def _acronym_expansions(
                         definition_start=acronym.start,
                     )
                 )
-    return {
-        key: tuple(
+    result: dict[tuple[str, str], tuple[_AcronymDefinition, ...]] = {}
+    for key, values in definitions.items():
+        earliest: dict[tuple[str, str], _AcronymDefinition] = {}
+        for value in values:
+            definition_key = (value.expansion, value.coordinate_scope)
+            existing = earliest.get(definition_key)
+            if existing is None or (
+                value.definition_start,
+                value.full_mention_id,
+                value.acronym_mention_id,
+            ) < (
+                existing.definition_start,
+                existing.full_mention_id,
+                existing.acronym_mention_id,
+            ):
+                earliest[definition_key] = value
+        result[key] = tuple(
             sorted(
-                values,
+                earliest.values(),
                 key=lambda item: (
                     item.coordinate_scope,
                     item.definition_start,
@@ -1059,8 +1191,7 @@ def _acronym_expansions(
                 ),
             )
         )
-        for key, values in definitions.items()
-    }
+    return result
 
 
 def _name_identifier_conflicts(
@@ -1073,6 +1204,164 @@ def _name_identifier_conflicts(
                 mention.identifier
             )
     return frozenset(key for key, values in identifiers.items() if len(values) > 1)
+
+
+def _sparse_candidate_decisions(
+    mentions: tuple[_MentionView, ...],
+    *,
+    expansions: Mapping[tuple[str, str], tuple[_AcronymDefinition, ...]],
+    conflict_blocks: frozenset[tuple[str, str]],
+) -> tuple[PairDecision, ...]:
+    """Audit only pairs that can merge or conservatively block a merge."""
+
+    indexes = {mention.mention_id: index for index, mention in enumerate(mentions)}
+    pair_indexes: set[tuple[int, int]] = set()
+
+    def add_pair(left: _MentionView, right: _MentionView) -> None:
+        left_index = indexes[left.mention_id]
+        right_index = indexes[right.mention_id]
+        pair = tuple(sorted((left_index, right_index)))
+        if pair[0] == pair[1] or pair in pair_indexes:
+            return
+        if len(pair_indexes) >= MAX_DOCUMENT_DECISIONS:
+            raise ExtractionCapacityError(
+                ExtractionCapacityCode.ENTITY_LIMIT,
+                "document coreference candidate audit cap exceeded",
+            )
+        pair_indexes.add(pair)
+
+    def add_star(
+        group: list[_MentionView], *, anchor: _MentionView | None = None
+    ) -> None:
+        if len(group) < 2:
+            return
+        anchor = anchor or group[0]
+        for mention in group:
+            if mention is anchor:
+                continue
+            add_pair(anchor, mention)
+
+    def add_complete(group: list[_MentionView]) -> None:
+        for left, right in combinations(group, 2):
+            add_pair(left, right)
+
+    identifiers: dict[tuple[str, str], list[_MentionView]] = defaultdict(list)
+    names: dict[tuple[str, str], list[_MentionView]] = defaultdict(list)
+    entity_types: dict[str, list[_MentionView]] = defaultdict(list)
+    acronym_keys: set[tuple[str, str]] = set()
+    for mention in mentions:
+        if mention.identifier:
+            identifiers[(mention.entity_type, mention.identifier)].append(mention)
+        names[(mention.entity_type, mention.normalized_label)].append(mention)
+        entity_types[mention.entity_type].append(mention)
+        if mention.is_acronym:
+            acronym_keys.add((mention.entity_type, mention.acronym_shape_key))
+
+    def has_local_acronym_definition(mention: _MentionView) -> bool:
+        return any(
+            definition.coordinate_scope == mention.coordinate_scope
+            for definition in expansions.get(
+                (mention.entity_type, mention.acronym_shape_key),
+                (),
+            )
+        )
+
+    for group in identifiers.values():
+        signatures = {mention.version_signature for mention in group}
+        if len(signatures) > 1:
+            add_complete(group)
+        else:
+            add_star(group)
+
+    for name_key, group in names.items():
+        is_acronym_block = any(
+            mention.is_acronym
+            or has_local_acronym_definition(mention)
+            for mention in group
+        )
+        if is_acronym_block:
+            continue
+        requires_complete_audit = (
+            name_key in conflict_blocks
+            or any(mention.is_pronoun for mention in group)
+        )
+        if requires_complete_audit:
+            add_complete(group)
+        else:
+            unidentified = next(
+                (mention for mention in group if not mention.identifier),
+                group[0],
+            )
+            add_star(group, anchor=unidentified)
+
+    for group in entity_types.values():
+        global_blockers = [
+            mention
+            for mention in group
+            if mention.is_pronoun
+            or (
+                not mention.is_acronym
+                and has_local_acronym_definition(mention)
+            )
+        ]
+        for blocker in global_blockers:
+            for mention in group:
+                add_pair(blocker, mention)
+
+    acronym_groups: dict[tuple[str, str], list[_MentionView]] = defaultdict(list)
+    for mention in mentions:
+        if (mention.entity_type, mention.acronym_shape_key) in acronym_keys:
+            acronym_groups[(mention.entity_type, mention.acronym_shape_key)].append(
+                mention
+            )
+        initialism = _initialism(mention.display_label)
+        if (mention.entity_type, initialism) in acronym_keys:
+            acronym_groups[(mention.entity_type, initialism)].append(mention)
+    for group in acronym_groups.values():
+        unique_group = list(dict.fromkeys(group))
+        if len(unique_group) < 2:
+            continue
+        equivalent_anchor = next(
+            (mention for mention in unique_group if not mention.is_acronym),
+            unique_group[0],
+        )
+        anchor_decisions = tuple(
+            _decide_pair(
+                equivalent_anchor,
+                mention,
+                expansions=expansions,
+                conflict_blocks=conflict_blocks,
+            )
+            for mention in unique_group
+            if mention is not equivalent_anchor
+        )
+        identifiers_in_group = {
+            mention.identifier for mention in unique_group if mention.identifier
+        }
+        versions_in_group = {
+            mention.version_signature
+            for mention in unique_group
+            if mention.version_signature is not None
+        }
+        if (
+            len(identifiers_in_group) <= 1
+            and len(versions_in_group) <= 1
+            and anchor_decisions
+            and all(decision.accepted for decision in anchor_decisions)
+        ):
+            add_star(unique_group, anchor=equivalent_anchor)
+        else:
+            add_complete(unique_group)
+
+    return tuple(
+        _decide_pair(
+            mentions[left_index],
+            mentions[right_index],
+            expansions=expansions,
+            conflict_blocks=conflict_blocks,
+        )
+        for left_index, right_index in sorted(pair_indexes)
+    )
 
 
 def _rejected(left: _MentionView, right: _MentionView, method: str, reason: str):
@@ -1302,6 +1591,9 @@ def _constrain_component_merges(
         right_index = indexes[decision.right_mention_id]
         hard_conflicts[left_index][right_index] = decision
         hard_conflicts[right_index][left_index] = decision
+    component_forbidden: dict[int, set[int]] = {
+        index: set(hard_conflicts[index]) for index in range(len(mentions))
+    }
 
     candidates = sorted(
         (decision for decision in decisions if decision.accepted),
@@ -1330,11 +1622,12 @@ def _constrain_component_merges(
             continue
         left_members = component_members[left_root]
         right_members = component_members[right_root]
+        blocked_right = component_forbidden[left_root].intersection(right_members)
         blockers = [
-            hard_conflicts[left_index][right_index]
-            for left_index in sorted(left_members)
-            for right_index in sorted(right_members)
-            if right_index in hard_conflicts[left_index]
+            decision
+            for right_index in blocked_right
+            for left_index, decision in hard_conflicts[right_index].items()
+            if left_index in left_members
         ]
         if blockers:
             blocker = min(
@@ -1368,11 +1661,21 @@ def _constrain_component_merges(
             )
             constrained[decision_indexes[pair_key]] = suppressed
             continue
-        combined = left_members | right_members
+        if len(left_members) < len(right_members):
+            left_members, right_members = right_members, left_members
+        left_members.update(right_members)
+        left_forbidden = component_forbidden[left_root]
+        right_forbidden = component_forbidden[right_root]
+        if len(left_forbidden) < len(right_forbidden):
+            left_forbidden, right_forbidden = right_forbidden, left_forbidden
+        left_forbidden.update(right_forbidden)
         new_root = disjoint_set.union(left_root, right_root)
         component_members.pop(left_root)
         component_members.pop(right_root)
-        component_members[new_root] = combined
+        component_forbidden.pop(left_root)
+        component_forbidden.pop(right_root)
+        component_members[new_root] = left_members
+        component_forbidden[new_root] = left_forbidden
         merge_edges.append(candidate)
     return tuple(constrained), tuple(merge_edges)
 
@@ -1415,9 +1718,15 @@ def _build_clusters(
     groups: dict[int, list[_MentionView]] = defaultdict(list)
     for index, mention in enumerate(mentions):
         groups[disjoint_set.find(index)].append(mention)
+    edges_by_root: dict[int, list[PairDecision]] = defaultdict(list)
+    for decision in merge_edges:
+        edges_by_root[
+            disjoint_set.find(indexes[decision.left_mention_id])
+        ].append(decision)
     clusters: list[ResolvedCluster] = []
-    for group in groups.values():
+    for root, group in groups.items():
         ordered = tuple(sorted(group, key=lambda item: item.sort_key))
+        cluster_edges = edges_by_root[root]
         representative = min(
             ordered,
             key=lambda item: (
@@ -1443,24 +1752,18 @@ def _build_clusters(
         member_set = set(member_ids)
         methods = {
             decision.method
-            for decision in merge_edges
-            if decision.left_mention_id in member_set
-            and decision.right_mention_id in member_set
+            for decision in cluster_edges
         }
         method = min(methods or {"singleton"}, key=_METHOD_PRECEDENCE.__getitem__)
         confidence = min(item.confidence for item in ordered)
         adjacency: dict[str, list[tuple[str, PairDecision]]] = defaultdict(list)
-        for decision in merge_edges:
-            if (
-                decision.left_mention_id in member_set
-                and decision.right_mention_id in member_set
-            ):
-                adjacency[decision.left_mention_id].append(
-                    (decision.right_mention_id, decision)
-                )
-                adjacency[decision.right_mention_id].append(
-                    (decision.left_mention_id, decision)
-                )
+        for decision in cluster_edges:
+            adjacency[decision.left_mention_id].append(
+                (decision.right_mention_id, decision)
+            )
+            adjacency[decision.right_mention_id].append(
+                (decision.left_mention_id, decision)
+            )
         mention_by_id = {item.mention_id: item for item in ordered}
         singleton = len(ordered) == 1
         membership_by_id = {
@@ -1591,15 +1894,22 @@ def resolve_document_mentions(
         raise ValueError("source-coordinate member identities must be unique")
     expansions = _acronym_expansions(adapted)
     conflict_blocks = _name_identifier_conflicts(adapted)
-    candidate_decisions = tuple(
-        _decide_pair(
-            left,
-            right,
+    if len(adapted) <= _EXHAUSTIVE_PAIR_LIMIT:
+        candidate_decisions = tuple(
+            _decide_pair(
+                left,
+                right,
+                expansions=expansions,
+                conflict_blocks=conflict_blocks,
+            )
+            for left, right in combinations(adapted, 2)
+        )
+    else:
+        candidate_decisions = _sparse_candidate_decisions(
+            adapted,
             expansions=expansions,
             conflict_blocks=conflict_blocks,
         )
-        for left, right in combinations(adapted, 2)
-    )
     decisions, merge_edges = _constrain_component_merges(adapted, candidate_decisions)
     clusters = _build_clusters(
         adapted,
@@ -1626,6 +1936,7 @@ def resolve_document_mentions(
 
 
 __all__ = [
+    "MAX_DOCUMENT_DECISIONS",
     "MAX_DOCUMENT_MENTIONS",
     "ClusterMembership",
     "DocumentMention",

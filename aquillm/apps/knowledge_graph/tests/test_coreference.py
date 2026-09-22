@@ -13,7 +13,6 @@ from django.db.models import UniqueConstraint
 
 from apps.knowledge_graph.resolution import DOCUMENT_RESOLVER_VERSION
 from apps.knowledge_graph.resolution.coreference import (
-    MAX_DOCUMENT_MENTIONS,
     DocumentMention,
     PairDecision,
     ResolutionResult,
@@ -1147,6 +1146,7 @@ def test_resolution_input_fingerprint_hashes_repeated_source_context_once(monkey
     import apps.knowledge_graph.resolution.coreference as coreference
 
     source_text = "Repeated source context. " * 128
+    sample_size = 512
     mentions = tuple(
         _mention(
             f"mention-{index}",
@@ -1155,7 +1155,7 @@ def test_resolution_input_fingerprint_hashes_repeated_source_context_once(monkey
             start=index * 20,
             source_text=source_text,
         )
-        for index in range(MAX_DOCUMENT_MENTIONS)
+        for index in range(sample_size)
     )
     original_dumps = coreference.json.dumps
     original_context_digest = coreference._source_context_digest
@@ -1247,6 +1247,7 @@ def test_resolver_validates_and_hashes_one_shared_large_context_once(monkeypatch
     import apps.knowledge_graph.resolution.coreference as coreference
 
     source_text = "x" * 1_000_000
+    sample_size = 512
     mentions = tuple(
         _mapping_mention(
             mention_id=f"mention-{index}",
@@ -1256,7 +1257,7 @@ def test_resolver_validates_and_hashes_one_shared_large_context_once(monkeypatch
             source_text=source_text,
             source_key="shared-large-context",
         )
-        for index in range(MAX_DOCUMENT_MENTIONS)
+        for index in range(sample_size)
     )
     original_validate = coreference._validated_source_text
     original_digest = coreference._source_context_digest
@@ -1278,12 +1279,16 @@ def test_resolver_validates_and_hashes_one_shared_large_context_once(monkeypatch
 
     result = resolve_document_mentions(mentions, _ontology())
 
-    assert len(result.mention_ids) == MAX_DOCUMENT_MENTIONS
+    assert len(result.mention_ids) == sample_size
     assert validation_calls == 1
     assert digest_calls == 1
 
 
-def test_invalid_confidence_duplicate_ids_and_unbounded_documents_are_rejected():
+def test_invalid_confidence_duplicate_ids_and_unbounded_documents_are_rejected(
+    monkeypatch,
+):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
     with pytest.raises(ValueError, match="finite confidence"):
         resolve_document_mentions(
             (_mention("bad", "Orion", confidence=float("nan")),), _ontology()
@@ -1293,12 +1298,321 @@ def test_invalid_confidence_duplicate_ids_and_unbounded_documents_are_rejected()
             (_mention("same", "Orion"), _mention("same", "MMLU", start=20)),
             _ontology(),
         )
+    monkeypatch.setattr(coreference, "MAX_DOCUMENT_MENTIONS", 2)
     over_cap = tuple(
         _mention(index, f"entity {index}", start=index * 20)
-        for index in range(MAX_DOCUMENT_MENTIONS + 1)
+        for index in range(3)
     )
     with pytest.raises(ValueError, match="mention cap"):
         resolve_document_mentions(over_cap, _ontology())
+
+
+def test_sparse_resolver_does_not_materialize_unrelated_mention_pairs(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    monkeypatch.setattr(coreference, "MAX_DOCUMENT_MENTIONS", 1_024)
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 0, raising=False)
+    mentions = tuple(
+        _mention(
+            f"mention-{index}",
+            f"Unique Entity {index}",
+            start=index * 20,
+        )
+        for index in range(600)
+    )
+
+    result = resolve_document_mentions(mentions, _ontology())
+
+    assert len(result.clusters) == 600
+    assert len(result.decisions) <= 8 * len(mentions)
+
+
+def test_sparse_resolver_matches_exhaustive_adversarial_cluster_partition(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    acronym_text = (
+        "Retrieval-Augmented Generation (RAG) is introduced. RAG is used later."
+    )
+    acronym_positions = [
+        index
+        for index in range(len(acronym_text))
+        if acronym_text.startswith("RAG", index)
+    ]
+    mentions = (
+        _mention("name-a", "Orion", "model", start=0, source_key="name-a"),
+        _mention("name-b", "Orion", "model", start=20, source_key="name-b"),
+        _mention(
+            "alias",
+            "Orion",
+            "architecture",
+            start=40,
+            source_key="alias",
+        ),
+        _mention(
+            "id-a",
+            "Transformer paper",
+            "paper",
+            start=60,
+            source_key="id-a",
+            identifier="doi:10.5555/12345678",
+        ),
+        _mention(
+            "id-b",
+            "Attention Is All You Need",
+            "publication",
+            start=100,
+            source_key="id-b",
+            identifier="https://doi.org/10.5555/12345678",
+        ),
+        _mention(
+            "conflict-a",
+            "Atlas",
+            "model",
+            start=140,
+            source_key="conflict-a",
+            identifier="https://github.com/example/atlas-a",
+        ),
+        _mention(
+            "conflict-bridge",
+            "Atlas",
+            "model",
+            start=160,
+            source_key="conflict-bridge",
+        ),
+        _mention(
+            "conflict-b",
+            "Atlas",
+            "model",
+            start=180,
+            source_key="conflict-b",
+            identifier="https://github.com/example/atlas-b",
+        ),
+        _mention("v1-a", "Nova v1", "model", start=200, source_key="v1-a"),
+        _mention("v1-b", "Nova/v1", "model", start=220, source_key="v1-b"),
+        _mention("v2", "Nova v2", "model", start=240, source_key="v2"),
+        _mention(
+            "pronoun-id",
+            "it",
+            "model",
+            start=260,
+            source_key="pronoun-id",
+            identifier="https://github.com/example/comet",
+        ),
+        _mention(
+            "pronoun-named",
+            "Comet",
+            "model",
+            start=280,
+            source_key="pronoun-named",
+            identifier="https://github.com/example/comet",
+        ),
+        _mention(
+            "pronoun-blocked-bridge",
+            "Comet",
+            "model",
+            start=300,
+            source_key="pronoun-blocked-bridge",
+        ),
+        _mention(
+            "full",
+            "Retrieval-Augmented Generation",
+            start=0,
+            source_text=acronym_text,
+            source_key="acronym-source",
+        ),
+        _mention(
+            "definition",
+            "RAG",
+            start=acronym_positions[0],
+            source_text=acronym_text,
+            source_key="acronym-source",
+        ),
+        _mention(
+            "later",
+            "RAG",
+            start=acronym_positions[1],
+            source_text=acronym_text,
+            source_key="acronym-source",
+        ),
+        *tuple(
+            _mention(
+                f"unique-{index}",
+                f"Unique {index}",
+                start=340 + index * 20,
+                source_key=f"unique-{index}",
+            )
+            for index in range(20)
+        ),
+    )
+
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", len(mentions))
+    exhaustive = resolve_document_mentions(mentions, _ontology())
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 0)
+    sparse = resolve_document_mentions(mentions, _ontology())
+
+    def signature(result):
+        return {
+            (
+                frozenset(cluster.mention_ids),
+                cluster.label,
+                cluster.entity_type,
+                cluster.identifier,
+                cluster.version_signature,
+            )
+            for cluster in result.clusters
+        }
+
+    assert signature(sparse) == signature(exhaustive)
+    assert len(sparse.decisions) < len(exhaustive.decisions)
+
+
+def test_sparse_lowercase_acronym_blocks_identifier_alias_bridge(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    text = (
+        "Retrieval Augmented Generation (RAG). rag. "
+        "Independent Technique. Independent Technique."
+    )
+    full = "Retrieval Augmented Generation"
+    identifier = "doi:10.1234/aaa"
+    mentions = (
+        _mention("full", full, source_text=text),
+        _mention("definition", "RAG", start=text.index("RAG"), source_text=text),
+        _mention(
+            "lowercase",
+            "rag",
+            start=text.index("rag"),
+            source_text=text,
+            identifier=identifier,
+        ),
+        _mention(
+            "alias-id",
+            "Independent Technique",
+            start=text.index("Independent"),
+            source_text=text,
+            identifier=identifier,
+        ),
+        _mention(
+            "alias-unidentified",
+            "Independent Technique",
+            start=text.rindex("Independent"),
+            source_text=text,
+        ),
+    )
+
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", len(mentions))
+    exhaustive = resolve_document_mentions(mentions, _ontology())
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 0)
+    sparse = resolve_document_mentions(mentions, _ontology())
+
+    assert _cluster_ids(sparse) == _cluster_ids(exhaustive)
+
+
+def test_sparse_resolver_scales_across_many_small_clusters(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 0)
+    mentions = tuple(
+        _mention(
+            f"mention-{index}-{duplicate}",
+            f"Entity {index}",
+            start=(index * 2 + duplicate) * 20,
+            source_key=f"source-{index}-{duplicate}",
+        )
+        for index in range(2_048)
+        for duplicate in range(2)
+    )
+
+    result = resolve_document_mentions(mentions, _ontology())
+
+    assert len(result.clusters) == 2_048
+    assert len(result.decisions) == 2_048
+    assert all(len(cluster.mention_ids) == 2 for cluster in result.clusters)
+
+
+def test_sparse_resolver_uses_linear_star_for_repeated_non_acronym_name(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 0)
+    mentions = tuple(
+        _mention(
+            f"mention-{index}",
+            "Orion",
+            "model",
+            start=index * 20,
+            source_key=f"source-{index}",
+        )
+        for index in range(1_025)
+    )
+
+    result = resolve_document_mentions(mentions, _ontology())
+
+    assert len(result.clusters) == 1
+    assert len(result.decisions) == len(mentions) - 1
+
+
+def test_sparse_resolver_indexes_acronym_definition_candidates_by_position(
+    monkeypatch,
+):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    checks = 0
+    original = coreference._is_parenthetical_definition
+
+    def recording_check(full, acronym):
+        nonlocal checks
+        checks += 1
+        return original(full, acronym)
+
+    monkeypatch.setattr(coreference, "_is_parenthetical_definition", recording_check)
+    source_text = "Long Alpha (LA). " * 100
+    mentions = tuple(
+        mention
+        for index in range(100)
+        for mention in (
+            _mention(
+                f"full-{index}",
+                "Long Alpha",
+                start=index * 17,
+                source_text=source_text,
+            ),
+            _mention(
+                f"acronym-{index}",
+                "LA",
+                start=index * 17 + 12,
+                source_text=source_text,
+            ),
+        )
+    )
+
+    resolve_document_mentions(mentions, _ontology())
+
+    assert checks <= 2 * len(mentions)
+
+
+def test_sparse_resolver_rejects_pathological_candidate_block(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+    from apps.knowledge_graph.extraction.pipeline import (
+        ExtractionCapacityCode,
+        ExtractionCapacityError,
+    )
+
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 0)
+    monkeypatch.setattr(coreference, "MAX_DOCUMENT_DECISIONS", 10)
+    mentions = tuple(
+        _mention(
+            f"mention-{index}",
+            "RAG",
+            start=index * 20,
+            source_key=f"source-{index}",
+        )
+        for index in range(8)
+    )
+
+    with pytest.raises(ExtractionCapacityError) as error:
+        resolve_document_mentions(mentions, _ontology())
+
+    assert error.value.code is ExtractionCapacityCode.ENTITY_LIMIT
 
 
 def test_adversarial_scalars_are_rejected_as_bounded_validation_errors():

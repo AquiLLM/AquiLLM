@@ -18,8 +18,15 @@ from apps.knowledge_graph.models import (
 
 from .django_projection_evidence import load_projection_evidence
 from .django_projection_topology import load_projection_topology
+from .limits import (
+    MAX_ARTIFACT_ROWS,
+    MAX_DOCUMENT_ROWS,
+    MAX_ENTITY_ROWS,
+)
+from .limits import (
+    bounded_projection_rows as _bounded,
+)
 
-_MAX_FAMILY_ROWS = 4_999
 _PURPOSE_STATES = {
     "build": ("building",),
     "audit": ("ready",),
@@ -32,17 +39,6 @@ _ARTIFACT_FIELDS = (
     "filter_policy_version filter_policy_checksum embedding_model_signature "
     "assembly_version assembly_config_checksum"
 ).split()
-
-
-def _bounded(query, fields: tuple[str, ...], batch_size: int) -> tuple[dict, ...]:
-    rows = tuple(
-        query.order_by("pk")
-        .values(*fields)[: _MAX_FAMILY_ROWS + 1]
-        .iterator(chunk_size=batch_size)
-    )
-    if len(rows) > _MAX_FAMILY_ROWS:
-        raise ValueError("projection row family exceeds its hard cap")
-    return rows
 
 
 class DjangoProjectionOrmLoader:
@@ -68,6 +64,7 @@ class DjangoProjectionOrmLoader:
             ),
             ("document_id", "document_artifact_id"),
             batch_size,
+            maximum=MAX_DOCUMENT_ROWS,
         )
         document_ids = tuple(row["document_id"] for row in inputs)
         document_artifact_ids = tuple(row["document_artifact_id"] for row in inputs)
@@ -83,6 +80,7 @@ class DjangoProjectionOrmLoader:
             GraphArtifact.objects.using(self.using).filter(pk__in=artifact_ids),
             tuple(_ARTIFACT_FIELDS),
             batch_size,
+            maximum=MAX_ARTIFACT_ROWS,
         )
         collection_artifact = next(
             row for row in artifacts if row["id"] == artifact_id
@@ -230,6 +228,7 @@ class DjangoProjectionOrmLoader:
                 "retrieval_utility",
             ),
             batch_size,
+            maximum=MAX_ENTITY_ROWS,
         )
 
     def _memberships(
@@ -260,6 +259,7 @@ class DjangoProjectionOrmLoader:
                 "decision_checksum",
             ),
             batch_size,
+            maximum=MAX_ENTITY_ROWS,
         )
         return tuple(
             {

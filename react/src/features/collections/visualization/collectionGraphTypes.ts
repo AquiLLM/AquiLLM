@@ -39,6 +39,15 @@ export interface CollectionGraphEnvelope {
   collection_id: string;
   artifact_id: string | null;
   status: CollectionGraphStatus;
+  progress?: {
+    total: number;
+    ingesting: number;
+    pending: number;
+    building: number;
+    active: number;
+    failed: number;
+    failures: { code: string; count: number }[];
+  };
   permissions: { can_rebuild: boolean };
   nodes: CollectionGraphNode[];
   edges: CollectionGraphEdge[];

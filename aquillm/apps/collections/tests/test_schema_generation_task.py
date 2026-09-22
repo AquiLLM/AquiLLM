@@ -5,8 +5,8 @@ import uuid
 import pytest
 
 
-def test_enqueue_uses_the_knowledge_graph_queue(monkeypatch):
-    """Moving generation to the default queue would run it without GLiNER2."""
+def test_enqueue_uses_the_dedicated_schema_queue(monkeypatch):
+    """Schema requests must not wait behind document extraction backfills."""
 
     from apps.collections.tasks.schema_generation import enqueue_schema_generation
     from apps.collections.tasks.schema_generation import generate_collection_schema_task
@@ -21,7 +21,7 @@ def test_enqueue_uses_the_knowledge_graph_queue(monkeypatch):
     enqueue_schema_generation(run_id)
 
     assert observed == {"run_id": str(run_id)}
-    assert generate_collection_schema_task.queue
+    assert generate_collection_schema_task.queue == "knowledge-graph-schema"
 
 
 @pytest.mark.django_db

@@ -13,6 +13,18 @@ from .records import PrivateProjectionChunkReferenceV1
 from .serialization import private_chunk_mapping_checksum
 
 _MAX_PAGE = 5_000
+CHUNK_REFERENCE_READ_FIELDS = (
+    "id",
+    "projection_id",
+    "projection_chunk_key",
+    "integer_chunk_pk",
+    "document_uuid",
+    "chunk_number",
+    "chunk_id",
+    "chunk__id",
+    "chunk__doc_id",
+    "chunk__chunk_number",
+)
 
 
 def private_row(row: object) -> PrivateProjectionChunkReferenceV1:
@@ -51,6 +63,7 @@ class DjangoChunkReferenceStore:
             query = query.filter(projection_chunk_key__in=keys)
         return tuple(
             query.select_related("chunk")
+            .only(*CHUNK_REFERENCE_READ_FIELDS)
             .order_by("projection_chunk_key")
             .iterator(chunk_size=_MAX_PAGE)
         )
@@ -95,7 +108,9 @@ class DjangoChunkReferenceStore:
                 raise ValueError("projection private mapping fence is stale")
             stored = tuple(
                 ProjectionChunkReference.objects.using(self.using)
-                .select_for_update()
+                .select_for_update(of=("self",))
+                .select_related("chunk")
+                .only(*CHUNK_REFERENCE_READ_FIELDS)
                 .filter(projection_id=projection_id)
                 .order_by("projection_chunk_key")
             )

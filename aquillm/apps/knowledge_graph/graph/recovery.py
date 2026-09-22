@@ -23,6 +23,7 @@ class RecoveryOutcome(StrEnum):
     DEPENDENCY_PENDING = "dependency_pending"
     INVALID = "invalid"
     PUBLISH_FAILED = "publish_failed"
+    CAPACITY_BLOCKED = "capacity_blocked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +176,10 @@ def _recover_document(
     document_id: uuid.UUID,
     source_hash: str,
 ) -> RecoveryOutcome:
-    from apps.knowledge_graph.extraction.pipeline import StaleSourceError
+    from apps.knowledge_graph.extraction.pipeline import (
+        ExtractionCapacityError,
+        StaleSourceError,
+    )
     from apps.knowledge_graph.models import GraphArtifact
     from apps.knowledge_graph.services import builds
 
@@ -183,6 +187,8 @@ def _recover_document(
         document_id = _document_id(document_id)
         source_hash = _source_hash(source_hash)
         build_key = builds.derive_current_document_build_key(document_id, source_hash)
+    except ExtractionCapacityError:
+        return RecoveryOutcome.CAPACITY_BLOCKED
     except (LookupError, builds.StaleBuildError):
         return RecoveryOutcome.DEPENDENCY_PENDING
     except (ValueError, builds.CorruptBuildError, StaleSourceError):
@@ -193,8 +199,12 @@ def _recover_document(
         build_key=build_key,
     ):
         return RecoveryOutcome.CURRENT
+    if _exact_capacity_failure(document_id=document_id, build_key=build_key):
+        return RecoveryOutcome.CAPACITY_BLOCKED
     try:
         builds.enqueue_document_build(document_id, source_hash)
+    except ExtractionCapacityError:
+        return RecoveryOutcome.CAPACITY_BLOCKED
     except (LookupError, builds.StaleBuildError):
         return RecoveryOutcome.DEPENDENCY_PENDING
     except (ValueError, builds.CorruptBuildError, StaleSourceError):
@@ -210,14 +220,49 @@ def _recover_document(
     return RecoveryOutcome.PUBLISHED
 
 
+def _exact_capacity_failure(*, document_id: uuid.UUID, build_key: str) -> bool:
+    """Do not spend inference on an unchanged, known permanent capacity failure.
+
+    Source, ontology, or extractor/resolver changes produce a different key.
+    Explicit rebuild requests remain free to retry the same key.
+    """
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+    from apps.knowledge_graph.services.failure_codes import (
+        DOCUMENT_CAPACITY_FAILURE_CODES,
+    )
+
+    latest = (
+        GraphBuildRun.objects.filter(
+            scope_type=GraphArtifact.ScopeType.DOCUMENT,
+            scope_id=str(document_id),
+            build_key=build_key,
+            evaluation_only=False,
+            orchestration_version=GraphArtifact.OrchestrationVersion.SCOPED_V1,
+        )
+        .order_by("-build_generation", "-attempt", "-pk")
+        .values("status", "error_code")
+        .first()
+    )
+    return bool(
+        latest
+        and latest["status"] == GraphBuildRun.Status.FAILED
+        and latest["error_code"] in DOCUMENT_CAPACITY_FAILURE_CODES
+    )
+
+
 def _recover_collection(collection_id: int) -> RecoveryOutcome:
-    from apps.knowledge_graph.extraction.pipeline import StaleSourceError
+    from apps.knowledge_graph.extraction.pipeline import (
+        ExtractionCapacityError,
+        StaleSourceError,
+    )
     from apps.knowledge_graph.models import GraphArtifact
     from apps.knowledge_graph.services import builds
 
     try:
         context = builds._collection_context(collection_id)
         build_key = builds.derive_collection_build_key(context.identity)
+    except ExtractionCapacityError:
+        return RecoveryOutcome.CAPACITY_BLOCKED
     except (LookupError, builds.StaleBuildError):
         return RecoveryOutcome.DEPENDENCY_PENDING
     except (ValueError, builds.CorruptBuildError, StaleSourceError):
@@ -234,6 +279,8 @@ def _recover_collection(collection_id: int) -> RecoveryOutcome:
             context.identity.aggregate_source_signature,
             build_key,
         )
+    except ExtractionCapacityError:
+        return RecoveryOutcome.CAPACITY_BLOCKED
     except (LookupError, builds.StaleBuildError):
         return RecoveryOutcome.DEPENDENCY_PENDING
     except (ValueError, builds.CorruptBuildError, StaleSourceError):
@@ -260,6 +307,7 @@ def _summary(
         "dependency_pending_count": outcomes.count(RecoveryOutcome.DEPENDENCY_PENDING),
         "invalid_count": outcomes.count(RecoveryOutcome.INVALID),
         "publish_failed_count": outcomes.count(RecoveryOutcome.PUBLISH_FAILED),
+        "capacity_blocked_count": outcomes.count(RecoveryOutcome.CAPACITY_BLOCKED),
         "next_cursor": None if next_cursor is None else next_cursor.as_dict(),
     }
 

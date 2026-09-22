@@ -183,6 +183,54 @@ services:
       - "${KG_HF_CACHE_HOST_PATH:-../../data/hf_knowledge_graph}:${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}"
     command: /opt/venv/bin/python -c "from lib.knowledge_graph.config import run_extraction_worker; run_extraction_worker()"
 
+  worker_knowledge_graph_schema:
+    build: {context: ../.., dockerfile: deploy/docker/knowledge-graph/Dockerfile}
+    profiles: [knowledge-graph]
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: schema-worker-only
+      DJANGO_DEBUG: "0"
+      GOOGLE_OAUTH2_CLIENT_ID: disabled
+      GOOGLE_OAUTH2_CLIENT_SECRET: disabled
+      OPENAI_API_KEY: disabled
+      ANTHROPIC_API_KEY: disabled
+      GEMINI_API_KEY: disabled
+      AWS_EC2_METADATA_DISABLED: "true"
+      POSTGRES_HOST: db
+      POSTGRES_NAME: ${POSTGRES_NAME:-aquillm}
+      POSTGRES_USER: ${POSTGRES_USER:-aquillm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aquillm}
+      KG_BUILD_ENABLED: "0"
+      KG_MEMGRAPH_PROJECTION_ENABLED: "0"
+      KG_SCHEMA_GENERATION_ENABLED: ${KG_SCHEMA_GENERATION_ENABLED:-0}
+      KG_SCHEMA_GENERATION_MAX_CHUNKS: ${KG_SCHEMA_GENERATION_MAX_CHUNKS:-32}
+      KG_SCHEMA_GENERATION_MAX_CHARACTERS: ${KG_SCHEMA_GENERATION_MAX_CHARACTERS:-48000}
+      KG_SCHEMA_GENERATION_TIMEOUT_SECONDS: ${KG_SCHEMA_GENERATION_TIMEOUT_SECONDS:-180}
+      VLLM_BASE_URL: http://vllm:8000/v1
+      VLLM_API_KEY: ${VLLM_API_KEY:-EMPTY}
+      VLLM_SERVED_MODEL_NAME: ${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b}
+      KG_GLINER2_MODEL: ${KG_GLINER2_MODEL:-fastino/gliner2-base-v1}
+      KG_GLINER2_REVISION: ${KG_GLINER2_REVISION:-8437ba583a733d87f56ae902f3b197934eedd58e}
+      KG_GLINER2_DEVICE: cpu
+      KG_GLINER2_LOCAL_FILES_ONLY: ${KG_GLINER2_LOCAL_FILES_ONLY:-1}
+      OMP_NUM_THREADS: ${KG_SCHEMA_CPU_THREADS:-1}
+      MKL_NUM_THREADS: ${KG_SCHEMA_CPU_THREADS:-1}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HOME: ${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}
+      KG_GLINER2_CACHE_DIR: ${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}
+      C_FORCE_ROOT: "1"
+      RUN_CELERY_IN_WEB: "0"
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      VIRTUAL_ENV: /opt/venv
+      PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    volumes:
+      - "${KG_HF_CACHE_HOST_PATH:-../../data/hf_knowledge_graph}:${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}"
+    command: /opt/venv/bin/celery -A aquillm --broker=redis://redis:6379 worker --loglevel=info --queues=knowledge-graph-schema --concurrency=1 --prefetch-multiplier=1 --hostname=worker-knowledge-graph-schema@%h
+
   memgraph_knowledge_graph:
     image: ${KG_MEMGRAPH_IMAGE:-memgraph/memgraph-mage:3.8.1}
     profiles: [knowledge-graph]

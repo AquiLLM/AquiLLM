@@ -137,7 +137,7 @@ def test_document_character_cap_rejects_before_provider_inference(monkeypatch):
         def extract_batch(self, *_args, **_kwargs):
             raise AssertionError("over-cap input must not reach the provider")
 
-    with pytest.raises(StructuralExtractionError, match="character cap"):
+    with pytest.raises(StructuralExtractionError, match="character cap") as error:
         collect_document_evidence(
             (_window(1, "123456789", 0),),
             full_text="123456789",
@@ -146,6 +146,7 @@ def test_document_character_cap_rejects_before_provider_inference(monkeypatch):
             max_batch_count=1,
             max_batch_characters=100,
         )
+    assert error.value.code is pipeline.ExtractionCapacityCode.CHARACTER_LIMIT
 
 
 def test_provider_entity_cap_is_checked_before_candidate_iteration(monkeypatch):
@@ -172,7 +173,7 @@ def test_provider_entity_cap_is_checked_before_candidate_iteration(monkeypatch):
                 ),
             )
 
-    with pytest.raises(StructuralExtractionError, match="entity cap"):
+    with pytest.raises(StructuralExtractionError, match="entity cap") as error:
         collect_document_evidence(
             (_window(1, "Orion", 0),),
             full_text="Orion",
@@ -181,6 +182,7 @@ def test_provider_entity_cap_is_checked_before_candidate_iteration(monkeypatch):
             max_batch_count=1,
             max_batch_characters=100,
         )
+    assert error.value.code is pipeline.ExtractionCapacityCode.OBSERVATION_LIMIT
 
 
 def test_deduplicated_entity_cap_rejects_genuine_unique_overflow(monkeypatch):
@@ -188,7 +190,9 @@ def test_deduplicated_entity_cap_rejects_genuine_unique_overflow(monkeypatch):
 
     monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_ENTITIES", 1)
 
-    with pytest.raises(StructuralExtractionError, match="deduplicated entity cap"):
+    with pytest.raises(
+        StructuralExtractionError, match="deduplicated entity cap"
+    ) as error:
         collect_document_evidence(
             (_window(1, "Orion uses MMLU", 0),),
             full_text="Orion uses MMLU",
@@ -199,6 +203,43 @@ def test_deduplicated_entity_cap_rejects_genuine_unique_overflow(monkeypatch):
             max_batch_count=1,
             max_batch_characters=100,
         )
+    assert error.value.code is pipeline.ExtractionCapacityCode.ENTITY_LIMIT
+
+
+def test_large_document_retains_more_than_legacy_raw_entity_observation_cap():
+    class RepeatedObservationBackend:
+        def extract_batch(self, texts, *, ontology):
+            del ontology
+            return tuple(
+                ExtractionBatchResult(
+                    entities=tuple(
+                        EntityCandidate(
+                            entity_type="model",
+                            text="A",
+                            start=0,
+                            end=1,
+                            confidence=0.9,
+                        )
+                        for _ in range(12)
+                    ),
+                    relations=(),
+                    diagnostics=(),
+                )
+                for _text in texts
+            )
+
+    full_text = "A" * 354
+    evidence = collect_document_evidence(
+        tuple(_window(index + 1, "A", index) for index in range(len(full_text))),
+        full_text=full_text,
+        backend=RepeatedObservationBackend(),
+        ontology=_ontology(),
+        max_batch_count=64,
+        max_batch_characters=64,
+    )
+
+    assert len(evidence.entities) == 354
+    assert sum(len(entity.observations) for entity in evidence.entities) == 4_248
 
 
 def test_extraction_fingerprint_counts_querysets_before_materialization(monkeypatch):
@@ -1130,8 +1171,9 @@ def test_ordered_chunk_query_caps_actual_iteration_after_count_drift(monkeypatch
     monkeypatch.setattr(document_models.TextChunk, "objects", Query())
     monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_CHUNKS", 2)
 
-    with pytest.raises(pipeline.StaleSourceError, match="chunk cap"):
+    with pytest.raises(pipeline.ExtractionCapacityError, match="chunk cap") as error:
         pipeline._ordered_chunks(DOCUMENT_ID)
+    assert error.value.code is pipeline.ExtractionCapacityCode.CHUNK_LIMIT
     assert consumed == [0, 1, 2]
 
 

@@ -11,7 +11,9 @@ from django.utils import timezone
 
 from apps.knowledge_graph.models import CollectionGraphProjection, ProjectionChunkReference
 
+from .chunk_reference_store import CHUNK_REFERENCE_READ_FIELDS
 from .records import PrivateProjectionChunkReferenceV1, ProjectionFailureCode
+from .limits import MAX_DETAIL_ROWS, MAX_PAGE_ROWS
 
 _FUNCTIONS = {
     "claim": "kg_projection_claim",
@@ -145,19 +147,29 @@ class FunctionProjectionStateRepository:
     def load(self, *, projection_id: UUID, keys: tuple[str, ...] | None = None):
         query = ProjectionChunkReference.objects.using(self.source_using).filter(projection_id=_identifier(projection_id))
         if keys is not None: query = query.filter(projection_chunk_key__in=keys)
-        return tuple(query.select_related("chunk").order_by("projection_chunk_key")[:5001])
+        rows = tuple(query.select_related("chunk").only(*CHUNK_REFERENCE_READ_FIELDS).order_by("projection_chunk_key")[:MAX_DETAIL_ROWS + 1].iterator(chunk_size=MAX_PAGE_ROWS))
+        if len(rows) > MAX_DETAIL_ROWS:
+            raise ValueError("projection chunk mapping exceeds its hard cap")
+        return rows
 
     def create(self, *, projection_id: UUID, rows: tuple[PrivateProjectionChunkReferenceV1, ...], batch_size: int) -> None:
-        del batch_size
-        payload = json.dumps(
-            [{"projection_chunk_key": row.projection_chunk_key, "integer_chunk_pk": row.integer_chunk_pk, "document_uuid": row.document_uuid, "chunk_number": row.chunk_number} for row in rows],
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        self._one("store_chunks", (_identifier(projection_id), _token(self.owner, "owner"), payload, timezone.now()))
+        if type(batch_size) is not int or not 1 <= batch_size <= MAX_PAGE_ROWS:
+            raise ValueError("batch_size must be an integer in 1..5000")
+        if type(rows) is not tuple or len(rows) > MAX_DETAIL_ROWS or any(type(row) is not PrivateProjectionChunkReferenceV1 for row in rows):
+            raise ValueError("projection chunk mapping exceeds its hard cap or is invalid")
+        identifier, owner = _identifier(projection_id), _token(self.owner, "owner")
+        for offset in range(0, len(rows), batch_size):
+            payload = json.dumps(
+                [{"projection_chunk_key": row.projection_chunk_key, "integer_chunk_pk": row.integer_chunk_pk, "document_uuid": row.document_uuid, "chunk_number": row.chunk_number} for row in rows[offset:offset + batch_size]],
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            result = self._one("store_chunks", (identifier, owner, payload, timezone.now()))
+            if result is None:
+                raise ValueError("projection chunk mapping lease was lost")
 
     def fence(self, *, projection_id: UUID, checksum: str, row_count: int) -> None:
-        if type(row_count) is not int or not 0 <= row_count <= 5_000: raise ValueError("row_count must be an integer in 0..5000")
+        if type(row_count) is not int or not 0 <= row_count <= MAX_DETAIL_ROWS: raise ValueError("row_count must be an integer in 0..250000")
         row = self._one("fence_chunks", (_identifier(projection_id), _token(self.owner, "owner"), _checksum(checksum), row_count, timezone.now()))
         if row is None or not row["fenced"]: raise ValueError("projection private mapping fence was lost")
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from hashlib import sha256
 from itertools import islice
 from time import perf_counter
@@ -19,7 +20,6 @@ from .windows import (
     ExtractionWindow,
     MappedEntityEvidence,
     batch_extraction_windows,
-    deduplicate_mapped_entities,
     map_entity_candidate,
     sanitize_graph_source_text,
 )
@@ -36,16 +36,40 @@ _FATAL_STRUCTURAL_DIAGNOSTICS = frozenset(
 )
 DOCUMENT_EXTRACTION_V1_MAX_CHUNKS = 10_000
 DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS = 10_000_000
-DOCUMENT_EXTRACTION_V1_MAX_ENTITIES = 512
-DOCUMENT_EXTRACTION_V1_MAX_RELATIONS = 4_096
-DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS = 4_096
-DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS = 32_768
+DOCUMENT_EXTRACTION_V1_MAX_ENTITIES = 65_536
+DOCUMENT_EXTRACTION_V1_MAX_RELATIONS = 131_072
+DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS = 524_288
+DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS = 1_048_576
 _QUERY_ITERATOR_BATCH_SIZE = 1_000
 logger = structlog.stdlib.get_logger(__name__)
 
 
 class StructuralExtractionError(RuntimeError):
     """Raised when a provider omits a required per-window output section."""
+
+
+class ExtractionCapacityCode(StrEnum):
+    """Stable, non-sensitive failure codes for bounded extraction limits."""
+
+    CHUNK_LIMIT = "extraction_chunk_limit"
+    CHARACTER_LIMIT = "extraction_character_limit"
+    ENTITY_LIMIT = "extraction_entity_limit"
+    RELATION_LIMIT = "extraction_relation_limit"
+    OBSERVATION_LIMIT = "extraction_observation_limit"
+
+
+class ExtractionCapacityError(StructuralExtractionError):
+    """Raised when complete extraction cannot fit a published document bound."""
+
+    def __init__(self, code: ExtractionCapacityCode, message: str) -> None:
+        if type(code) is not ExtractionCapacityCode:
+            raise TypeError("capacity error code must be an ExtractionCapacityCode")
+        super().__init__(message)
+        self._capacity_code = code
+
+    @property
+    def code(self) -> ExtractionCapacityCode:
+        return self._capacity_code
 
 
 class StaleSourceError(RuntimeError):
@@ -173,35 +197,108 @@ def _endpoint_entities(
     return tuple(matches)
 
 
-def _deduplicate_relations(
-    relations: list[MappedRelationEvidence],
-) -> tuple[MappedRelationEvidence, ...]:
-    deduplicated: dict[tuple[object, ...], MappedRelationEvidence] = {}
-    for relation in relations:
-        existing = deduplicated.get(relation.identity_key)
-        if existing is None:
-            deduplicated[relation.identity_key] = relation
-            continue
-        representative = (
-            relation if relation.confidence > existing.confidence else existing
-        )
-        observations = tuple(
-            sorted(
-                (*existing.observations, *relation.observations),
-                key=lambda item: (
-                    item.chunk_id,
-                    item.head_local_start,
-                    item.tail_local_start,
-                ),
+def _accumulate_entity(
+    accumulated: dict[
+        tuple[object, ...], tuple[MappedEntityEvidence, list[object]]
+    ],
+    entity: MappedEntityEvidence,
+) -> None:
+    existing = accumulated.get(entity.identity_key)
+    if existing is None:
+        if len(accumulated) >= DOCUMENT_EXTRACTION_V1_MAX_ENTITIES:
+            raise ExtractionCapacityError(
+                ExtractionCapacityCode.ENTITY_LIMIT,
+                "deduplicated entity cap exceeded",
             )
-        )
-        deduplicated[relation.identity_key] = replace(
+        accumulated[entity.identity_key] = (entity, list(entity.observations))
+        return
+    representative, observations = existing
+    observations.extend(entity.observations)
+    if entity.confidence > representative.confidence:
+        accumulated[entity.identity_key] = (entity, observations)
+
+
+def _finalize_entities(
+    accumulated: dict[
+        tuple[object, ...], tuple[MappedEntityEvidence, list[object]]
+    ],
+) -> tuple[MappedEntityEvidence, ...]:
+    entities = (
+        replace(
             representative,
-            observations=observations,
+            observations=tuple(
+                sorted(
+                    observations,
+                    key=lambda item: (
+                        item.chunk_id,
+                        item.local_start,
+                        item.local_end,
+                    ),
+                )
+            ),
         )
+        for representative, observations in accumulated.values()
+    )
     return tuple(
         sorted(
-            deduplicated.values(),
+            entities,
+            key=lambda item: (
+                str(item.document_id),
+                item.position_basis,
+                item.start,
+                item.end,
+                item.entity_type,
+                item.chunk_id,
+            ),
+        )
+    )
+
+
+def _accumulate_relation(
+    accumulated: dict[
+        tuple[object, ...], tuple[MappedRelationEvidence, list[RelationObservation]]
+    ],
+    relation: MappedRelationEvidence,
+) -> None:
+    existing = accumulated.get(relation.identity_key)
+    if existing is None:
+        if len(accumulated) >= DOCUMENT_EXTRACTION_V1_MAX_RELATIONS:
+            raise ExtractionCapacityError(
+                ExtractionCapacityCode.RELATION_LIMIT,
+                "deduplicated relation cap exceeded",
+            )
+        accumulated[relation.identity_key] = (relation, list(relation.observations))
+        return
+    representative, observations = existing
+    observations.extend(relation.observations)
+    if relation.confidence > representative.confidence:
+        accumulated[relation.identity_key] = (relation, observations)
+
+
+def _finalize_relations(
+    accumulated: dict[
+        tuple[object, ...], tuple[MappedRelationEvidence, list[RelationObservation]]
+    ],
+) -> tuple[MappedRelationEvidence, ...]:
+    relations = (
+        replace(
+            representative,
+            observations=tuple(
+                sorted(
+                    observations,
+                    key=lambda item: (
+                        item.chunk_id,
+                        item.head_local_start,
+                        item.tail_local_start,
+                    ),
+                )
+            ),
+        )
+        for representative, observations in accumulated.values()
+    )
+    return tuple(
+        sorted(
+            relations,
             key=lambda item: (
                 item.relation_type,
                 repr(item.head_identity),
@@ -223,13 +320,19 @@ def collect_document_evidence(
     """Run provider extraction outside SQL transactions and map all evidence."""
 
     if len(windows) > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
-        raise StructuralExtractionError("document extraction chunk cap exceeded")
+        raise ExtractionCapacityError(
+            ExtractionCapacityCode.CHUNK_LIMIT,
+            "document extraction chunk cap exceeded",
+        )
     if (
         len(full_text) > DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS
         or sum(len(window.content) for window in windows)
         > DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS
     ):
-        raise StructuralExtractionError("document extraction character cap exceeded")
+        raise ExtractionCapacityError(
+            ExtractionCapacityCode.CHARACTER_LIMIT,
+            "document extraction character cap exceeded",
+        )
     full_text = sanitize_graph_source_text(full_text)
     windows = tuple(
         replace(window, content=sanitize_graph_source_text(window.content))
@@ -240,8 +343,12 @@ def collect_document_evidence(
         max_count=max_batch_count,
         max_characters=max_batch_characters,
     )
-    mapped_entities: list[MappedEntityEvidence] = []
-    mapped_relations: list[MappedRelationEvidence] = []
+    mapped_entities: dict[
+        tuple[object, ...], tuple[MappedEntityEvidence, list[object]]
+    ] = {}
+    mapped_relations: dict[
+        tuple[object, ...], tuple[MappedRelationEvidence, list[RelationObservation]]
+    ] = {}
     diagnostic_counts: Counter[str] = Counter()
     raw_entity_count = 0
     raw_relation_count = 0
@@ -258,7 +365,8 @@ def collect_document_evidence(
         for window, result in zip(batch, results, strict=True):
             raw_entity_count += len(result.entities)
             if raw_entity_count > DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS:
-                raise StructuralExtractionError(
+                raise ExtractionCapacityError(
+                    ExtractionCapacityCode.OBSERVATION_LIMIT,
                     "provider raw entity cap exceeded before candidate materialization"
                 )
             raw_relation_count += len(result.relations)
@@ -266,7 +374,8 @@ def collect_document_evidence(
                 raw_relation_count
                 > DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS
             ):
-                raise StructuralExtractionError(
+                raise ExtractionCapacityError(
+                    ExtractionCapacityCode.OBSERVATION_LIMIT,
                     "provider raw relation cap exceeded before candidate "
                     "materialization"
                 )
@@ -286,7 +395,8 @@ def collect_document_evidence(
                 map_entity_candidate(window, candidate, full_text=full_text)
                 for candidate in result.entities
             )
-            mapped_entities.extend(local_entities)
+            for entity in local_entities:
+                _accumulate_entity(mapped_entities, entity)
             for relation in result.relations:
                 relation_definition = ontology.relations.get(relation.relation_type)
                 endpoint_orientations = [("head", "tail")]
@@ -330,7 +440,8 @@ def collect_document_evidence(
                     diagnostic_counts["unresolved_relation_endpoint"] += 1
                     continue
                 head, tail = next(iter(endpoint_pairs.values()))
-                mapped_relations.append(
+                _accumulate_relation(
+                    mapped_relations,
                     MappedRelationEvidence(
                         document_id=window.document_id,
                         chunk_id=window.chunk_id,
@@ -352,12 +463,8 @@ def collect_document_evidence(
                     )
                 )
 
-    entities = deduplicate_mapped_entities(tuple(mapped_entities))
-    if len(entities) > DOCUMENT_EXTRACTION_V1_MAX_ENTITIES:
-        raise StructuralExtractionError("deduplicated entity cap exceeded")
-    relations = _deduplicate_relations(mapped_relations)
-    if len(relations) > DOCUMENT_EXTRACTION_V1_MAX_RELATIONS:
-        raise StructuralExtractionError("deduplicated relation cap exceeded")
+    entities = _finalize_entities(mapped_entities)
+    relations = _finalize_relations(mapped_relations)
     return ExtractedDocumentEvidence(
         entities=entities,
         relations=relations,
@@ -762,13 +869,19 @@ def _ordered_chunks(document_id, *, for_update: bool = False):
     if for_update:
         queryset = queryset.select_for_update()
     if queryset.count() > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
-        raise StaleSourceError("ordered document chunk cap exceeded")
+        raise ExtractionCapacityError(
+            ExtractionCapacityCode.CHUNK_LIMIT,
+            "ordered document chunk cap exceeded",
+        )
     totals = queryset.aggregate(total_characters=Coalesce(Sum(Length("content")), 0))
     total_characters = totals.get("total_characters")
     if type(total_characters) is not int or total_characters < 0:
         raise StaleSourceError("ordered document chunk character count is invalid")
     if total_characters > DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS:
-        raise StaleSourceError("ordered document chunk character cap exceeded")
+        raise ExtractionCapacityError(
+            ExtractionCapacityCode.CHARACTER_LIMIT,
+            "ordered document chunk character cap exceeded",
+        )
     chunks = tuple(
         islice(
             queryset.iterator(
@@ -781,7 +894,10 @@ def _ordered_chunks(document_id, *, for_update: bool = False):
         )
     )
     if len(chunks) > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
-        raise StaleSourceError("ordered document chunk cap exceeded")
+        raise ExtractionCapacityError(
+            ExtractionCapacityCode.CHUNK_LIMIT,
+            "ordered document chunk cap exceeded",
+        )
     return chunks
 
 
@@ -1051,7 +1167,7 @@ def _persist_evidence(
         )
         for entity in evidence.entities
     ]
-    EntityMention.objects.bulk_create(mention_rows)
+    EntityMention.objects.bulk_create(mention_rows, batch_size=1_000)
     mentions_by_identity = {
         entity.identity_key: mention
         for entity, mention in zip(evidence.entities, mention_rows, strict=True)
@@ -1069,7 +1185,7 @@ def _persist_evidence(
         )
         for relation in evidence.relations
     ]
-    RelationMention.objects.bulk_create(relation_rows)
+    RelationMention.objects.bulk_create(relation_rows, batch_size=1_000)
     return (
         len(mention_rows),
         len(relation_rows),
@@ -1419,6 +1535,8 @@ __all__ = [
     "DOCUMENT_EXTRACTION_V1_MAX_ENTITIES",
     "DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS",
     "DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS",
+    "ExtractionCapacityCode",
+    "ExtractionCapacityError",
     "DOCUMENT_EXTRACTION_V1_MAX_RELATIONS",
     "ExtractedDocumentEvidence",
     "DocumentResolutionError",

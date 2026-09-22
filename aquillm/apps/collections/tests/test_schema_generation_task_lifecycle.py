@@ -7,6 +7,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from celery.exceptions import Retry
 
 
 def test_claim_resumes_a_running_run_after_retry_or_worker_redelivery(monkeypatch):
@@ -130,6 +131,9 @@ def test_final_source_fence_locks_source_before_task_one_draft_write(monkeypatch
     now = tasks.timezone.now()
     monkeypatch.setattr(tasks.timezone, "now", lambda: now)
     monkeypatch.setattr(tasks, "_locked_collection_source_signature", lambda collection_id: "source")
+    monkeypatch.setattr(
+        tasks, "collection_ingestion_pending", lambda collection_id: False
+    )
     collection_locks = []
     collection_manager = SimpleNamespace(
         select_for_update=lambda: collection_manager,
@@ -163,7 +167,6 @@ def test_final_source_fence_locks_source_before_task_one_draft_write(monkeypatch
 @pytest.mark.parametrize(
     ("source", "samples", "candidate_error", "write_error", "expected"),
     (
-        ("changed", ["sample"], None, None, "source_changed"),
         ("source", [], None, None, "no_collection_text"),
         ("source", ["sample"], ValueError("invalid"), None, "invalid_candidate"),
         ("source", ["sample"], None, "draft_conflict", "draft_conflict"),
@@ -178,13 +181,13 @@ def test_task_fake_lifecycle_maps_terminal_outcomes_without_payload_logs(
     from apps.collections.services.schema_generation import InvalidSchemaCandidate
     from apps.collections.tasks import schema_generation as tasks
 
-    run = SimpleNamespace(collection_id=1, source_signature="source")
+    run = SimpleNamespace(collection_id=1, source_signature="source", statistics={})
     lease_token = uuid.uuid4()
     failures, writes, logs = [], [], []
     monkeypatch.setenv("KG_SCHEMA_GENERATION_ENABLED", "1")
     monkeypatch.setattr(tasks, "_claim_run", lambda run_id: tasks._RunClaim(run, lease_token))
     monkeypatch.setattr(tasks, "_fail_run", lambda run_id, code, token: failures.append(code) or True)
-    monkeypatch.setattr(tasks, "collection_source_signature", lambda collection_id: source)
+    monkeypatch.setattr(tasks, "_prepare_run_source", lambda run, lease_token: source)
     monkeypatch.setattr(tasks, "load_schema_generation_config", lambda: SimpleNamespace(max_chunks=2, max_characters=20))
     monkeypatch.setattr(tasks, "sample_collection_chunks", lambda *args: samples)
     monkeypatch.setattr(tasks, "_safe_log_failure", lambda code, exc=None: logs.append((code, type(exc).__name__ if exc else None)))
@@ -219,3 +222,22 @@ def test_safe_failure_logger_excludes_exception_message_and_credentials(monkeypa
     tasks._safe_log_failure("invalid_candidate", ValueError("SENTINEL API KEY AND COLLECTION TEXT"))
 
     assert observed == [("obs.collections.schema_generation_failed", {"error_code": "invalid_candidate", "error_type": "ValueError"})]
+
+
+def test_legacy_queue_lease_redelivery_moves_to_schema_queue(monkeypatch):
+    from apps.collections.tasks import schema_generation as tasks
+
+    monkeypatch.setattr(
+        tasks, "_claim_run", lambda _: (_ for _ in ()).throw(tasks._LeaseBusy(30))
+    )
+    task = tasks.generate_collection_schema_task
+    task.push_request(
+        retries=0, called_directly=False, is_eager=True,
+        delivery_info={"routing_key": "knowledge-graph-extraction"},
+    )
+    try:
+        with pytest.raises(Retry) as pending:
+            task.run(str(uuid.uuid4()))
+        assert pending.value.sig.options["queue"] == "knowledge-graph-schema"
+    finally:
+        task.pop_request()

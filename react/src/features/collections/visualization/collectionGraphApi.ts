@@ -66,6 +66,18 @@ function isEdge(value: unknown): value is CollectionGraphEdge {
   );
 }
 
+function isProgress(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const fields = ["total", "ingesting", "pending", "building", "active", "failed"];
+  return fields.every((key) => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0)
+    && Array.isArray(value.failures)
+    && value.failures.length <= 16
+    && value.failures.every((failure) => isRecord(failure)
+      && typeof failure.code === "string"
+      && /^[a-z][a-z0-9_]{0,127}$/.test(failure.code)
+      && Number.isSafeInteger(failure.count) && (failure.count as number) > 0);
+}
+
 function parseEnvelope(value: unknown): CollectionGraphEnvelope {
   if (
     !isRecord(value) ||
@@ -83,6 +95,7 @@ function parseEnvelope(value: unknown): CollectionGraphEnvelope {
     !isNullableString(value.status.error_code) ||
     !isNullableString(value.status.request_id) ||
     !isNullableString(value.status.updated_at) ||
+    (value.progress !== undefined && !isProgress(value.progress)) ||
     typeof value.permissions.can_rebuild !== "boolean" ||
     !Array.isArray(value.nodes) ||
     !value.nodes.every(isNode) ||

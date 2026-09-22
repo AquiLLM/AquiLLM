@@ -12,6 +12,7 @@ from math import isfinite
 from uuid import UUID
 
 from .coreference import (
+    MAX_DOCUMENT_DECISIONS,
     MAX_DOCUMENT_MENTIONS,
     ClusterMembership,
     PairDecision,
@@ -288,8 +289,9 @@ def _revalidate_immutable_result(result: object) -> ResolutionResult:
             raise ValueError("result mention IDs must be a bounded exact tuple")
         if type(result.clusters) is not tuple:
             raise ValueError("result clusters must be an exact tuple")
-        if type(result.decisions) is not tuple or len(result.decisions) > (
-            len(result.mention_ids) * (len(result.mention_ids) - 1) // 2
+        if (
+            type(result.decisions) is not tuple
+            or len(result.decisions) > MAX_DOCUMENT_DECISIONS
         ):
             raise ValueError("result decisions must be a bounded exact tuple")
         for cluster in result.clusters:
@@ -647,7 +649,7 @@ def _write_resolution_rows(*, artifact, result, mentions_by_id):
     entities_by_key = {row.cluster_key: row for row in entity_rows}
     if len(entities_by_key) != len(entity_rows):
         raise ResolutionPersistenceError("resolution cluster keys are not unique")
-    DocumentEntity.objects.bulk_create(entity_rows)
+    DocumentEntity.objects.bulk_create(entity_rows, batch_size=1_000)
     link_rows = [
         DocumentEntityMention(
             document_entity=entities_by_key[cluster.cluster_key],
@@ -662,7 +664,7 @@ def _write_resolution_rows(*, artifact, result, mentions_by_id):
         for cluster in result.clusters
         for membership in cluster.memberships
     ]
-    DocumentEntityMention.objects.bulk_create(link_rows)
+    DocumentEntityMention.objects.bulk_create(link_rows, batch_size=1_000)
     return (
         tuple(sorted(entity_rows, key=lambda row: row.cluster_key)),
         tuple(sorted(link_rows, key=lambda row: row.mention_id)),

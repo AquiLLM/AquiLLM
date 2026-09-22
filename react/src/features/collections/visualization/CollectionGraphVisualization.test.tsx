@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -179,9 +180,44 @@ const graphWithIsolatedEntity: CollectionGraphEnvelope = {
   ],
 };
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("CollectionGraphVisualization", () => {
+  it("shows automatic document progress and a useful capacity failure", async () => {
+    const loadInstance = vi.fn().mockResolvedValue({
+      ...readyGraph, nodes: [], edges: [], artifact_id: null,
+      status: { ...readyGraph.status, state: "partial", error_code: "document_builds_failed" },
+      progress: { total: 31, active: 7, failed: 24, pending: 0, building: 0, ingesting: 0,
+        failures: [{ code: "extraction_entity_limit", count: 24 }] },
+    });
+    render(<CollectionGraphVisualization collectionId="7"
+      loadSchema={vi.fn().mockResolvedValue(schema)} loadInstance={loadInstance} />);
+    fireEvent.click(screen.getByRole("button", { name: "Instance Graph" }));
+    expect(await screen.findByText(/7 of 31 document graphs complete/)).toBeTruthy();
+    expect(screen.getByText(/24 failed/)).toBeTruthy();
+    expect(screen.getByText(/graph processing limit/)).toBeTruthy();
+  });
+
+  it("keeps polling after an unchanged building response and stops when ready", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const loadInstance = vi.fn(async () => ({
+      ...readyGraph,
+      status: { ...readyGraph.status, state: ++calls >= 3 ? "ready" as const : "building" as const },
+    }));
+    render(<CollectionGraphVisualization collectionId="7"
+      loadSchema={vi.fn().mockResolvedValue(schema)} loadInstance={loadInstance} />);
+    fireEvent.click(screen.getByRole("button", { name: "Instance Graph" }));
+    await act(async () => {});
+    expect(loadInstance).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(loadInstance).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(loadInstance).toHaveBeenCalledTimes(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(loadInstance).toHaveBeenCalledTimes(3);
+  });
+
   it("loads and renders the schema graph by default", async () => {
     render(
       <CollectionGraphVisualization

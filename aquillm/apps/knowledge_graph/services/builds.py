@@ -598,6 +598,8 @@ def _document_context(
         DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS,
         DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
         DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,
+        DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS,
+        DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS,
         DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
         _get_concrete_document,
         _ordered_chunks,
@@ -651,6 +653,12 @@ def _document_context(
                 "max_chunks": DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
                 "max_characters": DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS,
                 "max_entities": DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,
+                "max_raw_entity_observations": (
+                    DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS
+                ),
+                "max_raw_relation_observations": (
+                    DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS
+                ),
                 "max_relations": DOCUMENT_EXTRACTION_V1_MAX_RELATIONS,
             },
         ),
@@ -3941,6 +3949,8 @@ def build_document_graph(
     )
     resolved_request_id = None if request is None else request.pk
     from apps.knowledge_graph.extraction.pipeline import (
+        ExtractionCapacityCode,
+        ExtractionCapacityError,
         StaleSourceError,
         extract_into_build,
     )
@@ -4076,6 +4086,12 @@ def build_document_graph(
                 else "document_build_failed"
             )
         )
+        if (
+            isinstance(exc, ExtractionCapacityError)
+            and type(exc.code) is ExtractionCapacityCode
+        ):
+            # Persist only the typed category, never provider/source exception text.
+            error_code = exc.code.value
         try:
             _terminal_document_build(
                 context,

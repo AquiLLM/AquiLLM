@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from hashlib import sha256
 
+from .limits import FAMILY_LIMITS as _FAMILY_LIMITS
 from .memgraph_pagination import (
     FAMILY_IDENTITY_FIELDS,
     PAGE_SIZE,
@@ -21,17 +22,6 @@ from .records import (
 )
 from .serialization import canonical_projection_bytes
 
-_FAMILY_LIMITS = {
-    "ProjectedEntity": 50_000,
-    "AutomaticMembership": 50_000,
-    "ProjectedDocument": 10_000,
-    "ProjectedChunk": 250_000,
-    "ProjectedRelationSemantics": 10_000,
-    "ProjectedRelation": 250_000,
-    "ProjectedEvidence": 250_000,
-    "ProjectedEntityMention": 250_000,
-    "ArtifactProvenance": 10_001,
-}
 _COUNT_FIELDS = {
     "ProjectedEntity": "entity_count",
     "AutomaticMembership": "automatic_membership_count",

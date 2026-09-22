@@ -9,7 +9,6 @@ from math import ceil
 
 import structlog
 from celery import shared_task
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -17,7 +16,7 @@ from apps.collections.services.schema_generation import (
     InvalidSchemaCandidate,
     _locked_collection_source_signature,
     collect_candidate_evidence,
-    collection_source_signature,
+    collection_ingestion_pending,
     generate_schema_candidate,
     load_schema_generation_config,
     sample_collection_chunks,
@@ -27,11 +26,13 @@ logger = structlog.stdlib.get_logger(__name__)
 _MAX_RETRIES = 3
 _RETRY_COUNTDOWN_SECONDS = 30
 _LEASE_DURATION = timedelta(minutes=10)
-_QUEUE = settings.KG_EXTRACTION_QUEUE
+_QUEUE = "knowledge-graph-schema"
+_MAX_SOURCE_DEFERRALS = 20
+_SOURCE_SETTLING_DURATION = timedelta(minutes=10)
 
 
 class _SourceChanged(RuntimeError):
-    """The final source-document lock fence rejected a stale generation run."""
+    """Uploads are still active or the attempt's source snapshot changed."""
 
 
 class _LeaseLost(RuntimeError):
@@ -63,7 +64,7 @@ def _generation_enabled() -> bool:
 
 
 def enqueue_schema_generation(run_id) -> None:
-    """Publish an exact durable run identifier to the isolated graph queue."""
+    """Publish an exact durable run identifier to the isolated schema queue."""
 
     parsed = run_id if isinstance(run_id, uuid.UUID) else _canonical_run_id(run_id)
     generate_collection_schema_task.delay(str(parsed))
@@ -86,12 +87,90 @@ def _claim_run(run_id: uuid.UUID):
         lease_token = uuid.uuid4()
         if run.status == "queued":
             run.status = "running"
-            run.started_at = now
+            if run.started_at is None:
+                run.started_at = now
         run.error_code = ""
         run.lease_token = lease_token
         run.lease_expires_at = now + _LEASE_DURATION
         run.save(update_fields=["status", "started_at", "error_code", "lease_token", "lease_expires_at"])
         return _RunClaim(run=run, lease_token=lease_token)
+
+
+def _prepare_run_source(run, lease_token: uuid.UUID) -> str:
+    """Refresh only the source snapshot, never the user's requested draft fence."""
+
+    from apps.collections.models import (
+        Collection,
+        CollectionSchemaDraft,
+        CollectionSchemaGenerationRun,
+    )
+    from apps.collections.services.schema import SchemaGenerationDraftConflict
+
+    with transaction.atomic():
+        Collection.objects.select_for_update().get(pk=run.collection_id)
+        signature = _locked_collection_source_signature(run.collection_id)
+        current = CollectionSchemaGenerationRun.objects.select_for_update().filter(
+            pk=run.pk, collection_id=run.collection_id, status="running",
+            lease_token=lease_token, lease_expires_at__gt=timezone.now(),
+        ).first()
+        if current is None:
+            raise _LeaseLost()
+        draft = (
+            CollectionSchemaDraft.objects.select_for_update()
+            .filter(collection_id=run.collection_id)
+            .first()
+        )
+        if (
+            (draft.pk if draft else None) != current.base_draft_id
+            or (draft.revision if draft else None) != current.base_draft_revision
+        ):
+            raise SchemaGenerationDraftConflict("draft_conflict")
+        if collection_ingestion_pending(run.collection_id):
+            raise _SourceChanged()
+        current.source_signature = signature
+        current.save(update_fields=["source_signature"])
+        return signature
+
+
+def _defer_source(task, run_id: uuid.UUID, lease_token: uuid.UUID) -> None:
+    """Release the worker while uploads settle, with durable time/attempt bounds."""
+
+    from apps.collections.models import CollectionSchemaGenerationRun
+
+    with transaction.atomic():
+        now = timezone.now()
+        run = CollectionSchemaGenerationRun.objects.select_for_update().filter(
+            pk=run_id, status="running", lease_token=lease_token,
+            lease_expires_at__gt=now,
+        ).first()
+        if run is not None:
+            deferrals = run.statistics.get("source_deferrals", 0)
+            if (
+                deferrals >= _MAX_SOURCE_DEFERRALS
+                or now - run.started_at >= _SOURCE_SETTLING_DURATION
+            ):
+                run.status = "failed"
+                run.error_code = "source_changed"
+                run.completed_at = now
+            else:
+                run.status = "queued"
+                run.statistics = {**run.statistics, "source_deferrals": deferrals + 1}
+            run.lease_token = None
+            run.lease_expires_at = None
+            run.save(update_fields=[
+                "status", "error_code", "completed_at", "statistics",
+                "lease_token", "lease_expires_at",
+            ])
+    if run is None:
+        _retry_after_lease_loss(
+            task, run_id, lease_token, "source_changed", _SourceChanged()
+        )
+    elif run.status == "queued":
+        raise task.retry(
+            countdown=_RETRY_COUNTDOWN_SECONDS,
+            max_retries=max(task.max_retries, int(task.request.retries) + 1),
+            queue=_QUEUE,
+        )
 
 
 def _fail_run(run_id: uuid.UUID, error_code: str, lease_token: uuid.UUID) -> bool:
@@ -151,6 +230,8 @@ def _write_draft_with_source_fence(
         Collection.objects.select_for_update().get(pk=collection_id)
         if _locked_collection_source_signature(collection_id) != expected_signature:
             raise _SourceChanged()
+        if collection_ingestion_pending(collection_id):
+            raise _SourceChanged()
         now = timezone.now()
         run = (
             CollectionSchemaGenerationRun.objects.select_for_update()
@@ -193,9 +274,15 @@ def _release_lease_for_retry(run_id: uuid.UUID, lease_token: uuid.UUID) -> bool:
         if run is None:
             return False
         run.status = "queued"
+        run.statistics = {
+            **run.statistics,
+            "inference_retries": run.statistics.get("inference_retries", 0) + 1,
+        }
         run.lease_token = None
         run.lease_expires_at = None
-        run.save(update_fields=["status", "lease_token", "lease_expires_at"])
+        run.save(update_fields=[
+            "status", "statistics", "lease_token", "lease_expires_at",
+        ])
         return True
 
 
@@ -203,7 +290,7 @@ def _retry_after_lease_loss(task, run_id: uuid.UUID, lease_token: uuid.UUID, err
     """Redeliver a stale owner, or fail only its own expired lease at exhaustion."""
 
     if int(getattr(task.request, "retries", 0)) < task.max_retries:
-        raise task.retry(exc=exc, countdown=_RETRY_COUNTDOWN_SECONDS)
+        raise task.retry(exc=exc, countdown=_RETRY_COUNTDOWN_SECONDS, queue=_QUEUE)
     return _fail_expired_run(run_id, error_code, lease_token)
 
 
@@ -215,13 +302,24 @@ def _fail_or_retry(task, run_id: uuid.UUID, lease_token: uuid.UUID, error_code: 
     return _retry_after_lease_loss(task, run_id, lease_token, error_code, exc)
 
 
-def _retry_or_fail(task, run_id: uuid.UUID, lease_token: uuid.UUID, exc: BaseException) -> bool:
+def _retry_or_fail(
+    task, run_id: uuid.UUID, lease_token: uuid.UUID, exc: BaseException, *,
+    inference_retries: int | None = None,
+) -> bool:
     """Release an owned retry attempt, or preserve a stale delivery for recovery."""
 
-    retry_count = int(getattr(task.request, "retries", 0))
+    retry_count = (
+        int(getattr(task.request, "retries", 0))
+        if inference_retries is None
+        else inference_retries
+    )
     if retry_count < task.max_retries:
         if _release_lease_for_retry(run_id, lease_token):
-            raise task.retry(exc=exc, countdown=_RETRY_COUNTDOWN_SECONDS)
+            raise task.retry(
+                exc=exc, countdown=_RETRY_COUNTDOWN_SECONDS,
+                max_retries=max(task.max_retries, int(task.request.retries) + 1),
+                queue=_QUEUE,
+            )
         return _retry_after_lease_loss(task, run_id, lease_token, "local_inference_failed", exc)
     if _fail_run(run_id, "local_inference_failed", lease_token):
         _safe_log_failure("local_inference_failed", exc)
@@ -258,6 +356,7 @@ def generate_collection_schema_task(self, run_id: str) -> None:
         raise self.retry(
             countdown=exc.retry_after,
             max_retries=max(self.max_retries, int(self.request.retries) + 1),
+            queue=_QUEUE,
         )
     if claim is None:
         return None
@@ -266,9 +365,7 @@ def generate_collection_schema_task(self, run_id: str) -> None:
         _fail_or_retry(self, parsed_run_id, lease_token, "disabled", _LeaseLost())
         return None
     try:
-        if collection_source_signature(run.collection_id) != run.source_signature:
-            _fail_or_retry(self, parsed_run_id, lease_token, "source_changed", _SourceChanged())
-            return None
+        source_signature = _prepare_run_source(run, lease_token)
         config = load_schema_generation_config()
         samples = sample_collection_chunks(
             run.collection_id, config.max_chunks, config.max_characters
@@ -279,10 +376,11 @@ def generate_collection_schema_task(self, run_id: str) -> None:
         candidate = generate_schema_candidate(samples)
         definitions, statistics = collect_candidate_evidence(candidate, samples)
         _write_draft_with_source_fence(
-            parsed_run_id, run.collection_id, run.source_signature, lease_token, definitions, statistics
+            parsed_run_id, run.collection_id, source_signature, lease_token,
+            definitions, statistics,
         )
     except _SourceChanged:
-        _fail_or_retry(self, parsed_run_id, lease_token, "source_changed", _SourceChanged())
+        _defer_source(self, parsed_run_id, lease_token)
     except _LeaseLost as exc:
         _retry_after_lease_loss(self, parsed_run_id, lease_token, "local_inference_failed", exc)
     except InvalidSchemaCandidate as exc:
@@ -295,7 +393,10 @@ def generate_collection_schema_task(self, run_id: str) -> None:
             if _fail_or_retry(self, parsed_run_id, lease_token, "draft_conflict", exc):
                 _safe_log_failure("draft_conflict", exc)
             return None
-        _retry_or_fail(self, parsed_run_id, lease_token, exc)
+        _retry_or_fail(
+            self, parsed_run_id, lease_token, exc,
+            inference_retries=run.statistics.get("inference_retries", 0),
+        )
     return None
 
 

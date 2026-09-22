@@ -87,7 +87,8 @@ def test_projection_ready_and_membership_mutation_share_collection_first_lock_or
     )
 
 
-def test_concurrent_membership_mutation_fences_ready_without_deadlock():
+def test_concurrent_membership_mutation_fences_ready_without_deadlock(monkeypatch):
+    monkeypatch.setenv("KG_PROJECTION_IDENTIFIER_KEY_VERSION", "race-key-v1")
     if connection.vendor != "postgresql":
         pytest.fail("KG_REQUIRE_POSTGRES_TESTS requires PostgreSQL")
     from apps.collections.models import Collection

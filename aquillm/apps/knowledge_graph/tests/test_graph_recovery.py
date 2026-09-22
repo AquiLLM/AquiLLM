@@ -4,6 +4,13 @@ from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def no_persisted_capacity_failure(monkeypatch):
+    monkeypatch.setattr(_recovery(), "_exact_capacity_failure", lambda **_kwargs: False)
+
 
 def _recovery():
     return import_module("apps.knowledge_graph.graph.recovery")
@@ -127,6 +134,7 @@ def test_recovery_page_is_bounded_and_returns_json_safe_continuation(monkeypatch
         "dependency_pending_count": 0,
         "invalid_count": 0,
         "publish_failed_count": 0,
+        "capacity_blocked_count": 0,
         "next_cursor": {
             "phase": "documents",
             "document_model_index": 0,
@@ -226,3 +234,75 @@ def test_document_source_limit_error_is_counted_as_invalid(monkeypatch):
     outcome = recovery._recover_document(document_id, "a" * 64)
 
     assert outcome == recovery.RecoveryOutcome.INVALID
+
+
+@pytest.mark.parametrize("kind", ["document", "collection"])
+@pytest.mark.parametrize("stage", ["preflight", "publication"])
+def test_capacity_blocked_row_does_not_starve_following_work(monkeypatch, kind, stage):
+    from uuid import UUID
+
+    recovery = _recovery()
+    builds = import_module("apps.knowledge_graph.services.builds")
+    pipeline = import_module("apps.knowledge_graph.extraction.pipeline")
+    ids = (
+        (
+            UUID("11111111-1111-4111-8111-111111111111"),
+            UUID("22222222-2222-4222-8222-222222222222"),
+        )
+        if kind == "document"
+        else (17, 18)
+    )
+    published = []
+
+    def check(identifier, at):
+        if identifier == ids[0] and stage == at:
+            raise pipeline.ExtractionCapacityError(
+                pipeline.ExtractionCapacityCode.CHUNK_LIMIT,
+                "private-source-canary",
+            )
+
+    def publish(identifier, *args):
+        check(identifier, "publication")
+        published.append(identifier)
+
+    monkeypatch.setattr(recovery, "_exact_artifact_exists", lambda **kwargs: False)
+    if kind == "document":
+
+        def document_key(identifier, source_hash):
+            check(identifier, "preflight")
+            return "b" * 64
+
+        monkeypatch.setattr(builds, "derive_current_document_build_key", document_key)
+        monkeypatch.setattr(builds, "enqueue_document_build", publish)
+        cursor = recovery.GraphRecoveryCursor(phase="documents")
+        next_cursor = recovery.GraphRecoveryCursor(phase="documents", last_pk=22)
+        rows = tuple(recovery.DocumentRecoveryRow(value, "a" * 64) for value in ids)
+        monkeypatch.setattr(
+            recovery, "_load_document_page", lambda *_args: (rows, next_cursor)
+        )
+    else:
+
+        def collection_context(identifier):
+            check(identifier, "preflight")
+            return SimpleNamespace(
+                identity=SimpleNamespace(aggregate_source_signature="a" * 64)
+            )
+
+        monkeypatch.setattr(builds, "_collection_context", collection_context)
+        monkeypatch.setattr(builds, "derive_collection_build_key", lambda _: "b" * 64)
+        monkeypatch.setattr(builds, "enqueue_collection_refresh", publish)
+        cursor = recovery.GraphRecoveryCursor(phase="collections")
+        next_cursor = recovery.GraphRecoveryCursor(phase="collections", last_pk=22)
+        monkeypatch.setattr(
+            recovery, "_load_collection_page", lambda *_args: (ids, next_cursor)
+        )
+
+    summary = recovery.recover_graph_builds_page(cursor.as_dict(), page_size=2)
+
+    assert summary["capacity_blocked_count"] == 1
+    assert summary["published_count"] == 1
+    assert summary["publish_failed_count"] == 0
+    assert summary["examined_count"] == 2
+    assert summary["next_cursor"]["last_pk"] == 22
+    assert published == [ids[1]]
+    assert "private-source-canary" not in str(summary)

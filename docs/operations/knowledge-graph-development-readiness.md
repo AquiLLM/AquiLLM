@@ -18,9 +18,12 @@ regression tests to verify the repaired behavior.
 4. Apply Django migrations using the application's migration role before starting
    the updated workers. Migration `0010_projection_prune_completion` adds a nullable
    completion timestamp and two narrow projection state functions. It requires the
-   existing `aquillm_projection_state` role. The source role remains read-only.
+   existing `aquillm_projection_state` role. Migration
+   `0011_projection_bulk_chunk_fence` increases the complete private chunk-map
+   fence to 250,000 rows while retaining 5,000-row writes and the existing role,
+   lease, source-coordinate and state checks. The source role remains read-only.
 5. Build the frontend and affected images, then restart the web, extraction,
-   projection, and scheduled maintenance services from the deployed Compose files.
+   schema, projection, and scheduled maintenance services from the deployed Compose files.
    Run only one scheduler for this environment.
 6. Confirm the running web and workers use the pushed revision and that their
    configured queues have consumers. Check public health endpoints and redacted
@@ -40,6 +43,12 @@ graph build keys. Recovery tasks run on the extraction queue at priority 9 and
 publish missing builds; one bounded continuation advances the cursor. Lost publications or continuations
 are recovered by the next periodic sweep. Already current artifacts are reused.
 Malformed or capped scopes are counted and skipped so later scopes can progress.
+An unchanged document build whose latest exact-key attempt failed a permanent
+extraction capacity check is counted as `capacity_blocked` without repeating
+inference. Source, ontology, or processing configuration changes produce a new
+build key; explicit rebuilds can also retry the existing key. Chunk/character
+preflight overflow is skipped before artifact bootstrap because it has no valid
+complete chunk signature. It does not fabricate a partial graph identity.
 Projection reconciliation runs on its separate queue and publishes durable outbox
 work both before and after reconciliation. The scheduler holds no database or
 graph credentials, and it does not schedule destructive pruning.
@@ -47,6 +56,35 @@ graph credentials, and it does not schedule destructive pruning.
 Redis has `restart: unless-stopped` in all Compose variants. After broker recovery,
 verify both workers respond and consume their configured queues before relying on
 scheduled repair. A running beat process alone does not establish this.
+
+## Bulk uploads and schema work
+
+Run `worker_knowledge_graph_schema` on its dedicated `knowledge-graph-schema`
+queue. It uses one process, prefetch one, and `KG_SCHEMA_CPU_THREADS` (default one).
+It receives database and local generation settings without projection write
+credentials. Schema requests defer while collection ingestion is incomplete,
+refresh their source snapshot before inference, and retain the final source and
+draft UUID/revision checks. Source settling is bounded to 20 deferrals or ten
+minutes from the first delivery; inference retries have a separate budget.
+
+Document extraction retains all validated evidence within explicit aggregate
+limits: 65,536 entity mentions, 131,072 relation mentions, 524,288 raw entity
+observations, and 1,048,576 raw relation observations. The existing 10,000-chunk
+and ten-million-character limits remain. Overlapping-window deduplication keeps
+the complete observation provenance. The versioned sparse document resolver
+avoids comparing every unrelated mention pair; ambiguous dense candidate sets
+still fail an explicit audit budget instead of silently dropping evidence.
+
+Projection readers and private maps distinguish fetch/write pages from complete
+generation limits. Complete families remain bounded in memory and retain full
+checksums; this does not make arbitrarily large collections supported. The
+collection graph panel displays automatic document build progress and safe
+failure categories. These counts describe activity, while retrieval still
+requires an active complete collection artifact and a ready fenced projection.
+
+Schema generation creates a reviewable draft. Deployment or collection repair
+must preserve that draft and any subsequent edits; publishing it is a separate
+operation that changes the collection ontology and rebuilds its graphs.
 
 ## Required development checks
 
@@ -75,6 +113,8 @@ belong in an isolated environment as described under readiness evidence.
 | Area | Check | Expected outcome |
 |---|---|---|
 | Schema generation | Generate a draft from a small collection, publish it, and inspect its active ontology. | Valid types, correct source identity, successful downstream builds. |
+| Bulk ingestion | Upload a batch while requesting schema generation, then inspect every document and collection projection. | Source settling waits, schema work has its own consumer, and every eligible document completes before collection activation. |
+| Projection pages | Project more than 5,000 private chunk references and mutate a coordinate past the first page. | All references persist and checksum/fence validation detects the later mutation. |
 | Schema lease | Terminate a generation worker after claim; redeliver while its lease is live. | Delivery waits until lease expiry and recovers; no permanently running job. |
 | Draft concurrency | Keep an editor open, replace its draft, then save/delete using the old UUID and the same revision number. | Conflict response; replacement draft is unchanged. |
 | Names | Submit overlong, noncanonical, or provider-reserved names. | Structured validation error before activation or provider inference. |

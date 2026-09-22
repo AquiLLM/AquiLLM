@@ -11,18 +11,8 @@ from apps.knowledge_graph.models import (
     OntologyVersion,
 )
 
-_MAX_FAMILY_ROWS = 4_999
-
-
-def _bounded(query, fields: tuple[str, ...], batch_size: int) -> tuple[dict, ...]:
-    rows = tuple(
-        query.order_by("pk")
-        .values(*fields)[: _MAX_FAMILY_ROWS + 1]
-        .iterator(chunk_size=batch_size)
-    )
-    if len(rows) > _MAX_FAMILY_ROWS:
-        raise ValueError("projection row family exceeds its hard cap")
-    return rows
+from .limits import MAX_DETAIL_ROWS
+from .limits import bounded_projection_rows as _bounded
 
 
 def apply_relation_directions(
@@ -93,6 +83,10 @@ def expand_entity_mentions(
                 current["mention_id"],
             ):
                 selected[key] = candidate
+                if len(selected) > MAX_DETAIL_ROWS:
+                    raise ValueError(
+                        "entity mention projection family exceeds its hard cap"
+                    )
     result = tuple(
         sorted(
             selected.values(),
@@ -105,8 +99,6 @@ def expand_entity_mentions(
             ),
         )
     )
-    if len(result) > _MAX_FAMILY_ROWS:
-        raise ValueError("entity mention projection family exceeds its hard cap")
     return result
 
 
@@ -123,6 +115,7 @@ def load_relation_directions(
         ),
         ("version", "checksum", "metadata"),
         batch_size,
+        maximum=2,
     )
     if len(rows) != 1:
         raise ValueError("artifact-bound ontology definition is missing")
@@ -184,6 +177,7 @@ def load_entity_mentions(
         ),
         fields,
         batch_size,
+        order=("pk", "document_entity__mention_links__pk"),
     )
     aliases = (
         "entity_id",

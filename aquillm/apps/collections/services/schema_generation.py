@@ -176,6 +176,27 @@ def collection_source_signature(collection_id) -> str:
     return digest.hexdigest()
 
 
+def collection_ingestion_pending(collection_id: int) -> bool:
+    """Include queued uploads that have not created document rows yet."""
+
+    from apps.ingestion.models import IngestionBatchItem
+
+    if IngestionBatchItem.objects.filter(
+        batch__collection_id=collection_id,
+        status__in=(
+            IngestionBatchItem.Status.QUEUED,
+            IngestionBatchItem.Status.PROCESSING,
+        ),
+    ).exists():
+        return True
+    return any(
+        not document["ingestion_complete"]
+        for document in _collection_source_documents(
+            collection_id, include_incomplete=True
+        )
+    )
+
+
 def _locked_collection_source_signature(collection_id: int) -> str:
     """Lock all source rows, then hash only completed document identities."""
 
@@ -294,6 +315,7 @@ from .schema_generation_support import (
 __all__ = [
     "InvalidSchemaCandidate", "SchemaGenerationConfig", "SchemaGenerationConfigurationError",
     "SchemaSample", "collect_candidate_evidence", "collection_source_signature",
+    "collection_ingestion_pending",
     "generate_schema_candidate", "load_schema_generation_config", "normalize_schema_candidate",
     "balanced_samples", "sample_collection_chunks",
 ]

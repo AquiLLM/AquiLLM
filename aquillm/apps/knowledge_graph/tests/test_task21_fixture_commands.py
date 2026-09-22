@@ -52,7 +52,17 @@ def _run_ml_import_probe(
 ) -> subprocess.CompletedProcess:
     environment = {
         key: os.environ[key]
-        for key in ("PATH", "SYSTEMROOT", "TEMP", "TMP", "WINDIR")
+        # Windows user-site installations require profile coordinates even in
+        # this otherwise scrubbed child environment. No app secrets are passed.
+        for key in (
+            "PATH",
+            "SYSTEMROOT",
+            "TEMP",
+            "TMP",
+            "WINDIR",
+            "APPDATA",
+            "USERPROFILE",
+        )
         if key in os.environ
     }
     environment.update(

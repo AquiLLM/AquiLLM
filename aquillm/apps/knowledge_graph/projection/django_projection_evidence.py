@@ -6,7 +6,8 @@ from django.db.models import F
 
 from apps.knowledge_graph.models import CollectionRelationEvidence
 
-_MAX_FAMILY_ROWS = 4_999
+from .limits import bounded_projection_rows
+
 _FIELDS = (
     "id relation_id relation_mention_id relation_mention__chunk_id "
     "relation_mention__document_id relation_mention__chunk__chunk_number "
@@ -51,13 +52,7 @@ def load_projection_evidence(
         head_mapping__collection_entity__status="active",
         tail_mapping__collection_entity__status="active",
     )
-    rows = tuple(
-        query.order_by("pk")
-        .values(*_FIELDS)[: _MAX_FAMILY_ROWS + 1]
-        .iterator(chunk_size=batch_size)
-    )
-    if len(rows) > _MAX_FAMILY_ROWS:
-        raise ValueError("projection row family exceeds its hard cap")
+    rows = bounded_projection_rows(query, tuple(_FIELDS), batch_size)
     return tuple(
         {_ALIASES.get(key, key): value for key, value in row.items()} for row in rows
     )
