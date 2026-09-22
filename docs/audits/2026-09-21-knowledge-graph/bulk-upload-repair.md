@@ -399,3 +399,29 @@ tests reject corruption and accept idempotent repair. Scoped Ruff and independen
 review passed. A separate 100,000-edge local benchmark returned identical first,
 second and later pages in 219, 220 and 110 ms under the unchanged 300 ms budget.
 Live deployment measurements remain required before claiming the target is ready.
+
+The read repair was pushed and deployed as
+`f310c9977cae713235df784c2ce990a581f6b87c`. All 20 indexes were verified. A
+read-only validation probe traversed all 43,980 target entity-mention edges in
+44 pages without a timeout. Actual direct and extended retrieval succeeded for
+the published-schema fixture, with scoped graph candidates materialized and
+retained; candidate overlap with baseline retrieval correctly reports a graph
+miss without implying a branch failure.
+
+The target's next staging attempt exposed an optimizer regression: with the new
+read indexes present, the 128-row membership writer chose a broad family-generation
+index for one endpoint and exhausted its 300 ms transaction budget. A read-only
+EXPLAIN of the exact production batch confirmed that a fixed composite-index hint
+selects `(generation_key, opaque_key)` for both endpoints. The shared batch writer
+now supplies that hint before its existing staging guard, including its bytes in
+the existing query-size bound. Parameters, family filters and publication fences
+are unchanged. The worker drained naturally to exit zero before this deployment.
+
+A real Memgraph 3.8.1 regression reproduces the unfavorable plan with all 20 indexes
+and 40,000 same-generation pairs. After the fix, both endpoint lookups use the
+composite index; 128-row writes complete at the normal 300 ms transaction budget
+with retries disabled. Replay preserves exactly 128 edges, and a ready marker
+blocks further writes. The root verification passed all 23 batch, repository,
+edge and real-container tests in 43.82 seconds; Ruff and independent review are
+clear. Full target publication,
+retrieval and generated cited-answer verification remain required after deployment.

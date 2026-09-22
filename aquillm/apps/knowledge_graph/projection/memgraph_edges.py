@@ -28,6 +28,9 @@ _STAGING_GUARD = (
     "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
     "WHERE g.state IN ['staging','building'] WITH g "
 )
+# Family generation indexes serve reads; batch identity lookups must use both
+# properties to avoid rescanning a whole generation for each UNWIND row.
+_BATCH_IDENTITY_INDEX = "USING INDEX :ProjectedRecord(generation_key, opaque_key) "
 # Keep structural UNWIND queries and their scalar parameters small even when a
 # caller requests the public 5,000-row maximum. No family rows are discarded.
 _MAX_BOLT_BATCH_ROWS = 128
@@ -204,7 +207,14 @@ def write_parameterized_batches(
                 parameters[parameter] = row[name]
                 assignments.append(f"{name}:${parameter}")
             maps.append("{" + ",".join(assignments) + "}")
-        query = _STAGING_GUARD + "UNWIND [" + ",".join(maps) + "] AS row " + cypher
+        query = (
+            _BATCH_IDENTITY_INDEX
+            + _STAGING_GUARD
+            + "UNWIND ["
+            + ",".join(maps)
+            + "] AS row "
+            + cypher
+        )
         if (
             len(parameters) > _MAX_BOLT_BATCH_PARAMETERS
             or len(query.encode("utf-8")) > _MAX_BOLT_BATCH_QUERY_BYTES
