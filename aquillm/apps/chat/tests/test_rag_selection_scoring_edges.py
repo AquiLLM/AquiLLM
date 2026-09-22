@@ -136,3 +136,27 @@ def test_preparation_honors_configured_concurrency_below_six(monkeypatch):
         assert result.new_pairs <= 2
     finally:
         gate.set()
+
+
+def test_fresh_retry_input_mismatch_falls_back_for_entire_pool():
+    chunks = (_chunk(1, "first"), _chunk(2, "second"))
+
+    class MixedInputScorer(PointwiseScorer):
+        def score_pair(self, pair, timeout_seconds):
+            if pair[1] == "second":
+                return 0.9, (pair[0], "shorter retry")
+            return 0.1, pair
+
+    result = prepare_selection_candidates(
+        pool=_pool(chunks),
+        primary_query="question",
+        authorization=_authorization(Policy()),
+        deadline=100.0,
+        allow_new_scores=True,
+        scorer=MixedInputScorer(),
+        chunk_loader=lambda _auth, _ids: chunks,
+        clock=lambda: 0.0,
+    )
+    assert result.score_status == "rank_fallback"
+    assert result.fallback_reason == "score_incompatible"
+    assert [candidate.relevance for candidate in result.candidates] == [1.0, 0.0]

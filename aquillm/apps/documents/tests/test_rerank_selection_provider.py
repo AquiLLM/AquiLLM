@@ -140,3 +140,49 @@ def test_actual_long_query_pair_is_stable_when_other_candidates_change(monkeypat
     assert full.scores[1].effective_pair_fingerprint == (
         alone.scores[0].effective_pair_fingerprint
     )
+
+
+def test_known_batch_only_score_shape_uses_singleton_list_and_exact_index(monkeypatch):
+    from apps.documents.services import chunk_rerank_selection_provider as provider
+
+    payloads = []
+
+    def post(_endpoint, *, headers, json, timeout):
+        payloads.append(json)
+        if json["text_2"] != ["document"]:
+            return SimpleNamespace(status_code=400)
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": [{"index": 0, "score": -0.4}]},
+        )
+
+    monkeypatch.setattr(provider.requests, "post", post)
+    scorer = provider.LocalSelectionScorer(
+        endpoint="http://reranker/score",
+        shape="score_batch_text_pairs",
+        model_name="model",
+        revision="revision",
+        char_limit=2000,
+        pair_limit=1024,
+        reserve=256,
+        timeout=3.0,
+        deadline=2.0,
+        clock=lambda: 0.0,
+        headers={},
+    )
+    assert scorer.score_pair(("question", "document"), 1.0) == (
+        -0.4,
+        ("question", "document"),
+    )
+    assert len(payloads) == 1
+    assert payloads[0]["text_2"] == ["document"]
+
+    monkeypatch.setattr(
+        provider.requests,
+        "post",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": [{"index": 1, "score": 0.9}]},
+        ),
+    )
+    assert scorer.score_pair(("question", "document"), 1.0) is None

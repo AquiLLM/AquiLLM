@@ -165,6 +165,22 @@ def prepare_selection_candidates(
                     and fresh.query_fingerprint == fingerprint_text(primary_query)
                     and fresh.scoring_kind == used_scorer.scoring_kind
                 ):
+                    if fresh.candidate_order != tuple(chunk.pk for chunk in to_score):
+                        raise ValueError("new score pool changed")
+                    validate_score_set(
+                        fresh,
+                        authorized_identities=tuple(
+                            score_identity_for_chunk(
+                                chunk,
+                                effective_pair_fingerprint=fingerprint_pair(
+                                    *used_scorer.prepare_pair(primary_query, chunk)
+                                ),
+                            )
+                            for chunk in to_score
+                        ),
+                        expected_query_fingerprint=fingerprint_text(primary_query),
+                        expected_scorer_fingerprint=used_scorer.scorer_fingerprint,
+                    )
                     new_scores = {score.chunk_pk: score for score in fresh.scores}
             if missing and not new_scores and not allow_new_scores:
                 fallback_reason = "new_scores_disabled"

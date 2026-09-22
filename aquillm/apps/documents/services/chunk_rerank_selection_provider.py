@@ -122,7 +122,11 @@ class LocalSelectionScorer:
             return {
                 "model": self.model_name,
                 "text_1": prepared[0],
-                "text_2": prepared[1],
+                "text_2": (
+                    [prepared[1]]
+                    if self.shape == "score_batch_text_pairs"
+                    else prepared[1]
+                ),
                 "truncate_prompt_tokens": self.pair_limit,
                 "truncation_side": "right",
             }
@@ -145,7 +149,21 @@ class LocalSelectionScorer:
         if response is None or response.status_code >= 400:
             return None
         try:
-            value = parse_single_score(response.json())
+            body = response.json()
+            if self.shape == "score_batch_text_pairs":
+                items = (
+                    body.get("data", body.get("results"))
+                    if isinstance(body, dict)
+                    else None
+                )
+                indexed = parse_score_results(body)
+                if not isinstance(items, list) or len(items) != 1 or len(indexed) != 1:
+                    return None
+                index, value = indexed[0]
+                if type(index) is not int or index != 0:
+                    return None
+            else:
+                value = parse_single_score(body)
         except (TypeError, ValueError, requests.RequestException):
             return None
         return (float(value), successful) if isfinite(float(value)) else None
