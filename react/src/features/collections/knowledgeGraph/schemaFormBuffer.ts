@@ -5,6 +5,7 @@ export interface SchemaFormBufferState {
   definitionKey: string | null;
   definitionKind: SchemaDefinitionKind | null;
   baseRevision: number | null;
+  baseDraftId: string | null;
   initialValues: Record<string, unknown> | null;
   currentValues: Record<string, unknown> | null;
   dirtyFields: string[];
@@ -15,6 +16,7 @@ export interface SchemaFormBufferState {
 export type SchemaFormBufferAction =
   | {
       type: 'form/open';
+      baseDraftId?: string | null;
       kind: SchemaDefinitionKind;
       key: string;
       baseRevision: number | null;
@@ -32,6 +34,7 @@ export type SchemaFormBufferAction =
   | { type: 'form/discard' }
   | {
       type: 'form/reload';
+      baseDraftId?: string | null;
       baseRevision: number;
       values: Record<string, unknown>;
       preserveDirty?: boolean;
@@ -61,6 +64,7 @@ export function createInitialSchemaFormBufferState(): SchemaFormBufferState {
     definitionKey: null,
     definitionKind: null,
     baseRevision: null,
+    baseDraftId: null,
     initialValues: null,
     currentValues: null,
     dirtyFields: [],
@@ -97,6 +101,7 @@ export function schemaFormBufferReducer(
         definitionKey: action.key,
         definitionKind: action.kind,
         baseRevision: action.baseRevision,
+        baseDraftId: action.baseDraftId ?? null,
         initialValues: { ...action.values },
         currentValues: { ...action.values },
         dirtyFields: [],
@@ -150,6 +155,7 @@ export function schemaFormBufferReducer(
         return {
           ...state,
           baseRevision: action.baseRevision,
+          baseDraftId: action.baseDraftId ?? state.baseDraftId,
           initialValues,
           currentValues,
           dirtyFields: computeDirtyFields(initialValues, currentValues),
@@ -159,6 +165,7 @@ export function schemaFormBufferReducer(
       return {
         ...state,
         baseRevision: action.baseRevision,
+        baseDraftId: action.baseDraftId ?? state.baseDraftId,
         initialValues,
         currentValues: initialValues,
         dirtyFields: [],

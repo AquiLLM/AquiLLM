@@ -55,13 +55,19 @@ def test_reconcile_and_prune_tasks_are_registered_thin_wrappers(monkeypatch):
         ),
     )
     published = []
+    publications = iter((2, 0))
+
+    def publish(**kwargs):
+        published.append(kwargs)
+        count = next(publications)
+        return SimpleNamespace(
+            attempted_count=count, published_count=count, failed_count=0
+        )
+
     monkeypatch.setattr(
         tasks,
         "publish_projection_outbox",
-        lambda **kwargs: (
-            published.append(kwargs)
-            or SimpleNamespace(attempted_count=2, published_count=2, failed_count=0)
-        ),
+        publish,
         raising=False,
     )
 
@@ -79,7 +85,7 @@ def test_reconcile_and_prune_tasks_are_registered_thin_wrappers(monkeypatch):
     assert calls["reconcile"]["collection_id"] == 17
     assert calls["prune"]["projection_id"] == projection_id
     assert calls["prune"]["collection_id"] is None
-    assert len(published) == 1
+    assert len(published) == 2
 
 
 def test_projection_module_registers_exactly_three_production_task_wrappers() -> None:
@@ -98,6 +104,7 @@ def test_reconcile_task_retries_failed_outbox_then_publishes(monkeypatch) -> Non
     summaries = [
         SimpleNamespace(attempted_count=1, published_count=0, failed_count=1),
         SimpleNamespace(attempted_count=1, published_count=1, failed_count=0),
+        SimpleNamespace(attempted_count=0, published_count=0, failed_count=0),
     ]
     observed = []
     monkeypatch.setattr(
@@ -112,6 +119,7 @@ def test_reconcile_task_retries_failed_outbox_then_publishes(monkeypatch) -> Non
 
     assert recovered["published_count"] == 1
     assert [call["using"] for call in observed] == [
+        "projection_state",
         "projection_state",
         "projection_state",
     ]

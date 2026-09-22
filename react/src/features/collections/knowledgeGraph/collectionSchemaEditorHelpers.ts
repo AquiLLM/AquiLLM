@@ -59,7 +59,7 @@ export function buildConflictReapplyUpdate(
     latest.values as unknown as Record<string, unknown>,
   );
   return {
-    formReload: { baseRevision: latestRevision, values: rebased.values },
+    formReload: { baseDraftId: envelope.draft.draft_id, baseRevision: latestRevision, values: rebased.values },
     envelope: {
       ...envelope,
       draft: { ...envelope.draft, revision: latestRevision },

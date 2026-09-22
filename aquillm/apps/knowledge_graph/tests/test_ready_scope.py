@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
@@ -17,6 +18,29 @@ from apps.knowledge_graph.retrieval.ready_scope import (
 
 _DOC_A = UUID("11111111-1111-4111-8111-111111111111")
 _DOC_B = UUID("22222222-2222-4222-8222-222222222222")
+
+
+def test_ready_scope_preserves_real_locked_embedding_signature():
+    from apps.knowledge_graph.tests.test_models import COLLECTION_EMBEDDING_SIGNATURE
+
+    context = authorization(Policy())
+    rows = tuple(
+        replace(row, embedding_model_signature=COLLECTION_EMBEDDING_SIGNATURE)
+        for row in (_authority(7, _DOC_A, "1"), _authority(9, _DOC_B, "2"))
+    )
+    scope = assemble_selected_ready_scope(
+        authorization=context,
+        authorities=rows,
+        codec=HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v1"),
+    )
+    assert all(
+        row.embedding_model_signature == COLLECTION_EMBEDDING_SIGNATURE
+        for row in scope.ready.selected_generations
+    )
+    with pytest.raises(ValueError, match="bounded canonical token"):
+        replace(
+            scope.ready.selected_generations[0], embedding_model_signature="x" * 513
+        )
 
 
 def _authority(collection_id: int, document_id: UUID, marker: str):

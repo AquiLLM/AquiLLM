@@ -195,8 +195,8 @@ def test_missing_or_malformed_authorization_never_starts_graph(
     )
 
     assert calls == []
-    assert rerank_inputs == [(1, 2)]
-    assert tuple(row.pk for row in returned[2]) == (1, 2)
+    assert rerank_inputs == []
+    assert returned[:3] == ((), (), [])
     assert returned[3]["graph_candidate_count"] == 0
 
 

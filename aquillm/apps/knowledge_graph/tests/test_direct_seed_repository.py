@@ -34,6 +34,110 @@ K = tuple(character * 64 for character in "123456789abcdef")
 DOCUMENT_ID = UUID("11111111-1111-4111-8111-111111111111")
 
 
+def test_canonical_seed_rejects_identity_string_in_place_of_database_pk():
+    with pytest.raises(ValueError, match="canonical"):
+        DirectSeedCandidateRow(9, 11, "model", "a" * 64, 1.0)
+
+
+def test_direct_seeds_match_projection_entity_and_canonical_encoding():
+    from apps.knowledge_graph.projection.memberships import (
+        MEMBERSHIP_REGISTRY_GENERATION,
+        membership_decision_checksum,
+    )
+    from apps.knowledge_graph.projection.projection_encoding import (
+        _entities,
+        _memberships,
+    )
+    from apps.knowledge_graph.projection.records import AutomaticCanonicalMembershipV1
+
+    ready = _ready()
+    codec = HmacSha256ProjectionIdentifierCodec(b"key", key_version="key-v1")
+    span = QueryEntitySpanV1("model", 0, 5, 1.0)
+    repository = DirectSeedRepository(
+        scope=_scope(ready),
+        codec=codec,
+        span_inputs=(DirectResolutionSpanInputV1(span, "model"),),
+        row_loader=lambda **_: (
+            DirectSeedCandidateRow(7, 11, "model", None, 1.0),
+            DirectSeedCandidateRow(9, 11, "model", 42, 1.0),
+        ),
+        membership_state_loader=lambda **_: _membership_state(ready),
+    )
+    marker = type(
+        "Marker", (), dict(generation_key=K[1], artifact_key=K[2], collection_key=K[0])
+    )()
+    entities, _ = _entities(
+        {
+            "entities": (
+                {
+                    "id": 7,
+                    "entity_type": "model",
+                    "cluster_key": "cluster",
+                    "retrieval_utility": 1.0,
+                },
+            )
+        },
+        lambda domain, source: (
+            codec.encode(domain, generation=DOCUMENT_ID, source=source).value
+        ),
+        marker,
+    )
+    matches = repository.canonical_name_matches(span=span, ready=ready, limit=4)
+    singleton = next(row for row in matches if row.entity_key == row.component_key)
+    canonical = next(row for row in matches if row.entity_key != row.component_key)
+    assert singleton.entity_key == entities[0].entity_key
+    assert (
+        canonical.component_key
+        == codec.encode(
+            ProjectionIdentifierDomain.AUTOMATIC_CANONICAL_IDENTITY, source=42
+        ).value
+    )
+    projected_canonical_key = codec.encode(
+        ProjectionIdentifierDomain.AUTOMATIC_CANONICAL_IDENTITY, source=42
+    ).value
+    audit = AutomaticCanonicalMembershipV1(
+        codec.encode(
+            ProjectionIdentifierDomain.ENTITY,
+            generation=MEMBERSHIP_REGISTRY_GENERATION,
+            source=7,
+        ).value,
+        projected_canonical_key,
+        K[3],
+        "resolver-v1",
+        K[6],
+    )
+    projected_memberships = _memberships(
+        {
+            "memberships": (
+                {
+                    "entity_id": 7,
+                    "canonical_entity_id": 42,
+                    "outcome": "automatic",
+                    "status": "active",
+                    "canonical_status": "active",
+                    "decision_checksum": K[3],
+                },
+            ),
+            "artifacts": (
+                {
+                    "id": 11,
+                    "resolver_version": "resolver-v1",
+                    "resolution_config_checksum": K[6],
+                },
+            ),
+        },
+        codec,
+        DOCUMENT_ID,
+        {
+            "artifact_id": 11,
+            "membership_checksum": membership_decision_checksum((audit,)),
+        },
+        entities,
+        {7: entities[0].entity_key},
+    )
+    assert canonical.component_key == projected_memberships[0].automatic_membership_key
+
+
 def _ready() -> ReadyGenerationBundleV1:
     generation = SelectedCollectionGenerationV1(
         K[0],
@@ -58,7 +162,7 @@ def _ready() -> ReadyGenerationBundleV1:
 
 # fmt: off
 def _scope(ready: ReadyGenerationBundleV1) -> DirectSeedScopeV1:
-    return DirectSeedScopeV1(ready_bundle_checksum=ready.bundle_checksum, selected_collection_ids=(3,), selected_artifact_ids=(11,), selected_document_ids=(DOCUMENT_ID,), selected_document_artifact_ids=(22,), generation_keys_by_artifact=((11, K[1]),), ontology_checksum=K[7], resolver_version="resolver-v1")
+    return DirectSeedScopeV1(ready_bundle_checksum=ready.bundle_checksum, selected_collection_ids=(3,), selected_artifact_ids=(11,), selected_document_ids=(DOCUMENT_ID,), selected_document_artifact_ids=(22,), generation_keys_by_artifact=((11, K[1]),), generation_ids_by_artifact=((11, DOCUMENT_ID),), ontology_checksum=K[7], resolver_version="resolver-v1")
 # fmt: on
 
 
@@ -91,7 +195,7 @@ def test_identifier_name_and_indexed_alias_use_bounded_scoped_predicates() -> No
                 entity_id=7,
                 artifact_id=11,
                 ontology_type="paper",
-                automatic_identity_key=None,
+                automatic_canonical_entity_id=None,
                 similarity=1.0,
             ),
         )
@@ -141,7 +245,7 @@ def test_alias_query_binds_scope_provenance_and_text_to_one_join(monkeypatch) ->
     slices = []
     def candidate_rows(result_slice):
         slices.append(result_slice.stop)
-        row = {"id": 7, "artifact_id": 11, "entity_type": "paper", "automatic_identity_key": None, "similarity": 1.0}
+        row = {"id": 7, "artifact_id": 11, "entity_type": "paper", "automatic_canonical_entity_id": None, "similarity": 1.0}
         return [row] * 5 if any(required <= set(call.kwargs) for call in query.filter.call_args_list) else []
     query.__getitem__.side_effect = candidate_rows
     monkeypatch.setattr(CanonicalEntityLink, "objects", automatic)
@@ -152,6 +256,7 @@ def test_alias_query_binds_scope_provenance_and_text_to_one_join(monkeypatch) ->
         direct_seed_repository._load_candidate_rows(tier=DirectResolutionTier.ALIAS, lookup="doi:10.1234/x", lookup_field="document_links__document_entity__mention_links__mention__normalized_text", embedding=None, model_signature="", ontology_type="paper", membership_states=_membership_state(ready), automatic_only=True, scope=_scope(ready), using="default", limit=4)
 
     assert slices == [5]
+    assert automatic.values.call_args.args == ("canonical_entity_id",)
     assert any(required <= set(call.kwargs) for call in query.filter.call_args_list)
 # fmt: on
 
@@ -167,9 +272,9 @@ def test_matching_current_membership_admits_automatic_link_and_excludes_candidat
         calls.append(options)
         assert options["automatic_only"] is True
         return (
-            DirectSeedCandidateRow(9, 11, "model", "automatic-a", 1.0),
+            DirectSeedCandidateRow(9, 11, "model", 42, 1.0),
             DirectSeedCandidateRow(7, 11, "model", None, 1.0),
-            DirectSeedCandidateRow(8, 11, "model", "candidate-a", 1.0, "candidate"),
+            DirectSeedCandidateRow(8, 11, "model", 43, 1.0, "candidate"),
         )
 
     repository = DirectSeedRepository(
@@ -257,7 +362,7 @@ def test_automatic_components_cross_generations_and_singletons_do_not() -> None:
     ready = _ready()
     span = QueryEntitySpanV1("model", 0, 5, 1.0)
     rows = (
-        DirectSeedCandidateRow(9, 11, "model", "canonical-a", 1.0),
+        DirectSeedCandidateRow(9, 11, "model", 42, 1.0),
         DirectSeedCandidateRow(7, 11, "model", None, 1.0),
     )
     codec = HmacSha256ProjectionIdentifierCodec(b"key", key_version="key-v1")
@@ -280,7 +385,7 @@ def test_automatic_components_cross_generations_and_singletons_do_not() -> None:
     assert automatic.component_key == str(
         codec.encode(
             ProjectionIdentifierDomain.AUTOMATIC_CANONICAL_IDENTITY,
-            source="canonical-a",
+            source=42,
         )
     )
     assert singleton.component_key == singleton.entity_key

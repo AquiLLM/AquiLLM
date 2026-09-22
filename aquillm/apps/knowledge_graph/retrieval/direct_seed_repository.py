@@ -34,6 +34,7 @@ class DirectSeedScopeV1:
     selected_document_ids: tuple[UUID, ...]
     selected_document_artifact_ids: tuple[int, ...]
     generation_keys_by_artifact: tuple[tuple[int, str], ...]
+    generation_ids_by_artifact: tuple[tuple[int, UUID], ...]
     ontology_checksum: str
     resolver_version: str
     expected_embedding_signature: str = "embed-v1"
@@ -64,13 +65,26 @@ class DirectSeedScopeV1:
             != self.selected_artifact_ids
         ):
             raise ValueError("generation mapping must cover selected artifacts")
+        if tuple(
+            row[0] for row in self.generation_ids_by_artifact
+        ) != self.selected_artifact_ids or any(
+            type(row[1]) is not UUID for row in self.generation_ids_by_artifact
+        ):
+            raise ValueError(
+                "raw generation UUID mapping must cover selected artifacts"
+            )
 
 
 # fmt: off
 @dataclass(frozen=True, slots=True)
 class DirectSeedCandidateRow:
-    entity_id: int; artifact_id: int; ontology_type: str; automatic_identity_key: str | None; similarity: float
+    entity_id: int; artifact_id: int; ontology_type: str; automatic_canonical_entity_id: int | None; similarity: float
     link_outcome: str = "automatic"
+
+    def __post_init__(self):
+        canonical = self.automatic_canonical_entity_id
+        if canonical is not None and (type(canonical) is not int or canonical <= 0):
+            raise ValueError("automatic canonical entity must be a positive database PK")
 
 
 def repository_predicates(scope: DirectSeedScopeV1, tier: DirectResolutionTier) -> tuple[str, ...]:
@@ -168,7 +182,7 @@ class DirectSeedRepository:
             using=self._using,
             limit=limit,
         )
-        generations = dict(self._scope.generation_keys_by_artifact)
+        generations = dict(self._scope.generation_ids_by_artifact)
         matches = []
         for row in rows:
             entity_key = str(
@@ -179,11 +193,11 @@ class DirectSeedRepository:
                 )
             )
             component_key = entity_key
-            if row.automatic_identity_key is not None and row.link_outcome == "automatic":
+            if row.automatic_canonical_entity_id is not None and row.link_outcome == "automatic":
                 component_key = str(
                     self._codec.encode(
                         ProjectionIdentifierDomain.AUTOMATIC_CANONICAL_IDENTITY,
-                        source=row.automatic_identity_key,
+                        source=row.automatic_canonical_entity_id,
                     )
                 )
             similarity = (
@@ -256,7 +270,7 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
         resolver_version=scope.resolver_version, canonical_entity__status="active",
         canonical_entity__resolver_version=scope.resolver_version, canonical_entity__entity_type=OuterRef("entity_type"),
         canonical_entity__version_signature=OuterRef("version_signature"),
-    ).values("canonical_entity__identity_key")[:1]
+    ).values("canonical_entity_id")[:1]
     tier = options["tier"]
     alias_filters = {"document_links__document_entity__mention_links__status": "active", "document_links__document_entity__mention_links__resolver_version": scope.resolver_version, "document_links__document_entity__mention_links__mention__artifact_id__in": scope.selected_document_artifact_ids, "document_links__document_entity__mention_links__mention__document_id__in": scope.selected_document_ids, "document_links__document_entity__mention_links__mention__artifact__status__in": ("active", "superseded"), "document_links__document_entity__mention_links__mention__artifact__evaluation_only": False, "document_links__document_entity__mention_links__mention__artifact__ontology_checksum": scope.ontology_checksum, "document_links__document_entity__mention_links__mention__entity_type": options["ontology_type"], str(options["lookup_field"]): options["lookup"]} if tier is DirectResolutionTier.ALIAS else {}
     query = (
@@ -279,7 +293,7 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
             document_links__document_entity__artifact__ontology_checksum=scope.ontology_checksum,
             **alias_filters,
         )
-        .annotate(automatic_identity_key=Subquery(automatic))
+        .annotate(automatic_canonical_entity_id=Subquery(automatic))
     )
     if tier is DirectResolutionTier.EMBEDDING:
         similarity = ExpressionWrapper(
@@ -291,10 +305,10 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
         if tier is not DirectResolutionTier.ALIAS:
             query = query.filter(**{str(options["lookup_field"]): options["lookup"]})
         query = query.annotate(similarity=Value(1.0, output_field=FloatField()))
-    rows = tuple(query.distinct().order_by("-similarity", "pk").values("id", "artifact_id", "entity_type", "automatic_identity_key", "similarity")[: int(options["limit"]) + 1])
+    rows = tuple(query.distinct().order_by("-similarity", "pk").values("id", "artifact_id", "entity_type", "automatic_canonical_entity_id", "similarity")[: int(options["limit"]) + 1])
     if len(rows) > int(options["limit"]):
         raise ValueError("candidate result exceeds its hard cap")
-    return tuple(DirectSeedCandidateRow(int(row["id"]), int(row["artifact_id"]), str(row["entity_type"]), row["automatic_identity_key"], float(row["similarity"])) for row in rows)
+    return tuple(DirectSeedCandidateRow(int(row["id"]), int(row["artifact_id"]), str(row["entity_type"]), row["automatic_canonical_entity_id"], float(row["similarity"])) for row in rows)
 
 __all__ = ["DirectSeedCandidateRow", "DirectSeedRepository", "DirectSeedScopeV1", "repository_predicates"]
 # fmt: on

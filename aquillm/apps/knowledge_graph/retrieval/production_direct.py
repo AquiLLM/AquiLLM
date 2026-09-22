@@ -94,6 +94,11 @@ def prepare_direct_seeds(runtime, *, query, scope, deadline):
                 )
             ),
             generation_by_artifact,
+            tuple(
+                sorted(
+                    (row.artifact_id, row.generation_id) for row in scope.projections
+                )
+            ),
             ontology.checksum,
             scope.projections[0].resolver_version,
             scope.projections[0].embedding_model_signature,

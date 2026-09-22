@@ -5,6 +5,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
+from math import ceil
 
 import structlog
 from celery import shared_task
@@ -13,10 +14,10 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.collections.services.schema_generation import (
-    _locked_collection_source_signature,
     InvalidSchemaCandidate,
-    collection_source_signature,
+    _locked_collection_source_signature,
     collect_candidate_evidence,
+    collection_source_signature,
     generate_schema_candidate,
     load_schema_generation_config,
     sample_collection_chunks,
@@ -35,6 +36,11 @@ class _SourceChanged(RuntimeError):
 
 class _LeaseLost(RuntimeError):
     """A newer delivery owns the run, so this stale delivery must do nothing."""
+
+
+class _LeaseBusy(RuntimeError):
+    def __init__(self, retry_after: int):
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +82,7 @@ def _claim_run(run_id: uuid.UUID):
             return None
         now = timezone.now()
         if run.status == "running" and run.lease_expires_at is not None and run.lease_expires_at > now:
-            return None
+            raise _LeaseBusy(max(1, ceil((run.lease_expires_at - now).total_seconds())))
         lease_token = uuid.uuid4()
         if run.status == "queued":
             run.status = "running"
@@ -136,7 +142,10 @@ def _write_draft_with_source_fence(
     """Fence source writes with parent/source locks and the current execution lease."""
 
     from apps.collections.models import Collection, CollectionSchemaGenerationRun
-    from apps.collections.services.schema import canonicalize_definitions, write_generated_draft
+    from apps.collections.services.schema import (
+        canonicalize_definitions,
+        write_generated_draft,
+    )
 
     with transaction.atomic():
         Collection.objects.select_for_update().get(pk=collection_id)
@@ -241,7 +250,15 @@ def generate_collection_schema_task(self, run_id: str) -> None:
     except ValueError as exc:
         _safe_log_failure("local_inference_failed", exc)
         raise
-    claim = _claim_run(parsed_run_id)
+    try:
+        claim = _claim_run(parsed_run_id)
+    except _LeaseBusy as exc:
+        # A worker-loss redelivery is the only remaining message in some cases.
+        # Keep it deliverable even when inference retries have been exhausted.
+        raise self.retry(
+            countdown=exc.retry_after,
+            max_retries=max(self.max_retries, int(self.request.retries) + 1),
+        )
     if claim is None:
         return None
     run, lease_token = claim.run, claim.lease_token

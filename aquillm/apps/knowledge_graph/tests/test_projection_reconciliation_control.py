@@ -8,6 +8,10 @@ from uuid import uuid4
 from django.utils import timezone
 
 from apps.knowledge_graph.projection import generation_audit, reconciler
+from apps.knowledge_graph.projection.identifiers import (
+    HmacSha256ProjectionIdentifierCodec,
+    ProjectionIdentifierDomain,
+)
 from apps.knowledge_graph.projection.records import (
     ProjectionCountsV1,
     ProjectionLifecycleState,
@@ -18,6 +22,9 @@ def _settings():
     return SimpleNamespace(
         projection_batch_size=25,
         graph_overall_timeout_ms=500,
+        projection_schema_version="collection-graph-v1",
+        projection_format_version="projection-v1",
+        projection_identifier_key_version="key-v7",
     )
 
 
@@ -124,17 +131,19 @@ def test_generation_audit_detects_empty_store_and_checksum_drift(monkeypatch):
 
 
 def test_generation_audit_leaves_inflight_projection_for_queued_worker() -> None:
+    pending_row = _ready_row()
+    pending_row.state = "pending"
+    building_row = _ready_row()
+    building_row.state = "building"
+    building_row.lease_expires_at = timezone.now() + timedelta(seconds=30)
     pending = generation_audit.audit_projection_generation(
-        row=SimpleNamespace(state="pending"),
+        row=pending_row,
         postgres=object(),
         graph=object(),
         settings=_settings(),
     )
     building = generation_audit.audit_projection_generation(
-        row=SimpleNamespace(
-            state="building",
-            lease_expires_at=timezone.now() + timedelta(seconds=30),
-        ),
+        row=building_row,
         postgres=object(),
         graph=object(),
         settings=_settings(),
@@ -229,8 +238,21 @@ def test_reconcile_replays_only_missing_expired_or_drifted_work(monkeypatch):
 
 
 def test_global_orphan_scan_uses_exclusive_opaque_cursor(monkeypatch):
-    authoritative = _bundle("1" * 64)
-    row = SimpleNamespace(id=1, state="ready")
+    codec = HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v7")
+    generation = uuid4()
+    authoritative = _bundle(
+        codec.encode(
+            ProjectionIdentifierDomain.COLLECTION,
+            generation=generation,
+            source=generation,
+        ).value
+    )
+    row = SimpleNamespace(
+        id=1, state="ready", generation_key=generation, identifier_key_version="key-v7"
+    )
+    monkeypatch.setattr(
+        generation_audit, "projection_identifier_codec", lambda *args, **kwargs: codec
+    )
     projection_pages = [(row,), ()]
     monkeypatch.setattr(
         generation_audit,
@@ -264,7 +286,21 @@ def test_global_orphan_scan_uses_exclusive_opaque_cursor(monkeypatch):
 
 def test_collection_orphan_scan_never_reads_other_collection_manifests(monkeypatch):
     authoritative = _bundle("1" * 64)
-    projection_pages = [(SimpleNamespace(id=1, state="ready"),), ()]
+    codec = HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v7")
+    projection_pages = [
+        (
+            SimpleNamespace(
+                id=1,
+                state="ready",
+                generation_key=uuid4(),
+                identifier_key_version="key-v7",
+            ),
+        ),
+        (),
+    ]
+    monkeypatch.setattr(
+        generation_audit, "projection_identifier_codec", lambda *args, **kwargs: codec
+    )
     monkeypatch.setattr(
         generation_audit,
         "_projection_page",

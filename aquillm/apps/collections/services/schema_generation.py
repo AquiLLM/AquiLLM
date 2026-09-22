@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import heapq
 import os
-import re
 from dataclasses import dataclass
 from itertools import islice
 from typing import Iterator
@@ -21,7 +20,6 @@ _MAX_ENTITY_TYPES = 24
 _MIN_ENTITY_TYPES = 2
 _MAX_RELATION_TYPES = 32
 _MIN_RELATION_TYPES = 1
-_SNAKE_CASE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class SchemaGenerationConfigurationError(ValueError):
@@ -133,6 +131,7 @@ def _eligible_collection_documents(collection_id: int) -> Iterator[dict[str, obj
 
     from django.apps import apps
     from django.db.models import Exists, OuterRef
+
     from apps.documents.models.chunks import TextChunk
 
     usable_chunks = TextChunk.objects.filter(
@@ -199,6 +198,7 @@ def _next_sample_chunk(
     """Materialize one deterministic chunk, truncated before it leaves PostgreSQL."""
 
     from django.db.models.functions import Substr
+
     from apps.documents.models.chunks import TextChunk
 
     row = (
@@ -290,7 +290,6 @@ from .schema_generation_support import (
     generate_schema_candidate,
     normalize_schema_candidate,
 )
-
 
 __all__ = [
     "InvalidSchemaCandidate", "SchemaGenerationConfig", "SchemaGenerationConfigurationError",

@@ -93,8 +93,10 @@ def test_web_gets_query_only_and_projection_worker_gets_split_credentials(
     assert web_environment.get("KG_MEMGRAPH_QUERY_USERNAME") in (None, "")
     assert web_environment.get("KG_MEMGRAPH_QUERY_PASSWORD") in (None, "")
     assert web_environment.get("KG_MEMGRAPH_PROJECTION_PASSWORD") in (None, "")
-    assert web_environment.get("KG_PROJECTION_POSTGRES_SOURCE_DSN") in (None, "")
+    assert web_environment["KG_PROJECTION_POSTGRES_SOURCE_DSN"] == SOURCE_DSN
     assert web_environment.get("KG_PROJECTION_POSTGRES_STATE_DSN") in (None, "")
+    assert str(web_environment["KG_MEMGRAPH_PROJECTION_ENABLED"]) == "0"
+    assert web_environment.get("KG_MEMGRAPH_PROJECTION_USERNAME") in (None, "")
     assert not worker.get("env_file")
     assert worker_environment["KG_PROJECTION_POSTGRES_SOURCE_DSN"] == SOURCE_DSN
     assert worker_environment["KG_PROJECTION_POSTGRES_STATE_DSN"] == STATE_DSN

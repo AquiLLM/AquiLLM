@@ -4,6 +4,7 @@ import json
 
 from django.core.management.base import BaseCommand, CommandError
 
+from apps.knowledge_graph.projection.outbox import dispatch_due_projection_work
 from apps.knowledge_graph.projection.reconciler import reconcile_graph_projections
 from apps.knowledge_graph.projection.runtime import load_projection_runtime_settings
 
@@ -31,6 +32,13 @@ class Command(BaseCommand):
             dry_run=options["dry_run"],
             collection_id=collection_id,
         )
+        if not options["dry_run"]:
+            try:
+                dispatch_due_projection_work(page_size=options["page_size"])
+            except Exception:
+                raise CommandError(
+                    "projection work is pending; check services and retry recovery"
+                ) from None
         self.stdout.write(
             json.dumps(
                 {

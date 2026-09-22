@@ -26,6 +26,8 @@ _FUNCTIONS = {
     "fail_outbox": "kg_projection_fail_outbox",
     "ready": "kg_projection_ready_compare_and_set",
     "replay": "kg_projection_replay",
+    "record_pruned": "kg_projection_record_pruned",
+    "begin_prune": "kg_projection_begin_prune",
 }
 
 
@@ -126,6 +128,14 @@ class FunctionProjectionStateRepository:
 
     def supersede(self, *, projection_id: UUID, now: datetime) -> bool:
         row = self._one("supersede", (_identifier(projection_id), _instant(now)))
+        return bool(row and row["changed"])
+
+    def record_pruned(self, *, projection_id: UUID, generation_key: UUID, now: datetime) -> bool:
+        row = self._one("record_pruned", (_identifier(projection_id), _identifier(generation_key), _instant(now)))
+        return bool(row and row["changed"])
+
+    def begin_prune(self, *, projection_id: UUID, generation_key: UUID, now: datetime) -> bool:
+        row = self._one("begin_prune", (_identifier(projection_id), _identifier(generation_key), _instant(now)))
         return bool(row and row["changed"])
 
     def load(self, *, projection_id: UUID, keys: tuple[str, ...] | None = None):

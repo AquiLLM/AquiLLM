@@ -149,16 +149,19 @@ def _allowed_endpoint_types(
     return frozenset(value for value in raw_types if isinstance(value, str))
 
 
-def _endpoint_entity(
+def _endpoint_entities(
     relation: RelationCandidate,
     endpoint: str,
+    allowed_endpoint: str,
     mapped_entities: tuple[MappedEntityEvidence, ...],
     ontology: OntologyDefinition,
-) -> MappedEntityEvidence | None:
+) -> tuple[MappedEntityEvidence, ...]:
     surface = getattr(relation, f"{endpoint}_text")
     start = getattr(relation, f"{endpoint}_start")
     end = getattr(relation, f"{endpoint}_end")
-    allowed = _allowed_endpoint_types(ontology, relation.relation_type, endpoint)
+    allowed = _allowed_endpoint_types(
+        ontology, relation.relation_type, allowed_endpoint
+    )
     matches = [
         entity
         for entity in mapped_entities
@@ -167,7 +170,7 @@ def _endpoint_entity(
         and entity.raw_text == surface
         and entity.entity_type in allowed
     ]
-    return matches[0] if len(matches) == 1 else None
+    return tuple(matches)
 
 
 def _deduplicate_relations(
@@ -285,15 +288,48 @@ def collect_document_evidence(
             )
             mapped_entities.extend(local_entities)
             for relation in result.relations:
-                head = _endpoint_entity(relation, "head", local_entities, ontology)
-                tail = _endpoint_entity(relation, "tail", local_entities, ontology)
+                relation_definition = ontology.relations.get(relation.relation_type)
+                endpoint_orientations = [("head", "tail")]
                 if (
-                    head is None
-                    or tail is None
-                    or head.identity_key == tail.identity_key
+                    relation_definition is not None
+                    and _definition_value(relation_definition, "direction")
+                    == "undirected"
                 ):
+                    endpoint_orientations.append(("tail", "head"))
+                endpoint_pairs = {}
+                ambiguous = False
+                for head_role, tail_role in endpoint_orientations:
+                    heads = _endpoint_entities(
+                        relation,
+                        "head",
+                        head_role,
+                        local_entities,
+                        ontology,
+                    )
+                    tails = _endpoint_entities(
+                        relation,
+                        "tail",
+                        tail_role,
+                        local_entities,
+                        ontology,
+                    )
+                    if not heads or not tails:
+                        continue
+                    # An ambiguous orientation remains ambiguous even when the
+                    # other orientation happens to have a unique resolution.
+                    if len(heads) != 1 or len(tails) != 1:
+                        ambiguous = True
+                        continue
+                    head, tail = heads[0], tails[0]
+                    if head.identity_key != tail.identity_key:
+                        pair_key = (head.identity_key, tail.identity_key)
+                        if len(endpoint_orientations) == 2:
+                            pair_key = tuple(sorted(pair_key))
+                        endpoint_pairs.setdefault(pair_key, (head, tail))
+                if ambiguous or len(endpoint_pairs) != 1:
                     diagnostic_counts["unresolved_relation_endpoint"] += 1
                     continue
+                head, tail = next(iter(endpoint_pairs.values()))
                 mapped_relations.append(
                     MappedRelationEvidence(
                         document_id=window.document_id,

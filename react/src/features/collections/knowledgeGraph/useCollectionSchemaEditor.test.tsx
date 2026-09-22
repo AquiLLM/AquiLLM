@@ -48,12 +48,25 @@ afterEach(() => {
 });
 
 describe('useCollectionSchemaEditor', () => {
+  it('keeps form draft UUID and revision when the workspace receives a replacement draft', async () => {
+    const original = manageDraftEnvelope.draft!;
+    const replacement = { ...manageDraftEnvelope, draft: { ...original, draft_id: '00000000-0000-0000-0000-000000000002' } };
+    const api = createMockApi({ createDraft: vi.fn().mockResolvedValue({ ok: true, data: replacement }) });
+    const { result } = renderHook(() => useCollectionSchemaEditor({ collectionId: 'col-manage', api }));
+    await waitFor(() => expect(result.current.editorState.phase).toBe('ready'));
+    act(() => result.current.onSelectDefinition('entity', 'person'));
+    act(() => result.current.onFieldChange('description', 'local edit'));
+    await act(async () => { await result.current.onCreateDraft(); });
+    await act(async () => { await result.current.onSaveDefinition(); });
+    expect(api.upsertEntity).toHaveBeenCalledWith('col-manage', 'person', original.draft_id, original.revision,
+      expect.objectContaining({ description: 'local edit' }));
+  });
   it('loads workspace on mount', async () => {
     const api = createMockApi();
     const { result } = renderHook(() => useCollectionSchemaEditor({ collectionId: 'col-manage', api }));
     await waitFor(() => expect(result.current.editorState.phase).toBe('ready'));
     expect(api.loadWorkspace).toHaveBeenCalledWith('col-manage');
-    expect(result.current.editorState.envelope?.draft?.draft_id).toBe('draft-manage-1');
+    expect(result.current.editorState.envelope?.draft?.draft_id).toBe('10000000-0000-4000-8000-000000000001');
   });
 
   it('reloads when collection id changes', async () => {
@@ -122,7 +135,7 @@ describe('useCollectionSchemaEditor', () => {
     await act(async () => {
       await result.current.onValidate?.();
     });
-    expect(api.validate).toHaveBeenCalledWith('col-manage', 'draft-manage-1', 5);
+    expect(api.validate).toHaveBeenCalledWith('col-manage', '10000000-0000-4000-8000-000000000001', 5);
     expect(result.current.editorState.validation.status).toBe('valid');
   });
 
@@ -133,7 +146,7 @@ describe('useCollectionSchemaEditor', () => {
     await act(async () => {
       await result.current.onDiscardDraft?.();
     });
-    expect(api.discardDraft).toHaveBeenCalledWith('col-manage', 'draft-manage-1', 5);
+    expect(api.discardDraft).toHaveBeenCalledWith('col-manage', '10000000-0000-4000-8000-000000000001', 5);
   });
 
   it('loads history when requested', async () => {
@@ -169,7 +182,7 @@ describe('useCollectionSchemaEditor', () => {
     await act(async () => {
       resolveFirst?.({ ok: true, data: editDraftEnvelope });
     });
-    await waitFor(() => expect(result.current.editorState.envelope?.draft?.draft_id).toBe('draft-manage-1'));
+    await waitFor(() => expect(result.current.editorState.envelope?.draft?.draft_id).toBe('10000000-0000-4000-8000-000000000001'));
   });
 
   it('automatically starts exactly one generation run for an empty editable workspace', async () => {
@@ -223,7 +236,7 @@ describe('useCollectionSchemaEditor', () => {
 
     await waitFor(() => expect(api.loadWorkspace).toHaveBeenCalledTimes(2));
     expect(result.current.generation.status).toBe('succeeded');
-    expect(result.current.editorState.envelope?.draft?.draft_id).toBe('draft-edit-1');
+    expect(result.current.editorState.envelope?.draft?.draft_id).toBe('10000000-0000-4000-8000-000000000002');
   });
 
   it('exposes manual retry after a failed generation', async () => {

@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 
+from aquillm.celery_schedules import knowledge_graph_maintenance_schedule
 from aquillm.projection_database_settings import projection_databases
 from lib.knowledge_graph.config import (
     INVALID_EXTRACTION_QUEUE,
@@ -100,6 +101,15 @@ RAG_LONG_QUERY_CANDIDATE_SCALE = env_float("RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1
 
 # Knowledge-graph operations. All mutation/build controls are off by default.
 KG_EVAL_BYPASS_ALLOWED = env_bool("KG_EVAL_BYPASS_ALLOWED", False)
+KG_MAINTENANCE_SCHEDULER_ENABLED = env_bool(
+    "KG_MAINTENANCE_SCHEDULER_ENABLED", False
+)
+KG_GRAPH_RECOVERY_PAGE_SIZE = min(
+    max(env_int("KG_GRAPH_RECOVERY_PAGE_SIZE", 50), 1), 500
+)
+KG_MAINTENANCE_INTERVAL_SECONDS = max(
+    env_int("KG_MAINTENANCE_INTERVAL_SECONDS", 300), 60
+)
 KG_ARTIFACT_RETENTION_DAYS = env_int("KG_ARTIFACT_RETENTION_DAYS", 30) or 30
 KG_ARTIFACT_KEEP_SUPERSEDED = env_int("KG_ARTIFACT_KEEP_SUPERSEDED", 2)
 try:
@@ -481,7 +491,17 @@ CELERY_TASK_ROUTES = {
         "queue": KG_EXTRACTION_QUEUE,
         "priority": 9,
     },
+    "apps.knowledge_graph.tasks.recover_missing_graph_builds_task": {
+        "queue": KG_EXTRACTION_QUEUE,
+        "priority": 9,
+    },
 }
+CELERY_BEAT_SCHEDULE = knowledge_graph_maintenance_schedule(
+    enabled=KG_MAINTENANCE_SCHEDULER_ENABLED,
+    extraction_queue=KG_EXTRACTION_QUEUE,
+    projection_queue=globals()["KG_PROJECTION_QUEUE"],
+    interval_seconds=KG_MAINTENANCE_INTERVAL_SECONDS,
+)
 
 # Zotero Integration Settings
 # OAuth credentials should be set in environment variables:

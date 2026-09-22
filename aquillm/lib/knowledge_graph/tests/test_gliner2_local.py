@@ -30,12 +30,14 @@ def _ontology() -> SimpleNamespace:
         "uses_dataset": SimpleNamespace(
             name="uses_dataset",
             description="Connects research work to a dataset.",
+            direction="directed",
             allowed_head_types=("paper", "model"),
             allowed_tail_types=("dataset",),
         ),
         "reports_metric": SimpleNamespace(
             name="reports_metric",
             description="Connects a paper to a metric.",
+            direction="directed",
             allowed_head_types=("paper",),
             allowed_tail_types=("metric",),
         ),
@@ -142,9 +144,7 @@ def _install_fake_provider(
             if raw_results is not None:
                 return raw_results
             resolved_entities = entity_results or [{"entities": [{}]} for _ in texts]
-            default_relations = {
-                name: [] for name in calls.schema_relations[-1]
-            }
+            default_relations = {name: [] for name in calls.schema_relations[-1]}
             resolved_relations = relation_results or [default_relations for _ in texts]
             return [
                 {**default_relations, **entity_result, **relation_result}
@@ -268,6 +268,38 @@ def test_nonempty_extraction_rejects_unpinned_revision_before_provider_load(
     assert calls.pretrained == []
 
 
+@pytest.mark.parametrize(
+    ("mapping_name", "invalid_name"),
+    [
+        ("entity_types", "a" * 65),
+        ("relations", "entities"),
+    ],
+)
+def test_invalid_ontology_type_names_are_rejected_before_model_load(
+    monkeypatch: pytest.MonkeyPatch,
+    mapping_name: str,
+    invalid_name: str,
+) -> None:
+    ontology = _ontology()
+    definitions = dict(getattr(ontology, mapping_name))
+    definitions[invalid_name] = SimpleNamespace(
+        name=invalid_name,
+        description="invalid provider schema key",
+        direction="directed",
+        allowed_head_types=("paper",),
+        allowed_tail_types=("dataset",),
+    )
+    setattr(ontology, mapping_name, MappingProxyType(definitions))
+
+    def model_must_not_load(_settings):
+        raise AssertionError("invalid ontology must be rejected before model load")
+
+    monkeypatch.setattr(gliner2_local, "_load_model", model_must_not_load)
+
+    with pytest.raises(ExtractionBackendError, match="ontology.*name"):
+        _backend().extract_batch(("A paper.",), ontology=ontology)
+
+
 def test_model_load_is_shared_once_across_instances_and_threads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -311,9 +343,7 @@ def test_normalizes_entities_and_spanned_relations_to_neutral_candidates(
         EntityCandidate("dataset", "MMLU", 11, 15, 0.91),
     )
     assert result.relations == (
-        RelationCandidate(
-            "uses_dataset", "Qwen3", "MMLU", 0, 5, 11, 15, 0.87
-        ),
+        RelationCandidate("uses_dataset", "Qwen3", "MMLU", 0, 5, 11, 15, 0.87),
     )
     assert result.diagnostics == ()
 
@@ -369,9 +399,7 @@ def test_unformatted_output_preserves_repeated_surface_spans_and_relation_target
         ("MMLU", 29, 33),
     ]
     assert result.relations == (
-        RelationCandidate(
-            "uses_dataset", "Qwen3", "MMLU", 20, 25, 29, 33, 0.86
-        ),
+        RelationCandidate("uses_dataset", "Qwen3", "MMLU", 20, 25, 29, 33, 0.86),
     )
     assert result.diagnostics == ()
 
@@ -390,9 +418,7 @@ def test_rejects_invalid_entities_to_diagnostics(
     raw_entity: tuple[str, str, float, int, int],
     expected_code: str,
 ) -> None:
-    _install_fake_provider(
-        monkeypatch, entity_results=[_entity_result(raw_entity)]
-    )
+    _install_fake_provider(monkeypatch, entity_results=[_entity_result(raw_entity)])
 
     result = _backend().extract_batch(("Qwen3",), ontology=_ontology())[0]
 
@@ -407,9 +433,7 @@ def test_huge_integer_entity_confidence_is_rejected_without_overflow(
 ) -> None:
     _install_fake_provider(
         monkeypatch,
-        entity_results=[
-            _entity_result(("model", "Qwen3", 10**1000, 0, 5))
-        ],
+        entity_results=[_entity_result(("model", "Qwen3", 10**1000, 0, 5))],
     )
 
     result = _backend().extract_batch(("Qwen3",), ontology=_ontology())[0]
@@ -440,9 +464,7 @@ def test_huge_integer_relation_confidence_is_rejected_without_overflow(
         ],
     )
 
-    result = _backend().extract_batch(
-        ("Qwen3 uses MMLU.",), ontology=_ontology()
-    )[0]
+    result = _backend().extract_batch(("Qwen3 uses MMLU.",), ontology=_ontology())[0]
 
     assert result.relations == ()
     assert [diagnostic.code for diagnostic in result.diagnostics] == [
@@ -497,9 +519,7 @@ def test_rejects_unknown_relation_and_nan_endpoint_confidence(
         monkeypatch, entity_results=[entities], relation_results=relation_results
     )
 
-    result = _backend().extract_batch(
-        ("Qwen3 uses MMLU.",), ontology=_ontology()
-    )[0]
+    result = _backend().extract_batch(("Qwen3 uses MMLU.",), ontology=_ontology())[0]
 
     assert result.relations == ()
     assert {diagnostic.code for diagnostic in result.diagnostics} == {
@@ -526,9 +546,7 @@ def test_rejects_malformed_relation_span_instead_of_matching_by_text(
         ],
     )
 
-    result = _backend().extract_batch(
-        ("Qwen3 uses MMLU.",), ontology=_ontology()
-    )[0]
+    result = _backend().extract_batch(("Qwen3 uses MMLU.",), ontology=_ontology())[0]
 
     assert result.relations == ()
     assert [diagnostic.code for diagnostic in result.diagnostics] == [
@@ -572,14 +590,10 @@ def test_text_only_relation_endpoints_resolve_to_unique_compatible_mentions(
         ],
     )
 
-    result = _backend().extract_batch(
-        ("Qwen3 uses MMLU.",), ontology=_ontology()
-    )[0]
+    result = _backend().extract_batch(("Qwen3 uses MMLU.",), ontology=_ontology())[0]
 
     assert result.relations == (
-        RelationCandidate(
-            "uses_dataset", "Qwen3", "MMLU", 0, 5, 11, 15, 0.7
-        ),
+        RelationCandidate("uses_dataset", "Qwen3", "MMLU", 0, 5, 11, 15, 0.7),
     )
     assert result.diagnostics == ()
 
@@ -650,9 +664,7 @@ def test_spanned_endpoint_with_multiple_compatible_entity_types_is_ambiguous(
         ],
     )
 
-    result = _backend().extract_batch(
-        ("Qwen3 uses MMLU.",), ontology=_ontology()
-    )[0]
+    result = _backend().extract_batch(("Qwen3 uses MMLU.",), ontology=_ontology())[0]
 
     assert result.relations == ()
     assert result.diagnostics[0].code == "ambiguous_relation_endpoint"
@@ -676,15 +688,177 @@ def test_disallowed_endpoint_type_is_diagnostic_not_promoted(
         ],
     )
 
-    result = _backend().extract_batch(
-        ("Qwen3 uses MMLU.",), ontology=_ontology()
-    )[0]
+    result = _backend().extract_batch(("Qwen3 uses MMLU.",), ontology=_ontology())[0]
 
     assert result.relations == ()
     assert [diagnostic.code for diagnostic in result.diagnostics] == [
         "disallowed_relation_endpoint"
     ]
     assert ("endpoint", "head") in result.diagnostics[0].details
+
+
+def test_undirected_asymmetric_relation_accepts_either_provider_orientation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ontology = _ontology()
+    ontology.relations["uses_dataset"].direction = "undirected"
+    text = "Qwen3 uses MMLU."
+    entities = _entity_result(
+        ("model", "Qwen3", 0.95, 0, 5),
+        ("dataset", "MMLU", 0.91, 11, 15),
+    )
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[entities, entities],
+        relation_results=[
+            _spanned_relation(
+                "uses_dataset", ("Qwen3", 0.8, 0, 5), ("MMLU", 0.7, 11, 15)
+            ),
+            _spanned_relation(
+                "uses_dataset", ("MMLU", 0.7, 11, 15), ("Qwen3", 0.8, 0, 5)
+            ),
+        ],
+    )
+
+    forward, reverse = _backend().extract_batch((text, text), ontology=ontology)
+
+    assert forward.relations == (
+        RelationCandidate("uses_dataset", "Qwen3", "MMLU", 0, 5, 11, 15, 0.7),
+    )
+    assert reverse.relations == (
+        RelationCandidate("uses_dataset", "MMLU", "Qwen3", 11, 15, 0, 5, 0.7),
+    )
+    assert forward.diagnostics == reverse.diagnostics == ()
+
+
+def test_directed_asymmetric_relation_rejects_reverse_provider_orientation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[
+            _entity_result(
+                ("model", "Qwen3", 0.95, 0, 5),
+                ("dataset", "MMLU", 0.91, 11, 15),
+            )
+        ],
+        relation_results=[
+            _spanned_relation(
+                "uses_dataset", ("MMLU", 0.7, 11, 15), ("Qwen3", 0.8, 0, 5)
+            )
+        ],
+    )
+
+    result = _backend().extract_batch(("Qwen3 uses MMLU.",), ontology=_ontology())[0]
+
+    assert result.relations == ()
+    assert [item.code for item in result.diagnostics] == [
+        "disallowed_relation_endpoint"
+    ]
+
+
+def test_undirected_reverse_orientation_preserves_grounding_and_ambiguity_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ontology = _ontology()
+    ontology.relations["uses_dataset"].direction = "undirected"
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[
+            _entity_result(
+                ("dataset", "MMLU", 0.91, 0, 4),
+                ("model", "Qwen3", 0.95, 11, 16),
+                ("paper", "Qwen3", 0.90, 11, 16),
+            )
+        ],
+        relation_results=[
+            {
+                "uses_dataset": [
+                    {
+                        "head": {"text": "MMLU", "confidence": 0.7},
+                        "tail": {"text": "Qwen3", "confidence": 0.8},
+                    }
+                ]
+            }
+        ],
+    )
+
+    result = _backend().extract_batch(("MMLU links Qwen3",), ontology=ontology)[0]
+
+    assert result.relations == ()
+    assert [item.code for item in result.diagnostics] == ["ambiguous_relation_endpoint"]
+
+
+@pytest.mark.parametrize("ambiguous_forward", [False, True])
+def test_undirected_rejects_distinct_typed_pairs_across_orientations(
+    monkeypatch, ambiguous_forward
+):
+    ontology = _ontology()
+    ontology.relations["uses_dataset"].direction = "undirected"
+    entities = [
+        ("model", "Qwen3", 0.95, 0, 5),
+        ("dataset", "Qwen3", 0.95, 0, 5),
+        ("dataset", "MMLU", 0.91, 11, 15),
+        ("model", "MMLU", 0.91, 11, 15),
+    ]
+    if ambiguous_forward:
+        entities.append(("paper", "Qwen3", 0.90, 0, 5))
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[_entity_result(*entities)],
+        relation_results=[
+            _spanned_relation(
+                "uses_dataset", ("Qwen3", 0.8, 0, 5), ("MMLU", 0.7, 11, 15)
+            )
+        ],
+    )
+    result = _backend().extract_batch(("Qwen3 uses MMLU.",), ontology=ontology)[0]
+    assert result.relations == ()
+    assert [item.code for item in result.diagnostics] == ["ambiguous_relation_endpoint"]
+
+
+def test_undirected_overlapping_type_rules_count_identical_pair_once(monkeypatch):
+    ontology = _ontology()
+    definition = ontology.relations["uses_dataset"]
+    definition.direction = "undirected"
+    definition.allowed_head_types = definition.allowed_tail_types = ("model", "dataset")
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[
+            _entity_result(
+                ("model", "Qwen3", 0.95, 0, 5), ("dataset", "MMLU", 0.91, 11, 15)
+            )
+        ],
+        relation_results=[
+            _spanned_relation(
+                "uses_dataset", ("Qwen3", 0.8, 0, 5), ("MMLU", 0.7, 11, 15)
+            )
+        ],
+    )
+    result = _backend().extract_batch(("Qwen3 uses MMLU.",), ontology=ontology)[0]
+    assert len(result.relations) == 1
+    assert result.diagnostics == ()
+
+
+def test_undirected_swapped_typed_pair_at_same_span_counts_once(monkeypatch):
+    ontology = _ontology()
+    ontology.relations["uses_dataset"].direction = "undirected"
+    _install_fake_provider(
+        monkeypatch,
+        entity_results=[
+            _entity_result(
+                ("model", "Qwen3", 0.95, 0, 5), ("dataset", "Qwen3", 0.91, 0, 5)
+            )
+        ],
+        relation_results=[
+            _spanned_relation(
+                "uses_dataset", ("Qwen3", 0.8, 0, 5), ("Qwen3", 0.7, 0, 5)
+            )
+        ],
+    )
+    result = _backend().extract_batch(("Qwen3",), ontology=ontology)[0]
+    assert len(result.relations) == 1
+    assert result.diagnostics == ()
 
 
 @pytest.mark.parametrize("stage", ["load", "inference"])

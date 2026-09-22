@@ -5,7 +5,36 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from apps.knowledge_graph.projection import outbox
+
+
+def test_command_dispatch_drains_all_due_pages_with_one_cutoff(monkeypatch):
+    batches = iter((2, 2, 1))
+    calls = []
+
+    def publish(**kwargs):
+        calls.append(kwargs)
+        count = next(batches)
+        return outbox.OutboxPublishSummaryV1(count, count, 0)
+
+    monkeypatch.setattr(outbox, "publish_projection_outbox", publish)
+    assert outbox.dispatch_due_projection_work(page_size=2) == 5
+    assert {call["now"] for call in calls} == {calls[0]["now"]}
+    assert all(
+        call["limit"] == 2 and call["using"] == "projection_state" for call in calls
+    )
+
+
+def test_command_dispatch_stops_on_failed_publication(monkeypatch):
+    monkeypatch.setattr(
+        outbox,
+        "publish_projection_outbox",
+        lambda **kwargs: outbox.OutboxPublishSummaryV1(2, 1, 1),
+    )
+    with pytest.raises(RuntimeError, match="pending"):
+        outbox.dispatch_due_projection_work(page_size=2)
 
 
 class _Row(SimpleNamespace):

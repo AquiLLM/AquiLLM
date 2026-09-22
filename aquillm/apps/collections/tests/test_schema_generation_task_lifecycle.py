@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import sys
+import uuid
 from contextlib import nullcontext
 from datetime import timedelta
-import sys
 from types import SimpleNamespace
-import uuid
 
 import pytest
 
@@ -12,8 +12,8 @@ import pytest
 def test_claim_resumes_a_running_run_after_retry_or_worker_redelivery(monkeypatch):
     """An expired late-ack delivery can recover without changing its first start time."""
 
-    from apps.collections.tasks import schema_generation as tasks
     from apps.collections import models
+    from apps.collections.tasks import schema_generation as tasks
 
     run = SimpleNamespace(
         status="running", started_at="original", error_code="", lease_token=uuid.UUID(int=1),
@@ -37,8 +37,8 @@ def test_claim_resumes_a_running_run_after_retry_or_worker_redelivery(monkeypatc
 def test_claim_excludes_live_duplicate_delivery_and_recovers_only_an_expired_lease(monkeypatch):
     """Two concurrent deliveries must never execute the same durable run."""
 
-    from apps.collections.tasks import schema_generation as tasks
     from apps.collections import models
+    from apps.collections.tasks import schema_generation as tasks
 
     now = tasks.timezone.now()
     run = SimpleNamespace(
@@ -57,7 +57,8 @@ def test_claim_excludes_live_duplicate_delivery_and_recovers_only_an_expired_lea
     first = tasks._claim_run("run-id")
     assert first is not None
     assert first.lease_token == run.lease_token
-    assert tasks._claim_run("run-id") is None
+    with pytest.raises(tasks._LeaseBusy):
+        tasks._claim_run("run-id")
 
     run.lease_expires_at = now - timedelta(seconds=1)
     recovered = tasks._claim_run("run-id")
@@ -114,10 +115,11 @@ def test_retry_keeps_the_durable_run_resumable_and_marks_only_exhaustion(monkeyp
 def test_final_source_fence_locks_source_before_task_one_draft_write(monkeypatch):
     """Writing after an unlocked signature check permits a stale source draft."""
 
-    from apps.collections.tasks import schema_generation as tasks
-    from apps.collections import models
     import sys
     from types import ModuleType
+
+    from apps.collections import models
+    from apps.collections.tasks import schema_generation as tasks
 
     calls = []
     schema = ModuleType("apps.collections.services.schema")
@@ -173,8 +175,8 @@ def test_task_fake_lifecycle_maps_terminal_outcomes_without_payload_logs(
 ):
     """Changing a terminal mapping must not retry, strand, or log source data."""
 
-    from apps.collections.tasks import schema_generation as tasks
     from apps.collections.services.schema_generation import InvalidSchemaCandidate
+    from apps.collections.tasks import schema_generation as tasks
 
     run = SimpleNamespace(collection_id=1, source_signature="source")
     lease_token = uuid.uuid4()

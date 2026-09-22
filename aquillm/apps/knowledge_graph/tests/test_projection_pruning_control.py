@@ -54,6 +54,8 @@ def test_prune_honors_projection_id_and_uses_immutable_generation_key(monkeypatc
         ),
     )
     monkeypatch.setattr(reconciler, "_projection_settings", _settings)
+    monkeypatch.setattr(reconciler, "_record_pruned", lambda row: None)
+    monkeypatch.setattr(reconciler, "_prepare_prune", lambda row: True)
 
     summary = reconciler.prune_graph_projection_generations(
         projection_id=row.id,
@@ -107,7 +109,7 @@ def test_exact_projection_prune_is_not_hidden_by_collection_retention(monkeypatc
 
     assert candidates == (row,)
     assert aliases == ["projection_source"]
-    assert {"pk": projection_id} in filters
+    assert {"pk": projection_id, "pruned_at__isnull": True} in filters
 
 
 def test_attested_missing_generation_is_not_counted_as_deleted(monkeypatch):
@@ -131,6 +133,11 @@ def test_attested_missing_generation_is_not_counted_as_deleted(monkeypatch):
         lambda: SimpleNamespace(delete_generation=lambda **_kwargs: False),
     )
     monkeypatch.setattr(reconciler, "_projection_settings", _settings)
+    completed = []
+    monkeypatch.setattr(reconciler, "_prepare_prune", lambda row: True)
+    monkeypatch.setattr(
+        reconciler, "_record_pruned", lambda row: completed.append(row.id)
+    )
 
     summary = reconciler.prune_graph_projection_generations(
         projection_id=row.id,
@@ -141,6 +148,7 @@ def test_attested_missing_generation_is_not_counted_as_deleted(monkeypatch):
 
     assert summary.candidate_count == 1
     assert summary.deleted_count == 0
+    assert completed == [row.id]
 
 
 def test_attested_missing_orphan_is_not_counted_as_deleted(monkeypatch):

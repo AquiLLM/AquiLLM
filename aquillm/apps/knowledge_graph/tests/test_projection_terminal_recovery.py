@@ -81,6 +81,8 @@ def test_terminal_prune_uses_immutable_orm_authority_after_source_change(
         ),
     )
     monkeypatch.setattr(reconciler, "_orphan_generation_keys", lambda **_kwargs: ())
+    monkeypatch.setattr(reconciler, "_record_pruned", lambda row: None)
+    monkeypatch.setattr(reconciler, "_prepare_prune", lambda row: True)
 
     summary = reconciler.prune_graph_projection_generations(
         projection_id=row.id,
@@ -91,34 +93,34 @@ def test_terminal_prune_uses_immutable_orm_authority_after_source_change(
 
     assert filters == [
         {"state__in": ("failed", "superseded")},
-        {"pk": row.id},
+        {"pk": row.id, "pruned_at__isnull": True},
     ]
     assert deleted == [expected]
     assert summary.deleted_count == 1
 
 
 def test_terminal_generation_identity_never_reloads_mutable_bundle(monkeypatch):
-    generation = uuid4()
-    rows = (
-        SimpleNamespace(id=1, state="pending"),
-        SimpleNamespace(id=2, state="building"),
-        SimpleNamespace(id=3, state="ready"),
+    rows = tuple(
         SimpleNamespace(
-            id=4,
-            state="superseded",
-            generation_key=generation,
+            id=index,
+            state=state,
+            generation_key=uuid4(),
             collection_id=7,
             artifact_id=11,
             identifier_key_version="key-v1",
-        ),
+        )
+        for index, state in enumerate(("pending", "building", "ready", "superseded"), 1)
     )
     pages = [rows, ()]
     codec = HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v1")
-    expected = codec.encode(
-        ProjectionIdentifierDomain.COLLECTION,
-        generation=generation,
-        source=generation,
-    ).value
+    expected = frozenset(
+        codec.encode(
+            ProjectionIdentifierDomain.COLLECTION,
+            generation=row.generation_key,
+            source=row.generation_key,
+        ).value
+        for row in rows
+    )
     monkeypatch.setattr(
         generation_audit, "_projection_page", lambda **_kwargs: pages.pop(0)
     )
@@ -143,8 +145,8 @@ def test_terminal_generation_identity_never_reloads_mutable_bundle(monkeypatch):
         collection_id=None,
     )
 
-    assert observed == [(2, "build"), (3, "audit")]
-    assert keys == frozenset(("2" * 64, "3" * 64, expected))
+    assert observed == []
+    assert keys == expected
 
 
 def test_direct_prune_refuses_nonterminal_authority(monkeypatch):

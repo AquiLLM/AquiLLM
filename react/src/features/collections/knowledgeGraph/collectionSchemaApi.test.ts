@@ -64,10 +64,10 @@ describe('createCollectionSchemaApi', () => {
       return { ok: true as const, data: validationResultFixture as never };
     }) as CollectionSchemaHttpClient['requestJson'];
     const api = createCollectionSchemaApi(routes, client);
-    await api.validate('7', 'draft-manage-1', 5);
+    await api.validate('7', '10000000-0000-4000-8000-000000000001', 5);
     expect(client.calls[0]?.init).toMatchObject({
       method: 'POST',
-      body: { draft_id: 'draft-manage-1', revision: 5 },
+      body: { draft_id: '10000000-0000-4000-8000-000000000001', revision: 5 },
     });
   });
 
@@ -77,7 +77,7 @@ describe('createCollectionSchemaApi', () => {
     await api.publish(
       '7',
       {
-        draft_id: 'draft-manage-1',
+        draft_id: '10000000-0000-4000-8000-000000000001',
         revision: 5,
         candidate_checksum: 'candidate-checksum-v5',
         validation_result_id: 'validation-result-1',
@@ -89,7 +89,7 @@ describe('createCollectionSchemaApi', () => {
       method: 'POST',
       revision: 5,
       body: {
-        draft_id: 'draft-manage-1',
+        draft_id: '10000000-0000-4000-8000-000000000001',
         revision: 5,
         candidate_checksum: 'candidate-checksum-v5',
         validation_result_id: 'validation-result-1',
@@ -126,9 +126,22 @@ describe('createCollectionSchemaApi', () => {
   it('maps entity upsert to formatted entity route with revision', async () => {
     const client = createMockClient();
     const api = createCollectionSchemaApi(routes, client);
-    await api.upsertEntity('9', 'person', 3, { description: 'Updated' });
+    await api.upsertEntity('9', 'person', '00000000-0000-0000-0000-000000000001', 3, { description: 'Updated' });
     expect(client.calls[0]?.url).toBe('/api/collection/9/schema/entity/person/');
-    expect(client.calls[0]?.init).toMatchObject({ method: 'PUT', revision: 3, body: { values: { description: 'Updated' } } });
+    expect(client.calls[0]?.init).toMatchObject({ method: 'PUT', revision: 3, body: { draft_id: '00000000-0000-0000-0000-000000000001', values: { description: 'Updated' } } });
+  });
+
+  it('binds every definition mutation to the form draft UUID', async () => {
+    const client = createMockClient();
+    const api = createCollectionSchemaApi(routes, client);
+    const draftId = '00000000-0000-0000-0000-000000000001';
+    await api.deleteEntity('9', 'person', draftId, 3);
+    await api.upsertRelation('9', 'works_for', draftId, 3, { description: 'Updated' });
+    await api.deleteRelation('9', 'works_for', draftId, 3);
+    expect(client.calls.map((call) => call.init?.body)).toEqual([
+      { draft_id: draftId }, { draft_id: draftId, values: { description: 'Updated' } }, { draft_id: draftId },
+    ]);
+    expect(client.calls.map((call) => call.init?.revision)).toEqual([3, 3, 3]);
   });
 
   it('returns complete normalized envelopes from mutation methods', async () => {
@@ -138,7 +151,7 @@ describe('createCollectionSchemaApi', () => {
     const result = await api.createDraft('col-edit');
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.data.draft?.draft_id).toBe('draft-edit-1');
+      expect(result.data.draft?.draft_id).toBe('10000000-0000-4000-8000-000000000002');
     }
   });
 

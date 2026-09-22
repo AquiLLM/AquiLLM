@@ -4,12 +4,30 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from django.db import transaction
+from django.utils import timezone
 
 from apps.knowledge_graph.models import GraphProjectionOutbox
 
 from .state_repository import FunctionProjectionStateRepository
 
 _MAX_LIMIT = 5_000
+
+
+def dispatch_due_projection_work(*, page_size: int) -> int:
+    """Drain work due at command start using bounded, function-only claims."""
+    now = timezone.now()
+    published = 0
+    while True:
+        summary = publish_projection_outbox(
+            limit=page_size, now=now, using="projection_state"
+        )
+        published += summary.published_count
+        if summary.failed_count:
+            raise RuntimeError(
+                "projection work remains pending after broker publication failure"
+            )
+        if summary.attempted_count < page_size:
+            return published
 
 
 @dataclass(frozen=True, slots=True)

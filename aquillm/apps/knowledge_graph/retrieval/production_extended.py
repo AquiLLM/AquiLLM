@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from math import fsum
+from math import fsum, isfinite
 
-from apps.knowledge_graph.projection.identifiers import ProjectionIdentifierDomain
-from apps.knowledge_graph.projection.serialization import projection_checksum
 from apps.knowledge_graph.retrieval.branch_contracts import ExtendedBranchFailureReason
 from apps.knowledge_graph.retrieval.projected_ppr import ppr_projected_v1
 from apps.knowledge_graph.retrieval.scheduler_support import (
@@ -30,24 +28,9 @@ from .production_runtime_support import (
 def _projection_repository(runtime):
     if runtime.projection_repository_factory is not None:
         return runtime.projection_repository_factory()
-    from apps.knowledge_graph.projection.django_projection_source import (
-        DjangoProjectionRowSource,
-    )
-    from apps.knowledge_graph.projection.postgres_repository import (
-        PostgresProjectionRepository,
-    )
+    from .extended_seed_repository import ExtendedSeedRepository
 
-    source = DjangoProjectionRowSource(
-        "projection_source",
-        state_using="projection_source",
-        identifier_key=(
-            runtime.settings.projection_identifier_hmac_key.get_secret_value().encode()
-        ),
-        identifier_key_version=runtime.settings.projection_identifier_key_version,
-        schema_version=runtime.settings.projection_schema_version,
-        projection_version=runtime.settings.projection_format_version,
-    )
-    return PostgresProjectionRepository(using="projection_source", source=source)
+    return ExtendedSeedRepository(using="projection_source")
 
 
 def _source_failure(error):
@@ -80,59 +63,54 @@ def prepare_extended_branch(
         for row in scope.projections
         for document, _artifact in row.documents
     }
-    generation_by_projection = dict(scope.generation_keys_by_projection)
-    requested: dict[str, float] = {}
+    requested: dict[int, float] = {}
+    chunks_by_projection = defaultdict(list)
     for seed in graph_seeds[: settings.graph_extended_max_seeds]:
         candidate = by_pk.get(getattr(seed, "chunk_id", None))
         authority = authority_by_document.get(getattr(candidate, "doc_id", None))
         weight = getattr(seed, "restart_weight", None)
-        if authority is None or type(weight) is not float or weight <= 0.0:
+        if (
+            authority is None
+            or type(weight) is not float
+            or not isfinite(weight)
+            or weight <= 0.0
+        ):
             return ExtendedBranchFailureReason.EXTENDED_SEED_INVALID
-        try:
-            chunk_key = runtime.codec.encode(
-                ProjectionIdentifierDomain.CHUNK,
-                generation=authority.generation_id,
-                source=candidate.pk,
-            ).value
-        except (TypeError, ValueError) as error:
-            _source_failure(error)
-        if chunk_key in requested:
+        if candidate.pk in requested:
             return ExtendedBranchFailureReason.EXTENDED_SEED_INVALID
-        requested[chunk_key] = weight
+        requested[candidate.pk] = weight
+        chunks_by_projection[authority.projection_id].append(
+            (candidate.pk, candidate.doc_id)
+        )
     identities: dict[str, list[float]] = defaultdict(list)
     try:
         repository = _projection_repository(runtime)
     except Exception as error:
         _source_failure(error)
     for authority in scope.projections:
+        chunks = tuple(chunks_by_projection.get(authority.projection_id, ()))
+        if not chunks:
+            continue
         if runtime.clock() >= deadline:
             return ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
         try:
-            bundle = repository.load_projection_bundle(
-                projection_id=authority.projection_id,
-                batch_size=runtime.settings.projection_batch_size,
-                purpose="audit",
+            by_chunk = repository.load_seed_identities(
+                authority=authority,
+                chunks=chunks,
+                authorization=authorization,
+                codec=runtime.codec,
+                max_rows=min(4999, getattr(settings, "graph_extended_max_nodes", 4999)),
             )
+            if set(by_chunk) - {pk for pk, _ in chunks}:
+                raise ValueError("extended source returned unrelated chunks")
         except Exception as error:
             _source_failure(error)
         if runtime.clock() >= deadline:
             return ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
-        if (
-            projection_checksum(bundle) != authority.graph_checksum
-            or bundle.generation.generation_key
-            != generation_by_projection[authority.projection_id]
-        ):
-            _source_failure(ValueError("extended seed projection provenance is stale"))
-        membership = {
-            row.entity_key: row.automatic_membership_key or row.entity_key
-            for row in bundle.automatic_memberships
-        }
-        by_chunk: dict[str, set[str]] = defaultdict(set)
-        for mention in bundle.entity_mentions:
-            if mention.chunk_key in requested:
-                by_chunk[mention.chunk_key].add(membership[mention.entity_key])
-        for chunk_key, entity_keys in by_chunk.items():
-            share = requested[chunk_key] / len(entity_keys)
+        for chunk_id, entity_keys in by_chunk.items():
+            if not entity_keys:
+                continue
+            share = requested[chunk_id] / len(entity_keys)
             for identity_key in entity_keys:
                 identities[identity_key].append(share)
     if not identities:

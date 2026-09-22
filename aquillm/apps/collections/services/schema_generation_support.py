@@ -12,14 +12,13 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 import yaml
 
 from .schema_generation import (
-    InvalidSchemaCandidate,
-    SchemaGenerationConfig,
-    SchemaSample,
     _MAX_ENTITY_TYPES,
     _MAX_RELATION_TYPES,
     _MIN_ENTITY_TYPES,
     _MIN_RELATION_TYPES,
-    _SNAKE_CASE,
+    InvalidSchemaCandidate,
+    SchemaGenerationConfig,
+    SchemaSample,
     load_schema_generation_config,
 )
 
@@ -117,11 +116,15 @@ def _open_local_request(request: Request, timeout: int):
 
 
 def _snake_case(value: object, field: str) -> str:
+    from lib.knowledge_graph.type_names import validate_type_name
+
     if not isinstance(value, str) or not value.strip():
         raise InvalidSchemaCandidate(f"{field} must be a nonempty string")
     normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
-    if not _SNAKE_CASE.fullmatch(normalized):
-        raise InvalidSchemaCandidate(f"{field} must normalize to lowercase snake case")
+    try:
+        validate_type_name(normalized, field)
+    except ValueError as exc:
+        raise InvalidSchemaCandidate(str(exc)) from exc
     return normalized
 
 

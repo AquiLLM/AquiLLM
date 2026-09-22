@@ -10,6 +10,7 @@ export function validateFieldValue(
     return `${field} is required`;
   }
   if (typeof value === 'string') {
+    if (constraint.disallowed_values?.includes(value)) return `${field} is reserved`;
     if (constraint.max_length !== undefined && value.length > constraint.max_length) {
       return `${field} must be at most ${constraint.max_length} characters`;
     }

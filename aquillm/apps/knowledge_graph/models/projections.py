@@ -131,6 +131,7 @@ class CollectionGraphProjection(ProjectionAuthorityModel):
     updated_at = models.DateTimeField(auto_now=True)
     ready_at = models.DateTimeField(null=True, blank=True)
     superseded_at = models.DateTimeField(null=True, blank=True)
+    pruned_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     class Meta:
         app_label = "apps_knowledge_graph"

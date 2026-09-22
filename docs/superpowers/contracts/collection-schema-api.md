@@ -32,8 +32,8 @@ Oversized or malformed success payloads map to client error kind `invalid_respon
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Workspace | `api_collection_schema_workspace` | `api_collection_schema_workspace` | GET | `col_id` | — | — | `CollectionSchemaEnvelope` | 401/403/404/503 JSON | VIEW+ | yes |
 | Create draft | `api_collection_schema_draft` | `api_collection_schema_draft` | POST | `col_id` | `{}` | — | `CollectionSchemaEnvelope` | 401/403/409/503 | EDIT+ | yes |
-| Entity upsert/remove | `api_collection_schema_entity` | `api_collection_schema_entity` | PUT/DELETE | `col_id`, `entity_key` | PUT: `{ values }` | `If-Match: <revision>` | `CollectionSchemaEnvelope` | 401/403/409/422/503 | EDIT+ | yes |
-| Relation upsert/remove | `api_collection_schema_relation` | `api_collection_schema_relation` | PUT/DELETE | `col_id`, `relation_key` | PUT: `{ values }` | `If-Match: <revision>` | `CollectionSchemaEnvelope` | 401/403/409/422/503 | EDIT+ | yes |
+| Entity upsert/remove | `api_collection_schema_entity` | `api_collection_schema_entity` | PUT/DELETE | `col_id`, `entity_key` | PUT: `{ draft_id, values }`; DELETE: `{ draft_id }` | `If-Match: <revision>` | `CollectionSchemaEnvelope` | 400/401/403/409/422/503 | EDIT+ | yes |
+| Relation upsert/remove | `api_collection_schema_relation` | `api_collection_schema_relation` | PUT/DELETE | `col_id`, `relation_key` | PUT: `{ draft_id, values }`; DELETE: `{ draft_id }` | `If-Match: <revision>` | `CollectionSchemaEnvelope` | 400/401/403/409/422/503 | EDIT+ | yes |
 | Validate | `api_collection_schema_validate` | `api_collection_schema_validate` | POST | `col_id` | `{ draft_id, revision }` | — | `ValidationResult` | 401/403/409/422/503 | EDIT+ | yes |
 | Diff | `api_collection_schema_diff` | `api_collection_schema_diff` | GET | `col_id` | — | — | `SchemaDiffSummary` | 401/403/404/503 | VIEW+ | yes |
 | Publish | `api_collection_schema_publish` | `api_collection_schema_publish` | POST | `col_id` | `{ draft_id, revision, candidate_checksum, validation_result_id }` | `If-Match: <revision>` | `CollectionSchemaEnvelope` (sync) | 401/403/409/422/503 | MANAGE | yes |
@@ -55,6 +55,8 @@ Oversized or malformed success payloads map to client error kind `invalid_respon
 
 ## Conflict contract
 
+Definition PUT/DELETE require the form's draft UUID in the body and its revision in `If-Match`. A replacement draft UUID conflicts even if its revision equals the old draft revision. Missing or invalid UUIDs return `400 invalid_draft_id`. Editors retain both identities until explicit reload or reviewed rebase.
+
 `409` responses include `SchemaConflictInfo` with `attempted_revision`, `current_revision`, `draft_id`, and per-definition field conflicts.
 
 ## Restore challenge contract
@@ -63,9 +65,14 @@ When restore is blocked by an existing draft, `409` returns `{ challenge_token, 
 
 ## Generation contract
 
+- Live-lease duplicate deliveries retry at lease expiry. A generation POST after a running lease expires atomically fails that old run, clears its lease, and queues a fresh run with the current source and draft identity. Late output from the revoked run cannot write.
 - Starting generation is idempotent per collection while a queued/running run has the same source signature; repeated POSTs return that active run and a changed source returns 409.
 - Generation is rejected when an editable draft already exists, so generated output never overwrites manual work.
 - Status values are exactly `queued`, `running`, `succeeded`, and `failed`.
 - Status returns `{ run_id, status, error_code, statistics }`; successful runs also include the current `workspace` envelope.
 - The default caps are 32 chunks, 48,000 sampled characters, and 180 seconds.
 - Sampling, GLiNER2 evidence collection, and schema proposal run only against local Docker services. Collection text, prompts, raw model output, and credentials are never returned or logged.
+
+## Type naming contract
+
+Entity and relation names must match `^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`, be at most 64 characters, and must not equal the provider-reserved `entities`. The same validator applies to ontology activation, extensions, generated candidates and provider inputs. Draft validation returns structured `ontology_invalid` errors; publication rejects invalid drafts with `422 validation_failed`. Workspace name constraints advertise `pattern`, `max_length`, and `disallowed_values`. Published versions remain immutable.

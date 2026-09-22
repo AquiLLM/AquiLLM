@@ -6,6 +6,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from apps.knowledge_graph.models import GraphArtifact
+from apps.knowledge_graph.projection.outbox import dispatch_due_projection_work
 from apps.knowledge_graph.projection.reconciler import reconcile_graph_projections
 from apps.knowledge_graph.projection.runtime import (
     ProjectionDatabaseAliases,
@@ -74,4 +75,13 @@ class Command(BaseCommand):
                 "examined_count": 1,
                 "enqueued_count": 0 if options["dry_run"] else 1,
             }
+        if not options["dry_run"]:
+            try:
+                payload["published_count"] = dispatch_due_projection_work(
+                    page_size=options["page_size"]
+                )
+            except Exception:
+                raise CommandError(
+                    "projection work is pending; check services and retry recovery"
+                ) from None
         self.stdout.write(json.dumps(payload, sort_keys=True))

@@ -108,10 +108,25 @@ def reconcile_knowledge_graph_projections(
             collection_id=collection_id,
         ),
     )
+    if not dry_run:
+        # Reconciliation itself creates durable outbox rows. Flush those too;
+        # a full page schedules another bounded pass for the remaining backlog.
+        recovered = _run_redacted(self, lambda: _publish_due_outbox(size))
+        published_count = published.published_count + recovered.published_count
+        if recovered.attempted_count == size:
+            _run_redacted(
+                self,
+                lambda: self.apply_async(
+                    kwargs={"page_size": size, "collection_id": collection_id},
+                    countdown=1,
+                ),
+            )
+    else:
+        published_count = 0
     return {
         "examined_count": summary.examined_count,
         "enqueued_count": summary.enqueued_count,
-        "published_count": 0 if published is None else published.published_count,
+        "published_count": published_count,
     }
 
 

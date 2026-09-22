@@ -128,6 +128,27 @@ def schema_generate(request, col_id: int):
                 )
                 .first()
             )
+            if run is not None and run.status == "running" and (
+                run.lease_expires_at is None or run.lease_expires_at <= timezone.now()
+            ):
+                # Revoke the old owner under its row lock before queuing a new run.
+                # Its late output and redeliveries can no longer claim or write.
+                run.status = "failed"
+                run.error_code = "local_inference_failed"
+                run.completed_at = timezone.now()
+                run.lease_token = None
+                run.lease_expires_at = None
+                run.save(
+                    update_fields=(
+                        "status",
+                        "error_code",
+                        "completed_at",
+                        "lease_token",
+                        "lease_expires_at",
+                        "updated_at",
+                    )
+                )
+                run = None
             if run is not None and run.source_signature != source_signature:
                 raise schema_service.SchemaOperationError("source_changed", status=409)
             legacy_run_rebound = False
@@ -207,9 +228,10 @@ def _mutate(request, col_id: int, kind: str, key: str):
     if denied := require_edit(collection, request.user):
         return denied
     try:
+        body = load_body(request)
+        draft_id = body_uuid_string(body, "draft_id", "invalid_draft_id")
         values = None
         if request.method == "PUT":
-            body = load_body(request)
             values = body.get("values")
             if "values" not in body or type(values) is not dict:
                 raise schema_service.SchemaOperationError("invalid_definition")
@@ -220,6 +242,7 @@ def _mutate(request, col_id: int, kind: str, key: str):
             key,
             parse_revision(request),
             values,
+            draft_id=draft_id,
         )
     except (
         schema_service.SchemaRevisionConflict,

@@ -117,6 +117,7 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
           kind,
           key,
           baseRevision: envelope.draft?.revision ?? null,
+          baseDraftId: envelope.draft?.draft_id ?? null,
           values: definitionValues(kind, definition),
         });
       };
@@ -282,13 +283,13 @@ export function useCollectionSchemaEditor(options: UseCollectionSchemaEditorOpti
   const onSaveDefinition = useCallback(async () => {
     const draft = editorStateRef.current.envelope?.draft;
     const buffer = formBufferRef.current;
-    if (!draft || !buffer.definitionKey || !buffer.definitionKind || !buffer.currentValues) return;
+    if (!draft || !buffer.baseDraftId || buffer.baseRevision === null || !buffer.definitionKey || !buffer.definitionKind || !buffer.currentValues) return;
     const generation = nextGeneration();
     dispatchForm({ type: 'form/save/started' });
     const perform =
       buffer.definitionKind === 'entity'
-        ? () => api.upsertEntity(collectionId, buffer.definitionKey!, draft.revision, buffer.currentValues!)
-        : () => api.upsertRelation(collectionId, buffer.definitionKey!, draft.revision, buffer.currentValues!);
+        ? () => api.upsertEntity(collectionId, buffer.definitionKey!, buffer.baseDraftId!, buffer.baseRevision!, buffer.currentValues!)
+        : () => api.upsertRelation(collectionId, buffer.definitionKey!, buffer.baseDraftId!, buffer.baseRevision!, buffer.currentValues!);
     dispatch({ type: 'mutation/started', requestGeneration: generation });
     const result = await perform();
     if (generation !== requestGenerationRef.current) return;

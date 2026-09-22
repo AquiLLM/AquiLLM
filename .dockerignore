@@ -8,6 +8,9 @@ venv/
 .cursor/
 .env
 .env.*
+.env*
+.codex-ssh/
+.superpowers/sdd/
 .pytest_cache/
 __pycache__/
 *.pyc

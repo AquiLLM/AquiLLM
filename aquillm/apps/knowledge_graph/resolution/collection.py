@@ -2151,10 +2151,9 @@ def resolve_collection_entities(
         selected.append((score, left, right, similarity, neighborhood, tier, rank))
 
     for score, left_root, right_root, similarity, neighborhood, tier, rank in selected:
-        representative = min(
-            _pair(left, right)
-            for left in deterministic_groups[left_root]
-            for right in deterministic_groups[right_root]
+        representative = _pair(
+            deterministic_groups[left_root][0],
+            deterministic_groups[right_root][0],
         )
         outcome = classify_resolution_score(score, config.thresholds)
         reasons: tuple[str, ...]

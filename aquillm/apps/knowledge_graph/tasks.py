@@ -608,8 +608,57 @@ def prune_graph_artifacts_task():
     return prune_graph_artifacts(execute=True)
 
 
+@shared_task(
+    bind=True,
+    name="apps.knowledge_graph.tasks.recover_missing_graph_builds_task",
+    queue=GRAPH_EXTRACTION_QUEUE,
+    priority=9,
+    serializer="json",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    ignore_result=True,
+)
+def recover_missing_graph_builds_task(
+    self,
+    cursor: dict[str, object] | None = None,
+    page_size: int | None = None,
+):
+    """Recover one bounded page and publish a single continuation."""
+
+    if (
+        not _task_extraction_queue_is_valid()
+        or getattr(settings, "KG_MAINTENANCE_SCHEDULER_ENABLED", False) is not True
+        or not get_build_enabled()
+    ):
+        return None
+    from apps.knowledge_graph.graph.recovery import recover_graph_builds_page
+
+    size = (
+        getattr(settings, "KG_GRAPH_RECOVERY_PAGE_SIZE", 50)
+        if page_size is None
+        else page_size
+    )
+    summary = recover_graph_builds_page(cursor, page_size=size)
+    next_cursor = summary["next_cursor"]
+    if next_cursor is not None:
+        try:
+            self.apply_async(
+                kwargs={"cursor": next_cursor, "page_size": size},
+                countdown=1,
+                queue=GRAPH_EXTRACTION_QUEUE,
+                priority=9,
+            )
+        except Exception as exc:
+            logger.error(
+                "obs.kg.graph_recovery_continuation_failed",
+                error_type=type(exc).__name__,
+            )
+    return summary
+
+
 __all__ = [
     "build_document_graph_task",
     "prune_graph_artifacts_task",
+    "recover_missing_graph_builds_task",
     "refresh_collection_graph_task",
 ]

@@ -15,18 +15,29 @@ from apps.collections.models import (
     CollectionSchemaDraft,
     CollectionSchemaVersion,
 )
+from lib.knowledge_graph.type_names import (
+    PROVIDER_RESERVED_TYPE_NAMES,
+    TYPE_NAME_MAX_LENGTH,
+    TYPE_NAME_PATTERN,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 
+_NAME_CONSTRAINT = {
+    "required": True,
+    "max_length": TYPE_NAME_MAX_LENGTH,
+    "pattern": TYPE_NAME_PATTERN,
+    "disallowed_values": sorted(PROVIDER_RESERVED_TYPE_NAMES),
+}
 CONSTRAINTS = {
     "entity_fields": {
-        "name": {"required": True, "max_length": 64},
+        "name": _NAME_CONSTRAINT,
         "description": {"max_length": 512},
         "default_retrieval_weight": {"min": 0, "max": 1},
         "default_suppression_threshold": {"min": 0, "max": 1},
     },
     "relation_fields": {
-        "name": {"required": True, "max_length": 64},
+        "name": _NAME_CONSTRAINT,
         "direction": {"allowed_values": ["directed", "undirected"]},
     },
 }
@@ -281,6 +292,8 @@ def mutate_definition(
     key: str,
     revision: int | None,
     values: dict[str, Any] | None,
+    *,
+    draft_id: str,
 ) -> CollectionSchemaDraft:
     if kind not in {"entity", "relation"}:
         raise ValueError("unsupported schema definition kind")
@@ -298,6 +311,10 @@ def mutate_definition(
             key=key,
             attempted=attempted,
         )
+        if str(draft.pk) != str(draft_id):
+            raise SchemaRevisionConflict(
+                revision, draft, _conflict_fields(kind, key, draft, attempted)
+            )
         definitions = canonicalize_definitions(draft.definitions)
         group = definitions["entities" if kind == "entity" else "relations"]
         existing = next((row for row in group if row["key"] == key), None)

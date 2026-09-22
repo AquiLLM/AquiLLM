@@ -19,6 +19,13 @@ from typing import Any
 
 import yaml
 
+from lib.knowledge_graph.type_names import (
+    TypeNameValidationError,
+)
+from lib.knowledge_graph.type_names import (
+    validate_type_name as _validate_type_name,
+)
+
 _SEMVER = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
@@ -80,6 +87,14 @@ _UniqueKeySafeLoader.add_constructor(
 
 class OntologyValidationError(ValueError):
     """Raised when an ontology document violates the stable schema."""
+
+
+def validate_type_name(value: Any, label: str = "type name") -> str:
+    """The shared naming contract for storage, schema editing and providers."""
+    try:
+        return _validate_type_name(value, label)
+    except TypeNameValidationError as exc:
+        raise OntologyValidationError(str(exc)) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,7 +383,7 @@ def _load_ontology_document(document: Any, raw_yaml: str) -> OntologyDefinition:
             raise OntologyValidationError(
                 f"entity type is missing fields: {sorted(missing)}"
             )
-        name = _nonempty_string(record["name"], "entity type name")
+        name = validate_type_name(record["name"], "entity type name")
         aliases = _aliases(record["aliases"], f"aliases for {name}")
         if name in entity_types or name in known_aliases or name in aliases:
             raise OntologyValidationError(
@@ -413,7 +428,7 @@ def _load_ontology_document(document: Any, raw_yaml: str) -> OntologyDefinition:
             raise OntologyValidationError(
                 f"relation is missing fields: {sorted(missing)}"
             )
-        name = _nonempty_string(record["name"], "relation name")
+        name = validate_type_name(record["name"], "relation name")
         if name in relations:
             raise OntologyValidationError(f"duplicate relation name: {name}")
         direction = _nonempty_string(record["direction"], f"direction for {name}")
@@ -531,7 +546,7 @@ def load_ontology_extension(path: str | Path) -> OntologyExtensionDefinition:
     entities: dict[str, EntityTypeExtension] = {}
     for record in _records(root.get("entity_types", []), "entity_types"):
         _require_fields(record, _ENTITY_FIELDS, "entity type extension")
-        name = _nonempty_string(record.get("name"), "entity type extension name")
+        name = validate_type_name(record.get("name"), "entity type extension name")
         if name in entities:
             raise OntologyValidationError(f"duplicate entity extension: {name}")
         entities[name] = EntityTypeExtension(
@@ -573,7 +588,7 @@ def load_ontology_extension(path: str | Path) -> OntologyExtensionDefinition:
     relations: dict[str, RelationExtension] = {}
     for record in _records(root.get("relations", []), "relations"):
         _require_fields(record, _RELATION_FIELDS, "relation extension")
-        name = _nonempty_string(record.get("name"), "relation extension name")
+        name = validate_type_name(record.get("name"), "relation extension name")
         if name in relations:
             raise OntologyValidationError(f"duplicate relation extension: {name}")
         direction = (
@@ -771,6 +786,7 @@ def _lock_graph_ontology_activation(cursor: Any) -> None:
 
 def activate_ontology(definition: OntologyDefinition):
     """Persist and activate a definition atomically, without provider calls."""
+    validate_ontology_definition(definition)
     from django.db import IntegrityError, connection, transaction
     from django.utils import timezone
 
@@ -895,6 +911,7 @@ def activate_collection_ontology(
     """Activate a graph ontology within exactly one collection scope."""
     if type(collection_id) is not int or collection_id <= 0:
         raise ValueError("collection id must be a positive database integer")
+    validate_ontology_definition(definition)
     from django.db import IntegrityError, connection, transaction
     from django.utils import timezone
 

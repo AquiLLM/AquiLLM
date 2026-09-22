@@ -125,6 +125,8 @@ celerybeat.pid
 .env
 .env*
 .env.multimodal
+# Temporary deployment credentials must never be staged.
+/.codex-ssh/
 .venv
 env/
 venv/

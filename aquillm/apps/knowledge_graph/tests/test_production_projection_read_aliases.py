@@ -5,10 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from apps.documents.tests.hybrid_graph_test_support import Policy, authorization
-from apps.knowledge_graph.projection import (
-    django_projection_source,
-    postgres_repository,
-)
 from apps.knowledge_graph.projection.identifiers import (
     HmacSha256ProjectionIdentifierCodec,
     ProjectionIdentifierDomain,
@@ -147,8 +143,7 @@ def test_ready_scope_succeeds_when_state_select_is_denied(monkeypatch):
 class _ReferenceQuery(_Query):
     def values_list(self, *_fields):
         return tuple(
-            (row["projection_id"], row["projection_chunk_key"])
-            for row in self.rows
+            (row["projection_id"], row["projection_chunk_key"]) for row in self.rows
         )
 
 
@@ -221,6 +216,8 @@ def test_private_materialization_uses_source_for_authority_and_default_for_chunk
 
 
 def test_extended_seed_conversion_uses_only_projection_source(monkeypatch):
+    from apps.knowledge_graph.retrieval import extended_seed_repository
+
     bundle = _bundle()
     projection_id = _authority(7, _DOC_A, "1").projection_id
     authority = SimpleNamespace(
@@ -237,22 +234,16 @@ def test_extended_seed_conversion_uses_only_projection_source(monkeypatch):
     )
     aliases = []
 
-    class Source:
-        def __init__(self, using, *, state_using, **_kwargs):
-            aliases.extend((using, state_using))
-            if "projection_state" in (using, state_using):
+    class Repository:
+        def __init__(self, *, using):
+            aliases.append(using)
+            if using == "projection_state":
                 raise PermissionError("function-only state denied SELECT")
 
-    class Repository:
-        def __init__(self, *, using, source):
-            aliases.append(using)
-            self.source = source
+        def load_seed_identities(self, **_kwargs):
+            return {10: (bundle.entity_mentions[0].entity_key,)}
 
-        def load_projection_bundle(self, **_kwargs):
-            return bundle
-
-    monkeypatch.setattr(django_projection_source, "DjangoProjectionRowSource", Source)
-    monkeypatch.setattr(postgres_repository, "PostgresProjectionRepository", Repository)
+    monkeypatch.setattr(extended_seed_repository, "ExtendedSeedRepository", Repository)
     auth = authorization(Policy(), collection_ids=(7,), document_ids=(_DOC_A,))
     runtime = SimpleNamespace(
         authorization=auth,
@@ -296,4 +287,4 @@ def test_extended_seed_conversion_uses_only_projection_source(monkeypatch):
     assert tuple(row.identity_key for row in seeds) == (
         bundle.entity_mentions[0].entity_key,
     )
-    assert aliases == ["projection_source"] * 3
+    assert aliases == ["projection_source"]

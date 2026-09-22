@@ -20,23 +20,27 @@ export interface CollectionSchemaApi {
   upsertEntity(
     collectionId: string,
     entityKey: string,
+    draftId: string,
     revision: number,
     values: Record<string, unknown>,
   ): Promise<CollectionSchemaHttpResult<CollectionSchemaEnvelope>>;
   deleteEntity(
     collectionId: string,
     entityKey: string,
+    draftId: string,
     revision: number,
   ): Promise<CollectionSchemaHttpResult<CollectionSchemaEnvelope>>;
   upsertRelation(
     collectionId: string,
     relationKey: string,
+    draftId: string,
     revision: number,
     values: Record<string, unknown>,
   ): Promise<CollectionSchemaHttpResult<CollectionSchemaEnvelope>>;
   deleteRelation(
     collectionId: string,
     relationKey: string,
+    draftId: string,
     revision: number,
   ): Promise<CollectionSchemaHttpResult<CollectionSchemaEnvelope>>;
   validate(
@@ -163,38 +167,39 @@ export function createCollectionSchemaApi(
         await envelopeRequest(httpClient, routeUrl(routes.createDraft, col(collectionId)), { method: 'POST', body: {} }),
       );
     },
-    async upsertEntity(collectionId, entityKey, revision, values) {
+    async upsertEntity(collectionId, entityKey, draftId, revision, values) {
       return asEnvelope(
         await envelopeRequest(httpClient, routeUrl(routes.entity, { ...col(collectionId), entity_key: entityKey }), {
           method: 'PUT',
           revision,
-          body: { values },
+          body: { draft_id: draftId, values },
         }),
       );
     },
-    async deleteEntity(collectionId, entityKey, revision) {
+    async deleteEntity(collectionId, entityKey, draftId, revision) {
       return asEnvelope(
         await envelopeRequest(httpClient, routeUrl(routes.entity, { ...col(collectionId), entity_key: entityKey }), {
           method: 'DELETE',
           revision,
+          body: { draft_id: draftId },
         }),
       );
     },
-    async upsertRelation(collectionId, relationKey, revision, values) {
+    async upsertRelation(collectionId, relationKey, draftId, revision, values) {
       return asEnvelope(
         await envelopeRequest(
           httpClient,
           routeUrl(routes.relation, { ...col(collectionId), relation_key: relationKey }),
-          { method: 'PUT', revision, body: { values } },
+          { method: 'PUT', revision, body: { draft_id: draftId, values } },
         ),
       );
     },
-    async deleteRelation(collectionId, relationKey, revision) {
+    async deleteRelation(collectionId, relationKey, draftId, revision) {
       return asEnvelope(
         await envelopeRequest(
           httpClient,
           routeUrl(routes.relation, { ...col(collectionId), relation_key: relationKey }),
-          { method: 'DELETE', revision },
+          { method: 'DELETE', revision, body: { draft_id: draftId } },
         ),
       );
     },

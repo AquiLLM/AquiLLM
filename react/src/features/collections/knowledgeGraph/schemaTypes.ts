@@ -163,6 +163,7 @@ export interface SchemaFieldConstraint {
   max_length?: number;
   pattern?: string;
   allowed_values?: string[];
+  disallowed_values?: string[];
 }
 
 export interface SchemaValidationConstraints {

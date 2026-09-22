@@ -164,6 +164,13 @@ def test_project_command_routes_source_and_uses_function_only_state(monkeypatch)
     )
 
     observed = []
+    published = []
+    monkeypatch.setattr(
+        command_module,
+        "dispatch_due_projection_work",
+        lambda **kwargs: published.append(kwargs) or 1,
+        raising=False,
+    )
 
     class Query:
         def using(self, alias):
@@ -226,3 +233,36 @@ def test_project_command_routes_source_and_uses_function_only_state(monkeypatch)
             },
         ),
     ]
+    assert published == [{"page_size": 10}]
+
+
+def test_reconcile_command_dispatches_new_recovery_work(monkeypatch):
+    from apps.knowledge_graph.management.commands import (
+        reconcile_knowledge_graph_projection as command_module,
+    )
+
+    order = []
+    monkeypatch.setattr(
+        command_module,
+        "reconcile_graph_projections",
+        lambda **kwargs: (
+            order.append("reconcile")
+            or SimpleNamespace(
+                examined_count=1,
+                enqueued_count=1,
+                drift_count=0,
+                orphan_count=0,
+                replayed_count=1,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        command_module,
+        "dispatch_due_projection_work",
+        lambda **kwargs: order.append("publish") or 1,
+        raising=False,
+    )
+    command_module.Command(stdout=StringIO()).handle(
+        collection=7, all=False, page_size=10, dry_run=False
+    )
+    assert order == ["reconcile", "publish"]

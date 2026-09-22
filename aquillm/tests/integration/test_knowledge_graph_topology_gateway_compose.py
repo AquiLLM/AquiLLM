@@ -84,7 +84,11 @@ def test_web_owns_gateway_not_bolt_authority(path: Path) -> None:
     assert environment["KG_TOPOLOGY_GATEWAY_URL"] == f"http://{GATEWAY}:8092"
     assert environment["KG_TOPOLOGY_GATEWAY_BEARER_TOKEN"]
     assert environment["KG_PROJECTION_IDENTIFIER_HMAC_KEY"]
-    for key in BOLT_KEYS | PROJECTION_KEYS:
+    assert environment["KG_PROJECTION_POSTGRES_SOURCE_DSN"] == (
+        "${KG_PROJECTION_POSTGRES_SOURCE_DSN:-}"
+    )
+    assert str(environment["KG_MEMGRAPH_PROJECTION_ENABLED"]) == "0"
+    for key in BOLT_KEYS | {"KG_PROJECTION_POSTGRES_STATE_DSN"}:
         assert environment.get(key) in (None, "")
 
 
@@ -93,7 +97,7 @@ def test_gateway_has_only_query_client_authority(path: Path) -> None:
     gateway = _compose(path)["services"][GATEWAY]
     environment = _environment(gateway)
     assert not gateway.get("env_file")
-    assert environment["KG_MEMGRAPH_URI"] == "bolt://memgraph_knowledge_graph:7687"
+    assert environment["KG_MEMGRAPH_URI"] == "bolt://memgraph-knowledge-graph:7687"
     assert environment["KG_MEMGRAPH_QUERY_USERNAME"]
     assert environment["KG_MEMGRAPH_QUERY_PASSWORD"]
     assert environment["KG_TOPOLOGY_GATEWAY_BEARER_TOKEN"]

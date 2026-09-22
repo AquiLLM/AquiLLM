@@ -13,6 +13,7 @@ from threading import RLock
 from typing import Any
 
 from ..config import ExtractionSettings
+from ..type_names import TypeNameValidationError, validate_type_name
 from ..types import (
     EntityCandidate,
     ExtractionBatchResult,
@@ -30,6 +31,16 @@ _MODEL_LOAD_LOCK = RLock()
 
 class ExtractionBackendError(RuntimeError):
     """Raised when the optional provider cannot load or perform inference."""
+
+
+def _validate_ontology_type_names(ontology: OntologyDefinition) -> None:
+    try:
+        for name in ontology.entity_types:
+            validate_type_name(name, "ontology entity type name")
+        for name in ontology.relations:
+            validate_type_name(name, "ontology relation type name")
+    except TypeNameValidationError as exc:
+        raise ExtractionBackendError(str(exc)) from exc
 
 
 def _model_key(settings: ExtractionSettings) -> _ModelKey:
@@ -110,9 +121,7 @@ def _valid_confidence(value: object) -> bool:
     return False
 
 
-def _valid_span(
-    text: str, surface: object, start: object, end: object
-) -> bool:
+def _valid_span(text: str, surface: object, start: object, end: object) -> bool:
     return (
         isinstance(surface, str)
         and bool(surface.strip())
@@ -150,9 +159,7 @@ def _normalize_entities(
         )
         return entities, diagnostics
     raw_groups = raw_result["entities"]
-    if not isinstance(raw_groups, Sequence) or isinstance(
-        raw_groups, (str, bytes)
-    ):
+    if not isinstance(raw_groups, Sequence) or isinstance(raw_groups, (str, bytes)):
         diagnostics.append(
             _diagnostic(
                 "malformed_entity_output",
@@ -177,9 +184,7 @@ def _normalize_entities(
     grouped = raw_groups[0]
 
     for entity_type, candidates in grouped.items():
-        if not isinstance(candidates, Sequence) or isinstance(
-            candidates, (str, bytes)
-        ):
+        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
             diagnostics.append(
                 _diagnostic(
                     "malformed_entity_output",
@@ -288,9 +293,7 @@ def _relation_error(
     }
     for side in ("head", "tail"):
         raw_endpoint = raw_candidate.get(side)
-        endpoint_mapping = (
-            raw_endpoint if isinstance(raw_endpoint, Mapping) else {}
-        )
+        endpoint_mapping = raw_endpoint if isinstance(raw_endpoint, Mapping) else {}
         for field in ("text", "start", "end", "confidence"):
             details[f"{side}_{field}"] = _safe_diagnostic_value(
                 endpoint_mapping.get(field)
@@ -309,13 +312,14 @@ def _resolve_endpoint(
     raw_endpoint: object,
     *,
     endpoint: str,
+    allowed_endpoint: str,
     relation_type: str,
     relation_definition: object,
     raw_candidate: Mapping[object, object],
     entities: Sequence[EntityCandidate],
     text: str,
     input_index: int,
-) -> tuple[tuple[str, int, int, float] | None, ExtractionDiagnostic | None]:
+) -> tuple[tuple[str, int, int, float, str] | None, ExtractionDiagnostic | None]:
     if not isinstance(raw_endpoint, Mapping):
         return None, _relation_error(
             "malformed_relation_endpoint",
@@ -343,7 +347,7 @@ def _resolve_endpoint(
             endpoint=endpoint,
         )
 
-    allowed = _allowed_types(relation_definition, endpoint)
+    allowed = _allowed_types(relation_definition, allowed_endpoint)
     surface_matches = [entity for entity in entities if entity.text == surface]
     has_start = "start" in raw_endpoint
     has_end = "end" in raw_endpoint
@@ -367,7 +371,13 @@ def _resolve_endpoint(
             entity for entity in spanned_matches if entity.entity_type in allowed
         ]
         if len(compatible) == 1:
-            return (surface, start, end, float(confidence)), None
+            return (
+                surface,
+                start,
+                end,
+                float(confidence),
+                compatible[0].entity_type,
+            ), None
         if len(compatible) > 1:
             return None, _relation_error(
                 "ambiguous_relation_endpoint",
@@ -389,9 +399,7 @@ def _resolve_endpoint(
             endpoint=endpoint,
         )
 
-    compatible = [
-        entity for entity in surface_matches if entity.entity_type in allowed
-    ]
+    compatible = [entity for entity in surface_matches if entity.entity_type in allowed]
     if len(compatible) == 1:
         mention = compatible[0]
         return (
@@ -399,6 +407,7 @@ def _resolve_endpoint(
             mention.start,
             mention.end,
             float(confidence),
+            mention.entity_type,
         ), None
     if len(compatible) > 1:
         return None, _relation_error(
@@ -457,9 +466,7 @@ def _normalize_relations(
     for relation_type, candidates in raw_result.items():
         if relation_type == "entities":
             continue
-        if not isinstance(candidates, Sequence) or isinstance(
-            candidates, (str, bytes)
-        ):
+        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
             diagnostics.append(
                 _diagnostic(
                     "malformed_relation_output",
@@ -508,33 +515,77 @@ def _normalize_relations(
                 )
                 continue
             definition = ontology_relations[relation_type]
-            head, head_error = _resolve_endpoint(
-                raw_candidate.get("head"),
-                endpoint="head",
-                relation_type=relation_type,
-                relation_definition=definition,
-                raw_candidate=raw_candidate,
-                entities=entities,
-                text=text,
-                input_index=input_index,
-            )
-            if head_error is not None:
-                diagnostics.append(head_error)
+            endpoint_orientations = [("head", "tail")]
+            if _definition_value(definition, "direction") == "undirected":
+                endpoint_orientations.append(("tail", "head"))
+            resolved_pairs = {}
+            ambiguous_error = None
+            best_error: ExtractionDiagnostic | None = None
+            best_resolved_endpoint_count = -1
+            for head_role, tail_role in endpoint_orientations:
+                head, head_error = _resolve_endpoint(
+                    raw_candidate.get("head"),
+                    endpoint="head",
+                    allowed_endpoint=head_role,
+                    relation_type=relation_type,
+                    relation_definition=definition,
+                    raw_candidate=raw_candidate,
+                    entities=entities,
+                    text=text,
+                    input_index=input_index,
+                )
+                tail, tail_error = _resolve_endpoint(
+                    raw_candidate.get("tail"),
+                    endpoint="tail",
+                    allowed_endpoint=tail_role,
+                    relation_type=relation_type,
+                    relation_definition=definition,
+                    raw_candidate=raw_candidate,
+                    entities=entities,
+                    text=text,
+                    input_index=input_index,
+                )
+                if head_error is not None or tail_error is not None:
+                    errors = (head_error, tail_error)
+                    if all(
+                        error is None or error.code == "ambiguous_relation_endpoint"
+                        for error in errors
+                    ):
+                        ambiguous_error = next(
+                            error for error in errors if error is not None
+                        )
+                    resolved_count = int(head_error is None)
+                    if best_resolved_endpoint_count < resolved_count:
+                        best_error = head_error or tail_error
+                        best_resolved_endpoint_count = resolved_count
+                    continue
+                assert head is not None and tail is not None
+                # Retain type identity: equal surface spans can denote distinct
+                # typed entities, while overlapping role rules can yield the
+                # same exact pair in both orientations.
+                pair_key = (head[:3] + head[4:], tail[:3] + tail[4:])
+                if len(endpoint_orientations) == 2:
+                    pair_key = tuple(sorted(pair_key))
+                resolved_pairs.setdefault(pair_key, (head, tail))
+            if ambiguous_error is not None or len(resolved_pairs) > 1:
+                diagnostics.append(
+                    ambiguous_error
+                    or _relation_error(
+                        "ambiguous_relation_endpoint",
+                        input_index=input_index,
+                        relation_type=relation_type,
+                        raw_candidate=raw_candidate,
+                        endpoint="head"
+                        if len({pair[0] for pair in resolved_pairs}) > 1
+                        else "tail",
+                    )
+                )
                 continue
-            tail, tail_error = _resolve_endpoint(
-                raw_candidate.get("tail"),
-                endpoint="tail",
-                relation_type=relation_type,
-                relation_definition=definition,
-                raw_candidate=raw_candidate,
-                entities=entities,
-                text=text,
-                input_index=input_index,
-            )
-            if tail_error is not None:
-                diagnostics.append(tail_error)
+            if not resolved_pairs:
+                assert best_error is not None
+                diagnostics.append(best_error)
                 continue
-            assert head is not None and tail is not None
+            head, tail = next(iter(resolved_pairs.values()))
             relations.append(
                 RelationCandidate(
                     relation_type=relation_type,
@@ -579,6 +630,7 @@ class GLiNER2LocalBackend:
         if not texts:
             return ()
 
+        _validate_ontology_type_names(ontology)
         model = _load_model(self._settings)
         entity_definitions = {
             name: (
@@ -616,9 +668,7 @@ class GLiNER2LocalBackend:
                 .entities(entity_definitions)
                 .relations(relation_definitions)
             )
-            raw_results = model.batch_extract(
-                list(texts), schema, **inference_options
-            )
+            raw_results = model.batch_extract(list(texts), schema, **inference_options)
         except Exception as exc:
             raise ExtractionBackendError("GLiNER2 inference failed") from exc
 

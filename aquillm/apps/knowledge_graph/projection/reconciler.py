@@ -4,13 +4,16 @@ from __future__ import annotations
 from uuid import UUID
 
 from django.db import transaction
-from django.db.models import F, Window
+from django.db.models import F, Subquery, Window
 from django.db.models.functions import RowNumber
 from django.utils import timezone
 
 from apps.knowledge_graph.models import CollectionGraphProjection, GraphArtifact
 
-from .generation_audit import audit_projection_generation as _generation_audit, orphan_generation_keys as _orphan_generation_keys  # noqa: E501
+from .generation_audit import (
+    audit_projection_generation as _generation_audit,
+    orphan_generation_keys as _orphan_generation_keys,
+)  # noqa: E501
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
 from .inspection import inspect_projection_authority as inspect_projection_authority
 from .reconciliation_types import PruneSummaryV1, ReconcileSummaryV1
@@ -66,9 +69,12 @@ def enqueue_collection_projection_locked(*, collection_id, artifact_id, using, c
     del using, codec
     settings = _projection_settings()
     return FunctionProjectionStateRepository().replay(
-        projection_id=None, collection_id=collection_id, artifact_id=artifact_id,
+        projection_id=None,
+        collection_id=collection_id,
+        artifact_id=artifact_id,
         versions=(
-            settings.projection_schema_version, settings.projection_format_version,
+            settings.projection_schema_version,
+            settings.projection_format_version,
             settings.projection_identifier_key_version,
         ),
         now=timezone.now(),
@@ -204,19 +210,30 @@ def _prune_candidates(
         state__in=("failed", "superseded")
     )
     if projection_id is not None:
-        return tuple(query.filter(pk=projection_id).order_by("id")[:page_size])
+        return tuple(
+            query.filter(pk=projection_id, pruned_at__isnull=True).order_by("id")[
+                :page_size
+            ]
+        )
     if collection_id is not None:
         query = query.filter(collection_pk_snapshot=collection_id)
-    return tuple(
+    # Rank all historical generations before excluding completed deletions;
+    # otherwise each pass would retain another group of already old rows.
+    eligible = (
         query.annotate(
             generation_rank=Window(
                 expression=RowNumber(),
                 partition_by=[F("collection_pk_snapshot")],
-                order_by=F("created_at").desc(),
+                order_by=[F("created_at").desc(), F("id").desc()],
             )
         )
         .filter(generation_rank__gt=retain)
-        .order_by("collection_pk_snapshot", "-created_at", "id")[:page_size]
+        .values("pk")
+    )
+    return tuple(
+        query.filter(pk__in=Subquery(eligible), pruned_at__isnull=True).order_by(
+            "collection_pk_snapshot", "-created_at", "id"
+        )[:page_size]
     )
 
 
@@ -238,6 +255,22 @@ def _delete_projection_generation(*, row, graph, settings) -> bool | None:
     return graph.delete_generation(
         generation_key=generation_key,
         timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
+    )
+
+
+def _record_pruned(row) -> None:
+    FunctionProjectionStateRepository().record_pruned(
+        projection_id=row.id,
+        generation_key=row.generation_key,
+        now=timezone.now(),
+    )
+
+
+def _prepare_prune(row) -> bool:
+    return FunctionProjectionStateRepository().begin_prune(
+        projection_id=row.id,
+        generation_key=row.generation_key,
+        now=timezone.now(),
     )
 
 
@@ -277,6 +310,8 @@ def prune_graph_projection_generations(
     deleted = 0
     if not dry_run:
         for row in candidates:
+            if not _prepare_prune(row):
+                continue
             deleted += int(
                 _delete_projection_generation(
                     row=row,
@@ -285,6 +320,9 @@ def prune_graph_projection_generations(
                 )
                 is not False
             )
+            # Missing generations are complete too. A failed graph deletion
+            # raises before this acknowledgement, leaving the row retryable.
+            _record_pruned(row)
         for generation_key in orphaned:
             deleted += int(
                 graph.delete_generation(

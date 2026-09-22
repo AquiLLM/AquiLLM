@@ -141,7 +141,10 @@ def resolve(overlay_enabled, authorization, provided):
         and dependencies is None
         and is_exact_authorization_context(authorization)
     ):
-        dependencies = build_hybrid_graph_dependencies(authorization=authorization)
+        try:
+            dependencies = build_hybrid_graph_dependencies(authorization=authorization)
+        except Exception:
+            dependencies = None
     requested = overlay_enabled and (configured or dependencies is not None)
     return dependencies, requested
 

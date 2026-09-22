@@ -1,17 +1,6 @@
 """Fixture payloads for collection schema API stubs."""
 
-CONSTRAINTS = {
-    "entity_fields": {
-        "name": {"required": True, "max_length": 64},
-        "description": {"max_length": 512},
-        "default_retrieval_weight": {"min": 0, "max": 1},
-        "default_suppression_threshold": {"min": 0, "max": 1},
-    },
-    "relation_fields": {
-        "name": {"required": True, "max_length": 64},
-        "direction": {"allowed_values": ["directed", "undirected"]},
-    },
-}
+from apps.collections.services.schema import CONSTRAINTS as CONSTRAINTS
 
 PUBLISHED_ENTITY = {
     "key": "person",

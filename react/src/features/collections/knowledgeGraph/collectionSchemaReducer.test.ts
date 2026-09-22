@@ -41,7 +41,7 @@ function withValidation(state: State, generation: number, result = validationRes
 }
 
 const publishOperation = {
-  draft_id: 'draft-manage-1',
+  draft_id: '10000000-0000-4000-8000-000000000001',
   revision: 5,
   candidate_checksum: 'candidate-checksum-v5',
   validation_result_id: 'validation-result-1',

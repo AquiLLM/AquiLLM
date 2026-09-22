@@ -23,9 +23,11 @@ def _opaque_generation(value: str) -> OpaqueProjectionKey:
 
 
 def _projection_page(*, after_id, page_size: int, collection_id: int | None = None):
-    query = CollectionGraphProjection.objects.using(
-        ProjectionDatabaseAliases().source
-    ).order_by("id")
+    query = (
+        CollectionGraphProjection.objects.using(ProjectionDatabaseAliases().source)
+        .filter(pruned_at__isnull=True)
+        .order_by("id")
+    )
     if collection_id is not None:
         query = query.filter(collection_pk_snapshot=collection_id)
     if after_id is not None:
@@ -88,6 +90,16 @@ def _manifest_matches(row, bundle, manifest, checksum: str) -> bool:
 def audit_projection_generation(*, row, postgres, graph, settings) -> GenerationAuditV1:
     if row is None:
         return GenerationAuditV1("missing_authority")
+    if row.state in {"pending", "building", "ready"} and (
+        row.schema_version,
+        row.projection_version,
+        row.identifier_key_version,
+    ) != (
+        settings.projection_schema_version,
+        settings.projection_format_version,
+        settings.projection_identifier_key_version,
+    ):
+        return GenerationAuditV1("version_changed")
     if row.state == "pending":
         return GenerationAuditV1(None)
     if row.state == "failed":
@@ -148,32 +160,20 @@ def _authoritative_generation_keys(
         if not page:
             break
         for row in page:
-            if row.state in {"failed", "superseded"}:
-                values.add(
-                    projection_identifier_codec(
-                        settings,
-                        key_version=row.identifier_key_version,
-                    )
-                    .encode(
-                        ProjectionIdentifierDomain.COLLECTION,
-                        generation=row.generation_key,
-                        source=row.generation_key,
-                    )
-                    .value
+            # Generation identity is immutable authority. Reconstructing a full
+            # bundle here breaks old-version recovery and races source changes.
+            values.add(
+                projection_identifier_codec(
+                    settings,
+                    key_version=row.identifier_key_version,
                 )
-                continue
-            purpose = {
-                "building": "build",
-                "ready": "audit",
-            }.get(row.state)
-            if purpose is None:
-                continue
-            bundle = postgres.load_projection_bundle(
-                projection_id=row.id,
-                batch_size=settings.projection_batch_size,
-                purpose=purpose,
+                .encode(
+                    ProjectionIdentifierDomain.COLLECTION,
+                    generation=row.generation_key,
+                    source=row.generation_key,
+                )
+                .value
             )
-            values.add(bundle.generation.generation_key)
         after_id = page[-1].id
         if len(page) < settings.projection_batch_size:
             break

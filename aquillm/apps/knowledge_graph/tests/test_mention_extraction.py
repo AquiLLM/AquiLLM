@@ -352,6 +352,162 @@ def test_collect_deduplicates_overlapping_mentions_and_relations_by_global_ident
     ]
 
 
+def _authorship_result(*, reverse: bool, duplicate_paper: bool = False):
+    author = EntityCandidate("author", "Alice", 0, 5, 0.93)
+    paper = EntityCandidate("paper", "Paper", 6, 11, 0.91)
+    head, tail = (author, paper) if reverse else (paper, author)
+    return ExtractionBatchResult(
+        entities=(author, paper, *((paper,) if duplicate_paper else ())),
+        relations=(
+            RelationCandidate(
+                "authored_by",
+                head.text,
+                tail.text,
+                head.start,
+                head.end,
+                tail.start,
+                tail.end,
+                0.87,
+            ),
+        ),
+        diagnostics=(),
+    )
+
+
+def _authorship_ontology(*, undirected: bool):
+    raw = ONTOLOGY_PATH.read_text(encoding="utf-8")
+    if undirected:
+        raw = raw.replace(
+            "description: Connects a paper to one of its authors.\n"
+            "    direction: directed",
+            "description: Connects a paper to one of its authors.\n"
+            "    direction: undirected",
+        )
+    return load_ontology_yaml(raw)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_pipeline_accepts_either_undirected_asymmetric_endpoint_orientation(reverse):
+    evidence = collect_document_evidence(
+        (_window(10, "Alice Paper", 0),),
+        full_text="Alice Paper",
+        backend=_Backend((_authorship_result(reverse=reverse),)),
+        ontology=_authorship_ontology(undirected=True),
+        max_batch_count=1,
+        max_batch_characters=100,
+    )
+
+    by_type = {entity.entity_type: entity.identity_key for entity in evidence.entities}
+    assert len(evidence.relations) == 1
+    relation = evidence.relations[0]
+    expected = (
+        (by_type["author"], by_type["paper"])
+        if reverse
+        else (by_type["paper"], by_type["author"])
+    )
+    assert (relation.head_identity, relation.tail_identity) == expected
+    assert evidence.diagnostic_counts == {}
+
+
+def test_pipeline_keeps_directed_asymmetric_endpoint_orientation():
+    evidence = collect_document_evidence(
+        (_window(10, "Alice Paper", 0),),
+        full_text="Alice Paper",
+        backend=_Backend((_authorship_result(reverse=True),)),
+        ontology=_authorship_ontology(undirected=False),
+        max_batch_count=1,
+        max_batch_characters=100,
+    )
+
+    assert evidence.relations == ()
+    assert evidence.diagnostic_counts == {"unresolved_relation_endpoint": 1}
+
+
+def test_pipeline_undirected_reverse_orientation_keeps_endpoint_ambiguity_check():
+    evidence = collect_document_evidence(
+        (_window(10, "Alice Paper", 0),),
+        full_text="Alice Paper",
+        backend=_Backend((_authorship_result(reverse=True, duplicate_paper=True),)),
+        ontology=_authorship_ontology(undirected=True),
+        max_batch_count=1,
+        max_batch_characters=100,
+    )
+
+    assert evidence.relations == ()
+    assert evidence.diagnostic_counts == {"unresolved_relation_endpoint": 1}
+
+
+@pytest.mark.parametrize("duplicate_paper", [False, True])
+def test_pipeline_rejects_multiple_typed_pairs_across_undirected_orientations(
+    duplicate_paper,
+):
+    result = _authorship_result(reverse=True)
+    entities = (
+        *result.entities,
+        EntityCandidate("paper", "Alice", 0, 5, 0.9),
+        EntityCandidate("author", "Paper", 6, 11, 0.9),
+    )
+    if duplicate_paper:
+        entities += (EntityCandidate("paper", "Alice", 0, 5, 0.9),)
+    evidence = collect_document_evidence(
+        (_window(10, "Alice Paper", 0),),
+        full_text="Alice Paper",
+        backend=_Backend((ExtractionBatchResult(entities, result.relations, ()),)),
+        ontology=_authorship_ontology(undirected=True),
+        max_batch_count=1,
+        max_batch_characters=100,
+    )
+    assert evidence.relations == ()
+    assert evidence.diagnostic_counts == {"unresolved_relation_endpoint": 1}
+
+
+def test_pipeline_overlapping_undirected_rules_count_identical_pair_once():
+    from dataclasses import replace
+    from types import MappingProxyType
+
+    ontology = _authorship_ontology(undirected=True)
+    relation = replace(
+        ontology.relations["authored_by"],
+        allowed_head_types=("paper", "author"),
+        allowed_tail_types=("paper", "author"),
+    )
+    ontology = replace(
+        ontology,
+        relations=MappingProxyType({**ontology.relations, "authored_by": relation}),
+    )
+    evidence = collect_document_evidence(
+        (_window(10, "Alice Paper", 0),),
+        full_text="Alice Paper",
+        backend=_Backend((_authorship_result(reverse=True),)),
+        ontology=ontology,
+        max_batch_count=1,
+        max_batch_characters=100,
+    )
+    assert len(evidence.relations) == 1
+    assert evidence.diagnostic_counts == {}
+
+
+def test_pipeline_undirected_swapped_typed_pair_at_same_span_counts_once():
+    result = ExtractionBatchResult(
+        (
+            EntityCandidate("paper", "Alice", 0, 5, 0.9),
+            EntityCandidate("author", "Alice", 0, 5, 0.9),
+        ),
+        (RelationCandidate("authored_by", "Alice", "Alice", 0, 5, 0, 5, 0.9),),
+        (),
+    )
+    evidence = collect_document_evidence(
+        (_window(10, "Alice", 0),),
+        full_text="Alice",
+        backend=_Backend((result,)),
+        ontology=_authorship_ontology(undirected=True),
+        max_batch_count=1,
+        max_batch_characters=100,
+    )
+    assert len(evidence.relations) == 1
+    assert evidence.diagnostic_counts == {}
+
+
 def test_raw_overlap_can_exceed_unique_entity_cap_after_bounded_deduplication(
     monkeypatch,
 ):

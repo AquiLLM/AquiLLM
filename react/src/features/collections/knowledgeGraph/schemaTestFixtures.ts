@@ -10,13 +10,13 @@ import type {
 
 const constraints: SchemaValidationConstraints = {
   entity_fields: {
-    name: { required: true, max_length: 64 },
+    name: { required: true, max_length: 64, pattern: '^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$', disallowed_values: ['entities'] },
     description: { max_length: 512 },
     default_retrieval_weight: { min: 0, max: 1 },
     default_suppression_threshold: { min: 0, max: 1 },
   },
   relation_fields: {
-    name: { required: true, max_length: 64 },
+    name: { required: true, max_length: 64, pattern: '^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$', disallowed_values: ['entities'] },
     direction: { allowed_values: ['directed', 'undirected'] },
   },
 };
@@ -108,7 +108,7 @@ export const editDraftEnvelope: CollectionSchemaEnvelope = {
     relations: [publishedRelation],
   },
   draft: {
-    draft_id: 'draft-edit-1',
+    draft_id: '10000000-0000-4000-8000-000000000002',
     revision: 2,
     base_published_checksum: 'pub-edit-checksum',
     last_editor: 'editor@example.test',
@@ -135,7 +135,7 @@ export const emptyDraftEnvelope: CollectionSchemaEnvelope = {
   ...emptyEditableEnvelope,
   collection_id: 'col-empty-draft',
   draft: {
-    draft_id: 'draft-empty-1',
+    draft_id: '10000000-0000-4000-8000-000000000003',
     revision: 1,
     base_published_checksum: '',
     last_editor: 'editor@example.test',
@@ -160,14 +160,14 @@ export const manageDraftEnvelope: CollectionSchemaEnvelope = {
   },
   draft: {
     ...editDraftEnvelope.draft!,
-    draft_id: 'draft-manage-1',
+    draft_id: '10000000-0000-4000-8000-000000000001',
     revision: 5,
   },
 };
 
 export const validationResultFixture: ValidationResult = {
   identity: {
-    draft_id: 'draft-manage-1',
+    draft_id: '10000000-0000-4000-8000-000000000001',
     revision: 5,
     candidate_checksum: 'candidate-checksum-v5',
     result_id: 'validation-result-1',
@@ -212,7 +212,7 @@ export const historyPageFixture: SchemaHistoryPage = {
 export const conflictInfoFixture: SchemaConflictInfo = {
   attempted_revision: 4,
   current_revision: 6,
-  draft_id: 'draft-manage-1',
+  draft_id: '10000000-0000-4000-8000-000000000001',
   definitions: [
     {
       kind: 'entity',

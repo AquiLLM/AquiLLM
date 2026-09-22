@@ -35,6 +35,7 @@ from apps.documents.services.hybrid_graph_authorization import (
     HybridGraphRetrievalDependencies,
     documents_match_retrieval_authorization,
     is_exact_authorization_context,
+    reauthorized_baseline,
 )
 from apps.documents.services.hybrid_graph_dependencies import resolve
 from apps.documents.services.hybrid_graph_orchestration import (
@@ -239,6 +240,17 @@ def text_chunk_search(
         hybrid_graph_dependencies, hybrid_requested = resolve(
             overlay_enabled, authorization_context, hybrid_graph_dependencies
         )
+
+        def authorized_rows(rows):
+            if not hybrid_requested and not is_exact_authorization_context(
+                authorization_context
+            ):
+                return tuple(rows)
+            try:
+                return reauthorized_baseline(tuple(rows), authorization_context)[0]
+            except Exception:
+                return ()
+
         graph_config: object | None = None
         graph_scope: object | None = None
         graph_preflight_status: str | None = None
@@ -352,7 +364,7 @@ def text_chunk_search(
                 model_cls,
                 query,
                 top_k,
-                hybrid_pool,
+                authorized_rows(hybrid_pool),
                 authorized_scope=None,
                 force_complete_rerank=graph_diagnostics.get("graph_status") == "hit",
             )
@@ -362,7 +374,7 @@ def text_chunk_search(
                     model_cls,
                     query,
                     top_k,
-                    snapshot.baseline_candidates,
+                    authorized_rows(snapshot.baseline_candidates),
                     authorized_scope=graph_scope,
                     graph_chunk_ids=graph_chunk_ids,
                     max_graph_candidates=(
@@ -376,7 +388,7 @@ def text_chunk_search(
                     model_cls,
                     query,
                     top_k,
-                    snapshot.baseline_candidates,
+                    authorized_rows(snapshot.baseline_candidates),
                     authorized_scope=None,
                 )
                 if overlay_enabled:
@@ -406,7 +418,7 @@ def text_chunk_search(
                 graph_diagnostics["graph_candidate_count"] = len(
                     ranking.graph_candidates
                 )
-        reranked_results = list(ranking.ranked_results)
+        reranked_results = list(authorized_rows(ranking.ranked_results))
 
         total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
         logger.info(
@@ -453,8 +465,8 @@ def text_chunk_search(
                 ),
             )
         return (
-            snapshot.vector_results,
-            snapshot.trigram_results,
+            authorized_rows(snapshot.vector_results),
+            authorized_rows(snapshot.trigram_results),
             reranked_results,
             diagnostics,
         )

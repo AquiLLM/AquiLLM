@@ -114,9 +114,7 @@ def test_extended_seed_loading_fails_closed_before_database_io_after_deadline():
 
     outcome = prepare_extended_branch(
         runtime,
-        baseline=SimpleNamespace(
-            graph_seeds=(object(),), baseline_candidates=()
-        ),
+        baseline=SimpleNamespace(graph_seeds=(object(),), baseline_candidates=()),
         shared=object(),
         authorization=runtime.authorization,
         settings=settings,
@@ -195,15 +193,13 @@ def test_extended_projection_source_alias_failure_is_branch_local(state_alias):
     )
 
     class Repository:
-        def load_projection_bundle(self, **_kwargs):
+        def load_seed_identities(self, **_kwargs):
             raise ConnectionDoesNotExist(state_alias)
 
     runtime = SimpleNamespace(
         authorization=auth,
         settings=settings,
-        codec=HmacSha256ProjectionIdentifierCodec(
-            b"secret", key_version="key-v1"
-        ),
+        codec=HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v1"),
         clock=lambda: 0.0,
         projection_repository_factory=Repository,
         _exact_request=lambda request_authorization, request_settings: None,

@@ -17,6 +17,8 @@ const apiUrls = {
   api_collection_schema_version_diff: `/api/collection/${COLLECTION_ID}/schema/versions/%(version_id)s/diff/`,
   api_collection_schema_restore: `/api/collection/${COLLECTION_ID}/schema/versions/%(version_id)s/restore/`,
   api_collection_schema_restore_replace: `/api/collection/${COLLECTION_ID}/schema/restore-replace/`,
+  api_collection_schema_generate: `/api/collection/${COLLECTION_ID}/schema/generate/`,
+  api_collection_schema_generation_status: `/api/collection/${COLLECTION_ID}/schema/generation/%(run_id)s/`,
 };
 
 const pageUrls = {
@@ -82,7 +84,7 @@ function manageEnvelope(revision: number, description = 'Updated person descript
     },
     draft: includeDraft
       ? {
-          draft_id: 'draft-manage-1',
+          draft_id: '10000000-0000-4000-8000-000000000001',
           revision,
           base_published_checksum: 'pub-edit-checksum',
           last_editor: 'editor@example.test',
@@ -191,7 +193,7 @@ async function installHarness(page: Page, mode: 'manage' | 'view' = 'manage') {
           body: JSON.stringify({
             attempted_revision: 4,
             current_revision: revision,
-            draft_id: 'draft-manage-1',
+            draft_id: '10000000-0000-4000-8000-000000000001',
             definitions: [
               {
                 kind: 'entity',
@@ -224,7 +226,7 @@ async function installHarness(page: Page, mode: 'manage' | 'view' = 'manage') {
         contentType: 'application/json',
         body: JSON.stringify({
           identity: {
-            draft_id: 'draft-manage-1',
+            draft_id: '10000000-0000-4000-8000-000000000001',
             revision,
             candidate_checksum: 'candidate-checksum-v5',
             result_id: 'validation-result-1',
@@ -326,7 +328,7 @@ test.describe('Collection schema editor harness', () => {
         body: JSON.stringify({
           attempted_revision: 4,
           current_revision: 6,
-          draft_id: 'draft-manage-1',
+          draft_id: '10000000-0000-4000-8000-000000000001',
           definitions: [
             {
               kind: 'entity',

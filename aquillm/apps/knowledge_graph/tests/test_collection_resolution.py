@@ -686,6 +686,64 @@ def test_bounded_embedding_ties_ignore_database_entity_id_assignment():
     }
 
 
+def test_repeated_label_groups_choose_same_representative_without_cartesian_scan(
+    monkeypatch,
+):
+    from apps.knowledge_graph.resolution import collection
+
+    group_size = 30
+    config = CollectionResolutionConfig(
+        max_candidates_per_entity=1,
+        embedding_weight=1.0,
+        neighborhood_weight=0.0,
+    )
+    snapshot = _snapshot(*range(201, 201 + group_size), config=config)
+    entities = tuple(
+        _document_entity(
+            entity_id,
+            "Aquila" if entity_id <= group_size else "Falcon",
+            document_artifact_id=200 + ((entity_id - 1) % group_size + 1),
+            document_id=uuid.UUID(int=200 + ((entity_id - 1) % group_size + 1)),
+        )
+        for entity_id in range(1, 2 * group_size + 1)
+    )
+    session, _backend = _session(
+        {
+            "Aquila": _unit_vector(1.0, 0.0),
+            "Falcon": _unit_vector(1.0, 0.0),
+        }
+    )
+    original_pair = collection._pair
+    pair_calls = 0
+
+    def counted_pair(left, right):
+        nonlocal pair_calls
+        pair_calls += 1
+        return original_pair(left, right)
+
+    monkeypatch.setattr(collection, "_pair", counted_pair)
+
+    result = resolve_collection_entities(
+        snapshot,
+        entities,
+        _ontology(),
+        config=config,
+        embedding_session=session,
+    )
+
+    embedding_decisions = tuple(
+        decision
+        for decision in result.decisions
+        if decision.tier is ResolutionTier.EMBEDDING
+    )
+    assert len(embedding_decisions) == 1
+    assert (
+        embedding_decisions[0].left_entity_id,
+        embedding_decisions[0].right_entity_id,
+    ) == (1, group_size + 1)
+    assert pair_calls < group_size * 10
+
+
 def test_automatic_threshold_is_stricter_than_retrieval_similarity():
     with pytest.raises(ValueError, match="automatic.*retrieval"):
         ResolutionThresholds(

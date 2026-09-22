@@ -112,6 +112,85 @@ def _request(client, method: str, url: str, *, body=None, revision=None):
     )
 
 
+@pytest.mark.django_db
+@pytest.mark.parametrize("method", ["put", "delete"])
+def test_replacement_draft_rejects_previous_uuid_at_equal_revision(
+    client, schema_users, method
+):
+    collection, _viewer, editor, _manager = schema_users
+    old = CollectionSchemaDraft.objects.create(
+        collection=collection, definitions=_definitions(), last_editor=editor
+    )
+    old_id = str(old.pk)
+    old.delete()
+    replacement = CollectionSchemaDraft.objects.create(
+        collection=collection, definitions=_definitions(), last_editor=editor
+    )
+    client.force_login(editor)
+    response = _request(
+        client,
+        method,
+        reverse(
+            "api_collection_schema_entity",
+            kwargs={
+                "col_id": collection.pk,
+                "entity_key": "paper",
+            },
+        ),
+        body={"draft_id": old_id, "values": _entity("paper", "stale")["values"]},
+        revision=1,
+    )
+    assert response.status_code == 409
+    assert response.json()["draft_id"] == str(replacement.pk)
+    replacement.refresh_from_db()
+    assert replacement.revision == 1
+    assert replacement.definitions == _definitions()
+
+
+@pytest.mark.django_db
+def test_expired_generation_can_be_restarted_without_reviving_old_worker(
+    client,
+    schema_users,
+    monkeypatch,
+    django_capture_on_commit_callbacks,
+):
+    import uuid
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.collections.services.schema_generation import collection_source_signature
+    from apps.collections.tasks.schema_generation import _claim_run
+    from apps.collections.views import schema_api
+
+    collection, _viewer, editor, _manager = schema_users
+    expired = CollectionSchemaGenerationRun.objects.create(
+        collection=collection,
+        requested_by=editor,
+        status="running",
+        source_signature=collection_source_signature(collection.pk),
+        lease_token=uuid.uuid4(),
+        lease_expires_at=timezone.now() - timedelta(seconds=1),
+    )
+    published = []
+    monkeypatch.setattr(schema_api, "enqueue_schema_generation", published.append)
+    client.force_login(editor)
+    with django_capture_on_commit_callbacks(execute=True):
+        response = _request(
+            client,
+            "post",
+            reverse("api_collection_schema_generate", kwargs={"col_id": collection.pk}),
+            body={},
+        )
+    assert response.status_code == 202
+    assert response.json()["run_id"] != str(expired.pk)
+    expired.refresh_from_db()
+    assert expired.status == "failed"
+    assert expired.lease_token is None
+    assert _claim_run(expired.pk) is None
+    assert published == [response.json()["run_id"]]
+
+
 def _validate_and_publish(client, collection, draft):
     validation = _request(
         client,
@@ -365,7 +444,7 @@ def test_workspace_and_entity_mutation_persist_across_requests(client, schema_us
         client,
         "put",
         entity_url,
-        body={"values": _entity("paper")["values"]},
+        body={"draft_id": draft_id, "values": _entity("paper")["values"]},
         revision=1,
     )
     assert updated.status_code == 200
@@ -447,7 +526,10 @@ def test_if_match_conflict_returns_current_draft_without_mutating(client, schema
         client,
         "put",
         url,
-        body={"values": _entity("paper", "Attempted value")["values"]},
+        body={
+            "draft_id": str(draft.pk),
+            "values": _entity("paper", "Attempted value")["values"],
+        },
         revision=3,
     )
 
@@ -477,7 +559,7 @@ def test_if_match_conflict_returns_current_draft_without_mutating(client, schema
 @pytest.mark.django_db
 def test_relation_upsert_and_delete_are_revisioned(client, schema_users):
     collection, _viewer, editor, _manager = schema_users
-    CollectionSchemaDraft.objects.create(
+    draft = CollectionSchemaDraft.objects.create(
         collection=collection,
         definitions=_definitions(),
         last_editor=editor,
@@ -493,13 +575,21 @@ def test_relation_upsert_and_delete_are_revisioned(client, schema_users):
         "allowed_tail_types": ["paper"],
     }
 
-    created = _request(client, "put", url, body={"values": values}, revision=1)
+    created = _request(
+        client,
+        "put",
+        url,
+        body={"draft_id": str(draft.pk), "values": values},
+        revision=1,
+    )
     assert created.status_code == 200
     assert [row["key"] for row in created.json()["draft"]["relations"]] == [
         "authored_by",
         "cites",
     ]
-    deleted = _request(client, "delete", url, revision=2)
+    deleted = _request(
+        client, "delete", url, body={"draft_id": str(draft.pk)}, revision=2
+    )
     assert deleted.status_code == 200
     assert [row["key"] for row in deleted.json()["draft"]["relations"]] == [
         "authored_by"
@@ -522,7 +612,9 @@ def test_put_requires_non_null_values_object(client, schema_users, body):
         kwargs={"col_id": collection.pk, "entity_key": "paper"},
     )
 
-    response = _request(client, "put", url, body=body, revision=1)
+    response = _request(
+        client, "put", url, body={"draft_id": str(draft.pk), **body}, revision=1
+    )
 
     assert response.status_code == 400
     assert response.json() == {"error": "invalid_definition"}
@@ -808,7 +900,10 @@ def test_publishing_restored_checksum_reactivates_immutable_history(
             "api_collection_schema_entity",
             kwargs={"col_id": collection.pk, "entity_key": "paper"},
         ),
-        body={"values": _entity("paper", "Changed paper")["values"]},
+        body={
+            "draft_id": str(second_draft.pk),
+            "values": _entity("paper", "Changed paper")["values"],
+        },
         revision=second_draft.revision,
     )
     assert mutation.status_code == 200

@@ -78,9 +78,9 @@ class SelectedCollectionGenerationV1:
             "projection_version",
             "identifier_key_version",
             "resolver_version",
-            "embedding_model_signature",
         ):
             _token(getattr(self, name), name)
+        _projection_token(self.embedding_model_signature, "embedding_model_signature", maximum=512)
         _count(self.membership_epoch, "membership_epoch", 0, 2**63 - 1)
 @final
 @dataclass(frozen=True, slots=True)
