@@ -1,7 +1,9 @@
 """Query embedding cache in hybrid chunk search."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 from django.test import override_settings
 
@@ -78,8 +80,12 @@ def test_same_query_reuses_single_embedding_call(mock_embed, mock_rerank):
     mc.objects.filter_by_documents.return_value = _QRoot(chunks[:6], chunks[3:9])
 
     docs = [MagicMock()]
-    text_chunk_search(mc, "identical query", 2, docs)
-    text_chunk_search(mc, "identical query", 2, docs)
+    nonce = uuid4().hex
+    query = "identical query " + " ".join(
+        nonce[index : index + 2] for index in range(0, len(nonce), 2)
+    )
+    text_chunk_search(mc, query, 2, docs)
+    text_chunk_search(mc, query, 2, docs)
     assert mock_embed.call_count == 1
 
 

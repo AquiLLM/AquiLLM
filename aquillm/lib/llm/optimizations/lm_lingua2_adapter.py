@@ -159,10 +159,10 @@ def maybe_compress_openai_style_messages(messages: list[dict[str, Any]]) -> bool
             msg["content"] = compressed
             changed = True
             logger.info(
-                "lm_lingua2 compressed role=%s chars %s -> %s",
-                role,
-                len(content),
-                len(compressed),
+                "obs.llm.lingua2_compressed",
+                role=role,
+                original_chars=len(content),
+                compressed_chars=len(compressed),
             )
     return changed
 

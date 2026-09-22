@@ -25,6 +25,7 @@ from apps.collections.views.api import (
 from apps.documents.views.api import (
     chunk_detail,
     citation_narrow,
+    citation_sources,
     delete_document,
     move_document,
 )
@@ -81,6 +82,7 @@ urlpatterns = [
     path("documents/delete/<uuid:doc_id>/", delete_document, name="api_delete_document"),
     path("chunks/<int:chunk_id>/", chunk_detail, name="api_chunk_detail"),
     path("citations/narrow/", citation_narrow, name="api_citation_narrow"),
+    path("citations/sources/", citation_sources, name="api_citation_sources"),
     path("users/search/", search_users, name="api_search_users"),
     path("whitelisted_email/<str:email>/", whitelisted_email, name="api_whitelist_email"),
     path("whitelisted_emails/", whitelisted_emails, name="api_whitelist_emails"),

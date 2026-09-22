@@ -51,33 +51,37 @@ jobs:
           aquillm/tests/integration/test_context_processors_urls.py
           aquillm/tests/integration/test_document_image_view.py
           -q --tb=short
-      - name: Production reliability regressions
+      - name: Chat, retrieval, document, and deployment regressions
         run: >-
           python -m pytest
-          aquillm/lib/tools/search/tests/test_vector_search_pack.py
-          aquillm/lib/llm/tests/test_spin_tool_budget.py
-          aquillm/apps/documents/tests/test_chunk_rerank_budget.py
-          aquillm/apps/documents/tests/test_rerank_http_cache.py
-          aquillm/apps/documents/tests/test_rerank_capability_cache.py
-          aquillm/apps/documents/tests/test_rerank_request_routing.py
-          aquillm/apps/documents/tests/test_rerank_score_validation.py
-          aquillm/apps/documents/tests/test_rag_cache.py
+          aquillm/apps/chat/tests
+          aquillm/apps/documents/tests
+          aquillm/lib/llm/tests
+          aquillm/lib/embeddings/tests
+          aquillm/lib/tools/search/tests
           aquillm/apps/memory/tests/test_chat_memory_latency.py
-          aquillm/apps/chat/tests/test_rag_config.py
-          aquillm/apps/chat/tests/test_rag_evidence.py
-          aquillm/apps/chat/tests/test_rag_retrieval.py
-          aquillm/apps/chat/tests/test_rag_candidate_pool.py
-          aquillm/apps/chat/tests/test_rag_evidence_handoff.py
-          aquillm/apps/chat/tests/test_direct_rag_pipeline.py
-          aquillm/apps/chat/tests/test_direct_rag_recovery.py
-          aquillm/apps/chat/tests/test_direct_rag_websocket_smoke.py
-          aquillm/apps/chat/tests/test_rag_synthesis.py
+          aquillm/apps/ingestion/tests/test_transcribe_provider_selection.py
+          aquillm/tests/test_app_startup.py
+          aquillm/tests/integration/test_rag_observability_logging.py
           aquillm/tests/integration/test_vllm_extra_args_parser.py
           aquillm/tests/integration/test_vllm_genesis_image.py
+          aquillm/tests/integration/test_vllm_transcribe_image.py
           aquillm/tests/integration/test_vllm_readiness.py
           aquillm/tests/integration/test_vllm_lmcache_plumbing.py
           aquillm/tests/integration/test_compose_multimodal_services.py
+          aquillm/tests/integration/test_compose_render_test_support.py
+          aquillm/tests/integration/test_sidecar_revision_compose.py
+          tests/asr
+          deploy/vllm_plugins/nemotron_asr/tests
+          tests/unit/test_nemotron_verification_harness.py
+          tests/test_check_logging_conventions.py
+          tests/test_check_retrieval_logging.py
           -q --tb=short
+      - name: Logging and file-size guardrails
+        run: |
+          python scripts/check_logging_conventions.py
+          python scripts/check_retrieval_logging.py
+          python scripts/check_file_lengths.py
 
   frontend-build:
     runs-on: ubuntu-latest
@@ -92,5 +96,5 @@ jobs:
           cache: npm
           cache-dependency-path: react/package-lock.json
       - run: npm ci
-      - run: npm test -- src/features/chat/hooks/useChatWebSocket.test.tsx src/features/chat/components/Chat.test.tsx
+      - run: npm test
       - run: npm run build

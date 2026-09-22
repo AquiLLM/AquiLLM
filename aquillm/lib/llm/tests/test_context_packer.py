@@ -136,7 +136,7 @@ def test_context_packer_logs_stats_without_prompt_body(caplog):
             slack=32,
         )
     joined = " ".join(r.message for r in caplog.records)
-    assert "context_pack stats" in joined
+    assert "obs.llm.context_packed" in joined
     assert secret not in joined
     assert "system also hidden" not in joined
 

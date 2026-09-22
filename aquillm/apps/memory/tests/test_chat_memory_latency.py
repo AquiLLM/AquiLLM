@@ -107,17 +107,9 @@ async def test_async_memory_augmentation_can_skip_cross_chat_episodic_lookup(mon
         return "\n\n<memory>"
 
     monkeypatch.setattr(memory_module, "database_sync_to_async", fake_database_sync_to_async)
-    monkeypatch.setattr(
-        memory_module,
-        "get_last_user_message_text",
-        lambda convo: "compare these papers",
-    )
+    monkeypatch.setattr(memory_module, "get_last_user_message_text", lambda convo: "compare these papers")
     monkeypatch.setattr(memory_module, "get_user_profile_facts", lambda user: [profile_fact])
-    monkeypatch.setattr(
-        memory_module,
-        "get_episodic_memories_async",
-        unexpected_episodic_lookup,
-    )
+    monkeypatch.setattr(memory_module, "get_episodic_memories_async", unexpected_episodic_lookup)
     monkeypatch.setattr(memory_module, "format_memories_for_system", fake_format)
 
     convo = _FakeConversation()

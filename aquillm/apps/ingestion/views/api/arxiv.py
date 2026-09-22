@@ -34,10 +34,10 @@ def ingest_arxiv(request):
             return JsonResponse({"error": status["errors"]}, status=500)
         return JsonResponse({"message": status["message"]})
     except DuplicateDocumentError as e:
-        logger.error(e.message)
+        logger.error("obs.ingest.arxiv_duplicate", error=str(e), error_type=type(e).__name__)
         return JsonResponse({"error": e.message}, status=400)
     except DatabaseError as e:
-        logger.error("Database error: %s", e)
+        logger.error("obs.ingest.arxiv_db_error", error=str(e), error_type=type(e).__name__)
         return JsonResponse({"error": "Database error occurred while saving document"}, status=500)
 
 

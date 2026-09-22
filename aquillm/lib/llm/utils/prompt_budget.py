@@ -118,8 +118,9 @@ def maybe_pack_message_dicts_for_context(
         return (changed, new_max)
     except Exception as exc:
         logger.warning(
-            "context_packer skipped in prompt_budget (fail-open): %s",
-            type(exc).__name__,
+            "obs.llm.context_packer_skipped",
+            error=str(exc),
+            error_type=type(exc).__name__,
         )
         return (False, max_tokens)
 
@@ -153,9 +154,9 @@ def apply_preflight_trim_to_message_dicts(
                 _ENC,
             )
             logger.info(
-                "prompt_budget context_pack estimated_input_tokens=%s max_tokens=%s",
-                tail_tok,
-                mt,
+                "obs.llm.prompt_context_packed",
+                estimated_input_tokens=tail_tok,
+                max_tokens=mt,
             )
         return (changed_pack, mt)
 
@@ -189,10 +190,10 @@ def apply_preflight_trim_to_message_dicts(
     message_dicts[:] = trimmed_tail
     if changed:
         logger.info(
-            "prompt_budget provider_preflight estimated_input_tokens %s -> %s max_tokens=%s",
-            before,
-            after,
-            new_max,
+            "obs.llm.prompt_preflight_trim",
+            estimated_input_tokens_before=before,
+            estimated_input_tokens_after=after,
+            max_tokens=new_max,
         )
     return (changed, new_max)
 

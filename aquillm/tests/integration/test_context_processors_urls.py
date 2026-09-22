@@ -14,6 +14,7 @@ def test_api_urls_context_uses_reverse_for_named_routes():
     assert urls["api_collections"] == "/api/collections/"
     assert "%(col_id)s" in urls["api_collection"]
     assert urls["api_ingest_handwritten_notes"].startswith("/aquillm/")
+    assert urls["api_citation_sources"] == "/api/citations/sources/"
 
 
 def test_page_urls_context_contains_index_and_chat_routes():

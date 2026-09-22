@@ -4,8 +4,105 @@ from pathlib import Path
 
 import pytest
 
+from tests.integration.compose_render_test_support import (
+    render_compose_with_reviewed_env,
+)
 
-@pytest.mark.parametrize("compose_name", ["base.yml", "development.yml", "production.yml"])
+
+@pytest.mark.parametrize(
+    "compose_name", ["base.yml", "development.yml", "production.yml"]
+)
+@pytest.mark.parametrize("direct", [None, "0"])
+def test_rendered_defaults_preserve_production_and_direct_retrieval(
+    compose_name, direct
+):
+    root = Path(__file__).resolve().parents[3]
+    config = render_compose_with_reviewed_env(
+        (root / "deploy/compose" / compose_name,),
+        profile="vllm",
+        environment_overrides={} if direct is None else {"RAG_DIRECT_ENABLED": direct},
+    )
+    services = config["services"]
+    assert services["web"]["environment"]["RAG_DIRECT_ENABLED"] == (direct or "1")
+    for service, allocation in [
+        ("vllm_transcribe", "0.08"),
+        ("vllm_embed", "0.12"),
+        ("vllm_rerank", "0.15"),
+    ]:
+        assert (
+            services[service]["environment"]["VLLM_GPU_MEMORY_UTILIZATION"]
+            == allocation
+        )
+    assert (
+        services["vllm_transcribe"]["environment"]["VLLM_MODEL"]
+        == "openai/whisper-large-v3-turbo"
+    )
+    assert (
+        services["vllm_transcribe"]["build"]["dockerfile"]
+        == "deploy/docker/vllm/Dockerfile"
+    )
+    assert not any("knowledge_graph" in name for name in services)
+    for service in ("worker", "worker_memory_promotion"):
+        if service in services:
+            assert "&& exec " in " ".join(services[service]["command"])
+
+
+@pytest.mark.parametrize(
+    "compose_name", ["base.yml", "development.yml", "production.yml"]
+)
+def test_nemotron_override_is_complete_despite_existing_whisper_environment(
+    compose_name,
+):
+    root = Path(__file__).resolve().parents[3]
+    config = render_compose_with_reviewed_env(
+        (
+            root / "deploy/compose" / compose_name,
+            root / "deploy/compose/nemotron-asr.yml",
+        ),
+        profile="vllm",
+        environment_overrides={
+            "TRANSCRIBE_VLLM_MODEL": "openai/whisper-large-v3-turbo",
+            "TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION": "0.08",
+            "TRANSCRIBE_VLLM_EXTRA_ARGS": "--max-num-batched-tokens 1500",
+        },
+    )
+    services = config["services"]
+    transcribe = services["vllm_transcribe"]
+    env = transcribe["environment"]
+    assert (
+        transcribe["build"]["dockerfile"] == "deploy/docker/vllm/Dockerfile.transcribe"
+    )
+    assert env["VLLM_MODEL"] == "nvidia/nemotron-3.5-asr-streaming-0.6b"
+    assert env["VLLM_REVISION"] == "f3d333391852ba876df169dcc9ba902d25b6ab0b"
+    assert env["VLLM_GPU_MEMORY_UTILIZATION"] == "0.20"
+    assert env["VLLM_MAX_MODEL_LEN"] == "50000"
+    assert env["VLLM_DTYPE"] == "float32"
+    assert env["VLLM_ALLOW_LONG_MAX_MODEL_LEN"] == "1"
+    assert env["VLLM_USE_V2_MODEL_RUNNER"] == "0"
+    assert env["VLLM_SERVICE_KIND"] == "transcribe"
+    assert (
+        env["VLLM_EXTRA_ARGS"]
+        == "--enforce-eager --max-num-seqs 1 --max-num-batched-tokens 50000 --generation-config /opt/aquillm/nemotron-generation-config"
+    )
+    for app in ("web", "worker"):
+        assert (
+            services[app]["environment"]["INGEST_TRANSCRIBE_MODEL"]
+            == env["VLLM_SERVED_MODEL_NAME"]
+        )
+
+
+def test_test_compose_storage_dependency_resolves():
+    root = Path(__file__).resolve().parents[3]
+    config = render_compose_with_reviewed_env(
+        (root / "deploy/compose/test.yml",), profile="*"
+    )
+    assert "storage_test" in config["services"]["web_test"]["depends_on"]
+    assert "storage_test" in config["services"]
+
+
+@pytest.mark.parametrize(
+    "compose_name", ["base.yml", "development.yml", "production.yml"]
+)
 def test_sidecar_defaults_fit_the_shared_gpu_profile(compose_name):
     repo_root = Path(__file__).resolve().parents[3]
     contents = (repo_root / "deploy/compose" / compose_name).read_text(encoding="utf-8")
@@ -31,7 +128,9 @@ def test_chat_context_defaults_match_with_environment_overrides():
     example = (repo_root / ".env.example").read_text(encoding="utf-8")
     assert "VLLM_MAX_MODEL_LEN=131072" in example.splitlines()
     for compose_name in ("development.yml", "production.yml"):
-        contents = (repo_root / "deploy/compose" / compose_name).read_text(encoding="utf-8")
+        contents = (repo_root / "deploy/compose" / compose_name).read_text(
+            encoding="utf-8"
+        )
         assert "VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-131072}" in contents
 
 
@@ -59,8 +158,12 @@ def test_ocr_sidecar_is_not_in_default_vllm_profile():
 
     for compose_file in compose_files:
         contents = compose_file.read_text(encoding="utf-8")
-        ocr_service = contents.split("\n  vllm_ocr:", 1)[1].split("\n  vllm_transcribe:", 1)[0]
-        transcribe_service = contents.split("\n  vllm_transcribe:", 1)[1].split("\n  vllm_embed:", 1)[0]
+        ocr_service = contents.split("\n  vllm_ocr:", 1)[1].split(
+            "\n  vllm_transcribe:", 1
+        )[0]
+        transcribe_service = contents.split("\n  vllm_transcribe:", 1)[1].split(
+            "\n  vllm_embed:", 1
+        )[0]
 
         assert "- ocr-sidecar" in ocr_service
         assert "- vllm\n" not in ocr_service

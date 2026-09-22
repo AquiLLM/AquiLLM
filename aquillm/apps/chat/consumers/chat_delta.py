@@ -24,13 +24,13 @@ async def send_conversation_delta(
 ) -> None:
     if close_db:
         await aclose_old_connections()
-    logger.debug("send_func called")
+    logger.debug("obs.chat.delta_start")
     consumer.convo = convo
     save_start = perf_counter()
     await consumer._save_conversation(create_memories=create_memories)
     new_messages = convo.messages[consumer.last_sent_sequence + 1 :]
     if not new_messages:
-        logger.debug("send_func skipped; no new messages to send")
+        logger.debug("obs.chat.delta_skipped")
         return
     usage = next(
         (

@@ -40,7 +40,12 @@ def cache_get(key: str) -> Any | None:
     try:
         return cache.get(key)
     except Exception as exc:
-        logger.warning("cache_get failed (fail-open) key=%s err=%s", key[:120], exc)
+        logger.warning(
+            "obs.rag.cache_get_failed",
+            key=key[:120],
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return None
 
 
@@ -50,16 +55,21 @@ def cache_set(key: str, value: Any, timeout: int) -> None:
     try:
         cache.set(key, value, timeout=timeout)
     except Exception as exc:
-        logger.warning("cache_set failed (fail-open) key=%s err=%s", key[:120], exc)
+        logger.warning(
+            "obs.rag.cache_set_failed",
+            key=key[:120],
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
 
 def _log_hit_miss(metric: str, hit: bool) -> None:
     if not _rag_enabled():
         return
     if hit:
-        logger.info("%s hit", metric)
+        logger.info("obs.rag.cache_hit", metric=metric)
     else:
-        logger.debug("%s miss", metric)
+        logger.debug("obs.rag.cache_miss", metric=metric)
 
 
 def query_embedding_cache_key(query: str, input_type: str, model_signature: str) -> str:
@@ -240,10 +250,36 @@ def document_refs_from_documents(documents: Sequence[Any]) -> list[dict[str, Any
     return [{"model": d.__class__.__name__, "pkid": int(d.pkid)} for d in documents]
 
 
-def rehydrate_documents_from_refs(refs: Sequence[Mapping[str, Any]]) -> list[Any]:
+def _validated_collection_allowlist(
+    allowed_collection_ids: Sequence[int],
+) -> tuple[int, ...]:
+    try:
+        collection_ids = tuple(allowed_collection_ids)
+    except TypeError as exc:
+        raise ValueError(
+            "allowed_collection_ids must contain positive integers within the signed-bigint range"
+        ) from exc
+
+    if any(
+        type(collection_id) is not int
+        or collection_id <= 0
+        or collection_id > 2**63 - 1
+        for collection_id in collection_ids
+    ):
+        raise ValueError(
+            "allowed_collection_ids must contain positive integers within the signed-bigint range"
+        )
+    return tuple(sorted(set(collection_ids)))
+
+
+def rehydrate_documents_from_refs(
+    refs: Sequence[Mapping[str, Any]],
+    allowed_collection_ids: Sequence[int],
+) -> list[Any]:
     from django.apps import apps
 
-    if not refs:
+    collection_ids = _validated_collection_allowlist(allowed_collection_ids)
+    if not refs or not collection_ids:
         return []
 
     by_model: dict[str, list[int]] = defaultdict(list)
@@ -265,7 +301,10 @@ def rehydrate_documents_from_refs(refs: Sequence[Mapping[str, Any]]) -> list[Any
             continue
         uniq_pks = list(dict.fromkeys(pks))
         try:
-            qs = model.objects.filter(pkid__in=uniq_pks)
+            qs = model.objects.filter(
+                pkid__in=uniq_pks,
+                collection_id__in=collection_ids,
+            )
         except Exception:
             continue
         for doc in qs:

@@ -21,4 +21,5 @@ def test_dev_launch_script_supports_optional_edge_startup():
     contents = script.read_text(encoding="utf-8")
 
     assert 'USE_EDGE="${USE_EDGE:-0}"' in contents
-    assert 'compose_up get_certs nginx' in contents
+    assert 'compose_up get_certs' in contents
+    assert 'compose_up nginx' in contents

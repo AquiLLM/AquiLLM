@@ -1,0 +1,37 @@
+# Explicit opt-in: append after base.yml, development.yml or production.yml.
+# Uses separate variables so existing Whisper .env values cannot mix models.
+services:
+  vllm_transcribe:
+    build:
+      dockerfile: deploy/docker/vllm/Dockerfile.transcribe
+    environment:
+      VLLM_MODEL: nvidia/nemotron-3.5-asr-streaming-0.6b
+      VLLM_REVISION: f3d333391852ba876df169dcc9ba902d25b6ab0b
+      VLLM_TOKENIZER_REVISION: ""
+      VLLM_CODE_REVISION: ""
+      VLLM_SERVED_MODEL_NAME: nemotron-3.5-asr-streaming-0.6b
+      VLLM_TOKENIZER: nvidia/nemotron-3.5-asr-streaming-0.6b
+      VLLM_TENSOR_PARALLEL_SIZE: "1"
+      VLLM_GPU_MEMORY_UTILIZATION: ${NEMOTRON_ASR_GPU_MEMORY_UTILIZATION:-0.20}
+      VLLM_MAX_MODEL_LEN: "50000"
+      VLLM_DTYPE: float32
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+      VLLM_SERVICE_KIND: transcribe
+      VLLM_RUNNER: ""
+      VLLM_TASK: ""
+      VLLM_STRICT_PROTECTED_ARGS: "0"
+      VLLM_USE_V2_MODEL_RUNNER: "0"
+      VLLM_TRUST_REMOTE_CODE: "1"
+      VLLM_EXTRA_ARGS: --enforce-eager --max-num-seqs 1 --max-num-batched-tokens 50000 --generation-config /opt/aquillm/nemotron-generation-config
+      LMCACHE_ENABLED: "0"
+      LMCACHE_EXTRA_ARGS: ""
+  web:
+    environment:
+      INGEST_TRANSCRIBE_PROVIDER: openai
+      INGEST_TRANSCRIBE_OPENAI_BASE_URL: http://vllm_transcribe:8000/v1
+      INGEST_TRANSCRIBE_MODEL: nemotron-3.5-asr-streaming-0.6b
+  worker:
+    environment:
+      INGEST_TRANSCRIBE_PROVIDER: openai
+      INGEST_TRANSCRIBE_OPENAI_BASE_URL: http://vllm_transcribe:8000/v1
+      INGEST_TRANSCRIBE_MODEL: nemotron-3.5-asr-streaming-0.6b

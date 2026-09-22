@@ -51,7 +51,7 @@ class BugReportMiddleware:
                 for f in traceback.extract_tb(exception.__traceback__)
             ]
             logger.error(
-                "unhandled_exception",
+                "obs.bug_report.unhandled_exception",
                 trace_id=trace_id,
                 user=user.username if user else "anonymous",
                 method=request.method,
@@ -61,6 +61,6 @@ class BugReportMiddleware:
                 traceback_frames=frames,
             )
         except Exception:
-            logger.debug("Failed to create bug report from exception", exc_info=True)
+            logger.debug("obs.bug_report.capture_failed", exc_info=True)
 
         return None

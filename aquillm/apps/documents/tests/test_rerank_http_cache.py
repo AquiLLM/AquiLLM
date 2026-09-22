@@ -1,4 +1,5 @@
 """Rerank HTTP client result and capability caches."""
+
 from __future__ import annotations
 
 import threading
@@ -110,18 +111,39 @@ def test_rerank_logs_cache_hit_without_query_text(
             "apps.documents.services.chunk_rerank_local_vllm.ordered_queryset_from_ids",
             return_value=MagicMock(),
         ):
-            rerank_via_local_vllm(MC, "user query must not appear in metrics log", chunks, 2)
+            rerank_via_local_vllm(
+                MC, "user query must not appear in metrics log", chunks, 2
+            )
 
     mock_post.assert_not_called()
     hit_calls = [
         c
         for c in mock_logger.info.call_args_list
-        if c.args and "cache_hit=1" in c.args[0]
+        if c.args and c.args[0] == "obs.rag.rerank_cache_hit"
     ]
     assert hit_calls
-    joined = " ".join(str(c.args) for c in hit_calls)
+    assert hit_calls[0].kwargs == {
+        "reason": "completed",
+        "count": 0,
+        "elapsed_ms": 0.0,
+    }
+    joined = " ".join(f"{call.args!r} {call.kwargs!r}" for call in hit_calls)
     assert "secret-query-text" not in joined
     assert "user query must not appear" not in joined
+
+
+@override_settings(RAG_CACHE_ENABLED=True)
+def test_rerank_capability_cache_round_trips_endpoint_and_payload_shape():
+    capability = {
+        "endpoint": "http://reranker/score",
+        "shape": "score_single_text_pair",
+    }
+
+    rag_cache.set_cached_rerank_capability("http://reranker/v1", "m1", capability)
+
+    assert (
+        rag_cache.get_cached_rerank_capability("http://reranker/v1", "m1") == capability
+    )
 
 
 @patch("apps.documents.services.chunk_rerank_local_vllm.ordered_queryset_from_ids")
@@ -142,7 +164,11 @@ def test_cached_single_score_capability_skips_batch_and_scores_concurrently(
         MagicMock(pk=index, content=f"document evidence {index}") for index in range(12)
     ]
     mock_ordered.side_effect = lambda _model, identifiers: tuple(identifiers)
-    monkeypatch.setattr(rag_cache, "get_cached_rerank_result", lambda *_args: None)
+    monkeypatch.setattr(
+        rag_cache,
+        "get_cached_rerank_result",
+        lambda *_args: None,
+    )
     monkeypatch.setattr(
         rag_cache,
         "get_cached_rerank_capability",

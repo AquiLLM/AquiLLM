@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from django.contrib.auth import get_user_model
+from channels.db import database_sync_to_async
 
 from aquillm.llm import Conversation
 from aquillm.models import WSConversation
@@ -12,6 +13,13 @@ from apps.chat.consumers.chat import ChatConsumer, CollectionsRef
 from apps.chat.tests.chat_message_test_support import _test_document_ids, _test_image_result_tool
 
 User = get_user_model()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_chat_services(monkeypatch):
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "0")
+    with patch("apps.chat.consumers.chat.enqueue_index_conversation_task"):
+        yield
 
 
 def test_collection_selection_is_isolated_per_websocket_consumer():
@@ -24,12 +32,13 @@ def test_collection_selection_is_isolated_per_websocket_consumer():
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")
-@patch("apps.chat.consumers.chat.augment_conversation_with_memory_async", new_callable=AsyncMock)
+@patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async", new_callable=AsyncMock)
 async def test_append_without_files_does_not_raise(_augment, _mem_task):
-    user = User.objects.create_user(username="appendtest", password="pass")
-    db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
+    _augment.side_effect = lambda convo, *args, **kwargs: convo
+    user = await database_sync_to_async(User.objects.create_user)(username="appendtest", password="pass")
+    db_convo = await WSConversation.objects.acreate(owner=user, system_prompt="sys")
 
     consumer = ChatConsumer()
     consumer.base_send = AsyncMock()
@@ -55,18 +64,20 @@ async def test_append_without_files_does_not_raise(_augment, _mem_task):
 
     await consumer.receive(payload)
 
+    consumer.llm_if.spin.assert_awaited_once()
     assert consumer.convo is not None
     assert len(consumer.convo.messages) >= 1
     assert consumer.convo[-1].files == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")
 @patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async")
 async def test_append_regular_chat_omits_tools(_augment, _mem_task):
-    user = User.objects.create_user(username="appendtools", password="pass")
-    db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
+    _augment.side_effect = lambda convo, *args, **kwargs: convo
+    user = await database_sync_to_async(User.objects.create_user)(username="appendtools", password="pass")
+    db_convo = await WSConversation.objects.acreate(owner=user, system_prompt="sys")
 
     consumer = ChatConsumer()
     consumer.base_send = AsyncMock()
@@ -99,12 +110,13 @@ async def test_append_regular_chat_omits_tools(_augment, _mem_task):
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")
 @patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async")
 async def test_append_persists_selected_collections(_augment, _mem_task):
-    user = User.objects.create_user(username="appendcollections", password="pass")
-    db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
+    _augment.side_effect = lambda convo, *args, **kwargs: convo
+    user = await database_sync_to_async(User.objects.create_user)(username="appendcollections", password="pass")
+    db_convo = await WSConversation.objects.acreate(owner=user, system_prompt="sys")
 
     consumer = ChatConsumer()
     consumer.base_send = AsyncMock()
@@ -129,17 +141,17 @@ async def test_append_persists_selected_collections(_augment, _mem_task):
     )
 
     await consumer.receive(payload)
-    db_convo.refresh_from_db()
+    await db_convo.arefresh_from_db()
 
     assert consumer.col_ref.collections == [3, "7"]
     assert db_convo.selected_collection_ids == [3, "7"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_selection_update_persists_without_appending_message():
-    user = User.objects.create_user(username="selectcollections", password="pass")
-    db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
+    user = await database_sync_to_async(User.objects.create_user)(username="selectcollections", password="pass")
+    db_convo = await WSConversation.objects.acreate(owner=user, system_prompt="sys")
 
     consumer = ChatConsumer()
     consumer.base_send = AsyncMock()
@@ -158,7 +170,7 @@ async def test_selection_update_persists_without_appending_message():
     )
 
     await consumer.receive(payload)
-    db_convo.refresh_from_db()
+    await db_convo.arefresh_from_db()
 
     assert consumer.col_ref.collections == [11, "13"]
     assert db_convo.selected_collection_ids == [11, "13"]
@@ -166,12 +178,13 @@ async def test_selection_update_persists_without_appending_message():
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @patch("apps.chat.consumers.chat.enqueue_conversation_memories_task")
 @patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async")
 async def test_append_explicit_document_search_requires_doc_tool(_augment, _mem_task):
-    user = User.objects.create_user(username="appenddocsearch", password="pass")
-    db_convo = WSConversation.objects.create(owner=user, system_prompt="sys")
+    _augment.side_effect = lambda convo, *args, **kwargs: convo
+    user = await database_sync_to_async(User.objects.create_user)(username="appenddocsearch", password="pass")
+    db_convo = await WSConversation.objects.acreate(owner=user, system_prompt="sys")
 
     consumer = ChatConsumer()
     consumer.base_send = AsyncMock()

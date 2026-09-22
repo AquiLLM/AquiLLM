@@ -125,6 +125,13 @@ async def run_direct_rag_turn(
     if user_message is None:
         return "skipped"
 
+    # Explicit history recall (including retries) must reach the memory tool loop
+    # even when the user also has document collections selected.
+    if user_message.tool_choice and user_message.tool_choice.type in ("any", "tool"):
+        tool_names = {tool.name for tool in user_message.tools or []}
+        if tool_names == {"search_past_chats"}:
+            return "skipped"
+
     t_start = time.perf_counter()
     correlation_id = new_correlation_id()
 
@@ -188,9 +195,9 @@ async def run_direct_rag_turn(
         failed_query_count = len(search_outcomes) - len(search_results)
         if failed_query_count:
             logger.warning(
-                "direct_rag_partial_retrieval_failure failed=%d total=%d",
-                failed_query_count,
-                len(search_outcomes),
+                "obs.rag.direct_rag_partial_retrieval_failure",
+                failed=failed_query_count,
+                total=len(search_outcomes),
             )
         raw_result = merge_ranked_tool_results(search_results, limit=top_k)
         t_retrieval_end = time.perf_counter()
@@ -232,7 +239,7 @@ async def run_direct_rag_turn(
             retrieval_status=packet.retrieval_status,
         )
         logger.info(
-            "direct_rag_turn_handled",
+            "obs.rag.direct_rag_turn_handled",
             correlation_id=correlation_id,
             retrieved_count=int(raw_result.get("retrieved_count", 0) or 0),
             retained_count=len(packet.chunks),
@@ -241,7 +248,7 @@ async def run_direct_rag_turn(
         return "handled"
     except Exception as exc:
         logger.warning(
-            "direct_rag_turn_failed",
+            "obs.rag.direct_rag_turn_failed",
             correlation_id=correlation_id,
             error_type=type(exc).__name__,
         )

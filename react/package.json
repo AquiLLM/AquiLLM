@@ -9,6 +9,7 @@
     "watch": "vite build --watch --emptyOutDir",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:watch": "vitest",
     "test:e2e": "npx playwright test"
   },
   "keywords": [],

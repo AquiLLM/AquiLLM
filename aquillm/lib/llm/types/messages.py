@@ -127,9 +127,9 @@ class ToolMessage(__LLMMessage):
             ret['content'] = f"{prefix}\n{sanitized}"
 
         logger.info(
-            "tool_message_render tool=%s content_chars=%d",
-            self.tool_name,
-            len(sanitized),
+            "obs.llm.tool_message_render",
+            tool=self.tool_name,
+            content_chars=len(sanitized),
         )
 
         ret.pop('result_dict', None)

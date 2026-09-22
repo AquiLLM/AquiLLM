@@ -42,7 +42,7 @@ class SaveLoadConversationTests(TestCase):
         save_conversation_to_db(convo, self.db_convo)
         loaded = load_conversation_from_db(self.db_convo)
 
-        self.assertEqual(loaded.system, 'Test system prompt')
+        self.assertEqual(loaded.system, 'You are a helpful assistant.')
         self.assertEqual(len(loaded.messages), 2)
         self.assertIsInstance(loaded.messages[0], UserMessage)
         self.assertIsInstance(loaded.messages[1], AssistantMessage)
@@ -83,19 +83,19 @@ class SaveLoadConversationTests(TestCase):
         save_conversation_to_db(convo2, self.db_convo)
         self.assertEqual(self.db_convo.db_messages.count(), 2)
 
-    def test_save_updates_system_prompt(self):
+    def test_save_preserves_base_system_prompt(self):
         convo = Conversation(system='New system prompt', messages=[])
         save_conversation_to_db(convo, self.db_convo)
 
         self.db_convo.refresh_from_db()
-        self.assertEqual(self.db_convo.system_prompt, 'New system prompt')
+        self.assertEqual(self.db_convo.system_prompt, 'You are a helpful assistant.')
 
     def test_message_ordering_by_sequence_number(self):
         convo = Conversation(
             system='Test',
             messages=[
                 UserMessage(content='First'),
-                AssistantMessage(content='Second', stop_reason='end_turn', usage=100),
+                AssistantMessage(content='The second reply answers the question.', stop_reason='end_turn', usage=100),
                 UserMessage(content='Third'),
             ],
         )
@@ -104,7 +104,7 @@ class SaveLoadConversationTests(TestCase):
         loaded = load_conversation_from_db(self.db_convo)
 
         self.assertEqual(loaded.messages[0].content, 'First')
-        self.assertEqual(loaded.messages[1].content, 'Second')
+        self.assertEqual(loaded.messages[1].content, 'The second reply answers the question.')
         self.assertEqual(loaded.messages[2].content, 'Third')
 
 
@@ -195,7 +195,7 @@ class ConversationTitleTests(TestCase):
     def test_set_name_falls_back_when_llm_returns_generic_title(self):
         fake_llm = _FakeTitleLLM('conversation')
         fake_config = SimpleNamespace(llm_interface=fake_llm)
-        with patch('aquillm.models.apps.get_app_config', return_value=fake_config):
+        with patch('apps.chat.models.conversation.apps.get_app_config', return_value=fake_config):
             self.db_convo.set_name()
 
         self.db_convo.refresh_from_db()
@@ -204,7 +204,7 @@ class ConversationTitleTests(TestCase):
     def test_set_name_cleans_wrapped_llm_title(self):
         fake_llm = _FakeTitleLLM('  "*Yosemite Road Trip Plan*"  ')
         fake_config = SimpleNamespace(llm_interface=fake_llm)
-        with patch('aquillm.models.apps.get_app_config', return_value=fake_config):
+        with patch('apps.chat.models.conversation.apps.get_app_config', return_value=fake_config):
             self.db_convo.set_name()
 
         self.db_convo.refresh_from_db()

@@ -39,7 +39,7 @@ def _env_optional_float(name: str) -> float | None:
     try:
         return float(value)
     except Exception:
-        logger.warning("Invalid %s=%r; ignoring.", name, value)
+        logger.warning("obs.memory.invalid_env_float", env_name=name, value=value)
         return None
 
 

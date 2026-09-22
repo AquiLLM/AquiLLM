@@ -126,7 +126,7 @@ async def run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
         return _reply(consumer, working_convo, str(exc))
     except Exception as exc:
         logger.warning(
-            "manual_search_failed",
+            "obs.rag.manual_search_failed",
             correlation_id=correlation_id,
             command=command.command,
             error_type=type(exc).__name__,

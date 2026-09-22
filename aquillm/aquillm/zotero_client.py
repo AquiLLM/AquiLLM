@@ -52,7 +52,7 @@ class ZoteroAPIClient:
             response.raise_for_status()
             return response
         except requests.exceptions.RequestException as e:
-            logger.error(f"Zotero API request failed: {url} - {str(e)}")
+            logger.error("obs.zotero.api_error", url=url, error=str(e), error_type=type(e).__name__)
             raise
 
     def _next_page(self, res: Response, params: Dict | None = None) -> Response | None:
@@ -80,10 +80,10 @@ class ZoteroAPIClient:
 
         try:
             groups, _ =  self._get_paginated(endpoint)
-            logger.info(f"Fetched {len(groups)} groups from Zotero")
+            logger.info("obs.zotero.groups_fetched", groups_count=len(groups))
             return groups
         except Exception as e:
-            logger.error(f"Error fetching Zotero groups: {str(e)}")
+            logger.error("obs.zotero.groups_error", error=str(e), error_type=type(e).__name__)
             raise
 
     def get_collections(self, group_id: str | None = None) -> List[Dict]:
@@ -104,10 +104,10 @@ class ZoteroAPIClient:
         try:
             collections, _ = self._get_paginated(endpoint)
             library_type = "group" if group_id else "user"
-            logger.info(f"Fetched {len(collections)} collections from Zotero {library_type} library")
+            logger.info("obs.zotero.collections_fetched", collections_count=len(collections), library_type=library_type, group_id=group_id)
             return collections
         except Exception as e:
-            logger.error(f"Error fetching Zotero collections: {str(e)}")
+            logger.error("obs.zotero.collections_error", error=str(e), error_type=type(e).__name__)
             raise
 
     def get_items(self, collection_key: str | None = None, group_id: str | None = None) -> List[Dict]:
@@ -136,10 +136,10 @@ class ZoteroAPIClient:
             items, _ = self._get_paginated(endpoint)
 
             library_type = "group" if group_id else "user"
-            logger.info(f"Fetched {len(items)} items from Zotero {library_type} library")
+            logger.info("obs.zotero.items_fetched", items_count=len(items), library_type=library_type, group_id=group_id)
             return items
         except Exception as e:
-            logger.error(f"Error fetching Zotero items: {str(e)}")
+            logger.error("obs.zotero.items_error", error=str(e), error_type=type(e).__name__)
             raise
 
     def get_top_level_items(self, group_id: str | None = None) -> List[Dict]:
@@ -161,10 +161,10 @@ class ZoteroAPIClient:
             items, _ = self._get_paginated(endpoint)
 
             library_type = "group" if group_id else "user"
-            logger.info(f"Fetched {len(items)} top-level items from Zotero {library_type} library")
+            logger.info("obs.zotero.top_items_fetched", items_count=len(items), library_type=library_type, group_id=group_id)
             return items
         except Exception as e:
-            logger.error(f"Error fetching top-level items: {str(e)}")
+            logger.error("obs.zotero.top_items_error", error=str(e), error_type=type(e).__name__)
             raise
 
     def get_item_children(self, item_key: str, group_id: str | None = None) -> List[Dict]:
@@ -185,10 +185,10 @@ class ZoteroAPIClient:
 
         try:
             children, response = self._get_paginated(endpoint)
-            logger.info(f"Fetched {len(children)} children for item {item_key}")
+            logger.info("obs.zotero.children_fetched", children_count=len(children), item_id=item_key)
             return children
         except Exception as e:
-            logger.error(f"Error fetching children for item {item_key}: {str(e)}")
+            logger.error("obs.zotero.children_error", item_id=item_key, error=str(e), error_type=type(e).__name__)
             raise
 
     def download_file(self, item_key: str, group_id: str | None = None) -> Optional[bytes]:
@@ -212,16 +212,16 @@ class ZoteroAPIClient:
         try:
             response = self.session.get(url)
             if response.status_code == 200:
-                logger.info(f"Downloaded file for item {item_key}")
+                logger.info("obs.zotero.file_downloaded", item_id=item_key)
                 return response.content
             elif response.status_code == 404:
-                logger.warning(f"File not found for item {item_key}")
+                logger.warning("obs.zotero.file_not_found", item_id=item_key)
                 return None
             else:
                 response.raise_for_status()
                 return None
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error downloading file for item {item_key}: {str(e)}")
+            logger.error("obs.zotero.file_download_error", item_id=item_key, error=str(e), error_type=type(e).__name__)
             return None
 
     def get_fulltext(self, item_key: str) -> Optional[str]:
@@ -242,11 +242,11 @@ class ZoteroAPIClient:
             return fulltext_data.get('content', '')
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                logger.info(f"No fulltext available for item {item_key}")
+                logger.info("obs.zotero.fulltext_unavailable", item_id=item_key)
                 return None
             raise
         except Exception as e:
-            logger.error(f"Error fetching fulltext for item {item_key}: {str(e)}")
+            logger.error("obs.zotero.fulltext_error", item_id=item_key, error=str(e), error_type=type(e).__name__)
             return None
 
     def get_collection_by_key(self, collection_key: str) -> Optional[Dict]:
@@ -266,9 +266,9 @@ class ZoteroAPIClient:
             return response.json()
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                logger.warning(f"Collection {collection_key} not found")
+                logger.warning("obs.zotero.collection_not_found", collection=collection_key)
                 return None
             raise
         except Exception as e:
-            logger.error(f"Error fetching collection {collection_key}: {str(e)}")
+            logger.error("obs.zotero.collection_error", collection=collection_key, error=str(e), error_type=type(e).__name__)
             return None

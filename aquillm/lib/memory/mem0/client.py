@@ -115,7 +115,7 @@ def get_mem0_client():
 
     api_key = getenv("MEM0_API_KEY")
     if not api_key:
-        logger.warning("MEMORY_BACKEND=mem0 but MEM0_API_KEY is not set; falling back to local memory.")
+        logger.warning("obs.memory.api_key_missing")
         return None
 
     try:
@@ -124,7 +124,11 @@ def get_mem0_client():
         _MEM0_CLIENT = MemoryClient(api_key=api_key)
         return _MEM0_CLIENT
     except Exception as exc:
-        logger.warning("Failed to initialize Mem0 client; using local memory. Error: %s", exc)
+        logger.warning(
+            "obs.memory.client_init_error",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return None
 
 
@@ -146,14 +150,22 @@ async def get_mem0_client_async():
             _MEM0_CLIENT_ASYNC = AsyncMemoryClient(api_key=api_key)
             return _MEM0_CLIENT_ASYNC
         except Exception as exc:
-            logger.warning("Failed to initialize async Mem0 cloud client; using local memory. Error: %s", exc)
+            logger.warning(
+                "obs.memory.async_client_init_error",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             return None
 
 
 def _handle_oss_init_exception(exc: Exception):
     if _env_bool("MEM0_GRAPH_ENABLED", False) and (not _env_bool("MEM0_GRAPH_FAIL_OPEN", True)):
         raise exc
-    logger.warning("Failed to initialize OSS Mem0 client; using local memory. Error: %s", exc)
+    logger.warning(
+        "obs.memory.oss_init_error",
+        error=str(exc),
+        error_type=type(exc).__name__,
+    )
     return None
 
 

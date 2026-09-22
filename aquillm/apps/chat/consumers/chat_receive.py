@@ -1,6 +1,7 @@
 """WebSocket receive handler for chat append / rate / feedback actions."""
 from __future__ import annotations
 
+import re
 import structlog
 from base64 import b64decode
 from json import loads
@@ -30,6 +31,28 @@ from apps.chat.services.skills_runtime import effective_base_system_for_memory_a
 logger = structlog.stdlib.get_logger(__name__)
 
 
+# Recall requests that point at *other* conversation threads (not documents).
+_CHAT_HISTORY_TARGET_RE = re.compile(
+    r"\b(?:past|previous|prior|earlier|old(?:er)?|other|last(?:\s+time)?)\s+"
+    r"(?:chats?|conversations?|threads?|discussions?|sessions?|talks?)\b|"
+    r"\b(?:chat|conversation|thread|discussion)\s+history\b",
+    flags=re.IGNORECASE,
+)
+_CHAT_HISTORY_PHRASE_RE = re.compile(
+    r"\bwhat\s+did\s+we\s+(?:discuss|talk\s+about|say|decide|cover|go\s+over)\b|"
+    r"\b(?:discuss(?:ed)?|talk(?:ed)?\s+about|decide[d]?|said|mention(?:ed)?)\b[^.?!]*"
+    r"\b(?:before|earlier|last\s+time|previously|in\s+(?:a|an|our|the)\s+"
+    r"(?:past|previous|earlier|other)\s+(?:chat|conversation|thread))\b|"
+    r"\bremind\s+me\s+what\s+we\b",
+    flags=re.IGNORECASE,
+)
+_CURRENT_CHAT_TARGET_RE = re.compile(
+    r"\b(?:this|current|present|ongoing)\s+"
+    r"(?:chat|conversation|thread|discussion|session)\b",
+    flags=re.IGNORECASE,
+)
+
+
 def _looks_like_explicit_document_search_request(message_content: str) -> bool:
     """True when the user explicitly asks the assistant to retrieve from documents."""
     intent = classify_chat_message(message_content or "", selected_collection_ids=[])
@@ -46,6 +69,17 @@ def _looks_like_retry_request(message_content: str) -> bool:
     return classify_chat_message(message_content or "", selected_collection_ids=[]).is_retry
 
 
+def _looks_like_chat_history_search_request(message_content: str) -> bool:
+    """True when the user asks to recall something from an earlier conversation."""
+    text = message_content or ""
+    if _CHAT_HISTORY_TARGET_RE.search(text):
+        return True
+    # search_past_chats deliberately excludes the current conversation.
+    if _CURRENT_CHAT_TARGET_RE.search(text):
+        return False
+    return bool(_CHAT_HISTORY_PHRASE_RE.search(text))
+
+
 def _latest_prior_user_tool_intent(messages: list) -> tuple[list | None, Optional[ToolChoice]]:
     for msg in reversed(messages):
         if isinstance(msg, UserMessage) and msg.tools and msg.tool_choice:
@@ -59,12 +93,15 @@ def _configure_append_tools(
     all_tools: list,
     document_tools: list,
     selected_collection_ids: Optional[list] = None,
+    memory_tools: Optional[list] = None,
     prior_user_tools: Optional[list] = None,
     prior_user_tool_choice: Optional[ToolChoice] = None,
 ) -> tuple[list, Optional[ToolChoice]]:
     """Choose tool availability and choice strength for an appended user message."""
     if prior_user_tools and _looks_like_retry_request(message_content):
         return prior_user_tools, prior_user_tool_choice or ToolChoice(type="auto")
+    if memory_tools and _looks_like_chat_history_search_request(message_content):
+        return memory_tools, ToolChoice(type="any")
     if document_tools and _looks_like_explicit_document_search_request(message_content):
         return document_tools, ToolChoice(type="any")
     collection_ids = list(selected_collection_ids or [])
@@ -96,7 +133,7 @@ def _validated_collection_ids(raw_collections: Any) -> list[Any]:
 
 
 async def handle_chat_receive(consumer: Any, text_data: str) -> None:
-    logger.debug("ChatConsumer.receive() called with data: %s...", text_data[:100])
+    logger.debug("obs.chat.receive", data_chars=len(text_data))
 
     @database_sync_to_async
     def _save_files(files: list[ConversationFile]) -> list[ConversationFile]:
@@ -115,7 +152,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         await _save_selected_collections(selected_collections)
 
     async def append(data: dict):
-        logger.debug("append() called with collections: %s", data.get("collections", []))
+        logger.debug("obs.chat.append", collections=data.get("collections", []))
 
         assert consumer.convo is not None
 
@@ -143,6 +180,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             all_tools=consumer.tools,
             document_tools=getattr(consumer, "doc_tools", []),
             selected_collection_ids=selected_collections,
+            memory_tools=getattr(consumer, "memory_tools", []),
             prior_user_tools=prior_user_tools,
             prior_user_tool_choice=prior_user_tool_choice,
         )
@@ -151,7 +189,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         consumer.convo[-1].tool_choice = tool_choice
         await consumer._save_conversation(create_memories=False)
         consumer.last_sent_sequence = len(consumer.convo) - 1
-        logger.debug("append() completed, message added")
+        logger.debug("obs.chat.append_completed")
 
     async def rate(data: dict):
         assert consumer.convo is not None
@@ -190,7 +228,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         try:
             data = loads(text_data)
             action = data.pop("action", None)
-            logger.debug("Action: %s", action)
+            logger.debug("obs.chat.action", action=action)
             if action == "append":
                 await append(data)
                 augment_start = perf_counter()
@@ -202,8 +240,9 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                     include_episodic=not bool(consumer.col_ref.collections),
                 )
                 logger.info(
-                    "Memory augmentation took %.1fms in receive()",
-                    (perf_counter() - augment_start) * 1000,
+                    "obs.chat.memory_augmented",
+                    phase="receive",
+                    duration_ms=(perf_counter() - augment_start) * 1000,
                 )
                 direct_outcome = await run_direct_rag_turn(
                     consumer,
@@ -216,7 +255,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                         consumer, consumer.convo, create_memories=False, close_db=True
                     )
                 else:
-                    logger.debug("About to call llm_if.spin() in receive()")
+                    logger.debug("obs.chat.spin_starting", phase="receive")
                     llm_start = perf_counter()
                     await run_llm_spin(
                         consumer,
@@ -230,8 +269,9 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                         stream_func=consumer._send_stream_payload,
                     )
                     logger.info(
-                        "LLM spin took %.1fms in receive()",
-                        (perf_counter() - llm_start) * 1000,
+                        "obs.chat.spin_completed",
+                        phase="receive",
+                        duration_ms=(perf_counter() - llm_start) * 1000,
                     )
                 await consumer._save_conversation(create_memories=True)
             elif action == "select_collections":
@@ -242,13 +282,18 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 await feedback(data)
             else:
                 raise ValueError(f'Invalid action "{action}"')
-            logger.debug("receive() action completed")
+            logger.debug("obs.chat.action_completed", action=action)
         except ValidationError as e:
             msg = e.messages[0] if getattr(e, "messages", None) else str(e)
-            logger.warning("Validation error in receive(): %s", msg)
+            logger.warning("obs.chat.validation_error", error=msg)
             await send_receive_validation_error(consumer, msg)
         except Exception as e:
-            logger.error("Exception in receive(): %s", e, exc_info=True)
+            logger.error(
+                "obs.chat.receive_error",
+                error=str(e),
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
             await send_receive_error(consumer, e)
 
 
