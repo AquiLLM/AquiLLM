@@ -308,3 +308,49 @@ audit retains 36,740 automatic, 92,774 candidate and 205,128 rejected links;
 points to the active artifact. Projection remained pending while its worker was
 held for the final writer/index deployment; assembly success alone does not
 establish graph retrieval readiness.
+
+Before the final worker rollout, the authenticated graph visualization API
+returned HTTP 200 with a ready SQL graph preview (150 nodes, 89 edges, both
+display caps reported). The Memgraph projection was still pending, so this UI
+result was not treated as proof of graph-backed retrieval.
+
+The bounded assembly and indexed Memgraph batch writer were committed and
+pushed as `d745781de210903c209c038f1c13669f3366905b`. An isolated projection
+worker first loaded that exact revision while the main extraction worker
+finished its active document jobs. All six projection indexes were verified
+on the development Memgraph instance. Both workers then drained to exit zero,
+the main checkout fast-forwarded to the reviewed commit, and the official
+extraction/projection workers were rebuilt and restarted. Application, query
+gateway, query extractor and Redis health checks passed.
+
+The full-size projection exposed a separate lifecycle defect. Its normal build
+started at 11:44:21 UTC and wrote 93,862 records, but did not renew its five-minute
+lease. Reconciliation correctly superseded it at 11:49:34 instead of allowing
+an expired owner to publish. The pending replacement preserves the completed
+collection artifact. The operational probe also had a separate 300-second
+watchdog; that watchdog is not evidence of an application execution deadline.
+The projection worker was gracefully held again while renewal and publication
+failure handling were repaired and tested.
+
+The published-schema fixture's earlier ready projection was superseded when
+its collection artifact advanced to membership epoch one. Its current pending
+projection explains the subsequent readiness mismatch; elapsed age by itself
+does not. Broker inspection found 454 project, 392 prune and six reconcile
+messages, establishing a real delivery backlog. No queued work was purged.
+
+Projection now renews its existing owner-fenced lease every quarter lease
+interval throughout source reads, staging, validation and graph-ready topology
+checks. The heartbeat closes its own database connection, joins before the final
+synchronous renewal and PostgreSQL ready compare-and-set, and stops publication
+on ownership loss. An ambiguous error after graph-ready starts cannot retry
+staging on a possibly ready generation: the existing fenced failure/reconciliation
+path replaces failed or expired occurrences. Successful publication and another
+owner's lease remain protected. Lease duration and authority checks are unchanged.
+
+Five regression tests failed before implementation. The final combined worker,
+reconciler, task and real PostgreSQL suite passed **29 tests**. PostgreSQL checks
+used the restricted state role and proved renewal beyond original expiry,
+owner-takeover rejection, unchanged attempt count and actual thread-connection
+closure. Ruff passed, and the five outgoing source/test/report files contained
+zero credential-pattern findings. Live target retrieval remains to be verified
+after this repair is deployed.

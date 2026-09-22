@@ -1,19 +1,42 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from django.utils import timezone
 
 from apps.knowledge_graph.projection import reconciler, worker
 from apps.knowledge_graph.projection.memgraph_driver import MemgraphDriverError
+from apps.knowledge_graph.projection.state_repository import StateLeaseV1
+
+
+def _lease(projection_id):
+    return StateLeaseV1(
+        projection_id, "worker-a", timezone.now() + timedelta(seconds=300), 1
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_fenced_renewal(monkeypatch):
+    monkeypatch.setattr(
+        worker.FunctionProjectionStateRepository,
+        "renew",
+        lambda self, **kwargs: StateLeaseV1(
+            kwargs["projection_id"],
+            kwargs["owner"],
+            kwargs["now"] + timedelta(seconds=kwargs["lease_seconds"]),
+            1,
+        ),
+    )
 
 
 def test_project_generation_replays_partial_staging_and_ready_cas(monkeypatch):
     projection_id = uuid4()
     calls = []
-    lease = SimpleNamespace(projection_id=str(projection_id))
+    lease = _lease(projection_id)
     generation_key = "a" * 64
     private_checksum = "c" * 64
     bundle = SimpleNamespace(generation=SimpleNamespace(generation_key=generation_key))
@@ -108,7 +131,7 @@ def test_project_generation_redacts_partial_write_failures(monkeypatch):
     monkeypatch.setattr(
         worker,
         "claim_projection_lease",
-        lambda **_kwargs: SimpleNamespace(projection_id=str(projection_id)),
+        lambda **_kwargs: _lease(projection_id),
     )
     monkeypatch.setattr(
         worker,
@@ -151,7 +174,7 @@ def test_project_generation_propagates_redacted_transient_for_celery_retry(
     monkeypatch.setattr(
         worker,
         "claim_projection_lease",
-        lambda **_kwargs: SimpleNamespace(projection_id=str(projection_id)),
+        lambda **_kwargs: _lease(projection_id),
     )
     monkeypatch.setattr(
         worker,
@@ -186,7 +209,7 @@ def test_project_generation_retries_redacted_memgraph_driver_failures(monkeypatc
     monkeypatch.setattr(
         worker,
         "claim_projection_lease",
-        lambda **_kwargs: SimpleNamespace(projection_id=str(projection_id)),
+        lambda **_kwargs: _lease(projection_id),
     )
     monkeypatch.setattr(
         worker,
@@ -220,7 +243,7 @@ def test_project_generation_does_not_swallow_transient_failure_recording(monkeyp
     monkeypatch.setattr(
         worker,
         "claim_projection_lease",
-        lambda **_kwargs: SimpleNamespace(projection_id=str(projection_id)),
+        lambda **_kwargs: _lease(projection_id),
     )
     monkeypatch.setattr(
         worker,
@@ -271,6 +294,7 @@ def test_reconcile_handles_empty_store_drift_and_newer_artifact_in_pages(
     monkeypatch.setattr(reconciler, "_postgres_repository", lambda: object())
     monkeypatch.setattr(reconciler, "_memgraph_repository", lambda: object())
     enqueued = []
+
     def enqueue(**kwargs):
         if unexpected_failure:
             raise RuntimeError("state backend failed")
