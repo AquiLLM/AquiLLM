@@ -76,6 +76,31 @@ def test_merge_private_graph_diagnostics_stay_out_of_llm_text():
     assert "private-node" not in serialize_tool_result_for_llm(merged)
 
 
+def test_merge_keeps_second_document_before_final_cutoff(monkeypatch):
+    monkeypatch.setenv("RAG_MAX_SNIPPETS_PER_DOC", "2")
+    merged = _merge([
+        _payload(_row(1, 1, "a"), _row(2, 2, "a"), _row(3, 3, "b")),
+    ], limit=2)
+
+    assert [row["chunk_id"] for row in merged["result"]] == [1, 3]
+    assert [row["rank"] for row in merged["result"]] == [1, 2]
+
+
+def test_merge_caps_each_document_and_keeps_its_ranking(monkeypatch):
+    monkeypatch.setenv("RAG_MAX_SNIPPETS_PER_DOC", "2")
+    merged = _merge([
+        _payload(*[_row(i, i, "a") for i in range(1, 5)], _row(5, 5, "b")),
+    ], limit=5)
+
+    assert [row["chunk_id"] for row in merged["result"]] == [1, 5, 2]
+    assert merged["retrieved_count"] == 3
+
+
+def test_merge_titles_describe_only_retained_rows(monkeypatch):
+    merged = _merge([_payload(_row(1, 1, "a"), _row(2, 2, "b"))], limit=1)
+    assert merged["retrieved_documents"] == ["Paper a"]
+
+
 def test_merge_aggregates_safe_graph_diagnostics_with_hit_precedence():
     merged = _merge(
         [

@@ -1,10 +1,11 @@
 """Evidence packet building for direct RAG."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from apps.chat.services.rag_config import evidence_token_budget, max_snippets_per_doc
+from lib.llm.providers.rag_citations import _chunk_citation_from_row
 
 _CHARS_PER_TOKEN = 4
 
@@ -24,15 +25,15 @@ class EvidencePacket:
 
 
 def _estimate_tokens(text: str) -> int:
-    return max(1, len(text) // _CHARS_PER_TOKEN)
+    return max(1, (len(text) + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN)
 
 
 def _chunk_text(chunk: dict) -> str:
-    """Extract the textual content from a chunk dict (supports both compact and full formats)."""
+    """Extract text from either compact or full chunk format."""
     return chunk.get("text") or chunk.get("x") or ""
 
 
-def _apply_per_doc_cap_and_diversify(
+def diversify_evidence_chunks(
     chunks: list[dict],
     per_doc_limit: int,
 ) -> list[dict]:
@@ -84,7 +85,7 @@ def build_evidence_packet(
     search_scope: str,
     token_budget: int | None = None,
 ) -> EvidencePacket:
-    """Normalise a ``pack_chunk_search_results`` dict into a token-budgeted evidence packet.
+    """Normalise chunk search results into a token-budgeted evidence packet.
 
     Enforces:
     - ``RAG_MAX_SNIPPETS_PER_DOC`` – no single document dominates snippet slots.
@@ -116,22 +117,23 @@ def build_evidence_packet(
         )
 
     # Apply per-doc cap with round-robin diversification.
-    capped = _apply_per_doc_cap_and_diversify(raw_chunks, per_doc_limit)
+    capped = diversify_evidence_chunks(raw_chunks, per_doc_limit)
 
-    # Apply token budget: keep chunks in order until budget exhausted.
+    # Skip passages that cannot fit so shorter evidence from later papers can
+    # still be selected. Never send an oversized first passage past the budget.
     selected: list[dict] = []
     used_tokens = 0
     for chunk in capped:
         chunk_tokens = _estimate_tokens(_chunk_text(chunk))
-        if used_tokens + chunk_tokens > budget and selected:
-            break
+        if used_tokens + chunk_tokens > budget:
+            continue
         selected.append(chunk)
         used_tokens += chunk_tokens
 
     # Extract citation tokens.
     citation_tokens: list[str] = []
     for chunk in selected:
-        token = chunk.get("citation") or chunk.get("ref")
+        token = _chunk_citation_from_row(chunk)
         if token and token not in citation_tokens:
             citation_tokens.append(token)
 
@@ -139,7 +141,11 @@ def build_evidence_packet(
     image_urls: list[str] = []
     for chunk in selected:
         url = chunk.get("image_url") or chunk.get("u")
-        if url and isinstance(url, str) and url.startswith("/aquillm/") and url not in image_urls:
+        if (
+            isinstance(url, str)
+            and url.startswith("/aquillm/")
+            and url not in image_urls
+        ):
             image_urls.append(url)
 
     return EvidencePacket(
@@ -148,10 +154,13 @@ def build_evidence_packet(
         citation_tokens=citation_tokens,
         query=query,
         search_scope=search_scope,
-        retrieval_status=retrieval_status,
-        diagnostic_message="",
+        retrieval_status=retrieval_status if selected else "no_results",
+        diagnostic_message=(
+            "" if selected else
+            "Retrieved passages could not fit within the evidence budget."
+        ),
         total_tokens=used_tokens,
     )
 
 
-__all__ = ["EvidencePacket", "build_evidence_packet"]
+__all__ = ["EvidencePacket", "build_evidence_packet", "diversify_evidence_chunks"]

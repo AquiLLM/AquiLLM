@@ -21,6 +21,7 @@ from channels.db import database_sync_to_async
 
 from apps.chat.services.manual_search_turn import run_manual_search_turn
 from apps.chat.services.rag_config import (
+    direct_rag_candidate_top_k,
     direct_rag_max_queries,
     direct_rag_top_k,
     is_direct_rag_enabled,
@@ -160,6 +161,7 @@ async def run_direct_rag_turn(
         t_query_end = time.perf_counter()
 
         top_k = direct_rag_top_k()
+        candidate_top_k = direct_rag_candidate_top_k()
 
         t_retrieval_start = time.perf_counter()
         search_async = database_sync_to_async(
@@ -167,7 +169,7 @@ async def run_direct_rag_turn(
             thread_sensitive=False,
         )
         search_outcomes = await asyncio.gather(
-            *(search_async(consumer, search_query, top_k) for search_query in queries),
+            *(search_async(consumer, search_query, candidate_top_k) for search_query in queries),
             return_exceptions=True,
         )
         search_results = [
