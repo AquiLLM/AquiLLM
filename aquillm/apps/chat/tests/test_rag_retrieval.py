@@ -168,10 +168,14 @@ def test_fusion_rejects_inconsistent_coordinates_and_citations():
 
 
 def test_fusion_keeps_per_query_scores_separate_and_caps_union():
-    from apps.chat.services.rag_retrieval import fuse_ranked_tool_results
-    from apps.documents.services.chunk_rerank_results import PassageScore, RerankScoreSet
-    from apps.documents.services.chunk_rerank_score_transport import serialize_score_set
     from uuid import UUID
+
+    from apps.chat.services.rag_retrieval import fuse_ranked_tool_results
+    from apps.documents.services.chunk_rerank_results import (
+        PassageScore,
+        RerankScoreSet,
+    )
+    from apps.documents.services.chunk_rerank_score_transport import serialize_score_set
 
     doc = UUID("00000000-0000-0000-0000-000000000001")
     score_set = RerankScoreSet(

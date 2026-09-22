@@ -9,6 +9,8 @@ from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services.tool_wiring import document_figure_payloads as figure_payloads
 from apps.chat.services.tool_wiring.document_tool_support import (
     format_whole_document_citations as _format_whole_document_citations,
+)
+from apps.chat.services.tool_wiring.document_tool_support import (
     resolve_doc_uuid as _resolve_doc_uuid,
 )
 from apps.collections.models import Collection
@@ -88,7 +90,6 @@ def vector_search_tool(
         score_set = diagnostics.pop("_score_set", None)
         titles_by_doc_id = {doc.id: doc.title for doc in docs}
         docs_by_doc_id = {doc.id: doc for doc in docs}
-
         return pack_chunk_search_results(
             results,
             titles_by_doc_id=titles_by_doc_id,
@@ -260,7 +261,6 @@ def search_single_document_tool(
         )
         diagnostics = dict(diagnostics)
         score_set = diagnostics.pop("_score_set", None)
-
         titles_by_doc_id = {doc.id: doc.title}
         docs_by_doc_id = {doc.id: doc}
         return pack_chunk_search_results(

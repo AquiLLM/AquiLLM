@@ -23,25 +23,29 @@ from apps.documents.services.chunk_rerank import (
 )
 from apps.documents.services.chunk_rerank_results import RerankScoreSet
 from apps.documents.services.chunk_rerank_score_transport import serialize_score_set
-from apps.documents.services.chunk_search_score_handoff import (
-    score_set_for_authorized_rows,
-)
-from apps.documents.services.chunk_search_validation import (
-    candidate_identifier as _candidate_identifier,
-    candidate_identity as _candidate_identity,
-    validate_candidate_request,
-)
+from apps.documents.services.chunk_search_authorization import authorized_search_rows
 from apps.documents.services.chunk_search_candidates import (
     CandidateScopeLimit,
     collect_hybrid_candidate_snapshot,
     freeze_authorized_document_scope,
 )
-from apps.documents.services.chunk_search_authorization import authorized_search_rows
 from apps.documents.services.chunk_search_candidates import (
     _exact_term_query as _candidate_exact_term_query,
 )
 from apps.documents.services.chunk_search_candidates import (
     _salient_exact_terms as _candidate_salient_exact_terms,
+)
+from apps.documents.services.chunk_search_score_handoff import (
+    score_set_for_authorized_rows,
+)
+from apps.documents.services.chunk_search_validation import (
+    candidate_identifier as _candidate_identifier,
+)
+from apps.documents.services.chunk_search_validation import (
+    candidate_identity as _candidate_identity,
+)
+from apps.documents.services.chunk_search_validation import (
+    validate_candidate_request,
 )
 from apps.documents.services.hybrid_graph_authorization import (
     HybridGraphRetrievalDependencies,
@@ -221,8 +225,8 @@ def text_chunk_search(
     authorization_context: object | None = None,
     hybrid_graph_dependencies: HybridGraphRetrievalDependencies | None = None,
 ):
-    from apps.documents.services import rag_cache
     from apps.chat.services.rag_config import evidence_selection_config
+    from apps.documents.services import rag_cache
     from aquillm.utils import get_embedding
     from lib.embeddings.config import get_local_embed_config
 
@@ -480,11 +484,7 @@ def text_chunk_search(
             reason = RetrievalLogReason.INTERNAL_FAILURE
         logger.error(
             event,
-            **retrieval_log_fields(
-                reason=reason,
-                count=0,
-                elapsed_ms=0.0,
-            ),
+            **retrieval_log_fields(reason=reason, count=0, elapsed_ms=0.0),
         )
         raise
 

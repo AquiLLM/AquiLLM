@@ -1,4 +1,5 @@
 """Deterministic fusion for independently reranked direct-RAG searches."""
+
 from __future__ import annotations
 
 import re
@@ -16,10 +17,28 @@ _RRF_K = 60
 _GRAPH_STATUS_PRIORITY = {"miss": 1, "error": 2, "timeout": 3, "hit": 4}
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _CITATION_RE = re.compile(r"\[doc:([^\s\]]+) chunk:([1-9][0-9]*)\]")
-_PUBLIC_ROW_KEYS = frozenset({
-    "rank", "chunk_id", "doc_id", "chunk", "title", "citation", "text",
-    "type", "image_url", "r", "i", "d", "c", "n", "ref", "x", "ty", "u",
-})
+_PUBLIC_ROW_KEYS = frozenset(
+    {
+        "rank",
+        "chunk_id",
+        "doc_id",
+        "chunk",
+        "title",
+        "citation",
+        "text",
+        "type",
+        "image_url",
+        "r",
+        "i",
+        "d",
+        "c",
+        "n",
+        "ref",
+        "x",
+        "ty",
+        "u",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -36,18 +55,23 @@ def _verified_row_coordinates(row: dict[str, Any]) -> tuple[int, str, int, str] 
     number = row.get("chunk", row.get("c"))
     citation = row.get("citation", row.get("ref"))
     if (
-        type(chunk_id) is not int or chunk_id <= 0
-        or type(doc_id) is not str or not doc_id
-        or type(number) is not int or number < 0
+        type(chunk_id) is not int
+        or chunk_id <= 0
+        or type(doc_id) is not str
+        or not doc_id
+        or type(number) is not int
+        or number < 0
         or type(citation) is not str
     ):
         return None
     match = _CITATION_RE.fullmatch(citation)
     if match is None or match.group(1) != doc_id or int(match.group(2)) != chunk_id:
         return None
-    if ("chunk_id" in row and "i" in row and row["chunk_id"] != row["i"]) or (
-        "doc_id" in row and "d" in row and row["doc_id"] != row["d"]
-    ) or ("chunk" in row and "c" in row and row["chunk"] != row["c"]):
+    if (
+        ("chunk_id" in row and "i" in row and row["chunk_id"] != row["i"])
+        or ("doc_id" in row and "d" in row and row["doc_id"] != row["d"])
+        or ("chunk" in row and "c" in row and row["chunk"] != row["c"])
+    ):
         return None
     return chunk_id, doc_id, number, citation
 
@@ -238,8 +262,10 @@ def merge_ranked_tool_results(
 
     if not merged_rows:
         for payload in results:
-            if (isinstance(payload, dict)
-                    and payload.get("retrieval_status") == "no_results"):
+            if (
+                isinstance(payload, dict)
+                and payload.get("retrieval_status") == "no_results"
+            ):
                 return dict(payload)
         return {"result": [], "retrieval_status": "no_results", "retrieved_count": 0}
 
@@ -249,7 +275,8 @@ def merge_ranked_tool_results(
         "retrieved_count": len(merged_rows),
     }
     documents = {
-        str(row.get("title") or row.get("n")) for row in merged_rows
+        str(row.get("title") or row.get("n"))
+        for row in merged_rows
         if row.get("title") or row.get("n")
     }
     if documents:
@@ -263,4 +290,8 @@ def merge_ranked_tool_results(
     return merged
 
 
-__all__ = ["FusedRetrievalPool", "fuse_ranked_tool_results", "merge_ranked_tool_results"]
+__all__ = [
+    "FusedRetrievalPool",
+    "fuse_ranked_tool_results",
+    "merge_ranked_tool_results",
+]

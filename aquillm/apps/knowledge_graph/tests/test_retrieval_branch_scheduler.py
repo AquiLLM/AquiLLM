@@ -68,13 +68,8 @@ def _local_failure(kind: HybridBranchKind) -> BranchEnvelopeV1:
         if kind is HybridBranchKind.DIRECT
         else ExtendedBranchFailureReason.EXTENDED_NO_SEEDS
     )
-    return BranchEnvelopeV1(
-        kind,
-        BranchStatusV1.FAILED,
-        None,
-        reason,
-        BranchSafeDiagnosticsV1(0, 0, 0, 0, 3),
-    )
+    diagnostics = BranchSafeDiagnosticsV1(0, 0, 0, 0, 3)
+    return BranchEnvelopeV1(kind, BranchStatusV1.FAILED, None, reason, diagnostics)
 
 
 def _settings(direct_ms: int = 125, extended_ms: int = 225):
