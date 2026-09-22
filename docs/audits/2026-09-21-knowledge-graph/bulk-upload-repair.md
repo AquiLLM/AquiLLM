@@ -77,6 +77,12 @@ requests. Polling also stopped after an unchanged building response.
   The focused resolver and assembly suites passed 90 tests with one expected
   database skip; targeted Ruff passed. Independent downstream review confirmed
   that projection limits and SQL permissions remain appropriate.
+- Default and memory-promotion workers replace their shell wrapper with the
+  worker launcher using `exec`. During deployment, the old wrapper left Celery
+  behind PID 1 and did not forward Docker's graceful stop. The affected workers
+  exited cleanly after forwarding SIGTERM to their verified main process. Six
+  command changes across four Compose variants preserve all other settings;
+  70 existing Compose tests passed.
 
 ## Verification and limits
 
@@ -199,3 +205,13 @@ This confirms the downstream 250,000-link mismatch on the uploaded collection.
 The failed attempt retained all 31 active document artifacts. The extraction
 worker subsequently drained to exit zero while the compatible limit repair was
 tested; no running job was killed.
+
+The link-budget and status repair was committed and pushed as
+`d40a47083c89c9fc8ab40c5b1749d20a9b9179a6` before the development host fetched
+and fast-forwarded to it. Affected services drained cleanly, migration checks
+passed, all six graph service images built, and application/worker startup
+completed. Web, query gateway, query extractor and Redis were healthy; five
+workers responded on the expected queues. The collection-only retry started
+at 06:28:17 UTC. During that retry, the authenticated status API returned HTTP
+200 with `building` and 31 active document graphs, correctly overriding the
+earlier request's historical partial outcome.

@@ -135,7 +135,7 @@ services:
         condition: service_started
     volumes:
       - ../..:/app
-    command: sh -c "cd /app/aquillm && uv run celery -A aquillm worker --loglevel=info --queues=celery"
+    command: sh -c "cd /app/aquillm && exec uv run celery -A aquillm worker --loglevel=info --queues=celery"
 
   worker_knowledge_graph:
     build:

@@ -118,7 +118,7 @@ services:
         required: false
     volumes:
       - ../..:/app
-    command: sh -c "cd /app/aquillm && celery -A aquillm worker --loglevel=info --queues=celery"
+    command: sh -c "cd /app/aquillm && exec celery -A aquillm worker --loglevel=info --queues=celery"
 
   worker_knowledge_graph:
     build:

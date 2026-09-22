@@ -133,7 +133,7 @@ services:
     volumes:
       - ../..:/app
       - /app/.venv
-    command: sh -c "cd /app/aquillm && /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues=celery --hostname=worker-main@%h"
+    command: sh -c "cd /app/aquillm && exec /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues=celery --hostname=worker-main@%h"
 
   worker_knowledge_graph:
     build:
@@ -430,7 +430,7 @@ services:
     volumes:
       - ../..:/app
       - /app/.venv
-    command: sh -c "cd /app/aquillm && /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues=memory-promotion --concurrency=1 --prefetch-multiplier=1 --hostname=worker-memory-promotion@%h"
+    command: sh -c "cd /app/aquillm && exec /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues=memory-promotion --concurrency=1 --prefetch-multiplier=1 --hostname=worker-memory-promotion@%h"
   
   nginx:
       image: nginx:stable-bookworm
