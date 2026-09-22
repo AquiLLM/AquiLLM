@@ -253,9 +253,9 @@ async def get_episodic_memories_async(
         )
         if mem0_results:
             return mem0_results
-    return await database_sync_to_async(_get_episodic_memories_pgvector)(
-        user, query.strip(), top_k, exclude_conversation_id
-    )
+    return await database_sync_to_async(
+        _get_episodic_memories_pgvector, thread_sensitive=False
+    )(user, query.strip(), top_k, exclude_conversation_id)
 
 
 def get_last_user_message_text(convo: 'Conversation') -> str:
@@ -344,22 +344,20 @@ def augment_conversation_with_memory(
 
 
 async def augment_conversation_with_memory_async(
-    convo: 'Conversation',
-    user: User,
-    base_system: str,
+    convo: 'Conversation', user: User, base_system: str,
     exclude_conversation_id: Optional[int] = None,
+    *,
+    include_episodic: bool = True,
 ) -> None:
-    """
-    Like augment_conversation_with_memory but overlaps profile ORM load with async Mem0/pgvector episodic fetch.
-    Prefer this from Channels/WebSocket handlers to reduce wall-clock latency before the LLM call.
-    """
+    """Overlap profile loading with optional latency-bounded episodic retrieval."""
     query = get_last_user_message_text(convo)
     profile_task = database_sync_to_async(get_user_profile_facts)(user)
-    episodic_task = _get_episodic_memories_with_latency_budget(
-        user,
-        query,
-        top_k=EPISODIC_TOP_K,
-        exclude_conversation_id=exclude_conversation_id,
+    episodic_task = (
+        _get_episodic_memories_with_latency_budget(
+            user, query, EPISODIC_TOP_K, exclude_conversation_id
+        )
+        if include_episodic
+        else asyncio.sleep(0, result=[])
     )
     profile_facts, episodic = await asyncio.gather(profile_task, episodic_task)
     logger.info(

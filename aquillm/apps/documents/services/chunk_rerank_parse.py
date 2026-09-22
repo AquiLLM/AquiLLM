@@ -63,33 +63,33 @@ def parse_score_results(body) -> list[tuple[int, float]]:
         if not isinstance(idx, int):
             continue
         score = item.get("score")
-        if not isinstance(score, (int, float)):
+        if type(score) not in (int, float):
             score = item.get("relevance_score")
-        if not isinstance(score, (int, float)):
+        if type(score) not in (int, float):
             continue
         pairs.append((idx, float(score)))
     return pairs
 
 
 def parse_single_score(body) -> float:
-    if isinstance(body, (int, float)):
+    if type(body) in (int, float):
         return float(body)
     if isinstance(body, dict):
-        if isinstance(body.get("score"), (int, float)):
+        if type(body.get("score")) in (int, float):
             return float(body["score"])
         data = body.get("data")
         if isinstance(data, list) and data:
             first = data[0]
             if isinstance(first, dict):
                 for key in ("score", "relevance_score"):
-                    if isinstance(first.get(key), (int, float)):
+                    if type(first.get(key)) in (int, float):
                         return float(first[key])
         results = body.get("results")
         if isinstance(results, list) and results:
             first = results[0]
             if isinstance(first, dict):
                 for key in ("score", "relevance_score"):
-                    if isinstance(first.get(key), (int, float)):
+                    if type(first.get(key)) in (int, float):
                         return float(first[key])
     raise ValueError(f"Unable to parse score response: {body!r}")
 
