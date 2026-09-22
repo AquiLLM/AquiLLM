@@ -71,5 +71,12 @@ Files: `aquillm/apps/collections/services/graph_visualization.py`, a focused pro
 - [x] Review all changes, run targeted PostgreSQL and frontend checks, and scan outgoing files for secrets.
 - [x] Commit/push development, then pull/rebuild/migrate/restart the development host.
 - [x] Replay exact current collection document builds through normal service entry points; preserve the user's generated draft and any later edits.
-- [ ] Verify all uploaded documents, collection assembly, projection readiness, real retrieval, and cited answers. Report any remaining limitation explicitly.
-- [ ] Record evidence and final revisions; revoke only the temporary key created for this repair after work completes.
+- [x] Verify all uploaded documents, collection assembly, projection readiness, real retrieval, and cited answers. Report any remaining limitation explicitly.
+- [x] Record evidence and the final application revision; prepare identity-guarded cleanup of the temporary test database and this repair's exact SSH key.
+
+Application revision `2c2ceac66075573581e1b7af877527e854445c4d` is deployed. See
+`docs/audits/2026-09-21-knowledge-graph/bulk-upload-repair.md` for cold-cache
+retrieval, actual provider/citation results and explicit browser/quality limits.
+The final operational sequence is to pull this evidence commit, revoke the exact
+temporary SSH key, then remove its local files. Its completion is recorded in
+the task execution after the final documentation pull.

@@ -1,5 +1,41 @@
 # Bulk upload repair
 
+## Verified development outcome — 2026-09-22
+
+The reviewed fixes are committed and deployed on `development` through application
+revision `2c2ceac66075573581e1b7af877527e854445c4d`. The development checkout was
+clean after the source-first pull and service restart. No environment files,
+private keys, document content or raw private logs were included in the commits.
+
+For **Faithfullness Study Document Test**, all **31 documents** (30 PDFs and one
+report) have active graph artifacts, with **zero current document failures**.
+The ready projection contains 2,168 chunks, 23,536 entities and 277 relations.
+An actual cold-cache search succeeded through both direct and extended branches,
+materialized all 32 candidate chunks and retained graph evidence in the final
+top-five results. A subsequent actual provider-generated answer passed with one
+retrieval, both branches successful, no extractive fallback, and four valid
+citations, three pointing to graph-materialized chunks. These citations also
+overlapped baseline retrieval; this check proves execution and citation scope,
+not an improvement in recall or a semantic-faithfulness score.
+
+The generated custom schema draft is unchanged and **unpublished**. This uploaded
+collection therefore uses the default ontology. A separate published-custom-schema
+fixture also passed actual direct/extended retrieval and materialization.
+
+Web, query gateway, query extractor and Redis health checks passed; all five
+worker queues responded. The migration and collected frontend progress bundle
+were verified, with one maintenance scheduler and the restricted role boundaries
+intact. The final generated-answer check exercised application services and the
+real provider; it did not exercise an authenticated browser/WebSocket session or
+persist a chat conversation. End-user acceptance and semantic quality testing
+remain the next stage. Historical failed records and unrelated collection work
+were preserved and are not represented as globally repaired.
+
+The chronology below retains intermediate failures and their verification so
+they cannot be mistaken for successful checks. Final operational cleanup revokes
+only this repair's temporary SSH key after this report is committed and pulled;
+that result is confirmed separately in the task's final execution record.
+
 ## Observed development failure
 
 The reported collection contains 30 distinct PDFs and one report. All 31 source
@@ -590,3 +626,27 @@ required after the query-limit fix is deployed.
 
 The separate root direct-RAG orchestration suite also passed all **20 tests**.
 Independent source/probe/deployment review is clear.
+
+The query-limit repair was pushed and deployed as
+2c2ceac66075573581e1b7af877527e854445c4d. The web-only restart completed with
+a clean checkout and healthy web/gateway services; private configuration was
+unchanged. The actual provider-backed answer check then passed with exactly one
+retrieval and one 32-chunk materialization. Direct returned 12 candidates in
+1,114 ms; extended returned 20 in 477 ms. Two bounded provider calls produced one
+nonempty answer, with no extractive fallback. The substantive body contained 588
+words; all four citations belonged to retrieved evidence in the selected
+collection, and three referenced graph-materialized chunks. None was exclusive
+to graph retrieval. No source text or answer text was written to this report.
+
+Final health checks confirmed all ten inspected services running, healthy checks
+where defined, Redis PING, five responding worker queues, and successful recent
+recovery/reconciliation activity. The final private numeric settings were a
+4 MiB request budget, 5,000 ms overall, 4,500 ms per branch, 4,000 ms gateway and
+16 extended seeds. The graph transaction budget remained 300 ms. There were
+194 ready projections globally alongside historical failures and three unrelated
+active builds; the zero-failure statement applies to this uploaded collection.
+
+The exact owned disposable PostgreSQL test container was removed after final
+checks, using its ID, name, image, creation time and localhost port guards.
+Unrelated local containers were left in place. The earlier projection canary
+and its detached remote worktree had already been removed.
