@@ -6,7 +6,12 @@ from collections import defaultdict
 from math import fsum, isfinite
 
 from apps.knowledge_graph.retrieval.branch_contracts import ExtendedBranchFailureReason
-from apps.knowledge_graph.retrieval.projected_ppr import ppr_projected_v1
+from apps.knowledge_graph.retrieval.ppr_policy import classify_ppr_intent
+from apps.knowledge_graph.retrieval.ppr_seed_support import (
+    PreparedPPRSeedsV1,
+    summarize_extended_support,
+)
+from apps.knowledge_graph.retrieval.production_ppr_policy import rank_projected_for_mode
 from apps.knowledge_graph.retrieval.scheduler_support import (
     LocalBranchSchedulerFailure,
     failed_branch,
@@ -44,8 +49,8 @@ def _source_failure(error):
     ) from error
 
 
-def prepare_extended_branch(
-    runtime, *, baseline, shared, authorization, settings, deadline
+def _prepare_extended_branch(
+    runtime, *, query, baseline, shared, authorization, settings, deadline, with_policy
 ):
     runtime._exact_request(authorization, settings)
     scope = runtime._shared_scope(shared)
@@ -87,6 +92,7 @@ def prepare_extended_branch(
             (candidate.pk, candidate.doc_id)
         )
     identities: dict[str, list[float]] = defaultdict(list)
+    mapped_chunk_ids: set[int] = set()
     try:
         repository = _projection_repository(runtime)
     except Exception as error:
@@ -114,6 +120,7 @@ def prepare_extended_branch(
         for chunk_id, entity_keys in by_chunk.items():
             if not entity_keys:
                 continue
+            mapped_chunk_ids.add(chunk_id)
             share = requested[chunk_id] / len(entity_keys)
             for identity_key in entity_keys:
                 identities[identity_key].append(share)
@@ -124,11 +131,53 @@ def prepare_extended_branch(
         : settings.graph_extended_max_seeds
     ]
     total = fsum(masses[key] for key in selected)
-    return tuple(
+    seeds = tuple(
         sorted(
             (ProjectedSeedV1(key, masses[key] / total) for key in selected),
             key=lambda row: row.identity_key,
         )
+    )
+    if not with_policy:
+        return seeds
+    support = summarize_extended_support(
+        ranked_seeds=graph_seeds,
+        mapped_chunk_ids=frozenset(mapped_chunk_ids),
+        vector_chunk_ids=getattr(baseline, "vector_chunk_ids", None),
+        trigram_chunk_ids=getattr(baseline, "trigram_chunk_ids", None),
+        exact_chunk_ids=getattr(baseline, "exact_chunk_ids", None),
+        retained_identity_count=len(seeds),
+        max_seeds=settings.graph_extended_max_seeds,
+    )
+    return PreparedPPRSeedsV1(seeds, support, classify_ppr_intent(query))
+
+
+def prepare_extended_branch(
+    runtime, *, baseline, shared, authorization, settings, deadline
+):
+    return _prepare_extended_branch(
+        runtime,
+        query="",
+        baseline=baseline,
+        shared=shared,
+        authorization=authorization,
+        settings=settings,
+        deadline=deadline,
+        with_policy=False,
+    )
+
+
+def prepare_extended_with_policy(
+    runtime, *, query, baseline, shared, authorization, settings, deadline
+):
+    return _prepare_extended_branch(
+        runtime,
+        query=query,
+        baseline=baseline,
+        shared=shared,
+        authorization=authorization,
+        settings=settings,
+        deadline=deadline,
+        with_policy=True,
     )
 
 
@@ -139,21 +188,38 @@ def run_extended_branch(
     scope, started = runtime._shared_scope(shared), runtime.clock()
     if type(prepared) is ExtendedBranchFailureReason:
         return failed_branch(HybridBranchKind.EXTENDED, prepared)
-    seeds = prepared
+    mode = getattr(settings, "ppr_restart_mode", "fixed")
+    if mode != "fixed" and type(prepared) is not PreparedPPRSeedsV1:
+        return failed_branch(
+            HybridBranchKind.EXTENDED, ExtendedBranchFailureReason.EXTENDED_SEED_INVALID
+        )
+    seeds = prepared if mode == "fixed" else prepared.seeds
     caps = topology_caps(settings, HybridBranchKind.EXTENDED)
     snapshot = runtime.topology_loader.load(
         ready=scope.ready, seeds=seeds, caps=caps, deadline=deadline
     )
     try:
-        result = ppr_projected_v1(
+        result, execution_signature = rank_projected_for_mode(
             snapshot=snapshot,
             seeds=seeds,
             config=ppr_config(snapshot, caps.max_results),
+            prepared=None if mode == "fixed" else prepared,
+            mode=mode,
+            branch=HybridBranchKind.EXTENDED,
+            deadline_check=lambda: runtime._check_branch_deadline(deadline),
         )
         candidates = graph_candidates(
             snapshot=snapshot,
             identity_scores=result.scores,
             maximum=caps.max_results,
+        )
+    except TimeoutError:
+        return ppr_failure_envelope(
+            HybridBranchKind.EXTENDED,
+            ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT,
+            seed_count=len(seeds),
+            snapshot=snapshot,
+            elapsed_ms=settings.graph_extended_timeout_ms,
         )
     except (TypeError, ValueError):
         return ppr_failure_envelope(
@@ -174,7 +240,12 @@ def run_extended_branch(
         candidates=candidates,
         settings=settings,
         elapsed_ms=max(0, int((runtime.clock() - started) * 1000)),
+        execution_algorithm_signature=execution_signature,
     )
 
 
-__all__ = ["prepare_extended_branch", "run_extended_branch"]
+__all__ = [
+    "prepare_extended_branch",
+    "prepare_extended_with_policy",
+    "run_extended_branch",
+]

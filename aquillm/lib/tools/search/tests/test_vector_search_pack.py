@@ -10,6 +10,32 @@ from lib.tools.search.vector_search import pack_chunk_search_results
 
 
 class VectorSearchPackTests(SimpleTestCase):
+    def test_private_score_sidecar_never_enters_rows_or_model_text(self):
+        chunk = SimpleNamespace(
+            id=7, doc_id="doc-a", chunk_number=1, modality="text", content="evidence"
+        )
+        score_set = {"schema_version": "v2", "scores": [{"value": 0.83}]}
+        for compact in (False, True):
+            out = pack_chunk_search_results(
+                [chunk], titles_by_doc_id={"doc-a": "Doc A"},
+                docs_by_doc_id={"doc-a": SimpleNamespace(image_file=None)},
+                truncate=lambda value: value, image_modality="image",
+                compact_items=compact, score_set=score_set,
+            )
+            assert out["_retrieval_scores"] == score_set
+            assert "scores" not in repr(out["result"])
+            assert "0.83" not in serialize_tool_result_for_llm(out)
+
+    def test_no_results_strip_private_score_diagnostics(self):
+        out = pack_chunk_search_results(
+            [], titles_by_doc_id={}, docs_by_doc_id={},
+            truncate=lambda value: value, image_modality="image",
+            retrieval_diagnostics={"doc_count": 1, "_score_set": {"scores": [0.83]}},
+        )
+        assert "_score_set" not in out["retrieval_diagnostics"]
+        assert "_score_set" not in out["_retrieval_diagnostics"]
+        assert "0.83" not in serialize_tool_result_for_llm(out)
+
     def test_pack_includes_image_url_when_storage_has_image(self):
         chunk = SimpleNamespace(
             id=7,

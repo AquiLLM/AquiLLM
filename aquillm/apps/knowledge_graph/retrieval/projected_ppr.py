@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from collections import defaultdict
-from dataclasses import dataclass
 from hashlib import sha256
 
 from .ppr import (
@@ -15,6 +13,7 @@ from .ppr import (
     canonical_algorithm_json,
 )
 from .ppr_kernel import WeightedEdge, run_ppr_kernel
+from .projected_ppr_result import ProjectedPPRResultV1, _trace_bytes
 from .projected_types import (
     ProjectedAuthorizedGraphSnapshotV1,
 )
@@ -23,51 +22,6 @@ from .topology.contracts import (
     projected_seed_checksum,
     validate_projected_seed_sequence,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class ProjectedPPRResultV1:
-    """Opaque score vector, rank order, and provider-neutral trace bytes."""
-
-    scores: tuple[tuple[str, float], ...]
-    ranked_identity_keys: tuple[str, ...]
-    trace_bytes: bytes
-
-    def __post_init__(self) -> None:
-        if type(self.scores) is not tuple or any(
-            type(row) is not tuple
-            or len(row) != 2
-            or type(row[0]) is not str
-            or type(row[1]) is not float
-            for row in self.scores
-        ):
-            raise TypeError("scores must be exact opaque-key float pairs")
-        keys = tuple(key for key, _ in self.scores)
-        if keys != tuple(sorted(keys)) or len(set(keys)) != len(keys):
-            raise ValueError("scores must be unique and opaque-key sorted")
-        if (
-            type(self.ranked_identity_keys) is not tuple
-            or set(self.ranked_identity_keys) != set(keys)
-            or len(self.ranked_identity_keys) != len(keys)
-        ):
-            raise ValueError("ranked identities must cover scores exactly")
-        if type(self.trace_bytes) is not bytes:
-            raise TypeError("trace_bytes must be exact bytes")
-
-
-def _trace_bytes(
-    scores: tuple[tuple[str, float], ...], ranked: tuple[str, ...]
-) -> bytes:
-    return json.dumps(
-        {
-            "ranked_identity_keys": ranked,
-            "scores": [[key, score.hex()] for key, score in scores],
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
 
 
 def _validate_config(
@@ -180,14 +134,13 @@ def _replay_groups(snapshot, seeds, config):
     return tuple(retained)
 
 
-def ppr_projected_v1(
+def prepare_projected_ppr_inputs(
     *,
     snapshot: ProjectedAuthorizedGraphSnapshotV1,
     seeds: tuple[ProjectedSeedV1, ...],
     config: PPRAlgorithmConfig,
-) -> ProjectedPPRResultV1:
-    """Rank a projected snapshot using opaque lexical order, never DB order."""
-
+) -> tuple[WeightedEdge[str], ...]:
+    """Validate original inputs and replay the exact bounded transitions."""
     if type(snapshot) is not ProjectedAuthorizedGraphSnapshotV1:
         raise TypeError("snapshot must be an exact projected snapshot")
     _validate_config(snapshot, config)
@@ -199,12 +152,23 @@ def ppr_projected_v1(
     identities = set(snapshot.identity_keys)
     if any(seed.identity_key not in identities for seed in seeds):
         raise ValueError("projected seeds must reference snapshot identities")
-    edges = tuple(
+    return tuple(
         WeightedEdge(
             group.source_identity_key, group.target_identity_key, group.raw_weight
         )
         for group in _replay_groups(snapshot, seeds, config)
     )
+
+
+def ppr_projected_v1(
+    *,
+    snapshot: ProjectedAuthorizedGraphSnapshotV1,
+    seeds: tuple[ProjectedSeedV1, ...],
+    config: PPRAlgorithmConfig,
+) -> ProjectedPPRResultV1:
+    """Rank a projected snapshot using opaque lexical order, never DB order."""
+
+    edges = prepare_projected_ppr_inputs(snapshot=snapshot, seeds=seeds, config=config)
     kernel = run_ppr_kernel(
         nodes=snapshot.identity_keys,
         edges=edges,
@@ -218,4 +182,4 @@ def ppr_projected_v1(
     return ProjectedPPRResultV1(scores, ranked, _trace_bytes(scores, ranked))
 
 
-__all__ = ["ProjectedPPRResultV1", "ppr_projected_v1"]
+__all__ = ["ProjectedPPRResultV1", "prepare_projected_ppr_inputs", "ppr_projected_v1"]

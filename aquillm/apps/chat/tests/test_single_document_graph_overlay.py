@@ -66,6 +66,7 @@ def test_single_document_search_keeps_scope_payload_and_real_citation(monkeypatc
                 "graph_status": "hit",
                 "graph_seed_count": 1,
                 "graph_candidate_count": 1,
+                "_score_set": {"scores": [{"value": 0.88}]},
             },
         )
 
@@ -107,6 +108,8 @@ def test_single_document_search_keeps_scope_payload_and_real_citation(monkeypatc
     ]
     assert "retrieval_diagnostics" not in result
     assert not any(key.startswith("graph_") for key in result)
+    assert result["_retrieval_scores"] == {"scores": [{"value": 0.88}]}
+    assert "_score_set" not in result["_retrieval_diagnostics"]
 
 
 def test_single_document_no_result_diagnostics_strip_graph_fields(monkeypatch):
@@ -139,6 +142,7 @@ def test_single_document_no_result_diagnostics_strip_graph_fields(monkeypatch):
                 "vector_error": None,
                 "graph_status": "miss",
                 "graph_seed_count": 0,
+                "_score_set": {"scores": [{"value": 0.88}]},
             },
         ),
     )
@@ -157,3 +161,5 @@ def test_single_document_no_result_diagnostics_strip_graph_fields(monkeypatch):
         "doc_count": 1,
         "vector_error": None,
     }
+    assert "_retrieval_scores" not in result
+    assert "_score_set" not in result["_retrieval_diagnostics"]

@@ -16,13 +16,13 @@ import yaml
 
 from .config import QueryExtractorSettings, load_query_extractor_settings
 from .contracts import (
-    QueryEntitySpanV1,
     QueryExtractionResponseV1,
     QueryExtractorProvenanceV1,
     canonical_query_extraction_response_bytes,
     parse_query_extraction_request,
 )
 from .ontology_payload import load_ontology_definition
+from .span_selection import _canonical_spans
 
 _JSON_HEADERS = [(b"content-type", b"application/json")]
 _inference_slots = asyncio.BoundedSemaphore(1)
@@ -166,31 +166,6 @@ async def _read_body(
         chunks.append(chunk)
         if not message.get("more_body", False):
             return b"".join(chunks)
-
-
-def _canonical_spans(entities: object, maximum: int) -> tuple[QueryEntitySpanV1, ...]:
-    candidates: dict[tuple[int, int, str], QueryEntitySpanV1] = {}
-    for entity in entities:  # type: ignore[union-attr]
-        span = QueryEntitySpanV1(
-            entity.entity_type,
-            entity.start,
-            entity.end,
-            float(entity.confidence),
-        )
-        key = (span.start, span.end, span.ontology_type)
-        previous = candidates.get(key)
-        if previous is None or span.confidence > previous.confidence:
-            candidates[key] = span
-    selected: list[QueryEntitySpanV1] = []
-    for span in sorted(
-        candidates.values(), key=lambda row: (row.start, row.end, row.ontology_type)
-    ):
-        if selected and selected[-1].end > span.start:
-            continue
-        selected.append(span)
-        if len(selected) == maximum:
-            break
-    return tuple(selected)
 
 
 # fmt: off

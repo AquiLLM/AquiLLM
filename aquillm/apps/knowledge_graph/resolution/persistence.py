@@ -21,6 +21,7 @@ from .coreference import (
     resolution_input_fingerprint,
     resolution_result_checksum,
 )
+from .coreference_types import _is_count, _is_hash
 
 _HASH = re.compile(r"[0-9a-f]{64}")
 _QUERY_ITERATOR_BATCH_SIZE = 1_000
@@ -85,14 +86,6 @@ _RESOLUTION_LINK_FIELDS = (
 
 class ResolutionPersistenceError(RuntimeError):
     """Raised when a resolution write cannot preserve its immutable snapshot."""
-
-
-def _is_count(value: object) -> bool:
-    return type(value) is int and value >= 0
-
-
-def _is_hash(value: object) -> bool:
-    return type(value) is str and _HASH.fullmatch(value) is not None
 
 
 def resolution_commit_is_valid(

@@ -25,6 +25,15 @@ from django.db.models import Count, DateTimeField, ExpressionWrapper, F, Q, Valu
 from django.db.models.functions import Now
 from django.utils import timezone
 
+from .failure_codes import (
+    BuildInProgressError,
+    BuildLeaseLostError,
+    CommitMarkerState,
+    CorruptBuildError,
+    RebuildPublicationError,
+    StaleBuildError,
+)
+
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _LEASE_DURATION = timedelta(minutes=30)
 BUILD_LEASE_RETRY_SECONDS = int(_LEASE_DURATION.total_seconds()) + 30
@@ -48,41 +57,6 @@ _RESNAPSHOT_RECONCILABLE_ERRORS = frozenset(
 _MISSING_COLLECTION_SNAPSHOT_ERROR = "rebuild collection scope no longer exists"
 
 logger = structlog.stdlib.get_logger(__name__)
-
-
-class BuildLeaseLostError(RuntimeError):
-    """The caller no longer owns the durable attempt generation."""
-
-
-class BuildInProgressError(RuntimeError):
-    """Another live worker currently owns this exact build identity."""
-
-
-class StaleBuildError(RuntimeError):
-    """The immutable requested source no longer matches live source state."""
-
-
-class CorruptBuildError(RuntimeError):
-    """Persisted rows cannot be tied to a complete commit marker."""
-
-
-class RebuildPublicationError(RuntimeError):
-    """Durable request work remains resumable after broker publication failed."""
-
-    def __init__(self, request_id: uuid.UUID, error_code: str) -> None:
-        self.request_id = request_id
-        self.error_code = error_code
-        super().__init__(
-            f"rebuild request {request_id} publication failed: {error_code}"
-        )
-
-
-class CommitMarkerState(StrEnum):
-    """Durable stage commit state derived from both marker and persisted rows."""
-
-    ABSENT = "absent"
-    VALID = "valid"
-    CORRUPT = "corrupt"
 
 
 def validate_build_lease(

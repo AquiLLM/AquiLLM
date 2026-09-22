@@ -7,11 +7,16 @@ from django.contrib.auth.models import User
 from apps.chat.consumers.utils import truncate_tool_text
 from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services.tool_wiring import document_figure_payloads as figure_payloads
+from apps.chat.services.tool_wiring.document_tool_support import (
+    format_whole_document_citations as _format_whole_document_citations,
+)
+from apps.chat.services.tool_wiring.document_tool_support import (
+    resolve_doc_uuid as _resolve_doc_uuid,
+)
 from apps.collections.models import Collection
 from apps.documents.models import Document, DocumentChild, TextChunk
 from aquillm.llm import LLMTool, ToolResultDict, llm_tool
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
-from lib.tools.documents import ids as document_id_tools
 from lib.tools.documents import whole_document as whole_document_tools
 from lib.tools.documents.list_ids import titles_to_document_ids
 from lib.tools.search.context import format_adjacent_chunks_tool_result
@@ -21,70 +26,12 @@ from ..retrieval_authorization import resolve_document_retrieval_authorization
 
 _format_related_figure_payloads = figure_payloads.format_related_figure_payloads
 _related_figure_payloads = figure_payloads.related_figure_payloads
-clean_and_parse_doc_id = document_id_tools.clean_and_parse_doc_id
-resolve_doc_id_with_candidates = document_id_tools.resolve_doc_id_with_candidates
 image_document_instruction = whole_document_tools.image_document_instruction
 image_document_tool_payload = whole_document_tools.image_document_tool_payload
 _NO_DOCS_EXCEPTION = {
     "exception": "No documents to search! Either no collections were selected, or "
     "the selected collections are empty."
 }
-
-
-def _format_whole_document_citations(doc_id, chunks) -> tuple[str, list[dict]]:
-    """Tag whole-document passages with the exact chunk references used by the UI."""
-    document_id = str(doc_id)
-    passages: list[str] = []
-    citation_chunks: list[dict] = []
-    for chunk in chunks:
-        content = str(getattr(chunk, "content", "") or "").strip()
-        if not content:
-            continue
-        chunk_id = int(chunk.id)
-        citation = f"[doc:{document_id} chunk:{chunk_id}]"
-        passages.append(f"{citation}\n{content}")
-        citation_chunks.append(
-            {
-                "doc_id": document_id,
-                "chunk_id": chunk_id,
-                "chunk": int(chunk.chunk_number),
-                "citation": citation,
-            }
-        )
-    return "\n\n".join(passages), citation_chunks
-
-
-def _accessible_document_ids(user: User, col_ref: CollectionsRef) -> list:
-    docs = Collection.get_user_accessible_documents(
-        user, Collection.objects.filter(id__in=col_ref.collections)
-    )
-    return [d.id for d in docs]
-
-
-def _resolve_doc_uuid(doc_id: str, user: User, col_ref: CollectionsRef):
-    """
-    Prefer ids in the chat-selected collections (prefix match + membership).
-    If the id is a valid UUID but not in that set, fall back to any document the user can view
-    so whole_document/search_single_document still work when collections are under-selected or
-    the model cites an id from elsewhere in the workspace.
-    """
-    candidates = _accessible_document_ids(user, col_ref)
-    uid, err = resolve_doc_id_with_candidates(doc_id, candidates)
-    if uid is not None:
-        return uid, ""
-    parsed, _ = clean_and_parse_doc_id(doc_id)
-    if parsed is None:
-        return None, err
-    doc = Document.get_by_id(parsed)
-    if doc is None:
-        return None, (
-            f"Document {doc_id} does not exist. "
-            "Use document_ids for the collections selected in this chat, or add the right collection "
-            "in the chat picker if the file lives elsewhere."
-        )
-    if not doc.collection.user_can_view(user):
-        return None, f"User cannot access document {doc_id}!"
-    return parsed, ""
 
 
 def vector_search_tool(
@@ -139,9 +86,10 @@ def vector_search_tool(
             authorization_context=resolved_authorization,
             hybrid_graph_dependencies=hybrid_graph_dependencies,
         )
+        diagnostics = dict(diagnostics)
+        score_set = diagnostics.pop("_score_set", None)
         titles_by_doc_id = {doc.id: doc.title for doc in docs}
         docs_by_doc_id = {doc.id: doc for doc in docs}
-
         return pack_chunk_search_results(
             results,
             titles_by_doc_id=titles_by_doc_id,
@@ -151,6 +99,7 @@ def vector_search_tool(
             search_string=search_string,
             search_scope="selected documents",
             retrieval_diagnostics=diagnostics,
+            score_set=score_set,
         )
 
     return vector_search
@@ -310,7 +259,8 @@ def search_single_document_tool(
             authorization_context=resolved_authorization,
             hybrid_graph_dependencies=hybrid_graph_dependencies,
         )
-
+        diagnostics = dict(diagnostics)
+        score_set = diagnostics.pop("_score_set", None)
         titles_by_doc_id = {doc.id: doc.title}
         docs_by_doc_id = {doc.id: doc}
         return pack_chunk_search_results(
@@ -322,6 +272,7 @@ def search_single_document_tool(
             search_string=search_string,
             search_scope=f'document "{doc.title}"',
             retrieval_diagnostics=diagnostics,
+            score_set=score_set,
         )
 
     return search_single_document

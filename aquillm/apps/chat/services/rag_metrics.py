@@ -16,6 +16,20 @@ _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _MAX_GRAPH_METRIC_MS = 60_000.0
 _MAX_GRAPH_SEEDS = 64
 _MAX_GRAPH_CANDIDATES = 20
+_SELECTION_MODES = frozenset({"legacy", "shadow", "adaptive"})
+_FALLBACK_REASONS = frozenset(
+    {
+        "scorer_unavailable",
+        "new_scores_disabled",
+        "score_incompatible",
+        "deadline",
+        "incomplete_scores",
+    }
+)
+_PROFILE_VERSIONS = frozenset({"adaptive-evidence-v1-minmax-1e-9"})
+_PROFILE_NAMES = frozenset({"focused", "balanced", "breadth"})
+_SCORE_STATUSES = frozenset({"model", "rank_fallback"})
+_CONFIG_ERRORS = frozenset({"invalid_evidence_selection_configuration"})
 
 
 def _safe_graph_ms(value: object) -> float | None:
@@ -67,6 +81,22 @@ def log_direct_rag_turn(
     graph_status: str | None = None,
     graph_algorithm_signature: str | None = None,
     graph_version_signature: str | None = None,
+    selection_mode: str | None = None,
+    selector_ms: float | None = None,
+    final_scoring_ms: float | None = None,
+    candidate_count: int | None = None,
+    selected_doc_count: int | None = None,
+    estimated_tokens: int | None = None,
+    reused_pairs: int | None = None,
+    new_pairs: int | None = None,
+    profile_version: str | None = None,
+    fixed_fallback_reason: str | None = None,
+    selection_config_error: str | None = None,
+    proposed_selected_count: int | None = None,
+    proposed_selected_doc_count: int | None = None,
+    proposed_estimated_tokens: int | None = None,
+    proposed_profile_name: str | None = None,
+    proposed_score_status: str | None = None,
 ) -> None:
     """Emit a structlog ``rag_direct_turn`` event with per-stage timing fields."""
     fields = {
@@ -104,6 +134,53 @@ def log_direct_rag_turn(
             for key, value in optional_graph_fields.items()
             if value is not None
         }
+    )
+    selection_fields = {
+        "selection_mode": selection_mode
+        if type(selection_mode) is str and selection_mode in _SELECTION_MODES
+        else None,
+        "selector_ms": _safe_graph_ms(selector_ms),
+        "final_scoring_ms": _safe_graph_ms(final_scoring_ms),
+        "candidate_count": _safe_graph_count(candidate_count, maximum=45),
+        "selected_doc_count": _safe_graph_count(selected_doc_count, maximum=15),
+        "estimated_tokens": _safe_graph_count(estimated_tokens, maximum=100_000),
+        "reused_pairs": _safe_graph_count(reused_pairs, maximum=45),
+        "new_pairs": _safe_graph_count(new_pairs, maximum=45),
+        "profile_version": profile_version
+        if (type(profile_version) is str and profile_version in _PROFILE_VERSIONS)
+        else None,
+        "fixed_fallback_reason": fixed_fallback_reason
+        if (
+            type(fixed_fallback_reason) is str
+            and fixed_fallback_reason in _FALLBACK_REASONS
+        )
+        else None,
+        "selection_config_error": selection_config_error
+        if type(selection_config_error) is str
+        and selection_config_error in _CONFIG_ERRORS
+        else None,
+        "proposed_selected_count": _safe_graph_count(
+            proposed_selected_count, maximum=15
+        ),
+        "proposed_selected_doc_count": _safe_graph_count(
+            proposed_selected_doc_count,
+            maximum=15,
+        ),
+        "proposed_estimated_tokens": _safe_graph_count(
+            proposed_estimated_tokens,
+            maximum=100_000,
+        ),
+        "proposed_profile_name": proposed_profile_name
+        if type(proposed_profile_name) is str
+        and proposed_profile_name in _PROFILE_NAMES
+        else None,
+        "proposed_score_status": proposed_score_status
+        if type(proposed_score_status) is str
+        and proposed_score_status in _SCORE_STATUSES
+        else None,
+    }
+    fields.update(
+        {key: value for key, value in selection_fields.items() if value is not None}
     )
     logger.info("rag_direct_turn", **fields)
 

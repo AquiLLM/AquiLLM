@@ -19,7 +19,11 @@ from apps.documents.services.chunk_rerank import (
     _fallback_rerank,
     _strict_local_rerank_chunks,
     rerank_chunks,
+    rerank_chunks_scored,
 )
+from apps.documents.services.chunk_rerank_results import RerankScoreSet
+from apps.documents.services.chunk_rerank_score_transport import serialize_score_set
+from apps.documents.services.chunk_search_authorization import authorized_search_rows
 from apps.documents.services.chunk_search_candidates import (
     CandidateScopeLimit,
     collect_hybrid_candidate_snapshot,
@@ -31,11 +35,22 @@ from apps.documents.services.chunk_search_candidates import (
 from apps.documents.services.chunk_search_candidates import (
     _salient_exact_terms as _candidate_salient_exact_terms,
 )
+from apps.documents.services.chunk_search_score_handoff import (
+    score_set_for_authorized_rows,
+)
+from apps.documents.services.chunk_search_validation import (
+    candidate_identifier as _candidate_identifier,
+)
+from apps.documents.services.chunk_search_validation import (
+    candidate_identity as _candidate_identity,
+)
+from apps.documents.services.chunk_search_validation import (
+    validate_candidate_request,
+)
 from apps.documents.services.hybrid_graph_authorization import (
     HybridGraphRetrievalDependencies,
     documents_match_retrieval_authorization,
     is_exact_authorization_context,
-    reauthorized_baseline,
 )
 from apps.documents.services.hybrid_graph_dependencies import resolve
 from apps.documents.services.hybrid_graph_orchestration import (
@@ -64,22 +79,7 @@ class CandidateRankingResult:
     inaccessible_candidate_count: int
     materialization_ms: float
     rerank_ms: float
-
-
-def _candidate_identifier(candidate: object) -> int:
-    identifier = getattr(candidate, "pk", None)
-    if type(identifier) is not int or identifier <= 0:
-        raise ValueError("candidate rows require positive integer primary keys")
-    return identifier
-
-
-def _candidate_identity(candidate: object) -> tuple[str, int]:
-    """Use a durable PK when present, otherwise exact in-memory identity."""
-
-    identifier = getattr(candidate, "pk", None)
-    if type(identifier) is int and identifier > 0:
-        return ("pk", identifier)
-    return ("object", id(candidate))
+    score_set: RerankScoreSet | None = None
 
 
 def materialize_and_rerank_candidates(
@@ -92,36 +92,15 @@ def materialize_and_rerank_candidates(
     graph_chunk_ids: tuple[int, ...] = (),
     max_graph_candidates: int = 0,
     force_complete_rerank: bool = False,
+    capture_scores: bool = False,
     _eval_rerank_capability: object | None = None,
 ) -> CandidateRankingResult:
     """Permission-refetch graph rows, append to the baseline, and rerank once."""
 
-    if not isinstance(query, str) or not query.strip():
-        raise ValueError("query must be nonempty")
-    if type(top_k) is not int or top_k <= 0:
-        raise ValueError("top_k must be a positive exact integer")
-    if type(baseline_candidates) is not tuple:
-        raise ValueError("baseline_candidates must be an exact tuple")
-    baseline_identities = tuple(_candidate_identity(row) for row in baseline_candidates)
-    if len(set(baseline_identities)) != len(baseline_identities):
-        raise ValueError("baseline candidates must be unique")
-    if type(graph_chunk_ids) is not tuple or any(
-        type(identifier) is not int or identifier <= 0 for identifier in graph_chunk_ids
-    ):
-        raise ValueError("graph_chunk_ids must be an exact positive integer tuple")
-    if len(set(graph_chunk_ids)) != len(graph_chunk_ids):
-        raise ValueError("graph_chunk_ids must be unique")
-    if type(max_graph_candidates) is not int or max_graph_candidates < 0:
-        raise ValueError("max_graph_candidates must be a nonnegative exact integer")
-    if type(force_complete_rerank) is not bool:
-        raise ValueError("force_complete_rerank must be an exact bool")
-    if (
-        _eval_rerank_capability is not None
-        and _eval_rerank_capability is not _STRICT_EVALUATION_RERANK
-    ):
-        raise ValueError("invalid strict eval rerank capability")
-    if len(graph_chunk_ids) > max_graph_candidates:
-        raise CandidateScopeLimit("graph candidate materialization exceeds its cap")
+    baseline_identities = validate_candidate_request(
+        query, top_k, baseline_candidates, graph_chunk_ids, max_graph_candidates,
+        force_complete_rerank, capture_scores, _eval_rerank_capability,
+    )
 
     materialization_started = perf_counter()
     inaccessible = 0
@@ -186,6 +165,7 @@ def materialize_and_rerank_candidates(
     combined = (*baseline_candidates, *graph_rows)
     materialization_ms = (perf_counter() - materialization_started) * 1_000
     rerank_started = perf_counter()
+    score_set = None
     if _eval_rerank_capability is _STRICT_EVALUATION_RERANK:
         reranked = _strict_local_rerank_chunks(
             model_cls,
@@ -196,6 +176,20 @@ def materialize_and_rerank_candidates(
         )
     elif not force_complete_rerank and len(combined) <= top_k:
         reranked = _fallback_rerank(model_cls, combined, top_k)
+    elif capture_scores:
+        scored = rerank_chunks_scored(model_cls, query, combined, top_k)
+        by_id = {_candidate_identifier(row): row for row in combined}
+        if (
+            not scored.ranked_ids
+            or len(scored.ranked_ids) > top_k
+            or len(set(scored.ranked_ids)) != len(scored.ranked_ids)
+            or len(by_id) != len(combined)
+            or any(type(pk) is not int or pk not in by_id for pk in scored.ranked_ids)
+        ):
+            reranked = _fallback_rerank(model_cls, combined, top_k)
+        else:
+            reranked = [by_id[pk] for pk in scored.ranked_ids]
+            score_set = scored.score_set
     else:
         reranked = rerank_chunks(model_cls, query, combined, top_k)
     ranked_results = tuple(reranked)
@@ -218,6 +212,7 @@ def materialize_and_rerank_candidates(
         inaccessible_candidate_count=inaccessible,
         materialization_ms=materialization_ms,
         rerank_ms=rerank_ms,
+        score_set=score_set,
     )
 
 
@@ -230,26 +225,24 @@ def text_chunk_search(
     authorization_context: object | None = None,
     hybrid_graph_dependencies: HybridGraphRetrievalDependencies | None = None,
 ):
+    from apps.chat.services.rag_config import evidence_selection_config
     from apps.documents.services import rag_cache
     from aquillm.utils import get_embedding
     from lib.embeddings.config import get_local_embed_config
 
     total_start = perf_counter()
     try:
+        capture_scores = evidence_selection_config().mode == "adaptive"
         overlay_enabled = bool(getattr(django_settings, "KG_OVERLAY_ENABLED", False))
         hybrid_graph_dependencies, hybrid_requested = resolve(
             overlay_enabled, authorization_context, hybrid_graph_dependencies
         )
 
         def authorized_rows(rows):
-            if not hybrid_requested and not is_exact_authorization_context(
-                authorization_context
-            ):
-                return tuple(rows)
-            try:
-                return reauthorized_baseline(tuple(rows), authorization_context)[0]
-            except Exception:
-                return ()
+            return authorized_search_rows(
+                rows, authorization_context=authorization_context,
+                hybrid_requested=hybrid_requested,
+            )
 
         graph_config: object | None = None
         graph_scope: object | None = None
@@ -367,6 +360,7 @@ def text_chunk_search(
                 authorized_rows(hybrid_pool),
                 authorized_scope=None,
                 force_complete_rerank=graph_diagnostics.get("graph_status") == "hit",
+                capture_scores=capture_scores,
             )
         else:
             try:
@@ -382,6 +376,7 @@ def text_chunk_search(
                         if graph_chunk_ids
                         else 0
                     ),
+                    capture_scores=capture_scores,
                 )
             except Exception:
                 ranking = materialize_and_rerank_candidates(
@@ -390,6 +385,7 @@ def text_chunk_search(
                     top_k,
                     authorized_rows(snapshot.baseline_candidates),
                     authorized_scope=None,
+                    capture_scores=capture_scores,
                 )
                 if overlay_enabled:
                     graph_diagnostics = _graph_diagnostics(
@@ -419,6 +415,10 @@ def text_chunk_search(
                     ranking.graph_candidates
                 )
         reranked_results = list(authorized_rows(ranking.ranked_results))
+        score_set = (
+            score_set_for_authorized_rows(ranking.score_set, tuple(reranked_results))
+            if ranking.score_set is not None else None
+        )
 
         total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
         logger.info(
@@ -455,6 +455,8 @@ def text_chunk_search(
         }
         if overlay_enabled:
             diagnostics.update(graph_diagnostics)
+        if score_set is not None and reranked_results:
+            diagnostics["_score_set"] = serialize_score_set(score_set)
         if not reranked_results:
             logger.info(
                 "obs.rag.search_empty",
@@ -470,34 +472,19 @@ def text_chunk_search(
             reranked_results,
             diagnostics,
         )
-    except DatabaseError:
+    except Exception as error:
+        if isinstance(error, DatabaseError):
+            event = "obs.rag.search_db_error"
+            reason = RetrievalLogReason.UPSTREAM_UNAVAILABLE
+        elif isinstance(error, ValidationError):
+            event = "obs.rag.search_validation_error"
+            reason = RetrievalLogReason.INVALID_REQUEST
+        else:
+            event = "obs.rag.search_error"
+            reason = RetrievalLogReason.INTERNAL_FAILURE
         logger.error(
-            "obs.rag.search_db_error",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
-                count=0,
-                elapsed_ms=0.0,
-            ),
-        )
-        raise
-    except ValidationError:
-        logger.error(
-            "obs.rag.search_validation_error",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.INVALID_REQUEST,
-                count=0,
-                elapsed_ms=0.0,
-            ),
-        )
-        raise
-    except Exception:
-        logger.error(
-            "obs.rag.search_error",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.INTERNAL_FAILURE,
-                count=0,
-                elapsed_ms=0.0,
-            ),
+            event,
+            **retrieval_log_fields(reason=reason, count=0, elapsed_ms=0.0),
         )
         raise
 

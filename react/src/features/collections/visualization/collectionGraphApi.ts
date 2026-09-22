@@ -1,4 +1,5 @@
 import { getCookie } from "../../../utils/csrf";
+import { createDefaultCollectionSchemaApi } from "../knowledgeGraph/collectionSchemaEditorHelpers";
 import { formatCollectionSchemaRoute } from "../knowledgeGraph/schemaApiRoutes";
 import type {
   CollectionGraphEdge,
@@ -132,6 +133,12 @@ export async function fetchCollectionGraph(
   });
   if (!response.ok) throw new Error(`graph request failed: ${response.status}`);
   return parseEnvelope(await response.json());
+}
+
+export async function defaultLoadSchema(collectionId: string) {
+  const result = await createDefaultCollectionSchemaApi().loadWorkspace(collectionId);
+  if (!result.ok) throw new Error(`schema request failed: ${result.kind}`);
+  return result.data;
 }
 
 export async function requestCollectionGraphRebuild(collectionId: string) {

@@ -1,15 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { createDefaultCollectionSchemaApi } from "../knowledgeGraph/collectionSchemaEditorHelpers";
 import type { CollectionSchemaEnvelope } from "../knowledgeGraph/schemaTypes";
 import CollectionGraphCanvas from "./CollectionGraphCanvas";
+import { CollectionGraphDetails } from "./CollectionGraphDetails";
+import { CollectionGraphStatus } from "./CollectionGraphStatus";
+import { CollectionGraphScope } from "./CollectionGraphScope";
+import { connectedGraph, connectedNodeIds, filterGraph, needsProgressPoll, statusMessage } from "./collectionGraphPresentation";
 import {
+  defaultLoadSchema,
   fetchCollectionGraph,
   requestCollectionGraphRebuild,
 } from "./collectionGraphApi";
 import type {
   CollectionGraphEnvelope,
   VisualizationEdge,
-  VisualizationGraph,
   VisualizationNode,
 } from "./collectionGraphTypes";
 import {
@@ -27,102 +30,6 @@ export interface CollectionGraphVisualizationProps {
   requestRebuild?: (
     collectionId: string,
   ) => Promise<{ request_id: string; status: string }>;
-}
-
-async function defaultLoadSchema(collectionId: string) {
-  const result =
-    await createDefaultCollectionSchemaApi().loadWorkspace(collectionId);
-  if (!result.ok) throw new Error(`schema request failed: ${result.kind}`);
-  return result.data;
-}
-
-function statusMessage(envelope: CollectionGraphEnvelope) {
-  switch (envelope.status.state) {
-    case "building":
-      return "Graph generation is still in progress.";
-    case "partial":
-      return "Graph generation completed partially; at least one document failed.";
-    case "failed":
-      return "Graph generation failed before an active graph could be published.";
-    case "empty":
-      return "No active instance graph has been generated for this collection yet.";
-    default:
-      return null;
-  }
-}
-
-function needsProgressPoll(envelope: CollectionGraphEnvelope | null) {
-  return envelope?.status.state === "building" || Boolean(envelope?.progress && (
-    envelope.progress.ingesting + envelope.progress.pending + envelope.progress.building > 0
-  ));
-}
-
-function failureMessage(code: string) {
-  switch (code) {
-    case "extraction_chunk_limit":
-    case "extraction_character_limit":
-    case "extraction_entity_limit":
-    case "extraction_relation_limit":
-    case "extraction_observation_limit":
-      return "The document exceeds the current graph processing limit.";
-    default:
-      return "Document graph processing failed. A rebuild can retry it.";
-  }
-}
-
-function filterGraph(graph: VisualizationGraph, query: string, type: string) {
-  const normalized = query.trim().toLocaleLowerCase();
-  const matchingEdges = new Set(
-    graph.edges
-      .filter(
-        (edge) =>
-          !normalized || edge.label.toLocaleLowerCase().includes(normalized),
-      )
-      .map((edge) => edge.id),
-  );
-  const edgeNodeIds = new Set(
-    graph.edges
-      .filter((edge) => matchingEdges.has(edge.id))
-      .flatMap((edge) => [edge.source, edge.target]),
-  );
-  const nodes = graph.nodes.filter(
-    (node) =>
-      (!type || node.type === type) &&
-      (!normalized ||
-        node.label.toLocaleLowerCase().includes(normalized) ||
-        node.type.toLocaleLowerCase().includes(normalized) ||
-        edgeNodeIds.has(node.id)),
-  );
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  return {
-    nodes,
-    edges: graph.edges.filter(
-      (edge) =>
-        nodeIds.has(edge.source) &&
-        nodeIds.has(edge.target) &&
-        (!normalized ||
-          matchingEdges.has(edge.id) ||
-          nodes.some(
-            (node) =>
-              [edge.source, edge.target].includes(node.id) &&
-              node.label.toLocaleLowerCase().includes(normalized),
-          )),
-    ),
-  };
-}
-
-function connectedNodeIds(graph: VisualizationGraph) {
-  return new Set(
-    graph.edges.flatMap((edge) => [edge.source, edge.target]),
-  );
-}
-
-function connectedGraph(graph: VisualizationGraph): VisualizationGraph {
-  const connected = connectedNodeIds(graph);
-  return {
-    nodes: graph.nodes.filter((node) => connected.has(node.id)),
-    edges: graph.edges,
-  };
 }
 
 const CollectionGraphVisualization: React.FC<
@@ -326,38 +233,13 @@ const CollectionGraphVisualization: React.FC<
       </div>
 
       {mode === "instance" && graph && instanceCounts && (
-        <div className="flex flex-wrap items-center gap-2 rounded-[18px] border border-border-low_contrast bg-scheme-shade_4 p-[10px]">
-          <div className="flex gap-2" aria-label="Instance graph scope">
-            <button
-              type="button"
-              aria-pressed={!includeUnconnected}
-              onClick={() => {
-                setIncludeUnconnected(false);
-                setSelected(null);
-              }}
-              className={`h-[36px] rounded-[18px] border px-4 ${!includeUnconnected ? "bg-accent text-white border-accent" : "border-border-mid_contrast"}`}
-            >
-              Connected
-            </button>
-            <button
-              type="button"
-              aria-label="Include unconnected"
-              aria-pressed={includeUnconnected}
-              onClick={() => {
-                setIncludeUnconnected(true);
-                setSelected(null);
-              }}
-              className={`h-[36px] rounded-[18px] border px-4 ${includeUnconnected ? "bg-accent text-white border-accent" : "border-border-mid_contrast"}`}
-            >
-              All entities
-            </button>
-          </div>
-          <span className="text-sm text-text-lower_contrast">
-            {instanceCounts.connected} connected · {instanceCounts.unconnected}{" "}
-            unconnected
-            {instance?.truncated.nodes ? " in this bounded result" : ""}
-          </span>
-        </div>
+        <CollectionGraphScope
+          connected={instanceCounts.connected}
+          unconnected={instanceCounts.unconnected}
+          bounded={Boolean(instance?.truncated.nodes)}
+          includeUnconnected={includeUnconnected}
+          onChange={(next) => { setIncludeUnconnected(next); setSelected(null); }}
+        />
       )}
 
       {loading && (
@@ -368,38 +250,8 @@ const CollectionGraphVisualization: React.FC<
           {error}
         </p>
       )}
-      {mode === "instance" && instance?.progress && instance.progress.total > 0 && (
-        <div role="status" className="rounded-[18px] border border-border-mid_contrast bg-scheme-shade_4 p-4">
-          <p>{instance.progress.active} of {instance.progress.total} document graphs complete.</p>
-          <p className="mt-1 text-sm text-text-lower_contrast">
-            {instance.progress.ingesting} ingesting · {instance.progress.pending} waiting · {instance.progress.building} processing · {instance.progress.failed} failed
-          </p>
-          {instance.progress.failures.map((failure) => (
-            <p key={failure.code} className="mt-1 text-sm">
-              {failure.count} {failure.count === 1 ? "document" : "documents"}: {failureMessage(failure.code)}
-            </p>
-          ))}
-        </div>
-      )}
-      {mode === "instance" && instanceMessage && (
-        <div className="rounded-[18px] border border-border-mid_contrast bg-scheme-shade_4 p-4">
-          <p>{instanceMessage}</p>
-          {instance?.status.error_code && (
-            <p className="mt-1 text-sm text-text-lower_contrast">
-              Build error: <code>{instance.status.error_code}</code>
-            </p>
-          )}
-          {instance?.permissions.can_rebuild && (
-            <button
-              type="button"
-              onClick={() => void rebuild()}
-              disabled={rebuilding || instance.status.state === "building"}
-              className="mt-3 h-[36px] rounded-[18px] border border-border-mid_contrast px-4 disabled:opacity-50"
-            >
-              {rebuilding ? "Starting rebuild…" : "Rebuild graph"}
-            </button>
-          )}
-        </div>
+      {mode === "instance" && (
+        <CollectionGraphStatus instance={instance} message={instanceMessage} rebuilding={rebuilding} onRebuild={() => void rebuild()} />
       )}
 
       {visibleGraph && visibleGraph.nodes.length > 0 && (
@@ -437,59 +289,7 @@ const CollectionGraphVisualization: React.FC<
               </select>
             </label>
           </div>
-          <aside className="rounded-[18px] border border-border-low_contrast bg-scheme-shade_4 p-4">
-            {!selected ? (
-              <p>
-                Select a node or relation to inspect its details and evidence.
-              </p>
-            ) : (
-              <>
-                <h2 className="text-lg font-semibold">{selected.label}</h2>
-                <p className="text-sm text-text-lower_contrast">
-                  {selected.kind}
-                </p>
-                {"type" in selected && (
-                  <p className="mt-2">Type: {selected.type}</p>
-                )}
-                {selected.description && (
-                  <p className="mt-2">{selected.description}</p>
-                )}
-                {selected.confidence !== undefined && (
-                  <p className="mt-2">
-                    Confidence: {(selected.confidence * 100).toFixed(1)}%
-                  </p>
-                )}
-                {"supportCount" in selected &&
-                  selected.supportCount !== undefined && (
-                    <p className="mt-1">
-                      Supporting passages: {selected.supportCount}
-                    </p>
-                  )}
-                {"evidence" in selected &&
-                  selected.evidence &&
-                  selected.evidence.length > 0 && (
-                    <div className="mt-4 space-y-3">
-                      <h3 className="font-semibold">Evidence</h3>
-                      {selected.evidence.map((evidence) => (
-                        <details
-                          key={`${evidence.document_id}:${evidence.chunk_id}:${evidence.start}`}
-                          className="rounded border border-border-low_contrast p-2"
-                          open
-                        >
-                          <summary className="cursor-pointer text-sm">
-                            Document {evidence.document_id} · chunk{" "}
-                            {evidence.chunk_id}
-                          </summary>
-                          <p className="mt-2 whitespace-pre-wrap text-sm">
-                            {evidence.excerpt}
-                          </p>
-                        </details>
-                      ))}
-                    </div>
-                  )}
-              </>
-            )}
-          </aside>
+          <CollectionGraphDetails selected={selected} />
         </div>
       )}
     </section>

@@ -14,34 +14,36 @@ from __future__ import annotations
 
 import asyncio
 import os
-import structlog
 from typing import TYPE_CHECKING, Optional
 
+import structlog
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import User
 from django.db import IntegrityError
 from pgvector.django import L2Distance
 
-from .models import UserMemoryFact, EpisodicMemory
-from .utils import get_embedding
-
 # Import from lib/memory for pure Python operations
 from lib.memory import (
-    RetrievedEpisodicMemory,
     EPISODIC_TOP_K,
-    EPISODIC_MEMORY_MAX_CHARS,
     MEM0_DUAL_WRITE_LOCAL,
+    RetrievedEpisodicMemory,
+    add_mem0_memory_with_client,
     clean_stable_facts,
-    use_mem0,
+    extract_stable_facts,
+    format_memories_for_system,
+    has_remember_intent,
+    heuristic_facts_from_turn,
+    normalize_remember_fact,
     search_mem0_episodic_memories,
     search_mem0_episodic_memories_async,
-    add_mem0_memory_with_client,
-    extract_stable_facts,
-    heuristic_facts_from_turn,
-    has_remember_intent,
-    normalize_remember_fact,
-    format_memories_for_system,
+    use_mem0,
 )
+
+from .memory_categories import (
+    _categorize_profile_fact as _categorize_profile_fact,
+)
+from .models import EpisodicMemory, UserMemoryFact
+from .utils import get_embedding
 
 if TYPE_CHECKING:
     from .llm import Conversation
@@ -68,22 +70,6 @@ def _is_duplicate_episodic_memory_error(exc: IntegrityError) -> bool:
     """Check whether an IntegrityError is the assistant-message dedupe race."""
     message = str(exc)
     return "unique_episodic_per_assistant_msg" in message
-
-
-def _categorize_profile_fact(fact: str) -> str:
-    """Map a durable fact into the closest existing profile-memory category."""
-    lowered = (fact or "").strip().lower()
-    if not lowered:
-        return "general"
-    if lowered.startswith(("i prefer", "i like", "i want", "i need")):
-        return "preference"
-    if any(token in lowered for token in ("we use", "our stack", "project", "memory", "tool", "database", "qdrant", "memgraph")):
-        return "project"
-    if any(token in lowered for token in ("tone", "style", "concise", "verbose")):
-        return "tone"
-    if any(token in lowered for token in ("goal", "working on", "building", "trying to")):
-        return "goals"
-    return "general"
 
 
 def _promote_profile_facts(user: User, facts: list[str]) -> None:

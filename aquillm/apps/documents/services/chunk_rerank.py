@@ -8,6 +8,9 @@ import structlog
 from django.apps import apps
 
 from apps.documents.services.chunk_rerank_config import rerank_provider
+from apps.documents.services.chunk_rerank_local_scored import (
+    rerank_via_local_vllm_scored,
+)
 from apps.documents.services.chunk_rerank_local_vllm import (
     _STRICT_COMPLETE_SCORING,
     rerank_via_local_vllm,
@@ -17,6 +20,14 @@ from apps.documents.services.chunk_rerank_parse import (
     ordered_queryset_from_ids,
 )
 from apps.documents.services.chunk_rerank_payload import rerank_document_payload
+from apps.documents.services.chunk_rerank_results import (
+    PassageScore,
+    RerankScoreSet,
+    ScoredRerankResult,
+    fingerprint_pair,
+    fingerprint_pool,
+    fingerprint_text,
+)
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 # chunk_search and legacy imports expect this name
@@ -139,12 +150,138 @@ def rerank_chunks(model_cls: type[TextChunk], query: str, chunks, top_k: int):
         logger.warning(
             "obs.rag.cohere_rerank_failed",
             **retrieval_log_fields(
-                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
-                count=0,
-                elapsed_ms=0.0,
+                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE, count=0, elapsed_ms=0.0
             ),
         )
         return fallback_rerank(model_cls, chunks_list, top_k)
 
 
-__all__ = ["_fallback_rerank", "rerank_chunks", "rerank_document_payload"]
+def rerank_chunks_scored(
+    model_cls: type[TextChunk], query: str, chunks, top_k: int
+) -> ScoredRerankResult:
+    """Capture provider scores from the ranking call, without replaying inference."""
+    chunks_list = list(chunks)
+    candidate_ids = tuple(chunk.pk for chunk in chunks_list)
+    pool = fingerprint_pool(
+        tuple(
+            (
+                chunk.pk,
+                fingerprint_text(chunk.content),
+                fingerprint_pair(query, chunk.content),
+            )
+            for chunk in chunks_list
+        )
+    )
+    query_fp = fingerprint_text(query)
+
+    def unavailable(ranked_ids=()):
+        return ScoredRerankResult(
+            tuple(ranked_ids)[:top_k],
+            RerankScoreSet(
+                "v2",
+                query_fp,
+                "",
+                pool,
+                "rank_only",
+                "unavailable",
+                candidate_ids,
+                (),
+            ),
+        )
+
+    provider = rerank_provider()
+    if provider in ("auto", "local", "vllm"):
+        try:
+            local = rerank_via_local_vllm_scored(model_cls, query, chunks_list, top_k)
+            if local.ranked_ids:
+                return local
+        except Exception:
+            logger.warning(
+                "obs.rag.local_rerank_failed",
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
+            )
+        if provider in ("local", "vllm"):
+            return unavailable(candidate_ids[:top_k])
+
+    cohere = apps.get_app_config("aquillm").cohere_client  # type: ignore
+    if cohere is None:
+        return unavailable(candidate_ids[:top_k])
+    try:
+        response = cohere.rerank(
+            model="rerank-english-v3.0",
+            query=query,
+            documents=[
+                {"content": chunk.content, "id": chunk.pk} for chunk in chunks_list
+            ],
+            rank_fields=["content"],
+            top_n=len(chunks_list),
+            return_documents=True,
+        )
+        ranked_ids = tuple(result.document.id for result in response.results)
+        if not ranked_ids:
+            return unavailable(candidate_ids[:top_k])
+        by_id = {chunk.pk: chunk for chunk in chunks_list}
+        if (
+            len(ranked_ids) != len(candidate_ids)
+            or len(set(ranked_ids)) != len(candidate_ids)
+            or set(ranked_ids) != set(candidate_ids)
+        ):
+            return unavailable(ranked_ids)
+        scores_by_id = {}
+        for result in response.results:
+            value = getattr(result, "relevance_score", None)
+            if type(value) not in (int, float):
+                return unavailable(ranked_ids)
+            chunk = by_id[result.document.id]
+            scores_by_id[chunk.pk] = PassageScore(
+                chunk.pk,
+                chunk.doc_id,
+                chunk.chunk_number,
+                fingerprint_text(chunk.content),
+                fingerprint_pair(query, chunk.content),
+                float(value),
+            )
+        from math import isfinite
+
+        if not all(isfinite(score.value) for score in scores_by_id.values()):
+            return unavailable(ranked_ids)
+        scores = tuple(scores_by_id[pk] for pk in candidate_ids)
+        stable_ranked = tuple(
+            sorted(
+                candidate_ids,
+                key=lambda pk: (-scores_by_id[pk].value, candidate_ids.index(pk)),
+            )
+        )
+        return ScoredRerankResult(
+            stable_ranked[:top_k],
+            RerankScoreSet(
+                "v2",
+                query_fp,
+                fingerprint_text("cohere:rerank-english-v3.0"),
+                pool,
+                "listwise",
+                "complete",
+                candidate_ids,
+                scores,
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "obs.rag.cohere_rerank_failed",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE, count=0, elapsed_ms=0.0
+            ),
+        )
+        return unavailable(candidate_ids[:top_k])
+
+
+__all__ = [
+    "_fallback_rerank",
+    "rerank_chunks",
+    "rerank_chunks_scored",
+    "rerank_document_payload",
+]

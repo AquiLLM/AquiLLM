@@ -1,3 +1,5 @@
+import { vi } from 'vitest';
+import type { CollectionSchemaApi } from './collectionSchemaApi';
 import type {
   CollectionSchemaEnvelope,
   EntityTypeDefinition,
@@ -248,5 +250,32 @@ export function envelopeAfterConflict(envelope: CollectionSchemaEnvelope): Colle
           ),
         }
       : null,
+  };
+}
+export function createMockApi(overrides: Partial<CollectionSchemaApi> = {}): CollectionSchemaApi {
+  return {
+    loadWorkspace: vi.fn().mockResolvedValue({ ok: true, data: manageDraftEnvelope }),
+    createDraft: vi.fn().mockResolvedValue({ ok: true, data: editDraftEnvelope }),
+    upsertEntity: vi.fn().mockResolvedValue({ ok: true, data: manageDraftEnvelope }),
+    deleteEntity: vi.fn().mockResolvedValue({ ok: true, data: manageDraftEnvelope }),
+    upsertRelation: vi.fn().mockResolvedValue({ ok: true, data: manageDraftEnvelope }),
+    deleteRelation: vi.fn().mockResolvedValue({ ok: true, data: manageDraftEnvelope }),
+    validate: vi.fn().mockResolvedValue({ ok: true, data: validationResultFixture }),
+    fetchDiff: vi.fn(),
+    publish: vi.fn().mockResolvedValue({ ok: true, data: { ...manageDraftEnvelope, draft: null } }),
+    discardDraft: vi.fn().mockResolvedValue({ ok: true, data: { ...manageDraftEnvelope, draft: null } }),
+    listVersions: vi.fn().mockResolvedValue({ ok: true, data: historyPageFixture }),
+    fetchVersionDiff: vi.fn(),
+    restoreVersion: vi.fn().mockResolvedValue({ ok: true, data: editDraftEnvelope }),
+    restoreReplace: vi.fn(),
+    startGeneration: vi.fn().mockResolvedValue({
+      ok: true,
+      data: { run_id: 'run-1', status: 'queued', status_url: '/api/collection/col-empty/schema/generation/run-1/' },
+    }),
+    getGenerationStatus: vi.fn().mockResolvedValue({
+      ok: true,
+      data: { run_id: 'run-1', status: 'succeeded', error_code: null, statistics: {} },
+    }),
+    ...overrides,
   };
 }

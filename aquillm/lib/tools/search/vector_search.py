@@ -49,7 +49,7 @@ def _sanitize_retrieval_diagnostics(
     return {
         key: value
         for key, value in diagnostics.items()
-        if type(key) is str and not key.startswith("graph_")
+        if type(key) is str and not key.startswith(("graph_", "_"))
     }
 
 
@@ -65,9 +65,15 @@ def pack_chunk_search_results(
     search_string: str | None = None,
     search_scope: str = "documents",
     retrieval_diagnostics: dict[str, Any] | None = None,
+    score_set: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the tool `result` dict for multi-chunk search (collections or single doc)."""
     use_compact = _compact_items_default() if compact_items is None else compact_items
+    public_diagnostics = (
+        {key: value for key, value in retrieval_diagnostics.items()
+         if type(key) is str and not key.startswith("_")}
+        if retrieval_diagnostics is not None else None
+    )
     items: list[dict[str, Any]] = []
     has_image_results = False
     image_renderable_by_doc_id: dict[Any, bool] = {}
@@ -165,9 +171,9 @@ def pack_chunk_search_results(
             ),
         }
         if retrieval_diagnostics is not None:
-            no_results["_retrieval_diagnostics"] = dict(retrieval_diagnostics)
+            no_results["_retrieval_diagnostics"] = public_diagnostics
             no_results["retrieval_diagnostics"] = _sanitize_retrieval_diagnostics(
-                retrieval_diagnostics
+                public_diagnostics
             )
         return no_results
 
@@ -188,7 +194,9 @@ def pack_chunk_search_results(
     if has_image_results:
         ret["_image_instruction"] = IMAGE_MARKDOWN_INSTRUCTION
     if retrieval_diagnostics is not None:
-        ret["_retrieval_diagnostics"] = dict(retrieval_diagnostics)
+        ret["_retrieval_diagnostics"] = public_diagnostics
+    if score_set is not None:
+        ret["_retrieval_scores"] = score_set
 
     return ret
 

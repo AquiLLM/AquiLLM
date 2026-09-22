@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from os import getenv
 from typing import Any, Literal
 
 from ..types.conversation import Conversation
@@ -16,6 +15,99 @@ from . import fallback_heuristics as fb
 from . import final_stream, visibility
 from . import image_context as imgctx
 from . import rag_citations as citations
+from .complete_turn_continuation import (
+    _continuation_separator as _continuation_separator,
+)
+from .complete_turn_continuation import (
+    _largest_common_prefix as _largest_common_prefix,
+)
+from .complete_turn_continuation import (
+    _largest_suffix_prefix_overlap as _largest_suffix_prefix_overlap,
+)
+from .complete_turn_continuation import (
+    _repair_continuation_seam as _repair_continuation_seam,
+)
+from .complete_turn_continuation import (
+    _suffix_prefix_overlap_threshold as _suffix_prefix_overlap_threshold,
+)
+from .complete_turn_continuation import (
+    _trim_duplicate_continuation_prefix as _trim_duplicate_continuation_prefix,
+)
+from .complete_turn_policy import (
+    DIRECT_SYNTHESIS_GROUNDING as DIRECT_SYNTHESIS_GROUNDING,
+)
+from .complete_turn_policy import (
+    _auto_tool_followup_direct_retry_enabled as _auto_tool_followup_direct_retry_enabled,
+)
+from .complete_turn_policy import (
+    _compact_summary_fallback_enabled as _compact_summary_fallback_enabled,
+)
+from .complete_turn_policy import (
+    _conversation_used_whole_document as _conversation_used_whole_document,
+)
+from .complete_turn_policy import (
+    _direct_answer_retry_max_tokens as _direct_answer_retry_max_tokens,
+)
+from .complete_turn_policy import (
+    _env_int as _env_int,
+)
+from .complete_turn_policy import (
+    _env_optional_cap as _env_optional_cap,
+)
+from .complete_turn_policy import (
+    _extractive_evidence_ui_enabled as _extractive_evidence_ui_enabled,
+)
+from .complete_turn_policy import (
+    _general_answer_max_tokens as _general_answer_max_tokens,
+)
+from .complete_turn_policy import (
+    _post_tool_evidence_retry_enabled as _post_tool_evidence_retry_enabled,
+)
+from .complete_turn_policy import (
+    _post_tool_global_max as _post_tool_global_max,
+)
+from .complete_turn_policy import (
+    _post_tool_output_ceiling as _post_tool_output_ceiling,
+)
+from .complete_turn_policy import (
+    _post_tool_synthesis_retry_count as _post_tool_synthesis_retry_count,
+)
+from .complete_turn_policy import (
+    _resolve_continuation_max_tokens as _resolve_continuation_max_tokens,
+)
+from .complete_turn_policy import (
+    _resolve_post_tool_max_tokens as _resolve_post_tool_max_tokens,
+)
+from .complete_turn_policy import (
+    _resolve_tool_step_max_tokens as _resolve_tool_step_max_tokens,
+)
+from .complete_turn_policy import (
+    _tool_call_retry_max_tokens as _tool_call_retry_max_tokens,
+)
+from .complete_turn_sources import (
+    _append_citation_sources_if_missing as _append_citation_sources_if_missing,
+)
+from .complete_turn_sources import (
+    _build_sources_block as _build_sources_block,
+)
+from .complete_turn_sources import (
+    _collect_doc_refs_from_embedded_images as _collect_doc_refs_from_embedded_images,
+)
+from .complete_turn_sources import (
+    _collect_source_refs_from_tool_message as _collect_source_refs_from_tool_message,
+)
+from .complete_turn_sources import (
+    _doc_ref as _doc_ref,
+)
+from .complete_turn_sources import (
+    _extract_doc_ref_from_image_url as _extract_doc_ref_from_image_url,
+)
+from .complete_turn_sources import (
+    _latest_user_requested_image as _latest_user_requested_image,
+)
+from .complete_turn_sources import (
+    _select_source_refs_for_response as _select_source_refs_for_response,
+)
 from .request_observability import (
     current_correlation_id,
     current_stage,
@@ -38,169 +130,6 @@ if DEBUG:
 
 _DOC_IMAGE_URL_RE = re.compile(r"/aquillm/document_image/([^/]+)/")
 _MECHANICAL_TOOL_MAX_TOKENS = 256
-
-# Shared with the direct-RAG handoff; provider code must not import app services.
-DIRECT_SYNTHESIS_GROUNDING = (
-    "Selected evidence grounding rules:\n"
-    "- The selected evidence in the current tool result is the only factual source "
-    "for this answer. Earlier conversation provides request context, not additional "
-    "document evidence.\n"
-    "- Answer the user's question directly and keep the answer concise, with detail "
-    "proportionate to the selected evidence. Do not pad the answer with general "
-    "background, recommendations, implications, or explanations beyond the question "
-    "and evidence.\n"
-    "- Cite every factual claim at the claim. A shared claim or comparison must cite "
-    "every supporting paper together at the claim, not only in a sources list. For "
-    "each computed comparison, show the calculation or its inputs and cite all input "
-    "sources. Identify computed values as calculations, not source-reported results; "
-    "do not combine incompatible units or conditions.\n"
-    "- Preserve disagreements and each paper's conditions, units, definitions, and "
-    "qualifications. Do not invent consensus or a reconciliation.\n"
-    "- Distinguish inference from source-reported fact. Contrasting study results "
-    "do not establish causation. Do not attribute differences to conditions, "
-    "mechanisms, or environmental dependence unless the selected passages explicitly "
-    "support that explanation.\n"
-    "- If a required paper or fact is absent, state that the selected evidence is "
-    "insufficient to answer that part. Never fill the gap from assumptions or prior "
-    "conversation claims.\n"
-    "- Scope absence and negative evidence to the selected excerpts and the cited "
-    "study. One paper not measuring an outcome does not establish that no other "
-    "study exists or that no other researcher measured it."
-)
-
-
-def _env_int(name: str, default: int, minimum: int = 0) -> int:
-    try:
-        value = int(getenv(name, str(default)))
-    except Exception:
-        value = default
-    return max(minimum, value)
-
-
-def _env_optional_cap(name: str, default: int, minimum: int) -> int:
-    """Return a token cap where 0 disables the cap and uses the caller budget."""
-    try:
-        value = int(getenv(name, str(default)))
-    except Exception:
-        value = default
-    if value <= 0:
-        return 0
-    return max(minimum, value)
-
-
-def _conversation_used_whole_document(conversation: Conversation) -> bool:
-    for msg in reversed(conversation.messages):
-        if isinstance(msg, ToolMessage) and msg.for_whom == "assistant":
-            if msg.tool_name in {"whole_document", "search_single_document"}:
-                return True
-    return False
-
-
-def _post_tool_output_ceiling() -> int:
-    return _env_int("LLM_POST_TOOL_OUTPUT_MAX_TOKENS", 12288, minimum=256)
-
-
-def _post_tool_global_max(global_max: int) -> int:
-    return max(global_max, _post_tool_output_ceiling())
-
-
-def _resolve_post_tool_max_tokens(
-    conversation: Conversation,
-    *,
-    default_cap: int,
-    global_max: int,
-) -> int:
-    cap = max(default_cap, _post_tool_output_ceiling())
-    if _conversation_used_whole_document(conversation):
-        cap = max(
-            cap,
-            _env_int("LLM_POST_TOOL_WHOLE_DOC_MAX_TOKENS", 12288, minimum=256),
-        )
-    return min(cap, max(global_max, _post_tool_output_ceiling()))
-
-
-def _resolve_continuation_max_tokens(
-    conversation: Conversation,
-    *,
-    default_cap: int,
-    post_tool_budget: int,
-    global_max: int,
-) -> int:
-    cap = default_cap
-    if _conversation_used_whole_document(conversation):
-        cap = max(
-            cap,
-            _env_int("LLM_CONTINUATION_WHOLE_DOC_MAX_TOKENS", 6144, minimum=128),
-        )
-    return min(global_max, post_tool_budget, cap)
-
-
-def _compact_summary_fallback_enabled() -> bool:
-    return getenv("LLM_ALLOW_COMPACT_SUMMARY_FALLBACK", "0").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-
-
-def _extractive_evidence_ui_enabled() -> bool:
-    """When false, never replace a failed synthesis with raw chunk/doc bullet dumps."""
-    return getenv("LLM_ALLOW_EXTRACTIVE_EVIDENCE_UI", "0").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-
-
-def _post_tool_evidence_retry_enabled() -> bool:
-    return getenv("LLM_POST_TOOL_ALLOW_EVIDENCE_RETRY", "1").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-
-
-def _post_tool_synthesis_retry_count() -> int:
-    return min(4, _env_int("LLM_POST_TOOL_SYNTHESIS_RETRIES", 2, minimum=0))
-
-
-def _auto_tool_followup_direct_retry_enabled() -> bool:
-    return getenv("LLM_AUTO_TOOL_FOLLOWUP_DIRECT_RETRY", "1").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-
-
-def _direct_answer_retry_max_tokens() -> int:
-    return _env_optional_cap("LLM_DIRECT_ANSWER_RETRY_MAX_TOKENS", 2048, minimum=256)
-
-
-def _general_answer_max_tokens() -> int:
-    return _env_optional_cap("LLM_GENERAL_ANSWER_MAX_TOKENS", 4096, minimum=256)
-
-
-def _tool_call_retry_max_tokens() -> int:
-    return _env_optional_cap("LLM_TOOL_CALL_RETRY_MAX_TOKENS", 2048, minimum=256)
-
-
-def _resolve_tool_step_max_tokens(max_tokens: int, tool_choice_type: str) -> int:
-    requested = _env_optional_cap(
-        "LLM_TOOL_STEP_MAX_TOKENS",
-        _MECHANICAL_TOOL_MAX_TOKENS,
-        minimum=128,
-    )
-    if requested <= 0:
-        requested = _MECHANICAL_TOOL_MAX_TOKENS
-    if tool_choice_type == "any":
-        retry_cap = _tool_call_retry_max_tokens()
-        if retry_cap > 0:
-            requested = max(requested, retry_cap)
-    return min(max_tokens, requested, _MECHANICAL_TOOL_MAX_TOKENS)
 
 
 def _visible_text_is_empty_or_interim(text: str | None) -> bool:
@@ -543,201 +472,6 @@ async def _last_resort_evidence_answer(
             stream_message_uuid=stream_message_uuid,
         )
     return None
-
-
-def _build_sources_block(allowed_citations: set[str]) -> str:
-    refs = sorted(allowed_citations)
-    if not refs:
-        return ""
-    source_lines = "\n".join(f"- {ref}" for ref in refs)
-    return f"Sources:\n{source_lines}"
-
-
-def _select_source_refs_for_response(
-    text: str, allowed_citations: set[str]
-) -> set[str]:
-    used = {
-        c for c in citations.extract_citations(text or "") if c in allowed_citations
-    }
-    if used:
-        return used
-    return allowed_citations
-
-
-def _doc_ref(doc_id: Any) -> str | None:
-    if doc_id is None:
-        return None
-    doc_text = str(doc_id).strip()
-    if not doc_text:
-        return None
-    return f"[doc:{doc_text}]"
-
-
-def _extract_doc_ref_from_image_url(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    match = _DOC_IMAGE_URL_RE.search(value)
-    if not match:
-        return None
-    return _doc_ref(match.group(1))
-
-
-def _collect_doc_refs_from_embedded_images(text: str) -> set[str]:
-    refs: set[str] = set()
-    for match in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", text or ""):
-        ref = _extract_doc_ref_from_image_url(match.group(1))
-        if ref:
-            refs.add(ref)
-    return refs
-
-
-def _latest_user_requested_image(conversation: Conversation) -> bool:
-    for msg in reversed(conversation.messages):
-        if isinstance(msg, UserMessage):
-            return imgctx.looks_like_image_display_request(msg.content)
-    return False
-
-
-def _collect_source_refs_from_tool_message(tool_message: ToolMessage) -> set[str]:
-    refs: set[str] = set()
-
-    if isinstance(tool_message.arguments, dict):
-        direct_doc_ref = _doc_ref(tool_message.arguments.get("doc_id"))
-        if direct_doc_ref:
-            refs.add(direct_doc_ref)
-
-    result_dict = (
-        tool_message.result_dict if isinstance(tool_message.result_dict, dict) else {}
-    )
-    payload = result_dict.get("result")
-    payload_rows: list[dict[str, Any]] = []
-    if isinstance(payload, dict):
-        payload_rows = [payload]
-    elif isinstance(payload, list):
-        payload_rows = [row for row in payload if isinstance(row, dict)]
-
-    for row in payload_rows[:40]:
-        row_doc_ref = _doc_ref(row.get("doc_id") or row.get("d"))
-        if row_doc_ref:
-            refs.add(row_doc_ref)
-        image_url_ref = _extract_doc_ref_from_image_url(
-            row.get("image_url") or row.get("u")
-        )
-        if image_url_ref:
-            refs.add(image_url_ref)
-
-    if not refs and isinstance(payload, str):
-        image_url_ref = _extract_doc_ref_from_image_url(payload)
-        if image_url_ref:
-            refs.add(image_url_ref)
-
-    return refs
-
-
-def _append_citation_sources_if_missing(
-    text: str,
-    allowed_citations: set[str],
-) -> str:
-    base = (text or "").rstrip()
-    if not allowed_citations:
-        return base
-    source_refs = _select_source_refs_for_response(base, allowed_citations)
-    sources_block = _build_sources_block(source_refs)
-    if not sources_block:
-        return base
-    sources_index = base.rfind("Sources:")
-    if sources_index >= 0:
-        existing_sources = base[sources_index:]
-        if any(ref in existing_sources for ref in source_refs):
-            return base
-        source_lines = "\n".join(f"- {ref}" for ref in sorted(source_refs))
-        return f"{base}\n{source_lines}"
-    return f"{base}\n\n{sources_block}"
-
-
-def _continuation_separator(partial_text: str, continuation_text: str) -> str:
-    if not partial_text:
-        return ""
-    if partial_text.endswith(("\n", " ")):
-        return ""
-    if imgctx.has_unterminated_markdown_image(partial_text):
-        return ""
-    if continuation_text.startswith((")", "]", "/", ".", ",", ":", ";", "!", "?")):
-        return ""
-    tail = partial_text.rstrip()
-    if tail.endswith(("&", "*", "(", "[", "{", "-", "—")):
-        return ""
-    if tail.endswith("**") or tail.count("**") % 2 == 1:
-        return ""
-    return "\n"
-
-
-def _largest_suffix_prefix_overlap(left: str, right: str, min_chars: int = 1) -> int:
-    max_size = min(len(left), len(right))
-    for size in range(max_size, max(min_chars, 1) - 1, -1):
-        if left.endswith(right[:size]):
-            return size
-    return 0
-
-
-def _largest_common_prefix(left: str, right: str, min_chars: int = 1) -> int:
-    max_size = min(len(left), len(right))
-    for size in range(max_size, max(min_chars, 1) - 1, -1):
-        if left[:size] == right[:size]:
-            return size
-    return 0
-
-
-def _suffix_prefix_overlap_threshold(
-    partial: str, continuation: str, overlap: int
-) -> int:
-    if overlap <= 0:
-        return 0
-    if overlap <= 12:
-        return 3
-    return max(3, min(96, min(len(partial), len(continuation)) // 8))
-
-
-def _repair_continuation_seam(partial_text: str, merged_text: str) -> str:
-    """Fix glued tokens and doubled percent signs at the partial/continuation boundary."""
-    if not partial_text or not merged_text or len(partial_text) >= len(merged_text):
-        return merged_text
-    window_start = max(0, len(partial_text) - 48)
-    window_end = min(len(merged_text), len(partial_text) + 48)
-    window = merged_text[window_start:window_end]
-    repaired = re.sub(r"(\d+(?:\.\d+)?%)(?:\1)+", r"\1", window)
-    if repaired == window:
-        return merged_text
-    return merged_text[:window_start] + repaired + merged_text[window_end:]
-
-
-def _trim_duplicate_continuation_prefix(
-    partial_text: str, continuation_text: str
-) -> str:
-    partial = partial_text or ""
-    continuation = continuation_text or ""
-    if (not partial) or (not continuation):
-        return continuation
-
-    cont = continuation.lstrip("\r\n")
-    partial_stripped = partial.lstrip("\r\n")
-
-    if partial_stripped.startswith(cont):
-        return ""
-
-    if cont.startswith(partial):
-        cont = cont[len(partial) :]
-    else:
-        prefix_overlap = _largest_common_prefix(partial_stripped, cont, min_chars=1)
-        if prefix_overlap >= 24:
-            cont = cont[prefix_overlap:]
-
-    suffix_overlap = _largest_suffix_prefix_overlap(partial, cont, min_chars=1)
-    threshold = _suffix_prefix_overlap_threshold(partial, cont, suffix_overlap)
-    if suffix_overlap >= threshold:
-        cont = cont[suffix_overlap:]
-
-    return cont.lstrip("\r\n")
 
 
 async def complete_conversation_turn(

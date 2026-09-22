@@ -137,3 +137,77 @@ def test_merge_aggregates_safe_graph_diagnostics_with_hit_precedence():
     }
     assert "private-a" not in repr(diagnostics)
     assert "private-b" not in repr(diagnostics)
+
+
+def test_fusion_does_not_make_the_final_selection():
+    from apps.chat.services.rag_retrieval import fuse_ranked_tool_results
+
+    rows = [
+        {"rank": 1, "chunk_id": 1, "doc_id": "a", "chunk": 0,
+         "text": "Primary evidence", "citation": "[doc:a chunk:1]"},
+        {"rank": 2, "chunk_id": 2, "doc_id": "a", "chunk": 1,
+         "text": "Complementary evidence", "citation": "[doc:a chunk:2]"},
+        {"rank": 3, "chunk_id": 3, "doc_id": "b", "chunk": 0,
+         "text": "Secondary evidence", "citation": "[doc:b chunk:3]"},
+    ]
+    pool = fuse_ranked_tool_results([{"result": rows}], candidate_limit=45)
+    assert [row["chunk_id"] for row in pool.rows] == [1, 2, 3]
+
+
+def test_fusion_rejects_inconsistent_coordinates_and_citations():
+    from apps.chat.services.rag_retrieval import fuse_ranked_tool_results
+
+    good = {**_row(1, 1, "a"), "chunk": 0}
+    invalid = {**_row(2, 2, "b"), "chunk": 0,
+               "citation": "[doc:b chunk:999]"}
+    collision = {**_row(1, 1, "a"), "chunk": 5}
+    pool = fuse_ranked_tool_results(
+        [_payload(good, invalid), _payload(collision)], candidate_limit=45
+    )
+    assert pool.rows == (good,)
+
+
+def test_fusion_keeps_per_query_scores_separate_and_caps_union():
+    from uuid import UUID
+
+    from apps.chat.services.rag_retrieval import fuse_ranked_tool_results
+    from apps.documents.services.chunk_rerank_results import (
+        PassageScore,
+        RerankScoreSet,
+    )
+    from apps.documents.services.chunk_rerank_score_transport import serialize_score_set
+
+    doc = UUID("00000000-0000-0000-0000-000000000001")
+    score_set = RerankScoreSet(
+        "v2", "query", "scorer", "pool", "pointwise", "complete", (1,),
+        (PassageScore(1, doc, 0, "source", "effective", 0.9),),
+    )
+    row = _row(1, 1, str(doc))
+    row["chunk"] = 0
+    first = {**_payload(row), "_retrieval_scores": serialize_score_set(score_set)}
+    second = {**_payload({**row, "rank": 2}),
+              "_retrieval_scores": serialize_score_set(score_set)}
+    pool = fuse_ranked_tool_results([first, second], candidate_limit=1)
+    assert len(pool.rows) == 1
+    assert pool.source_score_sets == (score_set, score_set)
+    assert pool.fused_scores[0][0] == row["citation"]
+    assert pool.fused_scores[0][1] > 0
+
+
+def test_fusion_ignores_malformed_or_unrelated_scores_and_nested_score_fields():
+    from apps.chat.services.rag_retrieval import fuse_ranked_tool_results
+
+    row = {**_row(1, 1, "a"), "chunk": 0, "score": 0.93,
+           "_score_set": {"secret": "private"}}
+    pool = fuse_ranked_tool_results([
+        {**_payload(row), "_retrieval_scores": {"scores": [0.93]}},
+        {**_payload(row), "_retrieval_scores": {
+            "schema_version": "v2", "query_fingerprint": "q",
+            "scorer_fingerprint": "s", "pool_fingerprint": "p",
+            "scoring_kind": "pointwise", "status": "complete",
+            "candidate_order": [999], "scores": [],
+        }},
+    ])
+    assert pool.source_score_sets == ()
+    assert "score" not in pool.rows[0]
+    assert "_score_set" not in pool.rows[0]
