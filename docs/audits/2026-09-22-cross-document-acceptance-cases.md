@@ -174,7 +174,7 @@ same pre-existing logging test deselected. Independent review caught and verifie
 a regression fix for a bold Sources heading that could otherwise lend citations
 to preceding prose. No blocking review findings remained.
 
-A real collection probe using normal deployment limits retrieved twelve retained
+An earlier real collection probe using normal deployment limits retrieved twelve retained
 rows from ten documents and generated an answer citing nine chunks from seven
 documents. Both graph branches succeeded for that single-question probe; two
 cited chunks were also graph candidates. None of the cited chunks was exclusive
@@ -183,6 +183,53 @@ A separate three-query run had direct-branch failures (`backend_unavailable`,
 `direct_no_seeds`, `extractor_provenance`) while extended retrieval returned
 evidence. Graph reliability across multiple queries remains a separate issue;
 this work does not declare the whole graph pipeline consistently healthy.
+
+## Final deployed acceptance results
+
+Application revision: `b694615ee85fd80e8883fb9d7d56c66f196d9141`, following
+`6689a20a` (selection/handoff) and `ab0e4491` (grounding/repair). Each was committed
+and pushed to `development` before the clean development checkout was
+fast-forwarded and its web service rebuilt/restarted. Web, query gateway,
+extractor, and Redis health checks passed; all ten Compose services were running.
+Environment files, temporary keys, private document contents, and raw server logs
+were excluded from Git commits.
+
+Final runs used the deployment's `qwen3.6:27b-mtp-awq`, 4,096 synthesis tokens,
+enabled citation enforcement, and deferred final streaming. Each case used the
+same deliberately small synthetic retrieval fixture described above.
+
+| Case | Automated answer check | Review |
+| --- | --- | --- |
+| Capacity, both papers | Pass | 18 and 7 litres are correctly cited; the calculated 11-litre difference cites both inputs after one citation-repair call. |
+| Capacity, A omitted | Pass | Gives B's 7-litre result and withholds dry capacity and the comparison. |
+| Capacity, B omitted | Pass | Gives A's 18-litre result and withholds humid capacity and the comparison. |
+| Disagreement, both papers | Pass | Preserves the 20 C/+12% versus 35 C/−9% results, cites both for opposing directions, and does not invent a cause. |
+| Disagreement, A omitted | Conservative false positive | The lexical checker flags “differs,” but B itself states that qualitative fact. The answer cites B and explicitly withholds A's missing numeric result and the direction comparison. Independent review confirmed this distinction. |
+| Disagreement, B omitted | Pass, with wording qualification | Withholds field results and comparison. “No field trial was performed” should more explicitly say “within the cited controlled study.” |
+
+All six passed evidence coverage, serialized packet equality, exact citation
+allowlists, and final SDK request checks after provider preprocessing. All six
+delivered one final callback matching the returned answer, with no extractive
+fallback. Seven provider calls served the six cases, including the one citation
+repair. Both complete cross-document questions passed their expected factual and
+claim-local citation checks. Do not summarize the six outputs as unqualified
+semantic passes: the table preserves the lexical false positive and wording
+qualification, and the checker cannot establish general semantic entailment.
+
+The final real-collection check on `b694615e`, using the deployed retrieval and
+synthesis settings, retained twelve passages from ten documents. Its generated
+answer contained ten chunk citations spanning eight documents, all inside the
+selected packet and collection. Both direct and extended graph branches
+succeeded; three cited chunks were graph candidates, and one was absent from the
+observed baseline candidate set. This demonstrates a graph-only contribution in
+that run, not a measured accuracy uplift. No extractive fallback was used. Private
+passages and answer text were not included in this report or Git.
+
+These probes do not test browser/websocket transport or persist conversations.
+They establish a bounded synthesis/hand-off acceptance result, not broad corpus
+recall, universal answer faithfulness, new inferred graph relationships, or a
+measured quality gain uniquely attributable to the graph. Large-context provider
+trimming and intermittent multi-query graph failures remain separate limits.
 
 After the production changes, the same acceptance test file passed all 16 tests
 in 0.18 seconds on 2026-09-22. This establishes the deterministic transport and
