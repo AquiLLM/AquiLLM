@@ -97,6 +97,8 @@ services:
       KG_QUERY_MAX_CODEPOINTS: ${KG_QUERY_MAX_CODEPOINTS:-2048}
       KG_QUERY_MAX_SPANS: ${KG_QUERY_MAX_SPANS:-32}
       KG_GLINER2_DEVICE: cpu
+      OMP_NUM_THREADS: ${KG_QUERY_EXTRACTOR_CPU_THREADS:-1}
+      MKL_NUM_THREADS: ${KG_QUERY_EXTRACTOR_CPU_THREADS:-1}
       HF_HOME: /root/.cache/huggingface
     volumes: [knowledge_graph_hf_cache:/root/.cache/huggingface]
     networks:

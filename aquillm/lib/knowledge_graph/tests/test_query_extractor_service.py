@@ -52,7 +52,7 @@ def _settings():
 
 
 class Backend:
-    def extract_batch(self, texts, *, ontology):
+    def extract_entities_batch(self, texts, *, ontology):
         assert texts == (f"A{EMOJI}B",)
         assert ontology.checksum == DIGEST
         return (
@@ -68,10 +68,10 @@ class SlowBackend(Backend):
     def __init__(self, delay: float) -> None:
         self.delay = delay
 
-    def extract_batch(self, texts, *, ontology):
+    def extract_entities_batch(self, texts, *, ontology):
         delay = self.delay
         time.sleep(delay)
-        return super().extract_batch(texts, ontology=ontology)
+        return super().extract_entities_batch(texts, ontology=ontology)
 
 
 async def _call(
@@ -166,6 +166,34 @@ async def test_bearer_auth_is_constant_time_and_response_spans_are_text_free(
     assert response.query_code_points == 3
     assert not hasattr(response.spans[0], "text")
     assert b"\xf0\x9f\x98\x80" not in payload
+
+
+@pytest.mark.asyncio
+async def test_service_uses_entity_only_backend_and_preserves_provenance(monkeypatch):
+    calls = []
+
+    class QueryOnlyBackend(Backend):
+        def extract_batch(self, texts, *, ontology):
+            raise AssertionError("query must not run document relation extraction")
+
+        def extract_entities_batch(self, texts, *, ontology):
+            calls.append(ontology.checksum)
+            return Backend.extract_entities_batch(self, texts, ontology=ontology)
+
+    _use_backend(monkeypatch, QueryOnlyBackend())
+    sent = await _call(
+        path="/v1/extract", body=_request(), authorization=b"Bearer private-token"
+    )
+
+    assert sent[0]["status"] == 200
+    response = parse_query_extraction_response(sent[1]["body"])
+    assert calls == [DIGEST]
+    assert response.provenance.ontology_checksum == DIGEST
+    assert response.provenance.model_revision == REVISION
+    assert response.provenance.build_hash == BUILD
+    assert response.spans[0].start == 1
+    assert response.spans[0].end == 2
+    assert response.spans[0].confidence == 0.75
 
 
 @pytest.mark.asyncio
@@ -345,7 +373,7 @@ def test_custom_ontology_is_request_local_and_response_binds_its_checksum(monkey
     seen = []
 
     class CustomBackend:
-        def extract_batch(self, texts, *, ontology):
+        def extract_entities_batch(self, texts, *, ontology):
             seen.append(ontology.checksum)
             return (
                 ExtractionBatchResult(
@@ -410,7 +438,7 @@ def test_invalid_dynamic_ontology_never_reaches_provider(monkeypatch, mutation):
     calls = []
 
     class NeverBackend:
-        def extract_batch(self, *args, **kwargs):
+        def extract_entities_batch(self, *args, **kwargs):
             calls.append(True)
             raise AssertionError("invalid definition reached provider")
 
@@ -475,7 +503,7 @@ def test_real_client_and_service_agree_on_custom_schema_provenance(monkeypatch):
     ontology = _custom_ontology()
 
     class CustomBackend:
-        def extract_batch(self, texts, *, ontology):
+        def extract_entities_batch(self, texts, *, ontology):
             assert set(ontology.entity_types) == {"audit_entity"}
             return (
                 ExtractionBatchResult(

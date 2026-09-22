@@ -84,6 +84,18 @@ if membership changes after selection, a specific rejection from the locked stat
 function skips that stale scope without aborting later collections. Other errors
 still surface. This preserves the existing projection authority checks.
 
+Live CPU measurements found a further latency issue: the query extractor used the
+document extractor's relation inference even though its response contains only
+entity spans. The query path now requests entity inference only; document graph
+extraction retains relations. Query-side CPU thread counts are configurable in all
+Compose variants. On the development CPU, the synthetic query took about 9.5–10.2
+seconds with the original 20-thread composite inference. Entity-only inference
+with four threads took 156–193 ms after warm-up. These are bounded diagnostic
+measurements, not a concurrency or load-test result.
+The final provider/service/client/Compose regression run passed 98 tests, with one
+container-only check skipped locally; actual deployment checks cover that service.
+Independent review found no remaining issue in the performance change.
+
 Known pre-existing checks outside this change: the global frontend typecheck has
 nine errors in unrelated files; a global migration drift check reports existing
 chat/document model drift. The changed schema/KG applications have no pending

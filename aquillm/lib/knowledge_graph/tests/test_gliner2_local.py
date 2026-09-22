@@ -254,6 +254,50 @@ def test_empty_input_returns_without_importing_or_loading_provider(
     assert gliner2_local._MODEL_CACHE == {}
 
 
+def test_query_entity_extraction_omits_relation_schema_and_preserves_spans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _install_fake_provider(
+        monkeypatch,
+        raw_results=[
+            _entity_result(
+                ("model", "Qwen3", 0.95, 0, 5),
+                ("dataset", "MMLU", 0.91, 11, 15),
+            )
+        ],
+    )
+
+    result = _backend().extract_entities_batch(
+        ("Qwen3 uses MMLU.",), ontology=_ontology()
+    )[0]
+
+    assert len(calls.schema_entities) == 1
+    assert calls.schema_relations == []
+    assert result.entities == (
+        EntityCandidate("model", "Qwen3", 0, 5, 0.95),
+        EntityCandidate("dataset", "MMLU", 11, 15, 0.91),
+    )
+    assert result.relations == ()
+    assert result.diagnostics == ()
+    assert calls.batch[0][2]["include_spans"] is True
+    assert calls.batch[0][2]["include_confidence"] is True
+
+
+def test_query_entity_extraction_retains_invalid_span_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_provider(
+        monkeypatch,
+        raw_results=[_entity_result(("model", "Qwen3", 0.95, 0, 99))],
+    )
+
+    result = _backend().extract_entities_batch(("Qwen3",), ontology=_ontology())[0]
+
+    assert result.entities == ()
+    assert result.relations == ()
+    assert [item.code for item in result.diagnostics] == ["malformed_entity_span"]
+
+
 def test_nonempty_extraction_rejects_unpinned_revision_before_provider_load(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -58,6 +58,14 @@ the same definition bounds; historical oversized ontologies must be reviewed and
 edited rather than silently truncated. Warm the extractor with the dedicated
 fixture before evaluating steady-state query latency.
 
+Set `KG_QUERY_EXTRACTOR_CPU_THREADS` for the development CPU after measuring the
+fixture. It supplies both OpenMP and MKL thread limits to the query service only;
+the portable default is one. Excess CPU threads can make short inference much
+slower. The September development measurements favored four threads. Query
+extraction computes entity spans only; document extraction still computes both
+entities and relations. Keep extractor, gateway, branch, and overall deadlines
+consistent and record any environment-specific increases.
+
 Use a dedicated collection and disposable documents belonging to test accounts.
 Do not run destructive probes against end-user data.
 

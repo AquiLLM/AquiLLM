@@ -20,6 +20,7 @@ FILES = tuple(
 BUILD_HASH = "${KG_QUERY_EXTRACTOR_BUILD_HASH:-}"
 SOURCE_DSN = "${KG_PROJECTION_POSTGRES_SOURCE_DSN:-}"
 STATE_DSN = "${KG_PROJECTION_POSTGRES_STATE_DSN:-}"
+CPU_THREADS = "${KG_QUERY_EXTRACTOR_CPU_THREADS:-1}"
 
 
 def _compose(path: Path) -> dict:
@@ -67,6 +68,21 @@ def test_extractor_has_no_database_credentials_and_exact_provenance(path: Path) 
         name.startswith("POSTGRES_") or name.endswith("_DSN") for name in environment
     )
     assert "query_extractor.service" in extractor["command"]
+
+
+@pytest.mark.parametrize("path", FILES, ids=lambda path: path.name)
+def test_extractor_bounds_cpu_math_threads(path: Path) -> None:
+    extractor = _compose(path)["services"]["knowledge_graph_query_extractor"]
+    environment = _env(extractor)
+
+    assert environment["OMP_NUM_THREADS"] == CPU_THREADS
+    assert environment["MKL_NUM_THREADS"] == CPU_THREADS
+
+
+def test_example_environment_documents_query_extractor_cpu_threads() -> None:
+    example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+    assert "KG_QUERY_EXTRACTOR_CPU_THREADS=1" in example.splitlines()
 
 
 @pytest.mark.parametrize("path", FILES, ids=lambda path: path.name)

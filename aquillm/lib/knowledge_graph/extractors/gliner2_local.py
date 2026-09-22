@@ -627,6 +627,24 @@ class GLiNER2LocalBackend:
         *,
         ontology: OntologyDefinition,
     ) -> tuple[ExtractionBatchResult, ...]:
+        return self._extract_batch(texts, ontology=ontology, include_relations=True)
+
+    def extract_entities_batch(
+        self,
+        texts: tuple[str, ...],
+        *,
+        ontology: OntologyDefinition,
+    ) -> tuple[ExtractionBatchResult, ...]:
+        """Extract query anchors without running document relation inference."""
+        return self._extract_batch(texts, ontology=ontology, include_relations=False)
+
+    def _extract_batch(
+        self,
+        texts: tuple[str, ...],
+        *,
+        ontology: OntologyDefinition,
+        include_relations: bool,
+    ) -> tuple[ExtractionBatchResult, ...]:
         if not texts:
             return ()
 
@@ -644,18 +662,6 @@ class GLiNER2LocalBackend:
             )
             for name, definition in ontology.entity_types.items()
         }
-        relation_definitions = {
-            name: (
-                description
-                if isinstance(
-                    description := _definition_value(definition, "description"),
-                    str,
-                )
-                and description.strip()
-                else name
-            )
-            for name, definition in ontology.relations.items()
-        }
         inference_options = {
             "batch_size": self._settings.batch_size,
             "format_results": False,
@@ -663,11 +669,21 @@ class GLiNER2LocalBackend:
             "include_spans": True,
         }
         try:
-            schema = (
-                model.create_schema()
-                .entities(entity_definitions)
-                .relations(relation_definitions)
-            )
+            schema = model.create_schema().entities(entity_definitions)
+            if include_relations:
+                relation_definitions = {
+                    name: (
+                        description
+                        if isinstance(
+                            description := _definition_value(definition, "description"),
+                            str,
+                        )
+                        and description.strip()
+                        else name
+                    )
+                    for name, definition in ontology.relations.items()
+                }
+                schema = schema.relations(relation_definitions)
             raw_results = model.batch_extract(list(texts), schema, **inference_options)
         except Exception as exc:
             raise ExtractionBackendError("GLiNER2 inference failed") from exc
@@ -683,12 +699,16 @@ class GLiNER2LocalBackend:
                 input_index=input_index,
                 known_types=known_types,
             )
-            relations, relation_diagnostics = _normalize_relations(
-                batches[input_index],
-                text=text,
-                input_index=input_index,
-                ontology_relations=ontology_relations,
-                entities=entities,
+            relations, relation_diagnostics = (
+                _normalize_relations(
+                    batches[input_index],
+                    text=text,
+                    input_index=input_index,
+                    ontology_relations=ontology_relations,
+                    entities=entities,
+                )
+                if include_relations
+                else ([], [])
             )
             results.append(
                 ExtractionBatchResult(

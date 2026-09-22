@@ -208,7 +208,7 @@ async def _extract_batch(runtime: QueryExtractorRuntime, query: str, timeout_ms:
         raise _InferenceOverloaded
     await slots.acquire()
     selected = runtime.ontology if ontology is None else ontology
-    worker = asyncio.create_task(asyncio.to_thread(runtime.backend.extract_batch, (query,), ontology=selected))  # type: ignore[union-attr]
+    worker = asyncio.create_task(asyncio.to_thread(runtime.backend.extract_entities_batch, (query,), ontology=selected))  # type: ignore[union-attr]
     deferred_release = False
     try:
         async with asyncio.timeout(timeout_ms / 1000.0):
