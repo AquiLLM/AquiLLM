@@ -8,6 +8,7 @@ type ToolResultValue = (
     | int
     | bool
     | float
+    | None
     | dict[str, ToolResultValue | list[ToolResultValue]]
     | list[str]
     | list[tuple[str, int]]
@@ -21,6 +22,7 @@ type ToolResultDict = dict[
         '_images',
         '_image_instruction',
         '_retrieval_diagnostics',
+        'retrieval_diagnostics',
         'retrieval_status',
         'retrieval_message',
         'retrieved_count',

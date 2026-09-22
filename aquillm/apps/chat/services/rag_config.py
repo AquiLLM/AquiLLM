@@ -28,7 +28,13 @@ def attach_tools_when_collections_selected() -> bool:
 
 
 def direct_rag_top_k() -> int:
-    return _env_int("RAG_DIRECT_TOP_K", 10, minimum=1)
+    return min(15, _env_int("RAG_DIRECT_TOP_K", 10, minimum=1))
+
+
+def direct_rag_candidate_top_k() -> int:
+    """Leave room for document balancing within the retrieval tool's 15-row limit."""
+    final_limit = direct_rag_top_k()
+    return min(15, final_limit * 3) if final_limit > 1 else 1
 
 
 def direct_rag_max_queries() -> int:
@@ -66,6 +72,7 @@ def direct_stage_logs_enabled() -> bool:
 __all__ = [
     "attach_tools_when_collections_selected",
     "direct_rag_top_k",
+    "direct_rag_candidate_top_k",
     "direct_rag_max_queries",
     "direct_stage_logs_enabled",
     "evidence_token_budget",

@@ -117,7 +117,7 @@ def _mock_user_and_convo():
 @patch("apps.chat.consumers.chat_receive.run_llm_spin", new_callable=AsyncMock)
 async def test_append_direct_rag_skips_tool_selection_spin(
     mock_spin,
-    _augment,
+    mock_augment,
     _mem_task,
     _memory_system,
     _aclose,
@@ -169,6 +169,7 @@ async def test_append_direct_rag_skips_tool_selection_spin(
     )
 
     mock_spin.assert_not_called()
+    assert mock_augment.await_args.kwargs["include_episodic"] is False
     assert order.index("retrieval") < order.index("get_message")
     assert order.count("get_message") == 1
 
@@ -236,7 +237,7 @@ async def test_append_direct_rag_disabled_falls_back_to_spin(
 async def test_reconnect_pending_user_turn_uses_direct_rag_before_tool_spin(
     mock_direct,
     mock_spin,
-    _augment,
+    mock_augment,
     _memory_system,
     _astronomy_tools,
     _document_tools,
@@ -286,6 +287,7 @@ async def test_reconnect_pending_user_turn_uses_direct_rag_before_tool_spin(
 
     mock_direct.assert_awaited_once()
     mock_spin.assert_not_awaited()
+    assert mock_augment.await_args.kwargs["include_episodic"] is False
 
 
 async def _await_value(value):

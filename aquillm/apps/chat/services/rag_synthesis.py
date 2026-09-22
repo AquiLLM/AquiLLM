@@ -22,12 +22,14 @@ import structlog
 
 from lib.llm.providers import image_context as imgctx
 from lib.llm.providers import visibility
+from lib.llm.providers.rag_citations import _chunk_citation_from_row
 from lib.llm.providers.retrieval_status import document_retrieval_notice
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
 from apps.chat.services.rag_config import max_figures_per_turn, synthesis_max_tokens
 from apps.chat.services.rag_evidence import EvidencePacket
+from apps.chat.services.rag_evidence_handoff import prepare_evidence_handoff
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -86,7 +88,7 @@ def _extractive_summary(packet: EvidencePacket) -> str:
         snippet = _truncate_sentence(chunk.get("text") or chunk.get("x") or "")
         if not snippet:
             continue
-        citation = chunk.get("citation") or chunk.get("ref")
+        citation = _chunk_citation_from_row(chunk)
         key = (snippet, citation)
         if key in seen:
             continue
@@ -171,6 +173,7 @@ async def synthesize_from_evidence(
     max_tokens: int | None = None,
 ) -> Conversation:
     """Produce the final assistant turn from packaged evidence."""
+    convo, request_convo = prepare_evidence_handoff(convo, packet)
     if packet.retrieval_status == "no_results" or not packet.chunks:
         return convo + [
             AssistantMessage(
@@ -179,7 +182,12 @@ async def synthesize_from_evidence(
         ]
 
     budget = max_tokens if max_tokens is not None else synthesis_max_tokens()
-    result_convo, _ = await llm_if.complete(convo, budget, stream_func=stream_func)
+    completed_request, _ = await llm_if.complete(
+        request_convo, budget, stream_func=stream_func
+    )
+    # Only provider-created turns belong in stored history; request-only evidence
+    # omission and provider context trimming must never rewrite earlier messages.
+    result_convo = convo + list(completed_request.messages[len(convo):])
 
     last = result_convo[-1]
     if not isinstance(last, AssistantMessage) or last.tool_call_id:

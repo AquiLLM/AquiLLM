@@ -192,6 +192,12 @@ cmd=("${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --served-model-name "${SERVED_MODEL_NAME}"
 )
 
+if supports_arg "--no-enable-log-requests"; then
+  cmd+=(--no-enable-log-requests)
+elif supports_arg "--disable-log-requests"; then
+  cmd+=(--disable-log-requests)
+fi
+
 if [ -n "${VLLM_API_KEY:-}" ]; then
   cmd+=(--api-key "${VLLM_API_KEY}")
 fi
@@ -236,14 +242,14 @@ fi
 
 # bitsandbytes + Qwen3-VL sequence-classification reranker can fail loading
 # classifier weights. Use fp16 for rerank until that path is proven stable.
-# Match rerank intents broadly: score task, reranker model id, pooling runner, or known reranker hf_overrides marker.
+# Match explicit rerank intents only. Embedding sidecars also use the pooling
+# runner, so pooling alone must never strip their required quantization payload.
 _vllm_task_trim="${VLLM_TASK:-}"
 _vllm_task_trim="${_vllm_task_trim%%[$'\r']}"
 _rerank_bnb_strip=0
 if [[ "${VLLM_EXTRA_ARGS:-}" == *[Bb]itsandbytes* ]]; then
   if [ "${_vllm_task_trim}" = "score" ] \
     || [[ "${VLLM_MODEL:-}" == *[Rr]eranker* ]] \
-    || [[ "${VLLM_RUNNER:-}" == "pooling" ]] \
     || [[ "${VLLM_EXTRA_ARGS:-}" == *is_original_qwen3_reranker* ]]; then
     _rerank_bnb_strip=1
   fi
@@ -343,6 +349,12 @@ unset \
   VLLM_EXTRA_ARGS \
   VLLM_PYTHON_BIN \
   VLLM_BASE_URL \
+  VLLM_BUILD_URL \
+  VLLM_IMAGE_TAG \
+  VLLM_CACHE_PATH \
+  VLLM_BUILD_PIPELINE \
+  VLLM_BUILD_COMMIT \
+  VLLM_GENESIS_BASE_IMAGE \
   LMCACHE_ENABLED \
   LMCACHE_EXTRA_ARGS || true
 

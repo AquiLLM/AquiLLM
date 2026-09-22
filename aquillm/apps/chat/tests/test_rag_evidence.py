@@ -203,3 +203,29 @@ def test_explicit_token_budget_overrides_env(monkeypatch):
     raw = _results_found(_make_chunk(1, "doc-1", 1, "Paper A", "Short text."))
     packet = build_evidence_packet(raw, query="test", search_scope="docs", token_budget=100)
     assert isinstance(packet, EvidencePacket)
+
+
+def test_budget_skips_large_passage_to_keep_later_document():
+    raw = _results_found(
+        _make_chunk(1, "a", 1, "Paper A", "A" * 80),
+        _make_chunk(2, "b", 2, "Paper B", "B" * 400),
+        _make_chunk(3, "c", 3, "Paper C", "C" * 80),
+    )
+    packet = build_evidence_packet(raw, query="compare", search_scope="docs", token_budget=40)
+    assert [row["doc_id"] for row in packet.chunks] == ["a", "c"]
+    assert packet.total_tokens <= 40
+
+
+def test_first_passage_cannot_exceed_entire_budget():
+    raw = _results_found(_make_chunk(1, "a", 1, "Paper A", "A" * 401))
+    packet = build_evidence_packet(raw, query="test", search_scope="docs", token_budget=100)
+    assert packet.total_tokens <= 100
+    assert packet.chunks == []
+    assert packet.retrieval_status == "no_results"
+    assert packet.diagnostic_message
+
+
+def test_missing_citation_uses_real_document_and_chunk_ids():
+    raw = {"result": [{"d": "a", "i": 0, "x": "Evidence"}]}
+    packet = build_evidence_packet(raw, query="test", search_scope="docs")
+    assert packet.citation_tokens == ["[doc:a chunk:0]"]

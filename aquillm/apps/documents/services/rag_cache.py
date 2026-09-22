@@ -186,31 +186,12 @@ def set_cached_image_data_url(doc_id: uuid.UUID, image_file_name: str, data_url:
     cache_set(key, data_url, image_data_url_ttl())
 
 
-def rerank_capability_cache_key(base_url: str, model: str) -> str:
-    return stable_cache_key("rrcap", base_url.rstrip("/"), model)
-
-
-def rerank_capability_ttl() -> int:
-    return int(getattr(settings, "RAG_RERANK_CAPABILITY_TTL_SECONDS", 900))
-
-
-def get_cached_rerank_capability(base_url: str, model: str) -> str | None:
-    if not _rag_enabled():
-        return None
-    key = rerank_capability_cache_key(base_url, model)
-    val = cache_get(key)
-    if isinstance(val, str) and val:
-        _log_hit_miss(_MET_RERANK_CAP, True)
-        return val
-    _log_hit_miss(_MET_RERANK_CAP, False)
-    return None
-
-
-def set_cached_rerank_capability(base_url: str, model: str, endpoint: str) -> None:
-    if not _rag_enabled():
-        return
-    key = rerank_capability_cache_key(base_url, model)
-    cache_set(key, endpoint, rerank_capability_ttl())
+from apps.documents.services.rag_cache_rerank import (  # noqa: E402
+    RerankCapability,
+    delete_cached_rerank_capability,
+    get_cached_rerank_capability,
+    set_cached_rerank_capability,
+)
 
 
 def rerank_result_cache_key(
@@ -302,10 +283,12 @@ def rehydrate_documents_from_refs(refs: Sequence[Mapping[str, Any]]) -> list[Any
 
 
 __all__ = [
+    "RerankCapability",
     "cache_get",
     "cache_set",
     "doc_access_cache_key",
     "document_lookup_cache_key",
+    "delete_cached_rerank_capability",
     "get_cached_doc_access_refs",
     "get_cached_document_ref",
     "get_cached_image_data_url",

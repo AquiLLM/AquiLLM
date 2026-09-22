@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-
 import type { Message, Collection, Conversation, ChatProps } from '../types';
 import { MessageBubble } from './MessageBubble';
 import { ToolCallGroup } from './ToolCallGroup';
@@ -38,7 +37,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const fallbackContextLimit = 200000;
   const contextLimitTokens = contextLimit && contextLimit > 0 ? contextLimit : fallbackContextLimit;
 
-  const { wsRef } = useChatWebSocket({
+  const { wsRef, terminalError, beginTurn } = useChatWebSocket({
     convoId,
     setConversation,
     setException,
@@ -46,7 +45,6 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     setInputDisabled,
     setSelectedCollections,
   });
-
   useEffect(() => {
     if (conversationEndRef.current) {
       conversationEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -148,6 +146,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const sendMessage = () => {
     if (!messageInput.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
+    beginTurn();
     setInputDisabled(true);
     const newMessage: Message = { role: 'user', content: messageInput.trim() };
 
@@ -255,12 +254,13 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const usageValue = conversation.usage || 0;
   const clampedUsageValue = Math.min(usageValue, contextLimitTokens);
   const usageRatio = contextLimitTokens > 0 ? clampedUsageValue / contextLimitTokens : 0;
+  const visibleException = terminalError || exception;
 
   return (
     <div className="flex flex-col h-full">
-      {exception && (
+      {visibleException && (
         <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded flex items-center justify-between">
-          <span>{exception}</span>
+          <span>{visibleException}</span>
           {debugHtml && (
             <button
               className="ml-4 px-3 py-1 bg-red-900 hover:bg-red-800 text-white rounded text-sm whitespace-nowrap"
@@ -307,7 +307,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
             );
           })}
 
-          {shouldShowSpinner(conversation.messages) && (
+          {!terminalError && shouldShowSpinner(conversation.messages) && (
             <div className="group flex justify-start" role="status" aria-label="AquiLLM is thinking">
               <div className="w-[88%] flex flex-col items-start">
                 <div className="flex items-center gap-1.5 mb-1">

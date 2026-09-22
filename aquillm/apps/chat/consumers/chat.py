@@ -154,6 +154,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 self.user,
                 await effective_base_system_for_memory_async(self),
                 self.db_convo.id,
+                include_episodic=not bool(self.col_ref.collections),
             )
             logger.info(
                 "Memory augmentation took %.1fms in connect()",
