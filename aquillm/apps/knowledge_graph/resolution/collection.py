@@ -40,6 +40,7 @@ MAX_COLLECTION_LINKS = 850_000
 MAX_TEXT_CHARACTERS = 8_192
 DEFAULT_EMBEDDING_BATCH_SIZE = 64
 _QUERY_PREDICATE_BATCH_SIZE = 5_000
+_PERSISTENCE_WRITE_BATCH_SIZE = 1_000
 _HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 _VERSION_PATTERN = re.compile(r"[a-z0-9][a-z0-9.+:/_-]*")
 _ACRONYM_PATTERN = re.compile(r"[A-Z][A-Z0-9-]{1,11}")
@@ -4194,16 +4195,86 @@ def _build_collection_link_rows(
     return tuple(links)
 
 
-def _write_collection_resolution(
-    artifact, manifest, source_entities, result, filter_result
-):
+def _validate_bulk_rows_without_database_probes(
+    rows: Sequence[object],
+    *,
+    expected_model: type,
+) -> None:
+    """Run exact local model validation; the locked write enforces DB constraints."""
+
+    from django.core.exceptions import ValidationError
+
     from apps.knowledge_graph.models import (
         CollectionEntity,
         CollectionEntityDocumentLink,
     )
 
+    excluded_foreign_keys_by_model = {
+        CollectionEntity: {"artifact", "collection"},
+        CollectionEntityDocumentLink: {
+            "artifact",
+            "manifest_input",
+            "document_entity",
+            "collection_entity",
+        },
+    }
+    if expected_model not in excluded_foreign_keys_by_model:
+        raise TypeError("bulk validation model is not allowlisted")
+    excluded_foreign_keys = excluded_foreign_keys_by_model[expected_model]
+
+    for row in rows:
+        if (
+            type(row) is not expected_model
+            or row.pk is not None
+            or not row._state.adding
+        ):
+            raise ValidationError(
+                {"id": "Bulk graph rows must be new exact allowlisted instances."}
+            )
+        row.prepare_for_persistence()
+        errors = row._raw_validation_errors()
+        for field in row._meta.fields:
+            if not field.choices:
+                continue
+            value = getattr(row, field.attname)
+            allowed = {choice for choice, _label in field.flatchoices}
+            if value not in allowed:
+                errors[field.name] = "Value is not a valid choice."
+        if errors:
+            raise ValidationError(errors)
+        row.full_clean(
+            exclude=excluded_foreign_keys,
+            validate_unique=False,
+            validate_constraints=False,
+        )
+
+
+def _write_collection_resolution(
+    artifact, manifest, source_entities, result, filter_result
+):
+    from django.db import transaction
+    from django.db.models import QuerySet
+
+    from apps.knowledge_graph.models import (
+        CollectionEntity,
+        CollectionEntityDocumentLink,
+    )
+
+    if not transaction.get_connection().in_atomic_block:
+        raise CollectionResolutionPersistenceError(
+            "collection resolution writes require an atomic transaction"
+        )
+
     entity_rows = _build_collection_entity_rows(artifact, result, filter_result)
-    CollectionEntity.objects.bulk_create(entity_rows)
+    _validate_bulk_rows_without_database_probes(
+        entity_rows,
+        expected_model=CollectionEntity,
+    )
+    QuerySet.bulk_create(
+        CollectionEntity.objects.all(),
+        entity_rows,
+        batch_size=_PERSISTENCE_WRITE_BATCH_SIZE,
+    )
     links = _build_collection_link_rows(
         artifact,
         manifest,
@@ -4212,7 +4283,15 @@ def _write_collection_resolution(
         filter_result,
         entity_rows,
     )
-    CollectionEntityDocumentLink.objects.bulk_create(links)
+    _validate_bulk_rows_without_database_probes(
+        links,
+        expected_model=CollectionEntityDocumentLink,
+    )
+    QuerySet.bulk_create(
+        CollectionEntityDocumentLink.objects.all(),
+        links,
+        batch_size=_PERSISTENCE_WRITE_BATCH_SIZE,
+    )
     return tuple(entity_rows), tuple(links)
 
 

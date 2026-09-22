@@ -16,7 +16,7 @@ import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db.models import CheckConstraint, UniqueConstraint
+from django.db.models import CheckConstraint, QuerySet, UniqueConstraint
 
 from apps.knowledge_graph.resolution import collection as collection_resolution
 from apps.knowledge_graph.resolution import scoring as resolution_scoring
@@ -374,6 +374,198 @@ def test_result_endpoint_validation_uses_bounded_membership_index(monkeypatch):
     result.__post_init__()
 
     assert comparisons <= len(result.decisions) * 15
+
+
+def test_collection_resolution_writes_use_bounded_batches_in_one_transaction(
+    monkeypatch,
+):
+    from django.db import transaction
+
+    from apps.knowledge_graph.models import (
+        CollectionEntity,
+        CollectionEntityDocumentLink,
+    )
+
+    writes = []
+    local_validations = []
+    unsafe_manager_validations = []
+
+    def prepare_for_persistence(self):
+        local_validations.append((self._test_kind, self._test_index, "prepare"))
+
+    def raw_validation_errors(self):
+        local_validations.append((self._test_kind, self._test_index, "raw"))
+        return {}
+
+    def full_clean(self, **kwargs):
+        local_validations.append(
+            (self._test_kind, self._test_index, "full", kwargs)
+        )
+
+    def unsafe_validate_for_persistence(self):
+        unsafe_manager_validations.append((self._test_kind, self._test_index))
+
+    def record_bulk_create(queryset, rows, *, batch_size=None, **_kwargs):
+        writes.append((queryset.model.__name__, tuple(rows), batch_size))
+
+    entity_rows = tuple(CollectionEntity() for _index in range(2))
+    link_rows = tuple(
+        CollectionEntityDocumentLink(
+            outcome=CollectionEntityDocumentLink.Outcome.AUTOMATIC,
+            status=CollectionEntityDocumentLink.Status.ACTIVE,
+        )
+        for _index in range(3)
+    )
+    for kind, rows in (("entity", entity_rows), ("link", link_rows)):
+        for index, row in enumerate(rows):
+            row._test_kind = kind
+            row._test_index = index
+    for model in (CollectionEntity, CollectionEntityDocumentLink):
+        monkeypatch.setattr(model, "prepare_for_persistence", prepare_for_persistence)
+        monkeypatch.setattr(model, "_raw_validation_errors", raw_validation_errors)
+        monkeypatch.setattr(model, "full_clean", full_clean)
+        monkeypatch.setattr(
+            model, "validate_for_persistence", unsafe_validate_for_persistence
+        )
+    monkeypatch.setattr(
+        collection_resolution,
+        "_build_collection_entity_rows",
+        lambda *_args: entity_rows,
+    )
+    monkeypatch.setattr(
+        collection_resolution,
+        "_build_collection_link_rows",
+        lambda *_args: link_rows,
+    )
+    monkeypatch.setattr(QuerySet, "bulk_create", record_bulk_create)
+    monkeypatch.setattr(
+        transaction,
+        "get_connection",
+        lambda: SimpleNamespace(in_atomic_block=True),
+    )
+
+    written = collection_resolution._write_collection_resolution(
+        object(), (), (), object(), object()
+    )
+
+    assert written == (entity_rows, link_rows)
+    assert writes == [
+        (CollectionEntity.__name__, entity_rows, 1_000),
+        (CollectionEntityDocumentLink.__name__, link_rows, 1_000),
+    ]
+    assert unsafe_manager_validations == []
+    assert local_validations == [
+        ("entity", 0, "prepare"),
+        ("entity", 0, "raw"),
+        (
+            "entity",
+            0,
+            "full",
+            {
+                "exclude": {"artifact", "collection"},
+                "validate_unique": False,
+                "validate_constraints": False,
+            },
+        ),
+        ("entity", 1, "prepare"),
+        ("entity", 1, "raw"),
+        (
+            "entity",
+            1,
+            "full",
+            {
+                "exclude": {"artifact", "collection"},
+                "validate_unique": False,
+                "validate_constraints": False,
+            },
+        ),
+        ("link", 0, "prepare"),
+        ("link", 0, "raw"),
+        (
+            "link",
+            0,
+            "full",
+            {
+                "exclude": {
+                    "artifact",
+                    "manifest_input",
+                    "document_entity",
+                    "collection_entity",
+                },
+                "validate_unique": False,
+                "validate_constraints": False,
+            },
+        ),
+        ("link", 1, "prepare"),
+        ("link", 1, "raw"),
+        (
+            "link",
+            1,
+            "full",
+            {
+                "exclude": {
+                    "artifact",
+                    "manifest_input",
+                    "document_entity",
+                    "collection_entity",
+                },
+                "validate_unique": False,
+                "validate_constraints": False,
+            },
+        ),
+        ("link", 2, "prepare"),
+        ("link", 2, "raw"),
+        (
+            "link",
+            2,
+            "full",
+            {
+                "exclude": {
+                    "artifact",
+                    "manifest_input",
+                    "document_entity",
+                    "collection_entity",
+                },
+                "validate_unique": False,
+                "validate_constraints": False,
+            },
+        ),
+    ]
+    persistence_source = inspect.getsource(
+        collection_resolution.persist_collection_resolution
+    )
+    assert persistence_source.index("with transaction.atomic():") < (
+        persistence_source.index("_write_collection_resolution(")
+    )
+
+
+def test_collection_bulk_validation_exclusions_cannot_be_widened():
+    from apps.knowledge_graph.models import CollectionEntity
+
+    with pytest.raises(TypeError, match="excluded_foreign_keys"):
+        collection_resolution._validate_bulk_rows_without_database_probes(
+            (CollectionEntity(),),
+            expected_model=CollectionEntity,
+            excluded_foreign_keys={"label"},
+        )
+
+
+def test_collection_resolution_writes_require_atomic_transaction(monkeypatch):
+    from django.db import transaction
+
+    monkeypatch.setattr(
+        transaction,
+        "get_connection",
+        lambda: SimpleNamespace(in_atomic_block=False),
+    )
+
+    with pytest.raises(
+        collection_resolution.CollectionResolutionPersistenceError,
+        match="require an atomic transaction",
+    ):
+        collection_resolution._write_collection_resolution(
+            object(), (), (), object(), object()
+        )
 
 
 def test_stable_identifier_equality_is_first_tier_and_never_embeds():
@@ -2175,9 +2367,11 @@ def test_embedding_revision_is_documented_and_passed_fail_closed_to_compose():
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_collection_resolution_persistence_is_idempotent_and_marker_bound():
+def test_collection_resolution_persistence_is_idempotent_and_marker_bound(monkeypatch):
     """PostgreSQL CI exercises the complete manifest/marker write boundary."""
     from django.contrib.auth.models import User
+    from django.db import IntegrityError, connection, transaction
+    from django.test.utils import CaptureQueriesContext
 
     from apps.collections.models import Collection
     from apps.documents.models import RawTextDocument, TextChunk
@@ -2186,6 +2380,7 @@ def test_collection_resolution_persistence_is_idempotent_and_marker_bound():
         filter_collection_resolution,
     )
     from apps.knowledge_graph.models import (
+        CollectionEntity,
         CollectionEntityDocumentLink,
         DocumentEntity,
         DocumentEntityMention,
@@ -2194,6 +2389,8 @@ def test_collection_resolution_persistence_is_idempotent_and_marker_bound():
         GraphBuildRun,
     )
     from apps.knowledge_graph.resolution.collection import (
+        _validate_bulk_rows_without_database_probes,
+        _write_collection_resolution,
         build_collection_snapshot,
         load_collection_filter_inputs,
         load_collection_resolution_inputs,
@@ -2310,6 +2507,102 @@ def test_collection_resolution_persistence_is_idempotent_and_marker_bound():
         filter_result,
         filter_policy=policy,
         ontology=_ontology(),
+    )
+
+    entity_validation_rows = tuple(
+        CollectionEntity(
+            artifact=destination,
+            collection=collection,
+            cluster_key=f"{10_000 + index:064x}",
+            label=f"Validation entity {index}",
+            normalized_label=f"validation entity {index}",
+            entity_type="model",
+            status=CollectionEntity.Status.ACTIVE,
+            extraction_confidence=0.9,
+            resolution_confidence=0.95,
+            retrieval_utility=0.5,
+        )
+        for index in range(25)
+    )
+    link_validation_rows = tuple(
+        CollectionEntityDocumentLink(
+            artifact=destination,
+            manifest_input=manifest[0],
+            document_entity=document_entity,
+            collection_entity=first[0],
+            score=1.0,
+            method="singleton",
+            resolver_version=destination.resolver_version,
+            outcome=CollectionEntityDocumentLink.Outcome.AUTOMATIC,
+            decision_checksum=f"{20_000 + index:064x}",
+            status=CollectionEntityDocumentLink.Status.ACTIVE,
+            reason="singleton_assignment",
+        )
+        for index in range(25)
+    )
+    with CaptureQueriesContext(connection) as validation_queries:
+        _validate_bulk_rows_without_database_probes(
+            entity_validation_rows,
+            expected_model=CollectionEntity,
+        )
+        _validate_bulk_rows_without_database_probes(
+            link_validation_rows,
+            expected_model=CollectionEntityDocumentLink,
+        )
+
+    assert validation_queries.captured_queries == []
+
+    rollback_entity = entity_validation_rows[0]
+    monkeypatch.setattr(
+        collection_resolution,
+        "_build_collection_entity_rows",
+        lambda *_args: (rollback_entity,),
+    )
+
+    def duplicate_automatic_links(*args):
+        written_entity = args[-1][0]
+        return tuple(
+            CollectionEntityDocumentLink(
+                artifact=destination,
+                manifest_input=manifest[0],
+                document_entity=document_entity,
+                collection_entity=written_entity,
+                score=1.0,
+                method="singleton",
+                resolver_version=destination.resolver_version,
+                outcome=CollectionEntityDocumentLink.Outcome.AUTOMATIC,
+                decision_checksum=f"{30_000 + index:064x}",
+                status=CollectionEntityDocumentLink.Status.ACTIVE,
+                reason="singleton_assignment",
+            )
+            for index in range(2)
+        )
+
+    monkeypatch.setattr(
+        collection_resolution,
+        "_build_collection_link_rows",
+        duplicate_automatic_links,
+    )
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _write_collection_resolution(
+                destination,
+                manifest,
+                (document_entity,),
+                result,
+                filter_result,
+            )
+
+    assert not CollectionEntity.objects.filter(
+        artifact=destination,
+        cluster_key=rollback_entity.cluster_key,
+    ).exists()
+    assert (
+        CollectionEntityDocumentLink.objects.filter(
+            artifact=destination,
+            decision_checksum__in=(f"{30_000:064x}", f"{30_001:064x}"),
+        ).count()
+        == 0
     )
 
     assert first == second

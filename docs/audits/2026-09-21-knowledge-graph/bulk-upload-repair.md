@@ -83,6 +83,21 @@ requests. Polling also stopped after an unchanged building response.
   exited cleanly after forwarding SIGTERM to their verified main process. Six
   command changes across four Compose variants preserve all other settings;
   70 existing Compose tests passed.
+- Collection entity/link persistence uses 1,000-row SQL batches inside the same
+  atomic transaction. A private two-model validator keeps preparation, raw
+  type/choice checks, field/vector validation and model `clean()` while leaving
+  foreign-key, uniqueness and check constraints to the unchanged PostgreSQL
+  constraints. It accepts only fresh exact model instances, fixes the excluded
+  foreign-key names internally and requires an active transaction for writing.
+  The public model managers keep their existing validation behavior. Source,
+  manifest, destination and lease locks, complete resolver replay, filter
+  recomputation, counts and commit-marker checks remain in place.
+  Independent database-forbidden probes passed 35 valid/invalid model cases,
+  including vector preservation, cross-artifact links and malformed values.
+  The PostgreSQL regression validated 25 entities and 25 links with zero SQL
+  queries, then forced a duplicate automatic-link constraint violation after
+  entity insertion; the outer transaction rolled back every attempted row.
+  Three focused write-contract tests and targeted Ruff checks also passed.
 
 ## Verification and limits
 
@@ -215,3 +230,25 @@ workers responded on the expected queues. The collection-only retry started
 at 06:28:17 UTC. During that retry, the authenticated status API returned HTTP
 200 with `building` and 31 active document graphs, correctly overriding the
 earlier request's historical partial outcome.
+
+The worker-launch repair was pushed as
+`d1d001485a3dd1a81c364ed3d907d49477cda08a`, then pulled to the host. Only the
+default and memory-promotion workers were gracefully replaced. Both new
+containers were verified to run Celery as PID 1; the collection extraction
+worker continued its existing attempt. After the application restart, the
+published-schema fixture's first direct retrieval request timed out while
+extended retrieval succeeded. The warm repeat passed both branches (1,123 ms
+direct, 239 ms extended). Migration, collected frontend, restricted role access
+and single-scheduler checks remained valid.
+
+The next live attempt exposed another persistence bottleneck: the generic bulk
+manager called `full_clean()` for every entity and link, issuing per-row foreign
+key, uniqueness and check-constraint queries before its insert. PostgreSQL's
+default bulk size also left the collection's nonstandard vector fields in one
+large `VALUES` statement. The affected assembly was stopped through its verified
+Celery child using the installed soft-timeout handler during a warm worker drain.
+Its transaction rolled back before heartbeat cleanup; the run terminalized at
+06:52:58 UTC with its lease cleared, and the worker exited zero. All 31 document
+graphs and the original draft remained intact; no lingering database lock was
+observed. This was a controlled maintenance cancellation, not an unexplained
+application failure.
