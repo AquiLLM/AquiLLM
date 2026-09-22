@@ -1,6 +1,8 @@
 """Environment-backed configuration for direct RAG and tool-loop fallbacks."""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from os import getenv
 
 
@@ -69,6 +71,47 @@ def direct_stage_logs_enabled() -> bool:
     return _env_bool("RAG_DIRECT_STAGE_LOGS", default=True)
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceSelectionConfig:
+    mode: str = "legacy"
+    score_timeout_ms: int = 3000
+    shadow_scoring: bool = False
+    error: str | None = None
+
+
+def evidence_selection_config() -> EvidenceSelectionConfig:
+    """Read one validated rollout configuration; malformed values retain legacy."""
+    mode = getenv("RAG_EVIDENCE_SELECTION_MODE", "legacy").strip().lower()
+    shadow = getenv("RAG_EVIDENCE_SELECTION_SHADOW_SCORING", "0").strip().lower()
+    truthy = ("1", "true", "yes", "on")
+    falsy = ("0", "false", "no", "off")
+    try:
+        timeout = int(getenv("RAG_EVIDENCE_SELECTION_SCORE_TIMEOUT_MS", "3000"))
+        if (
+            mode not in ("legacy", "shadow", "adaptive")
+            or not 100 <= timeout <= 3000
+            or shadow not in (*truthy, *falsy)
+        ):
+            raise ValueError("invalid evidence selection configuration")
+    except (TypeError, ValueError):
+        return EvidenceSelectionConfig(
+            error="invalid_evidence_selection_configuration",
+        )
+    return EvidenceSelectionConfig(mode, timeout, shadow in truthy)
+
+
+def selection_mode() -> str:
+    return evidence_selection_config().mode
+
+
+def selection_scoring_timeout_ms() -> int:
+    return evidence_selection_config().score_timeout_ms
+
+
+def shadow_scoring_enabled() -> bool:
+    return evidence_selection_config().shadow_scoring
+
+
 __all__ = [
     "attach_tools_when_collections_selected",
     "direct_rag_top_k",
@@ -76,6 +119,11 @@ __all__ = [
     "direct_rag_max_queries",
     "direct_stage_logs_enabled",
     "evidence_token_budget",
+    "EvidenceSelectionConfig",
+    "evidence_selection_config",
+    "selection_mode",
+    "selection_scoring_timeout_ms",
+    "shadow_scoring_enabled",
     "is_direct_rag_enabled",
     "max_figures_per_turn",
     "max_snippets_per_doc",

@@ -39,6 +39,32 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Provision projection roles required by migrations
+        run: |
+          python - <<'PY'
+          import os
+
+          import psycopg2
+          from psycopg2 import sql
+
+          connection = psycopg2.connect(
+              host=os.environ["POSTGRES_HOST"],
+              dbname=os.environ["POSTGRES_NAME"],
+              user=os.environ["POSTGRES_USER"],
+              password=os.environ["POSTGRES_PASSWORD"],
+          )
+          connection.autocommit = True
+          try:
+              with connection.cursor() as cursor:
+                  for role in ("aquillm_projection_source", "aquillm_projection_state"):
+                      cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+                      if cursor.fetchone() is None:
+                          cursor.execute(
+                              sql.SQL("CREATE ROLE {} NOLOGIN").format(sql.Identifier(role))
+                          )
+          finally:
+              connection.close()
+          PY
       - name: Django system check
         working-directory: aquillm
         run: python manage.py check
@@ -56,6 +82,34 @@ jobs:
           aquillm/tests/integration/test_knowledge_graph_compose.py
           aquillm/tests/integration/test_knowledge_graph_query_extractor_compose.py
           aquillm/tests/integration/test_task21_knowledge_graph_eval_compose.py
+          -q --tb=short
+      - name: Adaptive evidence and score contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/chat/tests/test_rag_selection_config.py
+          aquillm/apps/chat/tests/test_rag_selection_policy.py
+          aquillm/apps/chat/tests/test_rag_selection.py
+          aquillm/apps/chat/tests/test_rag_retrieval.py
+          aquillm/apps/chat/tests/test_evidence_selection_eval.py
+          aquillm/apps/chat/tests/test_rag_evidence_handoff.py
+          aquillm/apps/chat/tests/test_direct_rag_pipeline.py
+          aquillm/apps/documents/tests/test_rerank_scores.py
+          aquillm/apps/documents/tests/test_rerank_score_providers.py
+          aquillm/apps/documents/tests/test_rerank_model_identity.py
+          aquillm/apps/documents/tests/test_chunk_search_score_transport.py
+          aquillm/apps/documents/tests/test_chunk_search_graph_overlay.py
+          aquillm/apps/documents/tests/test_hybrid_graph_reranker_authority.py
+          aquillm/apps/documents/tests/test_retrieval_log_redaction.py
+          aquillm/tests/integration/test_retrieval_authorization_propagation.py
+          -q --tb=short
+      - name: Projected PPR restart contracts
+        run: >-
+          python -m pytest
+          aquillm/lib/knowledge_graph/tests/test_ppr_restart_config.py
+          aquillm/apps/knowledge_graph/tests/test_ppr_policy.py
+          aquillm/apps/knowledge_graph/tests/test_projected_ppr_execution.py
+          aquillm/apps/knowledge_graph/tests/test_projected_ppr_caps.py
+          aquillm/apps/knowledge_graph/tests/test_ppr_restart_eval.py
           -q --tb=short
 
   frontend-build:
