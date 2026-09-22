@@ -22,6 +22,7 @@ type ToolResultDict = dict[
         '_images',
         '_image_instruction',
         '_retrieval_diagnostics',
+        '_retrieval_scores',
         'retrieval_status',
         'retrieval_message',
         'retrieval_diagnostics',
