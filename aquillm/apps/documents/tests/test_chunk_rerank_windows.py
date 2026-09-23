@@ -214,3 +214,72 @@ def test_reuse_preparation_uses_coordinator_deadline_for_injected_scorer(monkeyp
     assert counted == ["source 1"]
     assert result.score_status == "rank_fallback"
     assert now[0] == 0.2
+
+
+@pytest.mark.parametrize("delayed_method", ["reserve_text", "can_publish"])
+def test_ledger_wait_cannot_start_counter_after_deadline(monkeypatch, delayed_method):
+    now, operations = [0.0], []
+    budget = TurnBudget(TurnLimits(), clock=lambda: now[0])
+    original = getattr(budget, delayed_method)
+    calls = 0
+
+    def delayed(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = original(*args, **kwargs)
+        if delayed_method == "reserve_text" or calls == 2:
+            now[0] += 0.2
+        return result
+
+    class Counter:
+        def input_codepoints(self, query, document):
+            operations.append("render")
+            return len(query) + len(document)
+
+        def __call__(self, query, document):
+            operations.append("tokenize")
+            return 1
+
+    monkeypatch.setattr(budget, delayed_method, delayed)
+    plan = prepare_source_windows(
+        "q",
+        SourceEvidence(1, "doc", 0, "r", "tail"),
+        pair_counter=Counter(),
+        budget=budget,
+        deadline=0.1,
+        clock=lambda: now[0],
+    )
+    assert operations == (["render"] if delayed_method == "reserve_text" else [])
+    assert budget.text_used["tokenized"] == (
+        5 if delayed_method == "reserve_text" else 0
+    )
+    assert plan.reason == "preparation_deadline"
+    assert plan.preparation_coverage == "partial"
+    assert not plan.windows
+
+
+def test_plan_admission_rechecks_deadline_after_ledger_wait(monkeypatch):
+    from apps.documents.services.chunk_rerank_window_adapter import (
+        WindowSelectionScorer,
+    )
+
+    now = [0.0]
+    budget = TurnBudget(TurnLimits(), clock=lambda: now[0])
+    original = budget.can_publish
+
+    def delayed():
+        result = original()
+        now[0] += 0.2
+        return result
+
+    class UnreadSource:
+        @property
+        def pk(self):
+            pytest.fail("source preparation started after the nested deadline")
+
+    monkeypatch.setattr(budget, "can_publish", delayed)
+    scorer = WindowSelectionScorer(
+        None, budget=budget, deadline=0.1, clock=lambda: now[0]
+    )
+    with pytest.raises(ValueError, match="allowance exhausted"):
+        scorer.plan("q", UnreadSource())

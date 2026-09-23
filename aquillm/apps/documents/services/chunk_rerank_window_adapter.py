@@ -105,9 +105,10 @@ class WindowSelectionScorer:
         return self._plans[key]
 
     def _preparation_open(self):
-        return self.clock() < self.deadline and (
-            self.budget is None or self.budget.can_publish()
-        )
+        if self.clock() >= self.deadline:
+            return False
+        ledger_open = self.budget is None or self.budget.can_publish()
+        return ledger_open and self.clock() < self.deadline
 
     def score_windows(self, query, chunks, *, phase="final", on_submit=None):
         if self.budget is not None:

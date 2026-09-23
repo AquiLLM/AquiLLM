@@ -96,6 +96,8 @@ def prepare_source_windows(
             raise PreparationStopped("preparation_deadline")
         if budget is not None and not budget.can_publish():
             raise PreparationStopped("preparation_budget")
+        if deadline is not None and clock() >= deadline:
+            raise PreparationStopped("preparation_deadline")
 
     def counted(text):
         nonlocal unknown
@@ -111,6 +113,7 @@ def prepare_source_windows(
             and not budget.reserve_text(work, kind="tokenized")
         ):
             raise PreparationStopped("preparation_budget")
+        check_preparation_open()
         value = pair_counter(query, text)
         check_preparation_open()
         if value is None:
