@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from time import monotonic
 
 from lib.retrieval import SourceEvidence, SourceSpan, TurnBudget
 
@@ -60,12 +61,19 @@ class WindowPlan:
         )
 
 
-class PreparationStopped(Exception):
+class PreparationStopped(ValueError):
     pass
 
 
 def prepare_source_windows(
-    query, source, *, pair_counter, pair_limit=1024, budget=None
+    query,
+    source,
+    *,
+    pair_counter,
+    pair_limit=1024,
+    budget=None,
+    deadline=None,
+    clock=monotonic,
 ):
     """Count complete pairs first; retain every source code point in exact slices.
 
@@ -83,21 +91,28 @@ def prepare_source_windows(
     unknown = False
     memo = {}
 
+    def check_preparation_open():
+        if deadline is not None and clock() >= deadline:
+            raise PreparationStopped("preparation_deadline")
+        if budget is not None and not budget.can_publish():
+            raise PreparationStopped("preparation_budget")
+
     def counted(text):
         nonlocal unknown
-        if budget is not None and not budget.can_publish():
-            raise PreparationStopped
+        check_preparation_open()
         if text in memo:
             return memo[text]
         work_counter = getattr(pair_counter, "input_codepoints", None)
         work = work_counter(query, text) if work_counter else len(query) + len(text)
+        check_preparation_open()
         if (
             budget is not None
             and work
             and not budget.reserve_text(work, kind="tokenized")
         ):
-            raise PreparationStopped
+            raise PreparationStopped("preparation_budget")
         value = pair_counter(query, text)
+        check_preparation_open()
         if value is None:
             unknown = True
             value = len(query.encode("utf-8")) + len(text.encode("utf-8")) + 256
@@ -118,6 +133,7 @@ def prepare_source_windows(
         )
 
     def add(start, end):
+        check_preparation_open()
         windows.append(
             SourceSpan(
                 source.chunk_id,
@@ -129,6 +145,7 @@ def prepare_source_windows(
         )
 
     try:
+        check_preparation_open()
         if len(query) + len(source.text) > 250_000:
             return finish("partial", "source_limit")
         full_count = counted(source.text)
@@ -140,9 +157,11 @@ def prepare_source_windows(
         if base >= pair_limit or not source.text:
             return finish("partial", "query_capacity")
         # Compute boundaries once; never decode token prefixes back into source.
+        check_preparation_open()
         boundaries = [m.end() for m in re.finditer(r"\n\s*\n|[.!?]\s+", source.text)]
         start = 0
         while start < len(source.text):
+            check_preparation_open()
             if len(windows) >= 135:
                 return finish("partial", "window_limit")
             low, high = start, len(source.text)
@@ -177,5 +196,5 @@ def prepare_source_windows(
                     high = mid - 1
             start = end - low
         return finish("unknown" if unknown else "complete")
-    except PreparationStopped:
-        return finish("partial", "preparation_budget")
+    except PreparationStopped as stopped:
+        return finish("partial", str(stopped))

@@ -21,7 +21,7 @@ from .chunk_rerank_score_cache import (
     window_cache_key,
 )
 from .chunk_rerank_window_scores import aggregate_window_scores, score_window_plan
-from .chunk_rerank_windows import prepare_source_windows
+from .chunk_rerank_windows import PreparationStopped, prepare_source_windows
 
 
 def unknown_pair_count(query, document):
@@ -75,6 +75,8 @@ class WindowSelectionScorer:
         self._scores = {}
 
     def plan(self, query, chunk):
+        if not self._preparation_open():
+            raise PreparationStopped("window preparation allowance exhausted")
         source = SourceEvidence(
             chunk.pk,
             str(chunk.doc_id),
@@ -91,11 +93,21 @@ class WindowSelectionScorer:
                 counter = unknown_pair_count
             self._plans[key] = replace(
                 prepare_source_windows(
-                    query, source, pair_counter=counter, budget=self.budget
+                    query,
+                    source,
+                    pair_counter=counter,
+                    budget=self.budget,
+                    deadline=self.deadline,
+                    clock=self.clock,
                 ),
                 source_revision=revision,
             )
         return self._plans[key]
+
+    def _preparation_open(self):
+        return self.clock() < self.deadline and (
+            self.budget is None or self.budget.can_publish()
+        )
 
     def score_windows(self, query, chunks, *, phase="final", on_submit=None):
         if self.budget is not None:
@@ -104,14 +116,8 @@ class WindowSelectionScorer:
                 self.clock() + self.budget.scoring_remaining_ms(phase) / 1000,
             )
         rows = tuple(chunks)
-        plans = tuple(self.plan(query, row) for row in rows)
         order = tuple(row.pk for row in rows)
-        pool = fingerprint_pool(
-            tuple(
-                (row.pk, p.source.source_fingerprint, p.fingerprint)
-                for row, p in zip(rows, plans)
-            )
-        )
+        pool = fingerprint_pool(())
 
         def envelope(scores=()):
             return RerankScoreSet(
@@ -133,6 +139,22 @@ class WindowSelectionScorer:
             or not self.budget.can_publish()
         ):
             return envelope()
+        plans = []
+        for row in rows:
+            if not self._preparation_open():
+                return envelope()
+            try:
+                plans.append(self.plan(query, row))
+            except PreparationStopped:
+                return envelope()
+        if not self._preparation_open():
+            return envelope()
+        pool = fingerprint_pool(
+            tuple(
+                (row.pk, plan.source.source_fingerprint, plan.fingerprint)
+                for row, plan in zip(rows, plans)
+            )
+        )
         scores = []
         for row, plan in zip(rows, plans):
             if self.clock() >= self.deadline or not self.budget.can_publish():

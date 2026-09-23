@@ -26,6 +26,7 @@ from apps.documents.services.chunk_rerank_scoring import (
     score_missing_pairs,
 )
 from apps.documents.services.chunk_rerank_window_adapter import (
+    WindowSelectionScorer,
     compatible_window_score,
     expected_score_fingerprint,
 )
@@ -143,6 +144,8 @@ def prepare_selection_candidates(
         used_scorer = current_selection_scorer(
             deadline=deadline, clock=clock, turn_budget=turn_budget
         )
+    if isinstance(used_scorer, WindowSelectionScorer):
+        used_scorer.deadline = min(used_scorer.deadline, deadline)
     reused: dict[int, PassageScore] = {}
     new_scores: dict[int, PassageScore] = {}
     new_pairs = 0

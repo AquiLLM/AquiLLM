@@ -63,3 +63,154 @@ def test_repeated_counting_is_charged_and_stops_on_budget():
     )
     assert plan.preparation_coverage == "partial"
     assert not plan.windows
+
+
+@pytest.mark.parametrize("final_ms, coordinator_ms", [(100, 3000), (3000, 100)])
+def test_pool_preparation_stops_before_next_source_at_nested_deadline(
+    final_ms, coordinator_ms
+):
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    from apps.documents.services.chunk_rerank_window_adapter import (
+        WindowSelectionScorer,
+    )
+
+    now, counted = [0.0], []
+    budget = TurnBudget(TurnLimits(final_scoring_ms=final_ms), clock=lambda: now[0])
+
+    def slow_count(query, document):
+        counted.append(document)
+        now[0] += 0.2
+        return len(query) + len(document)
+
+    rows = tuple(
+        SimpleNamespace(pk=i, doc_id=UUID(int=i), chunk_number=0, content=f"source {i}")
+        for i in range(1, 4)
+    )
+    scorer = WindowSelectionScorer(
+        None,
+        budget=budget,
+        pair_counter=slow_count,
+        clock=lambda: now[0],
+        deadline=coordinator_ms / 1000,
+    )
+    result = scorer.score_windows("q", rows)
+    assert counted == ["source 1"]
+    assert now[0] == 0.2
+    assert result.status == "unavailable"
+    assert budget.pairs_used == {"acquisition": 0, "final": 0}
+    assert budget.can_publish()  # Final fallback must not close the retrieval ledger.
+
+
+def test_expired_window_preparation_does_not_start_another_counter_operation():
+    now, counted = [0.0], []
+    source = SourceEvidence(1, "doc", 0, "r", "x" * 3000)
+
+    def slow_count(query, document):
+        counted.append(len(document))
+        now[0] += 0.2
+        return len(query) + len(document)
+
+    plan = prepare_source_windows(
+        "q", source, pair_counter=slow_count, deadline=0.1, clock=lambda: now[0]
+    )
+    assert counted == [3000]
+    assert plan.source is source
+    assert plan.preparation_coverage == "partial"
+    assert plan.reason == "preparation_deadline"
+    assert not plan.windows
+
+
+def test_rendering_that_exhausts_deadline_cannot_start_tokenization():
+    now, tokenized = [0.0], []
+
+    class SlowRender:
+        def input_codepoints(self, query, document):
+            now[0] += 0.2
+            return len(query) + len(document)
+
+        def __call__(self, query, document):
+            tokenized.append(document)
+            return 1
+
+    plan = prepare_source_windows(
+        "q",
+        SourceEvidence(1, "doc", 0, "r", "tail"),
+        pair_counter=SlowRender(),
+        deadline=0.1,
+        clock=lambda: now[0],
+    )
+    assert not tokenized
+    assert plan.preparation_coverage == "partial"
+    assert plan.reason == "preparation_deadline"
+
+
+def test_reuse_preparation_uses_coordinator_deadline_for_injected_scorer(monkeypatch):
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    from apps.chat.services.rag_selection_scoring import prepare_selection_candidates
+    from apps.documents.services.chunk_rerank_results import fingerprint_text
+    from apps.documents.services.chunk_rerank_window_adapter import (
+        WindowSelectionScorer,
+    )
+
+    now, counted = [0.0], []
+    budget = TurnBudget(TurnLimits(), clock=lambda: now[0])
+    rows = tuple(
+        SimpleNamespace(pk=i, doc_id=UUID(int=i), chunk_number=0, content=f"source {i}")
+        for i in range(1, 4)
+    )
+    acquisition = WindowSelectionScorer(
+        SimpleNamespace(score_pair=lambda pair, timeout: (1.0, pair)),
+        budget=budget,
+        pair_counter=count_pair,
+        scorer_identity="deadline-fixture",
+        clock=lambda: now[0],
+        deadline=10,
+    ).score_windows("q", rows, phase="acquisition")
+
+    def slow_count(query, document):
+        counted.append(document)
+        now[0] += 0.2
+        return count_pair(query, document)
+
+    final = WindowSelectionScorer(
+        None,
+        budget=budget,
+        pair_counter=slow_count,
+        scorer_identity="deadline-fixture",
+        clock=lambda: now[0],
+        deadline=10,
+    )
+    public = tuple({"chunk_id": row.pk, "citation": str(row.pk)} for row in rows)
+    hydrated = tuple(
+        SimpleNamespace(
+            chunk=row,
+            row=view,
+            excerpt=row.content,
+            source_fingerprint=fingerprint_text(row.content),
+        )
+        for row, view in zip(rows, public)
+    )
+    monkeypatch.setattr(
+        "apps.chat.services.rag_selection_scoring.hydrate_pool_rows",
+        lambda *args, **kwargs: hydrated,
+    )
+    pool = SimpleNamespace(
+        rows=public, source_score_sets=(acquisition,), fused_scores=()
+    )
+    result = prepare_selection_candidates(
+        pool=pool,
+        primary_query="q",
+        authorization=object(),
+        deadline=0.1,
+        allow_new_scores=False,
+        scorer=final,
+        clock=lambda: now[0],
+        turn_budget=budget,
+    )
+    assert counted == ["source 1"]
+    assert result.score_status == "rank_fallback"
+    assert now[0] == 0.2
