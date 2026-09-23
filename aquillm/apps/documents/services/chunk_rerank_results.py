@@ -44,6 +44,29 @@ def score_identity_for_chunk(
 
 
 @dataclass(frozen=True)
+class WindowCoverage:
+    required_window_ids: tuple[str, ...]
+    required_pair_fingerprints: tuple[str, ...]
+    successful_pair_fingerprints: tuple[str, ...]
+    prepared_input_scoring_coverage: str
+    aggregation_version: str = "window-max-v1"
+
+    def is_complete(self) -> bool:
+        return (
+            self.aggregation_version == "window-max-v1"
+            and self.prepared_input_scoring_coverage == "complete"
+            and bool(self.required_window_ids)
+            and len(set(self.required_window_ids)) == len(self.required_window_ids)
+            and len(self.required_window_ids) == len(self.required_pair_fingerprints)
+            and self.required_pair_fingerprints == self.successful_pair_fingerprints
+            and all(
+                type(x) is str and x
+                for x in (*self.required_window_ids, *self.required_pair_fingerprints)
+            )
+        )
+
+
+@dataclass(frozen=True)
 class PassageScore:
     chunk_pk: int
     document_id: UUID
@@ -51,6 +74,7 @@ class PassageScore:
     source_fingerprint: str
     effective_pair_fingerprint: str
     value: float
+    window_coverage: WindowCoverage | None = None
 
 
 @dataclass(frozen=True)
@@ -134,7 +158,10 @@ def validate_score_set(
     expected_scorer_fingerprint: str,
 ) -> RerankScoreSet:
     """Reject cached/model metadata that is stale or outside the current scope."""
-    if not isinstance(score_set, RerankScoreSet) or score_set.schema_version != "v2":
+    if not isinstance(score_set, RerankScoreSet) or score_set.schema_version not in (
+        "v2",
+        "v3-window",
+    ):
         raise ValueError("unsupported score set")
     if (
         score_set.query_fingerprint != expected_query_fingerprint
@@ -178,6 +205,16 @@ def validate_score_set(
         return score_set
     seen: set[int] = set()
     for score in score_set.scores:
+        if not isinstance(score, PassageScore):
+            raise ValueError("invalid score")
+        if score_set.schema_version == "v3-window":
+            if (
+                not isinstance(score.window_coverage, WindowCoverage)
+                or not score.window_coverage.is_complete()
+            ):
+                raise ValueError("incomplete window coverage")
+        elif score.window_coverage is not None:
+            raise ValueError("window coverage requires v3-window")
         if (
             not isinstance(score, PassageScore)
             or type(score.value) not in (int, float)

@@ -100,6 +100,13 @@ class LocalSelectionScorer:
             query, chunk.content[: self.char_limit], self.pair_limit, self.reserve
         )
 
+    def score_budgeted_pair(self, pair, timeout_seconds, *, budget, phase):
+        from .chunk_rerank_window_http import score_budgeted_pair
+
+        return score_budgeted_pair(
+            self, pair, timeout_seconds, budget=budget, phase=phase, post=requests.post
+        )
+
     def _post(self, payload: dict, budget: float):
         remaining = min(self.timeout, budget, self.deadline - self.clock())
         if remaining <= 0:
@@ -200,7 +207,7 @@ class LocalSelectionScorer:
         return tuple((by_index[index], pair) for index, pair in enumerate(pairs))
 
 
-def current_selection_scorer(
+def _legacy_selection_scorer(
     *, deadline: float, clock: Callable[[], float] = monotonic
 ) -> LocalSelectionScorer | None:
     """Use only a known local capability; no endpoint discovery in this path."""
@@ -235,6 +242,30 @@ def current_selection_scorer(
         deadline=deadline,
         clock=clock,
         headers=headers,
+    )
+
+
+def current_selection_scorer(
+    *, deadline, clock=monotonic, turn_budget=None, windowed=None, pair_counter=None
+):
+    from .chunk_rerank_config import rerank_text_mode
+    from .chunk_rerank_pair_capability import registered_pair_counter
+    from .chunk_rerank_window_adapter import WindowSelectionScorer, unknown_pair_count
+
+    provider = _legacy_selection_scorer(deadline=deadline, clock=clock)
+    active = rerank_text_mode() == "windowed" if windowed is None else windowed
+    if not active:
+        return provider
+    verified = registered_pair_counter(provider)
+    if verified is not None:
+        provider.verified_pair_counter = verified
+    return WindowSelectionScorer(
+        provider,
+        budget=turn_budget,
+        deadline=deadline,
+        clock=clock,
+        pair_counter=pair_counter or verified or unknown_pair_count,
+        cache_enabled=verified is not None,
     )
 
 

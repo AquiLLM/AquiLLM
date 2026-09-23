@@ -143,6 +143,8 @@ def prepare_selection_turn(
     question: str,
     config: EvidenceSelectionConfig,
     top_k: int,
+    *,
+    turn_budget=None,
 ) -> SelectionTurn:
     """Resolve current scope, score once, and select on a DB-capable worker."""
     docs = Collection.get_user_accessible_documents(
@@ -158,12 +160,16 @@ def prepare_selection_turn(
     if authorization is None:
         raise ValueError("retrieval authorization unavailable")
     started = monotonic()
+    scoring_ms = config.score_timeout_ms
+    if turn_budget is not None:
+        scoring_ms = min(scoring_ms, turn_budget.scoring_remaining_ms("final"))
     prepared = prepare_selection_candidates(
         pool=pool,
         primary_query=primary_query,
         authorization=authorization,
-        deadline=started + config.score_timeout_ms / 1000.0,
+        deadline=started + scoring_ms / 1000.0,
         allow_new_scores=config.mode == "adaptive" or config.shadow_scoring,
+        turn_budget=turn_budget,
     )
     profile = choose_selection_profile(question)
     select_started = monotonic()

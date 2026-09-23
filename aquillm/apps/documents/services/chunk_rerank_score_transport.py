@@ -6,7 +6,58 @@ from collections.abc import Mapping
 from math import isfinite
 from uuid import UUID
 
-from apps.documents.services.chunk_rerank_results import PassageScore, RerankScoreSet
+from apps.documents.services.chunk_rerank_results import (
+    PassageScore,
+    RerankScoreSet,
+    WindowCoverage,
+)
+
+
+def _window_fields(score):
+    coverage = score.window_coverage
+    if coverage is None:
+        return {}
+    return {
+        "window_coverage": {
+            "required_window_ids": list(coverage.required_window_ids),
+            "required_pair_fingerprints": list(coverage.required_pair_fingerprints),
+            "successful_pair_fingerprints": list(coverage.successful_pair_fingerprints),
+            "prepared_input_scoring_coverage": coverage.prepared_input_scoring_coverage,
+            "aggregation_version": coverage.aggregation_version,
+        }
+    }
+
+
+def _parse_window(raw):
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "required_window_ids",
+        "required_pair_fingerprints",
+        "successful_pair_fingerprints",
+        "prepared_input_scoring_coverage",
+        "aggregation_version",
+    }:
+        raise ValueError("invalid window coverage")
+    arrays = tuple(
+        raw[k]
+        for k in (
+            "required_window_ids",
+            "required_pair_fingerprints",
+            "successful_pair_fingerprints",
+        )
+    )
+    if any(
+        type(a) is not list or len(a) > 135 or any(type(x) is not str for x in a)
+        for a in arrays
+    ):
+        raise ValueError("invalid window identities")
+    coverage = WindowCoverage(
+        *(tuple(a) for a in arrays),
+        raw["prepared_input_scoring_coverage"],
+        raw["aggregation_version"],
+    )
+    if not coverage.is_complete():
+        raise ValueError("incomplete window coverage")
+    return coverage
 
 
 def serialize_score_set(score_set: RerankScoreSet) -> dict[str, object]:
@@ -27,6 +78,7 @@ def serialize_score_set(score_set: RerankScoreSet) -> dict[str, object]:
                 "source_fingerprint": score.source_fingerprint,
                 "effective_pair_fingerprint": score.effective_pair_fingerprint,
                 "value": score.value,
+                **_window_fields(score),
             }
             for score in score_set.scores
         ],
@@ -66,7 +118,11 @@ def deserialize_score_set(value: object) -> RerankScoreSet | None:
         if any(type(item) is not str or not item for item in strings):
             return None
         schema, query, scorer, pool, kind, status = strings
-        if schema != "v2" or kind not in ("pointwise", "listwise", "rank_only"):
+        if schema not in ("v2", "v3-window") or kind not in (
+            "pointwise",
+            "listwise",
+            "rank_only",
+        ):
             return None
         if status not in ("complete", "unavailable"):
             return None
@@ -82,14 +138,17 @@ def deserialize_score_set(value: object) -> RerankScoreSet | None:
             return None
         scores: list[PassageScore] = []
         for raw in raw_scores:
-            if not isinstance(raw, Mapping) or set(raw) != {
+            expected = {
                 "chunk_pk",
                 "document_id",
                 "chunk_number",
                 "source_fingerprint",
                 "effective_pair_fingerprint",
                 "value",
-            }:
+            }
+            if schema == "v3-window":
+                expected.add("window_coverage")
+            if not isinstance(raw, Mapping) or set(raw) != expected:
                 return None
             pk, number, amount = raw["chunk_pk"], raw["chunk_number"], raw["value"]
             if (
@@ -112,6 +171,9 @@ def deserialize_score_set(value: object) -> RerankScoreSet | None:
                     raw["source_fingerprint"],
                     raw["effective_pair_fingerprint"],
                     float(amount),
+                    _parse_window(raw["window_coverage"])
+                    if schema == "v3-window"
+                    else None,
                 )
             )
         if len({score.chunk_pk for score in scores}) != len(scores):

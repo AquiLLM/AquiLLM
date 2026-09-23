@@ -16,7 +16,6 @@ from apps.collections.services.retrieval_authorization import (
 from apps.documents.services.chunk_rerank_config import rerank_score_concurrency
 from apps.documents.services.chunk_rerank_results import (
     PassageScore,
-    fingerprint_pair,
     fingerprint_pool,
     fingerprint_text,
     score_identity_for_chunk,
@@ -25,6 +24,10 @@ from apps.documents.services.chunk_rerank_results import (
 from apps.documents.services.chunk_rerank_scoring import (
     SelectionScorer,
     score_missing_pairs,
+)
+from apps.documents.services.chunk_rerank_window_adapter import (
+    compatible_window_score,
+    expected_score_fingerprint,
 )
 
 
@@ -59,7 +62,7 @@ def _reused_scores(
             (
                 item.chunk.pk,
                 item.source_fingerprint,
-                fingerprint_pair(*scorer.prepare_pair(query, item.chunk)),
+                expected_score_fingerprint(scorer, query, item.chunk),
             )
             for item in hydrated
         )
@@ -82,8 +85,8 @@ def _reused_scores(
         identities = tuple(
             score_identity_for_chunk(
                 by_id[pk].chunk,
-                effective_pair_fingerprint=fingerprint_pair(
-                    *scorer.prepare_pair(query, by_id[pk].chunk)
+                effective_pair_fingerprint=expected_score_fingerprint(
+                    scorer, query, by_id[pk].chunk
                 ),
             )
             for pk in score_set.candidate_order
@@ -96,6 +99,13 @@ def _reused_scores(
                 expected_scorer_fingerprint=scorer.scorer_fingerprint,
             )
         except (TypeError, ValueError):
+            continue
+        if any(
+            not compatible_window_score(
+                scorer, score, query, by_id[score.chunk_pk].chunk
+            )
+            for score in score_set.scores
+        ):
             continue
         reused.update((score.chunk_pk, score) for score in score_set.scores)
         if scorer.scoring_kind == "listwise":
@@ -113,10 +123,15 @@ def prepare_selection_candidates(
     scorer: SelectionScorer | None = None,
     chunk_loader=None,
     clock: Callable[[], float] = monotonic,
+    turn_budget=None,
 ) -> PreparedSelection:
     """Never widen pool membership or mix model and rank-derived scales."""
     if len(pool.rows) > 45:
         raise ValueError("candidate union exceeds the hard cap")
+    if turn_budget is not None:
+        deadline = min(
+            deadline, clock() + turn_budget.scoring_remaining_ms("final") / 1000
+        )
     first = hydrate_pool_rows(pool.rows, authorization, chunk_loader=chunk_loader)
     initial_by_id = {item.chunk.pk: item.source_fingerprint for item in first}
     used_scorer = scorer
@@ -125,7 +140,9 @@ def prepare_selection_candidates(
             current_selection_scorer,
         )
 
-        used_scorer = current_selection_scorer(deadline=deadline, clock=clock)
+        used_scorer = current_selection_scorer(
+            deadline=deadline, clock=clock, turn_budget=turn_budget
+        )
     reused: dict[int, PassageScore] = {}
     new_scores: dict[int, PassageScore] = {}
     new_pairs = 0
@@ -158,6 +175,7 @@ def prepare_selection_candidates(
                     max_inflight=min(6, rerank_score_concurrency()),
                     clock=clock,
                     on_submit=lambda count: submitted.append(count),
+                    turn_budget=turn_budget,
                 )
                 new_pairs = sum(submitted)
                 if fresh.status == "complete" and (
@@ -172,8 +190,8 @@ def prepare_selection_candidates(
                         authorized_identities=tuple(
                             score_identity_for_chunk(
                                 chunk,
-                                effective_pair_fingerprint=fingerprint_pair(
-                                    *used_scorer.prepare_pair(primary_query, chunk)
+                                effective_pair_fingerprint=expected_score_fingerprint(
+                                    used_scorer, primary_query, chunk
                                 ),
                             )
                             for chunk in to_score
@@ -208,6 +226,7 @@ def prepare_selection_candidates(
             for item in retained
         )
         and clock() < deadline
+        and (turn_budget is None or turn_budget.can_publish())
     )
     if model_complete:
         relevance = _normalize(tuple(scores[item.chunk.pk].value for item in retained))

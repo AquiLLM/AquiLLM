@@ -131,6 +131,38 @@ def reusable_scored_result(
     return ScoredRerankResult(tuple(score.chunk_pk for score in ranked[:top_k]), cached)
 
 
+def window_cache_key(scorer_fingerprint, plan_fingerprint):
+    return rag_cache.stable_cache_key(
+        "rrwindow:v1", scorer_fingerprint, plan_fingerprint
+    )
+
+
+def get_window_result(key):
+    from .chunk_rerank_score_transport import deserialize_score_set
+
+    if not key.startswith("rrwindow:v1:"):
+        return None
+    result = deserialize_score_set(rag_cache.cache_get(key))
+    return result if result and result.schema_version == "v3-window" else None
+
+
+def set_window_result(key, result, *, budget):
+    from .chunk_rerank_score_transport import serialize_score_set
+
+    if (
+        budget is None
+        or not key.startswith("rrwindow:v1:")
+        or result.schema_version != "v3-window"
+        or result.status != "complete"
+    ):
+        return False
+    return budget.publish(
+        lambda: rag_cache.cache_set(
+            key, serialize_score_set(result), rag_cache.rerank_result_ttl()
+        )
+    )
+
+
 __all__ = [
     "scored_result_cache_key",
     "get_scored_result",

@@ -9,6 +9,17 @@ def rerank_provider() -> str:
     return (getenv("APP_RERANK_PROVIDER") or "auto").strip().lower()
 
 
+def rerank_text_mode() -> str:
+    value = getenv("RAG_RERANK_TEXT_MODE", "legacy").strip().lower()
+    return value if value in ("legacy", "windowed", "shadow") else "legacy"
+
+
+def rerank_shadow_scoring() -> bool:
+    return rerank_text_mode() == "shadow" and getenv(
+        "RAG_RERANK_SHADOW_SCORING_ENABLED", "0"
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+
 def rerank_base_url() -> str:
     base_url = (
         getenv("APP_RERANK_BASE_URL")
@@ -28,6 +39,14 @@ def rerank_api_key() -> str:
         or getenv("VLLM_API_KEY")
         or "EMPTY"
     )
+
+
+def rerank_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    api_key = rerank_api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
 
 
 def rerank_model() -> str:

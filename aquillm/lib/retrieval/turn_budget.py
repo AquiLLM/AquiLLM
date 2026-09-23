@@ -7,19 +7,25 @@ evidence can still be used for answer synthesis.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from threading import RLock
 from time import monotonic
-from typing import Callable, Hashable
 
 from .evidence import SourceIdentity
 
 _PILOT_MAX = {
-    "actions": 3, "unique_sources": 45,
-    "materialized_codepoints": 250_000, "tokenized_codepoints": 1_000_000,
-    "acquisition_pairs": 90, "final_pairs": 45, "in_flight_pairs": 6,
-    "planner_calls": 2, "planner_call_ms": 2_000,
-    "planner_output_tokens": 512, "retrieval_ms": 15_000,
+    "actions": 3,
+    "unique_sources": 45,
+    "materialized_codepoints": 250_000,
+    "tokenized_codepoints": 1_000_000,
+    "acquisition_pairs": 90,
+    "final_pairs": 45,
+    "in_flight_pairs": 6,
+    "planner_calls": 2,
+    "planner_call_ms": 2_000,
+    "planner_output_tokens": 512,
+    "retrieval_ms": 15_000,
     "final_scoring_ms": 3_000,
 }
 
@@ -42,7 +48,11 @@ class TurnLimits:
     def __post_init__(self) -> None:
         for name in self.__dataclass_fields__:
             value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= _PILOT_MAX[name]:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= _PILOT_MAX[name]
+            ):
                 raise ValueError(f"{name} must be within the pilot allowance")
         if self.acquisition_pairs + self.final_pairs > 135:
             raise ValueError("overall pair allowance exceeds 135")
@@ -51,10 +61,12 @@ class TurnLimits:
 
     def clamped_to(self, parent: TurnLimits) -> TurnLimits:
         """A nested caller can narrow, never enlarge, a parent allowance."""
-        return TurnLimits(**{
-            name: min(getattr(self, name), getattr(parent, name))
-            for name in self.__dataclass_fields__
-        })
+        return TurnLimits(
+            **{
+                name: min(getattr(self, name), getattr(parent, name))
+                for name in self.__dataclass_fields__
+            }
+        )
 
 
 class TurnBudget:
@@ -68,6 +80,8 @@ class TurnBudget:
         self._sources: set[Hashable] = set()
         self._pairs = {"acquisition": 0, "final": 0}
         self._text = {"materialized": 0, "tokenized": 0}
+        self._inflight = 0
+        self._final_deadline: float | None = None
 
     def _open(self) -> bool:
         if self._closed_reason is not None:
@@ -106,7 +120,11 @@ class TurnBudget:
         if not isinstance(signature, str) or not signature:
             raise ValueError("action signature must be nonempty")
         with self._lock:
-            if not self._open() or signature in self._actions or len(self._actions) >= self.limits.actions:
+            if (
+                not self._open()
+                or signature in self._actions
+                or len(self._actions) >= self.limits.actions
+            ):
                 return False
             self._actions.add(signature)
             return True
@@ -129,19 +147,33 @@ class TurnBudget:
             return True
 
     def reserve_pairs(self, count: int, *, phase: str) -> bool:
-        if phase not in self._pairs or isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        if (
+            phase not in self._pairs
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count <= 0
+        ):
             raise ValueError("invalid pair reservation")
         with self._lock:
-            if not self._open() or self._pairs[phase] + count > getattr(self.limits, f"{phase}_pairs"):
+            if not self._open() or self._pairs[phase] + count > getattr(
+                self.limits, f"{phase}_pairs"
+            ):
                 return False
             self._pairs[phase] += count
             return True
 
     def reserve_text(self, count: int, *, kind: str) -> bool:
-        if kind not in self._text or isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        if (
+            kind not in self._text
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count <= 0
+        ):
             raise ValueError("invalid text reservation")
         with self._lock:
-            if not self._open() or self._text[kind] + count > getattr(self.limits, f"{kind}_codepoints"):
+            if not self._open() or self._text[kind] + count > getattr(
+                self.limits, f"{kind}_codepoints"
+            ):
                 return False
             self._text[kind] += count
             return True
@@ -152,9 +184,16 @@ class TurnBudget:
                 return 0
             return max(0, int((self._deadline - self._clock()) * 1000))
 
-    def can_start_optional(self, worst_case_ms: int, completion_reserve_ms: int) -> bool:
-        if any(isinstance(x, bool) or not isinstance(x, int) or x < 0 for x in (worst_case_ms, completion_reserve_ms)):
-            raise ValueError("optional work and completion reserve must be nonnegative milliseconds")
+    def can_start_optional(
+        self, worst_case_ms: int, completion_reserve_ms: int
+    ) -> bool:
+        if any(
+            isinstance(x, bool) or not isinstance(x, int) or x < 0
+            for x in (worst_case_ms, completion_reserve_ms)
+        ):
+            raise ValueError(
+                "optional work and completion reserve must be nonnegative milliseconds"
+            )
         with self._lock:
             return self._open() and (
                 worst_case_ms + completion_reserve_ms + self.limits.final_scoring_ms
@@ -171,3 +210,44 @@ class TurnBudget:
     def can_publish(self) -> bool:
         with self._lock:
             return self._open()
+
+    def publish(self, callback: Callable[[], object]) -> bool:
+        """Serialize a bounded publication with close; no check/write race."""
+        with self._lock:
+            if not self._open():
+                return False
+            callback()
+            return True
+
+    def start_pair(self, *, phase: str) -> bool:
+        """Atomically charge an actual transport and lease a per-turn slot."""
+        with self._lock:
+            if self.scoring_remaining_ms(phase) <= 0:
+                return False
+            if self._inflight >= self.limits.in_flight_pairs:
+                return False
+            if not self.reserve_pairs(1, phase=phase):
+                return False
+            self._inflight += 1
+            return True
+
+    def finish_pair(self) -> None:
+        with self._lock:
+            if self._inflight <= 0:
+                raise ValueError("no active pair lease")
+            self._inflight -= 1
+
+    def scoring_remaining_ms(self, phase: str) -> int:
+        """The once-only final allowance is nested inside the original deadline."""
+        if phase not in self._pairs:
+            raise ValueError("invalid scoring phase")
+        with self._lock:
+            if not self._open():
+                return 0
+            if phase == "acquisition":
+                return self.remaining_ms()
+            if self._final_deadline is None:
+                self._final_deadline = min(
+                    self._deadline, self._clock() + self.limits.final_scoring_ms / 1000
+                )
+            return max(0, int((self._final_deadline - self._clock()) * 1000))
