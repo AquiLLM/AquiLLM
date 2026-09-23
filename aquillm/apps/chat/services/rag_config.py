@@ -112,6 +112,13 @@ def shadow_scoring_enabled() -> bool:
     return evidence_selection_config().shadow_scoring
 
 
+def rag_preservation_config(*, shared_selector_available: bool = True):
+    """Expose separately validated preservation switches to RAG callers."""
+    from .rag_preservation_config import preservation_config
+
+    return preservation_config(shared_selector_available=shared_selector_available)
+
+
 __all__ = [
     "attach_tools_when_collections_selected",
     "direct_rag_top_k",
@@ -128,6 +135,7 @@ __all__ = [
     "max_figures_per_turn",
     "max_snippets_per_doc",
     "query_rewrite_enabled",
+    "rag_preservation_config",
     "synthesis_max_tokens",
     "tool_default_top_k",
 ]
