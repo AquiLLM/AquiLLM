@@ -10,7 +10,7 @@ from .rag_action_tools import RETRIEVAL_TOOLS, source_views
 from .rag_config import rag_preservation_config
 from .rag_selection_coordinator import selection_question
 from .rag_source_continuity import current_continuity_result
-from .rag_source_continuity_turn import continuity_candidates
+from .rag_source_continuity_turn import continuity_candidates, requires_clarification
 from .rag_source_synthesis import LIMITED_MESSAGE
 
 
@@ -59,11 +59,11 @@ async def normal_source_handoff(consumer, llm, convo, max_tokens, stream_func):
         selected_scope=consumer.col_ref.collections,
         enabled=rag_preservation_config().followup_evidence_enabled,
     )
-    if notice and not prior:
+    if requires_clarification(notice):
         return convo + [
             AssistantMessage(content=notice, stop_reason="end_turn")
         ], "changed"
-    results = (prior,) if notice else ((raw, prior) if prior else (raw,))
+    results = (raw, prior) if prior else (raw,)
     try:
         result = await finish_preservation(
             consumer,
@@ -75,7 +75,6 @@ async def normal_source_handoff(consumer, llm, convo, max_tokens, stream_func):
             stream_func=stream_func,
             auxiliary_handoff=auxiliary_handoff,
             notice=notice,
-            iterative=False if notice else None,
         )
     except Exception:
         result = convo + [

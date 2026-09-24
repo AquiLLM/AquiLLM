@@ -208,13 +208,15 @@ class LocalSelectionScorer:
 
 
 def _legacy_selection_scorer(
-    *, deadline: float, clock: Callable[[], float] = monotonic
+    *, deadline: float, clock: Callable[[], float] = monotonic, turn_budget=None
 ) -> LocalSelectionScorer | None:
     """Use only a known local capability; no endpoint discovery in this path."""
     if rerank_provider() not in ("auto", "local", "vllm"):
         return None
     base_v1, model_name = rerank_base_url(), rerank_model()
-    capability = rag_cache.get_cached_rerank_capability(base_v1, model_name)
+    capability = rag_cache.get_cached_rerank_capability(
+        base_v1, model_name, **({"budget": turn_budget} if turn_budget else {})
+    )
     if not capability:
         return None
     root = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
@@ -252,7 +254,9 @@ def current_selection_scorer(
     from .chunk_rerank_pair_capability import registered_pair_counter
     from .chunk_rerank_window_adapter import WindowSelectionScorer, unknown_pair_count
 
-    provider = _legacy_selection_scorer(deadline=deadline, clock=clock)
+    provider = _legacy_selection_scorer(
+        deadline=deadline, clock=clock, turn_budget=turn_budget
+    )
     active = rerank_text_mode() == "windowed" if windowed is None else windowed
     if not active:
         return provider

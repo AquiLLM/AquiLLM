@@ -71,6 +71,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
             text_data=dumps({"stream": payload}),
         )
 
+    async def dispatch(self, message):
+        from apps.chat.consumers.chat_turn_dispatch import dispatch_chat_event
+
+        await dispatch_chat_event(self, message, super().dispatch)
+
+    async def __call__(self, scope, receive, send):
+        from apps.chat.consumers.chat_turn_dispatch import stop_chat_work
+
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            if getattr(self, "_chat_event_owner", None):
+                await stop_chat_work(self)
+
     async def disconnect(self, close_code):
         from apps.chat.services.rag_turn import cancel_active_turn
 

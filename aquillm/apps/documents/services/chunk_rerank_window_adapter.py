@@ -164,7 +164,7 @@ class WindowSelectionScorer:
             cached = self._scores.get(key)
             cache_key = window_cache_key(self.scorer_fingerprint, plan.fingerprint)
             if cached is None and self.cache_enabled:
-                envelope_hit = get_window_result(cache_key)
+                envelope_hit = get_window_result(cache_key, budget=self.budget)
                 if envelope_hit is not None:
                     try:
                         validate_score_set(

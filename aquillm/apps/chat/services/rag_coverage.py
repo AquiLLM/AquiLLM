@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import re
 import unicodedata
 from dataclasses import dataclass, replace
 
@@ -47,44 +46,9 @@ class CoverageAssessment:
 
 
 def needs_coverage_assessment(question, evidence_views, anchors):
-    """Only an explicit single-field value lookup can establish the fast path.
+    from .rag_lookup_coverage import lookup_coverage
 
-    This deliberately conservative lexical gate is not semantic proof. Other
-    lookup forms, cross-source disagreement and qualifications are assessed.
-    """
-    if not evidence_views or getattr(anchors, "unresolved_references", ()):
-        return True
-    if re.search(
-        r"\b(compare|both|their|these|why|how|analy[sz]e|summari[sz]e|and|versus)\b",
-        question,
-        re.I,
-    ):
-        return True
-    match = re.fullmatch(
-        r"\s*(?:what (?:is|was|are|were)|give me) (?:the )?([\w -]+?)\??\s*",
-        question,
-        re.I,
-    )
-    if not match:
-        return True
-    field = match[1].strip()
-    values = set()
-    for source in evidence_views:
-        text = source.text
-        if re.search(
-            r"\b(except|unless|however|but|not|contradict|only if)\b", text, re.I
-        ):
-            return True
-        pattern = (
-            rf"\b{re.escape(field)}\s+(?:is|was|are|were|:)\s+"
-            r"([^!?\n]+?)(?:[.!?](?:\s|$)|\n|$)"
-        )
-        values.update(
-            " ".join(v.casefold().split()) for v in re.findall(pattern, text, re.I)
-        )
-    return len(values) != 1 or not any(
-        re.match(r"(?:about |approximately |[<>≤≥~] ?)?\d", v) for v in values
-    )
+    return lookup_coverage(question, evidence_views, anchors) is None
 
 
 def validate_action(action, unresolved, views, allowed_documents):

@@ -25,7 +25,10 @@ from apps.chat.services.rag_selection_coordinator import (
 from apps.chat.services.rag_source_continuity import (
     resolve_source_anchors,
 )
-from apps.chat.services.rag_source_continuity_turn import continuity_candidates
+from apps.chat.services.rag_source_continuity_turn import (
+    continuity_candidates,
+    requires_clarification,
+)
 from apps.chat.services.rag_source_synthesis import LIMITED_MESSAGE
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.documents.services.source_loading import current_source_runtime
@@ -139,11 +142,15 @@ async def finish_preservation(
         in {"partial_unknown", "completion_reserve", "action_limit", "no_progress"}
     ):
         packet.retrieval_status = "partial" if packet.chunks else "context_limited"
-        packet.diagnostic_message = notice or (
-            "Coverage is partial or unassessed. Answer supported "
-            "portions at the requested depth and state any missing "
-            "requested aspects; missing evidence is not proof of "
-            "absence."
+        packet.diagnostic_message = (
+            str(notice)
+            if notice
+            else (
+                "Coverage is partial or unassessed. Answer supported "
+                "portions at the requested depth and state any missing "
+                "requested aspects; missing evidence is not proof of "
+                "absence."
+            )
         )
     working = (
         convo
@@ -208,7 +215,7 @@ async def run_preservation_rag(
         selected_scope=consumer.col_ref.collections,
         enabled=config.followup_evidence_enabled,
     )
-    if notice and not prior:
+    if requires_clarification(notice):
         consumer.convo = convo + [
             AssistantMessage(content=notice, stop_reason="end_turn")
         ]
@@ -220,8 +227,6 @@ async def run_preservation_rag(
             convo,
             question=question,
             initial_results=(prior,) if prior else (),
-            initial_acquired=bool(notice),
-            iterative=False if notice else None,
             notice=notice,
             vector_runner=vector_runner,
             stream_func=stream_func,

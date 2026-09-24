@@ -10,6 +10,7 @@ from .rag_coverage import (
     needs_coverage_assessment,
     validate_action,
 )
+from .rag_lookup_coverage import lookup_coverage
 
 COMPLETION_RESERVE_MS = 1000
 ACTION_TIMEOUT_MS = 3000
@@ -42,10 +43,12 @@ async def acquire_evidence(
     reason = "initial"
 
     async def run(action):
+        from lib.llm.turn_context import tool_timeout
         from lib.retrieval.operation import operation_scope
 
         timeout = min(
             ACTION_TIMEOUT_MS,
+            tool_timeout(retrieval=True) * 1000,
             max(
                 0,
                 budget.remaining_ms()
@@ -64,6 +67,7 @@ async def acquire_evidence(
         for _ in range(budget.limits.planner_calls if iterative else 0):
             views = evidence_views(results)
             if not needs_coverage_assessment(question, views, anchors):
+                assessment = lookup_coverage(question, views, anchors)
                 reason = "adequate_lookup"
                 break
             if budget.actions_used >= budget.limits.actions:

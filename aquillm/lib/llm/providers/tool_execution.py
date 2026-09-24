@@ -50,7 +50,7 @@ def call_tool(self, message: AssistantMessage) -> ToolMessage:
                     self.tool_executor, partial(tool, **call_arguments)
                 )
                 try:
-                    tool_timeout_s = tool_timeout()
+                    tool_timeout_s = tool_timeout(message.tool_call_name)
                     result_dict = future.result(timeout=tool_timeout_s)
                     check_turn_active()
                     result = imgctx.serialize_tool_result_for_llm(result_dict)

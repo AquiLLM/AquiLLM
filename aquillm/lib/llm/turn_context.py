@@ -57,10 +57,23 @@ async def bounded_retrieval(awaitable, budget, *, cap_ms=None):
         raise
 
 
-def tool_timeout():
+def is_retrieval_tool(name):
+    return name in {
+        "vector_search",
+        "search_single_document",
+        "whole_document",
+        "more_context",
+    }
+
+
+def tool_timeout(name=None, *, retrieval=False):
     seconds = min(10.0, max(0.001, float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))))
     state = current_turn()
-    return min(seconds, state.budget.remaining_ms() / 1000) if state else seconds
+    return (
+        min(seconds, state.budget.remaining_ms() / 1000)
+        if state and (retrieval or is_retrieval_tool(name))
+        else seconds
+    )
 
 
 async def call_tool_async(llm, message):
@@ -72,9 +85,14 @@ async def call_tool_async(llm, message):
 
     state = current_turn()
     try:
-        with operation_scope(state.budget) if state else nullcontext():
+        with (
+            operation_scope(state.budget)
+            if state and is_retrieval_tool(message.tool_call_name)
+            else nullcontext()
+        ):
             return await asyncio.wait_for(
-                asyncio.to_thread(llm.call_tool, message), tool_timeout()
+                asyncio.to_thread(llm.call_tool, message),
+                tool_timeout(message.tool_call_name),
             )
     except asyncio.CancelledError:
         if state:

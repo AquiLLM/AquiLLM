@@ -20,9 +20,22 @@ _AMBIGUOUS = (
 )
 _UNAVAILABLE = (
     "I can no longer access every referenced source in the "
-    "selected collections. "
-    "Please choose an available source or ask a narrower question."
+    "selected collections. Answer any separately supported current portions, "
+    "and state that the unavailable historical evidence cannot be verified. "
+    "Do not substitute current evidence for a requested deleted or revoked citation."
 )
+
+
+class ContinuityNotice(str):
+    def __new__(cls, text, *, kind="unknown", unavailable=()):
+        value = super().__new__(cls, text)
+        value.kind = kind
+        value.unavailable = unavailable
+        return value
+
+
+def requires_clarification(notice):
+    return getattr(notice, "kind", None) == "ambiguous"
 
 
 async def continuity_candidates(convo, question, *, user, selected_scope, enabled):
@@ -31,7 +44,7 @@ async def continuity_candidates(convo, question, *, user, selected_scope, enable
         return None, None
     anchors = resolve_source_anchors(question, convo)
     if anchors.unresolved_references:
-        return None, _AMBIGUOUS
+        return None, ContinuityNotice(_AMBIGUOUS, kind="ambiguous")
     if not anchors.chunk_identities:
         return None, None
     runtime = current_source_runtime()
@@ -46,7 +59,21 @@ async def continuity_candidates(convo, question, *, user, selected_scope, enable
         ),
         runtime.budget,
     )
-    notice = _UNAVAILABLE if len(sources) != len(anchors.chunk_identities) else None
+    present = {(s.chunk_id, s.document_id, s.chunk_number) for s in sources}
+    missing = tuple(
+        identity for identity in anchors.chunk_identities if identity not in present
+    )
+    notice = (
+        ContinuityNotice(
+            _UNAVAILABLE
+            + " Unavailable historical coordinates: "
+            + "; ".join(f"document {doc}, chunk {pk}" for pk, doc, _ in missing),
+            kind="unavailable",
+            unavailable=missing,
+        )
+        if missing
+        else None
+    )
     if not sources:
         return None, notice
     result = await bounded_retrieval(

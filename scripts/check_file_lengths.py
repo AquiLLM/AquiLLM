@@ -21,7 +21,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/documents/models/document_types/figure.py": 386,
     "aquillm/apps/documents/services/chunk_rerank_local_vllm.py": 350,
     "aquillm/apps/documents/services/chunk_search.py": 485,
-    "aquillm/apps/documents/services/rag_cache.py": 338,
+    "aquillm/apps/documents/services/rag_cache.py": 337,
     "aquillm/apps/documents/tasks/chunking.py": 430,
     "aquillm/apps/documents/tests/test_chunk_search_candidates.py": 337,
     "aquillm/apps/documents/tests/test_chunk_search_graph_overlay.py": 1102,

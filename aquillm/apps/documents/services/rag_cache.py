@@ -66,12 +66,9 @@ def cache_set(key: str, value: Any, timeout: int) -> None:
 
 
 def _log_hit_miss(metric: str, hit: bool) -> None:
-    if not _rag_enabled():
-        return
-    if hit:
-        logger.info("obs.rag.cache_hit", metric=metric)
-    else:
-        logger.debug("obs.rag.cache_miss", metric=metric)
+    if _rag_enabled():
+        log = logger.info if hit else logger.debug
+        log("obs.rag.cache_hit" if hit else "obs.rag.cache_miss", metric=metric)
 
 
 def query_embedding_cache_key(query: str, input_type: str, model_signature: str) -> str:
@@ -210,11 +207,13 @@ def rerank_capability_ttl() -> int:
     return int(getattr(settings, "RAG_RERANK_CAPABILITY_TTL_SECONDS", 900))
 
 
-def get_cached_rerank_capability(base_url: str, model: str) -> RerankCapability | None:
+def get_cached_rerank_capability(
+    base_url: str, model: str, *, budget=None
+) -> RerankCapability | None:
     if not _rag_enabled():
         return None
     key = rerank_capability_cache_key(base_url, model)
-    val = cache_get(key)
+    val = cache_operation("get", key, budget=budget) if budget else cache_get(key)
     if (
         isinstance(val, dict)
         and isinstance(val.get("endpoint"), str)

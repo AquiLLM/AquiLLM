@@ -67,9 +67,9 @@ def test_preservation_cache_has_finite_transport_and_reserves_completion(
     }
     budget = TurnBudget(TurnLimits())
     with source_runtime_scope(SourceRuntime(budget, None)):
-        assert bounded_rag_cache.cache_operation("get", "safe") == "cached"
+        assert bounded_rag_cache.cache_operation("get", "rrcap:safe") == "cached"
         budget.close("cancelled")
-        assert bounded_rag_cache.cache_operation("get", "safe") is None
+        assert bounded_rag_cache.cache_operation("get", "rrcap:safe") is None
     assert captured[0]["OPTIONS"]["socket_connect_timeout"] <= 0.2
     assert captured[0]["OPTIONS"]["socket_timeout"] <= 0.2
     assert closed == [True]

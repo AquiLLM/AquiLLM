@@ -201,7 +201,15 @@ async def synthesize_from_evidence(
     convo, request_convo = prepare_evidence_handoff(convo, packet)
     if packet.retrieval_status == "context_limited":
         return convo + [
-            AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
+            AssistantMessage(
+                content=LIMITED_MESSAGE
+                + (
+                    "\n\n" + packet.diagnostic_message
+                    if packet.diagnostic_message
+                    else ""
+                ),
+                stop_reason="end_turn",
+            )
         ]
     if packet.retrieval_status == "no_results" or not packet.chunks:
         return convo + [
