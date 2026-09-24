@@ -171,6 +171,7 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_memgraph_projection_repository.py
           aquillm/apps/knowledge_graph/tests/test_memgraph_projection_validation_and_deletion.py
           aquillm/apps/knowledge_graph/tests/test_mention_extraction.py
+          aquillm/apps/knowledge_graph/tests/test_extraction_entity_labels.py
           aquillm/apps/knowledge_graph/tests/test_mention_relation_provenance.py
           aquillm/apps/knowledge_graph/tests/test_projection_document_provenance.py
           aquillm/apps/knowledge_graph/tests/test_projection_reconcile_drift.py
