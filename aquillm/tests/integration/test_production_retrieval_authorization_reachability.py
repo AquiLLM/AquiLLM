@@ -13,6 +13,7 @@ from apps.chat.refs import ChatRef, CollectionsRef
 from apps.chat.services import rag_pipeline, tool_wiring
 from apps.chat.services import retrieval_authorization as chat_authorization
 from apps.chat.services.tool_wiring import documents as document_tools
+from apps.collections.models import Collection
 from apps.core.views import pages
 from apps.documents.services import hybrid_graph_dependencies
 from apps.documents.tests.hybrid_graph_test_support import Policy, authorization
@@ -98,7 +99,7 @@ def test_chat_document_tool_builds_current_authorization_at_execution(monkeypatc
     user, document, capability = User(pk=7), _document(), object()
     observed = {}
     monkeypatch.setattr(
-        document_tools.Collection,
+        Collection,
         "get_user_accessible_documents",
         lambda *_args, **_kwargs: [document],
     )
@@ -129,7 +130,7 @@ def test_direct_rag_vector_route_reaches_same_authorization_builder(monkeypatch)
     user, document, capability = User(pk=7), _document(), object()
     observed = {}
     monkeypatch.setattr(
-        document_tools.Collection,
+        Collection,
         "get_user_accessible_documents",
         lambda *_args, **_kwargs: [document],
     )
@@ -162,7 +163,7 @@ def test_no_production_capability_never_constructs_or_schedules_graph_runtime(
     settings.KG_GRAPH_DIRECT_ENABLED = True
     settings.KG_GRAPH_EXTENDED_ENABLED = True
     monkeypatch.setattr(
-        document_tools.Collection,
+        Collection,
         "get_user_accessible_documents",
         lambda *_args, **_kwargs: [document],
     )
@@ -215,9 +216,7 @@ def test_enabled_web_and_chat_routes_reach_projection_source_authority(
     user, document = User(pk=7), _document()
     policy = Policy()
     policy.rows = ((3, _DOC),)
-    context = authorization(
-        policy, collection_ids=(3,), document_ids=(_DOC,)
-    )
+    context = authorization(policy, collection_ids=(3,), document_ids=(_DOC,))
     authorities = (_authority(3, _DOC, "3"),)
     observed = []
 
@@ -246,9 +245,11 @@ def test_enabled_web_and_chat_routes_reach_projection_source_authority(
         return _search_result()
 
     if route == "page":
+
         class Form:
             cleaned_data = {
-                "query": "q", "top_k": 3,
+                "query": "q",
+                "top_k": 3,
                 "collections": (SimpleNamespace(pk=3),),
             }
 
@@ -261,24 +262,26 @@ def test_enabled_web_and_chat_routes_reach_projection_source_authority(
         monkeypatch.setattr(pages, "SearchForm", Form)
         monkeypatch.setattr(pages, "render", lambda *_args, **_kwargs: object())
         monkeypatch.setattr(
-            pages.Collection, "get_user_accessible_documents",
+            pages.Collection,
+            "get_user_accessible_documents",
             lambda *_args, **_kwargs: [document],
         )
         monkeypatch.setattr(
-            pages, "build_production_retrieval_authorization_context",
+            pages,
+            "build_production_retrieval_authorization_context",
             lambda **_kwargs: context,
         )
         monkeypatch.setattr(pages.TextChunk, "text_chunk_search", text_chunk_search)
-        inspect.unwrap(pages.search)(
-            SimpleNamespace(method="POST", POST={}, user=user)
-        )
+        inspect.unwrap(pages.search)(SimpleNamespace(method="POST", POST={}, user=user))
     else:
         monkeypatch.setattr(
-            document_tools.Collection, "get_user_accessible_documents",
+            Collection,
+            "get_user_accessible_documents",
             lambda *_args, **_kwargs: [document],
         )
         monkeypatch.setattr(
-            chat_authorization, "build_production_retrieval_authorization_context",
+            chat_authorization,
+            "build_production_retrieval_authorization_context",
             lambda **_kwargs: context,
         )
         monkeypatch.setattr(

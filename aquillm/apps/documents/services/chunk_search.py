@@ -10,8 +10,6 @@ from uuid import UUID
 import structlog
 from django.apps import apps
 from django.conf import settings as django_settings
-from django.core.exceptions import ValidationError
-from django.db import DatabaseError
 
 from apps.documents.services import chunk_search_legacy_graph as _legacy_graph
 from apps.documents.services.chunk_rerank import (
@@ -35,6 +33,7 @@ from apps.documents.services.chunk_search_candidates import (
 from apps.documents.services.chunk_search_candidates import (
     _salient_exact_terms as _candidate_salient_exact_terms,
 )
+from apps.documents.services.chunk_search_logging import log_search_failure
 from apps.documents.services.chunk_search_score_handoff import (
     score_set_for_authorized_rows,
 )
@@ -47,6 +46,7 @@ from apps.documents.services.chunk_search_validation import (
 from apps.documents.services.chunk_search_validation import (
     validate_candidate_request,
 )
+from apps.documents.services.chunk_source_materialization import materialize_graph_rows
 from apps.documents.services.hybrid_graph_authorization import (
     HybridGraphRetrievalDependencies,
     documents_match_retrieval_authorization,
@@ -55,6 +55,10 @@ from apps.documents.services.hybrid_graph_authorization import (
 from apps.documents.services.hybrid_graph_dependencies import resolve
 from apps.documents.services.hybrid_graph_orchestration import (
     hybrid_graph_candidate_pool,
+)
+from apps.documents.services.source_loading import (
+    current_source_runtime,
+    source_mode_enabled,
 )
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
@@ -98,8 +102,14 @@ def materialize_and_rerank_candidates(
     """Permission-refetch graph rows, append to the baseline, and rerank once."""
 
     baseline_identities = validate_candidate_request(
-        query, top_k, baseline_candidates, graph_chunk_ids, max_graph_candidates,
-        force_complete_rerank, capture_scores, _eval_rerank_capability,
+        query,
+        top_k,
+        baseline_candidates,
+        graph_chunk_ids,
+        max_graph_candidates,
+        force_complete_rerank,
+        capture_scores,
+        _eval_rerank_capability,
     )
 
     materialization_started = perf_counter()
@@ -132,35 +142,10 @@ def materialize_and_rerank_candidates(
     )
     graph_rows: tuple[object, ...] = ()
     if novel_ids and authorized_scope is not None:
-        loaded = tuple(
-            model_cls.objects.filter(
-                pk__in=novel_ids,
-                doc_id__in=allowed_doc_ids,
-            )
+        graph_rows, rejected = materialize_graph_rows(
+            model_cls, novel_ids, allowed_doc_ids
         )
-        by_identifier: dict[int, object] = {}
-        allowed = set(allowed_doc_ids)
-        invalid_materialization = False
-        for row in loaded:
-            identifier = _candidate_identifier(row)
-            document_id = getattr(row, "doc_id", None)
-            if (
-                identifier not in novel_ids
-                or identifier in by_identifier
-                or type(document_id) is not UUID
-                or document_id not in allowed
-            ):
-                invalid_materialization = True
-                continue
-            if hasattr(model_cls, "_meta") and not isinstance(row, model_cls):
-                invalid_materialization = True
-                continue
-            by_identifier[identifier] = row
-        missing = set(novel_ids).difference(by_identifier)
-        if invalid_materialization or missing:
-            inaccessible += len(novel_ids)
-        else:
-            graph_rows = tuple(by_identifier[identifier] for identifier in novel_ids)
+        inaccessible += rejected
 
     combined = (*baseline_candidates, *graph_rows)
     materialization_ms = (perf_counter() - materialization_started) * 1_000
@@ -177,7 +162,14 @@ def materialize_and_rerank_candidates(
     elif not force_complete_rerank and len(combined) <= top_k:
         reranked = _fallback_rerank(model_cls, combined, top_k)
     elif capture_scores:
-        scored = rerank_chunks_scored(model_cls, query, combined, top_k)
+        runtime = current_source_runtime()
+        scored = rerank_chunks_scored(
+            model_cls,
+            query,
+            combined,
+            top_k,
+            **({"turn_budget": runtime.budget} if runtime else {}),
+        )
         by_id = {_candidate_identifier(row): row for row in combined}
         if (
             not scored.ranked_ids
@@ -225,14 +217,25 @@ def text_chunk_search(
     authorization_context: object | None = None,
     hybrid_graph_dependencies: HybridGraphRetrievalDependencies | None = None,
 ):
-    from apps.chat.services.rag_config import evidence_selection_config
+    from apps.chat.services.rag_config import (
+        evidence_selection_config,
+        rag_preservation_config,
+    )
     from apps.documents.services import rag_cache
     from aquillm.utils import get_embedding
     from lib.embeddings.config import get_local_embed_config
 
+    if source_mode_enabled() and current_source_runtime() is None:
+        from apps.documents.services.source_loading import SourcePreparationLimited
+
+        raise SourcePreparationLimited("source search requires shared ledger")
     total_start = perf_counter()
     try:
-        capture_scores = evidence_selection_config().mode == "adaptive"
+        capture_scores = (
+            evidence_selection_config().mode == "adaptive"
+            or source_mode_enabled()
+            or rag_preservation_config().rerank_text_mode == "windowed"
+        )
         overlay_enabled = bool(getattr(django_settings, "KG_OVERLAY_ENABLED", False))
         hybrid_graph_dependencies, hybrid_requested = resolve(
             overlay_enabled, authorization_context, hybrid_graph_dependencies
@@ -240,7 +243,8 @@ def text_chunk_search(
 
         def authorized_rows(rows):
             return authorized_search_rows(
-                rows, authorization_context=authorization_context,
+                rows,
+                authorization_context=authorization_context,
                 hybrid_requested=hybrid_requested,
             )
 
@@ -417,7 +421,8 @@ def text_chunk_search(
         reranked_results = list(authorized_rows(ranking.ranked_results))
         score_set = (
             score_set_for_authorized_rows(ranking.score_set, tuple(reranked_results))
-            if ranking.score_set is not None else None
+            if ranking.score_set is not None
+            else None
         )
 
         total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
@@ -473,19 +478,7 @@ def text_chunk_search(
             diagnostics,
         )
     except Exception as error:
-        if isinstance(error, DatabaseError):
-            event = "obs.rag.search_db_error"
-            reason = RetrievalLogReason.UPSTREAM_UNAVAILABLE
-        elif isinstance(error, ValidationError):
-            event = "obs.rag.search_validation_error"
-            reason = RetrievalLogReason.INVALID_REQUEST
-        else:
-            event = "obs.rag.search_error"
-            reason = RetrievalLogReason.INTERNAL_FAILURE
-        logger.error(
-            event,
-            **retrieval_log_fields(reason=reason, count=0, elapsed_ms=0.0),
-        )
+        log_search_failure(logger, error)
         raise
 
 

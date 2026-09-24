@@ -1,21 +1,32 @@
 """Retrieval query building for direct RAG."""
+
 from __future__ import annotations
 
 import re
 from typing import Any
 
-from apps.chat.services.rag_config import query_rewrite_enabled
+from apps.chat.services.rag_config import query_rewrite_enabled, rag_preservation_config
 
 _RETRY_RE = re.compile(
     r"^\s*(?:try again|retry|please retry|run it again|do that again)\s*[.!?]*\s*$",
     flags=re.IGNORECASE,
 )
 
-_PRONOUN_CUES = frozenset({
-    "it", "its", "itself",
-    "they", "them", "their", "theirs",
-    "this", "that", "these", "those",
-})
+_PRONOUN_CUES = frozenset(
+    {
+        "it",
+        "its",
+        "itself",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "this",
+        "that",
+        "these",
+        "those",
+    }
+)
 
 
 def _is_retry(text: str) -> bool:
@@ -30,9 +41,8 @@ def _has_pronoun_reference(text: str) -> bool:
 def _last_vector_search_query(conversation: Any) -> str | None:
     """Return the ``search_string`` from the most recent vector_search tool call."""
     for msg in reversed(conversation.messages):
-        if (
-            getattr(msg, "tool_call_name", None) == "vector_search"
-            and isinstance(getattr(msg, "tool_call_input", None), dict)
+        if getattr(msg, "tool_call_name", None) == "vector_search" and isinstance(
+            getattr(msg, "tool_call_input", None), dict
         ):
             query = msg.tool_call_input.get("search_string")
             if query:
@@ -43,9 +53,8 @@ def _last_vector_search_query(conversation: Any) -> str | None:
 def _last_retrieved_document_title(conversation: Any) -> str | None:
     """Return the first title from the most recent vector_search tool result."""
     for msg in reversed(conversation.messages):
-        if (
-            getattr(msg, "tool_name", None) == "vector_search"
-            and isinstance(getattr(msg, "result_dict", None), dict)
+        if getattr(msg, "tool_name", None) == "vector_search" and isinstance(
+            getattr(msg, "result_dict", None), dict
         ):
             titles = msg.result_dict.get("retrieved_documents")
             if titles:
@@ -80,7 +89,10 @@ def build_retrieval_query(conversation: Any, latest_user_text: str) -> str:
             return prior
         return text
 
-    if _has_pronoun_reference(text):
+    if (
+        _has_pronoun_reference(text)
+        and not rag_preservation_config().followup_evidence_enabled
+    ):
         title = _last_retrieved_document_title(conversation)
         if title:
             return f"{title}: {text}"

@@ -78,9 +78,10 @@ class DjangoPrivateChunkMapRepository:
         self, *, chunk_predicates, authorized_document_ids, database_alias
     ):
         from apps.documents.models import TextChunk
+        from apps.documents.services.source_loading import source_query_rows
 
         pks = tuple(row[0] for row in chunk_predicates)
-        return tuple(
+        return source_query_rows(
             TextChunk.objects.using(database_alias)
             .filter(pk__in=pks, doc_id__in=authorized_document_ids)
             .order_by("pk")

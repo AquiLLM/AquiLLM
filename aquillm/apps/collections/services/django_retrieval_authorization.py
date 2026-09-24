@@ -131,6 +131,18 @@ def build_production_retrieval_authorization_context(
 
     if not _hybrid_enabled():
         return None
+    return build_selected_scope_authorization_context(
+        principal=principal,
+        selected_collection_ids=selected_collection_ids,
+        selected_documents=selected_documents,
+        database_alias=database_alias,
+    )
+
+
+def build_selected_scope_authorization_context(
+    *, principal, selected_collection_ids, selected_documents, database_alias="default"
+) -> RetrievalAuthorizationContext | None:
+    """Freeze the same current permission policy independently of graph flags."""
     try:
         collections = _selected_collection_ids(selected_collection_ids)
         documents = _selected_document_ids(selected_documents, collections)
@@ -155,4 +167,5 @@ def build_production_retrieval_authorization_context(
 __all__ = [
     "DjangoCollectionRetrievalPermissionPolicy",
     "build_production_retrieval_authorization_context",
+    "build_selected_scope_authorization_context",
 ]

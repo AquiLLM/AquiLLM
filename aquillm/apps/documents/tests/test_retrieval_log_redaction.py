@@ -83,3 +83,16 @@ def test_unknown_payload_shape_fails_closed_without_rendering_the_payload() -> N
             elapsed_ms=0.0,
             query=Canary(),
         )
+
+
+def test_private_evaluation_observation_never_enters_logs(caplog):
+    from lib.evidence_observation import observe, publish
+
+    private = {"question": "private-eval-canary", "source": "private-source-canary"}
+    seen = []
+    publish("sdk_start", private)
+    with observe(lambda event, data: seen.append(data)):
+        publish("sdk_start", private)
+    assert seen[0]["source"] == private["source"]
+    assert "private-eval-canary" not in caplog.text
+    assert "private-source-canary" not in caplog.text

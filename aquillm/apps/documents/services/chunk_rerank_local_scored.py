@@ -28,7 +28,10 @@ from apps.documents.services.chunk_rerank_parse import (
     parse_rerank_results,
     parse_score_results,
 )
-from apps.documents.services.chunk_rerank_payload import rerank_document_payload
+from apps.documents.services.chunk_rerank_payload import (
+    append_multimodal_request,
+    rerank_document_payload,
+)
 from apps.documents.services.chunk_rerank_results import (
     PassageScore,
     RerankScoreSet,
@@ -46,9 +49,20 @@ from apps.documents.services.chunk_rerank_score_cache import (
 
 
 def rerank_via_local_vllm_scored(
-    model_cls, query: str, chunks_list, top_k: int
+    model_cls,
+    query: str,
+    chunks_list,
+    top_k: int,
+    *,
+    turn_budget=None,
+    window_scorer=None,
 ) -> ScoredRerankResult:
     chunks = list(chunks_list)
+    from .chunk_rerank_window_acquisition import dispatch_windowed
+
+    windowed = dispatch_windowed(query, chunks, top_k, turn_budget, window_scorer)
+    if windowed is not None:
+        return windowed
     candidate_ids = tuple(chunk.pk for chunk in chunks)
     query_fp = fingerprint_text(query)
     if not chunks:
@@ -196,27 +210,9 @@ def rerank_via_local_vllm_scored(
             {"query": pairs[0][0], "documents": documents, "top_n": len(chunks)},
         ]
         multimodal = [rerank_document_payload(chunk) for chunk in chunks]
-        if any(isinstance(item, list) for item in multimodal):
-            prepared = []
-            for item, document in zip(multimodal, documents):
-                prepared.append(
-                    [
-                        {"type": "text", "text": document}
-                        if part.get("type") == "text"
-                        else part
-                        for part in item
-                    ]
-                    if isinstance(item, list)
-                    else document
-                )
-            payloads.append(
-                {
-                    "model": model_name,
-                    "query": pairs[0][0],
-                    "documents": prepared,
-                    "top_n": len(chunks),
-                }
-            )
+        append_multimodal_request(
+            payloads, multimodal, documents, model_name, pairs[0][0]
+        )
         for endpoint in dict.fromkeys(rerank_endpoints):
             for payload in payloads:
                 try:

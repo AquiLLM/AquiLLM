@@ -100,6 +100,13 @@ class LocalSelectionScorer:
             query, chunk.content[: self.char_limit], self.pair_limit, self.reserve
         )
 
+    def score_budgeted_pair(self, pair, timeout_seconds, *, budget, phase):
+        from .chunk_rerank_window_http import score_budgeted_pair
+
+        return score_budgeted_pair(
+            self, pair, timeout_seconds, budget=budget, phase=phase, post=requests.post
+        )
+
     def _post(self, payload: dict, budget: float):
         remaining = min(self.timeout, budget, self.deadline - self.clock())
         if remaining <= 0:
@@ -200,14 +207,16 @@ class LocalSelectionScorer:
         return tuple((by_index[index], pair) for index, pair in enumerate(pairs))
 
 
-def current_selection_scorer(
-    *, deadline: float, clock: Callable[[], float] = monotonic
+def _legacy_selection_scorer(
+    *, deadline: float, clock: Callable[[], float] = monotonic, turn_budget=None
 ) -> LocalSelectionScorer | None:
     """Use only a known local capability; no endpoint discovery in this path."""
     if rerank_provider() not in ("auto", "local", "vllm"):
         return None
     base_v1, model_name = rerank_base_url(), rerank_model()
-    capability = rag_cache.get_cached_rerank_capability(base_v1, model_name)
+    capability = rag_cache.get_cached_rerank_capability(
+        base_v1, model_name, **({"budget": turn_budget} if turn_budget else {})
+    )
     if not capability:
         return None
     root = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
@@ -235,6 +244,38 @@ def current_selection_scorer(
         deadline=deadline,
         clock=clock,
         headers=headers,
+    )
+
+
+def current_selection_scorer(
+    *, deadline, clock=monotonic, turn_budget=None, windowed=None, pair_counter=None
+):
+    from .chunk_rerank_config import rerank_text_mode
+    from .chunk_rerank_pair_capability import registered_pair_counter
+    from .chunk_rerank_window_adapter import WindowSelectionScorer, unknown_pair_count
+
+    active = rerank_text_mode() == "windowed" if windowed is None else windowed
+    provider = None
+    if active:
+        from .pair_worker_lifecycle import verified_canonical_provider
+
+        provider = verified_canonical_provider(deadline)
+    if provider is None:
+        provider = _legacy_selection_scorer(
+            deadline=deadline, clock=clock, turn_budget=turn_budget
+        )
+    if not active:
+        return provider
+    verified = registered_pair_counter(provider)
+    if verified is not None:
+        provider.verified_pair_counter = verified
+    return WindowSelectionScorer(
+        provider,
+        budget=turn_budget,
+        deadline=deadline,
+        clock=clock,
+        pair_counter=pair_counter or verified or unknown_pair_count,
+        cache_enabled=verified is not None,
     )
 
 

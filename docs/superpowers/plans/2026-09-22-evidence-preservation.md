@@ -10,7 +10,7 @@
 
 **Spec:** [Evidence preservation and responsive retrieval design](../specs/2026-09-22-evidence-preservation-design.md).
 
-**Status:** Plan only. No application behavior or deployment is changed by committing these documents. The user requested implementation on development and a later backport; this task records the plan first.
+**Status:** Implemented locally with regression verification; independent review and live development quality/concurrent-latency gates remain pending. See [current implementation report](../reports/2026-09-22-evidence-preservation-implementation.md). Features remain default off. Preservation composes with the adaptive selector; the independent PPR activation gate remains open. This status update does not authorize activation or deployment.
 
 Scientific research is a demanding example of AquiLLM's serious use, not a domain restriction. Apply the same evidence standard to technical documentation, reports, policies, records and other supported sources. Preserve scientific regression cases while adding representative general evidence cases; do not introduce a science-specific retrieval mode or weaken quality to obtain a faster benchmark.
 
@@ -233,4 +233,4 @@ All test commands below assume that environment and use `--ds=aquillm.settings_t
 - [ ] After the backport is merged and deployment is authorized, take a verified backup, deploy the exact merged revision, verify runtime config/image identity, health/worker state and a representative real retrieval including tail/follow-up evidence.
 - [ ] Record rollback commands and deployed revision. Enable only modes that passed the development and target-main quality/latency gates.
 
-**Completion of the current request:** Commit this plan and its companion design to `development` only. Application implementation, backport, feature activation and deployment are not performed in this planning task.
+**Historical planning scope:** The original planning task ended with this plan and companion design. The subsequently authorized implementation is recorded in the [current implementation report](../reports/2026-09-22-evidence-preservation-implementation.md). Independent review, live quality/latency validation, activation, backport and deployment retain their separate gates above; the original checklist is not a record of live execution.

@@ -1,7 +1,10 @@
 """Prepare OpenAI-compatible requests and fit them to the context budget."""
+
 import asyncio
 from dataclasses import dataclass
 from os import getenv
+
+from lib.llm.evidence_guard import current_protection, validate_request
 
 from .openai_tools_format import transform_openai_tool_choice, transform_openai_tools
 
@@ -13,8 +16,15 @@ class PreparedRequest:
 
 
 async def prepare_request(
-    provider, *, system_text, message_list, max_tokens, thinking_budget,
-    tool_choice_raw, kwargs, compress_messages,
+    provider,
+    *,
+    system_text,
+    message_list,
+    max_tokens,
+    thinking_budget,
+    tool_choice_raw,
+    kwargs,
+    compress_messages,
 ) -> PreparedRequest:
     if (
         "[User preferences and background]" in system_text
@@ -23,9 +33,13 @@ async def prepare_request(
         system_text = (
             "You have access to retrieved user memory in the system context below. "
             "When relevant memory is present, use it directly. "
-            "Do not claim you cannot remember past conversations when memory items are provided. "
-            "Do not describe internal memory tools, storage backends, or persistence mechanisms. "
-            "If the user asks you to remember something, acknowledge it naturally without discussing whether "
+            "Do not claim you cannot remember past convers"
+            "ations when memory items are provided. "
+            "Do not describe internal memory tools, storag"
+            "e backends, or persistence mechanisms. "
+            "If the user asks you to remember something, a"
+            "cknowledge it naturally without discussing wh"
+            "ether "
             "a tool is available or whether storage will happen behind the scenes.\n\n"
             + system_text
         )
@@ -63,20 +77,17 @@ async def prepare_request(
         arguments["extra_body"] = {
             "chat_template_kwargs": {"enable_thinking": enable_thinking}
         }
-    context_limit_raw = (getenv("OPENAI_CONTEXT_LIMIT", "") or "").strip() or (
-        getenv("VLLM_MAX_MODEL_LEN", "") or ""
-    ).strip()
-    try:
-        context_limit = int(context_limit_raw)
-    except Exception:
-        context_limit = 0
+    from .openai_runtime_config import context_limit as configured_limit
+    from .openai_runtime_config import optional_float
+
+    context_limit = configured_limit()
     should_compress = True
-    if context_limit > 0:
+    if context_limit > 0 and current_protection() is None:
         prompt_tokens = provider._estimate_prompt_tokens(arguments["messages"])
         available_prompt_tokens = max(1, context_limit - max(0, int(max_tokens)))
         compression_trigger_tokens = max(1, int(available_prompt_tokens * 0.8))
         should_compress = prompt_tokens >= compression_trigger_tokens
-    if should_compress:
+    if should_compress and current_protection() is None:
         await asyncio.to_thread(
             compress_messages,
             message_list,
@@ -92,7 +103,7 @@ async def prepare_request(
         pack_limit = (
             context_limit if context_limit > 0 else prompt_budget_context_limit()
         )
-        if pack_limit > 0 and context_packer_enabled():
+        if pack_limit > 0 and context_packer_enabled() and current_protection() is None:
             sys_row = arguments["messages"][0]
             tail = arguments["messages"][1:]
             mt0 = cap_completion_tokens(arguments["max_tokens"])
@@ -105,24 +116,16 @@ async def prepare_request(
             arguments["max_tokens"] = mt1
     except Exception:
         pass
-    if context_limit > 0:
+    if context_limit > 0 and current_protection() is None:
         if is_local_compatible_endpoint:
             prompt_slack = provider._env_int("OPENAI_COMPAT_PROMPT_SLACK_TOKENS", 256)
         else:
             prompt_slack = provider._env_int("OPENAI_API_PROMPT_SLACK_TOKENS", 384)
         provider._preflight_trim_for_context(arguments, context_limit, prompt_slack)
-    temp_raw = (getenv("OPENAI_TEMPERATURE", "") or "").strip()
-    if temp_raw:
-        try:
-            arguments["temperature"] = float(temp_raw)
-        except Exception:
-            pass
-    top_p_raw = (getenv("OPENAI_TOP_P", "") or "").strip()
-    if top_p_raw:
-        try:
-            arguments["top_p"] = float(top_p_raw)
-        except Exception:
-            pass
+    for key, name in (("temperature", "OPENAI_TEMPERATURE"), ("top_p", "OPENAI_TOP_P")):
+        value = optional_float(name)
+        if value is not None:
+            arguments[key] = value
 
     if "tools" in kwargs:
         arguments["tools"] = await transform_openai_tools(
@@ -133,6 +136,7 @@ async def prepare_request(
         if transformed_tool_choice is not None:
             arguments["tool_choice"] = transformed_tool_choice
 
+    validate_request(arguments, output_reserve=arguments["max_tokens"])
     return PreparedRequest(arguments, thinking_requested)
 
 

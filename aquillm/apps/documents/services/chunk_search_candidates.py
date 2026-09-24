@@ -11,7 +11,6 @@ from uuid import UUID
 
 import structlog
 from django.apps import apps
-from django.conf import settings as django_settings
 from django.contrib.postgres.search import TrigramSimilarity
 from django.db.models import Q
 from pgvector.django import L2Distance
@@ -19,9 +18,11 @@ from pgvector.django import L2Distance
 from apps.documents.services.chunk_search_graph_seeds import (
     build_graph_seeds as _build_graph_seeds,
 )
+from apps.documents.services.chunk_search_limits import _candidate_limits
 from apps.documents.services.hybrid_graph_authorization import (
     documents_match_retrieval_authorization,
 )
+from apps.documents.services.source_loading import source_query_rows
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 if TYPE_CHECKING:
@@ -74,14 +75,6 @@ class HybridCandidateSnapshot:
     graph_seed_error: bool
 
 
-@dataclass(frozen=True, slots=True)
-class _CandidateLimits:
-    vector: int
-    trigram: int
-    exact: int
-    trigram_similarity_min: float
-
-
 def _salient_exact_terms(query: str, *, max_terms: int = 8) -> list[str]:
     """Extract exact fallback terms that are likely to matter for recall."""
 
@@ -121,46 +114,6 @@ def _exact_term_query(terms: list[str]) -> Q:
     for term in terms:
         query |= Q(content__icontains=term)
     return query
-
-
-def _candidate_limits(
-    query: str,
-    top_k: int,
-    *,
-    app_config_getter: Callable[[str], object],
-) -> _CandidateLimits:
-    app_config = app_config_getter("aquillm")
-    vector_top_k = int(getattr(app_config, "vector_top_k"))
-    trigram_top_k = int(getattr(app_config, "trigram_top_k"))
-    q_len = len(query.strip())
-    short_len = int(getattr(django_settings, "RAG_QUERY_SHORT_LEN", 48))
-    long_len = int(getattr(django_settings, "RAG_QUERY_LONG_LEN", 160))
-    short_scale = float(
-        getattr(django_settings, "RAG_SHORT_QUERY_CANDIDATE_SCALE", 0.9)
-    )
-    long_scale = float(getattr(django_settings, "RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1))
-    if q_len <= short_len:
-        length_scale = short_scale
-    elif q_len >= long_len:
-        length_scale = long_scale
-    else:
-        length_scale = 1.0
-    multiplier = float(getattr(django_settings, "RAG_CANDIDATE_MULTIPLIER", 3.0))
-    raw_cap = int(top_k * multiplier * length_scale)
-    vector_min = int(getattr(django_settings, "RAG_VECTOR_MIN_LIMIT", 0))
-    trigram_min = int(getattr(django_settings, "RAG_TRIGRAM_MIN_LIMIT", 0))
-    vector_limit = max(top_k + 2, vector_min, min(vector_top_k, raw_cap))
-    trigram_limit = max(top_k + 2, trigram_min, min(trigram_top_k, raw_cap))
-    exact_limit = max(top_k + 2, min(trigram_top_k, raw_cap))
-    similarity_min = float(
-        getattr(django_settings, "RAG_TRIGRAM_SIMILARITY_MIN", 0.000001)
-    )
-    return _CandidateLimits(
-        vector=vector_limit,
-        trigram=trigram_limit,
-        exact=exact_limit,
-        trigram_similarity_min=similarity_min,
-    )
 
 
 def freeze_authorized_document_scope(
@@ -249,7 +202,7 @@ def collect_hybrid_candidate_snapshot(
                 .order_by(L2Distance("embedding", query_embedding))[: limits.vector]
             )
             # Force database evaluation inside the vector-only fail-open seam.
-            vector_rows = tuple(vector_results)
+            vector_rows = source_query_rows(vector_results)
         except Exception:
             vector_error = RetrievalLogReason.UPSTREAM_UNAVAILABLE.value
             logger.warning(
@@ -272,7 +225,7 @@ def collect_hybrid_candidate_snapshot(
         .filter(similarity__gt=limits.trigram_similarity_min)
         .order_by("-similarity")[: limits.trigram]
     )
-    trigram_rows = tuple(trigram_results)
+    trigram_rows = source_query_rows(trigram_results)
     trigram_ms = (perf_counter() - trigram_started) * 1000
 
     exact_started = perf_counter()
@@ -284,7 +237,7 @@ def collect_hybrid_candidate_snapshot(
             .filter(_exact_term_query(exact_terms))
             .order_by("doc_id", "chunk_number")[: limits.exact]
         )
-        exact_rows = tuple(exact_results)
+        exact_rows = source_query_rows(exact_results)
     else:
         exact_results = model_cls.objects.none()
         exact_rows = ()
@@ -315,9 +268,9 @@ def collect_hybrid_candidate_snapshot(
 
     return HybridCandidateSnapshot(
         documents=documents_snapshot,
-        vector_results=vector_results,
-        trigram_results=trigram_results,
-        exact_results=exact_results,
+        vector_results=vector_rows,
+        trigram_results=trigram_rows,
+        exact_results=exact_rows,
         vector_chunk_ids=tuple(getattr(row, "pk") for row in vector_rows),
         trigram_chunk_ids=tuple(getattr(row, "pk") for row in trigram_rows),
         exact_chunk_ids=tuple(getattr(row, "pk") for row in exact_rows),

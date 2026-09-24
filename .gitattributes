@@ -1,1 +1,4 @@
 *.sh text eol=lf
+# Reviewed corpus digests bind exact bytes, including their authored newlines.
+aquillm/apps/chat/evals/evidence_quality_cases.json -text
+aquillm/apps/chat/evals/evidence_operational_cases.json -text whitespace=cr-at-eol

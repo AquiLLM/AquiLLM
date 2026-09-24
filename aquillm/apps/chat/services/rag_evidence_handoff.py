@@ -66,12 +66,25 @@ def _selected_payload(packet: EvidencePacket) -> dict[str, Any]:
     )
     payload: dict[str, Any] = {
         "result": rows,
-        "retrieval_status": packet.retrieval_status if rows else "no_results",
+        "retrieval_status": packet.retrieval_status
+        if rows or packet.retrieval_status == "context_limited"
+        else "no_results",
         "retrieved_count": len(rows),
         "retrieved_documents": titles,
     }
     if packet.diagnostic_message:
         payload["retrieval_message"] = packet.diagnostic_message
+    if packet.auxiliary_figures:
+        payload["result"] = {
+            "type": "document_with_figures",
+            "text": "\n\n".join(
+                f"{row.get('citation', row.get('ref'))} "
+                f"{row.get('text', row.get('x', ''))}"
+                for row in rows
+            ),
+            "figures": list(packet.auxiliary_figures),
+        }
+        payload["citation_chunks"] = rows
     return payload
 
 
@@ -97,6 +110,8 @@ def prepare_evidence_handoff(
             "content": serialize_tool_result_for_llm(payload),
             "result_dict": payload,
             "files": None,
+            "tools": [],
+            "tool_choice": None,
         }
     )
     persisted = Conversation(

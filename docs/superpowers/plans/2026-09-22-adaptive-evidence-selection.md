@@ -10,7 +10,7 @@
 
 **Spec:** [Adaptive Evidence Selection Design](../specs/2026-09-22-adaptive-evidence-selection-design.md).
 
-**Status:** Draft for review. This document authorizes no implementation, rollout, or remote changes by itself. The user requested the plan.
+**Status:** Implemented and reviewed in development (PR #230); live representative quality/concurrent-latency gates remain pending. See [current implementation report](../reports/2026-09-22-adaptive-retrieval-implementation.md). Features remain default off. Preservation composes with the adaptive selector; the independent PPR activation gate remains open. This status update does not authorize activation or deployment.
 
 ## Combined scope: pipeline steps 6 and 8
 

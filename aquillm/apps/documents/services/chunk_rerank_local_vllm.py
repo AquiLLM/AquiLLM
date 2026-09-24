@@ -8,13 +8,11 @@ import requests
 import structlog
 
 from apps.documents.services import rag_cache
-from apps.documents.services.chunk_rerank_budget import (
-    trim_rerank_pair,
-)
+from apps.documents.services.chunk_rerank_budget import trim_rerank_pair
 from apps.documents.services.chunk_rerank_config import (
-    rerank_api_key,
     rerank_base_url,
     rerank_doc_char_limit,
+    rerank_headers,
     rerank_model,
     rerank_model_is_qwen3_vl,
     rerank_pair_token_limit,
@@ -27,26 +25,34 @@ from apps.documents.services.chunk_rerank_parse import (
     parse_rerank_results,
     parse_score_results,
 )
-from apps.documents.services.chunk_rerank_payload import rerank_document_payload
+from apps.documents.services.chunk_rerank_payload import (
+    replace_payload_text,
+    rerank_document_payload,
+)
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
-
 
 from . import chunk_rerank_pointwise as pointwise
 from .chunk_rerank_parse import parse_single_score
 from .chunk_rerank_pointwise import (
     _is_complete_finite_scoring as _is_complete_finite_scoring,
+)
+from .chunk_rerank_pointwise import (
     _rank_complete_scores,
 )
 
 
 def _score_one_document(**kwargs):
     return pointwise._score_one_document(
-        **kwargs, parse_score=parse_single_score, trim_pair=trim_rerank_pair,
+        **kwargs,
+        parse_score=parse_single_score,
+        trim_pair=trim_rerank_pair,
     )
 
 
 def _score_documents_concurrently(**kwargs):
-    return pointwise._score_documents_concurrently(**kwargs, score_one=_score_one_document)
+    return pointwise._score_documents_concurrently(
+        **kwargs, score_one=_score_one_document
+    )
 
 
 if TYPE_CHECKING:
@@ -69,6 +75,7 @@ def rerank_via_local_vllm(
     top_k: int,
     *,
     _complete_scoring_capability: object | None = None,
+    turn_budget=None,
 ):
     if (
         _complete_scoring_capability is not None
@@ -76,6 +83,13 @@ def rerank_via_local_vllm(
     ):
         raise PermissionError("complete local scoring requires its private capability")
     require_complete_scoring = _complete_scoring_capability is _STRICT_COMPLETE_SCORING
+    from .chunk_rerank_window_acquisition import dispatch_windowed
+
+    result = dispatch_windowed(query, chunks_list, top_k, turn_budget)
+    if result is not None:
+        if require_complete_scoring and result.score_set.status != "complete":
+            return ()
+        return ordered_queryset_from_ids(model_cls, result.ranked_ids)
     if not chunks_list:
         return () if require_complete_scoring else model_cls.objects.none()
 
@@ -116,30 +130,16 @@ def rerank_via_local_vllm(
     effective_documents = [document for _query, document in trimmed_pairs]
 
     multimodal_documents = [rerank_document_payload(chunk) for chunk in chunks_list]
-    effective_multimodal_documents: list[Any] = []
-    for mm_document, text_document in zip(
-        multimodal_documents,
-        effective_documents,
-    ):
-        if isinstance(mm_document, list):
-            normalized: list[dict[str, Any]] = []
-            for part in mm_document:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    normalized.append({"type": "text", "text": text_document})
-                else:
-                    normalized.append(part)
-            effective_multimodal_documents.append(normalized)
-        else:
-            effective_multimodal_documents.append(text_document)
+    effective_multimodal_documents = [
+        replace_payload_text(payload, text)
+        for payload, text in zip(multimodal_documents, effective_documents)
+    ]
     has_multimodal_documents = any(
         isinstance(document, list) for document in effective_multimodal_documents
     )
 
     base_root = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
-    headers = {"Content-Type": "application/json"}
-    api_key = rerank_api_key()
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    headers = rerank_headers()
     timeout = rerank_timeout_seconds()
 
     def finish(

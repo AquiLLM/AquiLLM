@@ -1,44 +1,40 @@
-"""
-ASGI config for aquillm project.
-
-It exposes the ASGI callable as a module-level variable named ``application``.
-
-For more information on this file, see
-https://docs.djangoproject.com/en/5.0/howto/deployment/asgi/
-"""
+"""Django/Channels ASGI with default-off per-serving-worker capability lifespan."""
 
 import os
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aquillm.settings")
 from django.core.asgi import get_asgi_application
-asgi_app = get_asgi_application()
-
-from channels.auth import AuthMiddlewareStack
-from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import AllowedHostsOriginValidator
 
 
+def create_application():
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aquillm.settings")
+    asgi_app = get_asgi_application()
+    # Channels auth and app routes require Django setup before importing models.
+    from channels.auth import AuthMiddlewareStack
+    from channels.routing import ProtocolTypeRouter, URLRouter
+    from channels.security.websocket import AllowedHostsOriginValidator
 
-from apps.chat.routing import websocket_urlpatterns as chat_patterns
-from apps.ingestion.routing import websocket_urlpatterns as ingest_patterns
-# Import the new crawl status patterns
-from .routing import websocket_urlpatterns as crawl_status_patterns
+    from apps.chat.routing import websocket_urlpatterns as chat_patterns
+    from apps.documents.services.pair_worker_lifecycle import PairCapabilityLifespan
+    from apps.ingestion.routing import websocket_urlpatterns as ingest_patterns
 
-application = ProtocolTypeRouter(
-    {
-        "http": asgi_app,
-        "websocket": AllowedHostsOriginValidator(
-            AuthMiddlewareStack(
-                # Add the new patterns to the URLRouter
-                URLRouter(chat_patterns + ingest_patterns + crawl_status_patterns)
-            )
-        )
+    from .routing import websocket_urlpatterns as crawl_status_patterns
 
-    }
-)
+    application = ProtocolTypeRouter(
+        {
+            "http": asgi_app,
+            "websocket": AllowedHostsOriginValidator(
+                AuthMiddlewareStack(
+                    URLRouter(chat_patterns + ingest_patterns + crawl_status_patterns)
+                )
+            ),
+        }
+    )
+    if os.environ.get("OTEL_ENABLED", "").strip().lower() in ("1", "true", "yes"):
+        from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
 
-# Wrap the full ASGI application with OpenTelemetry tracing if enabled.
-if os.environ.get("OTEL_ENABLED", "").strip().lower() in ("1", "true", "yes"):
-    from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
+        application = OpenTelemetryMiddleware(application)
+    # Lifespan runs after fork/reload in each worker, never in AppConfig.ready.
+    return PairCapabilityLifespan(application)
 
-    application = OpenTelemetryMiddleware(application)
+
+application = create_application()

@@ -2,7 +2,6 @@
 
 import asyncio as asyncio  # Preserve the provider's async dispatch patch seam.
 import uuid
-from os import getenv
 from time import perf_counter
 from typing import override
 
@@ -17,21 +16,9 @@ from ..types.conversation import Conversation
 from ..types.messages import AssistantMessage
 from ..types.response import LLMResponse
 from .base import LLMInterface
-from .openai_overflow import (
-    retry_args_for_context_overflow,
-    retry_args_for_timeout,
-    strip_images_from_messages,
-)
-from .openai_request import is_timeout_error, prepare_request
+from .openai_context_policy import OpenAIContextPolicy
+from .openai_request import prepare_request
 from .openai_streaming import consume_streaming_completion
-from .openai_tokens import (
-    context_reserve_tokens,
-    env_float,
-    env_int,
-    estimate_prompt_tokens,
-    preflight_trim_for_context,
-    trim_messages_for_overflow,
-)
 from .openai_tool_text import (
     decode_json_dict,
     extract_tool_call_from_text,
@@ -61,7 +48,7 @@ gpt_enc = encoding_for_model("gpt-4o")
 logger = structlog.stdlib.get_logger(__name__)
 
 
-class OpenAIInterface(LLMInterface):
+class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
     """LLM interface for OpenAI models."""
 
     supports_request_observability = True
@@ -71,52 +58,9 @@ class OpenAIInterface(LLMInterface):
         self.client = openai_client
         self.base_args = {"model": model}
 
-    @staticmethod
-    def _trim_messages_for_overflow(arguments: dict, overflow_tokens: int) -> bool:
-        return trim_messages_for_overflow(arguments, overflow_tokens)
-
-    @classmethod
-    def _estimate_prompt_tokens(cls, messages: list[dict]) -> int:
-        return estimate_prompt_tokens(messages, gpt_enc)
-
-    @staticmethod
-    def _env_int(name: str, default: int) -> int:
-        return env_int(name, default)
-
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        return env_float(name, default)
-
-    @classmethod
-    def _context_reserve_tokens(cls, context_limit: int) -> tuple[int, int]:
-        return context_reserve_tokens(context_limit)
-
-    @classmethod
-    def _preflight_trim_for_context(
-        cls, arguments: dict, context_limit: int, extra_prompt_slack: int = 0
-    ) -> None:
-        preflight_trim_for_context(cls, arguments, context_limit, extra_prompt_slack)
-
-    @staticmethod
-    def _strip_images_from_messages(arguments: dict) -> bool:
-        return strip_images_from_messages(arguments)
-
-    @staticmethod
-    def _retry_args_for_context_overflow(
-        arguments: dict, exc: Exception
-    ) -> dict | None:
-        return retry_args_for_context_overflow(arguments, exc)
-
-    @staticmethod
-    def _is_timeout_error(exc: Exception) -> bool:
-        return is_timeout_error(exc)
-
-    @staticmethod
-    def _retry_args_for_timeout(arguments: dict, attempt: int) -> dict | None:
-        return retry_args_for_timeout(arguments, attempt)
-
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
+        synthesis_phase = kwargs.pop("_synthesis_phase", "initial")
         kwargs.pop("messages_pydantic", None)
         thinking_budget = kwargs.pop("thinking_budget", None)
         correlation_id = safe_correlation_id(
@@ -141,39 +85,28 @@ class OpenAIInterface(LLMInterface):
         raw_tools = kwargs.get("tools")
 
         prepared = await prepare_request(
-            self, system_text=system_text, message_list=message_list,
-            max_tokens=max_tokens, thinking_budget=thinking_budget,
-            tool_choice_raw=tool_choice_raw, kwargs=kwargs,
+            self,
+            system_text=system_text,
+            message_list=message_list,
+            max_tokens=max_tokens,
+            thinking_budget=thinking_budget,
+            tool_choice_raw=tool_choice_raw,
+            kwargs=kwargs,
             compress_messages=maybe_compress_openai_style_messages,
         )
         arguments = prepared.arguments
         thinking_requested = prepared.thinking_requested
 
-        request_timeout_s = float(getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "120"))
-        try:
-            max_request_timeout_s = float(
-                getenv("OPENAI_REQUEST_TIMEOUT_MAX_SECONDS", "360")
-            )
-        except Exception:
-            max_request_timeout_s = 360.0
-        if max_request_timeout_s < request_timeout_s:
-            max_request_timeout_s = request_timeout_s
-        try:
-            max_overflow_retries = int(getenv("OPENAI_CONTEXT_OVERFLOW_RETRIES", "3"))
-        except Exception:
-            max_overflow_retries = 3
-        if max_overflow_retries < 3:
-            max_overflow_retries = 3
-        try:
-            max_timeout_retries = int(getenv("OPENAI_TIMEOUT_RETRIES", "2"))
-        except Exception:
-            max_timeout_retries = 2
-        if max_timeout_retries < 0:
-            max_timeout_retries = 0
+        from .openai_runtime_config import request_limits
+        from .openai_runtime_config import stream_enabled as streams
 
-        stream_enabled = callable(stream_callback) and getenv(
-            "OPENAI_STREAM_RESPONSES", "1"
-        ).strip().lower() in ("1", "true", "yes", "on")
+        (
+            request_timeout_s,
+            max_request_timeout_s,
+            max_overflow_retries,
+            max_timeout_retries,
+        ) = request_limits()
+        stream_enabled = callable(stream_callback) and streams()
         parsed_response: LLMResponse | None = None
         request_args = dict(arguments)
         if stream_enabled:
@@ -182,11 +115,21 @@ class OpenAIInterface(LLMInterface):
         timeout_retries_used = 0
         max_total_retries = max_overflow_retries + max_timeout_retries
         for attempt in range(max_total_retries + 1):
+            from lib.llm.evidence_guard import validate_request
+            from lib.llm.synthesis_dispatch import dispatch
+
+            validate_request(request_args, output_reserve=request_args["max_tokens"])
             request_started_at = perf_counter()
             try:
                 if stream_enabled:
-                    stream = await self.client.chat.completions.create(
-                        timeout=request_timeout_s, **request_args
+                    stream = await dispatch(
+                        lambda: self.client.chat.completions.create(
+                            timeout=request_timeout_s, **request_args
+                        ),
+                        output_reserve=request_args["max_tokens"],
+                        payload=request_args,
+                        provider="openai",
+                        kind="transport_retry" if attempt else synthesis_phase,
                     )
                     parsed_response = await consume_streaming_completion(
                         stream=stream,
@@ -205,8 +148,14 @@ class OpenAIInterface(LLMInterface):
                         request_started_at=request_started_at,
                     )
                 else:
-                    response = await self.client.chat.completions.create(
-                        timeout=request_timeout_s, **request_args
+                    response = await dispatch(
+                        lambda: self.client.chat.completions.create(
+                            timeout=request_timeout_s, **request_args
+                        ),
+                        output_reserve=request_args["max_tokens"],
+                        payload=request_args,
+                        provider="openai",
+                        kind="transport_retry" if attempt else synthesis_phase,
                     )
                     if DEBUG:
                         print("OpenAI SDK Response:")

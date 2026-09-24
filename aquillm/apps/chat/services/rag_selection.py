@@ -24,6 +24,14 @@ def _token_cost(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
+def candidate_token_cost(candidate):
+    return (
+        candidate.token_cost
+        if candidate.token_cost is not None
+        else _token_cost(candidate.text)
+    )
+
+
 def _validate(
     profile: SelectionProfile,
     limits: SelectionLimits,
@@ -80,6 +88,7 @@ def select_evidence(
     profile: SelectionProfile,
     limits: SelectionLimits,
     score_status: str,
+    mode: str = "adaptive",
 ) -> EvidenceSelection:
     """Choose feasible passages by score and marginal textual novelty.
 
@@ -87,7 +96,12 @@ def select_evidence(
     Similarity only affects ordering inside the relevance-gap frontier.
     """
     pool = tuple(candidates)
+    from lib.evidence_observation import publish
+
+    publish("final_selection", {"mode": mode, "candidates": len(pool)})
     _validate(profile, limits, pool)
+    if mode not in ("legacy", "adaptive"):
+        raise ValueError("unsupported selector mode")
 
     # Verified document/chunk coordinates identify one source passage. Preserve
     # the strongest rendition of a duplicate, independently of input order.
@@ -98,6 +112,17 @@ def select_evidence(
         if previous is None or _tie_break(candidate) < _tie_break(previous):
             by_identity[key] = candidate
     remaining = list(by_identity.values())
+    if mode == "legacy":
+        from apps.chat.services.rag_legacy_selection import diversify_evidence_chunks
+
+        ordered = diversify_evidence_chunks(
+            [
+                {"doc_id": c.doc_id, "candidate": c}
+                for c in sorted(remaining, key=lambda c: c.fused_rank)
+            ],
+            MAX_CANDIDATES,
+        )
+        legacy_order = {_identity(row["candidate"]): i for i, row in enumerate(ordered)}
     features = {
         identity: prepare_snippet(candidate.text)
         for identity, candidate in by_identity.items()
@@ -117,7 +142,7 @@ def select_evidence(
             candidate
             for candidate in remaining
             if document_counts[candidate.doc_id] < limits.max_per_document
-            and _token_cost(candidate.text) <= available
+            and candidate_token_cost(candidate) <= available
         ]
         if not feasible:
             break
@@ -138,9 +163,13 @@ def select_evidence(
             )
             return (-value, *_tie_break(candidate))
 
-        best = min(frontier, key=order)
+        best = (
+            min(feasible, key=lambda c: legacy_order[_identity(c)])
+            if mode == "legacy"
+            else min(frontier, key=order)
+        )
         selected.append(best)
-        estimated_tokens += _token_cost(best.text)
+        estimated_tokens += candidate_token_cost(best)
         document_counts[best.doc_id] += 1
         remaining.remove(best)
         for candidate in remaining:
@@ -154,4 +183,7 @@ def select_evidence(
                 ),
             )
 
+    from .rag_selection_observation import observe_exclusions
+
+    observe_exclusions(remaining, selected, document_counts, estimated_tokens, limits)
     return EvidenceSelection(tuple(selected), estimated_tokens, profile, score_status)

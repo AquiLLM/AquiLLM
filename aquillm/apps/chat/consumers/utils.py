@@ -1,8 +1,10 @@
 """Shared helpers for the chat WebSocket consumer (env, text, UUID parsing, images)."""
+
 from __future__ import annotations
 
-import structlog
 from os import getenv
+
+import structlog
 
 from lib.llm.utils.images import resize_image_data_url_for_llm
 from lib.tools.documents.ids import clean_and_parse_doc_id
@@ -17,7 +19,9 @@ def env_int(name: str, default: int) -> int:
     try:
         value = int(raw)
     except ValueError:
-        logger.warning("obs.chat.invalid_env_int", env_name=name, raw_value=raw, default=default)
+        logger.warning(
+            "obs.chat.invalid_env_int", env_name=name, raw_value=raw, default=default
+        )
         return default
     return value if value > 0 else default
 
@@ -31,6 +35,7 @@ LLM_IMAGE_MAX_BYTES = env_int("LLM_IMAGE_MAX_BYTES", 50_000)
 
 
 def truncate_tool_text(text: str) -> str:
+    """Public preview only; source synthesis hydrates identity under current scope."""
     if len(text) <= TOOL_CHUNK_CHAR_LIMIT:
         return text
     return text[:TOOL_CHUNK_CHAR_LIMIT] + "\n...[truncated for context window]..."

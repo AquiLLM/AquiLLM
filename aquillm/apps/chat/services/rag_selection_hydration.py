@@ -14,6 +14,7 @@ from apps.collections.services.retrieval_authorization import (
 )
 from apps.documents.models.chunks import TextChunk
 from apps.documents.services.chunk_rerank_results import fingerprint_text
+from lib.retrieval.evidence import PreparedEvidence
 
 type ChunkLoader = Callable[
     [RetrievalAuthorizationContext, tuple[int, ...]], Iterable[TextChunk]
@@ -26,12 +27,19 @@ class HydratedRow:
     chunk: TextChunk
     excerpt: str
     source_fingerprint: str
+    prepared_evidence: PreparedEvidence | None = None
 
 
 def _current_chunks(
     authorization: RetrievalAuthorizationContext, ids: tuple[int, ...]
 ) -> Iterable[TextChunk]:
-    return TextChunk.objects.using(authorization.database_alias).filter(pk__in=ids)
+    from apps.documents.services.source_loading import (
+        current_source_runtime,
+        source_query_rows,
+    )
+
+    query = TextChunk.objects.using(authorization.database_alias).filter(pk__in=ids)
+    return source_query_rows(query) if current_source_runtime() else query
 
 
 def hydrate_pool_rows(
@@ -93,6 +101,12 @@ def revalidate_selection_candidates(
     chunk_loader: ChunkLoader | None = None,
 ) -> tuple[SelectionCandidate, ...]:
     """Preserve selected order while dropping revoked or changed source rows."""
+    if any(c.prepared_evidence is not None for c in candidates):
+        from apps.chat.services.rag_source_hydration import revalidate_source_candidates
+
+        return revalidate_source_candidates(
+            candidates, authorization, chunk_loader=chunk_loader
+        )
     hydrated = hydrate_pool_rows(
         tuple(candidate.row for candidate in candidates),
         authorization,

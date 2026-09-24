@@ -43,9 +43,17 @@ def score_missing_pairs(
     max_inflight: int = 6,
     clock: Callable[[], float] = monotonic,
     on_submit: Callable[[int], None] | None = None,
+    turn_budget=None,
 ) -> RerankScoreSet:
     """Score at most one bounded pool; late futures cannot publish a result."""
     rows = tuple(chunks)
+    from .chunk_rerank_window_adapter import WindowSelectionScorer
+
+    if isinstance(scorer, WindowSelectionScorer):
+        if turn_budget is not scorer.budget:
+            raise ValueError("window scoring must share the turn ledger")
+        scorer.deadline = min(scorer.deadline, deadline)
+        return scorer.score_windows(query, rows, phase="final", on_submit=on_submit)
     if (
         len(rows) > 45
         or len(rows) > max_pairs

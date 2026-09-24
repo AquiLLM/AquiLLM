@@ -193,3 +193,23 @@ async def test_grounding_rules_are_request_only_and_leave_stored_system_unchange
     assert "Do not pad" in prompt
     assert convo.system == original_system
     assert result.system == original_system
+
+
+async def test_old_answer_citation_cannot_expand_current_packet_allowlist():
+    convo, packet = _fixture()
+    convo.messages[3].content = "Earlier claim [doc:old chunk:8]."
+    packet.chunks = packet.chunks[:1]
+    packet.citation_tokens = ["[doc:a chunk:1]"]
+    snapshot = convo.model_dump()
+    llm = _BoundaryLLM(["Current selected finding [doc:a chunk:1]."])
+
+    result = await synthesize_from_evidence(llm, convo, packet)
+
+    assert set(extract_citations(llm.requests[0]["system"])) == {"[doc:a chunk:1]"}
+    assert [
+        row["citation"]
+        for row in llm.requests[0]["messages_pydantic"][-1].result_dict["result"]
+    ] == ["[doc:a chunk:1]"]
+    assert "STALE EARLIER PASSAGE" not in json.dumps(llm.requests[0]["messages"])
+    assert "[doc:old chunk:8]" not in result[-1].content
+    assert convo.model_dump() == snapshot

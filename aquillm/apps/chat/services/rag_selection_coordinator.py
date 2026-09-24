@@ -13,6 +13,11 @@ from apps.chat.services.rag_config import (
     EvidenceSelectionConfig,
     evidence_token_budget,
     max_snippets_per_doc,
+    rag_preservation_config,
+)
+from apps.chat.services.rag_context_budget import (
+    resolve_document_cap,
+    synthesis_evidence_budget,
 )
 from apps.chat.services.rag_evidence import build_selected_evidence_packet
 from apps.chat.services.rag_query import _is_retry
@@ -32,6 +37,10 @@ from apps.chat.services.retrieval_authorization import (
     resolve_document_retrieval_authorization,
 )
 from apps.collections.models import Collection
+from apps.documents.services.source_loading import (
+    SourcePreparationLimited,
+    current_source_runtime,
+)
 from lib.llm.types.messages import UserMessage
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -113,12 +122,23 @@ async def coordinate_selection(
     *,
     prepare_fn,
     revalidate_fn,
+    request_conversation=None,
+    llm_if=None,
 ):
     """Run opt-in selection on DB workers; shadow never changes served evidence."""
     try:
         pool = fuse_ranked_tool_results(search_results)
+        preservation = rag_preservation_config()
+        kwargs = {}
+        if preservation.evidence_text_mode == "source":
+            ceiling = synthesis_evidence_budget(request_conversation, llm_if, pool.rows)
+            if ceiling <= 0:
+                raise SourcePreparationLimited("no evidence context capacity")
+            kwargs = {"token_ceiling": ceiling}
         prepare_async = database_sync_to_async(prepare_fn, thread_sensitive=False)
-        turn = await prepare_async(consumer, pool, query, question, config, top_k)
+        turn = await prepare_async(
+            consumer, pool, query, question, config, top_k, **kwargs
+        )
         if config.mode == "shadow":
             return turn, None, None
         revalidate_async = database_sync_to_async(revalidate_fn, thread_sensitive=False)
@@ -128,11 +148,17 @@ async def coordinate_selection(
             query=query,
             search_scope="selected documents",
         )
+        if preservation.active:
+            packet.source_mode = preservation.evidence_text_mode == "source"
+            packet.source_authorization = turn.authorization
+            packet.selection = selection
+            if not packet.chunks:
+                packet.retrieval_status = "context_limited"
         return turn, packet, selected_tool_result(packet)
     except Exception:
-        if config.mode == "adaptive":
+        if config.mode == "adaptive" or rag_preservation_config().active:
             raise
-        logger.warning("direct_rag_shadow_selection_failed")
+        logger.warning("obs.rag.shadow_selection_failed")
         return None, None, None
 
 
@@ -143,35 +169,66 @@ def prepare_selection_turn(
     question: str,
     config: EvidenceSelectionConfig,
     top_k: int,
+    *,
+    turn_budget=None,
+    token_ceiling=None,
 ) -> SelectionTurn:
     """Resolve current scope, score once, and select on a DB-capable worker."""
-    docs = Collection.get_user_accessible_documents(
-        consumer.user,
-        Collection.objects.filter(id__in=consumer.col_ref.collections),
-    )
-    authorization = resolve_document_retrieval_authorization(
-        consumer.user,
-        consumer.col_ref,
-        docs,
-        None,
-    )
+    preservation = rag_preservation_config()
+    source_mode = preservation.evidence_text_mode == "source"
+    runtime = current_source_runtime()
+    if runtime is not None or source_mode:
+        if (
+            runtime is None
+            or frozenset(int(v) for v in consumer.col_ref.collections)
+            != runtime.authorization.selected_collection_ids
+        ):
+            raise SourcePreparationLimited("source scope or shared budget unavailable")
+        authorization = runtime.authorization
+        turn_budget = runtime.budget
+    else:
+        docs = Collection.get_user_accessible_documents(
+            consumer.user,
+            Collection.objects.filter(id__in=consumer.col_ref.collections),
+        )
+        authorization = resolve_document_retrieval_authorization(
+            consumer.user, consumer.col_ref, docs, None
+        )
     if authorization is None:
         raise ValueError("retrieval authorization unavailable")
     started = monotonic()
+    scoring_ms = config.score_timeout_ms
+    if turn_budget is not None:
+        scoring_ms = min(scoring_ms, turn_budget.scoring_remaining_ms("final"))
     prepared = prepare_selection_candidates(
         pool=pool,
         primary_query=primary_query,
         authorization=authorization,
-        deadline=started + config.score_timeout_ms / 1000.0,
+        deadline=started + scoring_ms / 1000.0,
         allow_new_scores=config.mode == "adaptive" or config.shadow_scoring,
+        turn_budget=turn_budget,
+        source_mode=source_mode,
+        token_ceiling=token_ceiling
+        if token_ceiling is not None
+        else evidence_token_budget(),
     )
     profile = choose_selection_profile(question)
     select_started = monotonic()
     selection = select_evidence(
         prepared.candidates,
         profile=profile,
-        limits=SelectionLimits(top_k, max_snippets_per_doc(), evidence_token_budget()),
+        limits=SelectionLimits(
+            top_k,
+            resolve_document_cap(
+                mode=preservation.document_capacity_mode,
+                legacy_cap=max_snippets_per_doc(),
+                explicit_hard_cap=preservation.document_hard_cap,
+                final_passage_limit=top_k,
+            ),
+            token_ceiling if token_ceiling is not None else evidence_token_budget(),
+        ),
         score_status=prepared.score_status,
+        mode="legacy" if config.mode == "legacy" else "adaptive",
     )
     return SelectionTurn(
         selection,
@@ -190,7 +247,12 @@ def revalidate_selection_turn(
     surviving = revalidate_selection_candidates(selection.candidates, authorization)
     return EvidenceSelection(
         surviving,
-        sum(max(1, (len(item.text) + 3) // 4) for item in surviving),
+        sum(
+            item.token_cost
+            if item.token_cost is not None
+            else max(1, (len(item.text) + 3) // 4)
+            for item in surviving
+        ),
         selection.profile,
         selection.score_status,
     )

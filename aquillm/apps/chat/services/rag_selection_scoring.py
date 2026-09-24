@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from math import isfinite
 from time import monotonic
 
 from apps.chat.services.rag_retrieval import FusedRetrievalPool
 from apps.chat.services.rag_selection_hydration import hydrate_pool_rows
+from apps.chat.services.rag_selection_reuse import _reused_scores
 from apps.chat.services.rag_selection_types import SelectionCandidate
 from apps.collections.services.retrieval_authorization import (
     RetrievalAuthorizationContext,
@@ -16,8 +18,6 @@ from apps.collections.services.retrieval_authorization import (
 from apps.documents.services.chunk_rerank_config import rerank_score_concurrency
 from apps.documents.services.chunk_rerank_results import (
     PassageScore,
-    fingerprint_pair,
-    fingerprint_pool,
     fingerprint_text,
     score_identity_for_chunk,
     validate_score_set,
@@ -25,6 +25,15 @@ from apps.documents.services.chunk_rerank_results import (
 from apps.documents.services.chunk_rerank_scoring import (
     SelectionScorer,
     score_missing_pairs,
+)
+from apps.documents.services.chunk_rerank_window_adapter import (
+    WindowSelectionScorer,
+    expected_score_fingerprint,
+)
+from apps.documents.services.source_deadline import (
+    bound_source_finalization,
+    check_source_deadline,
+    source_preparation_scope,
 )
 
 
@@ -47,62 +56,7 @@ def _normalize(values: tuple[float, ...]) -> tuple[float, ...]:
     return tuple((value - low) / (high - low) for value in values)
 
 
-def _reused_scores(
-    *, pool: FusedRetrievalPool, hydrated, query: str, scorer: SelectionScorer
-) -> dict[int, PassageScore]:
-    by_id = {item.chunk.pk: item for item in hydrated}
-    expected_query = fingerprint_text(query)
-    reused: dict[int, PassageScore] = {}
-    if scorer.scoring_kind == "listwise":
-        complete_order = tuple(item.chunk.pk for item in hydrated)
-        canonical = tuple(
-            (
-                item.chunk.pk,
-                item.source_fingerprint,
-                fingerprint_pair(*scorer.prepare_pair(query, item.chunk)),
-            )
-            for item in hydrated
-        )
-        expected_pool = fingerprint_pool(canonical)
-    for score_set in pool.source_score_sets:
-        if (
-            score_set.status != "complete"
-            or score_set.scoring_kind != scorer.scoring_kind
-            or score_set.query_fingerprint != expected_query
-            or score_set.scorer_fingerprint != scorer.scorer_fingerprint
-        ):
-            continue
-        if scorer.scoring_kind == "listwise" and (
-            score_set.candidate_order != complete_order
-            or score_set.pool_fingerprint != expected_pool
-        ):
-            continue
-        if any(pk not in by_id for pk in score_set.candidate_order):
-            continue
-        identities = tuple(
-            score_identity_for_chunk(
-                by_id[pk].chunk,
-                effective_pair_fingerprint=fingerprint_pair(
-                    *scorer.prepare_pair(query, by_id[pk].chunk)
-                ),
-            )
-            for pk in score_set.candidate_order
-        )
-        try:
-            validate_score_set(
-                score_set,
-                authorized_identities=identities,
-                expected_query_fingerprint=expected_query,
-                expected_scorer_fingerprint=scorer.scorer_fingerprint,
-            )
-        except (TypeError, ValueError):
-            continue
-        reused.update((score.chunk_pk, score) for score in score_set.scores)
-        if scorer.scoring_kind == "listwise":
-            break
-    return reused
-
-
+@bound_source_finalization
 def prepare_selection_candidates(
     *,
     pool: FusedRetrievalPool,
@@ -113,11 +67,36 @@ def prepare_selection_candidates(
     scorer: SelectionScorer | None = None,
     chunk_loader=None,
     clock: Callable[[], float] = monotonic,
+    turn_budget=None,
+    source_mode=False,
+    token_ceiling=3500,
+    source_windows=None,
 ) -> PreparedSelection:
     """Never widen pool membership or mix model and rank-derived scales."""
     if len(pool.rows) > 45:
         raise ValueError("candidate union exceeds the hard cap")
-    first = hydrate_pool_rows(pool.rows, authorization, chunk_loader=chunk_loader)
+    if turn_budget is not None:
+        deadline = min(
+            deadline, clock() + turn_budget.scoring_remaining_ms("final") / 1000
+        )
+
+    def hydrate():
+        if source_mode:
+            from apps.chat.services.rag_source_hydration import hydrate_source_rows
+
+            return hydrate_source_rows(
+                pool.rows,
+                authorization,
+                question=primary_query,
+                token_ceiling=token_ceiling,
+                turn_budget=turn_budget,
+                source_windows=source_windows,
+                chunk_loader=chunk_loader,
+            )
+        return hydrate_pool_rows(pool.rows, authorization, chunk_loader=chunk_loader)
+
+    with source_preparation_scope(deadline, clock) if source_mode else nullcontext():
+        first = hydrate()
     initial_by_id = {item.chunk.pk: item.source_fingerprint for item in first}
     used_scorer = scorer
     if used_scorer is None and allow_new_scores:
@@ -125,7 +104,11 @@ def prepare_selection_candidates(
             current_selection_scorer,
         )
 
-        used_scorer = current_selection_scorer(deadline=deadline, clock=clock)
+        used_scorer = current_selection_scorer(
+            deadline=deadline, clock=clock, turn_budget=turn_budget
+        )
+    if isinstance(used_scorer, WindowSelectionScorer):
+        used_scorer.deadline = min(used_scorer.deadline, deadline)
     reused: dict[int, PassageScore] = {}
     new_scores: dict[int, PassageScore] = {}
     new_pairs = 0
@@ -135,6 +118,13 @@ def prepare_selection_candidates(
         fallback_reason = "scorer_unavailable"
     elif first:
         try:
+            if source_mode and not isinstance(used_scorer, WindowSelectionScorer):
+                if any(
+                    used_scorer.prepare_pair(primary_query, item.chunk)
+                    != (primary_query, item.excerpt)
+                    for item in first
+                ):
+                    raise ValueError("prepared evidence would be clipped by scorer")
             reused = _reused_scores(
                 pool=pool,
                 hydrated=first,
@@ -158,6 +148,7 @@ def prepare_selection_candidates(
                     max_inflight=min(6, rerank_score_concurrency()),
                     clock=clock,
                     on_submit=lambda count: submitted.append(count),
+                    turn_budget=turn_budget,
                 )
                 new_pairs = sum(submitted)
                 if fresh.status == "complete" and (
@@ -172,8 +163,8 @@ def prepare_selection_candidates(
                         authorized_identities=tuple(
                             score_identity_for_chunk(
                                 chunk,
-                                effective_pair_fingerprint=fingerprint_pair(
-                                    *used_scorer.prepare_pair(primary_query, chunk)
+                                effective_pair_fingerprint=expected_score_fingerprint(
+                                    used_scorer, primary_query, chunk
                                 ),
                             )
                             for chunk in to_score
@@ -189,7 +180,15 @@ def prepare_selection_candidates(
     scoring_duration_ms = max(0.0, (clock() - score_start) * 1000.0)
 
     # Permissions and content may change while inference is running.
-    current = hydrate_pool_rows(pool.rows, authorization, chunk_loader=chunk_loader)
+    from apps.chat.services.rag_source_hydration import revalidate_prepared_rows
+
+    if source_mode:
+        check_source_deadline()
+    current = (
+        revalidate_prepared_rows(first, authorization, chunk_loader=chunk_loader)
+        if source_mode
+        else hydrate()
+    )
     retained = tuple(
         item
         for item in current
@@ -203,11 +202,13 @@ def prepare_selection_candidates(
             item.chunk.pk in scores
             and scores[item.chunk.pk].document_id == item.chunk.doc_id
             and scores[item.chunk.pk].chunk_number == item.chunk.chunk_number
-            and scores[item.chunk.pk].source_fingerprint == item.source_fingerprint
+            and scores[item.chunk.pk].source_fingerprint
+            == fingerprint_text(item.chunk.content)
             and isfinite(scores[item.chunk.pk].value)
             for item in retained
         )
         and clock() < deadline
+        and (turn_budget is None or turn_budget.can_publish())
     )
     if model_complete:
         relevance = _normalize(tuple(scores[item.chunk.pk].value for item in retained))
@@ -228,6 +229,8 @@ def prepare_selection_candidates(
         row.get("chunk_id", row.get("i")): rank
         for rank, row in enumerate(pool.rows, start=1)
     }
+    from apps.chat.services.rag_source_hydration import source_candidate_cost
+
     candidates = tuple(
         SelectionCandidate(
             item.chunk.pk,
@@ -238,6 +241,8 @@ def prepare_selection_candidates(
             rank_by_id[item.chunk.pk],
             item.source_fingerprint,
             item.row,
+            getattr(item, "prepared_evidence", None),
+            source_candidate_cost(item, turn_budget) if source_mode else None,
         )
         for item, value in zip(retained, relevance)
     )

@@ -1,4 +1,5 @@
 """Token budgets and feature policy for completion turns."""
+
 from os import getenv
 
 from ..types.conversation import Conversation
@@ -38,6 +39,28 @@ def _post_tool_output_ceiling() -> int:
     return _env_int("LLM_POST_TOOL_OUTPUT_MAX_TOKENS", 12288, minimum=256)
 
 
+def turn_token_limits():
+    return (
+        _env_int("LLM_POST_TOOL_MAX_TOKENS", 8192, minimum=256),
+        _env_int("LLM_CONTINUATION_MAX_TOKENS", 4096, minimum=128),
+        _env_int("LLM_CITATION_RETRY_PRIOR_MAX_CHARS", 2400, minimum=512),
+    )
+
+
+def _whole_document_output_cap():
+    return _env_int("LLM_POST_TOOL_WHOLE_DOC_MAX_TOKENS", 12288, minimum=256)
+
+
+def _whole_document_continuation_cap():
+    return _env_int("LLM_CONTINUATION_WHOLE_DOC_MAX_TOKENS", 6144, minimum=128)
+
+
+def _tool_step_token_cap():
+    return _env_optional_cap(
+        "LLM_TOOL_STEP_MAX_TOKENS", _MECHANICAL_TOOL_MAX_TOKENS, minimum=128
+    )
+
+
 def _post_tool_global_max(global_max: int) -> int:
     return max(global_max, _post_tool_output_ceiling())
 
@@ -52,7 +75,7 @@ def _resolve_post_tool_max_tokens(
     if _conversation_used_whole_document(conversation):
         cap = max(
             cap,
-            _env_int("LLM_POST_TOOL_WHOLE_DOC_MAX_TOKENS", 12288, minimum=256),
+            _whole_document_output_cap(),
         )
     return min(cap, max(global_max, _post_tool_output_ceiling()))
 
@@ -68,7 +91,7 @@ def _resolve_continuation_max_tokens(
     if _conversation_used_whole_document(conversation):
         cap = max(
             cap,
-            _env_int("LLM_CONTINUATION_WHOLE_DOC_MAX_TOKENS", 6144, minimum=128),
+            _whole_document_continuation_cap(),
         )
     return min(global_max, post_tool_budget, cap)
 
@@ -127,11 +150,7 @@ def _tool_call_retry_max_tokens() -> int:
 
 
 def _resolve_tool_step_max_tokens(max_tokens: int, tool_choice_type: str) -> int:
-    requested = _env_optional_cap(
-        "LLM_TOOL_STEP_MAX_TOKENS",
-        _MECHANICAL_TOOL_MAX_TOKENS,
-        minimum=128,
-    )
+    requested = _tool_step_token_cap()
     if requested <= 0:
         requested = _MECHANICAL_TOOL_MAX_TOKENS
     if tool_choice_type == "any":
@@ -147,7 +166,7 @@ DIRECT_SYNTHESIS_GROUNDING = (
     "- The selected evidence in the current tool result is the only factual source "
     "for this answer. Earlier conversation provides request context, not additional "
     "document evidence.\n"
-    "- Answer the user's question directly and keep the answer concise, with detail "
+    "- Answer the user's question directly at the depth requested, with detail "
     "proportionate to the selected evidence. Do not pad the answer with general "
     "background, recommendations, implications, or explanations beyond the question "
     "and evidence.\n"

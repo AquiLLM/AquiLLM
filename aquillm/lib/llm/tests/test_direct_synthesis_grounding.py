@@ -77,7 +77,8 @@ async def test_direct_initial_and_all_empty_retries_avoid_expanding_beyond_evide
     for request in model.requests:
         system = request["system"]
         assert "proportionate" in system
-        assert "concise" in system
+        assert "depth requested" in system
+        assert "concise" not in system
         assert "thorough" not in system
     for request in model.requests[1:]:
         prompt = request["messages"][-1]["content"]

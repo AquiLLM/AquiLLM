@@ -1,6 +1,6 @@
 # Evidence preservation and responsive retrieval design
 
-**Status:** Planning only. Implement on `development`, validate there, then prepare a separate non-graph backport to `main`. This document does not authorize feature activation or a production deployment.
+**Status:** Implemented locally with regression verification; independent review and live development quality/concurrent-latency gates remain pending. See [current implementation report](../reports/2026-09-22-evidence-preservation-implementation.md). Features remain default off. Preservation composes with the adaptive selector; the independent PPR activation gate remains open. This status update does not authorize activation or deployment.
 
 **Implementation plan:** [Evidence preservation and responsive retrieval](../plans/2026-09-22-evidence-preservation.md).
 
@@ -172,4 +172,4 @@ Implement as separately reviewable commits: source/provenance and budget contrac
 
 After development validation, inventory exact commits and dependencies against then-current `main`. Port only graph-independent evidence/runtime changes and the compatible selector pieces they require. Adapt authorization to the target branch's established interfaces; never remove checks just to make a cherry-pick compile. Test both branches with the same general and scientific evidence fixtures, keep production timeout/citation safeguards, and document configuration differences.
 
-Use a separate backport PR, then the normal merge/deployment workflow with backup, immutable image/revision verification, health checks, representative real retrieval and rollback instructions. This planning task ends with the documentation commit on development; implementation, backport, activation and production deployment remain later steps.
+Use a separate backport PR, then the normal merge/deployment workflow with backup, immutable image/revision verification, health checks, representative real retrieval and rollback instructions. Historically the planning task ended with documentation; the subsequently authorized local implementation is recorded in the [current implementation report](../reports/2026-09-22-evidence-preservation-implementation.md). Independent review, live validation, backport, activation and production deployment remain separately gated.

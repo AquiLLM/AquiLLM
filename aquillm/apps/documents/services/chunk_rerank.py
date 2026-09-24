@@ -157,10 +157,23 @@ def rerank_chunks(model_cls: type[TextChunk], query: str, chunks, top_k: int):
 
 
 def rerank_chunks_scored(
-    model_cls: type[TextChunk], query: str, chunks, top_k: int
+    model_cls: type[TextChunk],
+    query: str,
+    chunks,
+    top_k: int,
+    *,
+    turn_budget=None,
+    window_scorer=None,
 ) -> ScoredRerankResult:
     """Capture provider scores from the ranking call, without replaying inference."""
     chunks_list = list(chunks)
+    from .chunk_rerank_window_acquisition import dispatch_windowed
+
+    windowed = dispatch_windowed(
+        query, chunks_list, top_k, turn_budget, window_scorer, shadow=True
+    )
+    if windowed is not None:
+        return windowed
     candidate_ids = tuple(chunk.pk for chunk in chunks_list)
     pool = fingerprint_pool(
         tuple(
