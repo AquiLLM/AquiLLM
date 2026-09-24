@@ -25,11 +25,13 @@ from .topology_snapshot import build_projected_topology_snapshot
 _MAX_MENTION_SOURCE_ROWS_PER_PROJECTION = 4_999
 
 _MANIFEST_CYPHER = (
-    "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
+    "UNWIND split($generation_keys_csv, ',') AS generation_key "
+    "MATCH (g:CollectionGeneration {generation_key:generation_key}) "
     "RETURN g.collection_key AS collection_key, "
     "g.generation_key AS generation_key, g.projection_key AS projection_key, "
     "g.artifact_key AS active_artifact_key, g.graph_checksum AS graph_checksum, "
-    "g.membership_checksum AS membership_checksum, g.state AS state"
+    "g.membership_checksum AS membership_checksum, g.state AS state "
+    "LIMIT $row_limit"
 )
 _MANIFEST_FIELDS = frozenset(
     {
@@ -140,24 +142,39 @@ class Neo4jProjectedTopologyQueryAdapter:
     def _manifests(self, ready, *, deadline: float, max_records: int):
         if max_records != len(ready.selected_generations):
             raise TopologyLoadError(c.TopologyFailureReason.BACKEND_SCHEMA_MISMATCH)
-        result = []
-        for selected in ready.selected_generations:
-            rows = self._execute(
-                _MANIFEST_CYPHER,
-                {"generation_key": selected.generation_key},
-                deadline=deadline,
-                max_records=1,
-            )
+        selected_by_key = {row.generation_key: row for row in ready.selected_generations}
+        rows = self._execute(
+            _MANIFEST_CYPHER,
+            {
+                "generation_keys_csv": ",".join(selected_by_key),
+                # Let the existing driver cap detect an extra row, never truncate it.
+                "row_limit": max_records + 1,
+            },
+            deadline=deadline,
+            max_records=max_records,
+        )
+        self._remaining(deadline)
+        if type(rows) is not tuple or len(rows) != max_records:
+            raise TopologyLoadError(c.TopologyFailureReason.READINESS_MISMATCH)
+        result = {}
+        for row in rows:
             if (
-                type(rows) is not tuple
-                or len(rows) != 1
-                or not isinstance(rows[0], Mapping)
-                or set(rows[0]) != _MANIFEST_FIELDS
-                or rows[0]["state"] != "ready"
+                not isinstance(row, Mapping)
+                or set(row) != _MANIFEST_FIELDS
+                or any(type(row[key]) is not str for key in _MANIFEST_FIELDS)
+                or row["state"] != "ready"
+                or row["generation_key"] not in selected_by_key
+                or row["generation_key"] in result
+                or any(
+                    row[key] != getattr(selected_by_key[row["generation_key"]], key)
+                    for key in _MANIFEST_FIELDS - {"state"}
+                )
             ):
                 raise TopologyLoadError(c.TopologyFailureReason.READINESS_MISMATCH)
-            result.append({key: rows[0][key] for key in _MANIFEST_FIELDS - {"state"}})
-        return tuple(result)
+            result[row["generation_key"]] = {
+                key: row[key] for key in _MANIFEST_FIELDS - {"state"}
+            }
+        return tuple(result[key] for key in selected_by_key)
 
     def _snapshot(self, ready, seeds, caps, parameters, *, deadline: float):
         cache_key = (
