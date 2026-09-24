@@ -47,6 +47,7 @@ def test_one_baseline_concurrent_branches_shared_dependency_and_one_reranker(
     snapshot = selected_snapshot(baseline=baseline)
     collect_calls: list[object] = []
     branch_barrier = threading.Barrier(2, timeout=2)
+    direct_started = threading.Event()
 
     class Runtime:
         def __init__(self) -> None:
@@ -58,6 +59,7 @@ def test_one_baseline_concurrent_branches_shared_dependency_and_one_reranker(
             return object()
 
         def run_direct(self, **_kwargs):
+            direct_started.set()
             branch_barrier.wait()
             return successful_branch(
                 HybridBranchKind.DIRECT,
@@ -96,12 +98,18 @@ def test_one_baseline_concurrent_branches_shared_dependency_and_one_reranker(
     )
 
     def collect(*args, **kwargs):
+        assert direct_started.wait(1), "direct must overlap baseline retrieval"
         collect_calls.append((args, kwargs))
         return snapshot
 
     rerank_calls: list[tuple[int, ...]] = []
     monkeypatch.setattr(chunk_search, "collect_hybrid_candidate_snapshot", collect)
-    monkeypatch.setattr("aquillm.utils.get_embedding", lambda _query: (0.1, 0.2))
+
+    def embedding(_query):
+        assert direct_started.wait(1), "direct must overlap query embedding"
+        return (0.1, 0.2)
+
+    monkeypatch.setattr("aquillm.utils.get_embedding", embedding)
     monkeypatch.setattr(
         chunk_search,
         "rerank_chunks",
@@ -130,6 +138,11 @@ def test_one_baseline_concurrent_branches_shared_dependency_and_one_reranker(
     assert tuple(row.pk for row in results) == (1, 2, 3, 4)
     assert diagnostics["graph_status"] == "hit"
     assert diagnostics["graph_candidate_count"] == 2
+    assert diagnostics["graph_direct_status"] == "succeeded_new"
+    assert diagnostics["graph_extended_status"] == "succeeded_new"
+    assert diagnostics["graph_raw_count"] == 3
+    assert diagnostics["graph_materialized_count"] == 2
+    assert diagnostics["graph_cross_branch_duplicate_count"] == 1
 
 
 @pytest.mark.parametrize("authorization_context", (None, object()))
