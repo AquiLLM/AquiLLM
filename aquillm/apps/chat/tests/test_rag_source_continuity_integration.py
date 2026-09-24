@@ -21,8 +21,6 @@ from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
-from .test_rag_source_continuity import _history
-
 
 @pytest.mark.django_db(transaction=True)
 def test_rehydration_uses_current_revision_and_excludes_deleted_moved_revoked():
@@ -87,17 +85,19 @@ def test_rehydration_uses_current_revision_and_excludes_deleted_moved_revoked():
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
-    "kind,question,expected,revoke",
+    "kind,question,expected,revoke,stale",
     [
-        ("paper", "Compare their measurements", 2, False),
-        ("paper", "Explain the second paper", 1, False),
-        ("report", "Compare their totals", 2, False),
-        ("report", "Explain the second report", 1, False),
-        ("paper", "Compare their measurements", 0, True),
+        ("paper", "Compare their measurements", 2, False, False),
+        ("paper", "Explain the second paper", 1, False, False),
+        ("report", "Compare their totals", 2, False, False),
+        ("report", "Explain the second report", 1, False, False),
+        ("paper", "Compare their measurements", 0, True, False),
+        ("paper", "Explain Z Paper", 1, False, True),
+        ("paper", "__stale_citation__", 0, False, True),
     ],
 )
 async def test_direct_followup_selects_current_answer_ordered_sources(
-    kind, question, expected, revoke, monkeypatch
+    kind, question, expected, revoke, stale, monkeypatch
 ):
     from apps.chat.refs import CollectionsRef
     from apps.chat.services import rag_pipeline
@@ -141,6 +141,34 @@ async def test_direct_followup_selects_current_answer_ordered_sources(
             "citation": f"[doc:{doc_a} chunk:{chunks[1].pk}]",
         },
     ]
+    if stale:
+        stale_chunk = (
+            await database_sync_to_async(TextChunk.objects.bulk_create)(
+                [
+                    TextChunk(
+                        doc_id=doc_z,
+                        chunk_number=1,
+                        content="Unrelated old text",
+                        start_position=19,
+                        end_position=37,
+                    )
+                ]
+            )
+        )[0]
+        stale_row = {
+            "doc_id": str(doc_z),
+            "chunk_id": stale_chunk.pk,
+            "chunk": 1,
+            "title": "Z Paper",
+            "text": "Unrelated old text",
+            "citation": f"[doc:{doc_z} chunk:{stale_chunk.pk}]",
+        }
+        rows.append(stale_row)
+        await database_sync_to_async(
+            TextChunk.objects.filter(pk=stale_chunk.pk).delete
+        )()
+        if question == "__stale_citation__":
+            question = f"Check {stale_row['citation']}"
     convo = Conversation(
         system="sys",
         messages=[
@@ -225,48 +253,20 @@ async def test_direct_followup_selects_current_answer_ordered_sources(
             )
             == "handled"
         )
-    if revoke:
+    if revoke or expected == 0:
         assert captured == []
-        assert "limits" in consumer.convo[-1].content
+        assert ("limits" if revoke else "can no longer access") in consumer.convo[
+            -1
+        ].content
         assert convo.model_dump() == snapshot
         return
     assert len(captured[0]["result"]) == expected
     assert {row["doc_id"] for row in captured[0]["result"]} == (
-        {str(doc_z), str(doc_a)} if expected == 2 else {str(doc_a)}
+        {str(doc_z), str(doc_a)}
+        if expected == 2
+        else {str(doc_z) if stale else str(doc_a)}
     )
     assert all("Current" in row["text"] for row in captured[0]["result"])
     assert all(row["title"].startswith("Current ") for row in captured[0]["result"])
     assert "STALE" not in str(captured)
-    assert convo.model_dump() == snapshot
-
-
-@pytest.mark.asyncio
-async def test_ambiguous_title_asks_for_reference_without_guessing(monkeypatch):
-    from apps.chat.refs import CollectionsRef
-    from apps.chat.services import rag_pipeline
-
-    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
-    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
-    monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "1")
-    convo = _history(titles=("Annual Report", "Annual Report")) + [
-        UserMessage(content="Explain Annual Report")
-    ]
-    snapshot = convo.model_dump()
-    runtime = SourceRuntime(TurnBudget(TurnLimits()), _authorization(Policy()))
-    consumer = SimpleNamespace(
-        user=runtime.authorization.reauthorization_capability._principal,
-        col_ref=CollectionsRef([1]),
-        convo=convo,
-    )
-
-    def unexpected_search(*_args):
-        raise AssertionError("ambiguous reference reached retrieval")
-
-    monkeypatch.setattr(rag_pipeline, "_run_vector_search", unexpected_search)
-    with source_runtime_scope(runtime):
-        assert (
-            await rag_pipeline.run_direct_rag_turn(consumer, SimpleNamespace(), convo)
-            == "handled"
-        )
-    assert "title or citation" in consumer.convo[-1].content
     assert convo.model_dump() == snapshot

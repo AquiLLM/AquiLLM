@@ -1,12 +1,17 @@
 """Follow-up references preserve presented identities, then use current sources."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from apps.chat.services.rag_source_continuity import (
     resolve_source_anchors,
 )
+from apps.chat.tests.test_rag_selection_scoring import Policy, _authorization
+from apps.documents.services.source_loading import SourceRuntime, source_runtime_scope
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
+from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 
 def _history(kind="paper", *, compact=False, titles=None, answer=True):
@@ -147,3 +152,130 @@ def test_conflicting_answer_presentation_order_is_unresolved():
     anchors = resolve_source_anchors("Explain the second paper", history)
     assert anchors.document_ids == ()
     assert anchors.unresolved_references
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_mixed_explicit_and_contextual_references_follow_question_order(compact):
+    history = _history("report", compact=compact)
+    cited = "[doc:paper-z chunk:7]"
+    assert resolve_source_anchors(
+        f"Compare {cited} with the second report", history
+    ).document_ids == ("paper-z", "paper-a")
+    assert resolve_source_anchors(
+        f"Compare the second report with {cited}", history
+    ).document_ids == ("paper-a", "paper-z")
+    assert resolve_source_anchors(
+        f"Compare {cited} with both reports", history
+    ).document_ids == ("paper-z", "paper-a")
+    assert resolve_source_anchors(
+        "Compare Z Report with the second report", history
+    ).document_ids == ("paper-z", "paper-a")
+    assert resolve_source_anchors(
+        "Compare A Report with both reports", history
+    ).document_ids == ("paper-a", "paper-z")
+    assert resolve_source_anchors(
+        "Compare both reports with A Report", history
+    ).document_ids == ("paper-z", "paper-a")
+    ambiguous = resolve_source_anchors(
+        f"Compare {cited} with the second report",
+        _history("report", compact=compact, answer=False),
+    )
+    assert ambiguous.unresolved_references
+    assert resolve_source_anchors(
+        "Compare A Report with both reports",
+        _history("report", compact=compact, answer=False),
+    ).unresolved_references
+    assert resolve_source_anchors(
+        "Compare Z Report with the second report",
+        _history("report", compact=compact, answer=False),
+    ).unresolved_references
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_mixed_uuid_and_ordinal_keep_both_identities(compact):
+    history = _history("report", compact=compact)
+    ids = {
+        "paper-z": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "paper-a": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    }
+    for row in history.messages[1].result_dict["result"]:
+        old = row["d" if compact else "doc_id"]
+        row["d" if compact else "doc_id"] = ids[old]
+        row["ref" if compact else "citation"] = row[
+            "ref" if compact else "citation"
+        ].replace(old, ids[old])
+    for old, new in ids.items():
+        history.messages[2].content = history.messages[2].content.replace(old, new)
+    anchors = resolve_source_anchors(
+        f"Compare {ids['paper-z']} with the second report", history
+    )
+    assert anchors.document_ids == (ids["paper-z"], ids["paper-a"])
+    assert resolve_source_anchors(
+        f"Compare the second report with {ids['paper-z']}", history
+    ).document_ids == (ids["paper-a"], ids["paper-z"])
+    assert resolve_source_anchors(
+        f"Compare {ids['paper-z']} with both reports", history
+    ).document_ids == (ids["paper-z"], ids["paper-a"])
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_named_document_uses_answer_cited_chunk_before_unrelated_old_row(compact):
+    history = _history(compact=compact)
+    stale = (
+        {
+            "d": "paper-z",
+            "i": 9,
+            "c": 1,
+            "n": "Z Paper",
+            "x": "old unrelated",
+            "ref": "[doc:paper-z chunk:9]",
+        }
+        if compact
+        else {
+            "doc_id": "paper-z",
+            "chunk_id": 9,
+            "chunk": 1,
+            "title": "Z Paper",
+            "text": "old unrelated",
+            "citation": "[doc:paper-z chunk:9]",
+        }
+    )
+    history.messages[1].result_dict["result"].append(stale)
+    assert resolve_source_anchors("Explain Z Paper", history).chunk_identities == (
+        (7, "paper-z", 0),
+    )
+    assert resolve_source_anchors(
+        "Check [doc:paper-z chunk:9]", history
+    ).chunk_identities == ((9, "paper-z", 1),)
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_title_asks_for_reference_without_guessing(monkeypatch):
+    from apps.chat.refs import CollectionsRef
+    from apps.chat.services import rag_pipeline
+
+    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
+    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
+    monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "1")
+    convo = _history(titles=("Annual Report", "Annual Report")) + [
+        UserMessage(content="Explain Annual Report")
+    ]
+    snapshot = convo.model_dump()
+    runtime = SourceRuntime(TurnBudget(TurnLimits()), _authorization(Policy()))
+    consumer = SimpleNamespace(
+        user=runtime.authorization.reauthorization_capability._principal,
+        col_ref=CollectionsRef([1]),
+        convo=convo,
+    )
+
+    def unexpected_search(*_args):
+        raise AssertionError("ambiguous reference reached retrieval")
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", unexpected_search)
+    with source_runtime_scope(runtime):
+        assert (
+            await rag_pipeline.run_direct_rag_turn(consumer, SimpleNamespace(), convo)
+            == "handled"
+        )
+    assert "title or citation" in consumer.convo[-1].content
+    assert convo.model_dump() == snapshot
