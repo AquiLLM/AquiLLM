@@ -183,4 +183,7 @@ def select_evidence(
                 ),
             )
 
+    from .rag_selection_observation import observe_exclusions
+
+    observe_exclusions(remaining, selected, document_counts, estimated_tokens, limits)
     return EvidenceSelection(tuple(selected), estimated_tokens, profile, score_status)

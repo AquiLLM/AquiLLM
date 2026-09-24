@@ -54,6 +54,7 @@ def additional_controls():
     from apps.chat.services import rag_config
     from apps.documents.services import chunk_rerank_config as rerank
     from apps.documents.services import rag_cache
+    from lib.llm.providers.completion_policy_snapshot import completion_policy_snapshot
     from lib.llm.providers.openai_runtime_config import (
         context_limit,
         optional_float,
@@ -61,6 +62,7 @@ def additional_controls():
         stream_enabled,
     )
     from lib.llm.providers.openai_tokens import context_reserve_tokens, env_int
+    from lib.llm.providers.tool_budget import ToolBudgetConfig
     from lib.llm.turn_context import tool_timeout
     from lib.llm.utils import prompt_budget
     from lib.llm.utils.context_packer import load_context_packer_config
@@ -81,6 +83,15 @@ def additional_controls():
         "score_concurrency",
     )
     return {
+        "completion": completion_policy_snapshot(
+            output_tokens=rag_config.synthesis_max_tokens()
+        ),
+        "tool_loop": {
+            name: asdict(
+                ToolBudgetConfig.from_env(max_func_calls=module.CHAT_MAX_FUNC_CALLS)
+            )
+            for name, module in (("connect", chat), ("receive", chat_receive))
+        },
         "openai": {
             "request_limits": list(request_limits()),
             "stream": stream_enabled(),

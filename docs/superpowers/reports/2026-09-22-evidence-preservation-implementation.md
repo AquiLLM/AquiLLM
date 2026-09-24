@@ -107,3 +107,11 @@ retain unavailable notices without discarding valid historical or current source
 Focused local regressions and hygiene are recorded in the controller handoff; they
 are not live evaluation or activation evidence. Default-off and independent adaptive/
 PPR, deployment, human review, serving-worker identity and measured latency gates remain.
+
+## Task 6 review fix round 2
+
+R1–R3 corrections add actual final-selector source/span/resource exclusion evidence,
+complete common completion-policy snapshot matching, and one supported typed-SDK
+normalization boundary for initial review, partial proof and saved/rescored reports.
+Local verification and exact fix commits are recorded in the scoped handoff and
+backport manifest. Scoped independent review and all live activation gates remain open.

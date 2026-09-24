@@ -554,10 +554,10 @@ async def complete_conversation_turn(
 
         effective_stream_func = _live_citation_stream
     provider_stream_func = None if defer_stream_until_final else effective_stream_func
-    post_tool_max_tokens = _env_int("LLM_POST_TOOL_MAX_TOKENS", 8192, minimum=256)
-    continuation_max_tokens = _env_int("LLM_CONTINUATION_MAX_TOKENS", 4096, minimum=128)
-    citation_retry_prior_max_chars = _env_int(
-        "LLM_CITATION_RETRY_PRIOR_MAX_CHARS", 2400, minimum=512
+    from .complete_turn_policy import turn_token_limits
+
+    post_tool_max_tokens, continuation_max_tokens, citation_retry_prior_max_chars = (
+        turn_token_limits()
     )
     observability_stage = current_stage()
     request_max_tokens = max_tokens

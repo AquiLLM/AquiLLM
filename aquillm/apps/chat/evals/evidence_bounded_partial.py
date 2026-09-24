@@ -2,13 +2,15 @@
 
 import json
 
+from .evidence_loss_cause import observed_loss_cause
+from .evidence_observation_json import normalize
 from .evidence_quality_delivery import map_payload, parse_citations
 from .evidence_quality_eval import identity, valid_spans
 
 
 def bounded_partial(case, row, checks):
     try:
-        return _bounded_partial(case, row, checks)
+        return _bounded_partial(case, normalize(row), normalize(checks))
     except (KeyError, TypeError, ValueError, IndexError, AttributeError):
         return False
 
@@ -117,6 +119,7 @@ def _bounded_partial(case, row, checks):
             or contains(delivered, fact["span"])
             or not loss.get("reason")
             or loss.get("reviewed") is not True
+            or not observed_loss_cause(row, fact, loss, bindings)
         ):
             return False
     if facts:

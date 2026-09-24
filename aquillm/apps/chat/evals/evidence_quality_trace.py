@@ -2,23 +2,13 @@
 
 import json
 from contextlib import contextmanager
-from dataclasses import asdict, is_dataclass
 from time import perf_counter
 from unittest.mock import patch
 
 from lib.evidence_observation import active, publish
 
+from .evidence_observation_json import normalize, normalize_observation
 from .evidence_quality_delivery import map_payload, parse_citations
-
-
-def json_default(value):
-    from uuid import UUID
-
-    if is_dataclass(value):
-        return asdict(value)
-    if isinstance(value, UUID):
-        return str(value)
-    return value.model_dump(mode="json")
 
 
 @contextmanager
@@ -84,6 +74,7 @@ class Trace:
         from apps.documents.services.source_loading import current_source_runtime
 
         runtime = current_source_runtime()
+        data = normalize(data)
         self.events.append({"event": event, **data})
         if event == "retrieval_sources":
             mapped, _ = map_payload(
@@ -151,32 +142,36 @@ class Trace:
         accounted = len(sdk) == sum(e["event"] == "sdk_end" for e in self.events)
         if charged:
             accounted = accounted and charged == sum(e["pairs"] for e in http)
-        return {
-            "dispatch_accounting_complete": accounted,
-            "answer": answer,
-            "source_bindings": [
-                {
-                    "document_id": doc,
-                    "chunk_id": chunk,
-                    "source_id": source["source_id"],
-                    "revision": source["revision"],
-                }
-                for (doc, chunk), source in self.sources.items()
-            ],
-            "events": json.loads(json.dumps(self.events, default=json_default)),
-            "delivered": self.delivered,
-            "upstream": self.upstream,
-            "citations": parse_citations(answer, self.sources),
-            "provenance_complete": bool(sdk) and not self.unknown,
-            "unknown_provenance": self.unknown,
-            "timings_ms": self.timings,
-            "dispatches": [{"kind": e["kind"], "provider": e["provider"]} for e in sdk],
-            "sdk_payloads": self.sdk_payloads,
-            "inference_pairs": sum(e["pairs"] for e in http),
-            "rerank_http": http,
-            "cache_operations": cache,
-            "rank_fallback": self.rank_fallback,
-            "window_scores": self.window_scores,
-            "coverage": self.coverage,
-            **{k: v for k, v in self.final.items() if k != "at"},
-        }
+        return normalize_observation(
+            {
+                "dispatch_accounting_complete": accounted,
+                "answer": answer,
+                "source_bindings": [
+                    {
+                        "document_id": doc,
+                        "chunk_id": chunk,
+                        "source_id": source["source_id"],
+                        "revision": source["revision"],
+                    }
+                    for (doc, chunk), source in self.sources.items()
+                ],
+                "events": self.events,
+                "delivered": self.delivered,
+                "upstream": self.upstream,
+                "citations": parse_citations(answer, self.sources),
+                "provenance_complete": bool(sdk) and not self.unknown,
+                "unknown_provenance": self.unknown,
+                "timings_ms": self.timings,
+                "dispatches": [
+                    {"kind": e["kind"], "provider": e["provider"]} for e in sdk
+                ],
+                "sdk_payloads": self.sdk_payloads,
+                "inference_pairs": sum(e["pairs"] for e in http),
+                "rerank_http": http,
+                "cache_operations": cache,
+                "rank_fallback": self.rank_fallback,
+                "window_scores": self.window_scores,
+                "coverage": self.coverage,
+                **{k: v for k, v in self.final.items() if k != "at"},
+            }
+        )

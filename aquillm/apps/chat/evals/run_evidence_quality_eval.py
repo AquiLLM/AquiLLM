@@ -12,6 +12,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from apps.chat.evals.evidence_observation_json import normalize
 from apps.chat.evals.evidence_quality_eval import MODES, digest, evaluate, load_cases
 from apps.chat.evals.evidence_quality_gates import aggregate, compare
 
@@ -152,10 +153,9 @@ def main(argv=None):
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(
         json.dumps(
-            report,
+            normalize(report),
             indent=2,
             ensure_ascii=False,
-            default=lambda value: value.model_dump(mode="json"),
         )
         + "\n",
         encoding="utf-8",

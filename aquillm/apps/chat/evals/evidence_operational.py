@@ -59,6 +59,9 @@ def expand(workload, data):
 
 
 def assess(workload, data, row, review=None):
+    from .evidence_observation_json import normalize_observation
+
+    row = normalize_observation(row)
     case = expand(workload, data)
     result = evaluate(case, row, review)
     safety = actual_safety(result)

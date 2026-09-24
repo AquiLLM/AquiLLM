@@ -208,6 +208,9 @@ jobs:
           aquillm/tests/integration/test_production_retrieval_authorization_reachability.py
           aquillm/apps/chat/tests/test_evidence_operational.py
           aquillm/apps/chat/tests/test_evidence_bounded_partial.py
+          aquillm/apps/chat/tests/test_evidence_loss_causes.py
+          aquillm/apps/chat/tests/test_evidence_completion_controls.py
+          aquillm/apps/chat/tests/test_evidence_sdk_normalization.py
           aquillm/apps/chat/tests/test_evidence_effective_config.py
           aquillm/apps/chat/tests/test_evidence_operational_profiles.py
           aquillm/apps/chat/tests/test_evidence_review_subject.py

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from .evidence_effective_config import expected_treatment
+from .evidence_observation_json import normalize
 from .evidence_quality_eval import MODES, digest, load_cases, review_claims, text_digest
 
 # Only observations belong here: never derived metrics, reviews or their digests.
@@ -49,8 +50,10 @@ ORIGINAL_FIELDS = (
 def review_subject(row):
     """Missing or malformed original identity cannot be reviewed as live evidence."""
     try:
+        row = normalize(row)
         if (
-            row.get("mode") not in MODES
+            row.get("observation_normalization_failed")
+            or row.get("mode") not in MODES
             or row.get("backend") != "live"
             or row.get("split") not in ("development", "heldout")
             or row.get("profile") not in ("quality", "pilot", "one_action")

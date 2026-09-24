@@ -15,8 +15,12 @@ def text_digest(text):
 
 
 def digest(value):
+    from .evidence_observation_json import normalize
+
     return text_digest(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        json.dumps(
+            normalize(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
         + "\n"
     )
 
@@ -236,8 +240,10 @@ def join_arms(arms):
 
 
 def evaluate(case, observation, review=None):
+    from .evidence_observation_json import normalize_observation
     from .evidence_quality_safety import actual_safety
 
+    observation = normalize_observation(observation)
     delivered = observation.get("delivered", [])
     matched = match_delivered(case, delivered)
     required = required_support(case)

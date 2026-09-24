@@ -11,6 +11,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from apps.chat.evals.evidence_observation_json import normalize
 from apps.chat.evals.evidence_operational import (
     WORKLOAD_SHA256,
     assess,
@@ -127,7 +128,8 @@ def main(argv=None):
         )
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(
-        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(normalize(report), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
     )
     return 0
 
