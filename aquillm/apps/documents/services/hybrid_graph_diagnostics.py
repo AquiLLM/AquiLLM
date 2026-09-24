@@ -2,8 +2,6 @@
 
 import structlog
 
-from apps.knowledge_graph.retrieval.branch_contracts import BranchStatusV1
-
 logger = structlog.stdlib.get_logger(__name__)
 
 
@@ -15,6 +13,8 @@ class GraphBranchDiagnostics:
         self.fusion = None
 
     def emit(self):
+        from apps.knowledge_graph.retrieval.branch_contracts import BranchStatusV1
+
         fields = {}
         by_key = {row.chunk_key: row.integer_chunk_pk for row in self.materialized}
         baseline_ids = {row.pk for row in self.baseline}
