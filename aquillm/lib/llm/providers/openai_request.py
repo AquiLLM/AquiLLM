@@ -85,7 +85,7 @@ async def prepare_request(
     except Exception:
         context_limit = 0
     should_compress = True
-    if context_limit > 0:
+    if context_limit > 0 and current_protection() is None:
         prompt_tokens = provider._estimate_prompt_tokens(arguments["messages"])
         available_prompt_tokens = max(1, context_limit - max(0, int(max_tokens)))
         compression_trigger_tokens = max(1, int(available_prompt_tokens * 0.8))

@@ -1,7 +1,7 @@
 """Protected selected tool evidence reaches actual provider SDK arguments."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -15,11 +15,13 @@ TEXT = (
 async def test_openai_preparation_bypasses_all_mutating_transforms(monkeypatch):
     from lib.llm.evidence_guard import EvidenceProtection, protect_evidence
     from lib.llm.providers.openai_request import prepare_request
+    from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
+    estimate = Mock(return_value=9000)
     provider = SimpleNamespace(
         client=SimpleNamespace(base_url="http://vllm:8000"),
         base_args={"model": "test"},
-        _estimate_prompt_tokens=lambda _: 9000,
+        _estimate_prompt_tokens=estimate,
         _preflight_trim_for_context=lambda *args: pytest.fail(
             "protected evidence trimmed"
         ),
@@ -29,7 +31,10 @@ async def test_openai_preparation_bypasses_all_mutating_transforms(monkeypatch):
     def compress(*_):
         pytest.fail("protected evidence compressed")
 
-    with protect_evidence(EvidenceProtection(TEXT, 16000, 512, 800)):
+    budget = TurnBudget(TurnLimits())
+    with protect_evidence(
+        EvidenceProtection(TEXT, 16000, 512, 800, turn_budget=budget)
+    ):
         request = await prepare_request(
             provider,
             system_text="grounding",
@@ -41,6 +46,80 @@ async def test_openai_preparation_bypasses_all_mutating_transforms(monkeypatch):
             compress_messages=compress,
         )
     assert request.arguments["messages"][1]["content"] == TEXT
+    estimate.assert_not_called()
+    assert budget.text_used["tokenized"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("denial", ["closed", "exhausted"])
+async def test_openai_protected_denial_skips_legacy_estimate(denial, monkeypatch):
+    from lib.llm.evidence_guard import (
+        ContextLimited,
+        EvidenceProtection,
+        protect_evidence,
+    )
+    from lib.llm.providers.openai_request import prepare_request
+    from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+
+    estimate = Mock(return_value=9000)
+    provider = SimpleNamespace(
+        client=SimpleNamespace(base_url="http://vllm:8000"),
+        base_args={"model": "test"},
+        _estimate_prompt_tokens=estimate,
+    )
+    monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "16000")
+    budget = TurnBudget(TurnLimits(tokenized_codepoints=1))
+    if denial == "closed":
+        budget.close("test")
+    else:
+        assert budget.reserve_text(1, kind="tokenized")
+    charged_before = budget.text_used["tokenized"]
+    protection = EvidenceProtection(TEXT, 16000, 512, 800, turn_budget=budget)
+    with protect_evidence(protection), pytest.raises(ContextLimited):
+        await prepare_request(
+            provider,
+            system_text="grounding",
+            message_list=[{"role": "user", "content": TEXT}],
+            max_tokens=512,
+            thinking_budget=0,
+            tool_choice_raw=None,
+            kwargs={},
+            compress_messages=lambda *_: pytest.fail("protected evidence compressed"),
+        )
+    assert protection.limited_reason == "request_tokenization_limit"
+    estimate.assert_not_called()
+    assert budget.text_used["tokenized"] == charged_before
+
+
+@pytest.mark.asyncio
+async def test_openai_legacy_preparation_still_estimates_for_compression(monkeypatch):
+    from lib.llm.providers.openai_request import prepare_request
+
+    estimate = Mock(return_value=900)
+    compressions = []
+
+    provider = SimpleNamespace(
+        client=SimpleNamespace(base_url="http://vllm:8000"),
+        base_args={"model": "test"},
+        _estimate_prompt_tokens=estimate,
+        _preflight_trim_for_context=lambda *args: None,
+        _env_int=lambda *_: 256,
+    )
+    monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "1000")
+    messages = [{"role": "user", "content": "hello"}]
+    await prepare_request(
+        provider,
+        system_text="grounding",
+        message_list=messages,
+        max_tokens=512,
+        thinking_budget=0,
+        tool_choice_raw=None,
+        kwargs={},
+        compress_messages=lambda rows: compressions.append(rows),
+    )
+    estimate.assert_called_once()
+    assert estimate.call_args.args[0][1] is messages[0]
+    assert compressions == [messages]
 
 
 @pytest.mark.asyncio
