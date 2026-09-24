@@ -1,9 +1,9 @@
 # Evidence preservation: exact non-graph adaptation manifest
 
 This is a future adaptation inventory, not a backport, deployment or activation.
-Development Tasks 1–5 are accepted locally; Task 6 and this manifest await independent
-review. The source implementation through review fix round 2 is
-`f80f2a1dc6d1d04b68873e8003839a9bbc357c99`,
+Development Tasks 1–6 are accepted locally; whole-branch corrections and this updated
+manifest await independent review. The source implementation through whole-branch
+fix round 1 is `78e87679f3abe6bf6f270e43d9a284f36e65ba0e`,
 on the adaptive-selection merge baseline
 `52af11daab20975a5fbed6db742e9a596bd4f4da`. No graph branch is to be copied into main.
 
@@ -35,6 +35,7 @@ together; this is not permission for wholesale cherry-picks of mixed development
 | `935da23524c8f88aacb10552f1772b7e3c57936f` | Task 6 local self-review fix: require completion-reserve evidence to match the actual runtime reserve in every observed turn, preventing an inflated operator-record allowance. |
 | `a287509ea22413050e5c25ab193268dd5a8459c0` | Task 6 review fix I1–I7: exact human answer/evidence/run/code binding and observed bounded-partial facts; isolated observation failures; actual terminal short completion/streaming; resolved arm/runtime controls; pilot-only subtype proof; per-identity malformed historical UUID rejection retaining current/valid evidence. |
 | `f80f2a1dc6d1d04b68873e8003839a9bbc357c99` | Task 6 review fix R1–R3: observed source/span-specific selection exclusion causes, actual common completion/recovery/publication policy snapshot, and stable typed SDK observation normalization across review, partial proof and serialization. |
+| `78e87679f3abe6bf6f270e43d9a284f36e65ba0e` | Whole-branch I1–I2: separate hard initial preparation/scoring deadline from current-authority finalization under the original retrieval ledger; preserve whole-pool rank fallback and protected synthesis after scoring-only expiry; portable raw Git evaluator provenance without RTK. |
 
 This document's enclosing documentation-only commit need not contain its own hash.
 Append exact later implementation/review-fix SHAs before final backport acceptance.
@@ -156,6 +157,8 @@ aquillm/apps/chat/tests/test_evidence_review_subject.py
 aquillm/apps/chat/tests/test_evidence_loss_causes.py
 aquillm/apps/chat/tests/test_evidence_completion_controls.py
 aquillm/apps/chat/tests/test_evidence_sdk_normalization.py
+aquillm/apps/chat/tests/test_evidence_git_portability.py
+aquillm/apps/chat/tests/test_rag_scoring_timeout_fallback.py
 aquillm/apps/chat/tests/test_short_final_completion.py
 aquillm/apps/chat/tests/test_evidence_quality_delivery.py
 aquillm/apps/chat/tests/test_evidence_quality_eval.py
@@ -240,3 +243,13 @@ Use the same JSON-safe normalization for SDK models, dataclasses, UUIDs and sequ
 in trace capture, review subjects, partial comparisons and both report writers.
 Unsupported representations invalidate observation completeness rather than changing
 the application result. The three additional CI modules above cover these boundaries.
+
+Whole-branch correction requires adapting `source_deadline` and
+`rag_selection_scoring` together. Keep initial source work and scoring under their
+existing hard phase deadline, but permit bounded current-source revalidation and
+rank fallback under the original remaining retrieval ledger. Global closure still
+fences publication, and revised/revoked rows are removed before packet handoff.
+The real scorer/ledger/selection/protected-synthesis regression above belongs to
+that dependency closure. Evaluation provenance uses raw standard Git at all three
+subprocess sites, with unchanged failure behavior and saved-observation identity;
+RTK remains only a developer workflow tool, never a runtime dependency.
