@@ -20,6 +20,17 @@ generations. The four gateway request families and their response schemas remain
 unchanged. Other topology families retain their independent pagination and
 overflow checks.
 
+Gateway topology and readiness reads run in a separate process-wide pool of four
+workers. Admission has no waiting queue: saturation returns the existing
+unavailable response. Health checks remain responsive while database reads run.
+Callers wait only until their existing deadline. Timeout or cancellation does
+not release a worker slot until the synchronous read actually finishes, and
+late results are discarded. Underlying Neo4j retry/connection waits can therefore
+retain slots beyond caller deadlines; four abandoned reads temporarily exhaust
+capacity, without accumulating more work. The driver retry policy is unchanged.
+Cache bookkeeping and first driver initialization are synchronized; database
+hydration is not serialized by the cache lock.
+
 ## Scheduling and quality checks
 
 Readiness and direct graph retrieval can start before baseline retrieval. The
