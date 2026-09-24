@@ -63,7 +63,9 @@ import. The observation sink now lives in application-independent `lib`, and the
 pure comparison helper has no application imports. The final 58-module covering
 run passed 429 tests and 11 subtests; its one new subprocess test initially omitted
 the required `TurnLimits` constructor argument and was corrected: all six import/CLI
-and review tests then passed. Exact
+and review tests then passed. A final reserve-binding negative test then prevented
+operator records from claiming a larger configured reserve than the actual runtime;
+its covering review/ASGI/gate/operational suite passed 21 tests. Exact
 commands, outputs and final focused results are retained in the local handoff.
 Both runners' fixture commands remain explicitly ineligible. System check reports
 no issues; all 51 changed/new Python files pass Ruff and formatting, and file-length,

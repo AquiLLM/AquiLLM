@@ -7,6 +7,7 @@ from .evidence_quality_eval import digest, identity
 
 def comparison_controls():
     from apps.chat.consumers.utils import TOOL_CHUNK_CHAR_LIMIT
+    from apps.chat.services.rag_acquisition import COMPLETION_RESERVE_MS
     from apps.chat.services.rag_config import (
         direct_rag_candidate_top_k,
         direct_rag_max_queries,
@@ -24,6 +25,7 @@ def comparison_controls():
         "output_tokens": synthesis_max_tokens(),
         "legacy_document_cap": max_snippets_per_doc(),
         "preview_characters": TOOL_CHUNK_CHAR_LIMIT,
+        "completion_reserve_ms": COMPLETION_RESERVE_MS,
         "environment": {
             name: os.getenv(name)
             for name in (

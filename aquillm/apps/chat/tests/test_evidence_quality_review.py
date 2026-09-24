@@ -54,7 +54,13 @@ def test_rollout_artifact_hash_and_measured_reserve(tmp_path):
     report = {
         "revision": "r",
         "corpus_sha256": "c",
-        "observations": [{"case_id": "1", "snapshot": {"source": "s"}}],
+        "observations": [
+            {
+                "case_id": "1",
+                "snapshot": {"source": "s"},
+                "comparison_controls": {"completion_reserve_ms": 1000},
+            }
+        ],
     }
     evidence = {
         "kind": "human_operator",
@@ -67,6 +73,9 @@ def test_rollout_artifact_hash_and_measured_reserve(tmp_path):
     assert not attach_evidence(report, evidence)["completion_reserve_measured"]
     record["authorization_packet_p95_ms"] = 999
     assert attach_evidence(report, evidence)["completion_reserve_measured"]
+    record["configured_reserve_ms"] = 10000
+    assert not attach_evidence(report, evidence)["completion_reserve_measured"]
+    record["configured_reserve_ms"] = 1000
     artifact.write_text("changed")
     with pytest.raises(ValueError, match="artifact changed"):
         attach_evidence(report, evidence)

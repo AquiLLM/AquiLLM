@@ -154,7 +154,8 @@ snapshot objects). Each proof record has `status: passed`, `reviewed_by`, `artif
 and verified `artifact_sha256`. Required keys are `runtime_verified`,
 `corpus_human_reviewed`, `deterministic_regressions_passed`, `cold_warm_verified`,
 `completion_reserve_measured`; the reserve record also supplies measured
-`authorization_packet_p95_ms` and `configured_reserve_ms`. Preserve all underlying
+`authorization_packet_p95_ms` and `configured_reserve_ms`; the latter must equal
+the actual reserve observed in every turn's comparison controls. Preserve all underlying
 raw records. A named operator owns the claims; these hashes are binding checks,
 not a replacement for review. Raw SDK traces contain synthetic content and stay
 outside tracked/private production data.

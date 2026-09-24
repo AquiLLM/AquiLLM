@@ -70,10 +70,18 @@ def attach_evidence(report, evidence):
             != record["artifact_sha256"]
         ):
             raise ValueError("rollout measurement artifact changed")
-        if flag == "completion_reserve_measured" and not 0 < record.get(
-            "authorization_packet_p95_ms", 0
-        ) <= record.get("configured_reserve_ms", 0):
-            continue
+        if flag == "completion_reserve_measured":
+            configured = record.get("configured_reserve_ms", 0)
+            if (
+                not 0 < record.get("authorization_packet_p95_ms", 0) <= configured
+                or not report["observations"]
+                or any(
+                    row.get("comparison_controls", {}).get("completion_reserve_ms")
+                    != configured
+                    for row in report["observations"]
+                )
+            ):
+                continue
         result[flag] = True
     return {**result, "independent_evidence": evidence}
 
