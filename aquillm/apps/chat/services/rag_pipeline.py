@@ -1,12 +1,4 @@
-"""Direct RAG pipeline orchestration (backend-driven, deterministic).
-
-When ``RAG_DIRECT_ENABLED`` is on for a document question, this path retrieves
-evidence before asking the model. It skips model tool selection, packages evidence,
-then hands a post-tool conversation to :mod:`rag_synthesis` for the final answer.
-
-Failures fail open: any retrieval/synthesis exception returns ``"skipped"`` with
-``consumer.convo`` untouched so the normal tool loop can still run.
-"""
+"""Direct RAG retrieval, selection, and synthesis orchestration."""
 
 from __future__ import annotations
 
@@ -49,6 +41,7 @@ from apps.chat.services.rag_selection_coordinator import (
 from apps.chat.services.rag_selection_coordinator import (
     selection_question as _selection_question,
 )
+from apps.chat.services.rag_source_continuity_turn import continuity_candidates
 from apps.chat.services.rag_source_synthesis import LIMITED_MESSAGE
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.chat.services.tool_wiring.documents import vector_search_tool
@@ -142,6 +135,18 @@ async def run_direct_rag_turn(
         return "handled"
     try:
         t_query_start = time.perf_counter()
+        continuity_result, continuity_notice = await continuity_candidates(
+            convo,
+            user_message.content or "",
+            user=consumer.user,
+            selected_scope=collection_ids,
+            enabled=preservation.followup_evidence_enabled,
+        )
+        if continuity_notice:
+            consumer.convo = convo + [
+                AssistantMessage(content=continuity_notice, stop_reason="end_turn")
+            ]
+            return "handled"
         queries = build_retrieval_queries(
             convo,
             user_message.content or "",
@@ -169,6 +174,9 @@ async def run_direct_rag_turn(
         search_results = [
             outcome for outcome in search_outcomes if isinstance(outcome, dict)
         ]
+        failed_query_count = len(search_outcomes) - len(search_results)
+        if continuity_result is not None:
+            search_results.insert(0, continuity_result)
         if not search_results:
             first_error = next(
                 (
@@ -179,7 +187,6 @@ async def run_direct_rag_turn(
                 RuntimeError("all direct-RAG retrieval queries failed"),
             )
             raise first_error
-        failed_query_count = len(search_outcomes) - len(search_results)
         if failed_query_count:
             logger.warning(
                 "obs.rag.partial_retrieval_failure",
