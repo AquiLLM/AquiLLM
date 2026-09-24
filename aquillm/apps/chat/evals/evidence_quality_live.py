@@ -41,7 +41,9 @@ def mode_environment(mode):
     before = {key: os.getenv(key) for key in values}
     os.environ.update(values)
     try:
-        yield values
+        from .evidence_effective_config import resolved_treatment
+
+        yield resolved_treatment(mode)
     finally:
         for key, value in before.items():
             if value is None:
@@ -51,6 +53,9 @@ def mode_environment(mode):
 
 
 async def run_case(case, manifest, *, mode, cache_state):
+    from .evidence_effective_config import resolved_treatment
+
+    treatment = resolved_treatment(mode)
     from channels.db import database_sync_to_async as sync_to_async
 
     from apps.chat.consumers.chat import ChatConsumer
@@ -88,7 +93,11 @@ async def run_case(case, manifest, *, mode, cache_state):
             ):
                 trace.timings.setdefault("first_grounded", (at - trace.started) * 1000)
 
-    with observe(trace.sink):
+    async def wait_signal(signal):
+        while not signal.is_set():
+            await asyncio.sleep(0.01)
+
+    with observe(trace.sink) as observation:
         task = asyncio.create_task(
             consumer(
                 {
@@ -105,16 +114,16 @@ async def run_case(case, manifest, *, mode, cache_state):
         try:
             async with asyncio.timeout(900):
                 if case["scenario"] == "cancellation":
-                    await trace.sdk_started.wait()
+                    await wait_signal(observation.sdk_started)
                     closed_at = perf_counter()
                     await incoming.put({"type": "websocket.disconnect", "code": 1000})
                     await task
                 else:
-                    done_task = asyncio.create_task(trace.done.wait())
+                    done_task = asyncio.create_task(wait_signal(observation.completed))
                     ready, _ = await asyncio.wait(
                         {done_task, task}, return_when=asyncio.FIRST_COMPLETED
                     )
-                    if task in ready and not trace.done.is_set():
+                    if task in ready and not observation.completed.is_set():
                         raise RuntimeError("ASGI exited before turn completion")
                     done_task.cancel()
                     await asyncio.gather(done_task, return_exceptions=True)
@@ -133,6 +142,9 @@ async def run_case(case, manifest, *, mode, cache_state):
         if last.role == "assistant" and not last.tool_call_name:
             answer = last.content or ""
     result = trace.result(answer)
+    result["observation_failed"] = observation.failed.is_set()
+    if result["observation_failed"]:
+        result.update(provenance_complete=False, dispatch_accounting_complete=False)
     result.update(
         publication_observation_complete=True,
         late_publications=0,
@@ -155,9 +167,17 @@ async def run_case(case, manifest, *, mode, cache_state):
     from .evidence_quality_runtime import scenario_observation, snapshot
 
     result.update(scenario_observation(case, trace, result))
+    invocation_id = uuid4().hex
     result.update(
         mode=mode,
+        resolved_treatment=treatment,
         backend="live",
+        case_id=case["case_id"],
+        split=case["split"],
+        invocation_id=invocation_id,
+        run_id=f"quality/{case['case_id']}/{mode}/{invocation_id}",
+        repetition=1,
+        profile="quality",
         cache_state=cache_state,
         snapshot=snapshot(case, manifest),
     )
@@ -178,6 +198,8 @@ async def run_live(cases, args):
 
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aquillm.settings")
     await sync_to_async(django.setup)()
+    with mode_environment(args.mode):
+        pass  # Validate before seeding can dispatch embeddings or create rows.
     manifest = (
         await sync_to_async(seed_cases)(cases, args.live_manifest)
         if args.seed

@@ -1092,7 +1092,7 @@ async def complete_conversation_turn(
         if visibility.is_interim_assistant_text(response_text):
             response_text = ""
     else:
-        response_text = visibility.sanitize_assistant_text(response_text)
+        response_text = visibility.sanitize_completed_response(response_text, response)
         if not response_text.strip():
             response_text = visibility.clean_response_failure_text(
                 after_tool_result=is_post_tool_result_turn

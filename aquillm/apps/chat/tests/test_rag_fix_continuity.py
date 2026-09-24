@@ -13,8 +13,11 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
 @pytest.mark.parametrize("route", ["direct", "normal"])
 @pytest.mark.parametrize("prior_available", [True, False])
+@pytest.mark.parametrize(
+    "missing", ["11111111-1111-4111-8111-111111111111", "malformed-document"]
+)
 async def test_partial_followup_keeps_prior_and_recoverable_current_evidence(
-    docs, monkeypatch, route, prior_available
+    docs, monkeypatch, route, prior_available, missing
 ):
     from apps.chat.services.rag_pipeline import run_direct_rag_turn
     from apps.chat.services.rag_turn import preservation_turn
@@ -24,7 +27,6 @@ async def test_partial_followup_keeps_prior_and_recoverable_current_evidence(
     configure(monkeypatch)
     monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "1")
     user, doc, chunks, _ = docs
-    missing = "11111111-1111-4111-8111-111111111111"
     rows = [
         {
             "doc_id": str(doc.id),

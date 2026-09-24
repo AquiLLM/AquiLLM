@@ -2,8 +2,9 @@
 
 Tasks 1–5 were independently reviewed and accepted locally. Task 6 implements
 the quality/operational runners, serving-worker capability lifecycle, CI contracts,
-runbook and exact-commit backport inventory; its independent review is the next
-gate. All controls remain legacy/off. There has been no development deployment,
+runbook and exact-commit backport inventory. Independent review found seven bounded
+issues (I1–I7, including the deferred malformed historical identity); fixes are locally
+implemented and await scoped re-review. All controls remain legacy/off. There has been no development deployment,
 live provider evaluation, activation, push or backport during this local task.
 
 The [runbook](../../runbooks/evidence-preservation.md) specifies controls, runtime
@@ -90,3 +91,19 @@ their [implementation report](2026-09-22-adaptive-retrieval-implementation.md).
 PPR remains independent and default-off: representative live quality/concurrent
 cost is unmeasured, and its local maximum-cap p95 overhead missed the proposed
 target. Preservation tests make no claim to resolve that gate.
+
+## Task 6 review fix round 1
+
+Human records bind exact original observations, runtime/code/configuration and actual
+run identity; rescoring and attachment consumption revalidate them. Bounded partial
+answers require observed acquired/delivered facts, cited answer portions and reviewed
+loss or observed empty-source explanations. Pilot limit proof cannot be replaced by
+one_action results. Observer failures preserve application outcomes and invalidate
+evaluation evidence. Effective arm/config validation precedes live work. Short final
+answers now survive actual completion and streaming through persistence, while
+nonterminal/tool/interim suppression remains. Malformed historical document identities
+retain unavailable notices without discarding valid historical or current sources.
+
+Focused local regressions and hygiene are recorded in the controller handoff; they
+are not live evaluation or activation evidence. Default-off and independent adaptive/
+PPR, deployment, human review, serving-worker identity and measured latency gates remain.

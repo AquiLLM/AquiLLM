@@ -92,10 +92,6 @@ def main(argv=None):
         observations, metadata = asyncio.run(run_live(cases, args))
     else:
         observations, metadata = [fixture_observation(c, args.mode) for c in cases], {}
-    results = [
-        evaluate(c, o, reviews.get(c["case_id"]))
-        for c, o in zip(cases, observations, strict=True)
-    ]
     revision = (
         original["revision"]
         if original
@@ -106,6 +102,13 @@ def main(argv=None):
             check=True,
         ).stdout.strip()
     )
+    if not original:
+        for row in observations:
+            row["code_revision"] = revision
+    results = [
+        evaluate(c, o, reviews.get(c["case_id"], o.get("human_review")))
+        for c, o in zip(cases, observations, strict=True)
+    ]
     report = {
         "schema_version": 1,
         "backend": args.backend,

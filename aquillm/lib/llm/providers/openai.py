@@ -2,7 +2,6 @@
 
 import asyncio as asyncio  # Preserve the provider's async dispatch patch seam.
 import uuid
-from os import getenv
 from time import perf_counter
 from typing import override
 
@@ -98,31 +97,16 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
         arguments = prepared.arguments
         thinking_requested = prepared.thinking_requested
 
-        request_timeout_s = float(getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "120"))
-        try:
-            max_request_timeout_s = float(
-                getenv("OPENAI_REQUEST_TIMEOUT_MAX_SECONDS", "360")
-            )
-        except Exception:
-            max_request_timeout_s = 360.0
-        if max_request_timeout_s < request_timeout_s:
-            max_request_timeout_s = request_timeout_s
-        try:
-            max_overflow_retries = int(getenv("OPENAI_CONTEXT_OVERFLOW_RETRIES", "3"))
-        except Exception:
-            max_overflow_retries = 3
-        if max_overflow_retries < 3:
-            max_overflow_retries = 3
-        try:
-            max_timeout_retries = int(getenv("OPENAI_TIMEOUT_RETRIES", "2"))
-        except Exception:
-            max_timeout_retries = 2
-        if max_timeout_retries < 0:
-            max_timeout_retries = 0
+        from .openai_runtime_config import request_limits
+        from .openai_runtime_config import stream_enabled as streams
 
-        stream_enabled = callable(stream_callback) and getenv(
-            "OPENAI_STREAM_RESPONSES", "1"
-        ).strip().lower() in ("1", "true", "yes", "on")
+        (
+            request_timeout_s,
+            max_request_timeout_s,
+            max_overflow_retries,
+            max_timeout_retries,
+        ) = request_limits()
+        stream_enabled = callable(stream_callback) and streams()
         parsed_response: LLMResponse | None = None
         request_args = dict(arguments)
         if stream_enabled:

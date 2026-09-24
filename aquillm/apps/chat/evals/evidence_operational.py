@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .evidence_quality_eval import digest, evaluate, match_delivered, text_digest
+from .evidence_quality_eval import digest, evaluate, match_delivered
 from .evidence_quality_safety import actual_safety, exhaustion
 
 WORKLOAD_SHA256 = "ae60c47e40d7fa3574d6e8fa6c32e40eba51c30121e54741316d50314f8d3136"
@@ -62,14 +62,7 @@ def assess(workload, data, row, review=None):
     case = expand(workload, data)
     result = evaluate(case, row, review)
     safety = actual_safety(result)
-    human = (
-        review
-        if review
-        and review.get("kind") == "human"
-        and review.get("reviewer")
-        and review.get("answer_sha256") == text_digest(row.get("answer", ""))
-        else {}
-    )
+    human = result["human_review"] if result["review_valid"] else {}
     events = row.get("events", [])
     trigger = exhaustion(row)
     first = {s[0] for s in (row.get("acquisition_source_rounds") or [[]])[0]}
@@ -99,32 +92,9 @@ def assess(workload, data, row, review=None):
         and safety["passed"] is True
     )
     checks = human.get("bounded_partial", {})
-    partial = all(
-        checks.get(k) is True
-        for k in (
-            "preserves_usable_support",
-            "explicit_limit",
-            "explicit_missing_aspects",
-            "no_fabrication",
-            "qualifications_correct",
-            "citations_entailed",
-            "losses_explained",
-            "finalization_reserve_preserved",
-        )
-    )
-    usable, retained = (
-        checks.get("usable_fact_count"),
-        checks.get("retained_fact_count"),
-    )
-    partial = (
-        partial
-        and type(usable) is int
-        and type(retained) is int
-        and (
-            0 <= retained <= usable
-            and (retained >= 1 if usable else bool(checks.get("empty_reason")))
-        )
-    )
+    from .evidence_bounded_partial import bounded_partial
+
+    partial = bounded_partial(case, row, checks)
     charged = sum(e.get("pairs", 0) for e in events if e["event"] == "rerank_http")
     pair_limits = [
         e["limits"]["acquisition_pairs"] for e in events if e["event"] == "ledger_start"
@@ -136,7 +106,6 @@ def assess(workload, data, row, review=None):
     return {
         **result,
         "trace_sha256": digest(events),
-        "human_review": human,
         "operational": {
             "refinement_pass": refinement,
             "limit_pass": limited,
@@ -186,10 +155,14 @@ def validate_attachment(reports, quality_reports):
             mode = row.get("mode")
             reference = quality_reports.get(mode, {})
             quality = reference.get("observations", [{}])[0]
-            if report.get("revision") != reference.get("revision") or any(
-                not row.get("snapshot", {}).get(k)
-                or row["snapshot"][k] != quality.get("snapshot", {}).get(k)
-                for k in ("answer", "reranker", "hardware", "embedding")
+            if (
+                row.get("code_revision") != report.get("revision")
+                or report.get("revision") != reference.get("revision")
+                or any(
+                    not row.get("snapshot", {}).get(k)
+                    or row["snapshot"][k] != quality.get("snapshot", {}).get(k)
+                    for k in ("answer", "reranker", "hardware", "embedding")
+                )
             ):
                 reasons.append("operational runtime/revision drift")
             workload = workloads.get(row.get("case_id"))
@@ -202,6 +175,8 @@ def validate_attachment(reports, quality_reports):
                 row.get("run_id") != run_id
                 or report.get("mode") != mode
                 or report.get("profile") != workload["profile"]
+                or row.get("profile") != workload["profile"]
+                or row.get("repetition") != repetition
             ):
                 reasons.append("mislabelled operational run")
             controls = dict(row.get("comparison_controls", {}))
@@ -223,7 +198,9 @@ def validate_attachment(reports, quality_reports):
                 reasons.append("unsubstantiated operational assertions")
             proof = checked["operational"]
             covered[mode]["refinement"] |= proof["refinement_pass"]
-            covered[mode]["pair_or_deadline"] |= proof["limit_pass"]
+            covered[mode]["pair_or_deadline"] |= (
+                workload["profile"] == "pilot" and proof["limit_pass"]
+            )
     for mode, classes in covered.items():
         for name, proven in classes.items():
             if not proven:

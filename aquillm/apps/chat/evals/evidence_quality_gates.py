@@ -93,6 +93,9 @@ def compare(reports, targets=None, operational_reports=()):
     groups = join_arms({m: reports[m]["observations"] for m in MODES})
     reasons, comparisons = [], {}
     reasons.extend(frozen_comparison_errors(reports))
+    from .evidence_review_subject import quality_review_errors
+
+    reasons.extend(quality_review_errors(reports))
     from .evidence_operational import validate_attachment
 
     operational = validate_attachment(operational_reports, reports)

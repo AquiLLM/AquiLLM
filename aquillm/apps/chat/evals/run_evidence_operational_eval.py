@@ -74,11 +74,25 @@ def main(argv=None):
 
         rows = [fixture_observation(c, args.mode) for c in cases]
         metadata = {"runtime_verified": False}
+    revision = (
+        original["revision"]
+        if original
+        else subprocess.run(
+            ["rtk", "git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    )
+
     results = []
     for workload, row in zip(workloads, rows, strict=True):
         run_id = f"ops-v2/{workload['workload_id']}/{args.mode}/r{args.repetition:02}"
+        row.update(run_id=run_id, repetition=args.repetition, profile=args.profile)
+        if not original:
+            row["code_revision"] = revision
         results.append(
-            {**assess(workload, data, row, reviews.get(run_id)), "run_id": run_id}
+            assess(workload, data, row, reviews.get(run_id, row.get("human_review")))
         )
     report = {
         **metadata,
@@ -92,14 +106,7 @@ def main(argv=None):
         "corpus_sha256": WORKLOAD_SHA256,
         "workload_version": "ops-v2",
         "planned_run_ids": data["schedule"]["planned_run_ids"],
-        "revision": original["revision"]
-        if original
-        else subprocess.run(
-            ["rtk", "git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip(),
+        "revision": revision,
         "observations": results,
         "activation_eligible": False,
     }

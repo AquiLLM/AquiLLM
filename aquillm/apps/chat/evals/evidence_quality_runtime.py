@@ -1,7 +1,5 @@
 """Resolved comparison controls and observed operational scenario coverage."""
 
-import os
-
 from .evidence_quality_eval import digest, identity
 
 
@@ -17,7 +15,10 @@ def comparison_controls():
         synthesis_max_tokens,
     )
 
+    from .evidence_effective_config import additional_controls
+
     return {
+        **additional_controls(),
         "final_passages": direct_rag_top_k(),
         "candidates_per_action": direct_rag_candidate_top_k(),
         "max_actions": direct_rag_max_queries(),
@@ -26,23 +27,6 @@ def comparison_controls():
         "legacy_document_cap": max_snippets_per_doc(),
         "preview_characters": TOOL_CHUNK_CHAR_LIMIT,
         "completion_reserve_ms": COMPLETION_RESERVE_MS,
-        "environment": {
-            name: os.getenv(name)
-            for name in (
-                "OPENAI_CONTEXT_LIMIT",
-                "OPENAI_REQUEST_TIMEOUT_SECONDS",
-                "OPENAI_TIMEOUT_RETRIES",
-                "LLM_STREAM_RESPONSES",
-                "TOOL_CALL_TIMEOUT_SECONDS",
-                "RAG_CACHE_ENABLED",
-                "APP_RERANK_MODEL",
-                "APP_RERANK_MODEL_REVISION",
-                "APP_RERANK_TOKENIZER",
-                "APP_RERANK_TOKENIZER_REVISION",
-                "APP_RERANK_CODE_REVISION",
-                "APP_RERANK_PAIR_TOKEN_LIMIT",
-            )
-        },
     }
 
 

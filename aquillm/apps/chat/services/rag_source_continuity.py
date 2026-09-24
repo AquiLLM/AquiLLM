@@ -41,11 +41,14 @@ def rehydrate_prior_evidence(
             context=runtime.authorization
         )
     allowed = frozenset(scope.document_ids)
-    wanted = tuple(
-        identity
-        for identity in anchors.chunk_identities
-        if UUID(identity[1]) in allowed
-    )
+    wanted = []
+    for identity in anchors.chunk_identities:
+        try:
+            document_id = UUID(identity[1])
+        except ValueError:
+            continue  # Keep the anchor so the existing unavailable notice survives.
+        if document_id in allowed:
+            wanted.append(identity)
     if not wanted:
         return ()
     chunks = source_query_rows(

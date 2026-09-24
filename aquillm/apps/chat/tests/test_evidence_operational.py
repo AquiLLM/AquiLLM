@@ -143,7 +143,9 @@ def test_operational_partial_requires_human_facts_and_real_pair_transport():
         "limit_pass"
     ]
     row["events"].insert(1, {"event": "rerank_http", "pairs": 90})
-    assert assess(data["workloads"][-1], data, row, review)["operational"]["limit_pass"]
+    assert not assess(data["workloads"][-1], data, row, review)["operational"][
+        "limit_pass"
+    ]
     review["bounded_partial"]["usable_fact_count"] = 1
     assert not assess(data["workloads"][-1], data, row, review)["operational"][
         "limit_pass"

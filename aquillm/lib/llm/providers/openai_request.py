@@ -77,13 +77,10 @@ async def prepare_request(
         arguments["extra_body"] = {
             "chat_template_kwargs": {"enable_thinking": enable_thinking}
         }
-    context_limit_raw = (getenv("OPENAI_CONTEXT_LIMIT", "") or "").strip() or (
-        getenv("VLLM_MAX_MODEL_LEN", "") or ""
-    ).strip()
-    try:
-        context_limit = int(context_limit_raw)
-    except Exception:
-        context_limit = 0
+    from .openai_runtime_config import context_limit as configured_limit
+    from .openai_runtime_config import optional_float
+
+    context_limit = configured_limit()
     should_compress = True
     if context_limit > 0 and current_protection() is None:
         prompt_tokens = provider._estimate_prompt_tokens(arguments["messages"])
@@ -125,18 +122,10 @@ async def prepare_request(
         else:
             prompt_slack = provider._env_int("OPENAI_API_PROMPT_SLACK_TOKENS", 384)
         provider._preflight_trim_for_context(arguments, context_limit, prompt_slack)
-    temp_raw = (getenv("OPENAI_TEMPERATURE", "") or "").strip()
-    if temp_raw:
-        try:
-            arguments["temperature"] = float(temp_raw)
-        except Exception:
-            pass
-    top_p_raw = (getenv("OPENAI_TOP_P", "") or "").strip()
-    if top_p_raw:
-        try:
-            arguments["top_p"] = float(top_p_raw)
-        except Exception:
-            pass
+    for key, name in (("temperature", "OPENAI_TEMPERATURE"), ("top_p", "OPENAI_TOP_P")):
+        value = optional_float(name)
+        if value is not None:
+            arguments[key] = value
 
     if "tools" in kwargs:
         arguments["tools"] = await transform_openai_tools(

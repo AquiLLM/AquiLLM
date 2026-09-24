@@ -241,17 +241,19 @@ def evaluate(case, observation, review=None):
     delivered = observation.get("delivered", [])
     matched = match_delivered(case, delivered)
     required = required_support(case)
-    review = (
-        review
-        if review
-        and review.get("answer_sha256") == text_digest(observation.get("answer", ""))
-        else None
-    )
+    from .evidence_review_subject import review_subject, validated_review
+
+    observation = {**observation, "case_id": case["case_id"], "split": case["split"]}
+    submitted_review = review
+    review = validated_review(observation, review)
     result = {
         **observation,
         "case_id": case["case_id"],
         "split": case["split"],
         "depth": case["depth"],
+        "human_review": submitted_review,
+        "review_valid": review is not None,
+        "review_subject": review_subject(observation),
         "scenario": case["scenario"],
         "quality_aggregation": case["quality_aggregation"],
         "support_recall": support_recall(required, matched),

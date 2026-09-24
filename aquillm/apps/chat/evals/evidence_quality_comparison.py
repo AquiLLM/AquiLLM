@@ -43,6 +43,12 @@ def frozen_comparison_errors(reports):
         ):
             reasons.append(f"{mode}: incomplete frozen split")
         for row in rows:
+            from .evidence_effective_config import expected_treatment
+
+            if row.get("resolved_treatment") != expected_treatment(mode) or row.get(
+                "snapshot", {}
+            ).get("configuration") != digest(row.get("comparison_controls")):
+                reasons.append(f"{mode}: unverified effective configuration")
             case = indexed.get(row["case_id"])
             if case and (
                 row.get("snapshot", {}).get("source") != digest(case["sources"])

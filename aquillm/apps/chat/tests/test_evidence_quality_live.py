@@ -22,6 +22,7 @@ from apps.chat.evals.evidence_quality_seed import seed_cases
         "combined",
         "verified_windows",
         "cancellation",
+        "observer_failure",
     ],
 )
 async def test_actual_asgi_seed_retrieval_and_sdk_observation(
@@ -74,6 +75,19 @@ async def test_actual_asgi_seed_retrieval_and_sdk_observation(
         "test",
     )
     monkeypatch.setattr(ChatConsumer, "llm_if", interface)
+    broken_observer = mode == "observer_failure"
+    if broken_observer:
+        from apps.chat.evals.evidence_quality_trace import Trace
+
+        original_sink = Trace.sink
+
+        def faulty_sink(self, event, data):
+            if event in ("sdk_start", "turn_complete"):
+                raise RuntimeError("trace failure")
+            original_sink(self, event, data)
+
+        monkeypatch.setattr(Trace, "sink", faulty_sink)
+        mode = "combined"
     # Candidate search remains actual PostgreSQL over seeded chunks; only the
     # external query embedding computation is replaced for this local test.
     verified = mode == "verified_windows"
@@ -121,11 +135,12 @@ async def test_actual_asgi_seed_retrieval_and_sdk_observation(
     if mode == "cancellation":
         case = {**case, "scenario": "cancellation"}
     with mode_environment("combined" if mode == "cancellation" else mode):
-        with monkeypatch.context() as turn_environment:
-            if not verified:
-                turn_environment.setenv("RAG_RERANK_TEXT_MODE", "legacy")
-            turn_environment.setenv("RAG_ITERATIVE_RETRIEVAL_ENABLED", "0")
-            result = await run_case(case, manifest, mode=mode, cache_state="cold")
+        result = await run_case(
+            case,
+            manifest,
+            mode="combined" if mode == "cancellation" else mode,
+            cache_state="cold",
+        )
     if mode == "cancellation":
         assert result["closed"] and result["late_publications"] == 0
         assert result["answer"] == "" and result["published_after_disconnect"] == []
@@ -134,6 +149,14 @@ async def test_actual_asgi_seed_retrieval_and_sdk_observation(
             e["event"] == "ledger" and e["after"]["terminal"] == "cancelled"
             for e in result["events"]
         )
+        return
+    if broken_observer:
+        assert sent and result["answer"]
+        assert result["observation_failed"]
+        assert not result["provenance_complete"]
+        from apps.chat.evals.evidence_quality_safety import actual_safety
+
+        assert actual_safety(result)["passed"] is None
         return
     assert sent, result
     assert result["sdk_payloads"]

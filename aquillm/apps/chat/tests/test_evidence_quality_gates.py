@@ -10,6 +10,9 @@ from apps.chat.evals.evidence_quality_gates import compare
 
 @pytest.fixture(autouse=True)
 def independent_operational_gate(monkeypatch):
+    monkeypatch.setattr(
+        "apps.chat.evals.evidence_review_subject.quality_review_errors", lambda _: []
+    )
     # Metric unit tests isolate the separately tested attachment validator.
     monkeypatch.setattr(
         "apps.chat.evals.evidence_operational.validate_attachment",
@@ -112,6 +115,7 @@ def test_tail_latency_interval_exposes_uncertainty():
 def test_frozen_join_rejects_matching_but_wrong_source_snapshot():
     from pathlib import Path
 
+    from apps.chat.evals.evidence_effective_config import expected_treatment
     from apps.chat.evals.evidence_quality_comparison import frozen_comparison_errors
     from apps.chat.evals.evidence_quality_eval import FROZEN_SHA256, digest, load_cases
 
@@ -129,7 +133,16 @@ def test_frozen_join_rejects_matching_but_wrong_source_snapshot():
             "concurrency": 2,
             "cache_state": "cold",
             "observations": [
-                {**c, "snapshot": {"source": digest(c["sources"])}} for c in cases
+                {
+                    **c,
+                    "snapshot": {
+                        "source": digest(c["sources"]),
+                        "configuration": digest({"limit": 1}),
+                    },
+                    "comparison_controls": {"limit": 1},
+                    "resolved_treatment": expected_treatment(mode),
+                }
+                for c in cases
             ],
         }
         for mode in MODES

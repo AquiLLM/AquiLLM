@@ -15,10 +15,14 @@ from apps.chat.evals.evidence_quality_review import attach_evidence, load_observ
 
 
 def test_stale_answer_review_and_model_self_review_never_count():
+    from apps.chat.evals.evidence_review_subject import review_subject
+    from apps.chat.tests.test_evidence_review_subject import reviewed_case
+
     case = load_cases(Path(__file__).parents[1] / "evals/evidence_quality_cases.json")[
         0
     ]
-    observation = {"answer": "wrong unit", "delivered": [], "citations": []}
+    _, observation, _ = reviewed_case()
+    observation["answer"] = "wrong unit"
     review = {
         "reviewer": "person",
         "kind": "human",
@@ -32,6 +36,7 @@ def test_stale_answer_review_and_model_self_review_never_count():
     }
     assert evaluate(case, observation, review)["faithfulness"] is None
     review["answer_sha256"] = text_digest(observation["answer"])
+    review["subject"] = review_subject(observation)
     review["answer_faithful"] = False
     assert evaluate(case, observation, review)["faithfulness"] < 1
     review["kind"] = "model"

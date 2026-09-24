@@ -154,6 +154,15 @@ class Trace:
         return {
             "dispatch_accounting_complete": accounted,
             "answer": answer,
+            "source_bindings": [
+                {
+                    "document_id": doc,
+                    "chunk_id": chunk,
+                    "source_id": source["source_id"],
+                    "revision": source["revision"],
+                }
+                for (doc, chunk), source in self.sources.items()
+            ],
             "events": json.loads(json.dumps(self.events, default=json_default)),
             "delivered": self.delivered,
             "upstream": self.upstream,

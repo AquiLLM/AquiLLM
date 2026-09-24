@@ -196,6 +196,14 @@ def assistant_content_for_frontend(message: AssistantMessage) -> str:
     )
 
 
+def sanitize_completed_response(text, response):
+    return sanitize_assistant_text(
+        text,
+        allow_short_final=response.stop_reason in ("stop", "end_turn")
+        and not response.tool_call,
+    )
+
+
 def should_append_citation_sources(text: str | None) -> bool:
     """Sources footer is only for display-ready answers, not status stubs."""
     return is_displayable_answer_text(text)
@@ -220,6 +228,7 @@ def visible_stream_content(
     raw_tools: list[dict] | None,
     done: bool,
     tool_call_payload: dict | None = None,
+    stop_reason: str | None = None,
 ) -> str:
     """
     Return content safe to send through the live stream channel.
@@ -235,6 +244,8 @@ def visible_stream_content(
         return ""
     if is_interim_assistant_text(visible):
         return ""
+    if done and stop_reason in ("stop", "end_turn"):
+        return sanitize_assistant_text(visible, allow_short_final=True)
     if not done and (
         _looks_like_streaming_promise_prefix(visible)
         or looks_like_incomplete_tool_call_stream(visible)
