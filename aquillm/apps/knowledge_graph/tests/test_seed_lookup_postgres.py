@@ -187,7 +187,7 @@ def test_real_seed_rows_match_projection_for_representative_and_observation(seed
     }
     assert expected[keys[seeds.entities[2].pk]] not in set().union(*result.values())
     seed_sql = [row["sql"] for row in queries if "SELECT DISTINCT" in row["sql"]]
-    assert len(seed_sql) == 2
+    assert len(seed_sql) == 1
     assert all("LIMIT" in sql and "@>" in sql for sql in seed_sql)
     for span, entity in zip(seeds.spans, seeds.entities[:2], strict=True):
         matches = seeds.direct.canonical_name_matches(

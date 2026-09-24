@@ -37,41 +37,38 @@ class ExtendedSeedRepository:
         validate_authority()
         if _chunk_documents(chunk_ids=tuple(requested), using=self.using) != requested:
             raise ValueError("extended seed chunk ownership is stale")
-        result = {}
-        remaining = max_rows
-        for chunk_id, document_id in chunks:
-            rows = _seed_rows(
-                authority=authority,
-                chunk_id=chunk_id,
-                document_id=document_id,
-                document_artifact_id=documents[document_id],
-                using=self.using,
-                limit=remaining,
-            )
-            if len(rows) > remaining:
-                raise ValueError("extended seed result exceeds its hard cap")
-            remaining -= len(rows)
-            identities = set()
-            for entity_id, canonical_id in rows:
-                if (
-                    type(entity_id) is not int
-                    or entity_id <= 0
-                    or (
-                        canonical_id is not None
-                        and (type(canonical_id) is not int or canonical_id <= 0)
-                    )
-                ):
-                    raise ValueError("extended seed identity is invalid")
-                identities.add(
-                    codec.encode(
-                        ProjectionIdentifierDomain.ENTITY
-                        if canonical_id is None
-                        else ProjectionIdentifierDomain.AUTOMATIC_CANONICAL_IDENTITY,
-                        generation=authority.generation_id,
-                        source=entity_id if canonical_id is None else canonical_id,
-                    ).value
+        rows = _seed_rows(
+            authority=authority,
+            chunks=chunks,
+            documents=documents,
+            using=self.using,
+            limit=max_rows,
+        )
+        if len(rows) > max_rows:
+            raise ValueError("extended seed result exceeds its hard cap")
+        result = {chunk_id: set() for chunk_id in requested}
+        for chunk_id, entity_id, canonical_id in rows:
+            if (
+                type(chunk_id) is not int
+                or chunk_id not in requested
+                or type(entity_id) is not int
+                or entity_id <= 0
+                or (
+                    canonical_id is not None
+                    and (type(canonical_id) is not int or canonical_id <= 0)
                 )
-            result[chunk_id] = tuple(sorted(identities))
+            ):
+                raise ValueError("extended seed identity is invalid")
+            result[chunk_id].add(
+                codec.encode(
+                    ProjectionIdentifierDomain.ENTITY
+                    if canonical_id is None
+                    else ProjectionIdentifierDomain.AUTOMATIC_CANONICAL_IDENTITY,
+                    generation=authority.generation_id,
+                    source=entity_id if canonical_id is None else canonical_id,
+                ).value
+            )
+        result = {chunk_id: tuple(sorted(keys)) for chunk_id, keys in result.items()}
         validate_authority()
         return result
 
@@ -202,5 +199,33 @@ def _seed_query(*, authority, chunk_id, document_id, document_artifact_id, using
     )
 
 
-def _seed_rows(*, limit, **kwargs):
-    return tuple(_seed_query(**kwargs)[: limit + 1])
+def _seed_rows(*, authority, chunks, documents, using, limit):
+    from django.db.models import BigIntegerField, Value
+
+    # Each arm retains the exact manifest/mention join and its per-chunk
+    # DISTINCT. UNION ALL preserves shared entities in different chunks.
+    queries = tuple(
+        _seed_query(
+            authority=authority,
+            chunk_id=chunk_id,
+            document_id=document_id,
+            document_artifact_id=documents[document_id],
+            using=using,
+        )
+        .order_by()
+        .annotate(
+            seed_chunk_id=Value(chunk_id, output_field=BigIntegerField()),
+        )
+        .values_list("seed_chunk_id", "collection_entity_id", "canonical_id")
+        for chunk_id, document_id in chunks
+    )
+    combined = (
+        queries[0].union(*queries[1:], all=True) if len(queries) > 1 else queries[0]
+    )
+    return tuple(
+        combined.order_by(
+            "seed_chunk_id",
+            "collection_entity_id",
+            "canonical_id",
+        )[: limit + 1]
+    )

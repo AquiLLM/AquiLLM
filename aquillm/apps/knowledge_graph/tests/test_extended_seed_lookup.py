@@ -70,7 +70,9 @@ def test_seed_lookup_rejects_stale_unauthorized_or_unbounded_rows(monkeypatch, i
     monkeypatch.setattr(
         source,
         "_seed_rows",
-        lambda **_: ((7, None), (9, 42)) if invalid == "over_cap" else ((7, None),),
+        lambda **_: (
+            ((1, 7, None), (1, 9, 42)) if invalid == "over_cap" else ((1, 7, None),)
+        ),
     )
     repository = source.ExtendedSeedRepository()
     with pytest.raises(ValueError):
@@ -94,7 +96,7 @@ def test_seed_lookup_matches_projection_identifiers(monkeypatch):
     codec = HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v1")
     monkeypatch.setattr(source, "_authority_is_current", lambda **_: True)
     monkeypatch.setattr(source, "_chunk_documents", lambda **_: {1: _DOC_A})
-    monkeypatch.setattr(source, "_seed_rows", lambda **_: ((7, None), (9, 42)))
+    monkeypatch.setattr(source, "_seed_rows", lambda **_: ((1, 7, None), (1, 9, 42)))
     result = source.ExtendedSeedRepository().load_seed_identities(
         authority=authority,
         chunks=((1, _DOC_A),),
@@ -185,10 +187,12 @@ def test_many_seed_chunks_have_independent_complete_source_budget(
     monkeypatch.setattr(source, "_authority_is_current", lambda **_: True)
     monkeypatch.setattr(source, "_chunk_documents", lambda **_: chunks)
 
-    def read_rows(*, chunk_id, limit, **kwargs):
-        reads.append(chunk_id)
+    def read_rows(*, chunks, limit, **kwargs):
+        reads.append(chunks)
         # Match the SQL boundary's limit+1 overflow sentinel.
-        return tuple(by_chunk[chunk_id][: limit + 1])
+        return tuple((pk, *row) for pk, _ in chunks for row in by_chunk[pk])[
+            : limit + 1
+        ]
 
     monkeypatch.setattr(source, "_seed_rows", read_rows)
     runtime = SimpleNamespace(
@@ -230,7 +234,7 @@ def test_many_seed_chunks_have_independent_complete_source_budget(
         result = prepare()
         assert len(result) == 64
         assert sum(row.mass for row in result) == pytest.approx(1.0)
-        assert reads == list(range(1, 37))
+        assert reads == [tuple(chunks.items())]
         # All source rows are considered before the existing deterministic
         # top-seed selection; this does not enlarge the final graph.
         assert topology_caps(settings, HybridBranchKind.EXTENDED).max_nodes == 200
