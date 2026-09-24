@@ -2,8 +2,8 @@
 
 This is a future adaptation inventory, not a backport, deployment or activation.
 Development Tasks 1–5 are accepted locally; Task 6 and this manifest await independent
-review. The source implementation through its final local fix is
-`935da23524c8f88aacb10552f1772b7e3c57936f`,
+review. The source implementation through review fix round 1 is
+`a287509ea22413050e5c25ab193268dd5a8459c0`,
 on the adaptive-selection merge baseline
 `52af11daab20975a5fbed6db742e9a596bd4f4da`. No graph branch is to be copied into main.
 
@@ -33,6 +33,7 @@ together; this is not permission for wholesale cherry-picks of mixed development
 | `f4da561847cf44ce7d5cdb8eb2457c925dbf227a` | Task 5 fix: actual ASGI turn ownership/disconnect cancellation, exact deterministic support, stricter tool waits, bounded cache staging/pointers and non-source behavior. |
 | `3b53c40f8d2e658e5ebf4988fa7896e8aea4adb1` | Task 6: actual four-arm evaluator, frozen quality/operational corpora, activation-v2, per-worker capability lifecycle, SDK/ledger observations, adaptive-only non-graph authorization dependency fix, short-final persistence fix, CI/runbook/status. |
 | `935da23524c8f88aacb10552f1772b7e3c57936f` | Task 6 local self-review fix: require completion-reserve evidence to match the actual runtime reserve in every observed turn, preventing an inflated operator-record allowance. |
+| `a287509ea22413050e5c25ab193268dd5a8459c0` | Task 6 review fix I1–I7: exact human answer/evidence/run/code binding and observed bounded-partial facts; isolated observation failures; actual terminal short completion/streaming; resolved arm/runtime controls; pilot-only subtype proof; per-identity malformed historical UUID rejection retaining current/valid evidence. |
 
 This document's enclosing documentation-only commit need not contain its own hash.
 Append exact later implementation/review-fix SHAs before final backport acceptance.
@@ -130,7 +131,8 @@ Activation still requires real deployment identity per worker, both frozen split
 named human answer review, snapshot-matched four-arm quality/uncertainty, numeric
 deployment targets, measured reserve and concurrent cold/warm latency/cost, zero
 applicable authorization/citation/safety violations, and observed refinement plus
-shared acquisition-pair OR retrieval-deadline exhaustion in both candidate modes.
+shared acquisition-pair OR retrieval-deadline exhaustion in the pilot profile of
+both candidate modes; one_action cannot substitute.
 Source/action-only stops cannot substitute. Baseline new-ledger/cancellation failures
 stay visible diagnostics; ordinary baseline authority violations still block.
 Unknown candidate safety or missing evidence blocks. PPR has an independent open gate.
@@ -146,6 +148,11 @@ that future PR, not an assumed parity claim here.
 ```text
 aquillm/apps/chat/tests/test_conversation_persistence.py
 aquillm/apps/chat/tests/test_evidence_operational.py
+aquillm/apps/chat/tests/test_evidence_bounded_partial.py
+aquillm/apps/chat/tests/test_evidence_effective_config.py
+aquillm/apps/chat/tests/test_evidence_operational_profiles.py
+aquillm/apps/chat/tests/test_evidence_review_subject.py
+aquillm/apps/chat/tests/test_short_final_completion.py
 aquillm/apps/chat/tests/test_evidence_quality_delivery.py
 aquillm/apps/chat/tests/test_evidence_quality_eval.py
 aquillm/apps/chat/tests/test_evidence_quality_gates.py
@@ -201,3 +208,20 @@ aquillm/lib/llm/tests/test_direct_synthesis_grounding.py
 aquillm/lib/llm/tests/test_evidence_observation.py
 aquillm/tests/integration/test_production_retrieval_authorization_reachability.py
 ```
+
+### Review-fix adaptation closure
+
+Adapt the canonical review subject and bounded-partial helpers with both runner
+rescore/attachment consumers; old answer-SHA-only reviews are intentionally unknown.
+Preserve source-bindings and final SDK/acquisition trace mapping. Port observer
+failure state and robust completion signals together so instrumentation cannot
+change dispatch, reservation, cancellation or return semantics. Port terminal stop
+eligibility through complete_turn, visibility and openai_streaming together with
+the already-required persistence adapters. Keep the shared pure OpenAI runtime
+getters and their dispatch/request consumers coupled to effective comparison
+configuration; these extractions preserve existing defaults and retry behavior.
+Malformed historical IDs must be skipped only during UUID parsing, keeping anchors
+for unavailable notices and all current scope/principal/revision revalidation.
+The new five CI modules above and existing observer, continuity, completion/retry,
+streaming, visibility, authority and CLI tests are required. No graph imports,
+ratchet increases or live activation are part of these fixes.
