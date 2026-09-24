@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from ..resolution.normalization import normalize_entity_label
 from .windows import MappedEntityEvidence
 
 if TYPE_CHECKING:
@@ -72,6 +73,20 @@ class ExtractedDocumentEvidence:
     diagnostic_counts: dict[str, int]
     window_count: int
     batch_count: int
+
+
+def _resolvable_entities(entities, diagnostic_counts):
+    """Exclude provider labels that cannot become resolved graph identities."""
+
+    accepted = []
+    for entity in entities:
+        try:
+            normalize_entity_label(entity.raw_text)
+        except ValueError:
+            diagnostic_counts["unresolvable_entity_label"] += 1
+            continue
+        accepted.append(entity)
+    return tuple(accepted)
 
 
 def serialize_entity_observations(

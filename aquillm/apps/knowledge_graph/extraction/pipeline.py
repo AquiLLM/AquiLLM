@@ -26,6 +26,7 @@ from .evidence import (
     _endpoint_entities,
     _finalize_entities,
     _finalize_relations,
+    _resolvable_entities,
     serialize_entity_observations,
 )
 from .windows import (
@@ -54,8 +55,6 @@ DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS = 524_288
 DOCUMENT_EXTRACTION_V1_MAX_RAW_RELATION_OBSERVATIONS = 1_048_576
 _QUERY_ITERATOR_BATCH_SIZE = 1_000
 logger = structlog.stdlib.get_logger(__name__)
-
-
 
 
 class StaleSourceError(RuntimeError):
@@ -167,6 +166,7 @@ def collect_document_evidence(
                 map_entity_candidate(window, candidate, full_text=full_text)
                 for candidate in result.entities
             )
+            local_entities = _resolvable_entities(local_entities, diagnostic_counts)
             for entity in local_entities:
                 _accumulate_entity(
                     mapped_entities,
