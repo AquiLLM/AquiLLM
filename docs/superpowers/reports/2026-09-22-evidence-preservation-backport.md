@@ -2,7 +2,8 @@
 
 This is a future adaptation inventory, not a backport, deployment or activation.
 Development Tasks 1–5 are accepted locally; Task 6 and this manifest await independent
-review. The source implementation is `3b53c40f8d2e658e5ebf4988fa7896e8aea4adb1`,
+review. The source implementation through its final local fix is
+`935da23524c8f88aacb10552f1772b7e3c57936f`,
 on the adaptive-selection merge baseline
 `52af11daab20975a5fbed6db742e9a596bd4f4da`. No graph branch is to be copied into main.
 
@@ -31,6 +32,7 @@ together; this is not permission for wholesale cherry-picks of mixed development
 | `d12ff8e9ecdc6d2f4bc2f3da7241118b31fc6004` | Task 5: cumulative acquisition/coverage and direct/manual/normal handoff, synthesis/recovery lease. |
 | `f4da561847cf44ce7d5cdb8eb2457c925dbf227a` | Task 5 fix: actual ASGI turn ownership/disconnect cancellation, exact deterministic support, stricter tool waits, bounded cache staging/pointers and non-source behavior. |
 | `3b53c40f8d2e658e5ebf4988fa7896e8aea4adb1` | Task 6: actual four-arm evaluator, frozen quality/operational corpora, activation-v2, per-worker capability lifecycle, SDK/ledger observations, adaptive-only non-graph authorization dependency fix, short-final persistence fix, CI/runbook/status. |
+| `935da23524c8f88aacb10552f1772b7e3c57936f` | Task 6 local self-review fix: require completion-reserve evidence to match the actual runtime reserve in every observed turn, preventing an inflated operator-record allowance. |
 
 This document's enclosing documentation-only commit need not contain its own hash.
 Append exact later implementation/review-fix SHAs before final backport acceptance.
