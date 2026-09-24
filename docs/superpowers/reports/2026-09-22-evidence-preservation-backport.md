@@ -1,11 +1,11 @@
 # Evidence preservation: exact non-graph adaptation manifest
 
 This is a future adaptation inventory, not a backport, deployment or activation.
-Development Tasks 1–6 are accepted locally; whole-branch corrections and this updated
-manifest await independent review. The source implementation through whole-branch
-fix round 1 is `78e87679f3abe6bf6f270e43d9a284f36e65ba0e`,
-on the adaptive-selection merge baseline
-`52af11daab20975a5fbed6db742e9a596bd4f4da`. No graph branch is to be copied into main.
+Development Tasks 1–6 and whole-branch corrections were accepted and merged in
+`612b98422aea99f9698f0b1328b1a225478f3b87`, on the adaptive-selection baseline
+`52af11daab20975a5fbed6db742e9a596bd4f4da`. The later evaluator-history correction
+`8664556a164679807dc27bc77565e398be573fd0` and this manifest update await review.
+Live activation gates remain open. No graph branch is to be copied into main.
 
 Target observations are **provisional and unfetched**: local `origin/main` was
 `1d0468b0470225eb0b6236fc573c28668d2e3aff`; local `main` was the older
@@ -36,6 +36,7 @@ together; this is not permission for wholesale cherry-picks of mixed development
 | `a287509ea22413050e5c25ab193268dd5a8459c0` | Task 6 review fix I1–I7: exact human answer/evidence/run/code binding and observed bounded-partial facts; isolated observation failures; actual terminal short completion/streaming; resolved arm/runtime controls; pilot-only subtype proof; per-identity malformed historical UUID rejection retaining current/valid evidence. |
 | `f80f2a1dc6d1d04b68873e8003839a9bbc357c99` | Task 6 review fix R1–R3: observed source/span-specific selection exclusion causes, actual common completion/recovery/publication policy snapshot, and stable typed SDK observation normalization across review, partial proof and serialization. |
 | `78e87679f3abe6bf6f270e43d9a284f36e65ba0e` | Whole-branch I1–I2: separate hard initial preparation/scoring deadline from current-authority finalization under the original retrieval ledger; preserve whole-pool rank fallback and protected synthesis after scoring-only expiry; portable raw Git evaluator provenance without RTK. |
+| `8664556a164679807dc27bc77565e398be573fd0` | Evaluator history fix: serialize the authored historical chunk ordinal alongside the real DB document/chunk identity; retain ordered plural anchors after persistence, current-text rehydration, and current authorization revocation checks. Frozen labels and application resolver behavior are unchanged. |
 
 This document's enclosing documentation-only commit need not contain its own hash.
 Append exact later implementation/review-fix SHAs before final backport acceptance.
@@ -253,3 +254,13 @@ The real scorer/ledger/selection/protected-synthesis regression above belongs to
 that dependency closure. Evaluation provenance uses raw standard Git at all three
 subprocess sites, with unchanged failure behavior and saved-observation identity;
 RTK remains only a developer workflow tool, never a runtime dependency.
+
+The evaluator-history correction is required for faithful live follow-up fixtures:
+carry the authored historical `chunk_number` into the public history row's `chunk`
+field before serialization. Keep strict coordinate validation and current-source
+authorization/revision revalidation intact. The existing CI seed module now verifies
+the four frozen development plural histories through DB save/load, exact displayed
+coordinates, plural resolution, current text and permission revocation. Earlier
+diagnostics built by the incomplete history adapter remain immutable diagnostics;
+collect fresh matched runs after the correction, without changing frozen labels or
+claiming that those earlier runs used the fixed harness.

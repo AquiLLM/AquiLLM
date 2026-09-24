@@ -200,6 +200,7 @@ def create_conversation(case, manifest):
                 {
                     "doc_id": key[0],
                     "chunk_id": key[1],
+                    "chunk": historic["chunk_number"],
                     "text": historic["text"],
                     "title": historic["document_id"],
                     "citation": f"[doc:{key[0]} chunk:{key[1]}]",
