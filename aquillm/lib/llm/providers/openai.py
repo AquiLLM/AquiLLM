@@ -17,21 +17,9 @@ from ..types.conversation import Conversation
 from ..types.messages import AssistantMessage
 from ..types.response import LLMResponse
 from .base import LLMInterface
-from .openai_overflow import (
-    retry_args_for_context_overflow,
-    retry_args_for_timeout,
-    strip_images_from_messages,
-)
-from .openai_request import is_timeout_error, prepare_request
+from .openai_context_policy import OpenAIContextPolicy
+from .openai_request import prepare_request
 from .openai_streaming import consume_streaming_completion
-from .openai_tokens import (
-    context_reserve_tokens,
-    env_float,
-    env_int,
-    estimate_prompt_tokens,
-    preflight_trim_for_context,
-    trim_messages_for_overflow,
-)
 from .openai_tool_text import (
     decode_json_dict,
     extract_tool_call_from_text,
@@ -61,7 +49,7 @@ gpt_enc = encoding_for_model("gpt-4o")
 logger = structlog.stdlib.get_logger(__name__)
 
 
-class OpenAIInterface(LLMInterface):
+class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
     """LLM interface for OpenAI models."""
 
     supports_request_observability = True
@@ -70,50 +58,6 @@ class OpenAIInterface(LLMInterface):
     def __init__(self, openai_client, model: str):
         self.client = openai_client
         self.base_args = {"model": model}
-
-    @staticmethod
-    def _trim_messages_for_overflow(arguments: dict, overflow_tokens: int) -> bool:
-        return trim_messages_for_overflow(arguments, overflow_tokens)
-
-    @classmethod
-    def _estimate_prompt_tokens(cls, messages: list[dict]) -> int:
-        return estimate_prompt_tokens(messages, gpt_enc)
-
-    @staticmethod
-    def _env_int(name: str, default: int) -> int:
-        return env_int(name, default)
-
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        return env_float(name, default)
-
-    @classmethod
-    def _context_reserve_tokens(cls, context_limit: int) -> tuple[int, int]:
-        return context_reserve_tokens(context_limit)
-
-    @classmethod
-    def _preflight_trim_for_context(
-        cls, arguments: dict, context_limit: int, extra_prompt_slack: int = 0
-    ) -> None:
-        preflight_trim_for_context(cls, arguments, context_limit, extra_prompt_slack)
-
-    @staticmethod
-    def _strip_images_from_messages(arguments: dict) -> bool:
-        return strip_images_from_messages(arguments)
-
-    @staticmethod
-    def _retry_args_for_context_overflow(
-        arguments: dict, exc: Exception
-    ) -> dict | None:
-        return retry_args_for_context_overflow(arguments, exc)
-
-    @staticmethod
-    def _is_timeout_error(exc: Exception) -> bool:
-        return is_timeout_error(exc)
-
-    @staticmethod
-    def _retry_args_for_timeout(arguments: dict, attempt: int) -> dict | None:
-        return retry_args_for_timeout(arguments, attempt)
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
@@ -141,9 +85,13 @@ class OpenAIInterface(LLMInterface):
         raw_tools = kwargs.get("tools")
 
         prepared = await prepare_request(
-            self, system_text=system_text, message_list=message_list,
-            max_tokens=max_tokens, thinking_budget=thinking_budget,
-            tool_choice_raw=tool_choice_raw, kwargs=kwargs,
+            self,
+            system_text=system_text,
+            message_list=message_list,
+            max_tokens=max_tokens,
+            thinking_budget=thinking_budget,
+            tool_choice_raw=tool_choice_raw,
+            kwargs=kwargs,
             compress_messages=maybe_compress_openai_style_messages,
         )
         arguments = prepared.arguments
@@ -182,6 +130,9 @@ class OpenAIInterface(LLMInterface):
         timeout_retries_used = 0
         max_total_retries = max_overflow_retries + max_timeout_retries
         for attempt in range(max_total_retries + 1):
+            from lib.llm.evidence_guard import validate_request
+
+            validate_request(request_args, output_reserve=request_args["max_tokens"])
             request_started_at = perf_counter()
             try:
                 if stream_enabled:

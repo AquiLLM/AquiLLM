@@ -9,7 +9,37 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 from json import dumps
-from typing import Literal
+from typing import Literal, TypedDict
+
+
+class SourceProvenance(TypedDict):
+    chunk_id: int
+    document_id: str
+    chunk_number: int
+    source_fingerprint: str
+    source_codepoints: int
+
+
+class FigureProvenance(TypedDict):
+    figure_id: str
+    parent_id: str
+    field: str
+    revision: str
+    length: int
+    source_fingerprint: str
+    chunk_ids: list[int]
+
+
+def source_provenance(source: SourceEvidence) -> SourceProvenance:
+    """Private transport identity; never a permission or revision authority."""
+    return {
+        "chunk_id": source.chunk_id,
+        "document_id": source.document_id,
+        "chunk_number": source.chunk_number,
+        "source_fingerprint": source.source_fingerprint,
+        "source_codepoints": len(source.text),
+    }
+
 
 Coverage = Literal["complete", "partial", "unknown"]
 _COVERAGE = frozenset(("complete", "partial", "unknown"))
@@ -22,11 +52,16 @@ def fingerprint_source(text: str) -> str:
     return sha256(text.encode("utf-8")).hexdigest()
 
 
-def fingerprint_prepared_evidence(source: SourceEvidence, spans: tuple[SourceSpan, ...]) -> str:
+def fingerprint_prepared_evidence(
+    source: SourceEvidence, spans: tuple[SourceSpan, ...]
+) -> str:
     """Versioned identity for an exact ordered source/span representation."""
     fields = [
-        source.chunk_id, source.document_id, source.chunk_number,
-        source.source_fingerprint, source.text,
+        source.chunk_id,
+        source.document_id,
+        source.chunk_number,
+        source.source_fingerprint,
+        source.text,
         [[s.chunk_id, s.source_fingerprint, s.start, s.end, s.text] for s in spans],
     ]
     encoded = dumps(fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -57,7 +92,11 @@ class SourceEvidence:
         SourceIdentity(self.chunk_id, self.source_fingerprint)
         if not isinstance(self.document_id, str) or not self.document_id:
             raise ValueError("document_id must be nonempty")
-        if isinstance(self.chunk_number, bool) or not isinstance(self.chunk_number, int) or self.chunk_number < 0:
+        if (
+            isinstance(self.chunk_number, bool)
+            or not isinstance(self.chunk_number, int)
+            or self.chunk_number < 0
+        ):
             raise ValueError("chunk_number must be a nonnegative integer")
         if not isinstance(self.text, str):
             raise ValueError("source text must be str")
@@ -78,9 +117,12 @@ class SourceSpan:
     def __post_init__(self) -> None:
         SourceIdentity(self.chunk_id, self.source_fingerprint)
         if (
-            isinstance(self.start, bool) or not isinstance(self.start, int)
-            or isinstance(self.end, bool) or not isinstance(self.end, int)
-            or self.start < 0 or self.end <= self.start
+            isinstance(self.start, bool)
+            or not isinstance(self.start, int)
+            or isinstance(self.end, bool)
+            or not isinstance(self.end, int)
+            or self.start < 0
+            or self.end <= self.start
         ):
             raise ValueError("span offsets must be an increasing code-point range")
         if not isinstance(self.text, str):
@@ -100,21 +142,34 @@ class PreparedEvidence:
             raise ValueError("source must be SourceEvidence")
         if not isinstance(self.spans, tuple):
             raise ValueError("spans must be a tuple")
-        if not isinstance(self.evidence_fingerprint, str) or not self.evidence_fingerprint:
+        if (
+            not isinstance(self.evidence_fingerprint, str)
+            or not self.evidence_fingerprint
+        ):
             raise ValueError("evidence_fingerprint must be nonempty")
-        if isinstance(self.estimated_tokens, bool) or not isinstance(self.estimated_tokens, int) or self.estimated_tokens < 0:
+        if (
+            isinstance(self.estimated_tokens, bool)
+            or not isinstance(self.estimated_tokens, int)
+            or self.estimated_tokens < 0
+        ):
             raise ValueError("estimated_tokens must be nonnegative")
-        if not isinstance(self.source_coverage, str) or self.source_coverage not in _COVERAGE:
+        if (
+            not isinstance(self.source_coverage, str)
+            or self.source_coverage not in _COVERAGE
+        ):
             raise ValueError("invalid source_coverage")
         last_end = 0
         for span in self.spans:
             if not isinstance(span, SourceSpan):
                 raise ValueError("spans must contain SourceSpan")
-            if span.chunk_id != self.source.chunk_id or span.source_fingerprint != self.source.source_fingerprint:
+            if (
+                span.chunk_id != self.source.chunk_id
+                or span.source_fingerprint != self.source.source_fingerprint
+            ):
                 raise ValueError("span identity does not match source")
             if span.start < last_end or span.end > len(self.source.text):
                 raise ValueError("span is overlapping or outside source")
-            if self.source.text[span.start:span.end] != span.text:
+            if self.source.text[span.start : span.end] != span.text:
                 raise ValueError("span text does not match exact source slice")
             last_end = span.end
         if self.source_coverage == "complete":
@@ -127,5 +182,9 @@ class PreparedEvidence:
                 next_offset = span.end
             if next_offset != len(self.source.text):
                 raise ValueError("complete coverage cannot omit source tail")
-        if self.evidence_fingerprint != fingerprint_prepared_evidence(self.source, self.spans):
-            raise ValueError("evidence_fingerprint does not match exact prepared evidence")
+        if self.evidence_fingerprint != fingerprint_prepared_evidence(
+            self.source, self.spans
+        ):
+            raise ValueError(
+                "evidence_fingerprint does not match exact prepared evidence"
+            )

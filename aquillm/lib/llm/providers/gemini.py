@@ -1,62 +1,60 @@
 """Google Gemini LLM interface."""
-from typing import Optional, override
-import uuid
-import structlog
-import base64
 
+import base64
+import uuid
+from typing import override
+
+import structlog
 from google.genai import types as genai_types
 
-from ..types.messages import UserMessage, ToolMessage, AssistantMessage
 from ..types.conversation import Conversation
+from ..types.messages import AssistantMessage, ToolMessage, UserMessage
 from ..types.response import LLMResponse
 from .base import LLMInterface
-
 
 logger = structlog.stdlib.get_logger(__name__)
 
 
 class GeminiInterface(LLMInterface):
-    """
-    LLM interface for Google Gemini models.
-    Translates between the app's internal message/tool format and the google-genai SDK format.
-    """
-    base_args: dict = {'model': 'gemini-2.5-flash'}
+    """Translate the app's message/tool format to the Google Gemini SDK."""
+
+    base_args: dict = {"model": "gemini-2.5-flash"}
 
     @override
-    def __init__(self, google_client, model: str = 'gemini-2.5-flash'):
+    def __init__(self, google_client, model: str = "gemini-2.5-flash"):
         """Store the Gemini client and which model to use."""
         self.client = google_client
-        self.base_args = {'model': model}
+        self.base_args = {"model": model}
 
     def _transform_tools(self, tools: list[dict]) -> genai_types.Tool:
         """
-        Convert tool definitions from the app's internal format (Anthropic-style dicts)
-        into a Gemini Tool object containing FunctionDeclarations.
-        The input_schema passes through directly since Gemini accepts the same JSON schema format.
+        Convert Anthropic-style definitions into Gemini FunctionDeclarations.
+        Both providers accept the same JSON schema, so input_schema passes through.
         """
         return genai_types.Tool(
             function_declarations=[
                 genai_types.FunctionDeclaration(
-                    name=tool['name'],
-                    description=tool['description'],
-                    parametersJsonSchema=tool['input_schema'],
-                ) for tool in tools
+                    name=tool["name"],
+                    description=tool["description"],
+                    parametersJsonSchema=tool["input_schema"],
+                )
+                for tool in tools
             ]
         )
 
     def _convert_messages(self, messages: list[dict]) -> list[genai_types.Content]:
         """
-        Convert a list of rendered message dicts into Gemini Content objects using plain text.
-        Used only by token_count(), where approximate counts are acceptable.
-        For actual API calls, use _convert_pydantic_messages() instead.
+        Convert rendered text for approximate token_count() calls.
+        API requests use _convert_pydantic_messages() instead.
         """
         contents = []
         for msg in messages:
-            role = 'model' if msg['role'] == 'assistant' else 'user'
-            contents.append(genai_types.Content(
-                role=role,
-                parts=[genai_types.Part.from_text(text=msg['content'])]
-            ))
+            role = "model" if msg["role"] == "assistant" else "user"
+            contents.append(
+                genai_types.Content(
+                    role=role, parts=[genai_types.Part.from_text(text=msg["content"])]
+                )
+            )
         return contents
 
     def _convert_pydantic_messages(self, messages: list) -> list[genai_types.Content]:
@@ -68,26 +66,34 @@ class GeminiInterface(LLMInterface):
         for msg in messages:
             if isinstance(msg, AssistantMessage):
                 parts = []
-                if msg.content and msg.content.strip() and msg.content != "** Empty Message, tool call **":
+                if (
+                    msg.content
+                    and msg.content.strip()
+                    and msg.content != "** Empty Message, tool call **"
+                ):
                     parts.append(genai_types.Part.from_text(text=msg.content))
                 if msg.tool_call_id:
-                    parts.append(genai_types.Part(
-                        function_call=genai_types.FunctionCall(
-                            name=msg.tool_call_name,
-                            args=msg.tool_call_input or {},
+                    parts.append(
+                        genai_types.Part(
+                            function_call=genai_types.FunctionCall(
+                                name=msg.tool_call_name,
+                                args=msg.tool_call_input or {},
+                            )
                         )
-                    ))
-                if not parts:
-                    parts = [genai_types.Part.from_text(text=msg.content or '')]
-                contents.append(genai_types.Content(role='model', parts=parts))
-            elif isinstance(msg, ToolMessage):
-                parts = [genai_types.Part(
-                    function_response=genai_types.FunctionResponse(
-                        name=msg.tool_name,
-                        response={'output': msg.content},
                     )
-                )]
-                
+                if not parts:
+                    parts = [genai_types.Part.from_text(text=msg.content or "")]
+                contents.append(genai_types.Content(role="model", parts=parts))
+            elif isinstance(msg, ToolMessage):
+                parts = [
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            name=msg.tool_name,
+                            response={"output": msg.content},
+                        )
+                    )
+                ]
+
                 if msg.has_images():
                     for img in msg.get_images():
                         data_url = img.get("image_data_url", "")
@@ -96,57 +102,70 @@ class GeminiInterface(LLMInterface):
                                 header, b64_data = data_url.split(",", 1)
                                 mime_type = header.split(":")[1].split(";")[0]
                                 image_bytes = base64.b64decode(b64_data)
-                                parts.append(genai_types.Part.from_bytes(
-                                    data=image_bytes,
-                                    mime_type=mime_type
-                                ))
+                                parts.append(
+                                    genai_types.Part.from_bytes(
+                                        data=image_bytes, mime_type=mime_type
+                                    )
+                                )
                                 if img.get("caption"):
-                                    parts.append(genai_types.Part.from_text(
-                                        text=f"[Image {img.get('result_index', '?')}: {img.get('title', 'Image')}]"
-                                    ))
+                                    parts.append(
+                                        genai_types.Part.from_text(
+                                            text=(
+                                                "[Image "
+                                                f"{img.get('result_index', '?')}: "
+                                                f"{img.get('title', 'Image')}]"
+                                            )
+                                        )
+                                    )
                             except Exception as e:
-                                logger.warning("obs.llm.gemini_image_parse_failed", error=str(e), error_type=type(e).__name__)
-                
-                contents.append(genai_types.Content(role='user', parts=parts))
+                                logger.warning(
+                                    "obs.llm.gemini_image_parse_failed",
+                                    error=str(e),
+                                    error_type=type(e).__name__,
+                                )
+
+                contents.append(genai_types.Content(role="user", parts=parts))
             else:
                 # UserMessage
-                contents.append(genai_types.Content(
-                    role='user',
-                    parts=[genai_types.Part.from_text(text=msg.content or '')]
-                ))
+                contents.append(
+                    genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part.from_text(text=msg.content or "")],
+                    )
+                )
         return contents
 
     def _build_tool_config(self, tool_choice: dict) -> genai_types.ToolConfig:
         """
         Convert the app's tool_choice setting into a Gemini ToolConfig object.
         """
-        mode_map = {'auto': 'AUTO', 'any': 'ANY', 'tool': 'ANY'}
-        mode = mode_map.get(tool_choice['type'], 'AUTO')
-        if tool_choice['type'] == 'tool':
-            allowed = [tool_choice['name']]
+        mode_map = {"auto": "AUTO", "any": "ANY", "tool": "ANY"}
+        mode = mode_map.get(tool_choice["type"], "AUTO")
+        if tool_choice["type"] == "tool":
+            allowed = [tool_choice["name"]]
         else:
             allowed = None
         return genai_types.ToolConfig(
             functionCallingConfig=genai_types.FunctionCallingConfig(
-                mode=mode,
-                allowedFunctionNames=allowed
+                mode=mode, allowedFunctionNames=allowed
             )
         )
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
         """
-        Main method: send the conversation to Gemini and return a standardised LLMResponse.
+        Main method: send the conversation to Gemini and return a standardised
+        LLMResponse.
         """
-        kwargs.pop('stream_callback', None)
-        kwargs.pop('stream_message_uuid', None)
-        system = kwargs.pop('system')
-        messages = kwargs.pop('messages')
-        messages_pydantic = kwargs.pop('messages_pydantic', None)
-        max_tokens = kwargs.pop('max_tokens')
-        tools = kwargs.pop('tools', None)
-        tool_choice = kwargs.pop('tool_choice', None)
-        thinking_budget = kwargs.pop('thinking_budget', None)
+        kwargs.pop("stream_callback", None)
+        kwargs.pop("stream_message_uuid", None)
+        system = kwargs.pop("system")
+        messages = kwargs.pop("messages")
+        messages_pydantic = kwargs.pop("messages_pydantic", None)
+        max_tokens = kwargs.pop("max_tokens")
+        tools = kwargs.pop("tools", None)
+        tool_choice = kwargs.pop("tool_choice", None)
+        thinking_budget = kwargs.pop("thinking_budget", None)
 
         if isinstance(messages, list):
             from lib.llm.utils.prompt_budget import (
@@ -157,7 +176,10 @@ class GeminiInterface(LLMInterface):
             _, max_tokens = apply_preflight_trim_to_message_dicts(
                 str(system), messages, int(max_tokens)
             )
-            sync_trimmed_dicts_into_pydantic_messages(messages_pydantic, messages)
+            from lib.llm.evidence_guard import current_protection
+
+            if current_protection() is None:
+                sync_trimmed_dicts_into_pydantic_messages(messages_pydantic, messages)
 
         if messages_pydantic is not None:
             contents = self._convert_pydantic_messages(messages_pydantic)
@@ -171,7 +193,11 @@ class GeminiInterface(LLMInterface):
             gemini_tools = None
             tool_config = None
 
-        thinking_config = genai_types.ThinkingConfig(thinkingBudget=thinking_budget) if thinking_budget is not None else None
+        thinking_config = (
+            genai_types.ThinkingConfig(thinkingBudget=thinking_budget)
+            if thinking_budget is not None
+            else None
+        )
         config = genai_types.GenerateContentConfig(
             systemInstruction=system,
             maxOutputTokens=max_tokens,
@@ -180,8 +206,13 @@ class GeminiInterface(LLMInterface):
             thinkingConfig=thinking_config,
         )
 
+        from lib.llm.evidence_guard import validate_request
+
+        validate_request(
+            {"contents": contents, "config": config}, output_reserve=max_tokens
+        )
         response = await self.client.aio.models.generate_content(
-            model=self.base_args['model'],
+            model=self.base_args["model"],
             contents=contents,
             config=config,
         )
@@ -198,14 +229,14 @@ class GeminiInterface(LLMInterface):
             else:
                 tool_call_input = {}
             tool_call = {
-                'tool_call_id': tool_call_id,
-                'tool_call_name': fc.name,
-                'tool_call_input': tool_call_input,
+                "tool_call_id": tool_call_id,
+                "tool_call_name": fc.name,
+                "tool_call_input": tool_call_input,
             }
-            stop_reason = 'tool_use'
+            stop_reason = "tool_use"
         else:
             tool_call = {}
-            stop_reason = 'end_turn'
+            stop_reason = "end_turn"
 
         usage = response.usage_metadata
         if usage:
@@ -226,17 +257,19 @@ class GeminiInterface(LLMInterface):
             stop_reason=stop_reason,
             input_usage=input_tokens,
             output_usage=output_tokens,
-            model=self.base_args['model'],
+            model=self.base_args["model"],
         )
 
     @override
-    async def token_count(self, conversation: Conversation, new_message: Optional[str] = None) -> int:
+    async def token_count(
+        self, conversation: Conversation, new_message: str | None = None
+    ) -> int:
         """
         Count the total tokens in the conversation using Gemini's token counting API.
         """
         messages_for_bot = []
         for message in conversation:
-            if isinstance(message, ToolMessage) and message.for_whom == 'user':
+            if isinstance(message, ToolMessage) and message.for_whom == "user":
                 pass
             else:
                 messages_for_bot.append(message)
@@ -249,11 +282,11 @@ class GeminiInterface(LLMInterface):
 
         rendered = []
         for message in all_messages:
-            rendered.append(message.render(include={'role', 'content'}))
+            rendered.append(message.render(include={"role", "content"}))
         contents = self._convert_messages(rendered)
 
         response = await self.client.aio.models.count_tokens(
-            model=self.base_args['model'],
+            model=self.base_args["model"],
             contents=contents,
         )
 
@@ -263,4 +296,4 @@ class GeminiInterface(LLMInterface):
             return 0
 
 
-__all__ = ['GeminiInterface']
+__all__ = ["GeminiInterface"]

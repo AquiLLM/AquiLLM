@@ -9,6 +9,7 @@ from apps.chat.services.rag_config import evidence_token_budget, max_snippets_pe
 from apps.chat.services.rag_legacy_selection import diversify_evidence_chunks
 from apps.chat.services.rag_selection_types import EvidenceSelection
 from lib.llm.providers.rag_citations import _chunk_citation_from_row
+from lib.retrieval.evidence import PreparedEvidence
 
 _CHARS_PER_TOKEN = 4
 _PUBLIC_ROW_KEYS = frozenset(
@@ -47,6 +48,10 @@ class EvidencePacket:
     retrieval_status: str
     diagnostic_message: str
     total_tokens: int
+    source_evidence: tuple[PreparedEvidence, ...] = ()
+    source_mode: bool = False
+    source_authorization: object | None = None
+    selection: EvidenceSelection | None = None
 
 
 def _estimate_tokens(text: str) -> int:
@@ -103,14 +108,21 @@ def build_selected_evidence_packet(
         {key: value for key, value in candidate.row.items() if key in _PUBLIC_ROW_KEYS}
         for candidate in selection.candidates
     ]
-    return _assemble_packet(
+    packet = _assemble_packet(
         rows,
         query=query,
         search_scope=search_scope,
         retrieval_status="results_found",
         diagnostic="" if rows else "No authorized evidence remains for this request.",
-        total_tokens=sum(_estimate_tokens(_chunk_text(row)) for row in rows),
+        total_tokens=selection.estimated_tokens,
     )
+    packet.source_evidence = tuple(
+        c.prepared_evidence
+        for c in selection.candidates
+        if c.prepared_evidence is not None
+    )
+    packet.source_mode = bool(packet.source_evidence)
+    return packet
 
 
 def build_evidence_packet(

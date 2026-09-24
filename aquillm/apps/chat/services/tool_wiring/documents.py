@@ -1,4 +1,5 @@
 """Document/search LLM tools with current selected-scope access checks."""
+
 from __future__ import annotations
 
 from asgiref.sync import async_to_sync
@@ -13,16 +14,24 @@ from apps.chat.services.tool_wiring.document_tool_support import (
 from apps.chat.services.tool_wiring.document_tool_support import (
     resolve_doc_uuid as _resolve_doc_uuid,
 )
-from apps.collections.models import Collection
-from apps.documents.models import Document, DocumentChild, TextChunk
+from apps.documents.models import Document as Document
+from apps.documents.models import DocumentChild, TextChunk
+from apps.documents.services.source_loading import source_mode_enabled
 from aquillm.llm import LLMTool, ToolResultDict, llm_tool
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
 from lib.tools.documents import whole_document as whole_document_tools
 from lib.tools.documents.list_ids import titles_to_document_ids
-from lib.tools.search.context import format_adjacent_chunks_tool_result
 from lib.tools.search.vector_search import pack_chunk_search_results
 
 from ..retrieval_authorization import resolve_document_retrieval_authorization
+from .adjacent_documents import more_context_tool as more_context_tool
+from .bounded_document_tools import bounded_whole_document
+from .source_documents import (
+    can_view_document,
+    document_metadata,
+    document_source_evidence,
+    selected_document_metadata,
+)
 
 _format_related_figure_payloads = figure_payloads.format_related_figure_payloads
 _related_figure_payloads = figure_payloads.related_figure_payloads
@@ -44,11 +53,13 @@ def vector_search_tool(
     @llm_tool(
         param_descs={
             "search_string": (
-                "Required. Non-empty search query (string). Never call this tool with missing "
+                "Required. Non-empty search query (string). Ne"
+                "ver call this tool with missing "
                 "arguments; always pass search_string and top_k together."
             ),
             "top_k": (
-                "Required. Integer from 1 to 15. Start with 5 for simple questions, 8-10 for broad "
+                "Required. Integer from 1 to 15. Start with 5 "
+                "for simple questions, 8-10 for broad "
                 "or multi-part questions."
             ),
         },
@@ -57,23 +68,25 @@ def vector_search_tool(
     )
     def vector_search(search_string: str, top_k: int) -> ToolResultDict:
         """
-        Uses a combination of vector search, trigram search and reranking to search the documents
-        available to the user. You must pass search_string and top_k every time—empty tool calls fail.
-        Prefer this tool when the question may span many documents; it does not require document UUIDs.
-        Returns text chunks and image chunks. For image chunks, both the image and its OCR-extracted
-        text are provided.
-        After using this tool, tell the user that you searched the selected documents for
+        Uses a combination of vector search, trigram search and reranking to search
+        the documents
+        available to the user. You must pass search_string and top_k every
+        time—empty tool calls fail.
+        Prefer this tool when the question may span many documents; it does not
+        require document UUIDs.
+        Returns text and image chunks, including image OCR text.
+        After using this tool, tell the user that you searched the selected
+        documents for
         `search_string`, and cite or name the documents used in the final answer.
-        When returning results to the user that include images, use markdown image syntax:
+        When returning results to the user that include images, use markdown image
+        syntax:
         ![description](image_url)
         """
         if top_k < 1 or top_k > 15:
             return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
         if not search_string.strip():
             return {"exception": "search_string must not be empty"}
-        docs = Collection.get_user_accessible_documents(
-            user, Collection.objects.filter(id__in=col_ref.collections)
-        )
+        docs = selected_document_metadata(user, col_ref)
         if not docs:
             return _NO_DOCS_EXCEPTION
         resolved_authorization = resolve_document_retrieval_authorization(
@@ -100,6 +113,7 @@ def vector_search_tool(
             search_scope="selected documents",
             retrieval_diagnostics=diagnostics,
             score_set=score_set,
+            source_evidence=document_source_evidence(results),
         )
 
     return vector_search
@@ -113,13 +127,13 @@ def document_list_ids_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
     )
     def document_ids() -> ToolResultDict:
         """
-        Get the names and IDs of all documents in the selected collections. When a user asks to see
-        a document in full, or to search a single document, use this to get its ID. Copy UUIDs in full;
+        Get the names and IDs of all documents in the selected collections. When a
+        user asks to see
+        a document in full, or to search a single document, use this to get its ID.
+        Copy UUIDs in full;
         they are easy to truncate by mistake.
         """
-        docs = Collection.get_user_accessible_documents(
-            user, Collection.objects.filter(id__in=col_ref.collections)
-        )
+        docs = selected_document_metadata(user, col_ref)
         if not docs:
             return _NO_DOCS_EXCEPTION
         return {"result": titles_to_document_ids(docs)}
@@ -127,31 +141,40 @@ def document_list_ids_tool(user: User, col_ref: CollectionsRef) -> LLMTool:
     return document_ids
 
 
-def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) -> LLMTool:
+def whole_document_tool(
+    user: User, chat_ref: ChatRef, col_ref: CollectionsRef
+) -> LLMTool:
     @llm_tool(
         for_whom="assistant",
         required=["doc_id"],
         param_descs={
             "doc_id": (
-                "Document UUID; prefer values from document_ids for the selected chat collections. "
-                "If the document is in another collection you can access, add that collection in the "
+                "Document UUID; prefer values from document_id"
+                "s for the selected chat collections. "
+                "If the document is in another collection you "
+                "can access, add that collection in the "
                 "chat picker or use the exact id from the library."
             )
         },
     )
     def whole_document(doc_id: str) -> ToolResultDict:
         """
-        Get the full text of a document. Prefer doc_id from document_ids for the active collections;
-        other documents you are allowed to see can still be opened if the UUID is exact.
-        For image documents, this includes both the extracted text and the image itself.
+        Get the full text of a document. Prefer doc_id from document_ids for the
+        active collections;
+        other documents you are allowed to see can still be opened if the UUID is
+        exact.
+        For image documents, this includes both the extracted text and the image
+        itself.
         When returning an image to the user, use markdown: ![description](image_url)
-        Text passages are prefixed with exact [doc:<doc_id> chunk:<chunk_id>] references.
-        Cite those references in the answer so the user can open the supporting passage.
+        Text passages are prefixed with exact [doc:<doc_id> chunk:<chunk_id>]
+        references.
+        Cite those references in the answer so the user can open the supporting
+        passage.
         """
         doc_uuid, error_msg = _resolve_doc_uuid(doc_id, user, col_ref)
         if doc_uuid is None:
             return {"exception": error_msg}
-        doc: DocumentChild | None = Document.get_by_id(doc_uuid)
+        doc: DocumentChild | None = document_metadata(doc_uuid)
         if doc is None:
             return {
                 "exception": (
@@ -159,11 +182,15 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
                     "Try document_ids and vector_search instead."
                 )
             }
-        if not doc.collection.user_can_view(user):
+        if not can_view_document(user, doc):
             return {"exception": f"User cannot access document {doc_id}!"}
-        chunks = TextChunk.objects.filter(doc_id=doc.id).only(
-            "id", "chunk_number", "content"
-        ).order_by("chunk_number", "id")
+        if source_mode_enabled():
+            return bounded_whole_document(doc, chat_ref, user=user)
+        chunks = (
+            TextChunk.objects.filter(doc_id=doc.id)
+            .only("id", "chunk_number", "content")
+            .order_by("chunk_number", "id")
+        )
         cited_text, citation_chunks = _format_whole_document_citations(doc.id, chunks)
         document_text = cited_text or doc.full_text
         ret: ToolResultDict = {"result": document_text}
@@ -176,7 +203,9 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
             ret["result"] = image_document_tool_payload(
                 full_text=document_text, title=doc.title, display_url=display_url
             )
-            ret["_image_instruction"] = image_document_instruction(title=doc.title, display_url=display_url)
+            ret["_image_instruction"] = image_document_instruction(
+                title=doc.title, display_url=display_url
+            )
         else:
             figures = _related_figure_payloads(doc, user=user)
             if figures:
@@ -186,8 +215,10 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
                     "figures": figures,
                 }
                 ret["_image_instruction"] = (
-                    "Related figures include image_url fields. When the user asks for figures, "
-                    "include relevant figures in markdown with ![description](image_url)."
+                    "Related figures include image_url fields. Whe"
+                    "n the user asks for figures, "
+                    "include relevant figures in markdown with ![d"
+                    "escription](image_url)."
                 )
 
         serialized_result = serialize_tool_result_for_llm(ret)
@@ -195,7 +226,9 @@ def whole_document_tool(user: User, chat_ref: ChatRef, col_ref: CollectionsRef) 
             chat_ref.chat.convo, serialized_result
         )
         if token_count > 150000:
-            return {"exception": f"Document {doc_id} is too large to open in this chat."}
+            return {
+                "exception": f"Document {doc_id} is too large to open in this chat."
+            }
 
         return ret
 
@@ -214,22 +247,29 @@ def search_single_document_tool(
         required=["doc_id", "search_string", "top_k"],
         param_descs={
             "doc_id": (
-                "Document UUID; prefer document_ids for selected collections, exact id if the doc is "
+                "Document UUID; prefer document_ids for select"
+                "ed collections, exact id if the doc is "
                 "only in another collection you can access."
             ),
             "search_string": "String to search the contents of the document by.",
             "top_k": "Number of search results to return.",
         },
     )
-    def search_single_document(doc_id: str, search_string: str, top_k: int) -> ToolResultDict:
+    def search_single_document(
+        doc_id: str, search_string: str, top_k: int
+    ) -> ToolResultDict:
         """
-        Use vector search to search the text of a single document. If the user may mean many
+        Use vector search to search the text of a single document. If the user may
+        mean many
         documents, prefer vector_search instead (no doc_id required).
-        Returns text chunks and image chunks. For image chunks, both the image and its
+        Returns text chunks and image chunks. For image chunks, both the image and
+        its
         OCR-extracted text are provided.
-        After using this tool, tell the user which document was searched for `search_string`,
+        After using this tool, tell the user which document was searched for
+        `search_string`,
         and cite or name the document in the final answer.
-        When returning results to the user that include images, use markdown image syntax:
+        When returning results to the user that include images, use markdown image
+        syntax:
         ![description](image_url)
         """
         if top_k < 1 or top_k > 15:
@@ -239,7 +279,7 @@ def search_single_document_tool(
         doc_uuid, error_msg = _resolve_doc_uuid(doc_id, user, col_ref)
         if doc_uuid is None:
             return {"exception": error_msg}
-        doc = Document.get_by_id(doc_uuid)
+        doc = document_metadata(doc_uuid)
         if doc is None:
             return {
                 "exception": (
@@ -247,7 +287,7 @@ def search_single_document_tool(
                     "Try document_ids and vector_search instead."
                 )
             }
-        if not doc.collection.user_can_view(user):
+        if not can_view_document(user, doc):
             return {"exception": f"User cannot access document {doc_id}!"}
         resolved_authorization = resolve_document_retrieval_authorization(
             user, col_ref, (doc,), authorization_context
@@ -273,56 +313,16 @@ def search_single_document_tool(
             search_scope=f'document "{doc.title}"',
             retrieval_diagnostics=diagnostics,
             score_set=score_set,
+            source_evidence=document_source_evidence(results),
         )
 
     return search_single_document
 
 
-def more_context_tool(user: User) -> LLMTool:
-    @llm_tool(
-        for_whom="assistant",
-        required=["adjacent_chunks", "chunk_id"],
-        param_descs={
-            "chunk_id": "ID number of the chunk for which more context is desired",
-            "adjacent_chunks": (
-                "How many chunks on either side to return. Start small and work up, if you think "
-                "expanding the context will provide more useful info. Go no higher than 10."
-            ),
-        },
-    )
-    def more_context(chunk_id: int, adjacent_chunks: int) -> ToolResultDict:
-        """
-        Get adjacent text chunks on either side of a given chunk.
-        Use this when a search returned something relevant, but it seemed like the information was cut off.
-        """
-        if adjacent_chunks < 1 or adjacent_chunks > 10:
-            return {"exception": "Invalid value for adjacent_chunks!"}
-        central_chunk = TextChunk.objects.filter(id=chunk_id).first()
-        if central_chunk is None:
-            return {"exception": f"Text chunk {chunk_id} does not exist!"}
-        doc = Document.get_by_id(central_chunk.doc_id)
-        if doc is None:
-            return {"exception": f"Document for chunk {chunk_id} does not exist!"}
-        if not doc.collection.user_can_view(user):
-            return {"exception": f"User cannot access document containing {chunk_id}!"}
-        central_chunk_number = central_chunk.chunk_number
-        bottom = central_chunk_number - adjacent_chunks
-        top = central_chunk_number + adjacent_chunks
-        window = list(
-            TextChunk.objects.filter(
-                doc_id=central_chunk.doc_id, chunk_number__in=range(bottom, top + 1)
-            )
-            .order_by("chunk_number")
-            .only("chunk_number", "content")
-        )
-        if not window:
-            return {"exception": f"No nearby chunks found for chunk {chunk_id}."}
-        return format_adjacent_chunks_tool_result(window, truncate=truncate_tool_text)
-
-    return more_context
-
-
 __all__ = [
-    "document_list_ids_tool", "more_context_tool",
-    "search_single_document_tool", "vector_search_tool", "whole_document_tool",
+    "document_list_ids_tool",
+    "more_context_tool",
+    "search_single_document_tool",
+    "vector_search_tool",
+    "whole_document_tool",
 ]

@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from os import getenv
 
-
 _TRUE = frozenset(("1", "true", "yes", "on"))
 _FALSE = frozenset(("0", "false", "no", "off"))
 
@@ -51,7 +50,9 @@ class PreservationConfig:
             or (self.rerank_text_mode == "shadow" and self.shadow_scoring)
         )
 
-    def document_cap(self, *, final_passage_limit: int, legacy_per_doc_limit: int) -> int:
+    def document_cap(
+        self, *, final_passage_limit: int, legacy_per_doc_limit: int
+    ) -> int:
         if final_passage_limit <= 0 or legacy_per_doc_limit <= 0:
             raise ValueError("passage limits must be positive")
         if self.document_capacity_mode == "legacy":
@@ -59,11 +60,17 @@ class PreservationConfig:
         return min(final_passage_limit, self.document_hard_cap or final_passage_limit)
 
 
-def preservation_config(*, shared_selector_available: bool = True) -> PreservationConfig:
+def preservation_config(
+    *, shared_selector_available: bool = True
+) -> PreservationConfig:
     try:
-        rerank = _choice("RAG_RERANK_TEXT_MODE", "legacy", {"legacy", "shadow", "windowed"})
+        rerank = _choice(
+            "RAG_RERANK_TEXT_MODE", "legacy", {"legacy", "shadow", "windowed"}
+        )
         evidence = _choice("RAG_EVIDENCE_TEXT_MODE", "legacy", {"legacy", "source"})
-        capacity = _choice("RAG_DOCUMENT_CAPACITY_MODE", "legacy", {"legacy", "budgeted"})
+        capacity = _choice(
+            "RAG_DOCUMENT_CAPACITY_MODE", "legacy", {"legacy", "budgeted"}
+        )
         raw_cap = getenv("RAG_DOCUMENT_HARD_CAP", "0").strip()
         hard_cap = int(raw_cap)
         if hard_cap < 0:
@@ -72,10 +79,24 @@ def preservation_config(*, shared_selector_available: bool = True) -> Preservati
         iterative = _bool("RAG_ITERATIVE_RETRIEVAL_ENABLED")
         shadow = _bool("RAG_RERANK_SHADOW_SCORING_ENABLED")
         if (followup or iterative) and evidence != "source":
-            raise ValueError("source evidence required for follow-up or iterative retrieval")
+            raise ValueError(
+                "source evidence required for follow-up or iterative retrieval"
+            )
         if shadow and rerank != "shadow":
             raise ValueError("shadow scoring requires shadow rerank mode")
-        result = PreservationConfig(rerank, evidence, capacity, hard_cap, followup, iterative, shadow)
+        result = PreservationConfig(
+            rerank, evidence, capacity, hard_cap, followup, iterative, shadow
+        )
+        from .rag_config import evidence_selection_config
+
+        if result.active and evidence_selection_config().error:
+            raise ValueError("invalid shared selector configuration")
+        if (
+            result.active
+            and getenv("RAG_EVIDENCE_SELECTION_MODE", "legacy").strip().lower()
+            == "shadow"
+        ):
+            raise ValueError("active preservation requires a served shared selector")
         if result.active and not shared_selector_available:
             raise ValueError("shared selector unavailable")
         return result

@@ -1,9 +1,9 @@
 """OpenAI-compatible context overflow and timeout retry argument adjustment."""
+
 from __future__ import annotations
 
 import re
 from os import getenv
-from typing import Optional
 
 from .openai_tokens import trim_messages_for_overflow
 
@@ -13,22 +13,25 @@ def _token_int(raw: str) -> int:
     return int(re.sub(r"[,_\s]", "", raw))
 
 
-def _extract_overflow_tokens(message: str) -> Optional[int]:
+def _extract_overflow_tokens(message: str) -> int | None:
     """Extract overflow amount from common OpenAI-compatible context error templates."""
     if not message:
         return None
 
     patterns = (
         (
-            r"passed\s+([\d,\s_]+)\s+input tokens.*maximum input length of\s+([\d,\s_]+)\s+tokens",
+            "passed\\s+([\\d,\\s_]+)\\s+input tokens.*maximum "
+            "input length of\\s+([\\d,\\s_]+)\\s+tokens",
             lambda m: _token_int(m.group(1)) - _token_int(m.group(2)),
         ),
         (
-            r"maximum context length is\s+([\d,\s_]+)\s+tokens.*requested\s+([\d,\s_]+)\s+tokens",
+            "maximum context length is\\s+([\\d,\\s_]+)\\s+tok"
+            "ens.*requested\\s+([\\d,\\s_]+)\\s+tokens",
             lambda m: _token_int(m.group(2)) - _token_int(m.group(1)),
         ),
         (
-            r"requested\s+([\d,\s_]+)\s+tokens.*maximum context length is\s+([\d,\s_]+)\s+tokens",
+            "requested\\s+([\\d,\\s_]+)\\s+tokens.*maximum con"
+            "text length is\\s+([\\d,\\s_]+)\\s+tokens",
             lambda m: _token_int(m.group(1)) - _token_int(m.group(2)),
         ),
     )
@@ -43,7 +46,10 @@ def _extract_overflow_tokens(message: str) -> Optional[int]:
 
 
 def context_overflow_search_text(exc: BaseException) -> str:
-    """Collect all text the API might put the overflow message in (str vs nested JSON body)."""
+    """
+    Collect all text the API might put the overflow message in (str vs nested JSON
+    body).
+    """
     parts: list[str] = []
     seen_exc_ids: set[int] = set()
     queue: list[BaseException] = [exc]
@@ -111,7 +117,10 @@ def strip_images_from_messages(arguments: dict) -> bool:
                     if part_type in {"image_url", "image", "input_image"}:
                         stripped = True
                         new_content.append(
-                            {"type": "text", "text": "[Image removed due to context limit]"}
+                            {
+                                "type": "text",
+                                "text": "[Image removed due to context limit]",
+                            }
                         )
                     else:
                         new_content.append(part)
@@ -131,21 +140,29 @@ def strip_images_from_messages(arguments: dict) -> bool:
     return stripped
 
 
-def retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional[dict]:
+def retry_args_for_context_overflow(arguments: dict, exc: Exception) -> dict | None:
     """Parse context overflow error and adjust arguments for retry."""
     message = context_overflow_search_text(exc)
     overflow = _extract_overflow_tokens(message)
     if overflow is None:
         return None
+    from lib.llm.evidence_guard import context_limited, current_protection
+
+    if current_protection() is not None:
+        context_limited("provider_context_overflow")
 
     current_max_tokens = int(arguments.get("max_tokens", 0))
     has_tools = bool(arguments.get("tools"))
     try:
         if has_tools:
-            min_completion_tokens = max(64, int(getenv("LLM_TOOL_MIN_COMPLETION_TOKENS", "128")))
+            min_completion_tokens = max(
+                64, int(getenv("LLM_TOOL_MIN_COMPLETION_TOKENS", "128"))
+            )
             hard_floor_tokens = 64
         else:
-            min_completion_tokens = max(128, int(getenv("LLM_MIN_COMPLETION_TOKENS", "384")))
+            min_completion_tokens = max(
+                128, int(getenv("LLM_MIN_COMPLETION_TOKENS", "384"))
+            )
             hard_floor_tokens = 192
     except Exception:
         min_completion_tokens = 128 if has_tools else 384
@@ -194,7 +211,7 @@ def retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional
 
     should_trim_context = overflow > 0
     # Do not run text trim immediately after stripping images: small overflows use tiny
-    # trim windows and would replace the whole user message (including the strip marker).
+    # trim windows and would replace the whole user message, including its marker.
     if (
         should_trim_context
         and not stripped_images
@@ -208,7 +225,7 @@ def retry_args_for_context_overflow(arguments: dict, exc: Exception) -> Optional
     return retry_args if changed else None
 
 
-def retry_args_for_timeout(arguments: dict, attempt: int) -> Optional[dict]:
+def retry_args_for_timeout(arguments: dict, attempt: int) -> dict | None:
     current_max_tokens = int(arguments.get("max_tokens", 0))
     if current_max_tokens <= 0:
         return None
@@ -232,7 +249,9 @@ def retry_args_for_timeout(arguments: dict, attempt: int) -> Optional[dict]:
     changed = False
     reduction_ratio = min(0.6, 0.2 + (0.1 * attempt))
     reduction_tokens = max(64, int(current_max_tokens * reduction_ratio))
-    reduced_max_tokens = max(min_completion_tokens, current_max_tokens - reduction_tokens)
+    reduced_max_tokens = max(
+        min_completion_tokens, current_max_tokens - reduction_tokens
+    )
     if reduced_max_tokens < current_max_tokens:
         retry_args["max_tokens"] = reduced_max_tokens
         changed = True

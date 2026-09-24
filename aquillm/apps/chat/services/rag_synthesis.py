@@ -13,6 +13,7 @@ direct-RAG guarantees on top:
   ``LLM_ALLOW_EXTRACTIVE_EVIDENCE_UI``).
 - Figure requests ensure markdown images when the packet carries image URLs.
 """
+
 from __future__ import annotations
 
 import re
@@ -20,16 +21,22 @@ from typing import Any
 
 import structlog
 
+from apps.chat.services.rag_config import max_figures_per_turn, synthesis_max_tokens
+from apps.chat.services.rag_evidence import EvidencePacket
+from apps.chat.services.rag_evidence_handoff import prepare_evidence_handoff
+from apps.chat.services.rag_source_synthesis import (
+    LIMITED_MESSAGE,
+    complete_source_request,
+    revalidate_source_packet,
+)
+from apps.documents.services.source_loading import SourcePreparationLimited
+from lib.llm.evidence_guard import ContextLimited
 from lib.llm.providers import image_context as imgctx
 from lib.llm.providers import visibility
 from lib.llm.providers.rag_citations import _chunk_citation_from_row
 from lib.llm.providers.retrieval_status import document_retrieval_notice
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
-
-from apps.chat.services.rag_config import max_figures_per_turn, synthesis_max_tokens
-from apps.chat.services.rag_evidence import EvidencePacket
-from apps.chat.services.rag_evidence_handoff import prepare_evidence_handoff
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -71,7 +78,9 @@ def _wants_figures(convo: Conversation) -> bool:
 
 
 def _synthesis_unusable(content: str | None) -> bool:
-    visible = visibility.strip_tool_markup(visibility.strip_thinking_blocks(content)).strip()
+    visible = visibility.strip_tool_markup(
+        visibility.strip_thinking_blocks(content)
+    ).strip()
     if not visible:
         return True
     if visibility.is_interim_assistant_text(visible):
@@ -173,7 +182,18 @@ async def synthesize_from_evidence(
     max_tokens: int | None = None,
 ) -> Conversation:
     """Produce the final assistant turn from packaged evidence."""
+    if packet.source_mode:
+        try:
+            packet = await revalidate_source_packet(packet)
+        except SourcePreparationLimited:
+            return convo + [
+                AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
+            ]
     convo, request_convo = prepare_evidence_handoff(convo, packet)
+    if packet.retrieval_status == "context_limited":
+        return convo + [
+            AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
+        ]
     if packet.retrieval_status == "no_results" or not packet.chunks:
         return convo + [
             AssistantMessage(
@@ -182,12 +202,22 @@ async def synthesize_from_evidence(
         ]
 
     budget = max_tokens if max_tokens is not None else synthesis_max_tokens()
-    completed_request, _ = await llm_if.complete(
-        request_convo, budget, stream_func=stream_func
-    )
+    try:
+        if packet.source_mode:
+            completed_request, _ = await complete_source_request(
+                llm_if, request_convo, budget, stream_func
+            )
+        else:
+            completed_request, _ = await llm_if.complete(
+                request_convo, budget, stream_func=stream_func
+            )
+    except ContextLimited:
+        return convo + [
+            AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
+        ]
     # Only provider-created turns belong in stored history; request-only evidence
     # omission and provider context trimming must never rewrite earlier messages.
-    result_convo = convo + list(completed_request.messages[len(convo):])
+    result_convo = convo + list(completed_request.messages[len(convo) :])
 
     last = result_convo[-1]
     if not isinstance(last, AssistantMessage) or last.tool_call_id:

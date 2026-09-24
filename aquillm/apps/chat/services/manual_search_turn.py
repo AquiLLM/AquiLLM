@@ -89,6 +89,13 @@ async def run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
     if command is None:
         return "skipped"
 
+    from apps.chat.services.rag_source_synthesis import LIMITED_MESSAGE
+    from apps.documents.services.source_loading import source_mode_enabled
+
+    if source_mode_enabled():
+        # Task5 binds explicit manual acquisition to the shared source handoff.
+        return _reply(consumer, convo, LIMITED_MESSAGE)
+
     working_convo = convo
     correlation_id = new_correlation_id()
     try:
@@ -126,7 +133,7 @@ async def run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
         return _reply(consumer, working_convo, str(exc))
     except Exception as exc:
         logger.warning(
-            "manual_search_failed",
+            "obs.rag.manual_search_failed",
             correlation_id=correlation_id,
             command=command.command,
             error_type=type(exc).__name__,

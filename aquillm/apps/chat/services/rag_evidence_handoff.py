@@ -66,7 +66,9 @@ def _selected_payload(packet: EvidencePacket) -> dict[str, Any]:
     )
     payload: dict[str, Any] = {
         "result": rows,
-        "retrieval_status": packet.retrieval_status if rows else "no_results",
+        "retrieval_status": packet.retrieval_status
+        if rows or packet.retrieval_status == "context_limited"
+        else "no_results",
         "retrieved_count": len(rows),
         "retrieved_documents": titles,
     }

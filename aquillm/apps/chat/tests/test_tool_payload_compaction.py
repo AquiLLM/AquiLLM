@@ -1,15 +1,46 @@
 """Tests for compact vector search payloads and lean tool message wrappers."""
+
 from __future__ import annotations
 
 import os
 import uuid
-from unittest.mock import patch
 from types import SimpleNamespace
+from unittest.mock import patch
 
+import pytest
 from django.test import SimpleTestCase
 
 from lib.llm.types.messages import ToolMessage
 from lib.tools.search.vector_search import pack_chunk_search_results
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_private_source_sidecar_preserves_public_preview_schema(compact):
+    from lib.llm.providers.image_context import serialize_tool_result_for_llm
+    from lib.retrieval.evidence import SourceEvidence, fingerprint_source
+
+    did = uuid.uuid4()
+    text = "public preview " * 200 + "tail exception"
+    chunk = SimpleNamespace(
+        id=1, doc_id=did, chunk_number=0, content=text, modality="text"
+    )
+    source = SourceEvidence(1, str(did), 0, fingerprint_source(text), text)
+    result = pack_chunk_search_results(
+        [chunk],
+        titles_by_doc_id={did: "Doc"},
+        docs_by_doc_id={},
+        truncate=lambda value: value[:20],
+        image_modality="image",
+        compact_items=compact,
+        source_evidence=(source,),
+    )
+    assert result["result"][0]["x" if compact else "text"] == text[:20]
+    assert (
+        result["_source_provenance"][0]["source_fingerprint"]
+        == source.source_fingerprint
+    )
+    assert "tail exception" not in serialize_tool_result_for_llm(result)
+    assert "_source_provenance" not in serialize_tool_result_for_llm(result)
 
 
 class PackChunkSearchTests(SimpleTestCase):
@@ -80,7 +111,9 @@ class PackChunkSearchTests(SimpleTestCase):
         out = pack_chunk_search_results(
             [chunk],
             titles_by_doc_id={did: "Fig"},
-            docs_by_doc_id={did: SimpleNamespace(image_file=SimpleNamespace(name="fig.png"))},
+            docs_by_doc_id={
+                did: SimpleNamespace(image_file=SimpleNamespace(name="fig.png"))
+            },
             truncate=lambda s: s,
             image_modality="image",
             compact_items=False,

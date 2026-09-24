@@ -60,16 +60,6 @@ _BASELINE_VIOLATIONS: Counter[tuple[str, str, str]] = Counter(
             "rag_direct_turn",
         ): 1,
         (
-            "aquillm/apps/chat/services/rag_pipeline.py",
-            "info",
-            "direct_rag_turn_handled retrieved=%d retained=%d status=%s",
-        ): 1,
-        (
-            "aquillm/apps/chat/services/rag_pipeline.py",
-            "exception",
-            "direct_rag_turn_failed; falling back to tool loop",
-        ): 1,
-        (
             "aquillm/apps/documents/views/api.py",
             "warning",
             "citation_narrow_empty",

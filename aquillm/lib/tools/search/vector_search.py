@@ -1,13 +1,25 @@
-"""Format vector / hybrid text-chunk search results for LLM tools (no Django imports)."""
+"""
+Format vector / hybrid text-chunk search results for LLM tools (no Django imports).
+"""
+
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from os import getenv
-from typing import Any, Callable, Sequence
+from typing import Any
+
+from lib.retrieval.evidence import SourceEvidence, source_provenance
 
 IMAGE_MARKDOWN_INSTRUCTION = (
-    "One or more results include an image URL (field `image_url`, or compact payloads: `u` with "
-    "`ty` of `image` or `text_with_image`). When discussing those results, include them in markdown "
-    "with ![description](url) using that exact URL from the tool result—do not guess document ids."
+    "One or more results include an image URL (fie"
+    "ld `image_url`, or compact payloads: `u` with"
+    " "
+    "`ty` of `image` or `text_with_image`). When d"
+    "iscussing those results, include them in mark"
+    "down "
+    "with ![description](url) using that exact URL"
+    " from the tool result—do not guess document i"
+    "ds."
 )
 
 
@@ -37,7 +49,10 @@ def _retrieval_message(*, search_string: str | None, search_scope: str) -> str:
     scope = " ".join((search_scope or "documents").split())
     query = " ".join((search_string or "").split())
     if query:
-        return f'I searched {scope} for "{query}", but retrieval returned no relevant passages.'
+        return (
+            f'I searched {scope} for "{query}", '
+            "but retrieval returned no relevant passages."
+        )
     return f"I searched {scope}, but retrieval returned no relevant passages."
 
 
@@ -66,13 +81,20 @@ def pack_chunk_search_results(
     search_scope: str = "documents",
     retrieval_diagnostics: dict[str, Any] | None = None,
     score_set: dict[str, Any] | None = None,
+    source_evidence: tuple[SourceEvidence, ...] = (),
 ) -> dict[str, Any]:
-    """Build the tool `result` dict for multi-chunk search (collections or single doc)."""
+    """
+    Build the tool `result` dict for multi-chunk search (collections or single doc).
+    """
     use_compact = _compact_items_default() if compact_items is None else compact_items
     public_diagnostics = (
-        {key: value for key, value in retrieval_diagnostics.items()
-         if type(key) is str and not key.startswith("_")}
-        if retrieval_diagnostics is not None else None
+        {
+            key: value
+            for key, value in retrieval_diagnostics.items()
+            if type(key) is str and not key.startswith("_")
+        }
+        if retrieval_diagnostics is not None
+        else None
     )
     items: list[dict[str, Any]] = []
     has_image_results = False
@@ -102,7 +124,9 @@ def pack_chunk_search_results(
 
         doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
         if chunk.doc_id not in image_renderable_by_doc_id:
-            image_renderable_by_doc_id[chunk.doc_id] = _doc_has_renderable_image(doc_for_chunk)
+            image_renderable_by_doc_id[chunk.doc_id] = _doc_has_renderable_image(
+                doc_for_chunk
+            )
         has_renderable_image = image_renderable_by_doc_id[chunk.doc_id]
 
         if chunk.modality == image_modality:
@@ -197,6 +221,10 @@ def pack_chunk_search_results(
         ret["_retrieval_diagnostics"] = public_diagnostics
     if score_set is not None:
         ret["_retrieval_scores"] = score_set
+    if source_evidence:
+        ret["_source_provenance"] = [
+            source_provenance(source) for source in source_evidence
+        ]
 
     return ret
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from typing import Any, Literal
 
 import structlog
@@ -25,10 +24,16 @@ from apps.chat.services.rag_config import (
     direct_rag_top_k,
     evidence_selection_config,
     is_direct_rag_enabled,
+    rag_preservation_config,
 )
 from apps.chat.services.rag_evidence import build_evidence_packet
 from apps.chat.services.rag_intent import classify_chat_message
 from apps.chat.services.rag_metrics import log_direct_rag_turn
+from apps.chat.services.rag_pipeline_messages import (
+    _append_retrieval_messages,
+    _has_prior_vector_search,
+    _latest_user_message,
+)
 from apps.chat.services.rag_query import build_retrieval_queries
 from apps.chat.services.rag_retrieval import merge_ranked_tool_results
 from apps.chat.services.rag_selection_coordinator import (
@@ -44,15 +49,16 @@ from apps.chat.services.rag_selection_coordinator import (
 from apps.chat.services.rag_selection_coordinator import (
     selection_question as _selection_question,
 )
+from apps.chat.services.rag_source_synthesis import LIMITED_MESSAGE
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.chat.services.tool_wiring.documents import vector_search_tool
-from lib.llm.providers import image_context as imgctx
+from apps.documents.services.source_loading import current_source_runtime
 from lib.llm.providers.request_observability import (
     new_correlation_id,
     observability_scope,
 )
 from lib.llm.types.conversation import Conversation
-from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
+from lib.llm.types.messages import AssistantMessage
 
 logger = structlog.stdlib.get_logger(__name__)
 _SEARCH_SCOPE = "selected documents"
@@ -64,23 +70,6 @@ _SELECT_COLLECTIONS_MESSAGE = (
 DirectRagOutcome = Literal["handled", "skipped"]
 
 
-def _latest_user_message(convo: Conversation) -> UserMessage | None:
-    if len(convo) == 0:
-        return None
-    last = convo[-1]
-    return last if isinstance(last, UserMessage) else None
-
-
-def _has_prior_vector_search(convo: Conversation) -> bool:
-    """Return whether this conversation contains a reusable retrieval query."""
-    return any(
-        getattr(message, "tool_call_name", None) == "vector_search"
-        and isinstance(getattr(message, "tool_call_input", None), dict)
-        and bool(message.tool_call_input.get("search_string"))
-        for message in convo.messages[:-1]
-    )
-
-
 def _run_vector_search(consumer: Any, query: str, top_k: int) -> dict:
     """Execute vector_search synchronously via the existing tool factory.
 
@@ -89,28 +78,6 @@ def _run_vector_search(consumer: Any, query: str, top_k: int) -> dict:
     """
     tool = vector_search_tool(consumer.user, consumer.col_ref)
     return dict(tool(search_string=query, top_k=top_k))
-
-
-def _append_retrieval_messages(
-    convo: Conversation, query: str, raw_result: dict, top_k: int
-) -> Conversation:
-    """Append a synthetic tool-call + tool-result so synthesis sees a post-tool turn."""
-    arguments = {"search_string": query, "top_k": top_k}
-    assistant_tool_call = AssistantMessage(
-        content="",
-        stop_reason="tool_use",
-        tool_call_id=str(uuid.uuid4()),
-        tool_call_name="vector_search",
-        tool_call_input=arguments,
-    )
-    tool_message = ToolMessage(
-        tool_name="vector_search",
-        for_whom="assistant",
-        content=imgctx.serialize_tool_result_for_llm(raw_result),
-        arguments=arguments,
-        result_dict=raw_result,
-    )
-    return convo + [assistant_tool_call, tool_message]
 
 
 async def run_direct_rag_turn(
@@ -165,6 +132,14 @@ async def run_direct_rag_turn(
         ]
         return "handled"
 
+    preservation = rag_preservation_config()
+    if preservation.error or (
+        preservation.evidence_text_mode == "source" and current_source_runtime() is None
+    ):
+        consumer.convo = convo + [
+            AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
+        ]
+        return "handled"
     try:
         t_query_start = time.perf_counter()
         queries = build_retrieval_queries(
@@ -207,22 +182,30 @@ async def run_direct_rag_turn(
         failed_query_count = len(search_outcomes) - len(search_results)
         if failed_query_count:
             logger.warning(
-                "direct_rag_partial_retrieval_failure failed=%d total=%d",
-                failed_query_count,
-                len(search_outcomes),
+                "obs.rag.partial_retrieval_failure",
+                failed_count=failed_query_count,
+                total_count=len(search_outcomes),
             )
-        raw_result = merge_ranked_tool_results(search_results, limit=top_k)
+        raw_result = (
+            {}
+            if preservation.active
+            else merge_ranked_tool_results(search_results, limit=top_k)
+        )
         t_retrieval_end = time.perf_counter()
         retrieval_diagnostics = raw_result.get("_retrieval_diagnostics")
         if not isinstance(retrieval_diagnostics, dict):
             retrieval_diagnostics = {}
 
         t_evidence_start = time.perf_counter()
-        packet = build_evidence_packet(
-            raw_result, query=query, search_scope=_SEARCH_SCOPE
+        packet = (
+            None
+            if preservation.active
+            else build_evidence_packet(
+                raw_result, query=query, search_scope=_SEARCH_SCOPE
+            )
         )
         selection_turn = None
-        if selection_config.mode in ("shadow", "adaptive"):
+        if preservation.active or selection_config.mode in ("shadow", "adaptive"):
             (
                 selection_turn,
                 selected_packet,
@@ -236,6 +219,8 @@ async def run_direct_rag_turn(
                 top_k,
                 prepare_fn=_prepare_selection_sync,
                 revalidate_fn=_revalidate_selection_sync,
+                request_conversation=convo,
+                llm_if=llm_if,
             )
             if selected_packet is not None:
                 packet, raw_result = selected_packet, selected_result
@@ -280,7 +265,7 @@ async def run_direct_rag_turn(
             **selection_metric_fields(selection_config, selection_turn, packet),
         )
         logger.info(
-            "direct_rag_turn_handled",
+            "obs.rag.direct_turn_handled",
             correlation_id=correlation_id,
             retrieved_count=int(raw_result.get("retrieved_count", 0) or 0),
             retained_count=len(packet.chunks),
@@ -289,10 +274,15 @@ async def run_direct_rag_turn(
         return "handled"
     except Exception as exc:
         logger.warning(
-            "direct_rag_turn_failed",
+            "obs.rag.direct_turn_failed",
             correlation_id=correlation_id,
             error_type=type(exc).__name__,
         )
+        if preservation.active:
+            consumer.convo = convo + [
+                AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
+            ]
+            return "handled"
         return "skipped"
 
 
