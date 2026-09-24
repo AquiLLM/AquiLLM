@@ -6,6 +6,7 @@ import json
 from collections import OrderedDict
 from collections.abc import Mapping
 from math import isfinite
+from threading import Lock
 from time import monotonic
 
 from apps.knowledge_graph.retrieval.topology import contracts as c
@@ -108,6 +109,7 @@ class Neo4jProjectedTopologyQueryAdapter:
             raise TypeError("clock must be callable")
         self._driver, self._clock = driver, clock
         self._cache: OrderedDict[tuple[str, str, str], object] = OrderedDict()
+        self._cache_lock = Lock()
 
     def _remaining(self, deadline: float) -> float:
         if type(deadline) is not float or not isfinite(deadline) or deadline <= 0.0:
@@ -182,11 +184,12 @@ class Neo4jProjectedTopologyQueryAdapter:
             parameters["seed_checksum"],
             parameters["caps_json"],
         )
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            self._remaining(deadline)
-            self._cache.move_to_end(cache_key)
-            return cached
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                self._remaining(deadline)
+                self._cache.move_to_end(cache_key)
+                return cached
         deadline_driver = _DeadlineProjectionDriver(
             self._driver, deadline=deadline, clock=self._clock
         )
@@ -252,9 +255,10 @@ class Neo4jProjectedTopologyQueryAdapter:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise TopologyLoadError(invalid) from error
-        self._cache[cache_key] = snapshot
-        if len(self._cache) > 8:
-            self._cache.popitem(last=False)
+        with self._cache_lock:
+            self._cache[cache_key] = snapshot
+            if len(self._cache) > 8:
+                self._cache.popitem(last=False)
         return snapshot
 
     def execute_read(

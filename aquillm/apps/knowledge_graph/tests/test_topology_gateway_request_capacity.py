@@ -132,7 +132,8 @@ async def test_gateway_admits_128_generation_manifest_request(monkeypatch):
             return tuple({"index": index} for index in range(max_records))
 
     adapter = Adapter()
-    settings = _settings()
+    # This checks maximum wire admission, not a 100 ms decoding benchmark.
+    settings = replace(_settings(), timeout_ms=2500)
     runtime = service.TopologyGatewayRuntime(settings, object(), adapter)
     monkeypatch.setattr(service, "monotonic", lambda: 40.0)
     monkeypatch.setattr(

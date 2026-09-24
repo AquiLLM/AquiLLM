@@ -16,6 +16,7 @@ from apps.knowledge_graph.projection.topology_adapter import (
 
 from .contracts import TopologyFailureReason, TopologyQueryName
 from .failures import TopologyLoadError, TopologyResultCapError
+from .gateway_workers import GATEWAY_WORKERS
 from .gateway_config import (
     TopologyGatewaySettings,
     load_topology_gateway_settings,
@@ -51,9 +52,7 @@ class TopologyGatewayRuntime:
 _runtime: TopologyGatewayRuntime | None = None
 
 
-def _get_runtime(
-    settings: TopologyGatewaySettings | None = None,
-) -> TopologyGatewayRuntime:
+def _get_runtime(settings: TopologyGatewaySettings | None = None) -> TopologyGatewayRuntime:
     global _runtime
     if settings is None:
         settings = load_topology_gateway_settings(environ)
@@ -178,9 +177,7 @@ def _mapped_reason(error: TopologyLoadError) -> GatewayFailureReason:
     }[error.reason]
 
 
-async def healthz(
-    _scope: dict[str, Any], _receive: Callable[..., Awaitable[dict[str, Any]]], send
-) -> None:
+async def healthz(_scope, _receive, send) -> None:
     await _respond(send, 200, _OK)
 
 
@@ -189,9 +186,12 @@ async def readyz(scope, receive, send) -> None:
     try:
         settings = load_topology_gateway_settings(environ)
         runtime = _get_runtime(settings)
-        rows = runtime.driver.execute_read(
+        rows = await GATEWAY_WORKERS.run(
+            runtime.driver.execute_read,
             "RETURN 1 AS ready",
             {},
+            expires=monotonic() + settings.timeout_ms / 1000.0,
+            clock=monotonic,
             timeout_seconds=settings.timeout_ms / 1000.0,
             max_records=1,
         )
@@ -238,7 +238,8 @@ async def topology_read(scope, receive, send) -> None:
         return
     try:
         runtime = _get_runtime(settings)
-        rows = runtime.adapter.execute_read(
+        rows = await GATEWAY_WORKERS.run(
+            runtime.adapter.execute_read, expires=deadline, clock=monotonic,
             query=request.query,
             parameters=request.parameters,
             deadline=deadline,

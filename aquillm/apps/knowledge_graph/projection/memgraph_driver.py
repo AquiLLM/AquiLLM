@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isfinite
+from threading import Lock
 from typing import Any
 
 type ProjectionScalar = str | int | float | bool | None
@@ -154,18 +155,20 @@ class Neo4jMemgraphDriver:
         self._password = password
         self._database = database
         self._client = driver
+        self._client_lock = Lock()
 
     def _connection(self):
-        if self._client is None:
-            from neo4j import GraphDatabase
+        with self._client_lock:
+            if self._client is None:
+                from neo4j import GraphDatabase
 
-            auth = (
-                None
-                if not self._username and not self._password
-                else (self._username, self._password)
-            )
-            self._client = GraphDatabase.driver(self._uri, auth=auth)
-        return self._client
+                auth = (
+                    None
+                    if not self._username and not self._password
+                    else (self._username, self._password)
+                )
+                self._client = GraphDatabase.driver(self._uri, auth=auth)
+            return self._client
 
     def _transaction_function(self, callback, *, timeout: float):
         try:

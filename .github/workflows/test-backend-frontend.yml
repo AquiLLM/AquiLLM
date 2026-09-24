@@ -120,6 +120,8 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_topology_gateway_contracts.py
           aquillm/apps/knowledge_graph/tests/test_topology_gateway_client.py
           aquillm/apps/knowledge_graph/tests/test_topology_gateway_service.py
+          aquillm/apps/knowledge_graph/tests/test_topology_gateway_concurrency.py
+          aquillm/apps/knowledge_graph/tests/test_projection_concurrent_reads.py
           aquillm/apps/knowledge_graph/tests/test_retrieval_scheduler_lifecycle.py
           aquillm/apps/knowledge_graph/tests/test_retrieval_overlap.py
           aquillm/apps/knowledge_graph/tests/test_retrieval_overlap_failures.py
