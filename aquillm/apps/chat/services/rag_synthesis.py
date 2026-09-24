@@ -27,9 +27,13 @@ from apps.chat.services.rag_evidence_handoff import prepare_evidence_handoff
 from apps.chat.services.rag_source_synthesis import (
     LIMITED_MESSAGE,
     complete_source_request,
+    finalize_source_support,
     revalidate_source_packet,
 )
-from apps.documents.services.source_loading import SourcePreparationLimited
+from apps.documents.services.source_loading import (
+    SourcePreparationLimited,
+    current_source_runtime,
+)
 from lib.llm.evidence_guard import ContextLimited
 from lib.llm.providers import image_context as imgctx
 from lib.llm.providers import visibility
@@ -94,7 +98,8 @@ def _extractive_summary(packet: EvidencePacket) -> str:
     points: list[str] = []
     seen: set[tuple[str, str | None]] = set()
     for chunk in packet.chunks:
-        snippet = _truncate_sentence(chunk.get("text") or chunk.get("x") or "")
+        text = chunk.get("text") or chunk.get("x") or ""
+        snippet = text if packet.source_mode else _truncate_sentence(text)
         if not snippet:
             continue
         citation = _chunk_citation_from_row(chunk)
@@ -103,7 +108,7 @@ def _extractive_summary(packet: EvidencePacket) -> str:
             continue
         seen.add(key)
         points.append(f"- {snippet} {citation}" if citation else f"- {snippet}")
-        if len(points) >= _MAX_EXTRACTIVE_POINTS:
+        if not packet.source_mode and len(points) >= _MAX_EXTRACTIVE_POINTS:
             break
     if not points:
         return ""
@@ -182,9 +187,13 @@ async def synthesize_from_evidence(
     max_tokens: int | None = None,
 ) -> Conversation:
     """Produce the final assistant turn from packaged evidence."""
-    if packet.source_mode:
+    bounded_packet = packet.source_mode or (
+        current_source_runtime() is not None and packet.source_authorization is not None
+    )
+    if bounded_packet:
         try:
             packet = await revalidate_source_packet(packet)
+            packet = await finalize_source_support(packet)
         except SourcePreparationLimited:
             return convo + [
                 AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
@@ -203,9 +212,9 @@ async def synthesize_from_evidence(
 
     budget = max_tokens if max_tokens is not None else synthesis_max_tokens()
     try:
-        if packet.source_mode:
+        if bounded_packet:
             completed_request, _ = await complete_source_request(
-                llm_if, request_convo, budget, stream_func
+                llm_if, request_convo, budget, stream_func, packet=packet
             )
         else:
             completed_request, _ = await llm_if.complete(

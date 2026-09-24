@@ -1,4 +1,4 @@
-"""RAG-oriented Django cache helpers: normalized keys, fail-open get/set, metric logging."""
+"""RAG cache keys, fail-open I/O and aggregate cache metrics."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import structlog
 from django.conf import settings
 from django.core.cache import cache
 
+from .bounded_rag_cache import cache_operation
 from .rag_document_refs import (
     _validated_collection_allowlist as _validated_collection_allowlist,
 )
@@ -21,6 +22,7 @@ from .rag_document_refs import (
 from .rag_document_refs import (
     rehydrate_documents_from_refs as rehydrate_documents_from_refs,
 )
+from .source_loading import current_source_runtime
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -51,32 +53,16 @@ def stable_cache_key(prefix: str, *parts: Any) -> str:
 
 
 def cache_get(key: str) -> Any | None:
-    if not _rag_enabled():
-        return None
-    try:
-        return cache.get(key)
-    except Exception as exc:
-        logger.warning(
-            "obs.rag.cache_get_failed",
-            key=key[:120],
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
-        return None
+    from .rag_cache_io import cache_get as read
+
+    return read(cache, key) if _rag_enabled() else None
 
 
 def cache_set(key: str, value: Any, timeout: int) -> None:
-    if not _rag_enabled():
-        return
-    try:
-        cache.set(key, value, timeout=timeout)
-    except Exception as exc:
-        logger.warning(
-            "obs.rag.cache_set_failed",
-            key=key[:120],
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
+    from .rag_cache_io import cache_set as write
+
+    if _rag_enabled():
+        write(cache, key, value, timeout)
 
 
 def _log_hit_miss(metric: str, hit: bool) -> None:
@@ -273,6 +259,9 @@ def set_cached_rerank_capability(
 
 def delete_cached_rerank_capability(base_url: str, model: str) -> None:
     if not _rag_enabled():
+        return
+    if current_source_runtime() is not None:
+        cache_operation("delete", rerank_capability_cache_key(base_url, model))
         return
     try:
         cache.delete(rerank_capability_cache_key(base_url, model))

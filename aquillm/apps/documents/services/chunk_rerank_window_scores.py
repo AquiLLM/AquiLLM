@@ -34,6 +34,21 @@ class ChunkWindowScore:
     aggregation_version: str = "window-max-v1"
 
 
+class _AttemptBudget:
+    """Invocation-local diagnostics; all admission remains on the shared ledger."""
+
+    def __init__(self, budget):
+        self.budget, self.attempts = budget, 0
+
+    def __getattr__(self, name):
+        return getattr(self.budget, name)
+
+    def start_pair(self, *, phase):
+        admitted = self.budget.start_pair(phase=phase)
+        self.attempts += int(admitted)
+        return admitted
+
+
 def score_window_plan(
     plan, *, scorer, budget, phase="acquisition", timeout_seconds=3.0, clock=monotonic
 ):
@@ -44,9 +59,9 @@ def score_window_plan(
     """
     successful = []
     deadline = clock() + timeout_seconds
-    before = budget.pairs_used[phase] if budget is not None else 0
     if budget is None or plan.preparation_coverage != "complete":
         return WindowScoreSet(plan, (), 0)
+    budget = _AttemptBudget(budget)
     for window_id, window in zip(plan.required_window_ids, plan.windows):
         remaining = min(deadline - clock(), budget.scoring_remaining_ms(phase) / 1000)
         if remaining <= 0:
@@ -82,7 +97,7 @@ def score_window_plan(
                 break
         except (TimeoutError, ValueError, TypeError):
             break
-    return WindowScoreSet(plan, tuple(successful), budget.pairs_used[phase] - before)
+    return WindowScoreSet(plan, tuple(successful), budget.attempts)
 
 
 def aggregate_window_scores(scores):

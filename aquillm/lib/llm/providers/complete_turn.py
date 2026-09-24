@@ -37,7 +37,7 @@ from .complete_turn_policy import (
     DIRECT_SYNTHESIS_GROUNDING as DIRECT_SYNTHESIS_GROUNDING,
 )
 from .complete_turn_policy import (
-    _auto_tool_followup_direct_retry_enabled as _auto_tool_followup_direct_retry_enabled,
+    _auto_tool_followup_direct_retry_enabled,
 )
 from .complete_turn_policy import (
     _compact_summary_fallback_enabled as _compact_summary_fallback_enabled,
@@ -147,7 +147,7 @@ def _deterministic_required_tool_call(
     output_usage: int,
     model: str | None,
 ) -> LLMResponse | None:
-    """Fail open to a safe first retrieval call when a required tool turn produced only reasoning."""
+    """Use a safe first retrieval call for a required turn with only reasoning."""
     available = {tool.name: tool for tool in (last_message.tools or [])}
     if "vector_search" in available:
         query = " ".join((last_message.content or "").split())
@@ -218,46 +218,16 @@ def _post_tool_synthesis_unsatisfied(text: str | None) -> bool:
 
 
 def _build_synthesis_retry_prompt(conversation: Conversation, attempt: int) -> str:
+    from .synthesis_retry_prompt import build_synthesis_retry_prompt
+
     user_turn = _latest_user_turn(conversation)
-    query = (user_turn.content or "").strip() if user_turn else ""
-    if current_stage() == "direct_synthesis":
-        return "\n\n".join([
-            f"User request: {query or 'Answer using the selected evidence.'}",
-            DIRECT_SYNTHESIS_GROUNDING,
-            "Your previous reply was empty or incomplete. Give the supported answer "
-            "now, using only the selected evidence. Do not call tools, describe "
-            "future retrieval, or emit tool markup. Include a selected figure only "
-            "when it helps answer the user's request.",
-        ])
-    wants_figures = _latest_user_requested_image(conversation)
-    lines = [
-        f"User request: {query or 'Answer using the retrieved documents above.'}",
-        "",
-        "Write a complete, thorough final answer using evidence already in this conversation.",
-        "Use multiple sections when helpful; aim for depth (typically 400-900 words when sources support it).",
-        "Answer directly in plain text; do not describe future retrieval steps or emit tool markup.",
-    ]
-    if wants_figures:
-        lines.append(
-            "Include relevant figures using markdown image syntax from tool results "
-            "(![caption](url))."
-        )
-    lines.append("Explain equations and technical terms in readable language.")
-    if attempt >= 1:
-        lines.append(
-            "Your previous reply was empty or incomplete. Synthesize a thorough answer "
-            "from the document text and tool results above."
-        )
-    if attempt >= 2:
-        lines.append(
-            "Cover the main thesis, methods or math (with intuition), and key figures or findings."
-        )
-    if attempt >= 3 and _post_tool_evidence_retry_enabled():
-        lines.append(
-            "If existing excerpts are too thin for a specific claim, you may call "
-            "vector_search or search_single_document once with a focused query, then stop."
-        )
-    return "\n".join(lines)
+    return build_synthesis_retry_prompt(
+        (user_turn.content or "").strip() if user_turn else "",
+        attempt,
+        current_stage(),
+        _latest_user_requested_image(conversation),
+        _post_tool_evidence_retry_enabled(),
+    )
 
 
 async def _run_post_tool_synthesis_attempt(
@@ -278,6 +248,7 @@ async def _run_post_tool_synthesis_attempt(
     retry_messages = message_dicts + [{"role": "user", "content": prompt}]
     retry_pydantic_messages = messages_for_bot + [UserMessage(content=prompt)]
     retry_args: dict[str, Any] = llm.base_args | {
+        "_synthesis_phase": "recovery",
         "system": system_prompt,
         "messages": retry_messages,
         "messages_pydantic": retry_pydantic_messages,
@@ -311,8 +282,10 @@ async def _run_plain_followup_answer_retry(
 ) -> LLMResponse:
     prompt = (
         "Your previous attempt did not produce a user-visible answer. "
-        "Answer the latest user message directly using the conversation history. "
-        "Do not call tools, do not promise to search or retrieve, and do not mention internal tooling."
+        "Answer the latest user message directly using the "
+        "conversation history. "
+        "Do not call tools, do not promise to search or "
+        "retrieve, and do not mention internal tooling."
     )
     return await llm.get_message(
         **(
@@ -341,8 +314,10 @@ async def _run_reasoning_cutoff_answer_retry(
 ) -> LLMResponse:
     prompt = (
         "Your reasoning budget ended without a user-visible answer. "
-        "Answer the latest user message directly now. Do not include hidden analysis, "
-        "do not call tools, and do not mention the prior failed attempt."
+        "Answer the latest user message directly now. Do not "
+        "include hidden analysis, "
+        "do not call tools, and do not mention the prior failed "
+        "attempt."
     )
     retry_max_tokens = _direct_answer_retry_max_tokens() or max_tokens
     return await llm.get_message(
@@ -374,7 +349,8 @@ async def _run_hidden_tool_call_retry(
 ) -> LLMResponse:
     prompt = (
         "The prior attempt did not produce a visible tool call. "
-        "Call exactly one available tool now using valid JSON arguments. "
+        "Call exactly one available tool now using valid JSON "
+        "arguments. "
         "Do not answer in prose before the tool result is available."
     )
     return await llm.get_message(
@@ -497,7 +473,9 @@ async def complete_conversation_turn(
         return conversation, "unchanged"
     if isinstance(last_message, AssistantMessage):
         if last_message.tools and last_message.tool_call_id:
-            new_tool_msg = llm.call_tool(last_message)
+            from lib.llm.turn_context import call_tool_async
+
+            new_tool_msg = await call_tool_async(llm, last_message)
             return conversation + [new_tool_msg], "changed"
         return conversation, "unchanged"
 
@@ -523,17 +501,24 @@ async def complete_conversation_turn(
             if DIRECT_SYNTHESIS_GROUNDING not in request_system_prompt:
                 request_system_prompt += f"\n\n{DIRECT_SYNTHESIS_GROUNDING}"
             synthesis_instruction = (
-                "Final synthesis step: give a concise answer with detail proportionate "
-                "to the selected evidence. Complete the supported answer without "
-                "padding it. Do not emit status lines, tool markup, or promises to "
+                "Final synthesis step: answer at the depth requested "
+                "with detail proportionate "
+                "to the selected evidence. Complete the supported answer"
+                " without "
+                "padding it. Do not emit status lines, tool markup, or "
+                "promises to "
                 "retrieve later."
             )
         else:
             synthesis_instruction = (
-                "Final synthesis step: answer the user using retrieved document content "
-                "already in this thread. Write a thorough, well-structured user-facing "
-                "answer with enough detail to stand alone; finish every section and do "
-                "not stop mid-sentence. Do not emit status lines, tool markup, or promises "
+                "Final synthesis step: answer the user using retrieved "
+                "document content "
+                "already in this thread. Write a thorough, well-"
+                "structured user-facing "
+                "answer with enough detail to stand alone; finish every "
+                "section and do "
+                "not stop mid-sentence. Do not emit status lines, tool "
+                "markup, or promises "
                 "to retrieve later."
             )
         request_system_prompt = f"{request_system_prompt}\n\n{synthesis_instruction}"
@@ -756,7 +741,8 @@ async def complete_conversation_turn(
                     stream_message_uuid=stream_message_uuid,
                 )
                 response_text = recovered or (
-                    "I completed retrieval but received an unusable tool-call payload. "
+                    "I completed retrieval but received an unusable tool-"
+                    "call payload. "
                     "Please retry and I will provide a full summary."
                 )
 
@@ -937,7 +923,8 @@ async def complete_conversation_turn(
         require_cited_numeric_claims = current_stage() == "direct_synthesis"
         original_response_text = (response_text or "").strip()
         citations_valid = citations.response_has_required_citations(
-            response_text, citation_allowlist,
+            response_text,
+            citation_allowlist,
             require_cited_numeric_claims=require_cited_numeric_claims,
         )
         original_invalid = citations.find_invalid_citations(
@@ -990,7 +977,8 @@ async def complete_conversation_turn(
             if require_cited_numeric_claims:
                 retry_prompt += (
                     "\n\nNumeric factual sentences need citations at the claim. "
-                    "For a computed comparison, cite every source supplying an input "
+                    "For a computed comparison, cite every source supplying "
+                    "an input "
                     "at that comparison; a trailing Sources list is not sufficient."
                 )
             retry_messages = message_dicts + [
@@ -1002,6 +990,7 @@ async def complete_conversation_turn(
                 UserMessage(content=retry_prompt),
             ]
             retry_args = llm.base_args | {
+                "_synthesis_phase": "citation_repair",
                 "system": request_system_prompt,
                 "messages": retry_messages,
                 "messages_pydantic": retry_pydantic_messages,
@@ -1023,14 +1012,16 @@ async def complete_conversation_turn(
         )
         if retry_invalid and (
             not citations.response_has_required_citations(
-                response_text, citation_allowlist,
+                response_text,
+                citation_allowlist,
                 require_cited_numeric_claims=require_cited_numeric_claims,
             )
         ):
             if is_streaming_turn:
                 response_text = (
                     response_text.rstrip()
-                    + "\n\n[Note: Some citation tokens could not be verified against retrieved chunks.]"
+                    + "\n\n[Note: Some citation tokens could not be verified "
+                    "against retrieved chunks.]"
                 )
             else:
                 if _extractive_evidence_ui_enabled():

@@ -5,7 +5,9 @@ from contextlib import contextmanager
 from apps.documents.services.source_loading import (
     SourcePreparationLimited,
     current_source_runtime,
-    source_mode_enabled,
+)
+from apps.documents.services.source_loading import (
+    bounded_source_enabled as source_mode_enabled,
 )
 from lib.retrieval.evidence import SourceEvidence, fingerprint_source
 
@@ -52,7 +54,7 @@ def explicit_document_source_scope(user, doc_id):
     )
 
     parent = required_source_runtime()
-    alias = parent.authorization.database_alias
+    alias = getattr(parent.authorization, "database_alias", "default")
     with bounded_source_database(parent, alias):
         doc = document_metadata(doc_id)
         authorization = (
@@ -68,7 +70,12 @@ def explicit_document_source_scope(user, doc_id):
     if authorization is None:
         raise SourcePreparationLimited("requested document is not authorized")
     child = SourceRuntime(
-        parent.budget, authorization, parent.cache, parent.windows, parent.lock
+        parent.budget,
+        authorization,
+        parent.cache,
+        parent.windows,
+        parent.lock,
+        parent.observation,
     )
     with source_runtime_scope(child):
         yield child
@@ -85,7 +92,7 @@ def selected_document_metadata(user, col_ref):
     from apps.documents.services.source_loading import bounded_source_database
 
     runtime = required_source_runtime()
-    alias = runtime.authorization.database_alias
+    alias = getattr(runtime.authorization, "database_alias", "default")
     with bounded_source_database(runtime, alias):
         collections = (
             Collection.objects.using(alias)
@@ -110,7 +117,7 @@ def document_metadata(doc_id):
     from apps.documents.services.source_loading import bounded_source_database
 
     runtime = required_source_runtime()
-    alias = runtime.authorization.database_alias
+    alias = getattr(runtime.authorization, "database_alias", "default")
     with bounded_source_database(runtime, alias):
         for model in _get_document_types():
             doc = (
@@ -142,7 +149,15 @@ def document_source_evidence(results):
 
 
 async def prepare_source_tool_handoff(
-    consumer, llm, conversation, tool_result, *, question, top_k
+    consumer,
+    llm,
+    conversation,
+    tool_result,
+    *,
+    question,
+    top_k,
+    prepare_fn=None,
+    revalidate_fn=None,
 ):
     """Same served selection for model tools and direct acquisition.
 
@@ -158,13 +173,13 @@ async def prepare_source_tool_handoff(
 
     return await coordinate_selection(
         consumer,
-        [tool_result],
+        list(tool_result) if isinstance(tool_result, (tuple, list)) else [tool_result],
         question,
         question,
         evidence_selection_config(),
         top_k,
-        prepare_fn=prepare_selection_turn,
-        revalidate_fn=revalidate_selection_turn,
+        prepare_fn=prepare_fn or prepare_selection_turn,
+        revalidate_fn=revalidate_fn or revalidate_selection_turn,
         request_conversation=conversation,
         llm_if=llm,
     )

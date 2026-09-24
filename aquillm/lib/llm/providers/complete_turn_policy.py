@@ -1,4 +1,5 @@
 """Token budgets and feature policy for completion turns."""
+
 from os import getenv
 
 from ..types.conversation import Conversation
@@ -147,7 +148,7 @@ DIRECT_SYNTHESIS_GROUNDING = (
     "- The selected evidence in the current tool result is the only factual source "
     "for this answer. Earlier conversation provides request context, not additional "
     "document evidence.\n"
-    "- Answer the user's question directly and keep the answer concise, with detail "
+    "- Answer the user's question directly at the depth requested, with detail "
     "proportionate to the selected evidence. Do not pad the answer with general "
     "background, recommendations, implications, or explanations beyond the question "
     "and evidence.\n"

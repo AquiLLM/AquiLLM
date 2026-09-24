@@ -52,6 +52,9 @@ class EvidencePacket:
     source_mode: bool = False
     source_authorization: object | None = None
     selection: EvidenceSelection | None = None
+    coverage_assessment: object | None = None
+    auxiliary_handoff: tuple | None = None
+    auxiliary_figures: tuple = ()
 
 
 def _estimate_tokens(text: str) -> int:

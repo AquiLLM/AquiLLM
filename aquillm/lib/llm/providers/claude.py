@@ -29,6 +29,7 @@ class ClaudeInterface(LLMInterface):
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
+        synthesis_phase = kwargs.pop("_synthesis_phase", "initial")
         kwargs.pop("messages_pydantic", None)
         kwargs.pop("thinking_budget", None)
         kwargs.pop("stream_callback", None)
@@ -48,7 +49,13 @@ class ClaudeInterface(LLMInterface):
         from lib.llm.evidence_guard import validate_request
 
         validate_request(kwargs, output_reserve=kwargs.get("max_tokens", 0))
-        response = await self.client.messages.create(**kwargs)
+        from lib.llm.synthesis_dispatch import dispatch
+
+        response = await dispatch(
+            lambda: self.client.messages.create(**kwargs),
+            output_reserve=kwargs.get("max_tokens", 0),
+            kind=synthesis_phase,
+        )
         if DEBUG:
             print("Claude SDK Response:")
             pp(response)

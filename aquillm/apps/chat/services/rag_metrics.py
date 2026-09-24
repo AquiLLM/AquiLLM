@@ -186,3 +186,27 @@ def log_direct_rag_turn(
 
 
 __all__ = ["log_direct_rag_turn"]
+
+
+def log_preservation_turn(runtime, acquired, packet, timings):
+    """Aggregate-only turn ledger observations, never identifiers or source text."""
+    budget = runtime.budget
+    lease = budget._synthesis
+    logger.info(
+        "obs.rag.preservation_turn",
+        rounds=budget.actions_used,
+        planner_calls=budget.planner_calls,
+        budget_stop_reason=acquired.stop_reason,
+        coverage_state=acquired.assessment.certainty,
+        unresolved_count=len(
+            getattr(packet.coverage_assessment, "unresolved_aspects", ())
+        ),
+        sources_admitted=budget.sources_used,
+        acquisition_pairs=budget.pairs_used["acquisition"],
+        final_pairs=budget.pairs_used["final"],
+        materialized_codepoints=budget.text_used["materialized"],
+        tokenized_codepoints=budget.text_used["tokenized"],
+        selected_count=len(packet.chunks),
+        synthesis_dispatches=lease.calls if lease else 0,
+        **{name: round(value, 1) for name, value in timings.items()},
+    )

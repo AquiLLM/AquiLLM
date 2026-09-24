@@ -61,6 +61,7 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
+        synthesis_phase = kwargs.pop("_synthesis_phase", "initial")
         kwargs.pop("messages_pydantic", None)
         thinking_budget = kwargs.pop("thinking_budget", None)
         correlation_id = safe_correlation_id(
@@ -131,13 +132,18 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
         max_total_retries = max_overflow_retries + max_timeout_retries
         for attempt in range(max_total_retries + 1):
             from lib.llm.evidence_guard import validate_request
+            from lib.llm.synthesis_dispatch import dispatch
 
             validate_request(request_args, output_reserve=request_args["max_tokens"])
             request_started_at = perf_counter()
             try:
                 if stream_enabled:
-                    stream = await self.client.chat.completions.create(
-                        timeout=request_timeout_s, **request_args
+                    stream = await dispatch(
+                        lambda: self.client.chat.completions.create(
+                            timeout=request_timeout_s, **request_args
+                        ),
+                        output_reserve=request_args["max_tokens"],
+                        kind="transport_retry" if attempt else synthesis_phase,
                     )
                     parsed_response = await consume_streaming_completion(
                         stream=stream,
@@ -156,8 +162,12 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
                         request_started_at=request_started_at,
                     )
                 else:
-                    response = await self.client.chat.completions.create(
-                        timeout=request_timeout_s, **request_args
+                    response = await dispatch(
+                        lambda: self.client.chat.completions.create(
+                            timeout=request_timeout_s, **request_args
+                        ),
+                        output_reserve=request_args["max_tokens"],
+                        kind="transport_retry" if attempt else synthesis_phase,
                     )
                     if DEBUG:
                         print("OpenAI SDK Response:")

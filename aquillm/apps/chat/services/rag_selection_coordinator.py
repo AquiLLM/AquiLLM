@@ -148,8 +148,8 @@ async def coordinate_selection(
             query=query,
             search_scope="selected documents",
         )
-        if preservation.evidence_text_mode == "source":
-            packet.source_mode = True
+        if preservation.active:
+            packet.source_mode = preservation.evidence_text_mode == "source"
             packet.source_authorization = turn.authorization
             packet.selection = selection
             if not packet.chunks:
@@ -177,7 +177,7 @@ def prepare_selection_turn(
     preservation = rag_preservation_config()
     source_mode = preservation.evidence_text_mode == "source"
     runtime = current_source_runtime()
-    if source_mode:
+    if runtime is not None or source_mode:
         if (
             runtime is None
             or frozenset(int(v) for v in consumer.col_ref.collections)

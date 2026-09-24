@@ -12,7 +12,7 @@ from lib.llm.utils.prompt_budget import (
 )
 
 SYNTHESIS_INSTRUCTION = (
-    "Final synthesis step: give a concise answer with detail proportionate "
+    "Final synthesis step: answer at the requested depth with detail proportionate "
     "to the selected evidence. Complete the supported answer without "
     "padding it. Do not emit status lines, tool markup, or promises to retrieve later."
 )

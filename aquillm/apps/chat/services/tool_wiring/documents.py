@@ -7,6 +7,7 @@ from django.contrib.auth.models import User
 
 from apps.chat.consumers.utils import truncate_tool_text
 from apps.chat.refs import ChatRef, CollectionsRef
+from apps.chat.services.rag_action_tools import admit_tool_action, limited_action_result
 from apps.chat.services.tool_wiring import document_figure_payloads as figure_payloads
 from apps.chat.services.tool_wiring.document_tool_support import (
     format_whole_document_citations as _format_whole_document_citations,
@@ -16,7 +17,9 @@ from apps.chat.services.tool_wiring.document_tool_support import (
 )
 from apps.documents.models import Document as Document
 from apps.documents.models import DocumentChild, TextChunk
-from apps.documents.services.source_loading import source_mode_enabled
+from apps.documents.services.source_loading import (
+    bounded_source_enabled as source_mode_enabled,
+)
 from aquillm.llm import LLMTool, ToolResultDict, llm_tool
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
 from lib.tools.documents import whole_document as whole_document_tools
@@ -38,7 +41,8 @@ _related_figure_payloads = figure_payloads.related_figure_payloads
 image_document_instruction = whole_document_tools.image_document_instruction
 image_document_tool_payload = whole_document_tools.image_document_tool_payload
 _NO_DOCS_EXCEPTION = {
-    "exception": "No documents to search! Either no collections were selected, or "
+    "exception": "No documents to search! Either no collections were "
+    "selected, or "
     "the selected collections are empty."
 }
 
@@ -86,6 +90,8 @@ def vector_search_tool(
             return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
         if not search_string.strip():
             return {"exception": "search_string must not be empty"}
+        if not admit_tool_action("vector", search_string):
+            return limited_action_result()
         docs = selected_document_metadata(user, col_ref)
         if not docs:
             return _NO_DOCS_EXCEPTION
@@ -158,19 +164,9 @@ def whole_document_tool(
         },
     )
     def whole_document(doc_id: str) -> ToolResultDict:
-        """
-        Get the full text of a document. Prefer doc_id from document_ids for the
-        active collections;
-        other documents you are allowed to see can still be opened if the UUID is
-        exact.
-        For image documents, this includes both the extracted text and the image
-        itself.
-        When returning an image to the user, use markdown: ![description](image_url)
-        Text passages are prefixed with exact [doc:<doc_id> chunk:<chunk_id>]
-        references.
-        Cite those references in the answer so the user can open the supporting
-        passage.
-        """
+        """Open an authorized exact document with chunk citations and images."""
+        if not admit_tool_action("whole", document_id=doc_id):
+            return limited_action_result()
         doc_uuid, error_msg = _resolve_doc_uuid(doc_id, user, col_ref)
         if doc_uuid is None:
             return {"exception": error_msg}
@@ -276,6 +272,8 @@ def search_single_document_tool(
             return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
         if not search_string.strip():
             return {"exception": "search_string must not be empty"}
+        if not admit_tool_action("document", search_string, document_id=doc_id):
+            return limited_action_result()
         doc_uuid, error_msg = _resolve_doc_uuid(doc_id, user, col_ref)
         if doc_uuid is None:
             return {"exception": error_msg}

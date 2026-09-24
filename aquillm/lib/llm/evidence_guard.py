@@ -20,6 +20,7 @@ class EvidenceProtection:
     safety_margin: int
     limited_reason: str | None = None
     turn_budget: object | None = None
+    synthesis_lease: object | None = None
 
 
 _PROTECTION = ContextVar("selected_evidence_protection", default=None)
@@ -117,7 +118,12 @@ def validate_request(payload, *, output_reserve):
         for value in _strings(plain)
     ):
         context_limited("selected_evidence_changed")
-    estimated = estimate_request_tokens(plain, turn_budget=state.turn_budget)
+    try:
+        estimated = estimate_request_tokens(
+            plain, turn_budget=state.synthesis_lease or state.turn_budget
+        )
+    except ValueError as exc:
+        context_limited(str(exc))
     reserve = max(state.output_reserve, int(output_reserve))
     if estimated + reserve + state.safety_margin > state.model_context:
         context_limited("request_context_exhausted")

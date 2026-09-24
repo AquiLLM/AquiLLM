@@ -28,6 +28,7 @@ class SourceRuntime:
     cache: dict = field(default_factory=dict, repr=False)
     windows: dict = field(default_factory=dict, repr=False)
     lock: RLock = field(default_factory=RLock, repr=False)
+    observation: dict = field(default_factory=dict, repr=False)
 
 
 _RUNTIME = ContextVar("source_runtime", default=None)
@@ -54,6 +55,11 @@ def source_mode_enabled():
     from apps.chat.services.rag_config import rag_preservation_config
 
     return rag_preservation_config().evidence_text_mode == "source"
+
+
+def bounded_source_enabled():
+    """Accounting is independent of whether the public evidence text is full."""
+    return current_source_runtime() is not None or source_mode_enabled()
 
 
 @contextmanager

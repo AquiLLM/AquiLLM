@@ -57,6 +57,9 @@ async def consume_streaming_completion(
     first_signal_at: float | None = None
 
     async for chunk in stream:
+        from lib.llm.synthesis_dispatch import check_synthesis_active
+
+        check_synthesis_active()
         choices = getattr(chunk, "choices", None) or []
         if choices:
             choice = choices[0]

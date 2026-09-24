@@ -6,7 +6,9 @@ from apps.chat.consumers.utils import truncate_tool_text
 from apps.documents.models import TextChunk
 from apps.documents.services.source_loading import (
     bounded_source_database,
-    source_mode_enabled,
+)
+from apps.documents.services.source_loading import (
+    bounded_source_enabled as source_mode_enabled,
 )
 from aquillm.llm import LLMTool, ToolResultDict, llm_tool
 from lib.tools.search.context import format_adjacent_chunks_tool_result
@@ -62,6 +64,15 @@ def more_context_tool(user: User) -> LLMTool:
         central_chunk = _central_chunk(chunk_id)
         if central_chunk is None:
             return {"exception": f"Text chunk {chunk_id} does not exist!"}
+        from apps.chat.services.rag_action_tools import (
+            admit_tool_action,
+            limited_action_result,
+        )
+
+        if not admit_tool_action(
+            "adjacent", document_id=central_chunk.doc_id, chunk_id=chunk_id
+        ):
+            return limited_action_result()
         doc = document_metadata(central_chunk.doc_id)
         if doc is None:
             return {"exception": f"Document for chunk {chunk_id} does not exist!"}

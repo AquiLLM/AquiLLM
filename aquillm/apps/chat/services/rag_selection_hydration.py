@@ -33,7 +33,13 @@ class HydratedRow:
 def _current_chunks(
     authorization: RetrievalAuthorizationContext, ids: tuple[int, ...]
 ) -> Iterable[TextChunk]:
-    return TextChunk.objects.using(authorization.database_alias).filter(pk__in=ids)
+    from apps.documents.services.source_loading import (
+        current_source_runtime,
+        source_query_rows,
+    )
+
+    query = TextChunk.objects.using(authorization.database_alias).filter(pk__in=ids)
+    return source_query_rows(query) if current_source_runtime() else query
 
 
 def hydrate_pool_rows(

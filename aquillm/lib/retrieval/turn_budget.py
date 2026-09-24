@@ -76,6 +76,9 @@ class TurnBudget:
         self._deadline = clock() + limits.retrieval_ms / 1000
         self._lock = RLock()
         self._closed_reason: str | None = None
+        self._terminal_reason: str | None = None
+        self._synthesis = None
+        self._planner_calls = 0
         self._actions: set[str] = set()
         self._sources: set[Hashable] = set()
         self._pairs = {"acquisition": 0, "final": 0}
@@ -84,6 +87,10 @@ class TurnBudget:
         self._final_deadline: float | None = None
 
     def _open(self) -> bool:
+        from .operation import operation_live
+
+        if not operation_live(self):
+            return False
         if self._closed_reason is not None:
             return False
         if self._clock() >= self._deadline:
@@ -128,6 +135,22 @@ class TurnBudget:
                 return False
             self._actions.add(signature)
             return True
+
+    def has_action(self, signature):
+        with self._lock:
+            return signature in self._actions
+
+    def reserve_planner(self):
+        with self._lock:
+            if not self._open() or self._planner_calls >= self.limits.planner_calls:
+                return False
+            self._planner_calls += 1
+            return True
+
+    @property
+    def planner_calls(self):
+        with self._lock:
+            return self._planner_calls
 
     def admit_source(self, identity: SourceIdentity | tuple[int, str]) -> bool:
         if isinstance(identity, tuple):
@@ -204,8 +227,17 @@ class TurnBudget:
         if not isinstance(reason, str) or not reason:
             raise ValueError("closure reason must be nonempty")
         with self._lock:
+            self._terminal_reason = reason
             if self._closed_reason is None:
                 self._closed_reason = reason
+
+    def check_active(self):
+        """Retrieval expiry alone does not cancel an authorized answer."""
+        from asyncio import CancelledError
+
+        with self._lock:
+            if self._terminal_reason is not None:
+                raise CancelledError(self._terminal_reason)
 
     def can_publish(self) -> bool:
         with self._lock:

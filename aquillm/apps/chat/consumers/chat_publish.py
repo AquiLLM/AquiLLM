@@ -1,9 +1,12 @@
 """WebSocket publish policy while the LLM tool loop (spin) is in flight."""
+
 from __future__ import annotations
 
-import structlog
+from collections.abc import Awaitable, Callable
 from json import dumps
-from typing import Any, Awaitable, Callable
+from typing import Any
+
+import structlog
 
 from aquillm.llm import Conversation
 from aquillm.message_adapters import pydantic_message_to_frontend_dict
@@ -66,7 +69,13 @@ async def run_llm_spin(
             send_func=send_func,
             stream_func=stream_func,
         )
-    finally:
+    except BaseException:
+        consumer._spin_active = False
+        raise
+    else:
+        from lib.llm.turn_context import check_turn_active
+
+        check_turn_active()
         await end_spin_publish(consumer, convo)
 
 

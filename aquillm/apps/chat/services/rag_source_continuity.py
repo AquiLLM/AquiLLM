@@ -68,6 +68,7 @@ def rehydrate_prior_evidence(
 
 def current_continuity_result(sources: tuple[SourceEvidence, ...]) -> dict:
     from apps.chat.services.tool_wiring.source_documents import document_metadata
+    from lib.retrieval.evidence import source_provenance
 
     rows = []
     titles = {}
@@ -95,6 +96,7 @@ def current_continuity_result(sources: tuple[SourceEvidence, ...]) -> dict:
         "result": rows,
         "retrieval_status": "results_found" if rows else "no_results",
         "retrieved_count": len(rows),
+        "_source_provenance": [source_provenance(source) for source in sources],
     }
 
 

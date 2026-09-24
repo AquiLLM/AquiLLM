@@ -27,10 +27,7 @@ class GeminiInterface(LLMInterface):
         self.base_args = {"model": model}
 
     def _transform_tools(self, tools: list[dict]) -> genai_types.Tool:
-        """
-        Convert Anthropic-style definitions into Gemini FunctionDeclarations.
-        Both providers accept the same JSON schema, so input_schema passes through.
-        """
+        """Convert the shared JSON tool schema to Gemini declarations."""
         return genai_types.Tool(
             function_declarations=[
                 genai_types.FunctionDeclaration(
@@ -43,10 +40,7 @@ class GeminiInterface(LLMInterface):
         )
 
     def _convert_messages(self, messages: list[dict]) -> list[genai_types.Content]:
-        """
-        Convert rendered text for approximate token_count() calls.
-        API requests use _convert_pydantic_messages() instead.
-        """
+        """Render text for approximate token_count; requests use pydantic messages."""
         contents = []
         for msg in messages:
             role = "model" if msg["role"] == "assistant" else "user"
@@ -153,6 +147,7 @@ class GeminiInterface(LLMInterface):
 
     @override
     async def get_message(self, *args, **kwargs) -> LLMResponse:
+        synthesis_phase = kwargs.pop("_synthesis_phase", "initial")
         """
         Main method: send the conversation to Gemini and return a standardised
         LLMResponse.
@@ -211,10 +206,16 @@ class GeminiInterface(LLMInterface):
         validate_request(
             {"contents": contents, "config": config}, output_reserve=max_tokens
         )
-        response = await self.client.aio.models.generate_content(
-            model=self.base_args["model"],
-            contents=contents,
-            config=config,
+        from lib.llm.synthesis_dispatch import dispatch
+
+        response = await dispatch(
+            lambda: self.client.aio.models.generate_content(
+                model=self.base_args["model"],
+                contents=contents,
+                config=config,
+            ),
+            output_reserve=max_tokens,
+            kind=synthesis_phase,
         )
 
         function_calls = response.function_calls
@@ -264,9 +265,7 @@ class GeminiInterface(LLMInterface):
     async def token_count(
         self, conversation: Conversation, new_message: str | None = None
     ) -> int:
-        """
-        Count the total tokens in the conversation using Gemini's token counting API.
-        """
+        """Count conversation tokens with the provider tokenizer."""
         messages_for_bot = []
         for message in conversation:
             if isinstance(message, ToolMessage) and message.for_whom == "user":
