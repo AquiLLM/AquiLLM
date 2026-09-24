@@ -202,10 +202,11 @@ def resolve_source_anchors(question: str, history) -> SourceAnchors:
                 found = answer
             basis = "answer_plural"
         elif kind == "singular":
-            if not answer_conflict and len(answer_docs) == 1:
-                found = answer
-            elif len({identity[1] for identity in identities}) == 1:
+            prior_docs = {identity[1] for identity in identities}
+            if len(prior_docs) == 1:
                 found = tuple(identities)
+            elif not prior_docs and not answer_conflict and len(answer_docs) == 1:
+                found = answer
             basis = "answer_singular"
         if not found:
             unresolved.append(value)
