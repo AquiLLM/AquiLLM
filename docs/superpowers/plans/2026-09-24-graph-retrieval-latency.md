@@ -27,10 +27,10 @@
 
 **Interface:** Keep `ExtendedSeedRepository.load_seed_identities(authority, chunks, authorization, codec, max_rows)` unchanged. Load one bounded collection of `(chunk_id, entity_id, canonical_id)` rows for all requested chunks in a projection, including JSON observation matches. Preserve each chunk's distinct identities, the aggregate `max_rows` boundary and overflow sentinel, and revalidation before/after the read. Keep chunk-to-document/artifact mapping exact.
 
-- [ ] Add failing tests for two chunks sharing an entity, non-representative JSON observations, independent per-chunk associations, stale/revoked authorization, aggregate overflow, and fewer database round trips.
-- [ ] Implement a bounded batched query rather than one query for each chunk; use a deterministic ordered union if that preserves the existing join semantics most simply.
-- [ ] Compare literal expected identities and normalized seed masses with the prior path, and test real SQL execution on an isolated test database when available.
-- [ ] Run focused tests, self-review, commit, and obtain task review.
+- [x] Add failing tests for two chunks sharing an entity, non-representative JSON observations, independent per-chunk associations, stale/revoked authorization, aggregate overflow, and fewer database round trips.
+- [x] Implement a bounded batched query rather than one query for each chunk; use a deterministic ordered union if that preserves the existing join semantics most simply.
+- [x] Compare literal expected identities and normalized seed masses with the prior path, and test real SQL execution on an isolated test database when available.
+- [x] Run focused tests, self-review, commit, and obtain task review.
 
 ## Task 2: Batch graph manifest reads
 
@@ -38,10 +38,10 @@
 
 **Interface:** Keep the four existing topology gateway query families and response schemas. Replace one manifest query per generation with one bounded query for all selected generation keys. Validate exact membership, duplicates, ready state, requested ordering, and deadline; retain every existing provenance check. Inspect remaining graph reads for an equivalent bounded batching opportunity; do not trade off coverage to skip reads.
 
-- [ ] Add failing behavior tests showing one manifest database round trip for multiple generations and identical ordered manifest output.
-- [ ] Test missing, duplicate, unexpected, non-ready, and over-cap rows and deadlines.
-- [ ] Implement batched Cypher with a bounded result count; verify against the actual Memgraph service with read-only requests before deployment.
-- [ ] Run topology and gateway contract suites, self-review, commit, and obtain task review.
+- [x] Add failing behavior tests showing one manifest database round trip for multiple generations and identical ordered manifest output.
+- [x] Test missing, duplicate, unexpected, non-ready, and over-cap rows and deadlines.
+- [x] Implement batched Cypher with a bounded result count; verify against the actual Memgraph service with read-only requests before deployment.
+- [x] Run topology and gateway contract suites, self-review, commit, and obtain task review.
 
 ## Task 3: Overlap retrieval and expose branch outcomes
 
@@ -49,13 +49,16 @@
 
 **Interfaces:** Add a request-bound start/finish lifecycle that starts readiness and the direct branch before embedding/baseline retrieval; start extended work only once the baseline exists. Reuse the bounded worker pool, cancellation/cleanup, deadline and branch-failure contracts. Existing synchronous callers remain supported. Authorize/revalidate before fusion and final materialization as today.
 
-- [ ] Add event/barrier tests proving direct retrieval starts while baseline retrieval is blocked, extended sees the finished baseline, and results match the sequential scheduler when no deadline expires.
-- [ ] Test baseline failure, early branch completion, deadline expiry, revocation, worker saturation, and concurrent requests without leaked permits or cross-request state.
-- [ ] Emit direct/extended success/failure/reason/count/time plus fusion duplicate/new counts in a fixed aggregate event, including shared failures and no-result paths.
-- [ ] Assert log redaction and distinguish a duplicate-only successful branch from a timeout.
+- [x] Add event/barrier tests proving direct retrieval starts while baseline retrieval is blocked, extended sees the finished baseline, and results match the sequential scheduler when no deadline expires.
+- [x] Test baseline failure, early branch completion, deadline expiry, revocation, worker saturation, and concurrent requests without leaked permits or cross-request state.
+- [x] Emit direct/extended success/failure/reason/count/time plus fusion duplicate/new counts in a fixed aggregate event, including shared failures and no-result paths.
+- [x] Assert log redaction and distinguish a duplicate-only successful branch from a timeout.
 - [ ] Run focused and existing retrieval/PPR/authorization/selection tests, structure and import checks; obtain task and whole-branch review.
 
 ## Task 4: Integrate and deploy to development
+
+Review, CI, and deployment outcomes are recorded in the implementation PR; the
+remaining checklist is the release gate rather than a claim of deployment.
 
 - [ ] Include new regression files in CI, document runtime behavior and rollback, open a PR against development, attach it to this task, and wait for CI.
 - [ ] Merge the verified head and fast-forward development locally and on the authorized server.
