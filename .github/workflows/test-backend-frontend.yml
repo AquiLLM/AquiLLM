@@ -111,6 +111,21 @@ jobs:
           aquillm/tests/integration/test_retrieval_authorization_propagation.py
           aquillm/tests/integration/test_production_retrieval_authorization_reachability.py
           -q --tb=short
+      - name: Graph retrieval latency contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_topology_manifest_batch.py
+          aquillm/apps/knowledge_graph/tests/test_projected_topology_adapter.py
+          aquillm/apps/knowledge_graph/tests/test_projected_topology_adapter_caps.py
+          aquillm/apps/knowledge_graph/tests/test_topology_gateway_contracts.py
+          aquillm/apps/knowledge_graph/tests/test_topology_gateway_client.py
+          aquillm/apps/knowledge_graph/tests/test_topology_gateway_service.py
+          aquillm/apps/knowledge_graph/tests/test_retrieval_scheduler_lifecycle.py
+          aquillm/apps/knowledge_graph/tests/test_retrieval_overlap.py
+          aquillm/apps/knowledge_graph/tests/test_retrieval_overlap_failures.py
+          aquillm/apps/documents/tests/test_hybrid_graph_orchestration.py
+          aquillm/apps/documents/tests/test_hybrid_graph_diagnostics.py
+          -q --tb=short
       - name: Projected PPR restart contracts
         run: >-
           python -m pytest
@@ -278,6 +293,8 @@ jobs:
         run: >-
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_seed_lookup_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_extended_seed_batch.py
+          aquillm/apps/knowledge_graph/tests/test_extended_seed_lookup.py
           --ds=aquillm.settings_projection_test -q --tb=short
 
   frontend-build:

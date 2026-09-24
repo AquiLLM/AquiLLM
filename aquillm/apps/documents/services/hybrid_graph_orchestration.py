@@ -11,6 +11,7 @@ from apps.documents.services.hybrid_graph_authorization import (
     HybridGraphRetrievalDependencies,
     reauthorized_baseline,
 )
+from apps.documents.services.hybrid_graph_diagnostics import GraphBranchDiagnostics
 
 
 def _candidate_identifier(candidate: object) -> int:
@@ -25,6 +26,8 @@ def hybrid_graph_candidate_pool(
     query: str,
     authorization: object,
     dependencies: HybridGraphRetrievalDependencies,
+    *,
+    handle=None,
 ) -> tuple[tuple[object, ...], dict[str, object]]:
     """Run both projected branches, reauthorize, and fuse without reranking."""
 
@@ -48,16 +51,20 @@ def hybrid_graph_candidate_pool(
 
     started = perf_counter()
     baseline = snapshot.baseline_candidates
+    branch_diagnostics = GraphBranchDiagnostics()
 
     def diagnostics(status: str, candidate_count: int = 0) -> dict[str, object]:
-        return graph_diagnostics(
-            started_at=started,
-            seed_count=len(snapshot.graph_seeds),
-            candidate_count=candidate_count,
-            status=status,
-            algorithm_signature=None,
-            version_signature=None,
-        )
+        return {
+            **graph_diagnostics(
+                started_at=started,
+                seed_count=len(snapshot.graph_seeds),
+                candidate_count=candidate_count,
+                status=status,
+                algorithm_signature=None,
+                version_signature=None,
+            ),
+            **branch_diagnostics.emit(),
+        }
 
     settings = dependencies.settings
     traversal_enabled = getattr(settings, "memgraph_traversal_enabled", None)
@@ -77,13 +84,17 @@ def hybrid_graph_candidate_pool(
     if not isfinite(deadline):
         return baseline, diagnostics("error")
     try:
-        outcome = run_hybrid_graph_branches(
-            runtime=dependencies.runtime,
-            query=query,
-            baseline=snapshot,
-            authorization=authorization,
-            settings=settings,
-            deadline=deadline,
+        outcome = (
+            handle.finish(baseline=snapshot, deadline=deadline)
+            if handle is not None
+            else run_hybrid_graph_branches(
+                runtime=dependencies.runtime,
+                query=query,
+                baseline=snapshot,
+                authorization=authorization,
+                settings=settings,
+                deadline=deadline,
+            )
         )
     except Exception:
         try:
@@ -94,6 +105,7 @@ def hybrid_graph_candidate_pool(
             current_baseline = ()
         return current_baseline, diagnostics("error")
 
+    branch_diagnostics.outcome = outcome
     try:
         current_baseline, graph_allowed = reauthorized_baseline(baseline, authorization)
     except Exception:
@@ -140,6 +152,7 @@ def hybrid_graph_candidate_pool(
         by_key = {row.chunk_key: row for row in materialized}
         if len(by_key) != len(materialized) or set(by_key) != set(chunk_key_values):
             raise ValueError("graph materialization did not cover the exact pool")
+        branch_diagnostics.materialized = materialized
     except Exception:
         return current_baseline, diagnostics("error")
 
@@ -151,6 +164,7 @@ def hybrid_graph_candidate_pool(
         return (), diagnostics("error")
     if not graph_allowed:
         return final_baseline, diagnostics("error")
+    branch_diagnostics.baseline = final_baseline
 
     try:
         baseline_rows = tuple(
@@ -211,6 +225,7 @@ def hybrid_graph_candidate_pool(
         if fused.diagnostics.malformed_provenance:
             return final_baseline, diagnostics("error")
         graph_count = fused.diagnostics.graph_only_selected
+        branch_diagnostics.fusion = fused.diagnostics
         return fused.rerank_candidates, diagnostics(
             "hit" if graph_count else "miss", graph_count
         )

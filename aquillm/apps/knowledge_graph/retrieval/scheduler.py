@@ -11,6 +11,7 @@ from .branch_contracts import (
     ExtendedBranchFailureReason,
     SharedBranchFailureReason,
 )
+from .scheduler_overlap import OverlappingBranches
 from .scheduler_support import (
     CompletedBranch,
     HybridBranchRuntime,
@@ -40,10 +41,11 @@ class HybridGraphBranchScheduler:
 
     def _shared(self, authorization, settings, deadline):
         return self._runtime.prepare_shared(
-            authorization=authorization,
-            settings=settings,
-            deadline=deadline,
+            authorization=authorization, settings=settings, deadline=deadline
         )
+
+    def start(self, *, query, authorization, settings, deadline):
+        return OverlappingBranches(self, query, authorization, settings, deadline)
 
     def _direct(self, query, shared, authorization, settings, deadline):
         envelope = self._runtime.run_direct(
@@ -281,9 +283,7 @@ class HybridGraphBranchScheduler:
         from .branch_contracts import HybridBranchOutcomeV1
 
         return HybridBranchOutcomeV1(
-            results[HybridBranchKind.DIRECT],
-            results[HybridBranchKind.EXTENDED],
-            None,
+            results[HybridBranchKind.DIRECT], results[HybridBranchKind.EXTENDED], None
         )
 
 

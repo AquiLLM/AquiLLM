@@ -53,6 +53,12 @@ from apps.documents.services.hybrid_graph_authorization import (
     is_exact_authorization_context,
 )
 from apps.documents.services.hybrid_graph_dependencies import resolve
+from apps.documents.services.hybrid_graph_lifecycle import (
+    query_embedding as load_query_embedding,
+)
+from apps.documents.services.hybrid_graph_lifecycle import (
+    start_graph,
+)
 from apps.documents.services.hybrid_graph_orchestration import (
     hybrid_graph_candidate_pool,
 )
@@ -221,15 +227,13 @@ def text_chunk_search(
         evidence_selection_config,
         rag_preservation_config,
     )
-    from apps.documents.services import rag_cache
-    from aquillm.utils import get_embedding
-    from lib.embeddings.config import get_local_embed_config
 
     if source_mode_enabled() and current_source_runtime() is None:
         from apps.documents.services.source_loading import SourcePreparationLimited
 
         raise SourcePreparationLimited("source search requires shared ledger")
     total_start = perf_counter()
+    graph_handle = None
     try:
         capture_scores = (
             evidence_selection_config().mode == "adaptive"
@@ -275,25 +279,16 @@ def text_chunk_search(
                 graph_config = None
                 graph_scope = None
 
+        graph_handle = start_graph(
+            query,
+            authorization_context,
+            hybrid_graph_dependencies,
+            overlay_enabled and hybrid_requested and graph_preflight_status is None,
+        )
         initial_vector_error: str | None = None
         query_embedding: object | None = None
         try:
-            _embed_base, _embed_key, embed_model = get_local_embed_config()
-            cached_vec = rag_cache.get_cached_query_embedding(
-                query,
-                "search_query",
-                embed_model,
-            )
-            if cached_vec is not None:
-                query_embedding = cached_vec
-            else:
-                query_embedding = get_embedding(query)
-                rag_cache.set_cached_query_embedding(
-                    query,
-                    "search_query",
-                    embed_model,
-                    query_embedding,
-                )
+            query_embedding = load_query_embedding(query)
         except Exception:
             initial_vector_error = RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
             logger.warning(
@@ -334,6 +329,7 @@ def text_chunk_search(
                     query,
                     authorization_context,
                     hybrid_graph_dependencies,
+                    handle=graph_handle,
                 )
             else:
                 hybrid_pool = snapshot.baseline_candidates
@@ -480,6 +476,9 @@ def text_chunk_search(
     except Exception as error:
         log_search_failure(logger, error)
         raise
+    finally:
+        if graph_handle is not None:
+            graph_handle.close()
 
 
 __all__ = ["materialize_and_rerank_candidates", "text_chunk_search"]
