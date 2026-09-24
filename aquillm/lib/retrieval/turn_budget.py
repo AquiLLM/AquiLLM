@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from threading import RLock
 from time import monotonic
 
+from .budget_observation import observed_budget
 from .evidence import SourceIdentity
 
 _PILOT_MAX = {
@@ -69,6 +70,7 @@ class TurnLimits:
         )
 
 
+@observed_budget
 class TurnBudget:
     def __init__(self, limits: TurnLimits, *, clock: Callable[[], float] = monotonic):
         self.limits = limits

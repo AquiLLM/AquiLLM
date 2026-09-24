@@ -1,8 +1,8 @@
 """Presentation policy: what assistant text may leave the server toward the chat UI."""
+
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from ..types.messages import AssistantMessage
 from . import fallback_heuristics as fb
@@ -31,14 +31,14 @@ _TOOL_MARKUP_OPEN_RE = re.compile(
 _DEFAULT_MIN_DISPLAY_WORDS = 20
 
 
-def strip_tool_markup(text: Optional[str]) -> str:
+def strip_tool_markup(text: str | None) -> str:
     """Remove provider-specific tool-call XML/tags from user-visible text."""
     cleaned = _TOOL_MARKUP_BLOCK_RE.sub("", text or "")
     cleaned = _TOOL_MARKUP_OPEN_RE.sub("", cleaned)
     return cleaned
 
 
-def looks_like_incomplete_tool_call_stream(text: Optional[str]) -> bool:
+def looks_like_incomplete_tool_call_stream(text: str | None) -> bool:
     """Suppress partial tool-call JSON/XML while it is still streaming in."""
     visible = strip_thinking_blocks(text).strip()
     if not visible:
@@ -53,7 +53,7 @@ def looks_like_incomplete_tool_call_stream(text: Optional[str]) -> bool:
     return False
 
 
-def looks_like_extractive_chunk_dump(text: Optional[str]) -> bool:
+def looks_like_extractive_chunk_dump(text: str | None) -> bool:
     """True when the text is a mechanical evidence list, not a synthesized answer."""
     visible = strip_thinking_blocks(strip_tool_markup(text)).strip()
     if not visible:
@@ -61,14 +61,16 @@ def looks_like_extractive_chunk_dump(text: Optional[str]) -> bool:
     lowered = visible.lower()
     if lowered.startswith("here is a concise summary from the retrieved document"):
         return True
-    if lowered.startswith("i can only provide claims directly supported by retrieved chunks"):
+    if lowered.startswith(
+        "i can only provide claims directly supported by retrieved chunks"
+    ):
         return True
     if lowered.startswith("here are the key points from the retrieved passages"):
         return True
     return False
 
 
-def looks_like_tool_markup_fragment(text: Optional[str]) -> bool:
+def looks_like_tool_markup_fragment(text: str | None) -> bool:
     visible = strip_thinking_blocks(strip_tool_markup(text)).strip()
     if not visible:
         return False
@@ -79,12 +81,14 @@ def looks_like_tool_markup_fragment(text: Optional[str]) -> bool:
         or "<function_call" in lowered
     ):
         return True
-    if re.fullmatch(r"(?:tool|tools|calling\s+tool)\s*[.:]?", visible, flags=re.IGNORECASE):
+    if re.fullmatch(
+        r"(?:tool|tools|calling\s+tool)\s*[.:]?", visible, flags=re.IGNORECASE
+    ):
         return True
     return False
 
 
-def strip_thinking_blocks(text: Optional[str]) -> str:
+def strip_thinking_blocks(text: str | None) -> str:
     """Remove inline reasoning blocks from assistant-visible text."""
     cleaned = _THINK_BLOCK_RE.sub("", text or "")
     cleaned = _OPEN_THINK_RE.sub("", cleaned)
@@ -95,9 +99,9 @@ def _word_count(text: str) -> int:
     return len(re.findall(r"[A-Za-z0-9]+", text))
 
 
-def looks_like_status_only(text: Optional[str]) -> bool:
+def looks_like_status_only(text: str | None) -> bool:
     """
-    Short, in-progress status lines (e.g. "Retrieving the paper...") — structural, not phrase lists.
+    Short status lines (e.g. "Retrieving the paper...") detected structurally.
     """
     visible = strip_thinking_blocks(text).strip()
     if not visible:
@@ -112,7 +116,7 @@ def looks_like_status_only(text: Optional[str]) -> bool:
     return False
 
 
-def _looks_like_streaming_promise_prefix(text: Optional[str]) -> bool:
+def _looks_like_streaming_promise_prefix(text: str | None) -> bool:
     """Block early 'I'll …' / 'Let me …' tokens until the answer is clearly underway."""
     visible = strip_thinking_blocks(text).strip()
     if not visible:
@@ -122,7 +126,7 @@ def _looks_like_streaming_promise_prefix(text: Optional[str]) -> bool:
     return _word_count(visible) < 40
 
 
-def is_interim_assistant_text(text: Optional[str]) -> bool:
+def is_interim_assistant_text(text: str | None) -> bool:
     """True for model work-in-progress prose or raw tool transcripts."""
     visible = strip_thinking_blocks(text).strip()
     if not visible:
@@ -133,18 +137,20 @@ def is_interim_assistant_text(text: Optional[str]) -> bool:
         return True
     if looks_like_extractive_chunk_dump(visible):
         return True
-    return fb.looks_like_deferred_tool_intent(visible) or fb.looks_like_raw_tool_transcript(visible)
+    return fb.looks_like_deferred_tool_intent(
+        visible
+    ) or fb.looks_like_raw_tool_transcript(visible)
 
 
 def is_displayable_answer_text(
-    text: Optional[str],
+    text: str | None,
     *,
     min_words: int = _DEFAULT_MIN_DISPLAY_WORDS,
 ) -> bool:
     """
     True when assistant prose is substantial enough to show as a finished answer bubble.
 
-    Tool-call rows, streaming placeholders, and post-tool stubs stay hidden until this passes.
+    Tool calls, streaming placeholders and post-tool stubs stay hidden until then.
     """
     visible = strip_thinking_blocks(text).strip()
     if not visible:
@@ -162,9 +168,18 @@ def is_displayable_answer_text(
     return _word_count(visible) >= 2
 
 
-def sanitize_assistant_text(text: Optional[str], *, suppress_interim: bool = True) -> str:
+def sanitize_assistant_text(
+    text: str | None, *, suppress_interim: bool = True, allow_short_final: bool = False
+) -> str:
     """Return text safe for a normal assistant response bubble."""
     visible = strip_tool_markup(strip_thinking_blocks(text))
+    if (
+        allow_short_final
+        and len(visible.split()) == 1
+        and re.search(r"\w", visible)
+        and not is_interim_assistant_text(visible)
+    ):
+        return visible
     if suppress_interim and not is_displayable_answer_text(visible):
         return ""
     return visible
@@ -174,10 +189,14 @@ def assistant_content_for_frontend(message: AssistantMessage) -> str:
     """Map a persisted assistant row to user-visible bubble content."""
     if message.tool_call_name:
         return ""
-    return sanitize_assistant_text(message.content, suppress_interim=True)
+    return sanitize_assistant_text(
+        message.content,
+        suppress_interim=True,
+        allow_short_final=message.stop_reason in ("stop", "end_turn"),
+    )
 
 
-def should_append_citation_sources(text: Optional[str]) -> bool:
+def should_append_citation_sources(text: str | None) -> bool:
     """Sources footer is only for display-ready answers, not status stubs."""
     return is_displayable_answer_text(text)
 
@@ -196,11 +215,11 @@ def clean_response_failure_text(*, after_tool_result: bool) -> str:
 
 
 def visible_stream_content(
-    text: Optional[str],
+    text: str | None,
     *,
-    raw_tools: Optional[list[dict]],
+    raw_tools: list[dict] | None,
     done: bool,
-    tool_call_payload: Optional[dict] = None,
+    tool_call_payload: dict | None = None,
 ) -> str:
     """
     Return content safe to send through the live stream channel.

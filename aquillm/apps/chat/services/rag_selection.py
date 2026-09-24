@@ -96,6 +96,9 @@ def select_evidence(
     Similarity only affects ordering inside the relevance-gap frontier.
     """
     pool = tuple(candidates)
+    from lib.evidence_observation import publish
+
+    publish("final_selection", {"mode": mode, "candidates": len(pool)})
     _validate(profile, limits, pool)
     if mode not in ("legacy", "adaptive"):
         raise ValueError("unsupported selector mode")

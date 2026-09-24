@@ -143,6 +143,8 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
                             timeout=request_timeout_s, **request_args
                         ),
                         output_reserve=request_args["max_tokens"],
+                        payload=request_args,
+                        provider="openai",
                         kind="transport_retry" if attempt else synthesis_phase,
                     )
                     parsed_response = await consume_streaming_completion(
@@ -167,6 +169,8 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
                             timeout=request_timeout_s, **request_args
                         ),
                         output_reserve=request_args["max_tokens"],
+                        payload=request_args,
+                        provider="openai",
                         kind="transport_retry" if attempt else synthesis_phase,
                     )
                     if DEBUG:

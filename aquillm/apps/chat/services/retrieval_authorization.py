@@ -14,11 +14,16 @@ def resolve_document_retrieval_authorization(user, col_ref, documents, provided)
         return provided
     if provided is not None:
         return None
-    from apps.chat.services.rag_config import rag_preservation_config
+    from apps.chat.services.rag_config import (
+        evidence_selection_config,
+        rag_preservation_config,
+    )
 
+    selection = evidence_selection_config()
     builder = (
         build_selected_scope_authorization_context
         if rag_preservation_config().active
+        or (selection.mode == "adaptive" and not selection.error)
         else build_production_retrieval_authorization_context
     )
     return builder(

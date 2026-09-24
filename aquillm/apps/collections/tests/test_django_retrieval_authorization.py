@@ -87,3 +87,42 @@ def test_production_context_reauthorization_observes_permission_revocation(
 
     assert current.collection_ids == ()
     assert current.document_ids == ()
+
+
+def test_adaptive_only_uses_current_selected_scope_without_graph(monkeypatch, settings):
+    from apps.chat.services.retrieval_authorization import (
+        resolve_document_retrieval_authorization,
+    )
+
+    settings.KG_OVERLAY_ENABLED = False
+    monkeypatch.setenv("RAG_EVIDENCE_SELECTION_MODE", "adaptive")
+    user = User(pk=7, username="adaptive-user")
+    rows = [(3, _DOC)]
+    monkeypatch.setattr(
+        DjangoCollectionRetrievalPermissionPolicy,
+        "current_authorized_document_scope",
+        lambda self, **kw: tuple(rows),
+    )
+    docs = (
+        SimpleNamespace(id=_DOC, collection_id=3),
+        SimpleNamespace(id=UUID(int=2), collection_id=4),
+    )
+    context = resolve_document_retrieval_authorization(
+        user, SimpleNamespace(collections=[3]), docs, None
+    )
+    assert context.selected_document_ids == frozenset({_DOC})
+    rows.clear()
+    assert not revalidate_retrieval_authorization_context(context=context).document_ids
+    assert (
+        resolve_document_retrieval_authorization(
+            user, SimpleNamespace(collections=[3]), docs, object()
+        )
+        is None
+    )
+    monkeypatch.setenv("RAG_EVIDENCE_SELECTION_MODE", "shadow")
+    assert (
+        resolve_document_retrieval_authorization(
+            user, SimpleNamespace(collections=[3]), docs, None
+        )
+        is None
+    )

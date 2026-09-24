@@ -182,6 +182,9 @@ def log_direct_rag_turn(
     fields.update(
         {key: value for key, value in selection_fields.items() if value is not None}
     )
+    from lib.evidence_observation import publish
+
+    publish("rag_metrics", fields)
     logger.info("rag_direct_turn", **fields)
 
 

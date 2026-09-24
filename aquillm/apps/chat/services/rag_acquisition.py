@@ -3,6 +3,8 @@
 import asyncio
 from dataclasses import dataclass, replace
 
+from lib.evidence_observation import active, publish
+
 from .rag_coverage import (
     AcquisitionAction,
     CoverageAssessment,
@@ -59,7 +61,26 @@ async def acquire_evidence(
         if timeout <= 0:
             raise TimeoutError("acquisition reserve")
         with operation_scope(budget):
-            return await asyncio.wait_for(execute(action), timeout=timeout / 1000)
+            publish(
+                "action_start",
+                {
+                    "kind": action.kind,
+                    "query": action.query,
+                    "signature": action.signature,
+                    "ledger_id": str(id(budget)),
+                },
+            )
+            result = await asyncio.wait_for(execute(action), timeout=timeout / 1000)
+            if active():
+                publish(
+                    "action_end",
+                    {
+                        "signature": action.signature,
+                        "ledger_id": str(id(budget)),
+                        "sources": [str(s.identity) for s in evidence_views([result])],
+                    },
+                )
+            return result
 
     try:
         if not initial_acquired and budget.actions_used < budget.limits.actions:
@@ -92,6 +113,10 @@ async def acquire_evidence(
                 ),
                 timeout=budget.limits.planner_call_ms / 1000,
             )
+            if active():
+                from dataclasses import asdict
+
+                publish("coverage_assessment", asdict(assessment))
             action = assessment.next_action
             if action is None:
                 reason = "assessed"

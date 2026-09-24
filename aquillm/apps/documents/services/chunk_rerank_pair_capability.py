@@ -8,8 +8,8 @@ assets leaves the worker unknown. Reinitialize on runtime replacement.
 
 import json
 import re
-from dataclasses import dataclass
-from threading import RLock
+from dataclasses import dataclass, field
+from threading import Event, RLock
 from time import monotonic
 
 import requests
@@ -28,6 +28,7 @@ class VerifiedPairCounter:
     tokenizer_identity: str
     template_identity: str
     expires: float
+    revoked: Event = field(default_factory=Event, compare=False)
 
     def rendered(self, query, document):
         return self.tokenizer.apply_chat_template(
@@ -49,7 +50,9 @@ class VerifiedPairCounter:
 
     def __call__(self, query, document):
         return (
-            len(self.token_ids(query, document)) if monotonic() < self.expires else None
+            len(self.token_ids(query, document))
+            if not self.revoked.is_set() and monotonic() < self.expires
+            else None
         )
 
 
@@ -58,7 +61,23 @@ def registered_pair_counter(provider):
         return None
     with _lock:
         result = _registered.get(provider.scorer_fingerprint)
-        return result if result is not None and monotonic() < result.expires else None
+        return (
+            result
+            if result is not None
+            and not result.revoked.is_set()
+            and monotonic() < result.expires
+            else None
+        )
+
+
+def invalidate_pair_capability(provider=None):
+    """Revoke even counters held by an already-created request scorer."""
+    with _lock:
+        keys = [provider.scorer_fingerprint] if provider else list(_registered)
+        for key in keys:
+            counter = _registered.pop(key, None)
+            if counter is not None:
+                counter.revoked.set()
 
 
 def _valid_identity(identity, template):
@@ -89,8 +108,9 @@ def verify_pair_capability(
     must be the turn's existing ledger if invoked during a request. Identity must
     come from deployment revision verification, not unverified HTTP metadata.
     """
-    with _lock:
-        _registered.pop(provider.scorer_fingerprint, None)
+    if budget is None or not budget.can_publish():
+        return None
+    invalidate_pair_capability(provider)
     if (
         budget is None
         or provider.shape != "score_single_text_pair"

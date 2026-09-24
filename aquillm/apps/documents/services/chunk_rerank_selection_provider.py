@@ -254,10 +254,16 @@ def current_selection_scorer(
     from .chunk_rerank_pair_capability import registered_pair_counter
     from .chunk_rerank_window_adapter import WindowSelectionScorer, unknown_pair_count
 
-    provider = _legacy_selection_scorer(
-        deadline=deadline, clock=clock, turn_budget=turn_budget
-    )
     active = rerank_text_mode() == "windowed" if windowed is None else windowed
+    provider = None
+    if active:
+        from .pair_worker_lifecycle import verified_canonical_provider
+
+        provider = verified_canonical_provider(deadline)
+    if provider is None:
+        provider = _legacy_selection_scorer(
+            deadline=deadline, clock=clock, turn_budget=turn_budget
+        )
     if not active:
         return provider
     verified = registered_pair_counter(provider)

@@ -54,6 +54,8 @@ class ClaudeInterface(LLMInterface):
         response = await dispatch(
             lambda: self.client.messages.create(**kwargs),
             output_reserve=kwargs.get("max_tokens", 0),
+            payload=kwargs,
+            provider="claude",
             kind=synthesis_phase,
         )
         if DEBUG:

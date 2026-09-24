@@ -110,6 +110,17 @@ def aggregate_window_scores(scores):
     coverage = plan.preparation_coverage
     if coverage == "complete" and (actual != expected or not expected):
         coverage = "partial"
+    from lib.evidence_observation import publish
+
+    publish(
+        "window_score",
+        {
+            "windows": len(expected),
+            "score": max((s.value for s in scores.successful), default=None),
+            "coverage": coverage,
+            "attempted_pairs": scores.attempted_pairs,
+        },
+    )
     return ChunkWindowScore(
         max((s.value for s in scores.successful), default=None),
         coverage,

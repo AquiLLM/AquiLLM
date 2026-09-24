@@ -32,7 +32,22 @@ def synthesis_limits(output_tokens):
     }
 
 
-async def dispatch(factory, *, output_reserve, kind="initial"):
+async def dispatch(
+    factory, *, output_reserve, kind="initial", payload=None, provider=None
+):
+    from lib.evidence_observation import publish
+
+    async def observed():
+        publish("sdk_start", {"payload": payload, "provider": provider, "kind": kind})
+        try:
+            return await factory()
+        finally:
+            publish("sdk_end", {"provider": provider, "kind": kind})
+
+    return await _dispatch(observed, output_reserve=output_reserve, kind=kind)
+
+
+async def _dispatch(factory, *, output_reserve, kind):
     check_turn_active()
     state = current_protection()
     lease = getattr(state, "synthesis_lease", None)

@@ -198,6 +198,69 @@ jobs:
           aquillm/tests/integration/test_vllm_profiles.py
           -q --tb=short
 
+      - name: Evidence preservation and quality contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/chat/tests/test_conversation_persistence.py
+          aquillm/apps/chat/tests/test_message_adapters.py
+          aquillm/lib/llm/tests/test_visibility.py
+          aquillm/lib/llm/tests/test_context_packer.py
+          aquillm/tests/integration/test_production_retrieval_authorization_reachability.py
+          aquillm/apps/chat/tests/test_evidence_operational.py
+          aquillm/apps/chat/tests/test_evidence_quality_delivery.py
+          aquillm/apps/chat/tests/test_evidence_quality_eval.py
+          aquillm/apps/chat/tests/test_evidence_quality_gates.py
+          aquillm/apps/chat/tests/test_evidence_quality_live.py
+          aquillm/apps/chat/tests/test_evidence_quality_review.py
+          aquillm/apps/chat/tests/test_evidence_quality_seed.py
+          aquillm/apps/chat/tests/test_rag_acquisition.py
+          aquillm/apps/chat/tests/test_rag_budget_boundaries.py
+          aquillm/apps/chat/tests/test_rag_commit_fence.py
+          aquillm/apps/chat/tests/test_rag_context_budget.py
+          aquillm/apps/chat/tests/test_rag_coverage.py
+          aquillm/apps/chat/tests/test_rag_delayed_provider.py
+          aquillm/apps/chat/tests/test_rag_evidence_handoff.py
+          aquillm/apps/chat/tests/test_rag_fix_asgi.py
+          aquillm/apps/chat/tests/test_rag_fix_cache.py
+          aquillm/apps/chat/tests/test_rag_fix_continuity.py
+          aquillm/apps/chat/tests/test_rag_fix_coverage.py
+          aquillm/apps/chat/tests/test_rag_fix_handoff.py
+          aquillm/apps/chat/tests/test_rag_fix_tool_deadlines.py
+          aquillm/apps/chat/tests/test_rag_fix_window_cache.py
+          aquillm/apps/chat/tests/test_rag_normal_handoff.py
+          aquillm/apps/chat/tests/test_rag_preservation_routes.py
+          aquillm/apps/chat/tests/test_rag_provider_evidence_guard.py
+          aquillm/apps/chat/tests/test_rag_query.py
+          aquillm/apps/chat/tests/test_rag_refinement_routes.py
+          aquillm/apps/chat/tests/test_rag_source_continuity.py
+          aquillm/apps/chat/tests/test_rag_source_continuity_integration.py
+          aquillm/apps/chat/tests/test_rag_source_document_tools.py
+          aquillm/apps/chat/tests/test_rag_source_figures.py
+          aquillm/apps/chat/tests/test_rag_source_loading.py
+          aquillm/apps/chat/tests/test_rag_source_pipeline.py
+          aquillm/apps/chat/tests/test_rag_source_preparation.py
+          aquillm/apps/chat/tests/test_rag_source_selection.py
+          aquillm/apps/chat/tests/test_rag_source_singular.py
+          aquillm/apps/chat/tests/test_rag_source_synthesis.py
+          aquillm/apps/chat/tests/test_rag_source_types.py
+          aquillm/apps/chat/tests/test_rag_synthesis_lifecycle.py
+          aquillm/apps/chat/tests/test_rag_turn_budget.py
+          aquillm/apps/chat/tests/test_rag_turn_lifecycle.py
+          aquillm/apps/chat/tests/test_rag_websocket_lifecycle.py
+          aquillm/apps/chat/tests/test_tool_payload_compaction.py
+          aquillm/apps/collections/tests/test_django_retrieval_authorization.py
+          aquillm/apps/documents/tests/test_chunk_rerank_pair_capability.py
+          aquillm/apps/documents/tests/test_chunk_rerank_window_fences.py
+          aquillm/apps/documents/tests/test_chunk_rerank_window_scores.py
+          aquillm/apps/documents/tests/test_chunk_rerank_windows.py
+          aquillm/apps/documents/tests/test_pair_worker_lifecycle.py
+          aquillm/apps/documents/tests/test_rerank_http_cache.py
+          aquillm/apps/documents/tests/test_retrieval_log_redaction.py
+          aquillm/lib/llm/tests/test_budget_observation.py
+          aquillm/lib/llm/tests/test_direct_synthesis_grounding.py
+          aquillm/lib/llm/tests/test_evidence_observation.py
+          --ds=aquillm.settings_projection_test -q --tb=short
+
       - name: PostgreSQL seed identity and permission contracts
         env:
           KG_REQUIRE_POSTGRES_TESTS: "1"

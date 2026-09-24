@@ -104,4 +104,18 @@ def seal_synthesis(
         )
         budget._synthesis = lease
         budget._closed_reason = "sealed"
+        from lib.evidence_observation import publish
+
+        publish(
+            "synthesis_sealed",
+            {
+                "ledger_id": str(id(budget)),
+                "max_calls": calls,
+                "max_output_tokens": output_tokens,
+                "timeout_seconds": timeout_seconds,
+                "remaining_retrieval_ms": max(
+                    0, (budget._deadline - budget._clock()) * 1000
+                ),
+            },
+        )
         return lease

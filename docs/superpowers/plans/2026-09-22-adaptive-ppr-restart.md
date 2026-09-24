@@ -12,7 +12,7 @@
 
 **Parent:** [Adaptive retrieval and evidence-selection plan](2026-09-22-adaptive-evidence-selection.md). This is workstream B (pipeline step 6); workstream A covers step 8.
 
-**Status:** Draft; documentation only. Commands below are future implementation checks, not results already obtained.
+**Status:** Implemented and reviewed in development (PR #230); live representative quality/concurrent-latency gates remain pending. See [current implementation report](../reports/2026-09-22-adaptive-retrieval-implementation.md). Features remain default off. Preservation composes with the adaptive selector; the independent PPR activation gate remains open. This status update does not authorize activation or deployment.
 
 ## Global Constraints
 

@@ -1,9 +1,6 @@
 """Deterministic context packing: pinning and section budgets."""
+
 from __future__ import annotations
-
-import logging
-
-import structlog
 
 from lib.llm.utils.context_packer import ContextPackerConfig, pack_messages_for_budget
 
@@ -123,20 +120,30 @@ def test_pruning_stage_order_dedupe_then_compress_then_hard_trim():
         assert stages.index("dedupe") < stages.index("hard_trim")
 
 
-def test_context_packer_logs_stats_without_prompt_body(caplog):
+def test_context_packer_logs_stats_without_prompt_body(monkeypatch):
+    from types import SimpleNamespace
+
+    from lib.llm.utils import context_packer as cp
+
+    events = []
+    monkeypatch.setattr(
+        cp,
+        "logger",
+        SimpleNamespace(info=lambda event, **fields: events.append((event, fields))),
+    )
     secret = "SECRET_USER_TEXT_DO_NOT_LOG"
     msgs = [{"role": "user", "content": secret}]
-    with caplog.at_level(logging.INFO, logger="lib.llm.utils.context_packer"):
-        pack_messages_for_budget(
-            "system also hidden",
-            msgs,
-            context_limit=2048,
-            max_tokens=256,
-            cfg=ContextPackerConfig(),
-            slack=32,
-        )
-    joined = " ".join(r.message for r in caplog.records)
-    assert "context_pack stats" in joined
+    pack_messages_for_budget(
+        "system also hidden",
+        msgs,
+        context_limit=2048,
+        max_tokens=256,
+        cfg=ContextPackerConfig(),
+        slack=32,
+    )
+    assert events[0][0] == "obs.llm.context_packed"
+    assert events[0][1]["before_tokens"] >= events[0][1]["after_tokens"] > 0
+    joined = repr(events)
     assert secret not in joined
     assert "system also hidden" not in joined
 
@@ -153,7 +160,9 @@ def test_context_packer_limits_token_estimator_calls_under_pressure(monkeypatch)
 
     monkeypatch.setattr(cp, "estimate_prompt_tokens", wrapped_estimate)
 
-    msgs = [{"role": "user", "content": f"turn {i} " + ("data " * 220)} for i in range(18)]
+    msgs = [
+        {"role": "user", "content": f"turn {i} " + ("data " * 220)} for i in range(18)
+    ]
     out = cp.pack_messages_for_budget(
         "short system",
         msgs,
@@ -168,5 +177,3 @@ def test_context_packer_limits_token_estimator_calls_under_pressure(monkeypatch)
     )
     assert out["stats"].get("fail_open") is not True
     assert call_counter["count"] <= 12
-
-

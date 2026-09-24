@@ -125,6 +125,24 @@ def prepare_source_windows(
         return value
 
     def finish(coverage, reason=None):
+        from lib.evidence_observation import active, publish
+
+        if active():
+            publish(
+                "window_preparation",
+                {
+                    "chunk_id": source.chunk_id,
+                    "fingerprint": source.source_fingerprint,
+                    "full_pair_tokens": memo.get(source.text) if not unknown else None,
+                    "query_template_tokens": memo.get("") if not unknown else None,
+                    "pair_limit": pair_limit,
+                    "windows": [(s.start, s.end) for s in windows],
+                    "tokenizer": getattr(pair_counter, "tokenizer_identity", "unknown"),
+                    "template": getattr(pair_counter, "template_identity", "unknown"),
+                    "coverage": coverage,
+                    "reason": reason,
+                },
+            )
         return WindowPlan(
             query,
             source,

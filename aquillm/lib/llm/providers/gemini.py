@@ -215,6 +215,8 @@ class GeminiInterface(LLMInterface):
                 config=config,
             ),
             output_reserve=max_tokens,
+            payload={"contents": contents, "config": config},
+            provider="gemini",
             kind=synthesis_phase,
         )
 

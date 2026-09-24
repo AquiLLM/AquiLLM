@@ -87,6 +87,24 @@ def pack_chunk_search_results(
     Build the tool `result` dict for multi-chunk search (collections or single doc).
     """
     use_compact = _compact_items_default() if compact_items is None else compact_items
+    from lib.evidence_observation import active, publish
+
+    if active():
+        publish(
+            "retrieval_sources",
+            {
+                "rows": [
+                    {
+                        "doc_id": str(c.doc_id),
+                        "chunk_id": c.id,
+                        "text": c.content,
+                        "citation": f"[doc:{c.doc_id} chunk:{c.id}]",
+                    }
+                    for c in results
+                ],
+                "score_set": score_set,
+            },
+        )
     public_diagnostics = (
         {
             key: value

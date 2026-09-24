@@ -119,7 +119,19 @@ def cache_operation(operation, key, *args, budget=None, **kwargs):
     try:
         if key.startswith("rrcap:") and not 0 < _warm_ttl() <= 86400:
             return None
-        return _operate(operation, key, args, kwargs, budget, config, index_key)
+        from lib.evidence_observation import publish
+
+        started = monotonic()
+        result = _operate(operation, key, args, kwargs, budget, config, index_key)
+        publish(
+            "cache_operation",
+            {
+                "operation": operation,
+                "usable": result is not None,
+                "duration_ms": (monotonic() - started) * 1000,
+            },
+        )
+        return result
     except Exception:
         return None
 

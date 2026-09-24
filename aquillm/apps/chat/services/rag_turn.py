@@ -47,8 +47,13 @@ def create_runtime(consumer, budget):
 
 @asynccontextmanager
 async def preservation_turn(consumer, *, max_func_calls):
+    from lib.evidence_observation import publish
+
     if not rag_preservation_config().active:
-        yield None
+        try:
+            yield None
+        finally:
+            publish("turn_complete", {})
         return
     from apps.chat.services.rag_preservation_turn import normal_source_handoff
 
@@ -102,6 +107,16 @@ async def preservation_turn(consumer, *, max_func_calls):
         raise
     finally:
         budget.close("finished")
+        publish(
+            "turn_complete",
+            {
+                "pairs": budget.pairs_used,
+                "actions": budget.actions_used,
+                "planner_calls": budget.planner_calls,
+                "text": budget.text_used,
+                "stop_reason": budget.stop_reason,
+            },
+        )
         if getattr(consumer, "_active_evidence_turn", (None,))[0] is task:
             consumer._active_evidence_turn = None
 
