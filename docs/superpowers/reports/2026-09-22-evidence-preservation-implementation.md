@@ -1,11 +1,14 @@
 # Evidence preservation implementation status
 
-Tasks 1–5 were independently reviewed and accepted locally. Task 6 implements
+Tasks 1–6 were independently reviewed and accepted locally. Task 6 implements
 the quality/operational runners, serving-worker capability lifecycle, CI contracts,
 runbook and exact-commit backport inventory. Independent review found seven bounded
 issues (I1–I7, including the deferred malformed historical identity); fixes are locally
-implemented and await scoped re-review. All controls remain legacy/off. There has been no development deployment,
-live provider evaluation, activation, push or backport during this local task.
+implemented and accepted after two correction rounds. Whole-branch review then
+identified scoring-only timeout fallback and evaluator Git portability failures;
+their bounded corrections await re-review and the development PR's CI rerun.
+All controls remain legacy/off. The controller published a draft development PR;
+deployment, live provider evaluation, activation and main backport remain pending.
 
 The [runbook](../../runbooks/evidence-preservation.md) specifies controls, runtime
 attestation, commands, human review, activation-v2, measurements and rollback.
@@ -77,7 +80,7 @@ The actual GitHub Python 3.12 runtime is not established by this Windows Python 
 run. Existing frontend `npm ci` and `npm run build` passed on unchanged inputs under
 Node 22; CI uses Node 20. Locked dependency audit findings were not changed.
 
-Still required before activation: independent Task6 review; actual deployed
+Still required before activation: whole-branch correction acceptance and actual deployed
 model/tokenizer/template/runtime identity and each worker's capability; real
 embedding/reranker/answer runs on both frozen splits; named human answer review;
 snapshot-matched four-arm support/quality improvements; measured completion reserve;
@@ -114,4 +117,15 @@ R1–R3 corrections add actual final-selector source/span/resource exclusion evi
 complete common completion-policy snapshot matching, and one supported typed-SDK
 normalization boundary for initial review, partial proof and saved/rescored reports.
 Local verification and exact fix commits are recorded in the scoped handoff and
-backport manifest. Scoped independent review and all live activation gates remain open.
+backport manifest. Scoped Task 6 review accepted these corrections; all live
+activation gates remain open.
+
+## Whole-branch review corrections
+
+Scoring-only expiry now preserves the prepared authorized pool for rank fallback,
+with current revision/access revalidation and finalization bounded by the original
+retrieval ledger. Initial preparation and scoring keep their hard phase allowance.
+Portable native Git supplies evaluator revision/dirty provenance; both standalone
+fixture runners and saved-observation rescoring work without RTK. Affected local
+covering tests passed 254 tests with the six known warnings. Independent correction
+review and actual development CI remain required before merge/deployment.

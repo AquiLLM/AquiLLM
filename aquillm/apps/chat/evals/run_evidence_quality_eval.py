@@ -97,7 +97,7 @@ def main(argv=None):
         original["revision"]
         if original
         else subprocess.run(
-            ["rtk", "git", "rev-parse", "HEAD"],
+            ["git", "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             check=True,

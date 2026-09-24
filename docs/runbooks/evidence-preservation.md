@@ -293,3 +293,18 @@ runtime and manifest hashes and original failure outcomes. Evaluate rollback on
 the unchanged baseline. Development acceptance precedes a separate graph-free
 main adaptation; refresh target-main observations then, never broadly cherry-pick
 development graph ancestry. No deployment or backport is performed by these runners.
+
+### Scoring expiry and portable evaluation
+
+Initial source preparation and final scoring retain the configured final-scoring
+deadline. If scoring alone expires, the prepared pool receives whole-pool rank
+fallback after current authorization and revision checks, bounded by the original
+remaining retrieval ledger. This grants neither a new scoring attempt nor a new
+retrieval allowance. Initial preparation failure, global expiry, cancellation or
+unavailable bounded revalidation still prevents that packet from being published.
+
+The evaluator requires standard Git for raw revision and checkout-state provenance;
+RTK is not a runtime dependency. Failed Git discovery/inspection aborts a new report
+rather than declaring unknown code clean. Rescoring retains saved code revision and
+checkout state without consulting the current checkout. Fixture reports remain
+ineligible for activation.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from math import isfinite
 from time import monotonic
@@ -29,7 +30,11 @@ from apps.documents.services.chunk_rerank_window_adapter import (
     WindowSelectionScorer,
     expected_score_fingerprint,
 )
-from apps.documents.services.source_deadline import bound_source_preparation
+from apps.documents.services.source_deadline import (
+    bound_source_finalization,
+    check_source_deadline,
+    source_preparation_scope,
+)
 
 
 @dataclass(frozen=True)
@@ -51,7 +56,7 @@ def _normalize(values: tuple[float, ...]) -> tuple[float, ...]:
     return tuple((value - low) / (high - low) for value in values)
 
 
-@bound_source_preparation
+@bound_source_finalization
 def prepare_selection_candidates(
     *,
     pool: FusedRetrievalPool,
@@ -90,7 +95,8 @@ def prepare_selection_candidates(
             )
         return hydrate_pool_rows(pool.rows, authorization, chunk_loader=chunk_loader)
 
-    first = hydrate()
+    with source_preparation_scope(deadline, clock) if source_mode else nullcontext():
+        first = hydrate()
     initial_by_id = {item.chunk.pk: item.source_fingerprint for item in first}
     used_scorer = scorer
     if used_scorer is None and allow_new_scores:
@@ -176,6 +182,8 @@ def prepare_selection_candidates(
     # Permissions and content may change while inference is running.
     from apps.chat.services.rag_source_hydration import revalidate_prepared_rows
 
+    if source_mode:
+        check_source_deadline()
     current = (
         revalidate_prepared_rows(first, authorization, chunk_loader=chunk_loader)
         if source_mode

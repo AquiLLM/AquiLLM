@@ -18,7 +18,7 @@ def dirty_checkout():
 
     return bool(
         subprocess.run(
-            ["rtk", "git", "status", "--porcelain"],
+            ["git", "status", "--porcelain"],
             capture_output=True,
             text=True,
             check=True,

@@ -220,6 +220,7 @@ jobs:
           aquillm/apps/chat/tests/test_evidence_quality_gates.py
           aquillm/apps/chat/tests/test_evidence_quality_live.py
           aquillm/apps/chat/tests/test_evidence_quality_review.py
+          aquillm/apps/chat/tests/test_evidence_git_portability.py
           aquillm/apps/chat/tests/test_evidence_quality_seed.py
           aquillm/apps/chat/tests/test_rag_acquisition.py
           aquillm/apps/chat/tests/test_rag_budget_boundaries.py
@@ -248,6 +249,7 @@ jobs:
           aquillm/apps/chat/tests/test_rag_source_pipeline.py
           aquillm/apps/chat/tests/test_rag_source_preparation.py
           aquillm/apps/chat/tests/test_rag_source_selection.py
+          aquillm/apps/chat/tests/test_rag_scoring_timeout_fallback.py
           aquillm/apps/chat/tests/test_rag_source_singular.py
           aquillm/apps/chat/tests/test_rag_source_synthesis.py
           aquillm/apps/chat/tests/test_rag_source_types.py
