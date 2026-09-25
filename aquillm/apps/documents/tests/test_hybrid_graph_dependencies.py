@@ -117,7 +117,7 @@ def test_shipping_topology_loader_is_http_only_and_redacted() -> None:
             "KG_TOPOLOGY_GATEWAY_URL": "http://knowledge_graph_query_gateway:8092",
             "KG_TOPOLOGY_GATEWAY_BEARER_TOKEN": "gateway-secret",
             "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS": "300",
-            "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": "16384",
+            "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": "4194304",
             "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": "1048576",
         },
         required=True,

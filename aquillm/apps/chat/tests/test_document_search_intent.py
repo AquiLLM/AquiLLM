@@ -96,7 +96,7 @@ def test_astronomy_processing_request_keeps_all_tools_on_auto():
 
 def test_vector_search_prompt_requires_search_scope_and_sources_in_final_answer():
     tool = vector_search_tool(user=object(), col_ref=CollectionsRef([]))
-    description = tool.llm_definition["description"]
+    description = " ".join(tool.llm_definition["description"].split())
 
     assert "After using this tool" in description
     assert "searched the selected documents" in description
