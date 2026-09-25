@@ -21,7 +21,8 @@ permanent capacity failure therefore created successors that re-extracted the sa
   explicit config overrides and retain independent document/link/evidence limits.
 - Only actual stale source failures trigger resnapshotting. Capacity, corruption
   and unexpected preflight errors terminate with privacy-safe fixed error codes.
-- Canonical rebuilds admit 250,000 entities, 1,000,000 source links and 2,000,000
+- Canonical rebuilds admit 1,024 active collection artifacts, 250,000 entities,
+  1,000,000 source links and 2,000,000
   provenance rows, with a finite 5,000,000-decision budget. Authorization/read limits
   do not change. Preserve candidate/audit ordering and existing checksum semantics.
 - Avoid retaining every collection candidate pool simultaneously. Index canonical
@@ -44,3 +45,18 @@ Historical failed request records remain an accurate audit, even after repairs.
 Public health, worker health, projection consistency and retrieval must pass before
 declaring the repair complete. Temporary SSH access stays until explicitly removed
 at the user's request.
+
+## Development validation follow-up
+
+The development deployment exposed two additional boundaries. Its 196 active
+collection artifacts exceeded a remaining 128-artifact canonical write limit.
+Use the separate finite rebuild envelope for both snapshot admission and result
+validation; retain the 128-collection/artifact authorization limits for reads.
+
+Older failed document builds contain committed extraction records with labels
+that have no meaningful characters. New extraction already filters these labels,
+but resume reuses the older records. Preserve those immutable extraction rows and
+their commit fingerprint. Resolution may exclude only this known invalid-label
+category, recording excluded mention IDs and affected relation IDs in a validated
+resolution audit. All valid evidence remains eligible, other validation failures
+remain errors, and clean-input resolution commits remain unchanged.

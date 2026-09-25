@@ -122,3 +122,82 @@ def test_rejected_embedding_audits_share_the_exact_decision_budget(monkeypatch):
         canonical.resolve_canonical_entities(
             entities, embedding_candidates=(candidate,)
         )
+
+
+def _active_artifacts(count):
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.models import GraphArtifact
+    from apps.knowledge_graph.tests.test_canonical_resolution import (
+        _embedding_signature,
+    )
+
+    artifacts = tuple(
+        GraphArtifact.objects.create(
+            scope_type="collection",
+            scope_id=Collection.objects.create(name=f"capacity fixture {index}").pk,
+            status="building",
+            source_hash=f"{index:064x}",
+            ontology_version="ontology-v1",
+            extractor_version="extractor-v1",
+            resolver_version="collection-resolution-v1",
+            filter_policy_version="filter-v1",
+            embedding_model_signature=_embedding_signature(),
+        )
+        for index in range(1, count + 1)
+    )
+    GraphArtifact.objects.filter(pk__in=[row.pk for row in artifacts]).update(
+        status="active"
+    )
+    return artifacts
+
+
+@pytest.mark.django_db
+def test_global_registry_rebuild_preserves_all_196_active_collection_artifacts():
+    artifacts = _active_artifacts(196)
+
+    result = canonical.rebuild_canonical_registry()
+
+    assert result.active_artifact_ids == tuple(sorted(row.pk for row in artifacts))
+    assert result.canonical_entity_ids == ()
+    assert result.active_link_count == 0
+
+
+def test_rebuild_summary_accepts_global_artifact_scope_beyond_read_envelope():
+    artifacts = tuple(range(1, 197))
+    result = canonical.CanonicalRebuildResult(
+        resolver_version="canonical-resolution-v1",
+        resolution_checksum="a" * 64,
+        active_artifact_ids=artifacts,
+        canonical_entity_ids=(),
+        active_link_count=0,
+        created_entity_count=0,
+        created_link_count=0,
+        superseded_entity_count=0,
+        superseded_link_count=0,
+    )
+
+    assert result.active_artifact_ids == artifacts
+
+
+@pytest.mark.django_db
+def test_global_artifact_overflow_refuses_rebuild_without_truncation(monkeypatch):
+    _active_artifacts(3)
+    monkeypatch.setattr(canonical, "MAX_CANONICAL_REBUILD_ARTIFACTS", 2, raising=False)
+
+    with pytest.raises(ValueError, match="active collection artifacts exceed"):
+        canonical.rebuild_canonical_registry()
+
+
+@pytest.mark.parametrize("field", ["allowed_collection_ids", "active_artifact_ids"])
+def test_global_artifact_capacity_does_not_expand_authorized_read_scopes(field):
+    scopes = {"allowed_collection_ids": (), "active_artifact_ids": ()}
+    scopes[field] = tuple(range(1, 130))
+
+    with pytest.raises(ValueError, match="positive integer envelope"):
+        canonical.project_authorized_canonical_lookup(
+            seed_collection_entity_ids=(),
+            permission_endpoints=(),
+            canonical_memberships=(),
+            allowed_document_ids=(),
+            **scopes,
+        )

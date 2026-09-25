@@ -18,7 +18,8 @@ read authorization limits; repair existing work through normal lifecycle hooks.
 
 - Document source limit: 10,000,000 characters; no source truncation.
 - Collection default: 50,000 entities; large bucket: 100,000 entities.
-- Canonical rebuild: 250,000 entities, 1,000,000 source links, 2,000,000 provenance
+- Canonical rebuild: 1,024 active collection artifacts, 250,000 entities,
+  1,000,000 source links, 2,000,000 provenance
   rows, 5,000,000 decisions. Read authorization limits remain unchanged.
 - Preserve existing checksum semantics and small-collection default identities.
 - New Python files stay within 300 lines; existing reviewed maxima never increase.
@@ -103,7 +104,7 @@ Files: `services/inspection.py`, `services/inspection_progress.py`, focused test
 
 - [x] Run focused tests, existing lifecycle/lease regressions and repository checks.
 - [x] Review the integrated diff and ratchet down reduced legacy file budgets.
-- [ ] Commit, push and open a development PR; require relevant CI to pass.
+- [x] Commit, push and open a development PR; require relevant CI to pass (PR #237).
 - [ ] Deploy development using its existing compose configuration; verify health,
   large-input admission, exact small-input identities and graph retrieval fixture.
 - [ ] After separate explicit approval, merge tested development changes into main
@@ -120,3 +121,15 @@ rtk proxy python scripts/check_import_boundaries.py
 rtk proxy powershell -ExecutionPolicy Bypass -File scripts/check_hygiene.ps1
 rtk git diff --check
 ```
+
+## Development validation follow-up
+
+- [x] Reproduce and fix the remaining global 128-artifact write limit with a
+  196-artifact database regression; preserve authorized read caps and fail on overflow.
+- [x] Reproduce resume of committed extraction containing punctuation-only labels.
+  Preserve extraction rows/fingerprints and explicitly audit excluded mentions and
+  affected relations, while retaining complete coverage of valid mentions.
+- [x] Verify clean-input compatibility, malformed-audit refusal, and resumed build
+  completion; obtain an independent review of the follow-up changes.
+- [ ] Merge the follow-up into development after CI, redeploy only 149.165.150.254,
+  and complete canonical refresh plus the existing temporary retrieval fixture.

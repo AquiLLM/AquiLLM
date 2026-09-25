@@ -37,6 +37,7 @@ MAX_CANONICAL_ENTITIES = 10_000
 MAX_CANONICAL_SOURCE_LINKS = 30_000
 MAX_CANONICAL_MEMBERSHIPS = 50_000
 # Corpus rebuilds are bounded independently of authorization-bearing read envelopes.
+MAX_CANONICAL_REBUILD_ARTIFACTS = 1_024  # One active artifact per collection.
 MAX_CANONICAL_REBUILD_ENTITIES = 250_000
 MAX_CANONICAL_REBUILD_SOURCE_LINKS = 1_000_000
 MAX_CANONICAL_REBUILD_PROVENANCE = 2_000_000
@@ -58,7 +59,6 @@ _METHOD_PRIORITY = {
     "defined_acronym": 2,
     "embedding_similarity": 3,
 }
-
 
 
 
@@ -485,7 +485,7 @@ class CanonicalRebuildResult:
         _sorted_positive_tuple(
             self.active_artifact_ids,
             "active_artifact_ids",
-            maximum=MAX_CANONICAL_ARTIFACTS,
+            maximum=MAX_CANONICAL_REBUILD_ARTIFACTS,
         )
         _sorted_positive_tuple(
             self.canonical_entity_ids,
@@ -1691,9 +1691,9 @@ def _active_collection_artifact_snapshot(*, using: str) -> tuple[tuple[int, int]
             status=GraphArtifact.Status.ACTIVE,
         )
         .order_by("collection_scope_id", "pk")
-        .values_list("pk", "collection_scope_id")[: MAX_CANONICAL_ARTIFACTS + 1]
+        .values_list("pk", "collection_scope_id")[: MAX_CANONICAL_REBUILD_ARTIFACTS + 1]
     )
-    if len(rows) > MAX_CANONICAL_ARTIFACTS:
+    if len(rows) > MAX_CANONICAL_REBUILD_ARTIFACTS:
         raise ValueError("active collection artifacts exceed the canonical cap")
     snapshot: list[tuple[int, int]] = []
     collection_ids: set[int] = set()
