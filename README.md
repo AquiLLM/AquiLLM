@@ -11,9 +11,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 
-**AquiLLM is an open-source RAG (Retrieval-Augmented Generation) application designed specifically for researchers.** It helps you manage, search, and interact with your research documents using AI, streamlining your literature review and knowledge discovery process. Upload various document formats, organize them into collections, and chat with an AI that understands your library's content.
+**AquiLLM is an open-source open-weight RAG (Retrieval-Augmented Generation) application designed specifically for researchers and research groups.**  It helps users manage, search, and interact with research documents through a natural-language interface to their data, supporting literature review, onboarding, collaboration, and knowledge discovery workflows. Users can upload and organize documents into collections across a variety of file formats. AquiLLM is designed for local or pseudo-local deployment, giving research groups greater control over their data, models, and infrastructure.
 
-More info can be found at [https://aquillm.org](https://aquillm.org). See also our paper ["AquiLLM: a RAG Tool for Capturing Tacit Knowledge in Research Groups"](https://arxiv.org/abs/2508.05648) by Chandler Campbell, Bernie Boscoe, and Tuan Do
+More info can be found at [https://aquillm.org](https://aquillm.org). For a brief video tutorial using MRI data, visit [youtube](https://www.youtube.com/watch?v=7B3V2a0Xzaw).
+See also our paper ["AquiLLM: a RAG Tool for Capturing Tacit Knowledge in Research Groups"](https://arxiv.org/abs/2508.05648) by Chandler Campbell, Bernie Boscoe, and Tuan Do
 
 <!-- ![AquiLLM Screenshot](path/to/screenshot.gif) -->
 
@@ -36,6 +37,48 @@ The unified upload endpoint supports:
 * Audio/video transcription: `mp3`, `wav`, `m4a`, `aac`, `flac`, `ogg`, `opus`, `mp4`, `mov`, `m4v`, `webm`, `mkv`, `avi`, `mpeg`, `mpg`
 * Archives: `zip` (supported files inside are expanded and ingested)
 
+## Using AquiLLM
+
+### Uploading Documents
+
+1. **Add a Collection First**
+   - Click on "Collections" in the navigation menu
+   - Click the "New Collection" button
+   - Enter a name for your collection
+
+2. **Upload Documents**
+   - Go to the collection you created
+   - Choose the document type you want to upload using the buttons, the buttons are as follows, in order from left to right:
+     - PDF: Upload PDF files
+     - ArXiv Paper: Enter an arXiv ID to import
+     - VTT File: Upload VTT transcript files
+     - Webpage: Enter the URL of a site
+     - Handwritten Notes: Upload images of handwritten notes, select the Convert to LaTeX box if they contain formulas
+     - All documents will appear in your collection, if they don't show up automatically, refresh the page
+   - The documents will be ingested in the background. The ingestion monitor will show its progress. Images that are part of the document will be ingested into a subcollection. Support for image search is very experimental.
+
+3. **View Your Documents**
+   - If you leave your collection page, do the following
+   - Select Collections button from the sidebar and choose which collection you want to view
+   - Click on any document to view its contents
+
+### Chatting With Your Documents
+
+1. **Start a New Conversation**
+   - From the sidebar, click "New Conversation"
+   - Select which collections to include in your search context
+
+2. **Using the Chat**
+   - Type your questions about the documents in natural language
+   - The AI will search your documents and provide answers with references
+   - You can follow up with additional questions
+   - The AI may quote specific parts of your documents as references
+
+3. **Managing Conversations**
+   - All conversations are saved automatically
+   - Access past conversations from the "Your Conversations" menu in the sidebar
+   - Each conversation maintains its collection context
+
 ## Tech Stack
 
 *   **Backend**: Python, Django
@@ -55,7 +98,7 @@ Key env vars:
 
 | Variable | Default | Description |
 |---|---|---|
-| `RAG_DIRECT_ENABLED` | `0` | Enable backend-driven retrieval (off by default) |
+| `RAG_DIRECT_ENABLED` | `1` in Compose | Enable bounded backend-driven retrieval; set `0` explicitly to opt out. Standalone Python defaults to `0`. |
 | `RAG_DIRECT_TOP_K` | `10` | Chunks retrieved per turn |
 | `RAG_EVIDENCE_TOKEN_BUDGET` | `3500` | Max tokens of evidence passed to synthesis |
 | `RAG_ATTACH_TOOLS_WHEN_COLLECTIONS_SELECTED` | `1` | Auto-attach document tools when collections are selected and intent requires RAG |
@@ -86,7 +129,7 @@ This assumes you have Docker and Docker Compose installed.
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/AquiLLM/AquiLLM.git 
+    git clone https://github.com/AquiLLM/AquiLLM.git
     cd AquiLLM
     ```
 2.  **Copy the environment template:**
@@ -283,7 +326,7 @@ docker compose -f deploy/compose/production.yml --profile vllm up -d --force-rec
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/AquiLLM/AquiLLM.git 
+    git clone https://github.com/AquiLLM/AquiLLM.git
     cd AquiLLM
     ```
 2.  **Copy the environment template:**
@@ -316,7 +359,7 @@ docker compose -f deploy/compose/production.yml --profile vllm up -d --force-rec
     docker compose -f deploy/compose/production.yml --profile certbot up --build get_certs
 
     # Default: hosted LLMs (OpenAI, Claude, Gemini, etc.)
-    docker compose -f deploy/compose/production.yml up -d 
+    docker compose -f deploy/compose/production.yml up -d
 
     # Optional: with local vLLM-backed models
     docker compose -f deploy/compose/production.yml --profile vllm up -d
@@ -473,46 +516,6 @@ Healthy runs should also avoid repeated `falling back` or `retrying vector-only`
 | `MEM0_QDRANT_HOST=qdrant` | Qdrant service name (same stack). |
 | `MEM0_EMBED_VLLM_TRUST_REMOTE_CODE=1` | Required for some embedding models (e.g. Qwen3-Embedding-4B). |
 
-## Using AquiLLM
-
-### Uploading Documents
-
-1. **Add a Collection First**
-   - Click on "Collections" in the navigation menu
-   - Click the "New Collection" button
-   - Enter a name for your collection
-
-2. **Upload Documents**
-   - Go to the collection you created
-   - Choose the document type you want to upload using the buttons, the buttons are as follows, in order from left to right:
-     - PDF: Upload PDF files
-     - ArXiv Paper: Enter an arXiv ID to import 
-     - VTT File: Upload VTT transcript files
-     - Webpage: Enter the URL of a site 
-     - Handwritten Notes: Upload images of handwritten notes, select the Convert to LaTeX box if they contain formulas
-     - All documents will appear in your collection, if they don't show up automatically, refresh the page
-     
-3. **View Your Documents**
-   - If you leave your collection page, do the following
-   - Select Collections button from the sidebar and choose which collection you want to view
-   - Click on any document to view its contents
-
-### Chatting With Your Documents
-
-1. **Start a New Conversation**
-   - From the sidebar, click "New Conversation"
-   - Select which collections to include in your search context
-
-2. **Using the Chat**
-   - Type your questions about the documents in natural language
-   - The AI will search your documents and provide answers with references
-   - You can follow up with additional questions
-   - The AI may quote specific parts of your documents as references
-
-3. **Managing Conversations**
-   - All conversations are saved automatically
-   - Access past conversations from the "Your Conversations" menu in the sidebar
-   - Each conversation maintains its collection context
 
 ### Exporting chat feedback (superusers)
 
@@ -547,18 +550,25 @@ To ensure generated paths such as `node_modules/` are not committed, run `pwsh -
 * Bernie Boscoe (Southern Oregon University)
 * Tuan Do (UCLA)
 
-### Other Contributors
+### Current Contributors
 
-* Chandler Campbell (Lead Developer, Southern Oregon University)
-* Jack Stark
+* Chandler Campbell (Southern Oregon University)
+* Jack Stark (UCLA)
+* Jackson Godsey (Southern Oregon University)
+* Tee Grant (Southern Oregon University)
+* Morgan Himes (UCLA)
+* Andrew Lizarraga (UCLA)
 * Jacob Nowack (Southern Oregon University)
+* Srinath Saikrishnan (UCLA)
+* Jonathan Soriano (UCLA)
+
+
+### Other Contributors
 * Skyler Acosta (Southern Oregon University)
 * Zhuo Chen (University of Washington)
 * Kevin Donlon (Southern Oregon University)
-* Jackson Godsey (Southern Oregon University)
-* Tee Grant (Southern Oregon University)
 * Elyjah Kiehne (Southern Oregon University)
-* Jonathan Soriano (UCLA)
+
 
 ## Contributing
 
@@ -570,3 +580,24 @@ We welcome contributions! AquiLLM is an open-source project, and we appreciate h
 *   **Code style and structure**: Follow [docs/code-style-guide.md](docs/code-style-guide.md) for repository standards and quality gates.
 
 
+
+## Conversation history, citations, and optional ASR
+
+Completed conversations are indexed by the existing Celery worker for authorized
+history search. `CONVERSATION_INDEX_IDLE_SECONDS` defaults to 60; existing history
+can be populated with `python manage.py index_conversations`. Document questions
+use the bounded retrieval route enabled by Compose, while explicit history recall
+keeps its conversation-search tool route.
+
+Citation previews stream PDFs, render a bounded page window, and expose source
+links and extracted figures. Run database migrations before updating the app and
+workers together; document chunk tasks retain compatibility with old queued calls.
+
+The standard GPU profile retains Whisper and the production Genesis, embedding,
+and reranker memory allocations. [Nemotron ASR](deploy/NEMOTRON_ASR.md) is an
+explicit optional Compose override with a separate image and GPU budget. Its CPU
+contract tests do not replace validation on the deployment GPU.
+
+The [user documentation source](user-docs/readme.md) covers collections, ingestion,
+chat, and citations. See the [nongraph parity audit](docs/backports/2026-09-22-non-graph-parity.md)
+for the source revision, retained production fixes, exclusions, and rollout checks.

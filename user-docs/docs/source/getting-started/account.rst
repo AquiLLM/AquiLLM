@@ -15,7 +15,7 @@ Use the **Log In** button in the top-right corner, or the **log in** link in the
    Welcome page: choose Log In to continue.
 
 Sign in
-=======
+========
 
 That opens the sign-in page. Click on **Continue with Google**, and sign in with a .edu email address.
 

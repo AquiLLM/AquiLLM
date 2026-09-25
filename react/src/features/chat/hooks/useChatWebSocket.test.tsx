@@ -32,23 +32,47 @@ class FakeWebSocket {
 
 const Harness = () => {
   const [conversation, setConversation] = useState<Conversation>({ messages: [] });
+  const [exception, setException] = useState('');
+  const [, setDebugHtml] = useState<string | null>(null);
+  const [inputDisabled, setInputDisabled] = useState(true);
 
-  useChatWebSocket({
+  const socketState = useChatWebSocket({
     convoId: '314',
     setConversation,
-    setException: vi.fn(),
-    setDebugHtml: vi.fn(),
-    setInputDisabled: vi.fn(),
+    setException,
+    setDebugHtml,
+    setInputDisabled,
   });
+  const terminalError = socketState.terminalError;
 
   return (
-    <output data-testid="conversation" data-spinner={shouldShowSpinner(conversation.messages)}>
-      {conversation.messages.map((message) => (
-        <span key={message.message_uuid}>
-          {message.role}:{message.tool_call_name || message.tool_name || message.content}
-        </span>
-      ))}
-    </output>
+    <>
+      <output
+        data-testid="conversation"
+        data-spinner={!terminalError && shouldShowSpinner(conversation.messages)}
+        data-input-disabled={inputDisabled}
+      >
+        {conversation.messages.map((message, index) => (
+          <span key={message.message_uuid || index}>
+            {message.role}:{message.tool_call_name || message.tool_name || message.content}
+          </span>
+        ))}
+      </output>
+      <output data-testid="error">{terminalError || exception}</output>
+      <button
+        type="button"
+        onClick={() => {
+          socketState.beginTurn();
+          setInputDisabled(true);
+          setConversation((previous) => ({
+            ...previous,
+            messages: [...previous.messages, { role: 'user', content: 'retry' }],
+          }));
+        }}
+      >
+        Retry
+      </button>
+    </>
   );
 };
 
@@ -111,5 +135,140 @@ describe('useChatWebSocket', () => {
       );
     });
     expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('false');
+  });
+
+  it('settles an aborted tool turn and allows a later retry to run normally', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(FakeWebSocket.latest).not.toBeNull());
+    const socket = FakeWebSocket.latest!;
+
+    act(() => {
+      socket.onopen?.(new Event('open'));
+      socket.emit({
+        delta: {
+          messages: [{
+            role: 'assistant',
+            content: '',
+            message_uuid: 'failed-tool-call',
+            tool_call_name: 'vector_search',
+            tool_call_input: { search_string: 'calibration' },
+          }],
+        },
+      });
+    });
+
+    expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('true');
+    expect(screen.getByTestId('conversation').getAttribute('data-input-disabled')).toBe('true');
+
+    act(() => {
+      socket.emit({ exception: 'Tool result validation failed.' });
+    });
+
+    expect(screen.getByTestId('error').textContent).toBe('Tool result validation failed.');
+    expect(screen.getByTestId('conversation').textContent).toBe('assistant:vector_search');
+    expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('false');
+    expect(screen.getByTestId('conversation').getAttribute('data-input-disabled')).toBe('false');
+
+    act(() => {
+      socket.onopen?.(new Event('open'));
+    });
+
+    expect(screen.getByTestId('error').textContent).toBe('Tool result validation failed.');
+    expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('false');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Retry' }).click();
+    });
+
+    expect(screen.getByTestId('error').textContent).toBe('');
+    expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('true');
+    expect(screen.getByTestId('conversation').getAttribute('data-input-disabled')).toBe('true');
+
+    act(() => {
+      socket.emit({
+        delta: {
+          messages: [{
+            role: 'assistant',
+            content: 'Retry completed.',
+            message_uuid: 'retry-answer',
+            usage: 42,
+          }],
+        },
+      });
+    });
+
+    expect(screen.getByTestId('conversation').textContent).toContain('assistant:vector_search');
+    expect(screen.getByTestId('conversation').textContent).toContain('user:retry');
+    expect(screen.getByTestId('conversation').textContent).toContain('assistant:Retry completed.');
+    expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('false');
+    expect(screen.getByTestId('conversation').getAttribute('data-input-disabled')).toBe('false');
+  });
+
+  it('resumes a terminal tool turn after authoritative reconnect hydration', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(FakeWebSocket.latest).not.toBeNull());
+    const socket = FakeWebSocket.latest!;
+    const toolCall = {
+      role: 'assistant' as const,
+      content: '',
+      message_uuid: 'resumed-tool-call',
+      tool_call_name: 'vector_search',
+      tool_call_input: { search_string: 'calibration' },
+    };
+
+    act(() => {
+      socket.onopen?.(new Event('open'));
+      socket.emit({ delta: { messages: [toolCall] } });
+      socket.emit({ exception: 'Tool result validation failed.' });
+      socket.onopen?.(new Event('open'));
+    });
+
+    expect(screen.getByTestId('error').textContent).toBe('Tool result validation failed.');
+    expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('false');
+
+    act(() => {
+      socket.emit({ conversation: { messages: [toolCall] } });
+    });
+
+    expect(screen.getByTestId('error').textContent).toBe('');
+    expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('true');
+    expect(screen.getByTestId('conversation').getAttribute('data-input-disabled')).toBe('true');
+
+    act(() => {
+      socket.emit({
+        delta: {
+          messages: [{
+            role: 'tool',
+            content: '{"result": []}',
+            message_uuid: 'resumed-tool-result',
+            tool_name: 'vector_search',
+            for_whom: 'assistant',
+          }],
+        },
+      });
+    });
+
+    expect(screen.getByTestId('error').textContent).toBe('');
+    expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('true');
+    expect(screen.getByTestId('conversation').getAttribute('data-input-disabled')).toBe('true');
+
+    act(() => {
+      socket.emit({
+        delta: {
+          messages: [{
+            role: 'assistant',
+            content: 'Recovered answer.',
+            message_uuid: 'resumed-answer',
+            usage: 84,
+          }],
+        },
+      });
+    });
+
+    expect(screen.getByTestId('error').textContent).toBe('');
+    expect(screen.getByTestId('conversation').textContent).toContain('tool:vector_search');
+    expect(screen.getByTestId('conversation').textContent).toContain('assistant:Recovered answer.');
+    expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('false');
+    expect(screen.getByTestId('conversation').getAttribute('data-input-disabled')).toBe('false');
   });
 });

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from lib.llm.types.messages import ToolMessage
 
 from django.test import SimpleTestCase
 
@@ -251,3 +252,55 @@ class VectorSearchPackTests(SimpleTestCase):
             }
         ]
         assert "retrieval_diagnostics" not in out
+
+
+    def test_results_with_null_diagnostics_validate_as_tool_message(self):
+        chunk = SimpleNamespace(
+            id=6,
+            doc_id="doc-success",
+            chunk_number=2,
+            modality="text",
+            content="relevant passage",
+        )
+        packed = pack_chunk_search_results(
+            [chunk],
+            titles_by_doc_id={"doc-success": "Successful search"},
+            docs_by_doc_id={"doc-success": SimpleNamespace(image_file=None)},
+            truncate=lambda value: value,
+            image_modality="image",
+            compact_items=False,
+            retrieval_diagnostics={"vector_error": None},
+        )
+        assert packed["_retrieval_diagnostics"] == {"vector_error": None}
+
+        message = ToolMessage(
+            content="search completed",
+            tool_name="vector_search",
+            for_whom="assistant",
+            result_dict=packed,
+        )
+
+        assert message.result_dict == packed
+
+
+    def test_no_results_with_null_diagnostics_validate_as_tool_message(self):
+        packed = pack_chunk_search_results(
+            [],
+            titles_by_doc_id={},
+            docs_by_doc_id={},
+            truncate=lambda value: value,
+            image_modality="image",
+            compact_items=False,
+            search_string="missing calibration",
+            retrieval_diagnostics={"vector_error": None},
+        )
+        assert packed["retrieval_diagnostics"] == {"vector_error": None}
+
+        message = ToolMessage(
+            content="search completed",
+            tool_name="vector_search",
+            for_whom="assistant",
+            result_dict=packed,
+        )
+
+        assert message.result_dict == packed

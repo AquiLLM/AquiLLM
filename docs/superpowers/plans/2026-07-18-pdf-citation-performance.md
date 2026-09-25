@@ -1,3 +1,5 @@
+> Historical development reference. The [September 22 nongraph parity backport](../../backports/2026-09-22-non-graph-parity.md) imported this document but excluded graph work and unfinished plan items from that backport. That historical scope does not describe the later full development promotion.
+
 # PDF Citation Performance Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.

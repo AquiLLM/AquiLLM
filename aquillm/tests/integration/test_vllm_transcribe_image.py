@@ -141,8 +141,28 @@ def test_dockerignore_excludes_disposable_virtual_environments():
     assert "venv/" in ignored
 
 
-def test_readme_documents_the_nemotron_operator_contract():
-    readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
+def test_operator_contract_documents_optional_activation_and_rollback():
+    guide = (_repo_root() / "deploy/NEMOTRON_ASR.md").read_text(encoding="utf-8")
+    for required in (
+        "explicit opt-in",
+        "0.08",
+        "0.20",
+        "0.45",
+        "0.12",
+        "0.15",
+        "131072",
+        "--no-deps --wait --wait-timeout 900",
+        "INGEST_TRANSCRIBE_LANGUAGE",
+        "390 seconds",
+        "no concurrency promise",
+        "Whisper rollback",
+        "disabled",
+    ):
+        assert required in guide
+
+
+def test_operator_guide_documents_the_nemotron_contract():
+    readme = (_repo_root() / "deploy/NEMOTRON_ASR.md").read_text(encoding="utf-8")
     section = " ".join(
         _markdown_section(readme, "Local GPU ASR (Nemotron 3.5)").split()
     )
@@ -170,7 +190,7 @@ def test_readme_documents_the_nemotron_operator_contract():
         "https://openmdw.ai/license/1-1/",
         "distinct from the AquiLLM source license",
         "does not redistribute them",
-        "--env-file .env -f deploy/compose/base.yml",
+        "--env-file .env -f deploy/compose/production.yml",
         "--profile vllm",
         "--no-deps --wait --wait-timeout 900",
         "http://localhost:8000/health",
@@ -196,40 +216,6 @@ def test_readme_documents_the_nemotron_operator_contract():
         assert outside_release.lower() in section.lower()
 
 
-def test_readme_documents_a_complete_environment_only_whisper_rollback():
-    readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
-    rollback = " ".join(_markdown_section(readme, "Whisper rollback").split())
-
-    for setting in (
-        "TRANSCRIBE_VLLM_MODEL=openai/whisper-large-v3-turbo",
-        "TRANSCRIBE_VLLM_REVISION=",
-        "TRANSCRIBE_VLLM_SERVED_MODEL_NAME=whisper-large-v3-turbo",
-        "TRANSCRIBE_VLLM_TOKENIZER=openai/whisper-large-v3-turbo",
-        "TRANSCRIBE_VLLM_TENSOR_PARALLEL_SIZE=1",
-        "TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION=0.08",
-        "TRANSCRIBE_VLLM_MAX_MODEL_LEN=448",
-        "TRANSCRIBE_VLLM_DTYPE=float16",
-        "TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=0",
-        "TRANSCRIBE_VLLM_TRUST_REMOTE_CODE=1",
-        "--max-num-seqs 1",
-        "--max-num-batched-tokens 1500",
-        '\\"audio\\":{\\"count\\":1,\\"length\\":30}',
-        "INGEST_TRANSCRIBE_MODEL=whisper-large-v3-turbo",
-        "--force-recreate vllm_transcribe",
-        "--force-recreate web worker",
-        "without rebuilding",
-        "not automatic",
-        "not a second resident model",
-    ):
-        assert setting in rollback
-    assert "--quantization bitsandbytes" not in rollback
-    assert "--load-format bitsandbytes" not in rollback
-    assert "--model-loader-extra-config" not in rollback
-
-    assert "--generation-config" not in rollback
-    assert "TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=1" not in rollback
-
-
 def test_whisperx_docs_use_the_configurable_asr_baseline():
     root = _repo_root()
     paths = (
@@ -250,7 +236,7 @@ def test_whisperx_docs_use_the_configurable_asr_baseline():
         contents = path.read_text(encoding="utf-8").lower()
         assert "configured openai-compatible asr" in contents
         assert "nemotron" in contents and "default" in contents
-        assert "whisper rollback" in contents
+        assert "whisper" in contents and "optional nemotron" in contents
         assert "ingest_transcribe_provider=openai" in contents
         for stale in stale_phrases:
             assert stale not in contents
@@ -272,6 +258,6 @@ def test_roadmap_tracks_the_optional_whisperx_enhancement():
         in row
     )
     assert "**Not started**" in row
-    assert "Nemotron default" in row
-    assert "Whisper rollback" in row
+    assert "Whisper default" in row
+    assert "optional Nemotron" in row
     assert "without changing the baseline contract" in row

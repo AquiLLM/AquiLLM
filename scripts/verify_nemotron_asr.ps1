@@ -80,8 +80,13 @@ function Restore-ProcessEnvironment {
 
     foreach ($name in $Snapshot.Keys) {
         $entry = $Snapshot[$name]
-        $value = if ($entry.Exists) { $entry.Value } else { $null }
-        [Environment]::SetEnvironmentVariable($name, $value, "Process")
+        if ($entry.Exists) {
+            [Environment]::SetEnvironmentVariable($name, [string]$entry.Value, "Process")
+        }
+        else {
+            # Preserve absent versus empty on PowerShell 7.5 / .NET 9.
+            [Environment]::SetEnvironmentVariable($name, [NullString]::Value, "Process")
+        }
     }
 }
 
@@ -145,7 +150,7 @@ function Invoke-VerificationSelfTests {
     $outerSnapshot = Get-ProcessEnvironmentSnapshot -Names @($setName, $unsetName)
     try {
         [Environment]::SetEnvironmentVariable($setName, "before", "Process")
-        [Environment]::SetEnvironmentVariable($unsetName, $null, "Process")
+        [Environment]::SetEnvironmentVariable($unsetName, [NullString]::Value, "Process")
         $deliberateFailureObserved = $false
         try {
             Invoke-WithTemporaryEnvironment `

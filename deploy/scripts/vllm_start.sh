@@ -32,6 +32,7 @@ PORT="${VLLM_PORT:-8000}"
 # Same baseline as .env.example.
 _DEFAULT_OCR_VLLM_EXTRA_ARGS="--kv-cache-dtype fp8 --compilation-config '{\"cudagraph_mode\":\"PIECEWISE\"}' --quantization bitsandbytes --load-format bitsandbytes --model-loader-extra-config '{\"load_in_4bit\":true,\"bnb_4bit_compute_dtype\":\"float16\",\"bnb_4bit_quant_type\":\"nf4\",\"bnb_4bit_use_double_quant\":true}'"
 _DEFAULT_TRANSCRIBE_VLLM_EXTRA_ARGS="--enforce-eager --max-num-seqs 1 --max-num-batched-tokens 50000 --generation-config /opt/aquillm/nemotron-generation-config"
+_DEFAULT_WHISPER_VLLM_EXTRA_ARGS="--enforce-eager --max-num-seqs 1 --max-num-batched-tokens 1500 --limit-mm-per-prompt '{\"audio\":{\"count\":1,\"length\":30}}'"
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 OCR_VLLM_EXTRA_ARGS="${OCR_VLLM_EXTRA_ARGS:-}"
 
@@ -58,6 +59,10 @@ if [ -z "${VLLM_EXTRA_ARGS// }" ] && [ "${VLLM_RUNNER:-}" = "pooling" ] && [ -z 
 fi
 if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
   case "${VLLM_MODEL:-}" in
+    *whisper*|*Whisper*)
+      export VLLM_DTYPE="${VLLM_DTYPE:-float16}"
+      export VLLM_EXTRA_ARGS="${TRANSCRIBE_VLLM_EXTRA_ARGS:-${_DEFAULT_WHISPER_VLLM_EXTRA_ARGS}}"
+      ;;
     *Qwen2.5-VL*|*Qwen/Qwen2.5-VL*|*Qwen3.5-4B*|*Qwen/Qwen3.5-4B*)
       if [ -z "${VLLM_DTYPE:-}" ]; then
         export VLLM_DTYPE="float16"
@@ -546,6 +551,10 @@ while i < len(toks):
         continue
     out.append(toks[i])
     i += 1
+
+has_dtype = any(out[j] == "--dtype" and j + 1 < len(out) for j in range(len(out)))
+if not has_dtype and not os.environ.get("VLLM_DTYPE"):
+    out.extend(["--dtype", "float16"])
 
 print(shlex.join(out))
 PY

@@ -61,9 +61,11 @@ _CHAT_HISTORY_PHRASE_RE = re.compile(
 def _looks_like_chat_history_search_request(message_content: str) -> bool:
     """True when the user asks to recall something from an earlier conversation."""
     text = message_content or ""
-    return bool(
-        _CHAT_HISTORY_TARGET_RE.search(text) or _CHAT_HISTORY_PHRASE_RE.search(text)
-    )
+    if _CHAT_HISTORY_TARGET_RE.search(text):
+        return True
+    if re.search(r"\b(?:this|current|present|ongoing)\s+(?:chat|conversation|thread|discussion|session)\b", text, re.IGNORECASE):
+        return False
+    return bool(_CHAT_HISTORY_PHRASE_RE.search(text))
 
 
 def _latest_prior_user_tool_intent(
@@ -117,7 +119,7 @@ def _validated_collection_ids(raw_collections: Any) -> list[Any]:
 
 
 async def handle_chat_receive(consumer: Any, text_data: str) -> None:
-    logger.debug("obs.chat.receive", data_preview=text_data[:100])
+    logger.debug("obs.chat.receive", data_chars=len(text_data))
 
     @database_sync_to_async
     def _save_files(files: list[ConversationFile]) -> list[ConversationFile]:

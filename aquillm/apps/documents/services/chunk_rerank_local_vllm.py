@@ -7,8 +7,11 @@ from typing import TYPE_CHECKING, Any
 import requests
 import structlog
 
-from apps.documents.services import rag_cache
-from apps.documents.services.chunk_rerank_budget import trim_rerank_pair
+from apps.documents.services import chunk_rerank_score, rag_cache
+from apps.documents.services.chunk_rerank_budget import (
+    trim_rerank_documents,
+    trim_rerank_pair,
+)
 from apps.documents.services.chunk_rerank_config import (
     rerank_base_url,
     rerank_doc_char_limit,
@@ -23,7 +26,6 @@ from apps.documents.services.chunk_rerank_config import (
 from apps.documents.services.chunk_rerank_parse import (
     ordered_queryset_from_ids,
     parse_rerank_results,
-    parse_score_results,
 )
 from apps.documents.services.chunk_rerank_payload import (
     replace_payload_text,
@@ -36,9 +38,10 @@ from .chunk_rerank_parse import parse_single_score
 from .chunk_rerank_pointwise import (
     _is_complete_finite_scoring as _is_complete_finite_scoring,
 )
-from .chunk_rerank_pointwise import (
-    _rank_complete_scores,
-)
+
+_batch_score_payloads = chunk_rerank_score.batch_score_payloads
+_parse_batch_scores = chunk_rerank_score.parse_batch_scores
+_rank_complete_scores = chunk_rerank_score.rank_complete_scores
 
 
 def _score_one_document(**kwargs):
@@ -122,12 +125,9 @@ def rerank_via_local_vllm(
     ]
     pair_limit = rerank_pair_token_limit()
     reserve_tokens = rerank_template_reserve_tokens()
-    trimmed_pairs = [
-        trim_rerank_pair(query, document, pair_limit, reserve_tokens)
-        for document in raw_documents
-    ]
-    effective_query = trimmed_pairs[0][0]
-    effective_documents = [document for _query, document in trimmed_pairs]
+    effective_query, effective_documents = trim_rerank_documents(
+        query, raw_documents, pair_limit, reserve_tokens
+    )
 
     multimodal_documents = [rerank_document_payload(chunk) for chunk in chunks_list]
     effective_multimodal_documents = [
@@ -162,6 +162,35 @@ def rerank_via_local_vllm(
                 )
         return ordered_queryset_from_ids(model_cls, ranked_ids)
 
+    observed_http_error = False
+    batch_payloads = _batch_score_payloads(
+        model_name,
+        effective_query,
+        effective_documents,
+        effective_multimodal_documents,
+        has_multimodal_documents,
+    )
+
+    def score_batch(endpoint: str) -> list[int]:
+        nonlocal observed_http_error
+        for payload in batch_payloads:
+            try:
+                response = requests.post(
+                    endpoint, headers=headers, json=payload, timeout=timeout
+                )
+                if response.status_code in (404, 405):
+                    continue
+                if response.status_code >= 400:
+                    observed_http_error = True
+                    continue
+                ranked_ids = _parse_batch_scores(response.json(), chunks_list, top_k)
+            except Exception:
+                observed_http_error = True
+                continue
+            if ranked_ids:
+                return ranked_ids
+        return []
+
     cached_capability = None
     if not require_complete_scoring:
         cached_capability = rag_cache.get_cached_rerank_capability(
@@ -182,6 +211,12 @@ def rerank_via_local_vllm(
             reserve_tokens=reserve_tokens,
         )
         ranked_ids = _rank_complete_scores(scores, chunks_list, top_k)
+        if ranked_ids:
+            return finish(ranked_ids, cached_capability)
+        rag_cache.delete_cached_rerank_capability(base_v1, model_name)
+        cached_capability = None
+    elif cached_capability and cached_capability["shape"] == "score_batch_text_pairs":
+        ranked_ids = score_batch(cached_capability["endpoint"])
         if ranked_ids:
             return finish(ranked_ids, cached_capability)
         rag_cache.delete_cached_rerank_capability(base_v1, model_name)
@@ -229,7 +264,6 @@ def rerank_via_local_vllm(
             },
         )
 
-    observed_http_error = False
     for endpoint in rerank_endpoints:
         try:
             for payload in rerank_payloads:
@@ -265,55 +299,12 @@ def rerank_via_local_vllm(
     skip_batch_scores = rerank_model_is_qwen3_vl()
     for endpoint in score_endpoints:
         if not skip_batch_scores:
-            batch_payloads: tuple[dict[str, Any], ...] = (
-                {
-                    "model": model_name,
-                    "text_1": effective_query,
-                    "text_2": effective_documents,
-                },
-                {
-                    "text_1": effective_query,
-                    "text_2": effective_documents,
-                },
-                {
-                    "model": model_name,
-                    "query": effective_query,
-                    "documents": effective_documents,
-                },
-            )
-            if has_multimodal_documents:
-                batch_payloads += (
-                    {
-                        "model": model_name,
-                        "query": [{"type": "text", "text": effective_query}],
-                        "documents": effective_multimodal_documents,
-                    },
+            ranked_ids = score_batch(endpoint)
+            if ranked_ids:
+                return finish(
+                    ranked_ids,
+                    {"endpoint": endpoint, "shape": "score_batch_text_pairs"},
                 )
-            try:
-                for payload in batch_payloads:
-                    response = requests.post(
-                        endpoint,
-                        headers=headers,
-                        json=payload,
-                        timeout=timeout,
-                    )
-                    if response.status_code in (404, 405):
-                        continue
-                    if response.status_code >= 400:
-                        observed_http_error = True
-                        continue
-                    pairs = parse_score_results(response.json())
-                    ranked_ids = _rank_complete_scores(pairs, chunks_list, top_k)
-                    if ranked_ids:
-                        return finish(
-                            ranked_ids,
-                            {
-                                "endpoint": endpoint,
-                                "shape": "score_batch_text_pairs",
-                            },
-                        )
-            except Exception:
-                pass
 
         scores = _score_documents_concurrently(
             endpoint=endpoint,

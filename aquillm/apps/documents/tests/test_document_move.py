@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +14,35 @@ from django.test import RequestFactory
 from apps.documents.models import Document
 from apps.documents.views.api import move_document
 from apps.knowledge_graph.graph import invalidation
+
+
+def test_partial_save_rejects_a_deleted_persisted_document(monkeypatch):
+    from apps.documents.models import RawTextDocument
+    from django.db import models
+
+    document = RawTextDocument(
+        pkid=7,
+        id=uuid.uuid4(),
+        title="deleted document",
+        full_text="source",
+        collection_id=3,
+        ingested_by_id=1,
+    )
+    document._state.adding = False
+    query = MagicMock()
+    query.select_for_update.return_value.filter.return_value.values.return_value.first.return_value = None
+    monkeypatch.setattr(RawTextDocument._base_manager, "using", lambda _alias: query)
+    monkeypatch.setattr(
+        "apps.documents.models.document.transaction.atomic",
+        lambda **_kwargs: nullcontext(),
+    )
+    write = MagicMock()
+    monkeypatch.setattr(models.Model, "save", write)
+
+    with pytest.raises(ValidationError, match="persisted document row no longer exists"):
+        document.save(dont_rechunk=True, update_fields=["title"], using="default")
+
+    write.assert_not_called()
 
 
 def _document(

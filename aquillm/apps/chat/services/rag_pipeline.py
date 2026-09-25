@@ -61,7 +61,6 @@ _SELECT_COLLECTIONS_MESSAGE = (
 
 DirectRagOutcome = Literal["handled", "skipped"]
 
-
 def _run_vector_search(consumer: Any, query: str, top_k: int) -> dict:
     """Execute vector_search synchronously via the existing tool factory.
 
@@ -98,6 +97,13 @@ async def run_direct_rag_turn(
     user_message = _latest_user_message(convo)
     if user_message is None:
         return "skipped"
+
+    # Explicit history recall (including retries) must reach the memory tool loop
+    # even when the user also has document collections selected.
+    if user_message.tool_choice and user_message.tool_choice.type in ("any", "tool"):
+        tool_names = {tool.name for tool in user_message.tools or []}
+        if tool_names == {"search_past_chats"}:
+            return "skipped"
 
     t_start = time.perf_counter()
     correlation_id = new_correlation_id()

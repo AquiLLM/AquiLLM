@@ -150,6 +150,15 @@ class SaveLoadConversationTests(TestCase):
         self.assertEqual(loaded.messages[2].content, "Third")
 
 
+    def test_save_preserves_base_system_prompt(self):
+        convo = Conversation(system='New system prompt', messages=[])
+        save_conversation_to_db(convo, self.db_convo)
+
+        self.db_convo.refresh_from_db()
+        self.assertEqual(self.db_convo.system_prompt, 'You are a helpful assistant.')
+
+
+
 class RatingTests(TestCase):
     """Message rating persistence and queryset updates (consumers rate() pattern)."""
 

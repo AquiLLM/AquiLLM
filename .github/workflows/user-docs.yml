@@ -2,7 +2,7 @@ name: Deploy User Docs via GitHub Pages
 
 on:
   push:
-    branches: [development]
+    branches: [main]
     paths:
       - 'user-docs/**'
       - 'aquillm/lib/skills/**'

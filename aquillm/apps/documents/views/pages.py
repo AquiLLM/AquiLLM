@@ -3,9 +3,11 @@ import mimetypes
 from pathlib import Path
 
 import structlog
+from asgiref.sync import sync_to_async
 from botocore.exceptions import ClientError
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
+from django.core.handlers.asgi import ASGIRequest
 from django.http import FileResponse, Http404, HttpResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.utils.cache import patch_cache_control
@@ -32,8 +34,14 @@ class _ObjectBodyIterator:
         return self
 
     def __next__(self):
+        chunk = self.read_chunk()
+        if chunk:
+            return chunk
+        raise StopIteration
+
+    def read_chunk(self):
         if self.closed:
-            raise StopIteration
+            return b""
         try:
             chunk = self.body.read(PDF_STREAM_CHUNK_SIZE)
         except Exception:
@@ -42,12 +50,30 @@ class _ObjectBodyIterator:
         if chunk:
             return chunk
         self.close()
-        raise StopIteration
+        return b""
 
     def close(self):
         if not self.closed:
             self.closed = True
             self.body.close()
+
+
+class _AsyncObjectBodyIterator:
+    """Read one bounded chunk off the event loop for each ASGI iteration."""
+
+    def __init__(self, body):
+        self.iterator = _ObjectBodyIterator(body)
+
+    async def __aiter__(self):
+        try:
+            read = sync_to_async(self.iterator.read_chunk, thread_sensitive=False)
+            while chunk := await read():
+                yield chunk
+        finally:
+            await sync_to_async(self.close, thread_sensitive=False)()
+
+    def close(self):
+        self.iterator.close()
 
 
 def _private_pdf_response(response, filename):
@@ -56,7 +82,7 @@ def _private_pdf_response(response, filename):
     return response
 
 
-def _s3_pdf_response(pdf_field, storage):
+def _s3_pdf_response(pdf_field, storage, *, asynchronous=False):
     key = storage._normalize_name(clean_name(pdf_field.name))
     try:
         object_response = storage.bucket.Object(key).get()
@@ -72,7 +98,7 @@ def _s3_pdf_response(pdf_field, storage):
         body.close()
         raise Http404("PDF file is empty")
 
-    iterator = _ObjectBodyIterator(body)
+    iterator = (_AsyncObjectBodyIterator if asynchronous else _ObjectBodyIterator)(body)
     response = StreamingHttpResponse(iterator, content_type="application/pdf")
     if content_length is not None:
         response["Content-Length"] = content_length
@@ -83,7 +109,7 @@ def _s3_pdf_response(pdf_field, storage):
     return _private_pdf_response(response, Path(pdf_field.name).name)
 
 
-def _filesystem_pdf_response(pdf_field, storage):
+def _filesystem_pdf_response(pdf_field, storage, *, asynchronous=False):
     try:
         size = storage.size(pdf_field.name)
         if size == 0:
@@ -92,12 +118,18 @@ def _filesystem_pdf_response(pdf_field, storage):
     except OSError:
         raise Http404("PDF file is missing from storage") from None
 
-    response = FileResponse(
-        pdf_field,
-        as_attachment=False,
-        filename=Path(pdf_field.name).name,
-        content_type="application/pdf",
-    )
+    if asynchronous:
+        response = StreamingHttpResponse(
+            _AsyncObjectBodyIterator(pdf_field), content_type="application/pdf"
+        )
+        response["Content-Length"] = size
+    else:
+        response = FileResponse(
+            pdf_field,
+            as_attachment=False,
+            filename=Path(pdf_field.name).name,
+            content_type="application/pdf",
+        )
     return _private_pdf_response(response, Path(pdf_field.name).name)
 
 
@@ -111,7 +143,9 @@ def get_doc(request, doc_id):
     if not doc:
         raise Http404("Requested document does not exist")
     if not doc.collection.user_can_view(request.user):
-        raise PermissionDenied("You don't have access to the collection containing this document")
+        raise PermissionDenied(
+            "You don't have access to the collection containing this document"
+        )
     return doc
 
 
@@ -129,9 +163,10 @@ def pdf(request, doc_id):
         raise Http404("Requested document does not have an associated PDF")
 
     storage = pdf_field.storage
+    asynchronous = isinstance(request, ASGIRequest)
     if isinstance(storage, S3Storage):
-        return _s3_pdf_response(pdf_field, storage)
-    return _filesystem_pdf_response(pdf_field, storage)
+        return _s3_pdf_response(pdf_field, storage, asynchronous=asynchronous)
+    return _filesystem_pdf_response(pdf_field, storage, asynchronous=asynchronous)
 
 
 @require_http_methods(['GET'])
@@ -165,7 +200,9 @@ def document(request, doc_id):
     highlight_chunk = None
     raw_chunk = request.GET.get('chunk')
     if raw_chunk is not None and raw_chunk.isdigit():
-        highlight_chunk = TextChunk.objects.filter(pk=int(raw_chunk, 10), doc_id=doc_id).first()
+        highlight_chunk = TextChunk.objects.filter(
+            pk=int(raw_chunk, 10), doc_id=doc_id
+        ).first()
     context = {'document': doc, 'highlight_chunk': highlight_chunk}
     return render(request, 'aquillm/document.html', context)
 

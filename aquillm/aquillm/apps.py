@@ -185,9 +185,11 @@ class AquillmConfig(AppConfig):
             from apps.documents.models import TextChunk
 
             zero_vector = [0.0] * 1024
-            TextChunk.objects.order_by(L2Distance("embedding", zero_vector))[
-                :1
-            ].exists()
+            # exists() strips ordering and never executes the vector operation.
+            list(
+                TextChunk.objects.order_by(L2Distance("embedding", zero_vector))
+                .values_list("pk", flat=True)[:1]
+            )
             logger.info("obs.rag.hnsw_prewarmed")
         except Exception as e:
             logger.warning(

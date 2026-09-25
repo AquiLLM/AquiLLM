@@ -102,6 +102,41 @@ def _make_cfg():
 
 
 @override_settings(RAG_CACHE_ENABLED=False)
+def test_lazy_vector_query_failure_preserves_lexical_fallback(monkeypatch):
+    class BrokenVector:
+        def __iter__(self):
+            raise RuntimeError("PRIVATE_VECTOR_FAILURE")
+
+    original_slice = _SliceList.__getitem__
+    monkeypatch.setattr(
+        _SliceList,
+        "__getitem__",
+        lambda self, key: (
+            BrokenVector() if self._rows == "broken" else original_slice(self, key)
+        ),
+    )
+    lexical = [MagicMock(pk=31, content="lexical evidence")]
+    _ModelCls.objects.filter_by_documents.return_value = _QRoot("broken", lexical)
+    with (
+        patch("aquillm.utils.get_embedding", return_value=[0.2]),
+        patch(
+            "apps.documents.services.chunk_search.apps.get_app_config",
+            return_value=_make_cfg(),
+        ),
+        patch(
+            "apps.documents.services.chunk_search._fallback_rerank",
+            side_effect=lambda model, rows, k: list(rows),
+        ),
+    ):
+        _, _, results, diagnostics = text_chunk_search(
+            _ModelCls, "query", 3, [MagicMock()]
+        )
+    assert results == lexical
+    assert diagnostics["vector_error"]
+    assert "PRIVATE_VECTOR_FAILURE" not in repr(diagnostics)
+
+
+@override_settings(RAG_CACHE_ENABLED=False)
 @patch("apps.documents.services.chunk_search.apps.get_app_config")
 @patch("apps.documents.services.chunk_search._fallback_rerank")
 @patch("apps.documents.services.chunk_search.rerank_chunks")

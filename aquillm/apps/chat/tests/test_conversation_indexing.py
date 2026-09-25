@@ -3,12 +3,16 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.test import TestCase
 
 from apps.chat.models import ConversationChunk, Message, WSConversation
 from apps.chat.services.conversation_indexing import index_conversation
 from apps.chat.services.conversation_search import search_conversation_chunks
+from apps.chat.tasks.conversation_indexing import (
+    enqueue_index_conversation_task,
+    index_conversation_task,
+)
 
 User = get_user_model()
 
@@ -50,6 +54,91 @@ class ConversationIndexingTests(TestCase):
         "apps.chat.services.conversation_indexing.get_embeddings",
         side_effect=_fake_get_embeddings,
     )
+    def test_reopening_chat_does_not_discard_pending_index(self, _mock):
+        from aquillm.message_adapters import (
+            load_conversation_from_db,
+            save_conversation_to_db,
+        )
+
+        with patch.object(index_conversation_task, "apply_async") as queue:
+            enqueue_index_conversation_task(
+                self.convo.id, self.convo.updated_at.isoformat()
+            )
+        pending = queue.call_args.kwargs["kwargs"]
+        save_conversation_to_db(load_conversation_from_db(self.convo), self.convo)
+
+        index_conversation_task(**pending)
+
+        self.assertTrue(ConversationChunk.objects.filter(conversation=self.convo).exists())
+
+    @patch(
+        "apps.chat.services.conversation_indexing.get_embeddings",
+        side_effect=_fake_get_embeddings,
+    )
+    def test_collection_selection_does_not_discard_pending_index(self, _mock):
+        with patch.object(index_conversation_task, "apply_async") as queue:
+            enqueue_index_conversation_task(
+                self.convo.id, self.convo.updated_at.isoformat()
+            )
+        pending = queue.call_args.kwargs["kwargs"]
+        self.convo.selected_collection_ids = [123]
+        self.convo.save(update_fields=["selected_collection_ids", "updated_at"])
+
+        index_conversation_task(**pending)
+
+        self.assertTrue(ConversationChunk.objects.filter(conversation=self.convo).exists())
+
+    @patch(
+        "apps.chat.services.conversation_indexing.get_embeddings",
+        side_effect=_fake_get_embeddings,
+    )
+    def test_changed_transcript_is_requeued_then_indexed(self, _mock):
+        with patch.object(index_conversation_task, "apply_async") as queue:
+            enqueue_index_conversation_task(
+                self.convo.id, self.convo.updated_at.isoformat()
+            )
+        pending = queue.call_args.kwargs["kwargs"]
+        self.convo.db_messages.filter(sequence_number=3).update(
+            content="The exposure time is now 450 seconds."
+        )
+        self.convo.save(update_fields=["updated_at"])
+
+        with patch.object(index_conversation_task, "apply_async") as queue:
+            index_conversation_task(**pending)
+        self.assertFalse(ConversationChunk.objects.filter(conversation=self.convo).exists())
+        self.assertEqual(queue.call_count, 1)
+
+        index_conversation_task(**queue.call_args.kwargs["kwargs"])
+
+        contents = " ".join(self.convo.chunks.values_list("content", flat=True))
+        self.assertIn("450 seconds", contents)
+
+    def test_slower_old_index_cannot_replace_newer_transcript_chunks(self):
+        def embed_after_newer_index_finishes(texts, input_type="search_document"):
+            self.convo.db_messages.filter(sequence_number=3).update(
+                content="The exposure time is now 450 seconds."
+            )
+            with patch(
+                "apps.chat.services.conversation_indexing.get_embeddings",
+                side_effect=_fake_get_embeddings,
+            ):
+                index_conversation(self.convo.id)
+            return _fake_get_embeddings(texts, input_type=input_type)
+
+        with patch(
+            "apps.chat.services.conversation_indexing.get_embeddings",
+            side_effect=embed_after_newer_index_finishes,
+        ):
+            index_conversation_task(self.convo.id)
+
+        contents = " ".join(self.convo.chunks.values_list("content", flat=True))
+        self.assertIn("450 seconds", contents)
+        self.assertNotIn("300 seconds", contents)
+
+    @patch(
+        "apps.chat.services.conversation_indexing.get_embeddings",
+        side_effect=_fake_get_embeddings,
+    )
     def test_index_creates_chunks_and_is_idempotent(self, _mock):
         n = index_conversation(self.convo.id)
         self.assertGreaterEqual(n, 1)
@@ -82,7 +171,9 @@ class ConversationIndexingTests(TestCase):
         # A second user's conversation must never surface for alice.
         other = User.objects.create_user(username="bob", password="x")
         other_convo = WSConversation.objects.create(owner=other, name="Bob chat")
-        _add_messages(other_convo, [("user", "quasar quasar quasar"), ("assistant", "ok")])
+        _add_messages(
+            other_convo, [("user", "quasar quasar quasar"), ("assistant", "ok")]
+        )
         index_conversation(other_convo.id)
 
         results = search_conversation_chunks(self.user, "quasar", top_k=5)

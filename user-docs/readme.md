@@ -86,7 +86,7 @@ Rebuilds when `user-docs/`, `aquillm/lib/skills/`, or `docs/skills/runtime/` cha
 
 1. Open **Settings → Pages**.
 2. Set **Source** to **GitHub Actions**.
-3. Push to `main`/`master` (or run the workflow manually).
+3. Push to `main` (or run the workflow manually).
 
 Site URL: `https://<owner>.github.io/<repo>/` (e.g. `https://aquillm.github.io/AquiLLM/`)
 

@@ -31,6 +31,8 @@ jobs:
       POSTGRES_PASSWORD: aquillm
       OPENAI_API_KEY: ci-dummy
       GEMINI_API_KEY: ci-dummy
+      LLM_CHOICE: OPENAI
+      MEM0_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,7 +40,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r deploy/vllm_plugins/nemotron_asr/requirements-test.txt
       - name: Provision projection roles required by migrations
         run: |
           python - <<'PY'
@@ -299,6 +301,38 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_extended_seed_lookup.py
           --ds=aquillm.settings_projection_test -q --tb=short
 
+      - name: Chat, retrieval, document, and deployment regressions
+        run: >-
+          python -m pytest
+          aquillm/apps/chat/tests
+          aquillm/apps/documents/tests
+          aquillm/lib/llm/tests
+          aquillm/lib/embeddings/tests
+          aquillm/lib/tools/search/tests
+          aquillm/apps/memory/tests/test_chat_memory_latency.py
+          aquillm/apps/ingestion/tests/test_transcribe_provider_selection.py
+          aquillm/tests/test_app_startup.py
+          aquillm/tests/integration/test_rag_observability_logging.py
+          aquillm/tests/integration/test_vllm_extra_args_parser.py
+          aquillm/tests/integration/test_vllm_genesis_image.py
+          aquillm/tests/integration/test_vllm_transcribe_image.py
+          aquillm/tests/integration/test_vllm_readiness.py
+          aquillm/tests/integration/test_vllm_lmcache_plumbing.py
+          aquillm/tests/integration/test_compose_multimodal_services.py
+          aquillm/tests/integration/test_compose_render_test_support.py
+          aquillm/tests/integration/test_sidecar_revision_compose.py
+          tests/asr
+          deploy/vllm_plugins/nemotron_asr/tests
+          tests/unit/test_nemotron_verification_harness.py
+          tests/test_check_logging_conventions.py
+          tests/test_check_retrieval_logging.py
+          -q --tb=short
+      - name: Logging and file-size guardrails
+        run: |
+          python scripts/check_logging_conventions.py
+          python scripts/check_retrieval_logging.py
+          python scripts/check_file_lengths.py
+
   frontend-build:
     runs-on: ubuntu-latest
     defaults:
@@ -313,3 +347,4 @@ jobs:
           cache-dependency-path: react/package-lock.json
       - run: npm ci
       - run: npm run build
+      - run: npm test

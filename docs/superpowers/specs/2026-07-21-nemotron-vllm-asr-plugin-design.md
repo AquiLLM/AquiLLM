@@ -1,3 +1,5 @@
+> Historical development reference. The [September 22 nongraph parity backport](../../backports/2026-09-22-non-graph-parity.md) imported this document but excluded graph work and unfinished plan items from that backport. That historical scope does not describe the later full development promotion.
+
 # Nemotron 3.5 ASR vLLM Plugin Design
 
 **Date:** 2026-07-21

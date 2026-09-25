@@ -213,7 +213,11 @@ class Document(models.Model):
                             .values("id", "full_text_hash", "collection_id")
                             .first()
                         )
-                    if previous is not None and previous["id"] != self.id:
+                    if previous is None:
+                        raise ValidationError(
+                            "The exact persisted document row no longer exists."
+                        )
+                    if previous["id"] != self.id:
                         raise ValidationError(
                             {"id": "A persisted document UUID is immutable."}
                         )

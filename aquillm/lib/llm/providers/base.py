@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from json import dumps
 from typing import Any, Literal
+from uuid import uuid4
 
 import structlog
 from pydantic import validate_call
@@ -215,6 +216,7 @@ class LLMInterface(ABC):
             if cached_tool_result is not None:
                 reused_result = cached_tool_result.model_copy(
                     update={
+                        "message_uuid": uuid4(),
                         "content": (
                             "This identical tool call was already completed; reuse the "
                             "preceding result."

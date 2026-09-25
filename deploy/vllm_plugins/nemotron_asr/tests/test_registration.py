@@ -10,6 +10,19 @@ import pytest
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def isolate_registry_from_http_compatibility(
+    monkeypatch, plugin_source_on_path, fresh_plugin_module
+):
+    # Registry tests use a minimal vLLM module fake. HTTP hooks have their own
+    # pinned-runtime suite; installing them here requires unrelated router APIs.
+    import aquillm_vllm_nemotron_asr as plugin
+
+    monkeypatch.setattr(
+        plugin, "install_compatibility_hook", plugin.compat.verify_vllm_compatibility
+    )
+
+
 def test_pyproject_exposes_one_vllm_general_plugin_entry_point() -> None:
     with (PLUGIN_ROOT / "pyproject.toml").open("rb") as pyproject_file:
         pyproject = tomllib.load(pyproject_file)

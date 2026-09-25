@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a **local WhisperX HTTP service** that **enhances** the **configured OpenAI-compatible ASR** (`vllm_transcribe`) deployment: the Nemotron default or Whisper rollback remains the primary ASR, while an **optional second stage** calls WhisperX for alignment, optional diarization, and richer transcript text/metadata.
+**Goal:** Add a **local WhisperX HTTP service** that **enhances** the **configured OpenAI-compatible ASR** (`vllm_transcribe`) deployment: the Whisper default or optional Nemotron profile remains the primary ASR, while an **optional second stage** calls WhisperX for alignment, optional diarization, and richer transcript text/metadata.
 
 **Architecture:** (1) `transcribe_media_bytes` keeps calling vLLM via the existing client when `INGEST_TRANSCRIBE_PROVIDER=openai`. (2) If `INGEST_TRANSCRIBE_WHISPERX_ENHANCE` is enabled and `INGEST_TRANSCRIBE_WHISPERX_BASE_URL` is set, POST the **same media bytes** (and **baseline transcript** from step 1) to the local WhisperX service; use its JSON `text` as the final transcript (subject to failure policy). WhisperX runs in its **own container** on the Compose network (e.g. `whisperx` or `whisperx_transcribe`).
 
@@ -110,7 +110,7 @@
 
 ### Task 5: README and operator note
 
-- [ ] **Step 1:** README: describe **local** WhisperX as an **enhancer** for the configured ASR baseline (Nemotron default or Whisper rollback).
+- [ ] **Step 1:** README: describe **local** WhisperX as an **enhancer** for the configured ASR baseline (Whisper default or optional Nemotron profile).
 - [ ] **Step 2:** Note HF token for diarization and failure policy defaults.
 
 ---

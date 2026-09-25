@@ -40,8 +40,33 @@ def _transcript_messages(conversation: WSConversation) -> list[TranscriptMessage
 def _transcript_hash(messages: list[TranscriptMessage]) -> str:
     hasher = hashlib.sha256()
     for m in messages:
-        hasher.update(f"{m.sequence_number}\x1f{m.role}\x1f{m.content}\x1e".encode("utf-8"))
+        hasher.update(f"{m.sequence_number}\x1f{m.role}\x1f{m.content}\x1e".encode())
     return hasher.hexdigest()
+
+
+def conversation_transcript_hash(conversation: WSConversation) -> str:
+    """Fingerprint only searchable message content, not conversation metadata."""
+    return _transcript_hash(_transcript_messages(conversation))
+
+
+def _publish_chunks(conversation_id: int, transcript_hash: str, chunks: list) -> bool:
+    with transaction.atomic():
+        conversation = (
+            WSConversation.objects.select_for_update().filter(pk=conversation_id).first()
+        )
+        if (
+            conversation is None
+            or conversation_transcript_hash(conversation) != transcript_hash
+        ):
+            return False
+        # Transcript persistence takes this same parent-row lock before updating
+        # messages, so the snapshot cannot change during publication.
+        ConversationChunk.objects.filter(conversation=conversation).delete()
+        ConversationChunk.objects.bulk_create(chunks)
+        WSConversation.objects.filter(pk=conversation.pk).update(
+            indexed_transcript_hash=transcript_hash, index_complete=True
+        )
+    return True
 
 
 def index_conversation(conversation_id: int, *, force: bool = False) -> int:
@@ -66,10 +91,7 @@ def index_conversation(conversation_id: int, *, force: bool = False) -> int:
         return ConversationChunk.objects.filter(conversation=conversation).count()
 
     if not messages:
-        ConversationChunk.objects.filter(conversation=conversation).delete()
-        WSConversation.objects.filter(pk=conversation.pk).update(
-            indexed_transcript_hash=transcript_hash, index_complete=True
-        )
+        _publish_chunks(conversation_id, transcript_hash, [])
         return 0
 
     app_config = django_apps.get_app_config("aquillm")
@@ -79,10 +101,7 @@ def index_conversation(conversation_id: int, *, force: bool = False) -> int:
         overlap=app_config.chunk_overlap,
     )
     if not windows:
-        ConversationChunk.objects.filter(conversation=conversation).delete()
-        WSConversation.objects.filter(pk=conversation.pk).update(
-            indexed_transcript_hash=transcript_hash, index_complete=True
-        )
+        _publish_chunks(conversation_id, transcript_hash, [])
         return 0
 
     texts = [w.content for w in windows]
@@ -120,15 +139,14 @@ def index_conversation(conversation_id: int, *, force: bool = False) -> int:
         for i, w in enumerate(windows)
     ]
 
-    with transaction.atomic():
-        ConversationChunk.objects.filter(conversation=conversation).delete()
-        ConversationChunk.objects.bulk_create(chunks)
-        WSConversation.objects.filter(pk=conversation.pk).update(
-            indexed_transcript_hash=transcript_hash, index_complete=True
+    if not _publish_chunks(conversation_id, transcript_hash, chunks):
+        logger.info(
+            "obs.chat.conversation_index_stale", conversation_id=conversation_id
         )
+        return 0
 
     logger.info("Indexed conversation %s into %d chunks", conversation_id, len(chunks))
     return len(chunks)
 
 
-__all__ = ["index_conversation"]
+__all__ = ["conversation_transcript_hash", "index_conversation"]

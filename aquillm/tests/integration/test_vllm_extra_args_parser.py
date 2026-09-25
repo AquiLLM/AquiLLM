@@ -153,9 +153,7 @@ def test_vllm_start_uses_supported_log_requests_disable_flag(tmp_path: Path):
 
 def test_vllm_start_unsets_deployment_only_vllm_metadata():
     repo_root = Path(__file__).resolve().parents[3]
-    script = (repo_root / "deploy/scripts/vllm_start.sh").read_text(
-        encoding="utf-8"
-    )
+    script = (repo_root / "deploy/scripts/vllm_start.sh").read_text(encoding="utf-8")
     unset_block = script.split(
         "# Avoid vLLM env validation warnings for wrapper-only variables.", 1
     )[1].split('echo "Starting vLLM', 1)[0]
@@ -207,6 +205,14 @@ def test_parser_tokenizes_nemotron_scheduler_and_generation_config_args():
         "--generation-config",
         "/opt/aquillm/nemotron-generation-config",
     ]
+
+
+def test_whisper_default_uses_fp16_without_incompatible_quantization(tmp_path):
+    args = _run_vllm_start(tmp_path, VLLM_MODEL="openai/whisper-large-v3-turbo")
+    assert args[args.index("--dtype") + 1] == "float16"
+    assert args[args.index("--max-num-batched-tokens") + 1] == "1500"
+    assert "--quantization" not in args
+    assert "--generation-config" not in args
 
 
 def test_transcribe_service_kind_supplies_nemotron_args_when_env_args_are_absent(
@@ -623,3 +629,52 @@ def test_vllm_start_script_uses_parser_helper():
     assert "/parse_vllm_extra_args.py" in contents
     assert "parse_extra_args_into" in contents
     assert "mapfile -d '' -t parsed_output" in contents
+
+
+def test_checked_in_profiles_keep_protected_runner_and_dtype_out_of_extra_args():
+    repo_root = Path(__file__).resolve().parents[3]
+    env_lines = (repo_root / ".env.example").read_text(encoding="utf-8").splitlines()
+    active_extra_lines = [
+        line
+        for line in env_lines
+        if line.startswith(
+            (
+                "VLLM_EXTRA_ARGS=",
+                "OCR_VLLM_EXTRA_ARGS=",
+                "MEM0_EMBED_VLLM_EXTRA_ARGS=",
+                "APP_RERANK_VLLM_EXTRA_ARGS=",
+                "TRANSCRIBE_VLLM_EXTRA_ARGS=",
+            )
+        )
+    ]
+
+    assert active_extra_lines
+    assert all(
+        "--dtype" not in line and "--runner" not in line for line in active_extra_lines
+    )
+    # Main-model float16 uses the protected explicit field.
+    assert "VLLM_DTYPE=float16" in env_lines
+    assert "OCR_VLLM_DTYPE=float16" in env_lines
+
+    profile = (repo_root / "scripts" / "verify_nemotron_asr.ps1").read_text(
+        encoding="utf-8"
+    )
+    for prefix in (
+        "PROFILE_MAIN_EXTRA_ARGS=",
+        "PROFILE_EMBED_EXTRA_ARGS=",
+        "PROFILE_RERANK_EXTRA_ARGS=",
+    ):
+        line = next(row for row in profile.splitlines() if row.startswith(prefix))
+        assert "--dtype" not in line
+        assert "--runner" not in line
+    assert profile.count("VLLM_RUNNER: pooling") >= 2
+    assert profile.count("VLLM_DTYPE: float16") >= 3
+
+
+def test_repository_forces_shell_scripts_to_lf():
+    repo_root = Path(__file__).resolve().parents[3]
+    attributes_path = repo_root / ".gitattributes"
+
+    assert attributes_path.exists(), ".gitattributes must define shell line endings"
+    attributes = attributes_path.read_text(encoding="utf-8").splitlines()
+    assert "*.sh text eol=lf" in attributes

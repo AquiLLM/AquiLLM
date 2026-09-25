@@ -125,12 +125,12 @@ def rerank_model_is_qwen3_vl() -> bool:
 def rerank_doc_char_limit() -> int:
     raw = (getenv("APP_RERANK_DOC_CHAR_LIMIT") or "").strip()
     if not raw:
-        return 2000
+        return 900
     try:
         value = int(raw)
-        return value if value > 0 else 2000
+        return value if value > 0 else 900
     except Exception:
-        return 2000
+        return 900
 
 
 def rerank_pair_token_limit() -> int:
@@ -146,11 +146,11 @@ def rerank_pair_token_limit() -> int:
 
 
 def rerank_template_reserve_tokens() -> int:
-    raw = (getenv("APP_RERANK_TEMPLATE_RESERVE_TOKENS") or "256").strip()
+    raw = (getenv("APP_RERANK_TEMPLATE_RESERVE_TOKENS") or "96").strip()
     try:
         return max(0, int(raw))
     except Exception:
-        return 256
+        return 96
 
 
 def rerank_score_concurrency() -> int:

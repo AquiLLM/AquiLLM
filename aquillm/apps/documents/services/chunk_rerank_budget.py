@@ -24,7 +24,6 @@ def _decode_prefix(tokens: list[int], limit: int) -> str:
 
 def count_rerank_tokens(query: str, document: str) -> int:
     """Return the stable local token estimate used for pair budgeting."""
-
     return len(_token_ids(query)) + len(_token_ids(document))
 
 
@@ -35,7 +34,6 @@ def trim_rerank_pair(
     reserve_tokens: int,
 ) -> tuple[str, str]:
     """Fit a pair within the model budget while preserving document evidence."""
-
     usable_tokens = max(2, int(max_pair_tokens) - max(0, int(reserve_tokens)))
     query_tokens = _token_ids(query)
     document_tokens = _token_ids(document)
@@ -43,8 +41,7 @@ def trim_rerank_pair(
         return query, document
 
     if document_tokens:
-        # Ordinary academic queries remain intact. Only an abnormally large query is
-        # capped, and even then at least half of the pair remains evidence-bearing.
+        # Keep ordinary academic queries intact while leaving room for evidence.
         document_floor = min(len(document_tokens), max(1, usable_tokens // 2))
         query_limit = min(len(query_tokens), usable_tokens - document_floor)
         document_limit = min(len(document_tokens), usable_tokens - query_limit)
@@ -54,17 +51,40 @@ def trim_rerank_pair(
 
     trimmed_query = _decode_prefix(query_tokens, query_limit)
     trimmed_document = _decode_prefix(document_tokens, document_limit)
-
-    # Token decoding can normalize an incomplete Unicode boundary. Recheck and
-    # remove document tail tokens until the authoritative local count fits.
     while (
         trimmed_document
         and count_rerank_tokens(trimmed_query, trimmed_document) > usable_tokens
     ):
         document_limit -= 1
         trimmed_document = _decode_prefix(document_tokens, document_limit)
-
     return trimmed_query, trimmed_document
 
 
-__all__ = ["count_rerank_tokens", "trim_rerank_pair"]
+def trim_rerank_documents(
+    query: str,
+    documents: list[str],
+    max_pair_tokens: int,
+    reserve_tokens: int,
+) -> tuple[str, list[str]]:
+    """Fit a shared query and every document within the same pair budget."""
+    if not documents:
+        return query, []
+    candidate_queries = [
+        trim_rerank_pair(query, document, max_pair_tokens, reserve_tokens)[0]
+        for document in documents
+    ]
+    shared_query = min(candidate_queries, key=lambda value: len(_token_ids(value)))
+    trimmed_documents = [
+        trim_rerank_pair(
+            shared_query, document, max_pair_tokens, reserve_tokens
+        )[1]
+        for document in documents
+    ]
+    return shared_query, trimmed_documents
+
+
+__all__ = [
+    "count_rerank_tokens",
+    "trim_rerank_documents",
+    "trim_rerank_pair",
+]

@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
+from asgiref.sync import async_to_sync
 from botocore.exceptions import ClientError
 from django.contrib.auth.models import User
-from django.core.files.base import ContentFile
+from django.core.files.base import ContentFile, File
 from django.core.files.storage import FileSystemStorage
 from django.http import FileResponse, StreamingHttpResponse
+from django.test import AsyncRequestFactory
 from django.urls import reverse
 from django.utils.http import content_disposition_header, http_date
 from storages.backends.s3 import S3Storage
@@ -204,6 +207,95 @@ def test_s3_response_close_before_consumption_closes_body(
     response.close()
 
     assert body.read_sizes == []
+    assert body.close_count == 1
+
+
+@pytest.mark.parametrize("backend", ["s3", "filesystem"])
+def test_asgi_pdf_yields_first_chunk_before_reading_whole_file(
+    authorized_client, monkeypatch, tmp_path, backend
+):
+    from apps.documents.views.pages import pdf
+
+    _client, user, collection = authorized_client
+    content = b"%PDF-1.7\n" + b"a" * (3 * PDF_STREAM_CHUNK_SIZE)
+    if backend == "s3":
+        body = CountingBody(content)
+        storage = FakeS3Storage(FakeS3Bucket(FakeS3Object(
+            response={"Body": body, "ContentLength": len(content)}
+        )))
+        read_sizes = body.read_sizes
+        name = "pdfs/asgi.pdf"
+    else:
+        storage = FileSystemStorage(location=tmp_path)
+        name = storage.save("pdfs/asgi.pdf", ContentFile(content))
+        storage_open = storage.open
+        read_sizes = []
+
+        class TrackedFile(File):
+            def read(self, size=-1):
+                read_sizes.append(size)
+                return self.file.read(size)
+
+        def tracked_open(name, mode="rb"):
+            return TrackedFile(storage_open(name, mode))
+
+        monkeypatch.setattr(storage, "open", tracked_open)
+
+    _install_pdf_storage(monkeypatch, storage)
+    doc = _pdf_document(user=user, collection=collection, name=name)
+    request = AsyncRequestFactory().get(reverse("pdf", kwargs={"doc_id": doc.id}))
+    request.user = user
+    response = pdf(request, doc.id)
+
+    async def consume():
+        chunks = aiter(response)
+        first = await anext(chunks)
+        assert 0 < len(first) <= PDF_STREAM_CHUNK_SIZE
+        assert read_sizes == [len(first)]
+        assert first + b"".join([chunk async for chunk in chunks]) == content
+
+    try:
+        assert response["Content-Length"] == str(len(content))
+        assert read_sizes == []
+        async_to_sync(consume)()
+    finally:
+        response.close()
+    if backend == "s3":
+        assert body.close_count == 1
+
+
+@pytest.mark.parametrize("ending", ["before_read", "after_chunk", "read_error"])
+def test_async_pdf_releases_body_on_early_close_or_read_error(monkeypatch, ending):
+    from apps.documents.views.pages import _s3_pdf_response
+
+    body = CountingBody(b"%PDF-1.7\n" + b"a" * (2 * PDF_STREAM_CHUNK_SIZE))
+    storage = FakeS3Storage(FakeS3Bucket(FakeS3Object(response={"Body": body})))
+    response = _s3_pdf_response(
+        SimpleNamespace(name="pdfs/cleanup.pdf"), storage, asynchronous=True
+    )
+
+    if ending == "read_error":
+        def fail_read(size):
+            raise OSError("interrupted storage read")
+
+        monkeypatch.setattr(body, "read", fail_read)
+
+    async def consume():
+        if ending == "read_error":
+            with pytest.raises(OSError, match="interrupted storage read"):
+                await anext(aiter(response))
+            assert body.close_count == 1
+        elif ending == "after_chunk":
+            chunks = aiter(response)
+            assert await anext(chunks)
+            assert body.offset == PDF_STREAM_CHUNK_SIZE
+            response.close()
+            await chunks.aclose()
+
+    try:
+        async_to_sync(consume)()
+    finally:
+        response.close()
     assert body.close_count == 1
 
 

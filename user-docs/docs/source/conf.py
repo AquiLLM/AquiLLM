@@ -19,6 +19,8 @@ autodoc_mock_imports = [
     'anthropic',
     'google',
     'google.genai',
+    # Autodoc does not need application secrets or a Django deployment.
+    'aquillm.settings',
 ]
 
 autodoc_default_options = {

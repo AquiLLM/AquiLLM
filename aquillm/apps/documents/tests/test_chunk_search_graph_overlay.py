@@ -394,10 +394,10 @@ def test_strict_eval_rejects_partial_scoring_even_when_top_k_is_full(
     from apps.documents.services import chunk_rerank_local_vllm as local_vllm
 
     rows = tuple(_chunk(identifier) for identifier in range(1, 13))
+    observed_modes = set()
 
     class Response:
         status_code = 200
-        text = ""
 
         def __init__(self, payload):
             self.payload = payload
@@ -406,21 +406,17 @@ def test_strict_eval_rejects_partial_scoring_even_when_top_k_is_full(
             return self.payload
 
     def post(_url, *, json, **_kwargs):
-        return Response(json)
-
-    def partial_pairs(_payload):
-        if partial_mode == "batch":
-            return [(index, float(10 - index)) for index in range(10)]
-        return []
-
-    def partial_single(payload):
-        if partial_mode == "batch":
-            raise ValueError("no per-document fallback")
-        text = payload.get("text_2") or payload.get("document")
-        identifier = int(str(text).rsplit("-", 1)[1])
-        if identifier > 10:
-            raise ValueError("candidate was not scored")
-        return float(13 - identifier)
+        documents = json.get("text_2", json.get("documents"))
+        if isinstance(documents, list):
+            observed_modes.add("batch")
+            return Response({"data": [
+                {"index": index, "score": float(10 - index)} for index in range(10)
+            ]})
+        observed_modes.add("per_document")
+        identifier = int(str(documents).rsplit("-", 1)[1])
+        if partial_mode == "per_document" and identifier <= 10:
+            return Response({"score": float(13 - identifier)})
+        return Response({})
 
     def ordered(_model, identifiers):
         by_id = {row.pk: row for row in rows}
@@ -429,10 +425,10 @@ def test_strict_eval_rejects_partial_scoring_even_when_top_k_is_full(
     monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
     monkeypatch.setattr(local_vllm, "rerank_base_url", lambda: "http://local/v1")
     monkeypatch.setattr(local_vllm, "rerank_model", lambda: "Qwen/reranker")
-    monkeypatch.setattr(local_vllm, "rerank_model_is_qwen3_vl", lambda: True)
+    monkeypatch.setattr(
+        local_vllm, "rerank_model_is_qwen3_vl", lambda: partial_mode == "per_document"
+    )
     monkeypatch.setattr(local_vllm, "rerank_document_payload", lambda row: row.content)
-    monkeypatch.setattr(local_vllm, "parse_score_results", partial_pairs)
-    monkeypatch.setattr(local_vllm, "parse_single_score", partial_single)
     monkeypatch.setattr(local_vllm, "ordered_queryset_from_ids", ordered)
     monkeypatch.setattr(local_vllm.requests, "post", post)
 
@@ -444,6 +440,8 @@ def test_strict_eval_rejects_partial_scoring_even_when_top_k_is_full(
             10,
             _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
         )
+    assert "per_document" in observed_modes
+    assert ("batch" in observed_modes) == (partial_mode == "batch")
 
 
 @pytest.mark.parametrize("score_mode", ("batch", "per_document"))
@@ -458,10 +456,10 @@ def test_strict_eval_rejects_nonfinite_or_boolean_scores(
     from apps.documents.services import chunk_rerank_local_vllm as local_vllm
 
     rows = (_chunk(1), _chunk(2))
+    observed_modes = set()
 
     class Response:
         status_code = 200
-        text = ""
 
         def __init__(self, payload):
             self.payload = payload
@@ -469,32 +467,31 @@ def test_strict_eval_rejects_nonfinite_or_boolean_scores(
         def json(self):
             return self.payload
 
-    def pairs(_payload):
-        return [(0, 1.0), (1, bad_score)] if score_mode == "batch" else []
-
-    def single(payload):
+    def post(_url, *, json, **_kwargs):
+        documents = json.get("text_2", json.get("documents"))
+        if isinstance(documents, list):
+            observed_modes.add("batch")
+            return Response({"data": [
+                {"index": 0, "score": 1.0}, {"index": 1, "score": bad_score}
+            ]})
+        observed_modes.add("per_document")
         if score_mode == "batch":
-            raise ValueError("batch-only response")
-        text = payload.get("text_2") or payload.get("document")
-        return 1.0 if str(text).endswith("-1") else bad_score
+            return Response({})
+        return Response({"score": 1.0 if str(documents).endswith("-1") else bad_score})
 
     monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
     monkeypatch.setattr(local_vllm, "rerank_base_url", lambda: "http://local/v1")
     monkeypatch.setattr(local_vllm, "rerank_model", lambda: "Qwen/reranker")
-    monkeypatch.setattr(local_vllm, "rerank_model_is_qwen3_vl", lambda: True)
+    monkeypatch.setattr(
+        local_vllm, "rerank_model_is_qwen3_vl", lambda: score_mode == "per_document"
+    )
     monkeypatch.setattr(local_vllm, "rerank_document_payload", lambda row: row.content)
-    monkeypatch.setattr(local_vllm, "parse_score_results", pairs)
-    monkeypatch.setattr(local_vllm, "parse_single_score", single)
     monkeypatch.setattr(
         local_vllm,
         "ordered_queryset_from_ids",
         lambda _model, identifiers: tuple(rows[index - 1] for index in identifiers),
     )
-    monkeypatch.setattr(
-        local_vllm.requests,
-        "post",
-        lambda *_args, **kwargs: Response(kwargs["json"]),
-    )
+    monkeypatch.setattr(local_vllm.requests, "post", post)
 
     with pytest.raises(chunk_rerank.StrictRerankUnavailable, match="empty"):
         chunk_rerank._strict_local_rerank_chunks(
@@ -504,6 +501,8 @@ def test_strict_eval_rejects_nonfinite_or_boolean_scores(
             2,
             _capability=chunk_rerank._STRICT_EVALUATION_RERANK,
         )
+    assert "per_document" in observed_modes
+    assert ("batch" in observed_modes) == (score_mode == "batch")
 
 
 def test_shared_materializer_can_require_strict_rerank_even_below_top_k(

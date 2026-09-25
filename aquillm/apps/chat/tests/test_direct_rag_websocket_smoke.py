@@ -117,7 +117,7 @@ def _mock_user_and_convo():
 @patch("apps.chat.consumers.chat_receive.run_llm_spin", new_callable=AsyncMock)
 async def test_append_direct_rag_skips_tool_selection_spin(
     mock_spin,
-    _augment,
+    mock_augment,
     _mem_task,
     _memory_system,
     _aclose,

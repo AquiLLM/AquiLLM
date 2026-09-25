@@ -7,6 +7,7 @@ from apps.documents.services.chunk_rerank_budget import (
     trim_rerank_pair,
 )
 from apps.documents.services.chunk_rerank_config import (
+    rerank_doc_char_limit,
     rerank_template_reserve_tokens,
 )
 from apps.documents.services.chunk_rerank_local_vllm import _score_one_document
@@ -59,10 +60,20 @@ def test_oversized_query_leaves_room_for_document_evidence():
     assert count_rerank_tokens(trimmed_query, trimmed_document) <= 260
 
 
-def test_rerank_template_reserve_defaults_to_qwen_safe_margin(monkeypatch):
+def test_rerank_limits_match_deployment_defaults(monkeypatch):
+    monkeypatch.delenv("APP_RERANK_DOC_CHAR_LIMIT", raising=False)
     monkeypatch.delenv("APP_RERANK_TEMPLATE_RESERVE_TOKENS", raising=False)
 
-    assert rerank_template_reserve_tokens() == 256
+    assert rerank_doc_char_limit() == 900
+    assert rerank_template_reserve_tokens() == 96
+
+
+def test_invalid_rerank_limits_fall_back_to_deployment_defaults(monkeypatch):
+    monkeypatch.setenv("APP_RERANK_DOC_CHAR_LIMIT", "invalid")
+    monkeypatch.setenv("APP_RERANK_TEMPLATE_RESERVE_TOKENS", "invalid")
+
+    assert rerank_doc_char_limit() == 900
+    assert rerank_template_reserve_tokens() == 96
 
 
 def test_single_score_retries_context_overflow_with_tighter_pair(monkeypatch):

@@ -328,6 +328,10 @@ async def test_spin_reuses_cached_result_for_identical_pending_call(monkeypatch)
     assert llm.complete.await_count == 3
     cached_convo = send_func.await_args_list[-2].args[0]
     assert isinstance(cached_convo[-1], ToolMessage)
+    tool_results = [message for message in cached_convo if isinstance(message, ToolMessage)]
+    assert len(tool_results) == 2
+    assert tool_results[0].message_uuid != tool_results[1].message_uuid
+    assert tool_results[0].content == "{'result': [{'id': 1}]}"
     assert cached_convo[-1].result_dict == {"result": [{"id": 1}]}
     assert "already completed" in cached_convo[-1].content
     assert send_func.await_args_list[-1].args[0][-1].content == "cached synthesis"
