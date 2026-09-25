@@ -218,6 +218,23 @@ jobs:
           aquillm/tests/integration/test_vllm_profiles.py
           -q --tb=short
 
+      - name: Graph backfill capacity and lifecycle contracts
+        env:
+          KG_REQUIRE_POSTGRES_TESTS: "1"
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_coreference_capacity.py
+          aquillm/apps/knowledge_graph/tests/test_collection_capacity.py
+          aquillm/apps/knowledge_graph/tests/test_collection_context_policy.py
+          aquillm/apps/knowledge_graph/tests/test_collection_context_failures.py
+          aquillm/apps/knowledge_graph/tests/test_canonical_capacity.py
+          aquillm/apps/knowledge_graph/tests/test_inspection_progress.py
+          aquillm/apps/knowledge_graph/tests/test_build_idempotency.py
+          aquillm/apps/knowledge_graph/tests/test_bulk_build_failures.py
+          aquillm/apps/knowledge_graph/tests/test_build_orchestration_postgres_races.py
+          aquillm/apps/knowledge_graph/tests/test_rebuild_transition_advance_postgres.py
+          --ds=aquillm.settings_projection_test -q --tb=short
+
       - name: Evidence preservation and quality contracts
         run: >-
           python -m pytest

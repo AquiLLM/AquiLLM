@@ -197,11 +197,14 @@ def _recover_collection(collection_id: int) -> RecoveryOutcome:
     )
     from apps.knowledge_graph.models import GraphArtifact
     from apps.knowledge_graph.services import builds
+    from apps.knowledge_graph.services.collection_context_policy import (
+        CollectionCapacityError,
+    )
 
     try:
         context = builds._collection_context(collection_id)
         build_key = builds.derive_collection_build_key(context.identity)
-    except ExtractionCapacityError:
+    except (ExtractionCapacityError, CollectionCapacityError):
         return RecoveryOutcome.CAPACITY_BLOCKED
     except (LookupError, builds.StaleBuildError):
         return RecoveryOutcome.DEPENDENCY_PENDING
@@ -219,7 +222,7 @@ def _recover_collection(collection_id: int) -> RecoveryOutcome:
             context.identity.aggregate_source_signature,
             build_key,
         )
-    except ExtractionCapacityError:
+    except (ExtractionCapacityError, CollectionCapacityError):
         return RecoveryOutcome.CAPACITY_BLOCKED
     except (LookupError, builds.StaleBuildError):
         return RecoveryOutcome.DEPENDENCY_PENDING

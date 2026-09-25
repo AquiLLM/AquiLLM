@@ -22,6 +22,7 @@ from apps.knowledge_graph.resolution.normalization import (
 
 from .canonical_validation import (
     _bounded_text,
+    _hash_canonical_resolution,
     _hash_payload,
     _is_acronym,
     _normalized_key,
@@ -35,7 +36,16 @@ MAX_CANONICAL_ARTIFACTS = 128
 MAX_CANONICAL_ENTITIES = 10_000
 MAX_CANONICAL_SOURCE_LINKS = 30_000
 MAX_CANONICAL_MEMBERSHIPS = 50_000
-MAX_CANONICAL_DECISIONS = 50_000
+# Corpus rebuilds are bounded independently of authorization-bearing read envelopes.
+MAX_CANONICAL_REBUILD_ENTITIES = 250_000
+MAX_CANONICAL_REBUILD_SOURCE_LINKS = 1_000_000
+MAX_CANONICAL_REBUILD_PROVENANCE = 2_000_000
+# Preserve every pair audit, including dense conflicting name blocks. These
+# ceilings abort an oversized rebuild; they never truncate candidates or rows.
+MAX_CANONICAL_DECISIONS = 5_000_000
+MAX_CANONICAL_REBUILD_MEMBERSHIPS = (
+    MAX_CANONICAL_DECISIONS + MAX_CANONICAL_REBUILD_ENTITIES
+)
 CANONICAL_QUERY_BATCH_SIZE = 5_000
 CANONICAL_EMBEDDING_CANDIDATE_MIN_SIMILARITY = 0.88
 CANONICAL_EMBEDDING_PROJECTION_WINDOW = 4
@@ -265,19 +275,22 @@ def build_canonical_inputs_from_provenance(
 ) -> tuple[CanonicalEntityInput, ...]:
     """Adapt locked ORM rows without trusting unbound CollectionEntity metadata."""
 
-    if type(entity_rows) is not tuple or len(entity_rows) > MAX_CANONICAL_ENTITIES:
+    if (
+        type(entity_rows) is not tuple
+        or len(entity_rows) > MAX_CANONICAL_REBUILD_ENTITIES
+    ):
         raise ValueError("entity rows exceed the canonical input envelope")
     if type(provenance_rows) is not tuple or any(
         type(row) is not CanonicalProvenanceRow for row in provenance_rows
     ):
         raise ValueError("provenance rows must be an exact typed tuple")
-    if len(provenance_rows) > MAX_CANONICAL_MEMBERSHIPS:
+    if len(provenance_rows) > MAX_CANONICAL_REBUILD_PROVENANCE:
         raise ValueError("provenance rows exceed the canonical membership cap")
     if type(source_memberships) is not tuple or any(
         type(row) is not CanonicalSourceMembership for row in source_memberships
     ):
         raise ValueError("source memberships must be an exact typed tuple")
-    if len(source_memberships) > MAX_CANONICAL_SOURCE_LINKS:
+    if len(source_memberships) > MAX_CANONICAL_REBUILD_SOURCE_LINKS:
         raise ValueError("source memberships exceed the canonical source-link cap")
     by_id: dict[int, object] = {}
     for entity in entity_rows:
@@ -477,7 +490,7 @@ class CanonicalRebuildResult:
         _sorted_positive_tuple(
             self.canonical_entity_ids,
             "canonical_entity_ids",
-            maximum=MAX_CANONICAL_ENTITIES,
+            maximum=MAX_CANONICAL_REBUILD_ENTITIES,
         )
         for field_name in (
             "active_link_count",
@@ -487,7 +500,10 @@ class CanonicalRebuildResult:
             "superseded_link_count",
         ):
             value = getattr(self, field_name)
-            if type(value) is not int or not 0 <= value <= MAX_CANONICAL_MEMBERSHIPS:
+            if (
+                type(value) is not int
+                or not 0 <= value <= MAX_CANONICAL_REBUILD_MEMBERSHIPS
+            ):
                 raise ValueError(f"{field_name} exceeds the canonical audit envelope")
 
 
@@ -748,7 +764,7 @@ def resolve_canonical_entities(
         type(item) is not CanonicalEntityInput for item in entities
     ):
         raise ValueError("entities must be an exact CanonicalEntityInput tuple")
-    if len(entities) > MAX_CANONICAL_ENTITIES:
+    if len(entities) > MAX_CANONICAL_REBUILD_ENTITIES:
         raise ValueError("canonical entity cap exceeded")
     ordered = tuple(sorted(entities, key=lambda item: item.entity_id))
     by_id = {item.entity_id: item for item in ordered}
@@ -934,13 +950,17 @@ def resolve_canonical_entities(
     root_to_members: dict[int, tuple[int, ...]] = {}
     for group in dsu.groups():
         root_to_members[dsu.find(group[0])] = group
-    for root_group in _connected_edge_groups(root_to_members, root_edges):
-        group_set = set(root_group)
-        group_edges = tuple(
-            edge
-            for edge in root_edges
-            if edge.left in group_set and edge.right in group_set
-        )
+    root_groups = _connected_edge_groups(root_to_members, root_edges)
+    group_by_root = {root: group[0] for group in root_groups for root in group}
+    edges_by_group: dict[int, list[_EvidenceEdge]] = defaultdict(list)
+    originals_by_group: dict[int, list[_EvidenceEdge]] = defaultdict(list)
+    for edge in root_edges:
+        edges_by_group[group_by_root[edge.left]].append(edge)
+    for edge in lower_edges.values():
+        originals_by_group[group_by_root[dsu.find(edge.left)]].append(edge)
+    for root_group in root_groups:
+        group_edges = edges_by_group[root_group[0]]
+        original_edges = originals_by_group[root_group[0]]
         member_ids = tuple(
             sorted(
                 value
@@ -950,28 +970,25 @@ def resolve_canonical_entities(
         )
         conflict = _component_conflict(member_ids, by_id)
         if conflict:
-            for original in lower_edges.values():
-                endpoints_in_group = (
-                    dsu.find(original.left) in group_set
-                    and dsu.find(original.right) in group_set
+            for original in original_edges:
+                pair = _pair(original.left, original.right)
+                rejected_decisions[pair] = _rejected(
+                    original.left,
+                    original.right,
+                    method=original.method,
+                    reason=conflict,
+                    evidence_key=original.evidence_key,
                 )
-                if endpoints_in_group:
-                    pair = _pair(original.left, original.right)
-                    rejected_decisions[pair] = _rejected(
-                        original.left,
-                        original.right,
-                        method=original.method,
-                        reason=conflict,
-                        evidence_key=original.evidence_key,
-                    )
             continue
         for edge in group_edges:
             dsu.union(edge.left, edge.right)
-        for original in lower_edges.values():
-            if original.left in member_ids and original.right in member_ids:
-                accepted_edges.append(original)
+        accepted_edges.extend(original_edges)
 
-    decisions: dict[tuple[int, int], CanonicalDecision] = dict(rejected_decisions)
+    # Reuse the audit map and release generation indexes before checksum and
+    # projection build their outputs; the corpus can contain millions of pairs.
+    decisions = rejected_decisions
+    del stable_edges, lower_edges, reserved_pairs, stable_by_identifier
+    del root_edges, edges_by_group, originals_by_group
     for edge in accepted_edges:
         decisions[_pair(edge.left, edge.right)] = _automatic(edge)
 
@@ -992,6 +1009,8 @@ def resolve_canonical_entities(
             )
         if pair in decisions or dsu.find(pair[0]) == dsu.find(pair[1]):
             continue
+        if len(decisions) >= MAX_CANONICAL_DECISIONS:
+            raise ValueError("canonical decision cap exceeded")
         left, right = by_id[pair[0]], by_id[pair[1]]
         conflict = _pair_conflict(left, right)
         if (
@@ -1033,10 +1052,10 @@ def resolve_canonical_entities(
                 ("right_input_hash", candidate.right_input_hash),
             ),
         )
-        if len(decisions) > MAX_CANONICAL_DECISIONS:
-            raise ValueError("canonical decision cap exceeded")
 
-    accepted_tuple = tuple(accepted_edges)
+    accepted_by_root: dict[int, list[_EvidenceEdge]] = defaultdict(list)
+    for edge in accepted_edges:
+        accepted_by_root[dsu.find(edge.left)].append(edge)
     components: list[CanonicalComponent] = []
     for group in dsu.groups():
         members = tuple(by_id[value] for value in group)
@@ -1049,11 +1068,7 @@ def resolve_canonical_entities(
                 item.entity_id,
             ),
         )
-        component_edges = tuple(
-            edge
-            for edge in accepted_tuple
-            if edge.left in group and edge.right in group
-        )
+        component_edges = tuple(accepted_by_root[dsu.find(group[0])])
         payload = _component_identity_payload(members, component_edges)
         method = (
             "singleton"
@@ -1089,36 +1104,10 @@ def resolve_canonical_entities(
             ),
         )
     )
-    checksum = _hash_payload(
-        {
-            "resolver_version": resolver_version,
-            "components": [
-                {
-                    "identity_key": item.identity_key,
-                    "entity_ids": list(item.entity_ids),
-                    "collection_ids": list(item.collection_ids),
-                    "label": item.label,
-                    "normalized_label": item.normalized_label,
-                    "entity_type": item.entity_type,
-                    "version_signature": item.version_signature,
-                    "method": item.method,
-                }
-                for item in ordered_components
-            ],
-            "decisions": [
-                {
-                    "left": item.left_entity_id,
-                    "right": item.right_entity_id,
-                    "score": item.score,
-                    "method": item.method,
-                    "outcome": item.outcome.value,
-                    "reason": item.reason,
-                    "evidence_key": item.evidence_key,
-                    "metadata": list(item.metadata),
-                }
-                for item in ordered_decisions
-            ],
-        }
+    checksum = _hash_canonical_resolution(
+        resolver_version=resolver_version,
+        components=ordered_components,
+        decisions=ordered_decisions,
     )
     return CanonicalResolutionResult(
         resolver_version=resolver_version,
@@ -1301,7 +1290,7 @@ def project_canonical_link_decisions(
                 ),
             )
         )
-    if len(projected) > MAX_CANONICAL_MEMBERSHIPS:
+    if len(projected) > MAX_CANONICAL_REBUILD_MEMBERSHIPS:
         raise ValueError("projected canonical links exceed the membership cap")
     result = tuple(
         sorted(
@@ -1771,7 +1760,7 @@ def _load_locked_canonical_inputs(
                 "pk",
             )
             .iterator(chunk_size=1_000),
-            maximum=MAX_CANONICAL_SOURCE_LINKS,
+            maximum=MAX_CANONICAL_REBUILD_SOURCE_LINKS,
             label="canonical source memberships",
         )
     membership_keys: set[tuple[int, int, int]] = set()
@@ -1830,9 +1819,10 @@ def _load_locked_canonical_inputs(
             GraphArtifact.objects.using(using)
             .select_for_update()
             .filter(pk__in=artifact_batch)
+            .only("pk", "scope_type", "status", "evaluation_only", "scope_id")
             .order_by("pk")
             .iterator(chunk_size=1_000),
-            maximum=MAX_CANONICAL_SOURCE_LINKS,
+            maximum=MAX_CANONICAL_REBUILD_SOURCE_LINKS,
             label="canonical document artifacts",
         )
     if tuple(row.pk for row in locked_document_artifacts) != document_artifact_ids:
@@ -1860,9 +1850,10 @@ def _load_locked_canonical_inputs(
             DocumentEntity.objects.using(using)
             .select_for_update()
             .filter(pk__in=entity_batch)
+            .only("pk", "status", "artifact_id", "document_id")
             .order_by("pk")
             .iterator(chunk_size=1_000),
-            maximum=MAX_CANONICAL_SOURCE_LINKS,
+            maximum=MAX_CANONICAL_REBUILD_SOURCE_LINKS,
             label="canonical document entities",
         )
     if tuple(row.pk for row in locked_document_entities) != document_entity_ids:
@@ -1905,9 +1896,13 @@ def _load_locked_canonical_inputs(
                 mention__document_id=F("document_entity__document_id"),
             )
             .select_related("mention")
+            .only(
+                "pk", "document_entity_id", "mention_id", "method",
+                "parent_mention_id", "mention__id", "mention__raw_text",
+            )
             .order_by("pk")
             .iterator(chunk_size=1_000),
-            maximum=MAX_CANONICAL_MEMBERSHIPS,
+            maximum=MAX_CANONICAL_REBUILD_PROVENANCE,
             label="canonical mention provenance",
         )
     mention_by_key: dict[tuple[int, int], object] = {}
@@ -1950,7 +1945,7 @@ def _load_locked_canonical_inputs(
                 source_collection_entity_id=collection_entity_id,
             )
         )
-        if len(provenance) > MAX_CANONICAL_MEMBERSHIPS:
+        if len(provenance) > MAX_CANONICAL_REBUILD_PROVENANCE:
             raise ValueError("canonical provenance exceeds the membership cap")
 
     memberships = tuple(
@@ -2120,7 +2115,7 @@ def _reconcile_locked_registry(
             .exclude(status=CanonicalEntity.Status.SUPERSEDED)
             .order_by("pk")
             .iterator(chunk_size=1_000),
-            maximum=MAX_CANONICAL_ENTITIES,
+            maximum=MAX_CANONICAL_REBUILD_ENTITIES,
             label="live canonical registry rows",
         )
     )
@@ -2136,7 +2131,7 @@ def _reconcile_locked_registry(
             )
             .order_by("pk")
             .iterator(chunk_size=1_000),
-            maximum=MAX_CANONICAL_ENTITIES * 2,
+            maximum=MAX_CANONICAL_REBUILD_ENTITIES * 2,
             label="desired historical canonical registry rows",
         )
     link_rows = _bounded_locked_rows(
@@ -2149,7 +2144,7 @@ def _reconcile_locked_registry(
         .exclude(status=CanonicalEntityLink.Status.SUPERSEDED)
         .order_by("pk")
         .iterator(chunk_size=1_000),
-        maximum=MAX_CANONICAL_MEMBERSHIPS,
+        maximum=MAX_CANONICAL_REBUILD_MEMBERSHIPS,
         label="live canonical audit links",
     )
     registry_by_identity: dict[str, object] = {}
@@ -2372,6 +2367,7 @@ def _rebuild_canonical_snapshot(
             Collection.objects.using(using)
             .select_for_update()
             .filter(pk__in=collection_ids)
+            .only("pk")
             .order_by("pk")
         )
         if tuple(row.pk for row in locked_collections) != collection_ids:
@@ -2384,6 +2380,7 @@ def _rebuild_canonical_snapshot(
                 scope_type=GraphArtifact.ScopeType.COLLECTION,
                 status=GraphArtifact.Status.ACTIVE,
             )
+            .only("pk", "collection_scope_id", "scope_id", "embedding_model_signature")
             .order_by("pk")
         )
         if tuple(row.pk for row in locked_artifacts) != artifact_ids:
@@ -2407,9 +2404,10 @@ def _rebuild_canonical_snapshot(
                 status=CollectionEntity.Status.ACTIVE,
                 collection_id=F("artifact__collection_scope_id"),
             )
+            .defer("metadata")
             .order_by("pk")
             .iterator(chunk_size=1_000),
-            maximum=MAX_CANONICAL_ENTITIES,
+            maximum=MAX_CANONICAL_REBUILD_ENTITIES,
             label="active collection entities",
         )
         inputs = _load_locked_canonical_inputs(

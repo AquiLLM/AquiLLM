@@ -18,6 +18,7 @@ from heapq import merge
 from itertools import islice
 from math import isfinite, sqrt
 
+from .candidate_pool import iter_candidate_pools
 from .embedding_session import (
     _HASH_PATTERN,
     DEFAULT_EMBEDDING_BATCH_SIZE,
@@ -43,7 +44,10 @@ from .scoring import (
 
 COLLECTION_RESOLVER_VERSION = "collection-resolution-v1"
 
-MAX_COLLECTION_ENTITIES = 50_000
+# Keep existing default policy identities; larger collections opt into the
+# bounded capacity tier without increasing membership, relation, or link caps.
+DEFAULT_COLLECTION_ENTITIES = 50_000
+MAX_COLLECTION_ENTITIES = 100_000
 MAX_COLLECTION_DOCUMENT_INPUTS = 10_000
 MAX_COLLECTION_MEMBERSHIPS = 250_000
 MAX_RELATIONS = 250_000
@@ -330,10 +334,11 @@ class CollectionResolutionConfig:
     embedding_weight: float = 0.85
     neighborhood_weight: float = 0.15
     relation_support_threshold: float = 0.50
-    max_entities: int = MAX_COLLECTION_ENTITIES
+    max_entities: int = DEFAULT_COLLECTION_ENTITIES
     max_document_inputs: int = MAX_COLLECTION_DOCUMENT_INPUTS
     max_memberships: int = MAX_COLLECTION_MEMBERSHIPS
     max_relations: int = MAX_RELATIONS
+    # Independent output envelope: a larger input cap never truncates links.
     max_links: int = MAX_COLLECTION_LINKS
 
     def __post_init__(self) -> None:
@@ -1832,36 +1837,13 @@ def resolve_collection_entities(
         roots = sorted(roots)
         if len(roots) < 2:
             continue
-        blocks: dict[str, list[int]] = defaultdict(list)
-        for root in roots:
-            for key in sorted(_lexical_block_keys(group_members[root]))[:128]:
-                blocks[key].append(root)
-        local: dict[int, set[int]] = defaultdict(set)
-        if len(roots) <= config.exact_semantic_scan_limit:
-            for index, left in enumerate(roots):
-                local[left].update(roots[index + 1 :])
-                for right in roots[:index]:
-                    local[left].add(right)
-        else:
-            for block_roots in blocks.values():
-                block_roots = sorted(
-                    set(block_roots),
-                    key=lambda root: component_keys[root],
-                )
-                if len(block_roots) < 2:
-                    continue
-                limit = min(
-                    config.max_candidate_pool_per_entity,
-                    len(block_roots) - 1,
-                )
-                for index, left in enumerate(block_roots):
-                    for offset in range(1, limit + 1):
-                        if len(local[left]) >= config.max_candidate_pool_per_entity:
-                            break
-                        local[left].add(
-                            block_roots[(index + offset) % len(block_roots)]
-                        )
-        for left, candidates in local.items():
+        for left, candidates in iter_candidate_pools(
+            roots,
+            component_keys=component_keys,
+            lexical_keys=lambda root: _lexical_block_keys(group_members[root]),
+            exact_scan_limit=config.exact_semantic_scan_limit,
+            pool_limit=config.max_candidate_pool_per_entity,
+        ):
             bounded = sorted(
                 candidates,
                 key=lambda right: (
@@ -4349,6 +4331,7 @@ def persist_collection_resolution(
 __all__ = [
     "COLLECTION_RESOLVER_VERSION",
     "MAX_COLLECTION_DOCUMENT_INPUTS",
+    "DEFAULT_COLLECTION_ENTITIES",
     "MAX_COLLECTION_ENTITIES",
     "MAX_COLLECTION_LINKS",
     "MAX_COLLECTION_MEMBERSHIPS",

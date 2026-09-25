@@ -10,7 +10,8 @@ REPO = Path(__file__).resolve().parents[1]
 MAX_LINES = 300
 
 # Exact reviewed maxima for already-tracked hotspots, including the reviewed
-# main/development reconciliation. Unrelated new files never enter this map. A path must match its count: shrinking ratchets down; growth always fails.
+# main/development reconciliation. Unrelated new files never enter this map.
+# A path must match its count: shrinking ratchets down; growth always fails.
 _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/documents/tests/test_chunk_search_diagnostics.py": 304,
     "aquillm/apps/documents/tests/test_rerank_http_cache.py": 447,
@@ -30,7 +31,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/documents/tests/test_document_figure_parent_schema.py": 447,
     "aquillm/apps/documents/tests/test_pdf_response.py": 453,
     "aquillm/apps/knowledge_graph/evals/run_kg_eval.py": 5322,
-    "aquillm/apps/knowledge_graph/extraction/pipeline.py": 1337,
+    "aquillm/apps/knowledge_graph/extraction/pipeline.py": 1336,
     "aquillm/apps/knowledge_graph/graph/assembly.py": 3222,
     "aquillm/apps/knowledge_graph/graph/filtering.py": 1711,
     "aquillm/apps/knowledge_graph/graph/invalidation.py": 2543,
@@ -39,15 +40,15 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/knowledge_graph/models/entities.py": 908,
     "aquillm/apps/knowledge_graph/models/inputs.py": 325,
     "aquillm/apps/knowledge_graph/models/relations.py": 643,
-    "aquillm/apps/knowledge_graph/resolution/canonical.py": 2534,
-    "aquillm/apps/knowledge_graph/resolution/collection.py": 4379,
-    "aquillm/apps/knowledge_graph/resolution/coreference.py": 1599,
+    "aquillm/apps/knowledge_graph/resolution/canonical.py": 2532,
+    "aquillm/apps/knowledge_graph/resolution/collection.py": 4362,
+    "aquillm/apps/knowledge_graph/resolution/coreference.py": 1598,
     "aquillm/apps/knowledge_graph/resolution/normalization.py": 369,
     "aquillm/apps/knowledge_graph/resolution/persistence.py": 811,
     "aquillm/apps/knowledge_graph/retrieval/expansion.py": 4099,
     "aquillm/apps/knowledge_graph/retrieval/ppr.py": 553,
-    "aquillm/apps/knowledge_graph/services/builds.py": 5220,
-    "aquillm/apps/knowledge_graph/services/inspection.py": 416,
+    "aquillm/apps/knowledge_graph/services/builds.py": 5194,
+    "aquillm/apps/knowledge_graph/services/inspection.py": 397,
     "aquillm/apps/knowledge_graph/services/ontology.py": 812,
     "aquillm/apps/knowledge_graph/services/pruning.py": 834,
     "aquillm/apps/knowledge_graph/tasks.py": 534,
@@ -59,7 +60,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/knowledge_graph/tests/test_canonical_permissions.py": 367,
     "aquillm/apps/knowledge_graph/tests/test_canonical_resolution.py": 1274,
     "aquillm/apps/knowledge_graph/tests/test_collection_resolution.py": 2097,
-    "aquillm/apps/knowledge_graph/tests/test_coreference.py": 2421,
+    "aquillm/apps/knowledge_graph/tests/test_coreference.py": 2415,
     "aquillm/apps/knowledge_graph/tests/test_document_lifecycle.py": 1150,
     "aquillm/apps/knowledge_graph/tests/test_eval_runner.py": 3141,
     "aquillm/apps/knowledge_graph/tests/test_filtering.py": 739,

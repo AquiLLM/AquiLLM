@@ -11,6 +11,8 @@ from django.core.exceptions import ValidationError
 from django.db import close_old_connections
 from django.db.models import Q
 
+from .inspection_progress import request_audit_counters, request_progress
+
 _MAX_INSPECTION_ROWS = 100
 _TERMINAL_REQUEST_STATUSES = frozenset({"succeeded", "failed", "partial"})
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
@@ -364,29 +366,8 @@ def inspect_graph_state(
         "stale_count": stale_count,
         "active_evidence_count": evidence_count,
         "failure_count": failure_count,
-        "document_count": (
-            effective_request.document_count if effective_request is not None else None
-        ),
-        "completed_document_count": (
-            effective_request.completed_document_count
-            if effective_request is not None
-            else None
-        ),
-        "collection_count": (
-            effective_request.collection_count
-            if effective_request is not None
-            else None
-        ),
-        "completed_collection_count": (
-            effective_request.completed_collection_count
-            if effective_request is not None
-            else None
-        ),
-        "failed_collection_count": (
-            effective_request.failed_collection_count
-            if effective_request is not None
-            else None
-        ),
+        **request_audit_counters(effective_request),
+        "progress": request_progress(effective_request, artifact_query),
         "truncated": truncated,
         "artifact_ids": artifact_ids,
         "build_ids": tuple(row["pk"] for row in build_rows),
