@@ -1,4 +1,5 @@
 """Tests for RAG retrieval query builder (Task 2)."""
+
 from __future__ import annotations
 
 import pytest
@@ -13,7 +14,7 @@ def _make_convo(*messages) -> Conversation:
 
 
 def _search_turn(search_string: str, doc_titles: list[str] | None = None) -> list:
-    """Return [UserMessage, AssistantMessage(tool_call), ToolMessage(result)] for a search."""
+    """Return a user, assistant tool call, and tool result for a search."""
     result_dict = {
         "retrieval_status": "results_found",
         "retrieved_count": 1,
@@ -46,6 +47,7 @@ def _search_turn(search_string: str, doc_titles: list[str] | None = None) -> lis
 # Plain query passthrough
 # ---------------------------------------------------------------------------
 
+
 def test_plain_query_returned_as_is():
     convo = _make_convo()
     result = build_retrieval_query(convo, "What is dark matter?")
@@ -61,6 +63,7 @@ def test_whitespace_trimmed():
 # ---------------------------------------------------------------------------
 # Retry: reuse last vector_search query
 # ---------------------------------------------------------------------------
+
 
 def test_retry_reuses_last_vector_search_query():
     msgs = _search_turn("dark matter")
@@ -93,6 +96,7 @@ def test_retry_case_insensitive():
 # ---------------------------------------------------------------------------
 # Pronoun follow-ups: prepend document title
 # ---------------------------------------------------------------------------
+
 
 def test_pronoun_it_prepends_recent_document_title():
     msgs = _search_turn("dark matter", doc_titles=["Doc A"])
@@ -129,9 +133,19 @@ def test_no_pronoun_in_followup_returns_text_as_is():
     assert result == "What is the Hubble constant?"
 
 
+def test_enabled_followup_does_not_prepend_sorted_title(monkeypatch):
+    monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "1")
+    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
+    convo = _make_convo(*_search_turn("two reports", ["A Report", "Z Report"]))
+    assert (
+        build_retrieval_query(convo, "compare their totals") == "compare their totals"
+    )
+
+
 # ---------------------------------------------------------------------------
 # LLM rewrite (mocked, gated behind RAG_QUERY_REWRITE_ENABLED)
 # ---------------------------------------------------------------------------
+
 
 def test_rewrite_disabled_returns_plain_query(monkeypatch):
     monkeypatch.setenv("RAG_QUERY_REWRITE_ENABLED", "0")
@@ -149,6 +163,7 @@ def test_rewrite_enabled_calls_rewrite_function(monkeypatch):
         return f"REWRITTEN: {text}"
 
     from apps.chat.services import rag_query
+
     monkeypatch.setattr(rag_query, "_llm_rewrite_query", _fake_rewrite)
 
     convo = _make_convo()
@@ -197,10 +212,11 @@ def test_multi_part_question_honors_query_limit(max_queries, expected_count):
     from apps.chat.services.rag_query import build_retrieval_queries
 
     primary = "Explain the first paper? Compare the methods? Summarize the evidence?"
-    assert build_retrieval_queries(
-        _make_convo(), primary, max_queries=max_queries
-    ) == [
-        primary,
-        "Explain the first paper",
-        "Compare the methods",
-    ][:expected_count]
+    assert (
+        build_retrieval_queries(_make_convo(), primary, max_queries=max_queries)
+        == [
+            primary,
+            "Explain the first paper",
+            "Compare the methods",
+        ][:expected_count]
+    )

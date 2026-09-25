@@ -1,15 +1,28 @@
-"""RAG-oriented Django cache helpers: normalized keys, fail-open get/set, metric logging."""
+"""RAG cache keys, fail-open I/O and aggregate cache metrics."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-import structlog
 import uuid
-from collections import defaultdict
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any, TypedDict
 
+import structlog
 from django.conf import settings
 from django.core.cache import cache
+
+from .bounded_rag_cache import cache_operation
+from .rag_document_refs import (
+    _validated_collection_allowlist as _validated_collection_allowlist,
+)
+from .rag_document_refs import (
+    document_refs_from_documents as document_refs_from_documents,
+)
+from .rag_document_refs import (
+    rehydrate_documents_from_refs as rehydrate_documents_from_refs,
+)
+from .source_loading import current_source_runtime
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -19,6 +32,11 @@ _MET_DOC_LOOKUP = "rag_cache.document_lookup"
 _MET_IMAGE_URL = "rag_cache.image_data_url"
 _MET_RERANK_RES = "rag_cache.rerank_result"
 _MET_RERANK_CAP = "rag_cache.rerank_capability"
+
+
+class RerankCapability(TypedDict):
+    endpoint: str
+    shape: str
 
 
 def _rag_enabled() -> bool:
@@ -35,41 +53,22 @@ def stable_cache_key(prefix: str, *parts: Any) -> str:
 
 
 def cache_get(key: str) -> Any | None:
-    if not _rag_enabled():
-        return None
-    try:
-        return cache.get(key)
-    except Exception as exc:
-        logger.warning(
-            "obs.rag.cache_get_failed",
-            key=key[:120],
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
-        return None
+    from .rag_cache_io import cache_get as read
+
+    return read(cache, key) if _rag_enabled() else None
 
 
 def cache_set(key: str, value: Any, timeout: int) -> None:
-    if not _rag_enabled():
-        return
-    try:
-        cache.set(key, value, timeout=timeout)
-    except Exception as exc:
-        logger.warning(
-            "obs.rag.cache_set_failed",
-            key=key[:120],
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
+    from .rag_cache_io import cache_set as write
+
+    if _rag_enabled():
+        write(cache, key, value, timeout)
 
 
 def _log_hit_miss(metric: str, hit: bool) -> None:
-    if not _rag_enabled():
-        return
-    if hit:
-        logger.info("obs.rag.cache_hit", metric=metric)
-    else:
-        logger.debug("obs.rag.cache_miss", metric=metric)
+    if _rag_enabled():
+        log = logger.info if hit else logger.debug
+        log("obs.rag.cache_hit" if hit else "obs.rag.cache_miss", metric=metric)
 
 
 def query_embedding_cache_key(query: str, input_type: str, model_signature: str) -> str:
@@ -105,7 +104,9 @@ def set_cached_query_embedding(
     cache_set(key, embedding, query_embed_ttl())
 
 
-def doc_access_cache_key(user_id: int, collection_ids: tuple[int, ...], perm: str) -> str:
+def doc_access_cache_key(
+    user_id: int, collection_ids: tuple[int, ...], perm: str
+) -> str:
     return stable_cache_key("da", user_id, collection_ids, perm)
 
 
@@ -189,19 +190,82 @@ def get_cached_image_data_url(doc_id: uuid.UUID, image_file_name: str) -> str | 
     return None
 
 
-def set_cached_image_data_url(doc_id: uuid.UUID, image_file_name: str, data_url: str) -> None:
+def set_cached_image_data_url(
+    doc_id: uuid.UUID, image_file_name: str, data_url: str
+) -> None:
     if not _rag_enabled():
         return
     key = image_data_url_cache_key(doc_id, image_file_name)
     cache_set(key, data_url, image_data_url_ttl())
 
 
-from apps.documents.services.rag_cache_rerank import (  # noqa: E402
-    RerankCapability,
-    delete_cached_rerank_capability,
-    get_cached_rerank_capability,
-    set_cached_rerank_capability,
-)
+def rerank_capability_cache_key(base_url: str, model: str) -> str:
+    return stable_cache_key("rrcap", base_url.rstrip("/"), model)
+
+
+def rerank_capability_ttl() -> int:
+    return int(getattr(settings, "RAG_RERANK_CAPABILITY_TTL_SECONDS", 900))
+
+
+def get_cached_rerank_capability(
+    base_url: str, model: str, *, budget=None
+) -> RerankCapability | None:
+    if not _rag_enabled():
+        return None
+    key = rerank_capability_cache_key(base_url, model)
+    val = cache_operation("get", key, budget=budget) if budget else cache_get(key)
+    if (
+        isinstance(val, dict)
+        and isinstance(val.get("endpoint"), str)
+        and val.get("endpoint")
+        and val.get("shape")
+        in {
+            "rerank_documents",
+            "score_batch_text_pairs",
+            "score_single_text_pair",
+        }
+    ):
+        _log_hit_miss(_MET_RERANK_CAP, True)
+        return {"endpoint": val["endpoint"], "shape": val["shape"]}
+    if isinstance(val, str) and val:
+        # Read legacy endpoint-only records during rolling deployments.
+        _log_hit_miss(_MET_RERANK_CAP, True)
+        return {"endpoint": val, "shape": "rerank_documents"}
+    _log_hit_miss(_MET_RERANK_CAP, False)
+    return None
+
+
+def set_cached_rerank_capability(
+    base_url: str, model: str, capability: Mapping[str, str]
+) -> None:
+    if not _rag_enabled():
+        return
+    key = rerank_capability_cache_key(base_url, model)
+    endpoint = capability.get("endpoint")
+    shape = capability.get("shape")
+    if not endpoint or shape not in {
+        "rerank_documents",
+        "score_batch_text_pairs",
+        "score_single_text_pair",
+    }:
+        return
+    cache_set(
+        key,
+        {"endpoint": endpoint, "shape": shape},
+        rerank_capability_ttl(),
+    )
+
+
+def delete_cached_rerank_capability(base_url: str, model: str) -> None:
+    if not _rag_enabled():
+        return
+    if current_source_runtime() is not None:
+        cache_operation("delete", rerank_capability_cache_key(base_url, model))
+        return
+    try:
+        cache.delete(rerank_capability_cache_key(base_url, model))
+    except Exception:
+        return
 
 
 def rerank_result_cache_key(
@@ -244,81 +308,6 @@ def set_cached_rerank_result(
         return
     key = rerank_result_cache_key(query_signature, candidate_ids, top_k, model)
     cache_set(key, list(ranked_ids), rerank_result_ttl())
-
-
-def document_refs_from_documents(documents: Sequence[Any]) -> list[dict[str, Any]]:
-    return [{"model": d.__class__.__name__, "pkid": int(d.pkid)} for d in documents]
-
-
-def _validated_collection_allowlist(
-    allowed_collection_ids: Sequence[int],
-) -> tuple[int, ...]:
-    try:
-        collection_ids = tuple(allowed_collection_ids)
-    except TypeError as exc:
-        raise ValueError(
-            "allowed_collection_ids must contain positive integers within the signed-bigint range"
-        ) from exc
-
-    if any(
-        type(collection_id) is not int
-        or collection_id <= 0
-        or collection_id > 2**63 - 1
-        for collection_id in collection_ids
-    ):
-        raise ValueError(
-            "allowed_collection_ids must contain positive integers within the signed-bigint range"
-        )
-    return tuple(sorted(set(collection_ids)))
-
-
-def rehydrate_documents_from_refs(
-    refs: Sequence[Mapping[str, Any]],
-    allowed_collection_ids: Sequence[int],
-) -> list[Any]:
-    from django.apps import apps
-
-    collection_ids = _validated_collection_allowlist(allowed_collection_ids)
-    if not refs or not collection_ids:
-        return []
-
-    by_model: dict[str, list[int]] = defaultdict(list)
-    order: list[tuple[str, int]] = []
-    for ref in refs:
-        try:
-            mname = str(ref["model"])
-            pk = int(ref["pkid"])
-        except Exception:
-            continue
-        by_model[mname].append(pk)
-        order.append((mname, pk))
-
-    fetched: dict[tuple[str, int], Any] = {}
-    for mname, pks in by_model.items():
-        try:
-            model = apps.get_model("apps_documents", mname)
-        except Exception:
-            continue
-        uniq_pks = list(dict.fromkeys(pks))
-        try:
-            qs = model.objects.filter(
-                pkid__in=uniq_pks,
-                collection_id__in=collection_ids,
-            )
-        except Exception:
-            continue
-        for doc in qs:
-            try:
-                fetched[(mname, int(doc.pkid))] = doc
-            except Exception:
-                continue
-
-    out: list[Any] = []
-    for mname, pk in order:
-        doc = fetched.get((mname, pk))
-        if doc is not None:
-            out.append(doc)
-    return out
 
 
 __all__ = [

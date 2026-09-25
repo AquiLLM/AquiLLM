@@ -1,0 +1,812 @@
+"""Validated, provider-neutral research ontology definitions.
+
+Checksums are SHA-256 digests of canonical JSON semantic content.  YAML key and
+list ordering therefore never changes a definition's identity; ``raw_yaml`` is
+retained separately for audit persistence.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from hashlib import sha256
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
+import yaml
+
+from lib.knowledge_graph.type_names import (
+    TypeNameValidationError,
+)
+from lib.knowledge_graph.type_names import (
+    validate_type_name as _validate_type_name,
+)
+
+from .ontology_parsing import (
+    OntologyValidationError,
+    _aliases,
+    _compare_semver_precedence,
+    _mapping,
+    _names,
+    _nonempty_string,
+    _parse_yaml,
+    _read_yaml,
+    _records,
+    _require_fields,
+    _semantic_version,
+    _unit_number,
+)
+
+_DIRECTIONS = frozenset({"directed", "undirected"})
+_GRAPH_ONTOLOGY_ACTIVATION_LOCK = 707_750_921
+_ENTITY_FIELDS = frozenset(
+    {
+        "name",
+        "description",
+        "aliases",
+        "default_retrieval_weight",
+        "default_suppression_policy",
+        "default_suppression_threshold",
+    }
+)
+_RELATION_FIELDS = frozenset(
+    {
+        "name",
+        "description",
+        "direction",
+        "allowed_head_types",
+        "allowed_tail_types",
+    }
+)
+
+
+
+
+def validate_type_name(value: Any, label: str = "type name") -> str:
+    """The shared naming contract for storage, schema editing and providers."""
+    try:
+        return _validate_type_name(value, label)
+    except TypeNameValidationError as exc:
+        raise OntologyValidationError(str(exc)) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class EntityTypeDefinition:
+    name: str
+    description: str
+    aliases: tuple[str, ...]
+    default_retrieval_weight: float
+    default_suppression_policy: str
+    default_suppression_threshold: float
+    extension_enabled: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RelationDefinition:
+    name: str
+    description: str
+    direction: str
+    allowed_head_types: tuple[str, ...]
+    allowed_tail_types: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OntologyDefinition:
+    version: str
+    entity_types: Mapping[str, EntityTypeDefinition]
+    relations: Mapping[str, RelationDefinition]
+    checksum: str
+    canonical_yaml: str
+    raw_yaml: str
+    provenance: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+
+
+@dataclass(frozen=True, slots=True)
+class EntityTypeExtension:
+    name: str
+    description: str | None = None
+    aliases: tuple[str, ...] | None = None
+    default_retrieval_weight: float | None = None
+    default_suppression_policy: str | None = None
+    default_suppression_threshold: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RelationExtension:
+    name: str
+    description: str | None = None
+    direction: str | None = None
+    allowed_head_types: tuple[str, ...] | None = None
+    allowed_tail_types: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OntologyExtensionDefinition:
+    version: str
+    entity_types: Mapping[str, EntityTypeExtension]
+    relations: Mapping[str, RelationExtension]
+    checksum: str
+    canonical_yaml: str
+    raw_yaml: str
+
+
+
+
+
+
+
+def _canonical_yaml(content: Mapping[str, Any]) -> str:
+    return yaml.safe_dump(dict(content), allow_unicode=True, sort_keys=True)
+
+
+def _checksum(content: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        content, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _definition_content(
+    version: str,
+    entity_types: Mapping[str, EntityTypeDefinition],
+    relations: Mapping[str, RelationDefinition],
+) -> dict[str, Any]:
+    return {
+        "version": version,
+        "entity_types": [
+            {
+                "name": entity.name,
+                "description": entity.description,
+                "aliases": list(entity.aliases),
+                "default_retrieval_weight": entity.default_retrieval_weight,
+                "default_suppression_policy": entity.default_suppression_policy,
+                "default_suppression_threshold": entity.default_suppression_threshold,
+                "extension_enabled": entity.extension_enabled,
+            }
+            for entity in (entity_types[name] for name in sorted(entity_types))
+        ],
+        "relations": [
+            {
+                "name": relation.name,
+                "description": relation.description,
+                "direction": relation.direction,
+                "allowed_head_types": list(relation.allowed_head_types),
+                "allowed_tail_types": list(relation.allowed_tail_types),
+            }
+            for relation in (relations[name] for name in sorted(relations))
+        ],
+    }
+
+
+def _build_definition(
+    version: str,
+    entity_types: Mapping[str, EntityTypeDefinition],
+    relations: Mapping[str, RelationDefinition],
+    raw_yaml: str | None,
+    provenance: Mapping[str, str] | None = None,
+) -> OntologyDefinition:
+    content = _definition_content(version, entity_types, relations)
+    canonical_yaml = _canonical_yaml(content)
+    return OntologyDefinition(
+        version=version,
+        entity_types=MappingProxyType(dict(sorted(entity_types.items()))),
+        relations=MappingProxyType(dict(sorted(relations.items()))),
+        checksum=_checksum(content),
+        canonical_yaml=canonical_yaml,
+        raw_yaml=canonical_yaml if raw_yaml is None else raw_yaml,
+        provenance=MappingProxyType(dict(sorted((provenance or {}).items()))),
+    )
+
+
+def _load_ontology_document(document: Any, raw_yaml: str) -> OntologyDefinition:
+    root = _mapping(document, "ontology")
+    _require_fields(
+        root, frozenset({"version", "entity_types", "relations"}), "ontology"
+    )
+    version = _semantic_version(root.get("version"))
+
+    entity_types: dict[str, EntityTypeDefinition] = {}
+    known_aliases: set[str] = set()
+    for record in _records(root.get("entity_types"), "entity_types"):
+        _require_fields(
+            record, _ENTITY_FIELDS | frozenset({"extension_enabled"}), "entity type"
+        )
+        missing = _ENTITY_FIELDS.difference(record)
+        if missing:
+            raise OntologyValidationError(
+                f"entity type is missing fields: {sorted(missing)}"
+            )
+        name = validate_type_name(record["name"], "entity type name")
+        aliases = _aliases(record["aliases"], f"aliases for {name}")
+        if name in entity_types or name in known_aliases or name in aliases:
+            raise OntologyValidationError(
+                f"duplicate entity type name or alias: {name}"
+            )
+        if set(aliases).intersection(entity_types) or set(aliases).intersection(
+            known_aliases
+        ):
+            raise OntologyValidationError(f"duplicate entity aliases for {name}")
+        extension_enabled = record.get("extension_enabled", False)
+        if type(extension_enabled) is not bool:
+            raise OntologyValidationError(
+                f"extension_enabled for {name} must be a boolean"
+            )
+        entity_types[name] = EntityTypeDefinition(
+            name=name,
+            description=_nonempty_string(
+                record["description"], f"description for {name}"
+            ),
+            aliases=aliases,
+            default_retrieval_weight=_unit_number(
+                record["default_retrieval_weight"], f"retrieval weight for {name}"
+            ),
+            default_suppression_policy=_nonempty_string(
+                record["default_suppression_policy"], f"suppression policy for {name}"
+            ),
+            default_suppression_threshold=_unit_number(
+                record["default_suppression_threshold"],
+                f"suppression threshold for {name}",
+            ),
+            extension_enabled=extension_enabled,
+        )
+        known_aliases.update(aliases)
+    if not entity_types:
+        raise OntologyValidationError("entity_types must not be empty")
+
+    relations: dict[str, RelationDefinition] = {}
+    for record in _records(root.get("relations"), "relations"):
+        _require_fields(record, _RELATION_FIELDS, "relation")
+        missing = _RELATION_FIELDS.difference(record)
+        if missing:
+            raise OntologyValidationError(
+                f"relation is missing fields: {sorted(missing)}"
+            )
+        name = validate_type_name(record["name"], "relation name")
+        if name in relations:
+            raise OntologyValidationError(f"duplicate relation name: {name}")
+        direction = _nonempty_string(record["direction"], f"direction for {name}")
+        if direction not in _DIRECTIONS:
+            raise OntologyValidationError(f"invalid direction for {name}")
+        heads = _names(record["allowed_head_types"], f"head types for {name}")
+        tails = _names(record["allowed_tail_types"], f"tail types for {name}")
+        unknown = set(heads).union(tails).difference(entity_types)
+        if unknown:
+            raise OntologyValidationError(
+                f"unknown endpoint types for {name}: {sorted(unknown)}"
+            )
+        relations[name] = RelationDefinition(
+            name=name,
+            description=_nonempty_string(
+                record["description"], f"description for {name}"
+            ),
+            direction=direction,
+            allowed_head_types=heads,
+            allowed_tail_types=tails,
+        )
+    if not relations:
+        raise OntologyValidationError("relations must not be empty")
+    return _build_definition(version, entity_types, relations, raw_yaml)
+
+
+def load_ontology(path: str | Path) -> OntologyDefinition:
+    """Load a complete ontology without importing Django or any LLM provider."""
+
+    document, raw_yaml = _read_yaml(path)
+    return _load_ontology_document(document, raw_yaml)
+
+
+def load_ontology_yaml(raw_yaml: str) -> OntologyDefinition:
+    """Revalidate persisted ontology YAML directly, without filesystem parsing."""
+
+    document, normalized_yaml = _parse_yaml(raw_yaml)
+    return _load_ontology_document(document, normalized_yaml)
+
+
+def validate_ontology_definition(
+    definition: OntologyDefinition,
+    *,
+    expected_version: str | None = None,
+    expected_checksum: str | None = None,
+) -> OntologyDefinition:
+    """Recursively revalidate immutable ontology semantics at runtime seams."""
+
+    if type(definition) is not OntologyDefinition:
+        raise OntologyValidationError("ontology must be an exact OntologyDefinition")
+    version = _semantic_version(definition.version)
+    if expected_version is not None and version != expected_version:
+        raise OntologyValidationError("ontology version does not match build identity")
+    if type(definition.entity_types) is not type(MappingProxyType({})):
+        raise OntologyValidationError("ontology entity types must be immutable")
+    if type(definition.relations) is not type(MappingProxyType({})):
+        raise OntologyValidationError("ontology relations must be immutable")
+    if any(
+        type(name) is not str
+        or type(entity) is not EntityTypeDefinition
+        or entity.name != name
+        or type(entity.aliases) is not tuple
+        or type(entity.extension_enabled) is not bool
+        for name, entity in definition.entity_types.items()
+    ):
+        raise OntologyValidationError(
+            "ontology entity types failed recursive validation"
+        )
+    if any(
+        type(name) is not str
+        or type(relation) is not RelationDefinition
+        or relation.name != name
+        or type(relation.allowed_head_types) is not tuple
+        or type(relation.allowed_tail_types) is not tuple
+        for name, relation in definition.relations.items()
+    ):
+        raise OntologyValidationError("ontology relations failed recursive validation")
+    content = _definition_content(
+        version, definition.entity_types, definition.relations
+    )
+    semantic_checksum = _checksum(content)
+    if type(definition.checksum) is not str or definition.checksum != semantic_checksum:
+        raise OntologyValidationError("ontology semantic checksum is invalid")
+    if expected_checksum is not None and semantic_checksum != expected_checksum:
+        raise OntologyValidationError("ontology checksum does not match build identity")
+    canonical_yaml = _canonical_yaml(content)
+    if (
+        type(definition.canonical_yaml) is not str
+        or definition.canonical_yaml != canonical_yaml
+    ):
+        raise OntologyValidationError("ontology canonical semantics are invalid")
+    if type(definition.raw_yaml) is not str or not definition.raw_yaml.strip():
+        raise OntologyValidationError("ontology raw YAML must be nonempty")
+    reloaded = load_ontology_yaml(definition.raw_yaml)
+    if reloaded.checksum != semantic_checksum:
+        raise OntologyValidationError(
+            "ontology raw YAML differs from semantic identity"
+        )
+    if type(definition.provenance) is not type(MappingProxyType({})) or any(
+        type(key) is not str or type(value) is not str
+        for key, value in definition.provenance.items()
+    ):
+        raise OntologyValidationError("ontology provenance must be immutable strings")
+    return definition
+
+
+def load_ontology_extension(path: str | Path) -> OntologyExtensionDefinition:
+    """Load a partial, versioned change set without applying it."""
+    document, raw_yaml = _read_yaml(path)
+    root = _mapping(document, "ontology extension")
+    _require_fields(
+        root, frozenset({"version", "entity_types", "relations"}), "ontology extension"
+    )
+    version = _semantic_version(root.get("version"))
+    entities: dict[str, EntityTypeExtension] = {}
+    for record in _records(root.get("entity_types", []), "entity_types"):
+        _require_fields(record, _ENTITY_FIELDS, "entity type extension")
+        name = validate_type_name(record.get("name"), "entity type extension name")
+        if name in entities:
+            raise OntologyValidationError(f"duplicate entity extension: {name}")
+        entities[name] = EntityTypeExtension(
+            name=name,
+            description=(
+                None
+                if "description" not in record
+                else _nonempty_string(record["description"], f"description for {name}")
+            ),
+            aliases=(
+                None
+                if "aliases" not in record
+                else _aliases(record["aliases"], f"aliases for {name}")
+            ),
+            default_retrieval_weight=(
+                None
+                if "default_retrieval_weight" not in record
+                else _unit_number(
+                    record["default_retrieval_weight"], f"retrieval weight for {name}"
+                )
+            ),
+            default_suppression_policy=(
+                None
+                if "default_suppression_policy" not in record
+                else _nonempty_string(
+                    record["default_suppression_policy"],
+                    f"suppression policy for {name}",
+                )
+            ),
+            default_suppression_threshold=(
+                None
+                if "default_suppression_threshold" not in record
+                else _unit_number(
+                    record["default_suppression_threshold"],
+                    f"suppression threshold for {name}",
+                )
+            ),
+        )
+    relations: dict[str, RelationExtension] = {}
+    for record in _records(root.get("relations", []), "relations"):
+        _require_fields(record, _RELATION_FIELDS, "relation extension")
+        name = validate_type_name(record.get("name"), "relation extension name")
+        if name in relations:
+            raise OntologyValidationError(f"duplicate relation extension: {name}")
+        direction = (
+            None
+            if "direction" not in record
+            else _nonempty_string(record["direction"], f"direction for {name}")
+        )
+        if direction is not None and direction not in _DIRECTIONS:
+            raise OntologyValidationError(f"invalid direction for {name}")
+        relations[name] = RelationExtension(
+            name=name,
+            description=(
+                None
+                if "description" not in record
+                else _nonempty_string(record["description"], f"description for {name}")
+            ),
+            direction=direction,
+            allowed_head_types=(
+                None
+                if "allowed_head_types" not in record
+                else _names(record["allowed_head_types"], f"head types for {name}")
+            ),
+            allowed_tail_types=(
+                None
+                if "allowed_tail_types" not in record
+                else _names(record["allowed_tail_types"], f"tail types for {name}")
+            ),
+        )
+    content = {
+        "version": version,
+        "entity_types": [
+            {key: value for key, value in asdict(entity).items() if value is not None}
+            for entity in (entities[name] for name in sorted(entities))
+        ],
+        "relations": [
+            {key: value for key, value in asdict(relation).items() if value is not None}
+            for relation in (relations[name] for name in sorted(relations))
+        ],
+    }
+    return OntologyExtensionDefinition(
+        version=version,
+        entity_types=MappingProxyType(dict(sorted(entities.items()))),
+        relations=MappingProxyType(dict(sorted(relations.items()))),
+        checksum=_checksum(content),
+        canonical_yaml=_canonical_yaml(content),
+        raw_yaml=raw_yaml,
+    )
+
+
+def merge_ontology_extension(
+    base: OntologyDefinition, delta: OntologyExtensionDefinition
+) -> OntologyDefinition:
+    """Return a new immutable ontology after a core-preserving extension merge."""
+    base_version = _semantic_version(base.version)
+    delta_version = _semantic_version(delta.version)
+    if _compare_semver_precedence(delta_version, base_version) <= 0:
+        raise OntologyValidationError(
+            "extension version must be strictly newer than the base version"
+        )
+    entity_types = dict(base.entity_types)
+    relations = dict(base.relations)
+    for name, extension in delta.entity_types.items():
+        previous = entity_types.get(name)
+        if previous is None:
+            if None in (
+                extension.description,
+                extension.aliases,
+                extension.default_retrieval_weight,
+                extension.default_suppression_policy,
+                extension.default_suppression_threshold,
+            ):
+                raise OntologyValidationError(
+                    f"new entity type {name} requires a complete definition"
+                )
+            entity_types[name] = EntityTypeDefinition(
+                name=name,
+                description=extension.description,
+                aliases=extension.aliases,
+                default_retrieval_weight=extension.default_retrieval_weight,
+                default_suppression_policy=extension.default_suppression_policy,
+                default_suppression_threshold=extension.default_suppression_threshold,
+                extension_enabled=True,
+            )
+            continue
+        if (
+            extension.description is not None
+            and extension.description != previous.description
+        ):
+            raise OntologyValidationError(
+                f"extension redefines core entity type {name}"
+            )
+        entity_types[name] = EntityTypeDefinition(
+            name=name,
+            description=previous.description,
+            aliases=tuple(sorted(set(previous.aliases).union(extension.aliases or ()))),
+            default_retrieval_weight=(
+                extension.default_retrieval_weight
+                if extension.default_retrieval_weight is not None
+                else previous.default_retrieval_weight
+            ),
+            default_suppression_policy=(
+                extension.default_suppression_policy
+                if extension.default_suppression_policy is not None
+                else previous.default_suppression_policy
+            ),
+            default_suppression_threshold=(
+                extension.default_suppression_threshold
+                if extension.default_suppression_threshold is not None
+                else previous.default_suppression_threshold
+            ),
+            extension_enabled=previous.extension_enabled,
+        )
+    all_names = set(entity_types)
+    all_aliases = [
+        alias for entity in entity_types.values() for alias in entity.aliases
+    ]
+    if len(all_aliases) != len(set(all_aliases)) or all_names.intersection(all_aliases):
+        raise OntologyValidationError(
+            "extension introduces duplicate entity names or aliases"
+        )
+
+    for name, extension in delta.relations.items():
+        previous = relations.get(name)
+        if previous is None:
+            if None in (
+                extension.description,
+                extension.direction,
+                extension.allowed_head_types,
+                extension.allowed_tail_types,
+            ):
+                raise OntologyValidationError(
+                    f"new relation {name} requires a complete definition"
+                )
+            relation = RelationDefinition(
+                name,
+                extension.description,
+                extension.direction,
+                extension.allowed_head_types,
+                extension.allowed_tail_types,
+            )
+        else:
+            if (
+                (
+                    extension.description is not None
+                    and extension.description != previous.description
+                )
+                or (
+                    extension.direction is not None
+                    and extension.direction != previous.direction
+                )
+                or (
+                    extension.allowed_head_types is not None
+                    and extension.allowed_head_types != previous.allowed_head_types
+                )
+                or (
+                    extension.allowed_tail_types is not None
+                    and extension.allowed_tail_types != previous.allowed_tail_types
+                )
+            ):
+                raise OntologyValidationError(
+                    f"extension redefines core relation {name}"
+                )
+            relation = previous
+        unknown = (
+            set(relation.allowed_head_types)
+            .union(relation.allowed_tail_types)
+            .difference(all_names)
+        )
+        if unknown:
+            raise OntologyValidationError(
+                f"unknown endpoint types for {name}: {sorted(unknown)}"
+            )
+        relations[name] = relation
+    return _build_definition(
+        delta_version,
+        entity_types,
+        relations,
+        raw_yaml=None,
+        provenance={
+            "base_checksum": base.checksum,
+            "base_version": base_version,
+            "delta_checksum": delta.checksum,
+            "delta_version": delta_version,
+            "enabled_entity_types": ",".join(sorted(delta.entity_types)),
+        },
+    )
+
+
+def _lock_graph_ontology_activation(cursor: Any) -> None:
+    """Serialize graph ontology activation, including an initially empty table."""
+    cursor.execute(
+        "SELECT pg_advisory_xact_lock(%s)", [_GRAPH_ONTOLOGY_ACTIVATION_LOCK]
+    )
+
+
+def activate_ontology(definition: OntologyDefinition):
+    """Persist and activate a definition atomically, without provider calls."""
+    validate_ontology_definition(definition)
+    from django.db import IntegrityError, connection, transaction
+    from django.utils import timezone
+
+    from apps.knowledge_graph.models import OntologyVersion
+
+    yaml_text = definition.raw_yaml or definition.canonical_yaml
+    if not yaml_text:
+        raise OntologyValidationError("ontology activation requires nonempty YAML")
+    metadata = {
+        "yaml": yaml_text,
+        "canonical_yaml": definition.canonical_yaml,
+        "provenance": dict(definition.provenance),
+        "checksum_algorithm": "sha256-canonical-json-v1",
+    }
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            _lock_graph_ontology_activation(cursor)
+        checksum_conflict_message = (
+            f"version {definition.version} is already persisted with a different "
+            "checksum"
+        )
+        scope_conflict_message = (
+            f"version {definition.version} is already persisted for another identity"
+        )
+        record = (
+            OntologyVersion.objects.select_for_update()
+            .filter(kind=OntologyVersion.Kind.GRAPH, version=definition.version)
+            .first()
+        )
+        if record is not None and record.checksum != definition.checksum:
+            raise OntologyValidationError(checksum_conflict_message)
+        if record is not None and "collection_id" in record.metadata:
+            raise OntologyValidationError(scope_conflict_message)
+        if record is None:
+            try:
+                with transaction.atomic():
+                    record = OntologyVersion.objects.create(
+                        kind=OntologyVersion.Kind.GRAPH,
+                        version=definition.version,
+                        checksum=definition.checksum,
+                        metadata=metadata,
+                        status=OntologyVersion.Status.DRAFT,
+                    )
+            except IntegrityError:
+                record = OntologyVersion.objects.select_for_update().get(
+                    kind=OntologyVersion.Kind.GRAPH, version=definition.version
+                )
+                if record.checksum != definition.checksum:
+                    raise OntologyValidationError(checksum_conflict_message)
+                if "collection_id" in record.metadata:
+                    raise OntologyValidationError(scope_conflict_message)
+        OntologyVersion.objects.filter(
+            kind=OntologyVersion.Kind.GRAPH,
+            status=OntologyVersion.Status.ACTIVE,
+        ).exclude(metadata__has_key="collection_id").exclude(pk=record.pk).update(
+            status=OntologyVersion.Status.SUPERSEDED
+        )
+        if record.status != OntologyVersion.Status.ACTIVE:
+            record.status = OntologyVersion.Status.ACTIVE
+            record.activated_at = timezone.now()
+            record.save(update_fields=["status", "activated_at"])
+        return record
+
+
+def _definition_from_record(record):
+    metadata = record.metadata if type(record.metadata) is dict else {}
+    raw_yaml = metadata.get("yaml")
+    if type(raw_yaml) is not str:
+        raise OntologyValidationError("active ontology has no immutable YAML snapshot")
+    definition = load_ontology_yaml(raw_yaml)
+    if definition.version != record.version or definition.checksum != record.checksum:
+        raise OntologyValidationError(
+            "active ontology identity does not match its YAML"
+        )
+    return definition
+
+
+def deployment_ontology() -> OntologyDefinition:
+    """Resolve the single deployment-wide active graph ontology."""
+    from apps.knowledge_graph.models import OntologyVersion
+
+    records = tuple(
+        OntologyVersion.objects.filter(
+            kind=OntologyVersion.Kind.GRAPH,
+            status=OntologyVersion.Status.ACTIVE,
+        )
+        .exclude(metadata__has_key="collection_id")
+        .order_by("pk")[:2]
+    )
+    if len(records) != 1:
+        raise OntologyValidationError(
+            "graph build requires exactly one active ontology"
+        )
+    return _definition_from_record(records[0])
+
+
+def collection_ontology(collection_id: int) -> OntologyDefinition:
+    """Resolve a collection's active ontology, then the deployment fallback."""
+    if type(collection_id) is not int or collection_id <= 0:
+        raise ValueError("collection id must be a positive database integer")
+    from apps.knowledge_graph.models import OntologyVersion
+
+    records = tuple(
+        OntologyVersion.objects.filter(
+            kind=OntologyVersion.Kind.GRAPH,
+            status=OntologyVersion.Status.ACTIVE,
+            metadata__collection_id=collection_id,
+        ).order_by("pk")[:2]
+    )
+    if len(records) > 1:
+        raise OntologyValidationError(
+            "collection has multiple active ontology versions"
+        )
+    if not records:
+        return deployment_ontology()
+    return _definition_from_record(records[0])
+
+
+def activate_collection_ontology(
+    collection_id: int, definition: OntologyDefinition
+):
+    """Activate a graph ontology within exactly one collection scope."""
+    if type(collection_id) is not int or collection_id <= 0:
+        raise ValueError("collection id must be a positive database integer")
+    validate_ontology_definition(definition)
+    from django.db import IntegrityError, connection, transaction
+    from django.utils import timezone
+
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.models import OntologyVersion
+
+    if not Collection.objects.filter(pk=collection_id).exists():
+        raise ValueError("collection does not exist")
+    yaml_text = definition.raw_yaml or definition.canonical_yaml
+    if not yaml_text:
+        raise OntologyValidationError("ontology activation requires nonempty YAML")
+    metadata = {
+        "yaml": yaml_text,
+        "canonical_yaml": definition.canonical_yaml,
+        "provenance": dict(definition.provenance),
+        "checksum_algorithm": "sha256-canonical-json-v1",
+        "collection_id": collection_id,
+    }
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            _lock_graph_ontology_activation(cursor)
+        conflict_message = (
+            f"version {definition.version} is already persisted for another identity"
+        )
+        record = (
+            OntologyVersion.objects.select_for_update()
+            .filter(kind=OntologyVersion.Kind.GRAPH, version=definition.version)
+            .first()
+        )
+        if record is not None and (
+            record.checksum != definition.checksum
+            or record.metadata.get("collection_id") != collection_id
+        ):
+            raise OntologyValidationError(conflict_message)
+        if record is None:
+            try:
+                with transaction.atomic():
+                    record = OntologyVersion.objects.create(
+                        kind=OntologyVersion.Kind.GRAPH,
+                        version=definition.version,
+                        checksum=definition.checksum,
+                        metadata=metadata,
+                        status=OntologyVersion.Status.DRAFT,
+                    )
+            except IntegrityError:
+                record = OntologyVersion.objects.select_for_update().get(
+                    kind=OntologyVersion.Kind.GRAPH, version=definition.version
+                )
+                if (
+                    record.checksum != definition.checksum
+                    or record.metadata.get("collection_id") != collection_id
+                ):
+                    raise OntologyValidationError(conflict_message)
+        OntologyVersion.objects.filter(
+            kind=OntologyVersion.Kind.GRAPH,
+            status=OntologyVersion.Status.ACTIVE,
+            metadata__collection_id=collection_id,
+        ).exclude(pk=record.pk).update(status=OntologyVersion.Status.SUPERSEDED)
+        if record.status != OntologyVersion.Status.ACTIVE:
+            record.status = OntologyVersion.Status.ACTIVE
+            record.activated_at = timezone.now()
+            record.save(update_fields=["status", "activated_at"])
+        return record

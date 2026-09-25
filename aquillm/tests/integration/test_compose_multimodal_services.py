@@ -41,7 +41,9 @@ def test_rendered_defaults_preserve_production_and_direct_retrieval(
         services["vllm_transcribe"]["build"]["dockerfile"]
         == "deploy/docker/vllm/Dockerfile"
     )
-    assert not any("knowledge_graph" in name for name in services)
+    for name, service in services.items():
+        if "knowledge_graph" in name:
+            assert "knowledge-graph" in service.get("profiles", [])
     for service in ("worker", "worker_memory_promotion"):
         if service in services:
             assert "&& exec " in " ".join(services[service]["command"])
@@ -168,3 +170,44 @@ def test_ocr_sidecar_is_not_in_default_vllm_profile():
         assert "- ocr-sidecar" in ocr_service
         assert "- vllm\n" not in ocr_service
         assert "      vllm:\n        condition: service_healthy" in transcribe_service
+
+
+def test_no_gpu_compose_keeps_hosted_whisper_model():
+    contents = (Path(__file__).resolve().parents[3] / "deploy" / "compose" / "no_gpu_dev.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "INGEST_TRANSCRIBE_MODEL: whisper-1" in contents
+
+
+def test_start_script_recovers_transcribe_args_by_service_kind_and_gates_revision():
+    contents = (Path(__file__).resolve().parents[3] / "deploy" / "scripts" / "vllm_start.sh").read_text(
+        encoding="utf-8"
+    )
+
+    service_kind = '[ "${VLLM_SERVICE_KIND:-}" = "transcribe" ]'
+    task_recovery = 'case "${VLLM_TASK:-}" in'
+    runner_recovery = '[ "${VLLM_RUNNER:-}" = "pooling" ]'
+    model_recovery = 'case "${VLLM_MODEL:-}" in'
+    assert service_kind in contents
+    assert contents.index(service_kind) < contents.index(task_recovery)
+    assert contents.index(service_kind) < contents.index(runner_recovery)
+    assert contents.index(service_kind) < contents.index(model_recovery)
+    assert "*whisper*|*Whisper*) export VLLM_EXTRA_ARGS=" not in contents
+    assert 'export VLLM_EXTRA_ARGS="${TRANSCRIBE_VLLM_EXTRA_ARGS}"' in contents
+    assert 'export VLLM_EXTRA_ARGS="${_DEFAULT_TRANSCRIBE_VLLM_EXTRA_ARGS}"' in contents
+
+    assert (
+        'if [ -n "${VLLM_REVISION:-}" ] && supports_arg "--revision"; then' in contents
+    )
+    assert 'cmd+=(--revision "${VLLM_REVISION}")' in contents
+    assert 'score) export VLLM_EXTRA_ARGS="${APP_RERANK_VLLM_EXTRA_ARGS:-}"' in contents
+    assert 'export VLLM_EXTRA_ARGS="${MEM0_EMBED_VLLM_EXTRA_ARGS:-}"' in contents
+    assert 'export VLLM_EXTRA_ARGS="${OCR_VLLM_EXTRA_ARGS}"' in contents
+
+    unset_block = contents.split("# Avoid vLLM env validation warnings", 1)[1].split(
+        'echo "Starting vLLM', 1
+    )[0]
+    assert "VLLM_REVISION" in unset_block
+    assert "VLLM_SERVICE_KIND" in unset_block
+    assert "VLLM_ALLOW_LONG_MAX_MODEL_LEN" not in unset_block
+    assert "VLLM_USE_V2_MODEL_RUNNER" not in unset_block

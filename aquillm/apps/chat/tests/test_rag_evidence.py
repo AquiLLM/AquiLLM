@@ -1,10 +1,7 @@
 """Tests for the evidence packet builder (Task 3)."""
 from __future__ import annotations
 
-import pytest
-
 from apps.chat.services.rag_evidence import EvidencePacket, build_evidence_packet
-
 
 # ---------------------------------------------------------------------------
 # Helpers to build raw tool results matching pack_chunk_search_results output
@@ -74,6 +71,40 @@ def test_citation_tokens_extracted():
     packet = build_evidence_packet(raw, query="test", search_scope="docs")
     assert "[doc:doc-1 chunk:10]" in packet.citation_tokens
     assert "[doc:doc-2 chunk:20]" in packet.citation_tokens
+
+
+def test_graph_expanded_rows_remain_real_budgeted_chunk_evidence(monkeypatch):
+    monkeypatch.setenv("RAG_MAX_SNIPPETS_PER_DOC", "1")
+    raw = _results_found(
+        _make_chunk(
+            1,
+            "doc-graph",
+            31,
+            "Graph result",
+            "First real chunk.",
+            graph_score=0.9,
+            graph_path=["private", "canonical", "nodes"],
+        ),
+        _make_chunk(
+            2,
+            "doc-graph",
+            32,
+            "Graph result",
+            "Second real chunk.",
+            graph_score=0.8,
+        ),
+    )
+
+    packet = build_evidence_packet(
+        raw,
+        query="related context",
+        search_scope="selected documents",
+        token_budget=100,
+    )
+
+    assert [chunk["chunk_id"] for chunk in packet.chunks] == [31]
+    assert packet.citation_tokens == ["[doc:doc-graph chunk:31]"]
+    assert "[doc:private chunk:999]" not in packet.citation_tokens
 
 
 # ---------------------------------------------------------------------------

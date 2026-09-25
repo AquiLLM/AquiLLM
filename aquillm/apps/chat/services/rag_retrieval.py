@@ -1,17 +1,148 @@
 """Deterministic fusion for independently reranked direct-RAG searches."""
+
 from __future__ import annotations
 
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from math import isfinite
 from typing import Any
 
 from apps.chat.services.rag_config import max_snippets_per_doc
 from apps.chat.services.rag_evidence import diversify_evidence_chunks
+from apps.documents.services.chunk_rerank_results import RerankScoreSet
+from apps.documents.services.chunk_rerank_score_transport import deserialize_score_set
 
 _RRF_K = 60
 _GRAPH_STATUS_PRIORITY = {"miss": 1, "error": 2, "timeout": 3, "hit": 4}
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_CITATION_RE = re.compile(r"\[doc:([^\s\]]+) chunk:([1-9][0-9]*)\]")
+_PUBLIC_ROW_KEYS = frozenset(
+    {
+        "rank",
+        "chunk_id",
+        "doc_id",
+        "chunk",
+        "title",
+        "citation",
+        "text",
+        "type",
+        "image_url",
+        "r",
+        "i",
+        "d",
+        "c",
+        "n",
+        "ref",
+        "x",
+        "ty",
+        "u",
+    }
+)
+
+
+@dataclass(frozen=True)
+class FusedRetrievalPool:
+    rows: tuple[dict[str, Any], ...]
+    source_score_sets: tuple[RerankScoreSet, ...]
+    fused_scores: tuple[tuple[str, float], ...]
+
+
+def _verified_row_coordinates(row: dict[str, Any]) -> tuple[int, str, int, str] | None:
+    """Accept only public rows whose citation agrees with their coordinates."""
+    chunk_id = row.get("chunk_id", row.get("i"))
+    doc_id = row.get("doc_id", row.get("d"))
+    number = row.get("chunk", row.get("c"))
+    citation = row.get("citation", row.get("ref"))
+    if (
+        type(chunk_id) is not int
+        or chunk_id <= 0
+        or type(doc_id) is not str
+        or not doc_id
+        or type(number) is not int
+        or number < 0
+        or type(citation) is not str
+    ):
+        return None
+    match = _CITATION_RE.fullmatch(citation)
+    if match is None or match.group(1) != doc_id or int(match.group(2)) != chunk_id:
+        return None
+    if (
+        ("chunk_id" in row and "i" in row and row["chunk_id"] != row["i"])
+        or ("doc_id" in row and "d" in row and row["doc_id"] != row["d"])
+        or ("chunk" in row and "c" in row and row["chunk"] != row["c"])
+    ):
+        return None
+    return chunk_id, doc_id, number, citation
+
+
+def _score_set_matches_rows(
+    score_set: RerankScoreSet, coordinates: dict[int, tuple[str, int]]
+) -> bool:
+    if any(pk not in coordinates for pk in score_set.candidate_order):
+        return False
+    return all(
+        score.chunk_pk in coordinates
+        and (str(score.document_id), score.chunk_number) == coordinates[score.chunk_pk]
+        for score in score_set.scores
+    )
+
+
+def fuse_ranked_tool_results(
+    results: list[dict[str, Any]], *, candidate_limit: int = 45
+) -> FusedRetrievalPool:
+    """Fuse the complete verified union; leave evidence selection to the caller."""
+    if type(candidate_limit) is not int or not 1 <= candidate_limit <= 45:
+        raise ValueError("candidate_limit must be between 1 and 45")
+    scores: dict[str, float] = defaultdict(float)
+    first_seen: dict[str, int] = {}
+    rows_by_citation: dict[str, dict[str, Any]] = {}
+    coordinates_by_pk: dict[int, tuple[str, int]] = {}
+    source_score_sets: list[RerankScoreSet] = []
+    for payload in results:
+        if not isinstance(payload, dict):
+            continue
+        payload_coordinates: dict[int, tuple[str, int]] = {}
+        for fallback_rank, row in enumerate(payload.get("result") or (), start=1):
+            if not isinstance(row, dict):
+                continue
+            verified = _verified_row_coordinates(row)
+            if verified is None:
+                continue
+            pk, doc_id, number, citation = verified
+            if pk in payload_coordinates:
+                continue
+            coordinates = doc_id, number
+            if pk in coordinates_by_pk and coordinates_by_pk[pk] != coordinates:
+                continue
+            if citation in rows_by_citation:
+                prior = _verified_row_coordinates(rows_by_citation[citation])
+                if prior is None or prior[:3] != verified[:3]:
+                    continue
+            raw_rank = row.get("rank", row.get("r", fallback_rank))
+            rank = raw_rank if type(raw_rank) is int and raw_rank > 0 else fallback_rank
+            scores[citation] += 1.0 / (_RRF_K + rank)
+            payload_coordinates[pk] = coordinates
+            coordinates_by_pk[pk] = coordinates
+            if citation not in first_seen:
+                first_seen[citation] = len(first_seen)
+                rows_by_citation[citation] = {
+                    key: value for key, value in row.items() if key in _PUBLIC_ROW_KEYS
+                }
+        score_set = deserialize_score_set(payload.get("_retrieval_scores"))
+        if score_set is not None and _score_set_matches_rows(
+            score_set, payload_coordinates
+        ):
+            source_score_sets.append(score_set)
+    ordered = sorted(
+        rows_by_citation,
+        key=lambda citation: (-scores[citation], first_seen[citation]),
+    )[:candidate_limit]
+    return FusedRetrievalPool(
+        tuple(rows_by_citation[citation] for citation in ordered),
+        tuple(source_score_sets),
+        tuple((citation, scores[citation]) for citation in ordered),
+    )
 
 
 def _aggregate_graph_diagnostics(
@@ -131,8 +262,10 @@ def merge_ranked_tool_results(
 
     if not merged_rows:
         for payload in results:
-            if (isinstance(payload, dict)
-                    and payload.get("retrieval_status") == "no_results"):
+            if (
+                isinstance(payload, dict)
+                and payload.get("retrieval_status") == "no_results"
+            ):
                 return dict(payload)
         return {"result": [], "retrieval_status": "no_results", "retrieved_count": 0}
 
@@ -142,7 +275,8 @@ def merge_ranked_tool_results(
         "retrieved_count": len(merged_rows),
     }
     documents = {
-        str(row.get("title") or row.get("n")) for row in merged_rows
+        str(row.get("title") or row.get("n"))
+        for row in merged_rows
         if row.get("title") or row.get("n")
     }
     if documents:
@@ -156,4 +290,8 @@ def merge_ranked_tool_results(
     return merged
 
 
-__all__ = ["merge_ranked_tool_results"]
+__all__ = [
+    "FusedRetrievalPool",
+    "fuse_ranked_tool_results",
+    "merge_ranked_tool_results",
+]

@@ -15,13 +15,6 @@ from apps.chat.tests.chat_message_test_support import _test_document_ids, _test_
 User = get_user_model()
 
 
-@pytest.fixture(autouse=True)
-def _isolate_chat_services(monkeypatch):
-    monkeypatch.setenv("RAG_DIRECT_ENABLED", "0")
-    with patch("apps.chat.consumers.chat.enqueue_index_conversation_task"):
-        yield
-
-
 def test_collection_selection_is_isolated_per_websocket_consumer():
     first = ChatConsumer()
     second = ChatConsumer()

@@ -1,6 +1,6 @@
 # Documents Index
 
-Last updated: 2026-04-09
+Last updated: 2026-08-18
 
 ## Architecture
 
@@ -24,6 +24,7 @@ Last updated: 2026-04-09
 ## Operations
 
 - `docs/documents/operations/gcp-secret-manager-runbook.md`
+- `docs/documents/operations/knowledge-graph-overlay-runbook.md`
 - `docs/documents/operations/secrets-inventory.md`
 - `docs/documents/operations/ocr.md`
 

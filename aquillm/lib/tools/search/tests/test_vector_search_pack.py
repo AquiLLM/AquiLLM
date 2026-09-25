@@ -2,64 +2,40 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from lib.llm.types.messages import ToolMessage
 
 from django.test import SimpleTestCase
 
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
-from lib.llm.types.messages import ToolMessage
 from lib.tools.search.vector_search import pack_chunk_search_results
 
 
 class VectorSearchPackTests(SimpleTestCase):
-    def test_results_with_null_diagnostics_validate_as_tool_message(self):
+    def test_private_score_sidecar_never_enters_rows_or_model_text(self):
         chunk = SimpleNamespace(
-            id=6,
-            doc_id="doc-success",
-            chunk_number=2,
-            modality="text",
-            content="relevant passage",
+            id=7, doc_id="doc-a", chunk_number=1, modality="text", content="evidence"
         )
-        packed = pack_chunk_search_results(
-            [chunk],
-            titles_by_doc_id={"doc-success": "Successful search"},
-            docs_by_doc_id={"doc-success": SimpleNamespace(image_file=None)},
-            truncate=lambda value: value,
-            image_modality="image",
-            compact_items=False,
-            retrieval_diagnostics={"vector_error": None},
+        score_set = {"schema_version": "v2", "scores": [{"value": 0.83}]}
+        for compact in (False, True):
+            out = pack_chunk_search_results(
+                [chunk], titles_by_doc_id={"doc-a": "Doc A"},
+                docs_by_doc_id={"doc-a": SimpleNamespace(image_file=None)},
+                truncate=lambda value: value, image_modality="image",
+                compact_items=compact, score_set=score_set,
+            )
+            assert out["_retrieval_scores"] == score_set
+            assert "scores" not in repr(out["result"])
+            assert "0.83" not in serialize_tool_result_for_llm(out)
+
+    def test_no_results_strip_private_score_diagnostics(self):
+        out = pack_chunk_search_results(
+            [], titles_by_doc_id={}, docs_by_doc_id={},
+            truncate=lambda value: value, image_modality="image",
+            retrieval_diagnostics={"doc_count": 1, "_score_set": {"scores": [0.83]}},
         )
-        assert packed["_retrieval_diagnostics"] == {"vector_error": None}
-
-        message = ToolMessage(
-            content="search completed",
-            tool_name="vector_search",
-            for_whom="assistant",
-            result_dict=packed,
-        )
-
-        assert message.result_dict == packed
-
-    def test_no_results_with_null_diagnostics_validate_as_tool_message(self):
-        packed = pack_chunk_search_results(
-            [],
-            titles_by_doc_id={},
-            docs_by_doc_id={},
-            truncate=lambda value: value,
-            image_modality="image",
-            compact_items=False,
-            search_string="missing calibration",
-            retrieval_diagnostics={"vector_error": None},
-        )
-        assert packed["retrieval_diagnostics"] == {"vector_error": None}
-
-        message = ToolMessage(
-            content="search completed",
-            tool_name="vector_search",
-            for_whom="assistant",
-            result_dict=packed,
-        )
-
-        assert message.result_dict == packed
+        assert "_score_set" not in out["retrieval_diagnostics"]
+        assert "_score_set" not in out["_retrieval_diagnostics"]
+        assert "0.83" not in serialize_tool_result_for_llm(out)
 
     def test_pack_includes_image_url_when_storage_has_image(self):
         chunk = SimpleNamespace(
@@ -129,6 +105,12 @@ class VectorSearchPackTests(SimpleTestCase):
             "vector_error": "connection refused",
             "trigram_candidates": 0,
             "exact_terms": ["HSC-PDR2"],
+            "graph_ms": 2.5,
+            "graph_seed_count": 3,
+            "graph_candidate_count": 1,
+            "graph_status": "hit",
+            "graph_algorithm_signature": "a" * 64,
+            "graph_version_signature": "b" * 64,
         }
         out = pack_chunk_search_results(
             [],
@@ -143,9 +125,19 @@ class VectorSearchPackTests(SimpleTestCase):
         )
 
         assert out["retrieval_status"] == "no_results"
-        assert out["retrieval_diagnostics"] == diag
+        assert out["retrieval_diagnostics"] == {
+            "doc_count": 2,
+            "chunks_with_embeddings": 0,
+            "vector_error": "connection refused",
+            "trigram_candidates": 0,
+            "exact_terms": ["HSC-PDR2"],
+        }
         assert out["retrieval_diagnostics"]["vector_error"] == "connection refused"
         assert out["retrieval_diagnostics"]["chunks_with_embeddings"] == 0
+        assert not any(
+            key.startswith("graph_") for key in out["retrieval_diagnostics"]
+        )
+        assert diag["graph_status"] == "hit"
 
     def test_pack_no_results_omits_retrieval_diagnostics_when_not_provided(self):
         out = pack_chunk_search_results(
@@ -189,3 +181,126 @@ class VectorSearchPackTests(SimpleTestCase):
         assert "retrieval_diagnostics" not in out
         assert out["_retrieval_diagnostics"] == diag
         assert "_retrieval_diagnostics" not in serialize_tool_result_for_llm(out)
+
+    def test_graph_expanded_verbose_row_keeps_only_real_chunk_citation_shape(self):
+        chunk = SimpleNamespace(
+            id=17,
+            doc_id="doc-graph",
+            chunk_number=4,
+            modality="text",
+            content="second-hop evidence",
+            graph_score=0.91,
+            graph_path=("private", "entity"),
+        )
+
+        out = pack_chunk_search_results(
+            [chunk],
+            titles_by_doc_id={"doc-graph": "Graph document"},
+            docs_by_doc_id={"doc-graph": SimpleNamespace(image_file=None)},
+            truncate=lambda value: value,
+            image_modality="image",
+            compact_items=False,
+            retrieval_diagnostics={"graph_status": "hit"},
+        )
+
+        assert out["result"] == [
+            {
+                "rank": 1,
+                "chunk_id": 17,
+                "doc_id": "doc-graph",
+                "chunk": 4,
+                "title": "Graph document",
+                "citation": "[doc:doc-graph chunk:17]",
+                "text": "second-hop evidence",
+            }
+        ]
+        assert "retrieval_diagnostics" not in out
+        assert out["_retrieval_diagnostics"]["graph_status"] == "hit"
+        assert "graph_status" not in serialize_tool_result_for_llm(out)
+
+    def test_graph_expanded_compact_row_keeps_existing_shape(self):
+        chunk = SimpleNamespace(
+            id=23,
+            doc_id="doc-cross-collection",
+            chunk_number=7,
+            modality="text",
+            content="authorized cross-collection context",
+            graph_score=0.75,
+        )
+
+        out = pack_chunk_search_results(
+            [chunk],
+            titles_by_doc_id={"doc-cross-collection": "Peer document"},
+            docs_by_doc_id={
+                "doc-cross-collection": SimpleNamespace(image_file=None)
+            },
+            truncate=lambda value: value,
+            image_modality="image",
+            compact_items=True,
+            retrieval_diagnostics={"graph_status": "hit"},
+        )
+
+        assert out["result"] == [
+            {
+                "r": 1,
+                "i": 23,
+                "d": "doc-cross-collection",
+                "c": 7,
+                "n": "Peer document",
+                "ref": "[doc:doc-cross-collection chunk:23]",
+                "x": "authorized cross-collection context",
+            }
+        ]
+        assert "retrieval_diagnostics" not in out
+
+
+    def test_results_with_null_diagnostics_validate_as_tool_message(self):
+        chunk = SimpleNamespace(
+            id=6,
+            doc_id="doc-success",
+            chunk_number=2,
+            modality="text",
+            content="relevant passage",
+        )
+        packed = pack_chunk_search_results(
+            [chunk],
+            titles_by_doc_id={"doc-success": "Successful search"},
+            docs_by_doc_id={"doc-success": SimpleNamespace(image_file=None)},
+            truncate=lambda value: value,
+            image_modality="image",
+            compact_items=False,
+            retrieval_diagnostics={"vector_error": None},
+        )
+        assert packed["_retrieval_diagnostics"] == {"vector_error": None}
+
+        message = ToolMessage(
+            content="search completed",
+            tool_name="vector_search",
+            for_whom="assistant",
+            result_dict=packed,
+        )
+
+        assert message.result_dict == packed
+
+
+    def test_no_results_with_null_diagnostics_validate_as_tool_message(self):
+        packed = pack_chunk_search_results(
+            [],
+            titles_by_doc_id={},
+            docs_by_doc_id={},
+            truncate=lambda value: value,
+            image_modality="image",
+            compact_items=False,
+            search_string="missing calibration",
+            retrieval_diagnostics={"vector_error": None},
+        )
+        assert packed["retrieval_diagnostics"] == {"vector_error": None}
+
+        message = ToolMessage(
+            content="search completed",
+            tool_name="vector_search",
+            for_whom="assistant",
+            result_dict=packed,
+        )
+
+        assert message.result_dict == packed

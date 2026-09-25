@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import json
+
+from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
+
+from apps.knowledge_graph.models import GraphArtifact
+from apps.knowledge_graph.projection.outbox import dispatch_due_projection_work
+from apps.knowledge_graph.projection.reconciler import reconcile_graph_projections
+from apps.knowledge_graph.projection.runtime import (
+    ProjectionDatabaseAliases,
+    load_projection_runtime_settings,
+)
+from apps.knowledge_graph.projection.state_repository import (
+    FunctionProjectionStateRepository,
+)
+
+
+class Command(BaseCommand):
+    help = "Enqueue current collection graph projections without exposing graph data."
+
+    def add_arguments(self, parser):
+        settings = load_projection_runtime_settings()
+        parser.add_argument("--collection", type=int)
+        parser.add_argument("--all", action="store_true")
+        parser.add_argument("--dry-run", action="store_true")
+        parser.add_argument(
+            "--page-size", type=int, default=settings.projection_batch_size
+        )
+
+    def handle(self, *args, **options):
+        collection_id, all_collections = options["collection"], options["all"]
+        if (collection_id is None) == (all_collections is False):
+            raise CommandError("choose exactly one of --collection or --all")
+        if collection_id is not None and collection_id < 1:
+            raise CommandError("--collection must be positive")
+        if all_collections:
+            summary = reconcile_graph_projections(
+                page_size=options["page_size"], dry_run=options["dry_run"]
+            )
+            payload = {
+                "examined_count": summary.examined_count,
+                "enqueued_count": summary.enqueued_count,
+            }
+        else:
+            settings = load_projection_runtime_settings()
+            aliases = ProjectionDatabaseAliases()
+            artifact_id = (
+                GraphArtifact.objects.using(aliases.source)
+                .filter(
+                    collection_scope_id=collection_id,
+                    scope_type="collection",
+                    status="active",
+                    evaluation_only=False,
+                )
+                .values_list("pk", flat=True)
+                .first()
+            )
+            if artifact_id is None:
+                raise CommandError("collection has no active graph artifact")
+            if not options["dry_run"]:
+                FunctionProjectionStateRepository().replay(
+                    projection_id=None,
+                    collection_id=collection_id,
+                    artifact_id=artifact_id,
+                    versions=(
+                        settings.projection_schema_version,
+                        settings.projection_format_version,
+                        settings.projection_identifier_key_version,
+                    ),
+                    now=timezone.now(),
+                )
+            payload = {
+                "examined_count": 1,
+                "enqueued_count": 0 if options["dry_run"] else 1,
+            }
+        if not options["dry_run"]:
+            try:
+                payload["published_count"] = dispatch_due_projection_work(
+                    page_size=options["page_size"]
+                )
+            except Exception:
+                raise CommandError(
+                    "projection work is pending; check services and retry recovery"
+                ) from None
+        self.stdout.write(json.dumps(payload, sort_keys=True))

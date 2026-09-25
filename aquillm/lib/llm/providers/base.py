@@ -1,12 +1,12 @@
 """Base LLM interface class."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 from json import dumps
-from os import getenv
-from typing import Any, Awaitable, Callable, Literal, Optional
+from typing import Any, Literal
 from uuid import uuid4
 
 import structlog
@@ -15,8 +15,6 @@ from pydantic import validate_call
 from ..types.conversation import Conversation
 from ..types.messages import AssistantMessage, LLM_Message, ToolMessage, UserMessage
 from ..types.response import LLMResponse
-from ..utils.tool_call_kwargs import normalize_tool_call_kwargs
-from . import image_context as imgctx
 from .complete_turn import complete_conversation_turn
 from .tool_budget import ToolBudgetConfig, ToolBudgetPolicy, ToolCallObservation
 
@@ -44,7 +42,9 @@ class LLMInterface(ABC):
         pass
 
     @abstractmethod
-    async def token_count(self, conversation: Conversation, new_message: Optional[str] = None) -> int:
+    async def token_count(
+        self, conversation: Conversation, new_message: str | None = None
+    ) -> int:
         pass
 
     async def _continue_cutoff_response(
@@ -55,16 +55,19 @@ class LLMInterface(ABC):
         messages_for_bot: list[LLM_Message],
         partial_text: str,
         max_tokens: int,
-        stream_message_uuid: Optional[str] = None,
-        stream_callback: Optional[Callable[[dict], Awaitable[Any]]] = None,
-    ) -> Optional[LLMResponse]:
+        stream_message_uuid: str | None = None,
+        stream_callback: Callable[[dict], Awaitable[Any]] | None = None,
+    ) -> LLMResponse | None:
         if not partial_text.strip():
             return None
         continuation_prompt = (
-            "Continue the previous assistant response exactly where it stopped. "
-            "Do not restart from the beginning, do not repeat prior points or section headings, "
+            "Continue the previous assistant response exactly where "
+            "it stopped. "
+            "Do not restart from the beginning, do not repeat prior "
+            "points or section headings, "
             "and keep the same structure/tone. "
-            "If the previous text ended mid-sentence, mid-heading, or mid-list item, "
+            "If the previous text ended mid-sentence, mid-heading, "
+            "or mid-list item, "
             "complete that fragment first before starting any new section."
         )
         continuation_messages = message_dicts + [
@@ -77,6 +80,7 @@ class LLMInterface(ABC):
         ]
         continuation_stream_callback = stream_callback
         if callable(stream_callback):
+
             async def _prepend_partial_to_stream(payload: dict) -> Any:
                 out = dict(payload)
                 content = str(out.get("content", ""))
@@ -98,6 +102,7 @@ class LLMInterface(ABC):
                         # that answer, so another full reasoning pass only adds
                         # latency and can restart the response.
                         "thinking_budget": 0,
+                        "_synthesis_phase": "continuation",
                         "stream_callback": continuation_stream_callback,
                         "stream_message_uuid": stream_message_uuid,
                     }
@@ -107,69 +112,34 @@ class LLMInterface(ABC):
             return None
 
     def call_tool(self, message: AssistantMessage) -> ToolMessage:
-        """Execute a tool call from an assistant message."""
-        tools = message.tools
-        if tools:
-            name = message.tool_call_name
-            input = message.tool_call_input
-            tools_dict = {tool.llm_definition["name"]: tool for tool in tools}
-            tool_name = name or "invalid_tool"
-            for_whom: Literal["assistant", "user"] = "assistant"
-            result_dict: dict = {"exception": "Tool call failed before execution"}
-            call_arguments: Any = input
-            if not name or name not in tools_dict.keys():
-                result_dict = {"exception": "Function name is not valid"}
-                result = imgctx.serialize_tool_result_for_llm(result_dict)
-            else:
-                tool = tools_dict[name]
-                tool_name = tool.name
-                for_whom = tool.for_whom
-                # Must use a dict for kwargs. `if input:` is wrong: `{}` is falsy but still means
-                # "model sent an argument object" and should be validated (not bare tool() with no params).
-                if not isinstance(input, dict):
-                    result_dict = {
-                        "exception": (
-                            "The model returned a tool call without a JSON argument object. "
-                            "Required parameters were not supplied; try again or simplify the request."
-                        ),
-                    }
-                    result = imgctx.serialize_tool_result_for_llm(result_dict)
-                else:
-                    call_arguments = normalize_tool_call_kwargs(name, input)
-                    future = self.tool_executor.submit(partial(tool, **call_arguments))
-                    try:
-                        tool_timeout_s = float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))
-                        result_dict = future.result(timeout=tool_timeout_s)
-                        result = imgctx.serialize_tool_result_for_llm(result_dict)
-                    except TimeoutError:
-                        result_dict = {"exception": "Tool call timed out"}
-                        result = imgctx.serialize_tool_result_for_llm(result_dict)
-                    except Exception as e:
-                        if DEBUG:
-                            raise
-                        result_dict = {"exception": str(e)}
-                        result = imgctx.serialize_tool_result_for_llm(result_dict)
-            return ToolMessage(
-                tool_name=tool_name,
-                content=result,
-                arguments=call_arguments,
-                result_dict=result_dict,
-                for_whom=for_whom,
-                tools=message.tools,
-                files=result_dict.get("files") if isinstance(result_dict, dict) else None,
-                tool_choice=message.tool_choice,
-            )
-        raise ValueError("call_tool called on a message with no tools!")
+        from .tool_execution import call_tool
+
+        return call_tool(self, message)
 
     @validate_call
     async def complete(
         self,
         conversation: Conversation,
         max_tokens: int,
-        stream_func: Optional[Callable[[dict], Awaitable[Any]]] = None,
+        stream_func: Callable[[dict], Awaitable[Any]] | None = None,
     ) -> tuple[Conversation, Literal["changed", "unchanged"]]:
         """Complete a conversation by getting the next message from the LLM."""
-        return await complete_conversation_turn(self, conversation, max_tokens, stream_func=stream_func)
+        from lib.llm.turn_context import (
+            check_turn_active,
+            evidence_handoff,
+            fenced_callback,
+        )
+
+        check_turn_active()
+        stream_func = fenced_callback(stream_func)
+        handoff = await evidence_handoff(self, conversation, max_tokens, stream_func)
+        if handoff is not None:
+            return handoff
+        result = await complete_conversation_turn(
+            self, conversation, max_tokens, stream_func=stream_func
+        )
+        check_turn_active()
+        return result
 
     async def spin(
         self,
@@ -177,15 +147,31 @@ class LLMInterface(ABC):
         max_func_calls: int,
         send_func: Callable[[Conversation], Any],
         max_tokens: int,
-        stream_func: Optional[Callable[[dict], Awaitable[Any]]] = None,
+        stream_func: Callable[[dict], Awaitable[Any]] | None = None,
     ) -> None:
         """Spin the conversation, executing tool calls until complete."""
         calls = 0
-        stop_reason: Optional[str] = None
-        cached_tool_result: Optional[ToolMessage] = None
-        budget_policy = ToolBudgetPolicy(ToolBudgetConfig.from_env(max_func_calls=max_func_calls))
+        stop_reason: str | None = None
+        cached_tool_result: ToolMessage | None = None
+        budget_policy = ToolBudgetPolicy(
+            ToolBudgetConfig.from_env(max_func_calls=max_func_calls)
+        )
+        from lib.llm.turn_context import (
+            current_turn,
+            fenced_callback,
+        )
+
+        state = current_turn()
+        if state:
+            state.policy = budget_policy
+            state.max_func_calls = min(
+                state.max_func_calls or max_func_calls, max_func_calls
+            )
+        send_func = fenced_callback(send_func)
         while calls < max_func_calls:
-            convo, changed = await self.complete(convo, max_tokens, stream_func=stream_func)
+            convo, changed = await self.complete(
+                convo, max_tokens, stream_func=stream_func
+            )
             await send_func(convo)
             if changed == "unchanged":
                 logger.info(
@@ -197,7 +183,12 @@ class LLMInterface(ABC):
                 return
             last_message = convo[-1]
             if isinstance(last_message, AssistantMessage) and last_message.tool_call_id:
-                sig = f"{last_message.tool_call_name}|{dumps(last_message.tool_call_input or {}, sort_keys=True, ensure_ascii=True)}"
+                arguments = dumps(
+                    last_message.tool_call_input or {},
+                    sort_keys=True,
+                    ensure_ascii=True,
+                )
+                sig = f"{last_message.tool_call_name}|{arguments}"
                 tool_name = str(last_message.tool_call_name or "").strip().lower()
                 latest_tool_result = _latest_tool_result_for_name(convo, tool_name)
                 decision = budget_policy.observe_tool_call(
@@ -249,7 +240,7 @@ class LLMInterface(ABC):
             await send_func(convo)
 
 
-def _latest_tool_result_for_name(convo: Conversation, tool_name: str) -> Optional[dict]:
+def _latest_tool_result_for_name(convo: Conversation, tool_name: str) -> dict | None:
     if not tool_name:
         return None
     for message in reversed(list(convo)):
@@ -258,14 +249,16 @@ def _latest_tool_result_for_name(convo: Conversation, tool_name: str) -> Optiona
             and message.for_whom == "assistant"
             and str(message.tool_name or "").strip().lower() == tool_name
         ):
-            return message.result_dict if isinstance(message.result_dict, dict) else None
+            return (
+                message.result_dict if isinstance(message.result_dict, dict) else None
+            )
     return None
 
 
 def _matching_tool_result(
     convo: Conversation,
     pending: AssistantMessage,
-) -> Optional[ToolMessage]:
+) -> ToolMessage | None:
     tool_name = str(pending.tool_call_name or "").strip().lower()
     if not tool_name:
         return None

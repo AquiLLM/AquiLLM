@@ -177,6 +177,7 @@ def test_collection_skill_loading_does_not_materialize_every_collection_document
     assert "This is evidence" not in system
 
 
+# Channels closes old connections; exercise that outside pytest's atomic wrapper.
 @pytest.mark.django_db(transaction=True)
 @override_settings(
     SKILLS_ENABLED=True,

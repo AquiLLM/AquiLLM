@@ -1,0 +1,274 @@
+"""Deterministic tiered resolution of query spans to direct graph seeds."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from math import fsum
+
+from apps.knowledge_graph.resolution.normalization import normalize_entity_label
+from apps.knowledge_graph.retrieval.direct_seed_contracts import (
+    DirectEntityMatchV1,
+    DirectFailureReason,
+    DirectResolutionTier,
+    DirectSeedAmbiguityV1,
+    DirectSeedDiagnosticsV1,
+    DirectSeedOutcomeV1,
+    ResolvedDirectSeedV1,
+)
+from apps.knowledge_graph.retrieval.query_embedding import embed_unresolved_query_span
+from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
+
+_CANDIDATE_HARD_CAP = 128
+
+
+def _deduplicate(
+    spans: tuple[QueryEntitySpanV1, ...], repository
+) -> tuple[QueryEntitySpanV1, ...]:
+    rows: dict[tuple[str, str], QueryEntitySpanV1] = {}
+    for span in spans:
+        key = span.ontology_type, normalize_entity_label(repository.span_text(span)).key
+        current = rows.get(key)
+        if current is None or (-span.confidence, span.start, span.end) < (
+            -current.confidence,
+            current.start,
+            current.end,
+        ):
+            rows[key] = span
+    return tuple(
+        sorted(rows.values(), key=lambda row: (row.start, row.end, row.ontology_type))
+    )
+
+
+def _best_exact(
+    rows: tuple[DirectEntityMatchV1, ...], span_index: int
+) -> tuple[DirectEntityMatchV1 | None, DirectSeedAmbiguityV1 | None]:
+    components = {row.component_key for row in rows}
+    if len(components) > 1:
+        return None, DirectSeedAmbiguityV1(
+            span_index, rows[0].tier, len(components), len(rows)
+        )
+    best = min(rows, key=lambda row: (-row.match_weight, row.entity_key))
+    return replace(best, span_index=span_index), None
+
+
+def _best_embedding(
+    rows: tuple[DirectEntityMatchV1, ...],
+    *,
+    span_index: int,
+    minimum: float,
+    margin: float,
+) -> tuple[DirectEntityMatchV1 | None, DirectSeedAmbiguityV1 | None]:
+    eligible = tuple(row for row in rows if row.similarity >= minimum)
+    if not eligible:
+        return None, None
+    best_by_component: dict[str, DirectEntityMatchV1] = {}
+    for row in eligible:
+        current = best_by_component.get(row.component_key)
+        if current is None or (-row.similarity, row.entity_key) < (
+            -current.similarity,
+            current.entity_key,
+        ):
+            best_by_component[row.component_key] = row
+    ordered = sorted(
+        best_by_component.values(), key=lambda row: (-row.similarity, row.entity_key)
+    )
+    if len(ordered) > 1 and ordered[0].similarity - ordered[1].similarity < margin:
+        return None, DirectSeedAmbiguityV1(
+            span_index, DirectResolutionTier.EMBEDDING, len(ordered), len(eligible)
+        )
+    return replace(ordered[0], span_index=span_index), None
+
+
+def _diagnostics(
+    *,
+    total: int,
+    deduplicated: int,
+    matches: int,
+    ambiguities: int,
+    embedding_attempts: int,
+    embedding_matches: int,
+) -> DirectSeedDiagnosticsV1:
+    return DirectSeedDiagnosticsV1(
+        input_span_count=total,
+        deduplicated_span_count=deduplicated,
+        resolved_span_count=matches,
+        ambiguous_span_count=ambiguities,
+        unresolved_span_count=deduplicated - matches - ambiguities,
+        embedding_attempt_count=embedding_attempts,
+        embedding_match_count=embedding_matches,
+    )
+
+
+def _failure(
+    reason: DirectFailureReason,
+    *,
+    total: int,
+    deduplicated: int,
+    embedding_attempts: int = 0,
+) -> DirectSeedOutcomeV1:
+    diagnostics = _diagnostics(
+        total=total,
+        deduplicated=deduplicated,
+        matches=0,
+        ambiguities=0,
+        embedding_attempts=embedding_attempts,
+        embedding_matches=0,
+    )
+    return DirectSeedOutcomeV1((), (), (), diagnostics, reason)
+
+
+def _globally_bounded_matches(
+    matches: list[DirectEntityMatchV1], maximum: int
+) -> list[DirectEntityMatchV1]:
+    weights: dict[str, list[float]] = {}
+    members: dict[str, set[str]] = {}
+    for row in matches:
+        weights.setdefault(row.component_key, []).append(row.match_weight)
+        members.setdefault(row.component_key, set()).add(row.entity_key)
+    ordered = sorted(
+        weights,
+        key=lambda component: (
+            -fsum(weights[component]),
+            min(members[component]),
+        ),
+    )
+    selected = frozenset(ordered[:maximum])
+    return [row for row in matches if row.component_key in selected]
+
+
+def resolve_direct_seed_components(
+    *,
+    spans: tuple[QueryEntitySpanV1, ...],
+    repository,
+    ready,
+    settings,
+    deadline: float,
+) -> DirectSeedOutcomeV1:
+    if type(spans) is not tuple or any(
+        type(row) is not QueryEntitySpanV1 for row in spans
+    ):
+        raise TypeError("spans must contain exact QueryEntitySpanV1 values")
+    if len(spans) > 128:
+        raise ValueError("spans exceed the hard cap")
+    deduplicated = _deduplicate(spans, repository)
+    matches: list[DirectEntityMatchV1] = []
+    ambiguities: list[DirectSeedAmbiguityV1] = []
+    embedding_attempts = 0
+    embedding_matches = 0
+    embedding_failed = False
+    embedding_available = True
+    exact_tiers = (
+        (DirectResolutionTier.IDENTIFIER, repository.exact_identifier_matches),
+        (DirectResolutionTier.NAME, repository.canonical_name_matches),
+        (DirectResolutionTier.ALIAS, repository.indexed_alias_matches),
+    )
+    for span_index, span in enumerate(deduplicated):
+        if span.confidence == 0.0:
+            continue
+        selected: DirectEntityMatchV1 | None = None
+        ambiguity: DirectSeedAmbiguityV1 | None = None
+        for _tier, lookup in exact_tiers:
+            rows = lookup(span=span, ready=ready, limit=_CANDIDATE_HARD_CAP)
+            if rows:
+                selected, ambiguity = _best_exact(rows, span_index)
+                break
+        if (
+            selected is None
+            and ambiguity is None
+            and settings.direct_embedding_enabled
+            and embedding_available
+        ):
+            embedding_attempts += 1
+            try:
+                signature = ready.selected_generations[0].embedding_model_signature
+                if any(
+                    row.embedding_model_signature != signature
+                    for row in ready.selected_generations
+                ):
+                    raise RuntimeError("mixed embedding signatures")
+                embedding = embed_unresolved_query_span(
+                    text=repository.span_text(span),
+                    expected_signature=signature,
+                    deadline=deadline,
+                )
+                rows = repository.embedding_matches(
+                    embedding=embedding,
+                    span=span,
+                    ontology_type=span.ontology_type,
+                    model_signature=signature,
+                    ready=ready,
+                    limit=_CANDIDATE_HARD_CAP,
+                    minimum_similarity=settings.direct_min_similarity,
+                )
+            except (RuntimeError, TimeoutError, TypeError, ValueError):
+                embedding_available = False
+                embedding_failed = True
+            else:
+                selected, ambiguity = _best_embedding(
+                    rows,
+                    span_index=span_index,
+                    minimum=settings.direct_min_similarity,
+                    margin=settings.direct_winner_margin,
+                )
+                if selected is not None or ambiguity is not None:
+                    embedding_matches += 1
+        if selected is not None:
+            matches.append(selected)
+        elif ambiguity is not None:
+            ambiguities.append(ambiguity)
+    matches.sort(
+        key=lambda row: (
+            row.span_index,
+            row.tier.priority,
+            row.component_key,
+            row.entity_key,
+        )
+    )
+    matches = _globally_bounded_matches(matches, settings.graph_direct_max_seeds)
+    ambiguities.sort(key=lambda row: row.span_index)
+    embedding_matches = sum(
+        row.tier is DirectResolutionTier.EMBEDDING for row in (*matches, *ambiguities)
+    )
+    diagnostics = _diagnostics(
+        total=len(spans),
+        deduplicated=len(deduplicated),
+        matches=len(matches),
+        ambiguities=len(ambiguities),
+        embedding_attempts=embedding_attempts,
+        embedding_matches=embedding_matches,
+    )
+    if not matches:
+        if embedding_failed:
+            return _failure(
+                DirectFailureReason.DIRECT_EMBEDDING_UNAVAILABLE,
+                total=len(spans),
+                deduplicated=len(deduplicated),
+                embedding_attempts=embedding_attempts,
+            )
+        return DirectSeedOutcomeV1(
+            (),
+            (),
+            tuple(ambiguities),
+            diagnostics,
+            DirectFailureReason.DIRECT_NO_SEEDS,
+        )
+    total_weight = fsum(row.match_weight for row in matches)
+    members: dict[str, set[str]] = {}
+    for row in matches:
+        members.setdefault(row.component_key, set()).add(row.entity_key)
+    seeds = [
+        ResolvedDirectSeedV1(
+            component,
+            tuple(sorted(entity_keys)),
+            fsum(row.match_weight for row in matches if row.component_key == component)
+            / total_weight,
+        )
+        for component, entity_keys in members.items()
+    ]
+    seeds.sort(key=lambda row: (-row.mass, row.member_entity_keys[0]))
+    return DirectSeedOutcomeV1(
+        tuple(matches), tuple(seeds), tuple(ambiguities), diagnostics, None
+    )
+
+
+__all__ = ["resolve_direct_seed_components"]

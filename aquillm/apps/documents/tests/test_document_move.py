@@ -1,10 +1,9 @@
 """Permission and lifecycle-preserving document move behavior."""
-
 from __future__ import annotations
 
 import json
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +13,36 @@ from django.test import RequestFactory
 
 from apps.documents.models import Document
 from apps.documents.views.api import move_document
-from contextlib import nullcontext
+from apps.knowledge_graph.graph import invalidation
+
+
+def test_partial_save_rejects_a_deleted_persisted_document(monkeypatch):
+    from apps.documents.models import RawTextDocument
+    from django.db import models
+
+    document = RawTextDocument(
+        pkid=7,
+        id=uuid.uuid4(),
+        title="deleted document",
+        full_text="source",
+        collection_id=3,
+        ingested_by_id=1,
+    )
+    document._state.adding = False
+    query = MagicMock()
+    query.select_for_update.return_value.filter.return_value.values.return_value.first.return_value = None
+    monkeypatch.setattr(RawTextDocument._base_manager, "using", lambda _alias: query)
+    monkeypatch.setattr(
+        "apps.documents.models.document.transaction.atomic",
+        lambda **_kwargs: nullcontext(),
+    )
+    write = MagicMock()
+    monkeypatch.setattr(models.Model, "save", write)
+
+    with pytest.raises(ValidationError, match="persisted document row no longer exists"):
+        document.save(dont_rechunk=True, update_fields=["title"], using="default")
+
+    write.assert_not_called()
 
 
 def _document(
@@ -25,7 +53,7 @@ def _document(
     has_figures=False,
 ):
     class FakeDocument:
-        _base_manager = MagicMock()
+        _default_manager = MagicMock()
         _meta = SimpleNamespace(label_lower="apps_documents.rawtextdocument")
 
     source = MagicMock()
@@ -46,13 +74,32 @@ def _document(
     document._lifecycle_lock_calls = []
     FakeDocument._locked_row = document
 
+    @contextmanager
+    def _locked_document_lifecycle_row(
+        document_ref,
+        collection_ids,
+        *,
+        using,
+        active_or_building_only,
+    ):
+        document._lifecycle_lock_calls.append(
+            (
+                document_ref,
+                tuple(collection_ids),
+                using,
+                active_or_building_only,
+            )
+        )
+        yield FakeDocument._locked_row, tuple(sorted(set(collection_ids)))
+
     monkeypatch.setattr(
-        "apps.documents.models.document.transaction.atomic",
-        lambda **kwargs: nullcontext(),
+        invalidation,
+        "locked_document_lifecycle_row",
+        _locked_document_lifecycle_row,
     )
-    FakeDocument._base_manager.using.return_value.select_for_update.return_value.get.return_value = (
-        document
-    )
+    (
+        FakeDocument._default_manager.using.return_value.select_for_update.return_value.get.return_value
+    ) = document
     return document, source, destination
 
 
@@ -135,20 +182,40 @@ def test_move_to_authorizes_against_the_locked_current_source(monkeypatch):
         save=MagicMock(),
     )
     locked_document.child_figures.exists.return_value = False
-    type(
-        document
-    )._base_manager.using.return_value.select_for_update.return_value.get.return_value = (
-        locked_document
-    )
+    type(document)._locked_row = locked_document
     actor = object()
 
     with pytest.raises(PermissionDenied, match="source"):
         Document.move_to(document, destination, actor=actor)
 
+    assert len(document._lifecycle_lock_calls) == 1
     current_source.user_can_edit.assert_called_once_with(actor)
     stale_source.user_can_edit.assert_not_called()
     destination.user_can_edit.assert_not_called()
     locked_document.save.assert_not_called()
+
+
+def test_move_to_routes_locking_through_the_collection_first_lifecycle_spine(
+    monkeypatch,
+):
+    document, _source, destination = _document(
+        monkeypatch,
+        source_can_edit=True,
+        destination_can_edit=True,
+    )
+
+    Document.move_to(document, destination, actor=object())
+
+    assert len(document._lifecycle_lock_calls) == 1
+    document_ref, collection_ids, using, active_only = (
+        document._lifecycle_lock_calls[0]
+    )
+    assert document_ref.concrete_model_label == "apps_documents.rawtextdocument"
+    assert document_ref.document_pkid == document.pkid
+    assert document_ref.document_id == document.id
+    assert collection_ids == (3, 9)
+    assert using == "default"
+    assert active_only is True
 
 
 def test_move_api_passes_request_actor_and_maps_permission_denial_to_403():
@@ -165,9 +232,7 @@ def test_move_api_passes_request_actor_and_maps_permission_denial_to_403():
 
     with (
         patch("apps.documents.views.api.Document.get_by_id", return_value=document),
-        patch(
-            "apps.documents.views.api.Collection.objects.get", return_value=destination
-        ),
+        patch("apps.documents.views.api.Collection.objects.get", return_value=destination),
     ):
         response = move_document(request, document.id)
 

@@ -1,0 +1,587 @@
+{
+  "version": 1,
+  "fixture_kind": "synthetic_regression",
+  "cases": [
+    {
+      "id": "two-node-strong",
+      "split": "regression",
+      "question": "Who is A?",
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edges": [
+        [
+          "A",
+          "B",
+          1.0
+        ]
+      ],
+      "seeds": [
+        [
+          "A",
+          1.0
+        ]
+      ],
+      "support_status": "supported",
+      "branch": "direct",
+      "cap_pressure": false,
+      "support_summary": {
+        "minimum_extraction_score": 0.9
+      },
+      "required_chunks": [
+        1
+      ],
+      "required_groups": [
+        [
+          1
+        ]
+      ],
+      "irrelevant_chunks": [],
+      "expected_one_step": {
+        "fixed_020": [
+          0.2,
+          0.8
+        ],
+        "fixed_035": [
+          0.35,
+          0.65
+        ]
+      }
+    },
+    {
+      "id": "two-node-weak",
+      "split": "regression",
+      "question": "Who is A?",
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edges": [
+        [
+          "A",
+          "B",
+          1.0
+        ]
+      ],
+      "seeds": [
+        [
+          "A",
+          1.0
+        ]
+      ],
+      "support_status": "insufficient",
+      "branch": "direct",
+      "cap_pressure": false,
+      "support_summary": {
+        "minimum_extraction_score": 0.3
+      },
+      "required_chunks": [
+        1
+      ],
+      "required_groups": [
+        [
+          1
+        ]
+      ],
+      "irrelevant_chunks": []
+    },
+    {
+      "id": "relational-chain",
+      "split": "regression",
+      "question": "What is the connection between A and C?",
+      "nodes": [
+        "A",
+        "B",
+        "C"
+      ],
+      "edges": [
+        [
+          "A",
+          "B",
+          1.0
+        ],
+        [
+          "B",
+          "C",
+          1.0
+        ]
+      ],
+      "seeds": [
+        [
+          "A",
+          0.7
+        ],
+        [
+          "C",
+          0.3
+        ]
+      ],
+      "support_status": "supported",
+      "branch": "direct",
+      "cap_pressure": false,
+      "support_summary": {
+        "minimum_extraction_score": 0.9
+      },
+      "required_chunks": [
+        1,
+        2
+      ],
+      "required_groups": [
+        [
+          1,
+          2
+        ]
+      ],
+      "irrelevant_chunks": []
+    },
+    {
+      "id": "factual-hub",
+      "split": "regression",
+      "question": "Who is A?",
+      "nodes": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ],
+      "edges": [
+        [
+          "A",
+          "B",
+          1.0
+        ],
+        [
+          "A",
+          "C",
+          0.7
+        ],
+        [
+          "A",
+          "D",
+          0.6
+        ],
+        [
+          "A",
+          "E",
+          0.5
+        ]
+      ],
+      "seeds": [
+        [
+          "A",
+          1.0
+        ]
+      ],
+      "support_status": "supported",
+      "branch": "direct",
+      "cap_pressure": false,
+      "support_summary": {
+        "minimum_extraction_score": 0.9
+      },
+      "required_chunks": [
+        1
+      ],
+      "required_groups": [
+        [
+          1
+        ]
+      ],
+      "irrelevant_chunks": [
+        3,
+        4
+      ]
+    },
+    {
+      "id": "dead-end",
+      "split": "regression",
+      "question": "Who is A?",
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edges": [],
+      "seeds": [
+        [
+          "A",
+          1.0
+        ]
+      ],
+      "support_status": "supported",
+      "branch": "direct",
+      "cap_pressure": false,
+      "support_summary": {
+        "minimum_extraction_score": 0.9
+      },
+      "required_chunks": [],
+      "required_groups": [],
+      "irrelevant_chunks": []
+    },
+    {
+      "id": "cap-pressure",
+      "split": "regression",
+      "question": "Who is A?",
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edges": [
+        [
+          "A",
+          "B",
+          1.0
+        ]
+      ],
+      "seeds": [
+        [
+          "A",
+          1.0
+        ]
+      ],
+      "support_status": "supported",
+      "branch": "direct",
+      "cap_pressure": true,
+      "support_summary": {
+        "minimum_extraction_score": 0.9
+      },
+      "required_chunks": [
+        1
+      ],
+      "required_groups": [
+        [
+          1
+        ]
+      ],
+      "irrelevant_chunks": [],
+      "max_nodes": 2
+    },
+    {
+      "id": "unknown-extended",
+      "split": "regression",
+      "question": "Who is A?",
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edges": [
+        [
+          "A",
+          "B",
+          1.0
+        ]
+      ],
+      "seeds": [
+        [
+          "A",
+          1.0
+        ]
+      ],
+      "support_status": "unknown",
+      "branch": "extended",
+      "cap_pressure": false,
+      "support_summary": {
+        "requested_chunks": 3,
+        "mapped_top_chunks": 1
+      },
+      "required_chunks": [
+        1
+      ],
+      "required_groups": [
+        [
+          1
+        ]
+      ],
+      "irrelevant_chunks": []
+    },
+    {
+      "id": "comparison-balanced",
+      "split": "regression",
+      "question": "Compare findings across papers",
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edges": [
+        [
+          "A",
+          "B",
+          1.0
+        ]
+      ],
+      "seeds": [
+        [
+          "A",
+          1.0
+        ]
+      ],
+      "support_status": "supported",
+      "branch": "direct",
+      "cap_pressure": false,
+      "support_summary": {
+        "minimum_extraction_score": 0.9
+      },
+      "required_chunks": [
+        1
+      ],
+      "required_groups": [
+        [
+          1
+        ]
+      ],
+      "irrelevant_chunks": []
+    },
+    {
+      "id": "complementary-evidence",
+      "split": "regression",
+      "question": "Who observed the response?",
+      "nodes": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "edges": [
+        [
+          "A",
+          "B",
+          1.0
+        ],
+        [
+          "A",
+          "C",
+          1.0
+        ],
+        [
+          "A",
+          "D",
+          1.0
+        ]
+      ],
+      "seeds": [
+        [
+          "A",
+          1.0
+        ]
+      ],
+      "support_status": "supported",
+      "branch": "direct",
+      "cap_pressure": false,
+      "support_summary": {
+        "minimum_extraction_score": 0.9
+      },
+      "required_chunks": [
+        1,
+        2
+      ],
+      "required_groups": [
+        [
+          1,
+          2
+        ]
+      ],
+      "irrelevant_chunks": [],
+      "evidence_replay": {
+        "limits": {
+          "max_passages": 2,
+          "max_per_document": 3,
+          "token_budget": 1000
+        },
+        "candidates": [
+          {
+            "chunk_id": 1,
+            "doc_id": "a",
+            "text": "The trial reported improved response.",
+            "relevance": 0.95,
+            "fused_rank": 1
+          },
+          {
+            "chunk_id": 2,
+            "doc_id": "a",
+            "text": "An independent validation confirmed survival gains.",
+            "relevance": 0.92,
+            "fused_rank": 2
+          },
+          {
+            "chunk_id": 3,
+            "doc_id": "b",
+            "text": "Unrelated introductory context.",
+            "relevance": 0.2,
+            "fused_rank": 3
+          }
+        ],
+        "baseline_ids": [
+          1,
+          2,
+          3
+        ],
+        "required_chunks": [
+          1,
+          2
+        ],
+        "required_pairs": [
+          [
+            1,
+            2
+          ]
+        ],
+        "grades": {
+          "1": 3,
+          "2": 3,
+          "3": 0
+        },
+        "aspects": {
+          "response": [
+            1
+          ],
+          "validation": [
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "graph-sensitive",
+      "split": "regression",
+      "question": "Who is A?",
+      "nodes": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ],
+      "edges": [
+        [
+          "A",
+          "B",
+          0.5
+        ],
+        [
+          "C",
+          "A",
+          0.5
+        ],
+        [
+          "C",
+          "E",
+          1.5
+        ],
+        [
+          "E",
+          "C",
+          0.5
+        ],
+        [
+          "D",
+          "B",
+          1.5
+        ],
+        [
+          "C",
+          "D",
+          1.0
+        ],
+        [
+          "B",
+          "D",
+          1.5
+        ]
+      ],
+      "seeds": [
+        [
+          "A",
+          1.0
+        ]
+      ],
+      "support_status": "supported",
+      "support_summary": {
+        "minimum_extraction_score": 0.9
+      },
+      "required_chunks": [
+        1,
+        7
+      ],
+      "required_groups": [
+        [
+          1,
+          7
+        ]
+      ],
+      "irrelevant_chunks": [
+        5
+      ],
+      "evidence_replay": {
+        "family": "factual",
+        "limits": {
+          "max_passages": 2,
+          "max_per_document": 3,
+          "token_budget": 1000
+        },
+        "baseline_ids": [
+          7
+        ],
+        "candidates": [
+          {
+            "chunk_id": 1,
+            "doc_id": "document",
+            "text": "A is associated with the primary measured response.",
+            "relevance": 0.95,
+            "fused_rank": 1
+          },
+          {
+            "chunk_id": 7,
+            "doc_id": "document",
+            "text": "An independent cohort confirmed survival gains.",
+            "relevance": 0.92,
+            "fused_rank": 2
+          },
+          {
+            "chunk_id": 5,
+            "doc_id": "document",
+            "text": "An independent cohort confirmed survival gains.",
+            "relevance": 0.91,
+            "fused_rank": 3
+          },
+          {
+            "chunk_id": 6,
+            "doc_id": "document",
+            "text": "A different assay measured downstream response duration.",
+            "relevance": 0.9,
+            "fused_rank": 4
+          }
+        ],
+        "grades": {
+          "1": 3,
+          "7": 3,
+          "5": 0,
+          "6": 1
+        },
+        "required_chunks": [
+          1,
+          7
+        ],
+        "required_pairs": [
+          [
+            1,
+            7
+          ]
+        ],
+        "aspects": {
+          "primary": [
+            1
+          ],
+          "validation": [
+            7
+          ]
+        },
+        "redundancy_groups": [
+          [
+            5,
+            7
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -639,6 +639,7 @@ def test_checked_in_profiles_keep_protected_runner_and_dtype_out_of_extra_args()
         for line in env_lines
         if line.startswith(
             (
+                "VLLM_EXTRA_ARGS=",
                 "OCR_VLLM_EXTRA_ARGS=",
                 "MEM0_EMBED_VLLM_EXTRA_ARGS=",
                 "APP_RERANK_VLLM_EXTRA_ARGS=",
@@ -651,11 +652,8 @@ def test_checked_in_profiles_keep_protected_runner_and_dtype_out_of_extra_args()
     assert all(
         "--dtype" not in line and "--runner" not in line for line in active_extra_lines
     )
-    # Preserve the production Genesis main-model argument payload as tested.
-    assert any(
-        line.startswith("VLLM_EXTRA_ARGS=") and "--dtype float16" in line
-        for line in env_lines
-    )
+    # Main-model float16 uses the protected explicit field.
+    assert "VLLM_DTYPE=float16" in env_lines
     assert "OCR_VLLM_DTYPE=float16" in env_lines
 
     profile = (repo_root / "scripts" / "verify_nemotron_asr.ps1").read_text(

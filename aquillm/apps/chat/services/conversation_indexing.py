@@ -8,13 +8,13 @@ WSConversation guards against re-indexing unchanged conversations.
 from __future__ import annotations
 
 import hashlib
-
 import structlog
+
 from django.apps import apps as django_apps
 from django.db import transaction
 
-from apps.chat.models import ConversationChunk, Message, WSConversation
 from aquillm.utils import get_embedding, get_embeddings
+from apps.chat.models import ConversationChunk, Message, WSConversation
 from lib.conversations.chunking import TranscriptMessage, build_turn_windows
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -109,14 +109,10 @@ def index_conversation(conversation_id: int, *, force: bool = False) -> int:
     try:
         batch = get_embeddings(texts, input_type="search_document")
         if len(batch) != len(windows):
-            raise RuntimeError(
-                f"Embedding batch mismatch: expected {len(windows)}, got {len(batch)}"
-            )
+            raise RuntimeError(f"Embedding batch mismatch: expected {len(windows)}, got {len(batch)}")
         embeddings = list(batch)
     except Exception as exc:
-        logger.warning(
-            "Batch embedding failed for conversation %s: %s", conversation_id, exc
-        )
+        logger.warning("Batch embedding failed for conversation %s: %s", conversation_id, exc)
         for i, text in enumerate(texts):
             try:
                 embeddings[i] = get_embedding(text, input_type="search_document")

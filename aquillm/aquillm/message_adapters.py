@@ -1,22 +1,26 @@
 """
-Adapter layer between Pydantic messages (used at runtime) and Django Message rows (used for database storage).
+Adapter layer between runtime Pydantic messages and stored Django Message rows.
 
-Pydantic models handle validation, LLM API calls, and WebSocket serialization during a live session.
-Django models handle persistent storage so messages can be queried with SQL/ORM (e.g. filtering by rating).
+Pydantic models handle validation, LLM API calls and WebSocket serialization.
+Django models handle persistent storage and SQL/ORM queries (e.g. by rating).
 
-This file keeps all the conversion logic in one place so consumers.py doesn't need to know
+This file keeps conversion logic in one place so consumers.py need not know
 about database column mapping — it just calls save/load/build.
 """
 
-from .models import Message, WSConversation
-from .llm import (
-    Conversation, UserMessage, AssistantMessage, ToolMessage,
-    LLM_Message,
-)
 from lib.llm.providers.visibility import (
     assistant_content_for_frontend,
     sanitize_assistant_text,
 )
+
+from .llm import (
+    AssistantMessage,
+    Conversation,
+    LLM_Message,
+    ToolMessage,
+    UserMessage,
+)
+from .models import Message, WSConversation
 
 
 def _frontend_message_content(msg: LLM_Message) -> str:
@@ -28,9 +32,7 @@ def _frontend_message_content(msg: LLM_Message) -> str:
 
 
 def pydantic_message_to_django(
-    msg: LLM_Message,
-    conversation: WSConversation,
-    seq_num: int
+    msg: LLM_Message, conversation: WSConversation, seq_num: int
 ) -> Message:
     """Convert a Pydantic message to a Django Message instance (unsaved).
 
@@ -39,38 +41,42 @@ def pydantic_message_to_django(
     """
     # Fields shared by all message types
     content = (
-        sanitize_assistant_text(msg.content)
+        sanitize_assistant_text(
+            msg.content,
+            allow_short_final=msg.stop_reason in ("stop", "end_turn")
+            and not msg.tool_call_name,
+        )
         if isinstance(msg, AssistantMessage)
         else msg.content
     )
     common = {
-        'conversation': conversation,        # FK linking this message to its conversation
-        'message_uuid': msg.message_uuid,    # unique ID used by the frontend to identify messages
-        'role': msg.role,                    # 'user', 'assistant', or 'tool'
-        'content': content,                  # the actual message text
-        'rating': msg.rating,                # user rating (1-5) or None
-        'feedback_text': msg.feedback_text,  # optional user feedback text
-        'sequence_number': seq_num,          # position in the conversation (0, 1, 2, ...)
+        "conversation": conversation,  # FK linking this message to its conversation
+        "message_uuid": msg.message_uuid,  # frontend message identity
+        "role": msg.role,  # 'user', 'assistant', or 'tool'
+        "content": content,  # the actual message text
+        "rating": msg.rating,  # user rating (1-5) or None
+        "feedback_text": msg.feedback_text,  # optional user feedback text
+        "sequence_number": seq_num,  # position in the conversation (0, 1, 2, ...)
     }
 
     # Add role-specific fields depending on message type
     if isinstance(msg, AssistantMessage):
         return Message(
             **common,
-            model=msg.model,                     # which LLM model generated this response
-            stop_reason=msg.stop_reason,         # why the LLM stopped ('end_turn' or 'tool_use')
-            tool_call_id=msg.tool_call_id,       # ID of the tool call (if the LLM called a tool)
-            tool_call_name=msg.tool_call_name,   # name of the tool called (e.g. 'vector_search')
-            tool_call_input=msg.tool_call_input, # arguments passed to the tool
-            usage=msg.usage,                     # token count for this response
+            model=msg.model,  # which LLM model generated this response
+            stop_reason=msg.stop_reason,  # e.g. 'end_turn' or 'tool_use'
+            tool_call_id=msg.tool_call_id,  # ID if the LLM called a tool
+            tool_call_name=msg.tool_call_name,  # e.g. 'vector_search'
+            tool_call_input=msg.tool_call_input,  # arguments passed to the tool
+            usage=msg.usage,  # token count for this response
         )
     elif isinstance(msg, ToolMessage):
         return Message(
             **common,
-            tool_name=msg.tool_name,       # which tool produced this result
-            arguments=msg.arguments,       # arguments the tool was called with
-            for_whom=msg.for_whom,         # who the result is for ('assistant' or 'user')
-            result_dict=msg.result_dict,   # the tool's output data
+            tool_name=msg.tool_name,  # which tool produced this result
+            arguments=msg.arguments,  # arguments the tool was called with
+            for_whom=msg.for_whom,  # who the result is for ('assistant' or 'user')
+            result_dict=msg.result_dict,  # the tool's output data
         )
     else:
         # UserMessage — only needs the common fields
@@ -81,33 +87,37 @@ def django_message_to_pydantic(msg: Message) -> LLM_Message:
     """Convert a Django Message row to a Pydantic message object.
 
     Used when loading a conversation from the database for runtime use.
-    The Pydantic object can then be passed to the LLM API, rendered for the frontend, etc.
+    The Pydantic object can be passed to the LLM API or rendered for the frontend.
     """
     # Fields shared by all message types
     common = {
-        'content': msg.content,
-        'rating': msg.rating,
-        'feedback_text': msg.feedback_text,
-        'message_uuid': msg.message_uuid,
+        "content": msg.content,
+        "rating": msg.rating,
+        "feedback_text": msg.feedback_text,
+        "message_uuid": msg.message_uuid,
     }
 
-    if msg.role == 'assistant':
+    if msg.role == "assistant":
         return AssistantMessage(
             **common,
             model=msg.model,
-            stop_reason=msg.stop_reason or 'end_turn',  # default to 'end_turn' if not stored
+            stop_reason=msg.stop_reason
+            or "end_turn",  # default to 'end_turn' if not stored
             tool_call_id=msg.tool_call_id,
             tool_call_name=msg.tool_call_name,
             tool_call_input=msg.tool_call_input,
             usage=msg.usage,
         )
-    elif msg.role == 'tool':
+    elif msg.role == "tool":
         return ToolMessage(
             **common,
-            tool_name=msg.tool_name or '',            # default to empty string (required by Pydantic)
+            tool_name=msg.tool_name
+            or "",  # default to empty string (required by Pydantic)
             arguments=msg.arguments,
-            for_whom=msg.for_whom or 'assistant',     # default to 'assistant' (required by Pydantic)
-            result_dict=msg.result_dict or {},         # default to empty dict (required by Pydantic)
+            for_whom=msg.for_whom
+            or "assistant",  # default to 'assistant' (required by Pydantic)
+            result_dict=msg.result_dict
+            or {},  # default to empty dict (required by Pydantic)
         )
     else:
         return UserMessage(**common)
@@ -122,7 +132,9 @@ def load_conversation_from_db(db_convo: WSConversation) -> Conversation:
     """
     messages = [
         django_message_to_pydantic(msg)
-        for msg in db_convo.db_messages.order_by('sequence_number')  # ordered by position in conversation
+        for msg in db_convo.db_messages.order_by(
+            "sequence_number"
+        )  # ordered by position in conversation
     ]
     return Conversation(system=db_convo.system_prompt, messages=messages)
 
@@ -139,9 +151,9 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation) -> No
     from django.db import transaction
 
     with transaction.atomic():
-        # Do not overwrite system_prompt with convo.system: convo.system may be augmented
+        # Keep system_prompt separate: convo.system may be augmented
         # with user memory (profile facts + episodic). Only messages are persisted here.
-        db_convo.save(update_fields=['updated_at'])
+        db_convo.save(update_fields=["updated_at"])
 
         existing_rows = list(db_convo.db_messages.all())
         existing_by_uuid = {row.message_uuid: row for row in existing_rows}
@@ -180,21 +192,21 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation) -> No
             Message.objects.bulk_update(
                 rows_to_update,
                 fields=[
-                    'role',
-                    'content',
-                    'rating',
-                    'feedback_text',
-                    'sequence_number',
-                    'model',
-                    'stop_reason',
-                    'tool_call_id',
-                    'tool_call_name',
-                    'tool_call_input',
-                    'usage',
-                    'tool_name',
-                    'arguments',
-                    'for_whom',
-                    'result_dict',
+                    "role",
+                    "content",
+                    "rating",
+                    "feedback_text",
+                    "sequence_number",
+                    "model",
+                    "stop_reason",
+                    "tool_call_id",
+                    "tool_call_name",
+                    "tool_call_input",
+                    "usage",
+                    "tool_name",
+                    "arguments",
+                    "for_whom",
+                    "result_dict",
                 ],
             )
 
@@ -212,55 +224,55 @@ def build_frontend_conversation_json(db_convo: WSConversation) -> dict:
     so no frontend changes were needed for this redesign.
     """
     messages = []
-    for msg in db_convo.db_messages.order_by('sequence_number'):
+    for msg in db_convo.db_messages.order_by("sequence_number"):
         pydantic_msg = django_message_to_pydantic(msg)
         # Fields included for every message type
         msg_dict = {
-            'role': msg.role,
-            'content': _frontend_message_content(pydantic_msg),
-            'message_uuid': str(msg.message_uuid),  # convert UUID to string for JSON
-            'rating': msg.rating,
+            "role": msg.role,
+            "content": _frontend_message_content(pydantic_msg),
+            "message_uuid": str(msg.message_uuid),  # convert UUID to string for JSON
+            "rating": msg.rating,
         }
 
         # Add role-specific fields only when they have data
-        if msg.role == 'assistant':
+        if msg.role == "assistant":
             if msg.tool_call_name:
-                msg_dict['tool_call_name'] = msg.tool_call_name
-                msg_dict['tool_call_input'] = msg.tool_call_input
+                msg_dict["tool_call_name"] = msg.tool_call_name
+                msg_dict["tool_call_input"] = msg.tool_call_input
             if msg.usage:
-                msg_dict['usage'] = msg.usage
+                msg_dict["usage"] = msg.usage
 
-        elif msg.role == 'tool':
-            msg_dict['tool_name'] = msg.tool_name
-            msg_dict['result_dict'] = msg.result_dict
-            msg_dict['for_whom'] = msg.for_whom
+        elif msg.role == "tool":
+            msg_dict["tool_name"] = msg.tool_name
+            msg_dict["result_dict"] = msg.result_dict
+            msg_dict["for_whom"] = msg.for_whom
 
         messages.append(msg_dict)
 
     return {
-        'system': db_convo.system_prompt,
-        'selected_collections': db_convo.selected_collection_ids or [],
-        'messages': messages,
+        "system": db_convo.system_prompt,
+        "selected_collections": db_convo.selected_collection_ids or [],
+        "messages": messages,
     }
 
 
 def pydantic_message_to_frontend_dict(msg: LLM_Message) -> dict:
     content = _frontend_message_content(msg)
     msg_dict = {
-        'role': msg.role,
-        'content': content,
-        'message_uuid': str(msg.message_uuid),
-        'rating': msg.rating,
+        "role": msg.role,
+        "content": content,
+        "message_uuid": str(msg.message_uuid),
+        "rating": msg.rating,
     }
 
     if isinstance(msg, AssistantMessage):
         if msg.tool_call_name:
-            msg_dict['tool_call_name'] = msg.tool_call_name
-            msg_dict['tool_call_input'] = msg.tool_call_input
+            msg_dict["tool_call_name"] = msg.tool_call_name
+            msg_dict["tool_call_input"] = msg.tool_call_input
         if msg.usage:
-            msg_dict['usage'] = msg.usage
+            msg_dict["usage"] = msg.usage
     elif isinstance(msg, ToolMessage):
-        msg_dict['tool_name'] = msg.tool_name
-        msg_dict['result_dict'] = msg.result_dict
-        msg_dict['for_whom'] = msg.for_whom
+        msg_dict["tool_name"] = msg.tool_name
+        msg_dict["result_dict"] = msg.result_dict
+        msg_dict["for_whom"] = msg.for_whom
     return msg_dict

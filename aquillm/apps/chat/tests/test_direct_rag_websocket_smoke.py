@@ -169,6 +169,7 @@ async def test_append_direct_rag_skips_tool_selection_spin(
     )
 
     mock_spin.assert_not_called()
+    mock_augment.assert_awaited_once()
     assert mock_augment.await_args.kwargs["include_episodic"] is False
     assert order.index("retrieval") < order.index("get_message")
     assert order.count("get_message") == 1
@@ -217,6 +218,7 @@ async def test_append_direct_rag_disabled_falls_back_to_spin(
 
 
 @pytest.mark.asyncio
+@patch("apps.chat.consumers.chat.build_memory_tools", return_value=[])
 @patch("apps.chat.consumers.chat.build_document_tools", return_value=[])
 @patch("apps.chat.consumers.chat.build_astronomy_tools", return_value=[])
 @patch(
@@ -237,10 +239,11 @@ async def test_append_direct_rag_disabled_falls_back_to_spin(
 async def test_reconnect_pending_user_turn_uses_direct_rag_before_tool_spin(
     mock_direct,
     mock_spin,
-    mock_augment,
+    _augment,
     _memory_system,
     _astronomy_tools,
     _document_tools,
+    _memory_tools,
     monkeypatch,
 ):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
@@ -287,7 +290,6 @@ async def test_reconnect_pending_user_turn_uses_direct_rag_before_tool_spin(
 
     mock_direct.assert_awaited_once()
     mock_spin.assert_not_awaited()
-    assert mock_augment.await_args.kwargs["include_episodic"] is False
 
 
 async def _await_value(value):

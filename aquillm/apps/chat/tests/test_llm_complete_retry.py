@@ -590,6 +590,7 @@ class CutoffContinuationTests(SimpleTestCase):
             "2. Claim parsing and structured extraction.", updated[-1].content
         )
 
+
     @patch.dict(
         "os.environ",
         {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"},
@@ -633,6 +634,7 @@ class CutoffContinuationTests(SimpleTestCase):
         self.assertTrue(first_uuid)
         self.assertEqual(llm.calls[1].get("stream_message_uuid"), first_uuid)
         self.assertEqual(str(updated[-1].message_uuid), first_uuid)
+
 
     @patch.dict(
         "os.environ",
@@ -705,6 +707,7 @@ class CutoffContinuationTests(SimpleTestCase):
         self.assertIn("and then continues cleanly.", stream_payloads[-1]["content"])
         self.assertIn("and then continues cleanly.", updated[-1].content)
 
+
     @patch.dict(
         "os.environ",
         {"LLM_CONTINUATION_MAX_TOKENS": "640", "LLM_POST_TOOL_MAX_TOKENS": "1536"},
@@ -742,6 +745,7 @@ class CutoffContinuationTests(SimpleTestCase):
             updated[-1].content,
         )
         self.assertNotIn("/document_image/b4a\n65cf7", updated[-1].content)
+
 
     @patch.dict(
         "os.environ",
@@ -800,6 +804,7 @@ class CutoffContinuationTests(SimpleTestCase):
         self.assertIn(
             "The paper establishes **LSST deployment thresholds", updated[-1].content
         )
+
 
     @patch.dict(
         "os.environ",

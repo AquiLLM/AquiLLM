@@ -22,6 +22,7 @@ x-common-env: &common-env
   DJANGO_DEBUG: 1
   C_FORCE_ROOT: 1
   RUN_CELERY_IN_WEB: 0
+  KG_EXTRACTION_QUEUE: ${KG_EXTRACTION_QUEUE-knowledge-graph-extraction}
   # LLM — OpenAI
   LLM_CHOICE: OPENAI
   # OCR — OpenAI vision (GPT-4o)
@@ -36,6 +37,8 @@ x-common-env: &common-env
   APP_EMBED_BASE_URL: https://api.openai.com/v1
   APP_EMBED_API_KEY: ${OPENAI_API_KEY}
   APP_EMBED_MODEL: text-embedding-3-small
+  # Empty by default: OpenAI's mutable alias is not sufficient durable KG provenance.
+  APP_EMBED_MODEL_REVISION: ${APP_EMBED_MODEL_REVISION:-}
   APP_EMBED_DIMS: 1024
   APP_EMBED_ALLOW_DIMENSIONS_OVERRIDE: 1
   # Reranking — Cohere fallback (no OpenAI equivalent)
@@ -67,6 +70,21 @@ services:
       - ../../.env
     environment:
       <<: *common-env
+      KG_QUERY_EXTRACTOR_URL: http://knowledge-graph-query-extractor:8000
+      KG_QUERY_EXTRACTOR_BEARER_TOKEN: ${KG_QUERY_EXTRACTOR_BEARER_TOKEN:-}
+      KG_QUERY_EXTRACTOR_BUILD_HASH: ${KG_QUERY_EXTRACTOR_BUILD_HASH:-}
+      KG_TOPOLOGY_GATEWAY_URL: http://knowledge_graph_query_gateway:8092
+      KG_TOPOLOGY_GATEWAY_BEARER_TOKEN: ${KG_TOPOLOGY_GATEWAY_BEARER_TOKEN:-}
+      KG_MEMGRAPH_URI:
+      KG_MEMGRAPH_DATABASE:
+      KG_MEMGRAPH_QUERY_USERNAME:
+      KG_MEMGRAPH_QUERY_PASSWORD:
+      KG_MEMGRAPH_PROJECTION_ENABLED: "0"
+      KG_MEMGRAPH_PROJECTION_USERNAME:
+      KG_MEMGRAPH_PROJECTION_PASSWORD:
+      KG_PROJECTION_POSTGRES_SOURCE_DSN: ${KG_PROJECTION_POSTGRES_SOURCE_DSN:-}
+      KG_PROJECTION_POSTGRES_STATE_DSN:
+      KG_PROJECTION_IDENTIFIER_HMAC_KEY: ${KG_PROJECTION_IDENTIFIER_HMAC_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -78,6 +96,7 @@ services:
         condition: service_started
     volumes:
       - ../..:/app
+    networks: [default, knowledge_graph_api]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/health/"]
       interval: 30s
@@ -96,6 +115,15 @@ services:
       - ../../.env
     environment:
       <<: *common-env
+      KG_MEMGRAPH_URI:
+      KG_MEMGRAPH_DATABASE:
+      KG_MEMGRAPH_QUERY_USERNAME:
+      KG_MEMGRAPH_QUERY_PASSWORD:
+      KG_MEMGRAPH_PROJECTION_USERNAME:
+      KG_MEMGRAPH_PROJECTION_PASSWORD:
+      KG_PROJECTION_POSTGRES_SOURCE_DSN:
+      KG_PROJECTION_POSTGRES_STATE_DSN:
+      KG_PROJECTION_IDENTIFIER_HMAC_KEY:
     depends_on:
       db:
         condition: service_healthy
@@ -108,6 +136,219 @@ services:
     volumes:
       - ../..:/app
     command: sh -c "cd /app/aquillm && exec uv run celery -A aquillm worker --loglevel=info --queues=celery"
+
+  worker_knowledge_graph:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/knowledge-graph/Dockerfile
+    profiles:
+      - knowledge-graph
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      <<: *common-env
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      KG_BUILD_ENABLED: ${KG_BUILD_ENABLED:-0}
+      KG_OVERLAY_ENABLED: ${KG_OVERLAY_ENABLED:-0}
+      KG_EVAL_BYPASS_ALLOWED: ${KG_EVAL_BYPASS_ALLOWED:-0}
+      KG_SCHEMA_GENERATION_ENABLED: ${KG_SCHEMA_GENERATION_ENABLED:-0}
+      KG_SCHEMA_GENERATION_MAX_CHUNKS: ${KG_SCHEMA_GENERATION_MAX_CHUNKS:-32}
+      KG_SCHEMA_GENERATION_MAX_CHARACTERS: ${KG_SCHEMA_GENERATION_MAX_CHARACTERS:-48000}
+      KG_SCHEMA_GENERATION_TIMEOUT_SECONDS: ${KG_SCHEMA_GENERATION_TIMEOUT_SECONDS:-180}
+      KG_EXTRACTION_QUEUE: ${KG_EXTRACTION_QUEUE-knowledge-graph-extraction}
+      KG_EXTRACTION_WORKER_CONCURRENCY: ${KG_EXTRACTION_WORKER_CONCURRENCY:-auto}
+      KG_GLINER2_CPU_THREADS: ${KG_GLINER2_CPU_THREADS:-auto}
+      KG_MEMGRAPH_URI:
+      KG_MEMGRAPH_DATABASE:
+      KG_MEMGRAPH_QUERY_USERNAME:
+      KG_MEMGRAPH_QUERY_PASSWORD:
+      KG_MEMGRAPH_PROJECTION_USERNAME:
+      KG_MEMGRAPH_PROJECTION_PASSWORD:
+      KG_PROJECTION_POSTGRES_SOURCE_DSN:
+      KG_PROJECTION_POSTGRES_STATE_DSN:
+      KG_PROJECTION_IDENTIFIER_HMAC_KEY:
+      KG_GLINER2_DEVICE: cpu
+      KG_GLINER2_LOCAL_FILES_ONLY: ${KG_GLINER2_LOCAL_FILES_ONLY:-1}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HOME: ${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}
+      KG_GLINER2_CACHE_DIR: ${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      VIRTUAL_ENV: /opt/venv
+      PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../..:/app
+      - /app/.venv
+      - "${KG_HF_CACHE_HOST_PATH:-../../data/hf_knowledge_graph}:${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}"
+    command: /opt/venv/bin/python -c "from lib.knowledge_graph.config import run_extraction_worker; run_extraction_worker()"
+
+  worker_knowledge_graph_schema:
+    build: {context: ../.., dockerfile: deploy/docker/knowledge-graph/Dockerfile}
+    profiles: [knowledge-graph]
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: schema-worker-only
+      DJANGO_DEBUG: "0"
+      GOOGLE_OAUTH2_CLIENT_ID: disabled
+      GOOGLE_OAUTH2_CLIENT_SECRET: disabled
+      OPENAI_API_KEY: disabled
+      ANTHROPIC_API_KEY: disabled
+      GEMINI_API_KEY: disabled
+      AWS_EC2_METADATA_DISABLED: "true"
+      POSTGRES_HOST: db
+      POSTGRES_NAME: ${POSTGRES_NAME:-aquillm}
+      POSTGRES_USER: ${POSTGRES_USER:-aquillm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aquillm}
+      KG_BUILD_ENABLED: "0"
+      KG_MEMGRAPH_PROJECTION_ENABLED: "0"
+      KG_SCHEMA_GENERATION_ENABLED: ${KG_SCHEMA_GENERATION_ENABLED:-0}
+      KG_SCHEMA_GENERATION_MAX_CHUNKS: ${KG_SCHEMA_GENERATION_MAX_CHUNKS:-32}
+      KG_SCHEMA_GENERATION_MAX_CHARACTERS: ${KG_SCHEMA_GENERATION_MAX_CHARACTERS:-48000}
+      KG_SCHEMA_GENERATION_TIMEOUT_SECONDS: ${KG_SCHEMA_GENERATION_TIMEOUT_SECONDS:-180}
+      VLLM_BASE_URL: http://vllm:8000/v1
+      VLLM_API_KEY: ${VLLM_API_KEY:-EMPTY}
+      VLLM_SERVED_MODEL_NAME: ${VLLM_SERVED_MODEL_NAME:-qwen3.5:27b}
+      KG_GLINER2_MODEL: ${KG_GLINER2_MODEL:-fastino/gliner2-base-v1}
+      KG_GLINER2_REVISION: ${KG_GLINER2_REVISION:-8437ba583a733d87f56ae902f3b197934eedd58e}
+      KG_GLINER2_DEVICE: cpu
+      KG_GLINER2_LOCAL_FILES_ONLY: ${KG_GLINER2_LOCAL_FILES_ONLY:-1}
+      OMP_NUM_THREADS: ${KG_SCHEMA_CPU_THREADS:-1}
+      MKL_NUM_THREADS: ${KG_SCHEMA_CPU_THREADS:-1}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HOME: ${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}
+      KG_GLINER2_CACHE_DIR: ${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}
+      C_FORCE_ROOT: "1"
+      RUN_CELERY_IN_WEB: "0"
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      VIRTUAL_ENV: /opt/venv
+      PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    volumes:
+      - ../..:/app
+      - /app/.venv
+      - "${KG_HF_CACHE_HOST_PATH:-../../data/hf_knowledge_graph}:${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}"
+    command: /opt/venv/bin/celery -A aquillm --broker=redis://redis:6379 worker --loglevel=info --queues=knowledge-graph-schema --concurrency=1 --prefetch-multiplier=1 --hostname=worker-knowledge-graph-schema@%h
+
+  memgraph_knowledge_graph:
+    image: ${KG_MEMGRAPH_IMAGE:-memgraph/memgraph-mage:3.8.1}
+    profiles: [knowledge-graph]
+    restart: unless-stopped
+    environment:
+      MEMGRAPH_USER: ${KG_MEMGRAPH_PROJECTION_USERNAME:-}
+      MEMGRAPH_PASSWORD: ${KG_MEMGRAPH_PROJECTION_PASSWORD:-}
+    volumes: [knowledge_graph_memgraph_data:/var/lib/memgraph]
+    networks:
+      knowledge_graph_store:
+        aliases: [memgraph-knowledge-graph]
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$$MEMGRAPH_USER\" && test -n \"$$MEMGRAPH_PASSWORD\" && echo 'RETURN 1;' | mgconsole --host 127.0.0.1 --port 7687 --username \"$$MEMGRAPH_USER\" --password \"$$MEMGRAPH_PASSWORD\" >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  knowledge_graph_query_gateway:
+    build: {context: ../.., dockerfile: deploy/docker/knowledge-graph/Dockerfile}
+    profiles: [knowledge-graph]
+    restart: unless-stopped
+    environment:
+      KG_MEMGRAPH_URI: bolt://memgraph-knowledge-graph:7687
+      KG_MEMGRAPH_DATABASE: ${KG_MEMGRAPH_DATABASE:-memgraph}
+      KG_MEMGRAPH_QUERY_USERNAME: ${KG_MEMGRAPH_QUERY_USERNAME:-}
+      KG_MEMGRAPH_QUERY_PASSWORD: ${KG_MEMGRAPH_QUERY_PASSWORD:-}
+      KG_TOPOLOGY_GATEWAY_BEARER_TOKEN: ${KG_TOPOLOGY_GATEWAY_BEARER_TOKEN:-}
+      KG_TOPOLOGY_GATEWAY_TIMEOUT_MS: ${KG_TOPOLOGY_GATEWAY_TIMEOUT_MS:-300}
+      KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES: ${KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES:-4194304}
+      KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES: ${KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES:-1048576}
+    depends_on:
+      memgraph_knowledge_graph: {condition: service_healthy}
+    networks: [knowledge_graph_api, knowledge_graph_store]
+    command: /opt/venv/bin/uvicorn apps.knowledge_graph.retrieval.topology.gateway_service:app --host 0.0.0.0 --port 8092 --no-access-log
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/readyz', timeout=2).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  knowledge_graph_query_extractor:
+    build: {context: ../.., dockerfile: deploy/docker/knowledge-graph/Dockerfile}
+    profiles: [knowledge-graph]
+    restart: unless-stopped
+    environment:
+      KG_QUERY_EXTRACTOR_URL: http://knowledge-graph-query-extractor:8000
+      KG_QUERY_EXTRACTOR_BEARER_TOKEN: ${KG_QUERY_EXTRACTOR_BEARER_TOKEN:-}
+      KG_QUERY_EXTRACTOR_BUILD_HASH: ${KG_QUERY_EXTRACTOR_BUILD_HASH:-}
+      KG_QUERY_EXTRACTOR_MODEL: fastino/gliner2-base-v1
+      KG_QUERY_EXTRACTOR_MODEL_REVISION: 8437ba583a733d87f56ae902f3b197934eedd58e
+      KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION: query-entities-v1
+      KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM: 45bc8f86637a73324d2edae3096aac61d242fb0bcbab3c481cfa7599456cd271
+      KG_QUERY_EXTRACTOR_ONTOLOGY_PATH: /app/aquillm/apps/knowledge_graph/ontologies/research-v1.yaml
+      KG_QUERY_EXTRACTOR_ONTOLOGY_CHECKSUM: ${KG_QUERY_EXTRACTOR_ONTOLOGY_CHECKSUM:-}
+      KG_QUERY_EXTRACTOR_TIMEOUT_MS: ${KG_QUERY_EXTRACTOR_TIMEOUT_MS:-75}
+      KG_QUERY_MAX_BYTES: ${KG_QUERY_MAX_BYTES:-4096}
+      KG_QUERY_MAX_CODEPOINTS: ${KG_QUERY_MAX_CODEPOINTS:-2048}
+      KG_QUERY_MAX_SPANS: ${KG_QUERY_MAX_SPANS:-32}
+      KG_GLINER2_DEVICE: cpu
+      OMP_NUM_THREADS: ${KG_QUERY_EXTRACTOR_CPU_THREADS:-1}
+      MKL_NUM_THREADS: ${KG_QUERY_EXTRACTOR_CPU_THREADS:-1}
+      HF_HOME: /root/.cache/huggingface
+    volumes: [knowledge_graph_hf_cache:/root/.cache/huggingface]
+    networks:
+      knowledge_graph_api:
+        aliases: [knowledge-graph-query-extractor]
+    command: /opt/venv/bin/uvicorn lib.knowledge_graph.query_extractor.service:app --host 0.0.0.0 --port 8000 --no-access-log
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  worker_knowledge_graph_projection:
+    build: {context: ../.., dockerfile: deploy/docker/knowledge-graph/Dockerfile}
+    profiles: [knowledge-graph]
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-}
+      GOOGLE_OAUTH2_CLIENT_ID:
+      GOOGLE_OAUTH2_CLIENT_SECRET:
+      OPENAI_API_KEY: disabled
+      GEMINI_API_KEY: disabled
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 1
+      DJANGO_DEBUG: 0
+      KG_MEMGRAPH_PROJECTION_ENABLED: ${KG_MEMGRAPH_PROJECTION_ENABLED:-0}
+      KG_MEMGRAPH_URI: bolt://memgraph-knowledge-graph:7687
+      KG_MEMGRAPH_DATABASE: ${KG_MEMGRAPH_DATABASE:-memgraph}
+      KG_MEMGRAPH_PROJECTION_USERNAME: ${KG_MEMGRAPH_PROJECTION_USERNAME:-}
+      KG_MEMGRAPH_PROJECTION_PASSWORD: ${KG_MEMGRAPH_PROJECTION_PASSWORD:-}
+      KG_PROJECTION_POSTGRES_SOURCE_DSN: ${KG_PROJECTION_POSTGRES_SOURCE_DSN:-}
+      KG_PROJECTION_POSTGRES_STATE_DSN: ${KG_PROJECTION_POSTGRES_STATE_DSN:-}
+      KG_PROJECTION_IDENTIFIER_HMAC_KEY: ${KG_PROJECTION_IDENTIFIER_HMAC_KEY:-}
+      KG_PROJECTION_IDENTIFIER_KEY_VERSION: ${KG_PROJECTION_IDENTIFIER_KEY_VERSION:-}
+      KG_PROJECTION_SCHEMA_VERSION: ${KG_PROJECTION_SCHEMA_VERSION:-collection-graph-v1}
+      KG_PROJECTION_FORMAT_VERSION: ${KG_PROJECTION_FORMAT_VERSION:-projection-v1}
+      KG_PROJECTION_QUEUE: ${KG_PROJECTION_QUEUE:-knowledge_graph_projection}
+      C_FORCE_ROOT: 1
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      VIRTUAL_ENV: /opt/venv
+      PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      memgraph_knowledge_graph: {condition: service_healthy}
+    networks: [knowledge_graph_control, knowledge_graph_store]
+    command: /bin/sh -c 'exec /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues="$${KG_PROJECTION_QUEUE}" --concurrency=1 --prefetch-multiplier=1 --hostname=worker-knowledge-graph-projection@%h'
 
   db:
     image: pgvector/pgvector:0.8.0-pg17
@@ -124,6 +365,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    networks: [default, knowledge_graph_control]
 
   storage:
     image: minio/minio
@@ -155,6 +397,7 @@ services:
 
   redis:
     image: redis:7.4-bookworm
+    networks: [default, knowledge_graph_control]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -174,3 +417,13 @@ volumes:
   postgres_data:
   minio_data:
   qdrant_data:
+  knowledge_graph_memgraph_data:
+  knowledge_graph_hf_cache:
+
+networks:
+  knowledge_graph_api:
+    internal: true
+  knowledge_graph_store:
+    internal: true
+  knowledge_graph_control:
+    internal: true

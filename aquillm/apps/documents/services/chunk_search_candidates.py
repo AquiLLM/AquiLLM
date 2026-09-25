@@ -1,0 +1,296 @@
+"""Reusable baseline candidate acquisition and graph-seed preparation."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from time import perf_counter
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
+
+import structlog
+from django.apps import apps
+from django.contrib.postgres.search import TrigramSimilarity
+from django.db.models import Q
+from pgvector.django import L2Distance
+
+from apps.documents.services.chunk_search_graph_seeds import (
+    build_graph_seeds as _build_graph_seeds,
+)
+from apps.documents.services.chunk_search_limits import _candidate_limits
+from apps.documents.services.hybrid_graph_authorization import (
+    documents_match_retrieval_authorization,
+)
+from apps.documents.services.source_loading import source_query_rows
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+
+if TYPE_CHECKING:
+    from apps.knowledge_graph.retrieval import (
+        GraphExpansionConfig,
+        GraphExpansionSeed,
+    )
+
+logger = structlog.stdlib.get_logger(__name__)
+
+_DATABASE_ID_MAX = 2**63 - 1
+_EXACT_STOPWORDS = frozenset(
+    "about after answer before could document documents explain information "
+    "selected should through where which would".split()
+)
+
+
+class CandidateScopeLimit(ValueError):
+    """The authorized document snapshot exceeds a configured graph ceiling."""
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizedDocumentScope:
+    """Exact scalar permission scope derived only from authorized documents."""
+
+    documents: tuple[object, ...]
+    allowed_doc_ids: tuple[UUID, ...]
+    allowed_collection_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class HybridCandidateSnapshot:
+    """Immutable pre-rerank snapshot shared by production and evaluation."""
+
+    documents: tuple[object, ...]
+    vector_results: object
+    trigram_results: object
+    exact_results: object
+    vector_chunk_ids: tuple[int, ...]
+    trigram_chunk_ids: tuple[int, ...]
+    exact_chunk_ids: tuple[int, ...]
+    baseline_candidates: tuple[object, ...]
+    graph_seeds: tuple[GraphExpansionSeed, ...]
+    exact_terms: tuple[str, ...]
+    vector_error: str | None
+    vector_ms: float
+    trigram_ms: float
+    exact_ms: float
+    pre_dedupe_count: int
+    graph_seed_error: bool
+
+
+def _salient_exact_terms(query: str, *, max_terms: int = 8) -> list[str]:
+    """Extract exact fallback terms that are likely to matter for recall."""
+
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def add(term: str) -> None:
+        cleaned = term.strip(" \t\r\n\"'`.,;:!?()[]{}")
+        if len(cleaned) < 3:
+            return
+        key = cleaned.lower()
+        if key in seen or key in _EXACT_STOPWORDS:
+            return
+        seen.add(key)
+        terms.append(cleaned)
+
+    for quoted in re.findall(r'"([^\"]{3,96})"|\'([^\']{3,96})\'', query or ""):
+        add(quoted[0] or quoted[1])
+
+    for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_./:+-]{2,}", query or ""):
+        lowered = token.lower()
+        has_symbol = any(ch in token for ch in "-_./:+")
+        has_digit = any(ch.isdigit() for ch in token)
+        uppercase_count = sum(1 for ch in token if ch.isupper())
+        is_acronym = uppercase_count >= 2
+        is_long_domain_word = len(token) >= 10 and lowered not in _EXACT_STOPWORDS
+        if has_symbol or has_digit or is_acronym or is_long_domain_word:
+            add(token)
+        if len(terms) >= max_terms:
+            break
+
+    return terms[:max_terms]
+
+
+def _exact_term_query(terms: list[str]) -> Q:
+    query = Q()
+    for term in terms:
+        query |= Q(content__icontains=term)
+    return query
+
+
+def freeze_authorized_document_scope(
+    documents: Iterable[object],
+    graph_config: GraphExpansionConfig,
+) -> AuthorizedDocumentScope:
+    """Freeze exact UUID/collection scalars without following lazy relations."""
+
+    from apps.knowledge_graph.retrieval import GraphExpansionConfig
+
+    if type(graph_config) is not GraphExpansionConfig:
+        raise ValueError("graph_config must be an exact GraphExpansionConfig")
+    by_document_id: dict[UUID, object] = {}
+    collection_ids: set[int] = set()
+    for document in documents:
+        if len(by_document_id) >= graph_config.max_scope_documents:
+            raise CandidateScopeLimit("authorized document scope exceeds its cap")
+        document_id = getattr(document, "id", None)
+        collection_id = getattr(document, "collection_id", None)
+        if type(document_id) is not UUID:
+            raise ValueError("authorized documents must expose exact UUID ids")
+        if type(collection_id) is not int or not 1 <= collection_id <= _DATABASE_ID_MAX:
+            raise ValueError(
+                "authorized documents must expose positive collection_id integers"
+            )
+        if document_id in by_document_id:
+            raise ValueError("authorized document UUIDs must be unique")
+        by_document_id[document_id] = document
+        collection_ids.add(collection_id)
+        if len(collection_ids) > graph_config.max_scope_collections:
+            raise CandidateScopeLimit("authorized collection scope exceeds its cap")
+    if not by_document_id or not collection_ids:
+        raise ValueError("authorized graph scope must not be empty")
+    ordered_document_ids = tuple(sorted(by_document_id, key=lambda value: value.int))
+    return AuthorizedDocumentScope(
+        documents=tuple(
+            by_document_id[identifier] for identifier in ordered_document_ids
+        ),
+        allowed_doc_ids=ordered_document_ids,
+        allowed_collection_ids=tuple(sorted(collection_ids)),
+    )
+
+
+def collect_hybrid_candidate_snapshot(
+    model_cls: Any,
+    query: str,
+    top_k: int,
+    documents: Iterable[object],
+    *,
+    query_embedding: object | None,
+    graph_config: GraphExpansionConfig | None = None,
+    initial_vector_error: str | None = None,
+    app_config_getter: Callable[[str], object] | None = None,
+    authorization_context: object | None = None,
+) -> HybridCandidateSnapshot:
+    """Acquire vector/trigram/exact rows once and prepare the pre-rerank pool."""
+
+    documents_snapshot = tuple(documents)
+    if (
+        authorization_context is not None
+        and not documents_match_retrieval_authorization(
+            documents_snapshot, authorization_context
+        )
+    ):
+        raise ValueError("candidate documents differ from frozen authorization")
+    limits = _candidate_limits(
+        query,
+        top_k,
+        app_config_getter=app_config_getter or apps.get_app_config,
+    )
+    vector_error = (
+        RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
+        if initial_vector_error is not None
+        else None
+    )
+    vector_started = perf_counter()
+    if query_embedding is None:
+        vector_results = model_cls.objects.none()
+        vector_rows: tuple[object, ...] = ()
+    else:
+        try:
+            vector_results = (
+                model_cls.objects.filter_by_documents(documents_snapshot)
+                .exclude(embedding__isnull=True)
+                .defer("embedding")
+                .order_by(L2Distance("embedding", query_embedding))[: limits.vector]
+            )
+            # Force database evaluation inside the vector-only fail-open seam.
+            vector_rows = source_query_rows(vector_results)
+        except Exception:
+            vector_error = RetrievalLogReason.UPSTREAM_UNAVAILABLE.value
+            logger.warning(
+                "obs.rag.vector_search_failed",
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
+            )
+            vector_results = model_cls.objects.none()
+            vector_rows = ()
+    vector_ms = (perf_counter() - vector_started) * 1000
+
+    trigram_started = perf_counter()
+    trigram_results = (
+        model_cls.objects.filter_by_documents(documents_snapshot)
+        .filter(modality=model_cls.Modality.TEXT)
+        .annotate(similarity=TrigramSimilarity("content", query))
+        .filter(similarity__gt=limits.trigram_similarity_min)
+        .order_by("-similarity")[: limits.trigram]
+    )
+    trigram_rows = source_query_rows(trigram_results)
+    trigram_ms = (perf_counter() - trigram_started) * 1000
+
+    exact_started = perf_counter()
+    exact_terms = _salient_exact_terms(query)
+    if exact_terms:
+        exact_results = (
+            model_cls.objects.filter_by_documents(documents_snapshot)
+            .filter(modality=model_cls.Modality.TEXT)
+            .filter(_exact_term_query(exact_terms))
+            .order_by("doc_id", "chunk_number")[: limits.exact]
+        )
+        exact_rows = source_query_rows(exact_results)
+    else:
+        exact_results = model_cls.objects.none()
+        exact_rows = ()
+    exact_ms = (perf_counter() - exact_started) * 1000
+
+    all_rows = (*vector_rows, *trigram_rows, *exact_rows)
+    baseline: list[object] = []
+    seen_ids: set[object] = set()
+    for candidate in all_rows:
+        identifier = getattr(candidate, "pk", None)
+        if identifier in seen_ids:
+            continue
+        seen_ids.add(identifier)
+        baseline.append(candidate)
+
+    graph_seeds: tuple[GraphExpansionSeed, ...] = ()
+    graph_seed_error = False
+    if graph_config is not None:
+        try:
+            graph_seeds = _build_graph_seeds(
+                vector_rows,
+                trigram_rows,
+                exact_rows,
+                graph_config,
+            )
+        except Exception:
+            graph_seed_error = True
+
+    return HybridCandidateSnapshot(
+        documents=documents_snapshot,
+        vector_results=vector_rows,
+        trigram_results=trigram_rows,
+        exact_results=exact_rows,
+        vector_chunk_ids=tuple(getattr(row, "pk") for row in vector_rows),
+        trigram_chunk_ids=tuple(getattr(row, "pk") for row in trigram_rows),
+        exact_chunk_ids=tuple(getattr(row, "pk") for row in exact_rows),
+        baseline_candidates=tuple(baseline),
+        graph_seeds=graph_seeds,
+        exact_terms=tuple(exact_terms),
+        vector_error=vector_error,
+        vector_ms=vector_ms,
+        trigram_ms=trigram_ms,
+        exact_ms=exact_ms,
+        pre_dedupe_count=len(all_rows),
+        graph_seed_error=graph_seed_error,
+    )
+
+
+__all__ = [
+    "AuthorizedDocumentScope",
+    "CandidateScopeLimit",
+    "HybridCandidateSnapshot",
+    "collect_hybrid_candidate_snapshot",
+    "documents_match_retrieval_authorization",
+    "freeze_authorized_document_scope",
+]

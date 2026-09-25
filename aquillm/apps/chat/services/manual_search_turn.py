@@ -67,7 +67,8 @@ def _retrieve(consumer, command, query, prior_messages):
     raw_result = dict(tool(**arguments))
     if raw_result.get("exception"):
         raise ManualSearchError(
-            "I couldn't search the requested documents. Check your document or "
+            "I couldn't search the requested documents. Check your "
+            "document or "
             "collection selection and access, then try again."
         )
     return name, scope, arguments, raw_result
@@ -88,6 +89,14 @@ async def run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
         return _reply(consumer, convo, str(exc))
     if command is None:
         return "skipped"
+
+    from apps.chat.services.rag_config import rag_preservation_config
+    from apps.chat.services.rag_manual_preservation import run_manual_preservation
+
+    if rag_preservation_config().active:
+        return await run_manual_preservation(
+            consumer, llm_if, convo, command, stream_func=stream_func
+        )
 
     working_convo = convo
     correlation_id = new_correlation_id()

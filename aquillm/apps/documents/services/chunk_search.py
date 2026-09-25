@@ -1,147 +1,296 @@
-"""Hybrid vector + trigram chunk retrieval with reranking."""
+"""Hybrid chunk retrieval with an optional fail-open graph overlay."""
 
 from __future__ import annotations
 
-import re
-import structlog
+from dataclasses import dataclass
 from time import perf_counter
-from typing import TYPE_CHECKING, List, Type
+from typing import TYPE_CHECKING
+from uuid import UUID
 
+import structlog
 from django.apps import apps
 from django.conf import settings as django_settings
-from django.contrib.postgres.search import TrigramSimilarity
-from django.core.exceptions import ValidationError
-from django.db import DatabaseError
-from django.db.models import Q
-from pgvector.django import L2Distance
-from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
-from apps.documents.services.chunk_rerank import _fallback_rerank, rerank_chunks
+from apps.documents.services import chunk_search_legacy_graph as _legacy_graph
+from apps.documents.services.chunk_rerank import (
+    _STRICT_EVALUATION_RERANK,
+    _fallback_rerank,
+    _strict_local_rerank_chunks,
+    rerank_chunks,
+    rerank_chunks_scored,
+)
+from apps.documents.services.chunk_rerank_results import RerankScoreSet
+from apps.documents.services.chunk_rerank_score_transport import serialize_score_set
+from apps.documents.services.chunk_search_authorization import authorized_search_rows
+from apps.documents.services.chunk_search_candidates import (
+    CandidateScopeLimit,
+    collect_hybrid_candidate_snapshot,
+    freeze_authorized_document_scope,
+)
+from apps.documents.services.chunk_search_candidates import (
+    _exact_term_query as _candidate_exact_term_query,
+)
+from apps.documents.services.chunk_search_candidates import (
+    _salient_exact_terms as _candidate_salient_exact_terms,
+)
+from apps.documents.services.chunk_search_logging import log_search_failure
+from apps.documents.services.chunk_search_score_handoff import (
+    score_set_for_authorized_rows,
+)
+from apps.documents.services.chunk_search_validation import (
+    candidate_identifier as _candidate_identifier,
+)
+from apps.documents.services.chunk_search_validation import (
+    candidate_identity as _candidate_identity,
+)
+from apps.documents.services.chunk_search_validation import (
+    validate_candidate_request,
+)
+from apps.documents.services.chunk_source_materialization import materialize_graph_rows
+from apps.documents.services.hybrid_graph_authorization import (
+    HybridGraphRetrievalDependencies,
+    documents_match_retrieval_authorization,
+    is_exact_authorization_context,
+)
+from apps.documents.services.hybrid_graph_dependencies import resolve
+from apps.documents.services.hybrid_graph_lifecycle import (
+    query_embedding as load_query_embedding,
+)
+from apps.documents.services.hybrid_graph_lifecycle import (
+    start_graph,
+)
+from apps.documents.services.hybrid_graph_orchestration import (
+    hybrid_graph_candidate_pool,
+)
+from apps.documents.services.source_loading import (
+    current_source_runtime,
+    source_mode_enabled,
+)
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
 logger = structlog.stdlib.get_logger(__name__)
+_EVALUATION_GRAPH_FAILURE = _legacy_graph.EVALUATION_GRAPH_FAILURE
+_EVALUATION_GRAPH_MISS = _legacy_graph.EVALUATION_GRAPH_MISS
+_apply_graph_overlay = _legacy_graph.apply_graph_overlay
+_graph_diagnostics = _legacy_graph.graph_diagnostics
+
+_exact_term_query = _candidate_exact_term_query
+_salient_exact_terms = _candidate_salient_exact_terms
 
 
-_EXACT_STOPWORDS = {
-    "about",
-    "after",
-    "answer",
-    "before",
-    "could",
-    "document",
-    "documents",
-    "explain",
-    "information",
-    "selected",
-    "should",
-    "through",
-    "where",
-    "which",
-    "would",
-}
+@dataclass(frozen=True, slots=True)
+class CandidateRankingResult:
+    combined_candidates: tuple[object, ...]
+    graph_candidates: tuple[object, ...]
+    ranked_results: tuple[object, ...]
+    inaccessible_candidate_count: int
+    materialization_ms: float
+    rerank_ms: float
+    score_set: RerankScoreSet | None = None
 
 
-def _salient_exact_terms(query: str, *, max_terms: int = 8) -> list[str]:
-    """Extract exact fallback terms that are likely to matter for document recall."""
-    terms: list[str] = []
-    seen: set[str] = set()
+def materialize_and_rerank_candidates(
+    model_cls: type[TextChunk],
+    query: str,
+    top_k: int,
+    baseline_candidates: tuple[object, ...],
+    *,
+    authorized_scope: object | None,
+    graph_chunk_ids: tuple[int, ...] = (),
+    max_graph_candidates: int = 0,
+    force_complete_rerank: bool = False,
+    capture_scores: bool = False,
+    _eval_rerank_capability: object | None = None,
+) -> CandidateRankingResult:
+    """Permission-refetch graph rows, append to the baseline, and rerank once."""
 
-    def add(term: str) -> None:
-        cleaned = term.strip(" \t\r\n\"'`.,;:!?()[]{}")
-        if len(cleaned) < 3:
-            return
-        key = cleaned.lower()
-        if key in seen or key in _EXACT_STOPWORDS:
-            return
-        seen.add(key)
-        terms.append(cleaned)
-
-    for quoted in re.findall(r'"([^"]{3,96})"|\'([^\']{3,96})\'', query or ""):
-        add(quoted[0] or quoted[1])
-
-    for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_./:+-]{2,}", query or ""):
-        lowered = token.lower()
-        has_symbol = any(ch in token for ch in "-_./:+")
-        has_digit = any(ch.isdigit() for ch in token)
-        uppercase_count = sum(1 for ch in token if ch.isupper())
-        is_acronym = uppercase_count >= 2
-        is_long_domain_word = len(token) >= 10 and lowered not in _EXACT_STOPWORDS
-        if has_symbol or has_digit or is_acronym or is_long_domain_word:
-            add(token)
-        if len(terms) >= max_terms:
-            break
-
-    return terms[:max_terms]
-
-
-def _exact_term_query(terms: list[str]) -> Q:
-    query = Q()
-    for term in terms:
-        query |= Q(content__icontains=term)
-    return query
-
-
-def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: List):
-    from aquillm.utils import get_embedding
-    from apps.documents.services import rag_cache
-    from lib.embeddings.config import get_local_embed_config
-
-    vector_top_k = apps.get_app_config("aquillm").vector_top_k  # type: ignore
-    trigram_top_k = apps.get_app_config("aquillm").trigram_top_k  # type: ignore
-    qstrip = query.strip()
-    q_len = len(qstrip)
-    short_len = int(getattr(django_settings, "RAG_QUERY_SHORT_LEN", 48))
-    long_len = int(getattr(django_settings, "RAG_QUERY_LONG_LEN", 160))
-    short_scale = float(
-        getattr(django_settings, "RAG_SHORT_QUERY_CANDIDATE_SCALE", 0.9)
+    baseline_identities = validate_candidate_request(
+        query,
+        top_k,
+        baseline_candidates,
+        graph_chunk_ids,
+        max_graph_candidates,
+        force_complete_rerank,
+        capture_scores,
+        _eval_rerank_capability,
     )
-    long_scale = float(getattr(django_settings, "RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1))
-    if q_len <= short_len:
-        len_scale = short_scale
-    elif q_len >= long_len:
-        len_scale = long_scale
+
+    materialization_started = perf_counter()
+    inaccessible = 0
+    allowed_doc_ids: tuple[UUID, ...] = ()
+    if authorized_scope is not None:
+        from apps.documents.services.chunk_search_candidates import (
+            AuthorizedDocumentScope,
+        )
+
+        if type(authorized_scope) is not AuthorizedDocumentScope:
+            raise ValueError("authorized_scope must be an exact frozen scope")
+        allowed_doc_ids = authorized_scope.allowed_doc_ids
+        inaccessible += sum(
+            getattr(row, "doc_id", None) not in set(allowed_doc_ids)
+            for row in baseline_candidates
+        )
+    elif graph_chunk_ids:
+        inaccessible += len(graph_chunk_ids)
+
+    baseline_id_set = {
+        identifier
+        for identity_type, identifier in baseline_identities
+        if identity_type == "pk"
+    }
+    novel_ids = tuple(
+        identifier
+        for identifier in graph_chunk_ids
+        if identifier not in baseline_id_set
+    )
+    graph_rows: tuple[object, ...] = ()
+    if novel_ids and authorized_scope is not None:
+        graph_rows, rejected = materialize_graph_rows(
+            model_cls, novel_ids, allowed_doc_ids
+        )
+        inaccessible += rejected
+
+    combined = (*baseline_candidates, *graph_rows)
+    materialization_ms = (perf_counter() - materialization_started) * 1_000
+    rerank_started = perf_counter()
+    score_set = None
+    if _eval_rerank_capability is _STRICT_EVALUATION_RERANK:
+        reranked = _strict_local_rerank_chunks(
+            model_cls,
+            query,
+            combined,
+            top_k,
+            _capability=_eval_rerank_capability,
+        )
+    elif not force_complete_rerank and len(combined) <= top_k:
+        reranked = _fallback_rerank(model_cls, combined, top_k)
+    elif capture_scores:
+        runtime = current_source_runtime()
+        scored = rerank_chunks_scored(
+            model_cls,
+            query,
+            combined,
+            top_k,
+            **({"turn_budget": runtime.budget} if runtime else {}),
+        )
+        by_id = {_candidate_identifier(row): row for row in combined}
+        if (
+            not scored.ranked_ids
+            or len(scored.ranked_ids) > top_k
+            or len(set(scored.ranked_ids)) != len(scored.ranked_ids)
+            or len(by_id) != len(combined)
+            or any(type(pk) is not int or pk not in by_id for pk in scored.ranked_ids)
+        ):
+            reranked = _fallback_rerank(model_cls, combined, top_k)
+        else:
+            reranked = [by_id[pk] for pk in scored.ranked_ids]
+            score_set = scored.score_set
     else:
-        len_scale = 1.0
-    mult = float(getattr(django_settings, "RAG_CANDIDATE_MULTIPLIER", 3.0))
-    eff_mult = mult * len_scale
-    raw_cap = int(top_k * eff_mult)
-    vector_min = int(getattr(django_settings, "RAG_VECTOR_MIN_LIMIT", 0))
-    trigram_min = int(getattr(django_settings, "RAG_TRIGRAM_MIN_LIMIT", 0))
-    vector_limit = max(top_k + 2, vector_min, min(vector_top_k, raw_cap))
-    trigram_limit = max(top_k + 2, trigram_min, min(trigram_top_k, raw_cap))
-    exact_limit = max(top_k + 2, min(trigram_top_k, raw_cap))
-    tri_sim_min = float(
-        getattr(django_settings, "RAG_TRIGRAM_SIMILARITY_MIN", 0.000001)
+        reranked = rerank_chunks(model_cls, query, combined, top_k)
+    ranked_results = tuple(reranked)
+    rerank_ms = (perf_counter() - rerank_started) * 1_000
+    combined_identities = set(_candidate_identity(row) for row in combined)
+    ranked_identities = tuple(_candidate_identity(row) for row in ranked_results)
+    if len(set(ranked_identities)) != len(ranked_identities) or any(
+        identity not in combined_identities for identity in ranked_identities
+    ):
+        raise ValueError("reranker returned rows outside the candidate pool")
+    inaccessible += sum(
+        getattr(row, "doc_id", None) not in set(allowed_doc_ids)
+        for row in ranked_results
+        if authorized_scope is not None
     )
-    total_start = perf_counter()
+    return CandidateRankingResult(
+        combined_candidates=tuple(combined),
+        graph_candidates=graph_rows,
+        ranked_results=ranked_results,
+        inaccessible_candidate_count=inaccessible,
+        materialization_ms=materialization_ms,
+        rerank_ms=rerank_ms,
+        score_set=score_set,
+    )
 
+
+def text_chunk_search(
+    model_cls: type[TextChunk],
+    query: str,
+    top_k: int,
+    docs: list,
+    *,
+    authorization_context: object | None = None,
+    hybrid_graph_dependencies: HybridGraphRetrievalDependencies | None = None,
+):
+    from apps.chat.services.rag_config import (
+        evidence_selection_config,
+        rag_preservation_config,
+    )
+
+    if source_mode_enabled() and current_source_runtime() is None:
+        from apps.documents.services.source_loading import SourcePreparationLimited
+
+        raise SourcePreparationLimited("source search requires shared ledger")
+    total_start = perf_counter()
+    graph_handle = None
     try:
-        vector_error: str | None = None
-        try:
-            vector_start = perf_counter()
-            _embed_base, _embed_key, embed_model = get_local_embed_config()
-            cached_vec = rag_cache.get_cached_query_embedding(
-                query, "search_query", embed_model
+        capture_scores = (
+            evidence_selection_config().mode == "adaptive"
+            or source_mode_enabled()
+            or rag_preservation_config().rerank_text_mode == "windowed"
+        )
+        overlay_enabled = bool(getattr(django_settings, "KG_OVERLAY_ENABLED", False))
+        hybrid_graph_dependencies, hybrid_requested = resolve(
+            overlay_enabled, authorization_context, hybrid_graph_dependencies
+        )
+
+        def authorized_rows(rows):
+            return authorized_search_rows(
+                rows,
+                authorization_context=authorization_context,
+                hybrid_requested=hybrid_requested,
             )
-            if cached_vec is not None:
-                query_embedding = cached_vec
-            else:
-                query_embedding = get_embedding(query)
-                rag_cache.set_cached_query_embedding(
-                    query, "search_query", embed_model, query_embedding
+
+        graph_config: object | None = None
+        graph_scope: object | None = None
+        graph_preflight_status: str | None = None
+        search_documents: object = docs
+        if overlay_enabled:
+            try:
+                from apps.knowledge_graph.retrieval import (
+                    get_graph_expansion_config,
                 )
-            vector_results = (
-                model_cls.objects.filter_by_documents(docs)
-                .exclude(embedding__isnull=True)
-                .defer("embedding")
-                .order_by(L2Distance("embedding", query_embedding))[:vector_limit]
-            )  # type: ignore
-            vec_list = list(vector_results)
-            vector_ms = (perf_counter() - vector_start) * 1000
-        except Exception as exc:
-            vector_error = RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
+
+                graph_config = get_graph_expansion_config()
+                if hybrid_requested:
+                    if not documents_match_retrieval_authorization(
+                        docs, authorization_context
+                    ):
+                        graph_preflight_status = "error"
+                else:
+                    graph_scope = freeze_authorized_document_scope(docs, graph_config)
+                    search_documents = graph_scope.documents
+            except CandidateScopeLimit:
+                graph_preflight_status = "miss"
+                graph_scope = None
+            except Exception:
+                graph_preflight_status = "error"
+                graph_config = None
+                graph_scope = None
+
+        graph_handle = start_graph(
+            query,
+            authorization_context,
+            hybrid_graph_dependencies,
+            overlay_enabled and hybrid_requested and graph_preflight_status is None,
+        )
+        initial_vector_error: str | None = None
+        query_embedding: object | None = None
+        try:
+            query_embedding = load_query_embedding(query)
+        except Exception:
+            initial_vector_error = RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
             logger.warning(
                 "obs.rag.vector_search_failed",
                 **retrieval_log_fields(
@@ -150,52 +299,129 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
                     elapsed_ms=0.0,
                 ),
             )
-            vec_list = []
-            vector_results = model_cls.objects.none()
-            vector_ms = (perf_counter() - total_start) * 1000
-        trigram_start = perf_counter()
-        trigram_results = (
-            model_cls.objects.filter_by_documents(docs)
-            .filter(modality=model_cls.Modality.TEXT)
-            .annotate(similarity=TrigramSimilarity("content", query))  # type: ignore
-            .filter(similarity__gt=tri_sim_min)
-            .order_by("-similarity")[:trigram_limit]
+
+        snapshot = collect_hybrid_candidate_snapshot(
+            model_cls,
+            query,
+            top_k,
+            search_documents,
+            query_embedding=query_embedding,
+            graph_config=graph_config if graph_preflight_status is None else None,
+            initial_vector_error=initial_vector_error,
+            app_config_getter=apps.get_app_config,
+            authorization_context=(
+                authorization_context
+                if hybrid_requested and graph_preflight_status is None
+                else None
+            ),
         )
-        trigram_ms = (perf_counter() - trigram_start) * 1000
-        exact_start = perf_counter()
-        exact_terms = _salient_exact_terms(query)
-        if exact_terms:
-            exact_results = (
-                model_cls.objects.filter_by_documents(docs)
-                .filter(modality=model_cls.Modality.TEXT)
-                .filter(_exact_term_query(exact_terms))
-                .order_by("doc_id", "chunk_number")[:exact_limit]
+        graph_chunk_ids: tuple[int, ...] = ()
+        graph_diagnostics: dict[str, object] = {}
+        hybrid_pool: tuple[object, ...] | None = None
+        if overlay_enabled and hybrid_requested:
+            if (
+                graph_preflight_status is None
+                and type(hybrid_graph_dependencies) is HybridGraphRetrievalDependencies
+                and is_exact_authorization_context(authorization_context)
+            ):
+                hybrid_pool, graph_diagnostics = hybrid_graph_candidate_pool(
+                    snapshot,
+                    query,
+                    authorization_context,
+                    hybrid_graph_dependencies,
+                    handle=graph_handle,
+                )
+            else:
+                hybrid_pool = snapshot.baseline_candidates
+                graph_diagnostics = _graph_diagnostics(
+                    started_at=total_start,
+                    seed_count=len(snapshot.graph_seeds),
+                    candidate_count=0,
+                    status=graph_preflight_status or "error",
+                    algorithm_signature=getattr(
+                        graph_config, "algorithm_signature", None
+                    ),
+                    version_signature=None,
+                )
+        elif overlay_enabled:
+            graph_chunk_ids, graph_diagnostics = _apply_graph_overlay(
+                model_cls,
+                snapshot,
+                graph_scope,
+                graph_config,
+                preflight_status=graph_preflight_status,
+            )
+
+        if hybrid_pool is not None:
+            ranking = materialize_and_rerank_candidates(
+                model_cls,
+                query,
+                top_k,
+                authorized_rows(hybrid_pool),
+                authorized_scope=None,
+                force_complete_rerank=graph_diagnostics.get("graph_status") == "hit",
+                capture_scores=capture_scores,
             )
         else:
-            exact_results = model_cls.objects.none()
-        exact_ms = (perf_counter() - exact_start) * 1000
-        tri_list = list(trigram_results)
-        exact_list = list(exact_results)
-        combined_candidates = vec_list + tri_list + exact_list
-        pre_dedupe_count = len(combined_candidates)
-        deduped_candidates = []
-        seen_pks = set()
-        for candidate in combined_candidates:
-            if candidate.pk in seen_pks:
-                continue
-            seen_pks.add(candidate.pk)
-            deduped_candidates.append(candidate)
-        combined_candidates = deduped_candidates
-        if len(combined_candidates) <= top_k:
-            reranked_results = _fallback_rerank(model_cls, combined_candidates, top_k)
-            rerank_ms = 0.0
-        else:
-            rerank_start = perf_counter()
-            reranked_results = rerank_chunks(
-                model_cls, query, combined_candidates, top_k
+            try:
+                ranking = materialize_and_rerank_candidates(
+                    model_cls,
+                    query,
+                    top_k,
+                    authorized_rows(snapshot.baseline_candidates),
+                    authorized_scope=graph_scope,
+                    graph_chunk_ids=graph_chunk_ids,
+                    max_graph_candidates=(
+                        int(getattr(graph_config, "max_candidates", 0))
+                        if graph_chunk_ids
+                        else 0
+                    ),
+                    capture_scores=capture_scores,
+                )
+            except Exception:
+                ranking = materialize_and_rerank_candidates(
+                    model_cls,
+                    query,
+                    top_k,
+                    authorized_rows(snapshot.baseline_candidates),
+                    authorized_scope=None,
+                    capture_scores=capture_scores,
+                )
+                if overlay_enabled:
+                    graph_diagnostics = _graph_diagnostics(
+                        started_at=total_start,
+                        seed_count=len(snapshot.graph_seeds),
+                        candidate_count=0,
+                        status="error",
+                        algorithm_signature=getattr(
+                            graph_config,
+                            "algorithm_signature",
+                            None,
+                        ),
+                        version_signature=None,
+                    )
+        if overlay_enabled and ranking.inaccessible_candidate_count:
+            graph_diagnostics.update(
+                graph_status="error",
+                graph_candidate_count=0,
             )
-            rerank_ms = (perf_counter() - rerank_start) * 1000
-        total_ms = (perf_counter() - total_start) * 1000
+        if overlay_enabled:
+            graph_diagnostics["graph_ms"] = (
+                float(graph_diagnostics.get("graph_ms", 0.0))
+                + ranking.materialization_ms
+            )
+            if not hybrid_requested and graph_diagnostics.get("graph_status") == "hit":
+                graph_diagnostics["graph_candidate_count"] = len(
+                    ranking.graph_candidates
+                )
+        reranked_results = list(authorized_rows(ranking.ranked_results))
+        score_set = (
+            score_set_for_authorized_rows(ranking.score_set, tuple(reranked_results))
+            if ranking.score_set is not None
+            else None
+        )
+
+        total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
         logger.info(
             "obs.rag.search",
             **retrieval_log_fields(
@@ -208,11 +434,11 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
         if not reranked_results:
             try:
                 chunks_with_embeddings = (
-                    model_cls.objects.filter_by_documents(docs)
+                    model_cls.objects.filter_by_documents(snapshot.documents)
                     .exclude(embedding__isnull=True)
                     .count()
                 )
-            except Exception as count_exc:
+            except Exception:
                 logger.warning(
                     "obs.rag.chunk_count_failed",
                     **retrieval_log_fields(
@@ -224,10 +450,14 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
         diagnostics: dict = {
             "doc_count": len(docs),
             "chunks_with_embeddings": chunks_with_embeddings,
-            "vector_error": vector_error,
-            "trigram_candidates": len(tri_list),
-            "exact_term_count": len(exact_terms),
+            "vector_error": snapshot.vector_error,
+            "trigram_candidates": len(snapshot.trigram_chunk_ids),
+            "exact_term_count": len(snapshot.exact_terms),
         }
+        if overlay_enabled:
+            diagnostics.update(graph_diagnostics)
+        if score_set is not None and reranked_results:
+            diagnostics["_score_set"] = serialize_score_set(score_set)
         if not reranked_results:
             logger.info(
                 "obs.rag.search_empty",
@@ -237,31 +467,18 @@ def text_chunk_search(model_cls: Type[TextChunk], query: str, top_k: int, docs: 
                     elapsed_ms=total_ms,
                 ),
             )
-        return vector_results, trigram_results, reranked_results, diagnostics
-    except DatabaseError as e:
-        logger.error(
-            "obs.rag.search_db_error",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE, count=0, elapsed_ms=0.0
-            ),
+        return (
+            authorized_rows(snapshot.vector_results),
+            authorized_rows(snapshot.trigram_results),
+            reranked_results,
+            diagnostics,
         )
-        raise e
-    except ValidationError as e:
-        logger.error(
-            "obs.rag.search_validation_error",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.INVALID_REQUEST, count=0, elapsed_ms=0.0
-            ),
-        )
-        raise e
-    except Exception as e:
-        logger.error(
-            "obs.rag.search_error",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.INTERNAL_FAILURE, count=0, elapsed_ms=0.0
-            ),
-        )
-        raise e
+    except Exception as error:
+        log_search_failure(logger, error)
+        raise
+    finally:
+        if graph_handle is not None:
+            graph_handle.close()
 
 
-__all__ = ["text_chunk_search"]
+__all__ = ["materialize_and_rerank_candidates", "text_chunk_search"]

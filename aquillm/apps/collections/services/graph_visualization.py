@@ -1,0 +1,235 @@
+# ruff: noqa: E402 - status imports follow the visualization constants
+from __future__ import annotations
+
+from collections import defaultdict
+
+from django.db.models import Q
+
+from apps.collections.services.graph_progress import (
+    document_graph_progress,
+)
+from apps.knowledge_graph.extraction.windows import sanitize_graph_source_text
+from apps.knowledge_graph.models import (
+    CollectionEntity,
+    CollectionEntityDocumentLink,
+    CollectionRelation,
+    CollectionRelationEvidence,
+    DocumentEntityMention,
+)
+
+NODE_LIMIT = 150
+EDGE_LIMIT = 300
+EVIDENCE_PER_EDGE_LIMIT = 3
+EVIDENCE_PER_NODE_LIMIT = 3
+EXCERPT_CHARACTER_LIMIT = 360
+
+
+def _bounded_excerpt(value: str) -> str:
+    safe = sanitize_graph_source_text(value).strip()
+    if len(safe) <= EXCERPT_CHARACTER_LIMIT:
+        return safe
+    return safe[: EXCERPT_CHARACTER_LIMIT - 1].rstrip() + "…"
+
+
+def _edge_evidence(edge_ids: tuple[int, ...]):
+    grouped = defaultdict(list)
+    if not edge_ids:
+        return grouped
+    rows = (
+        CollectionRelationEvidence.objects.current()
+        .filter(relation_id__in=edge_ids)
+        .select_related(
+            "relation_mention__chunk",
+            "relation_mention__head",
+            "relation_mention__tail",
+        )
+        .order_by("relation_id", "pk")
+    )
+    for row in rows:
+        evidence = grouped[row.relation_id]
+        if len(evidence) >= EVIDENCE_PER_EDGE_LIMIT:
+            continue
+        mention = row.relation_mention
+        evidence.append(
+            {
+                "document_id": str(mention.document_id),
+                "chunk_id": mention.chunk_id,
+                "start": min(mention.head.start, mention.tail.start),
+                "end": max(mention.head.end, mention.tail.end),
+                "excerpt": _bounded_excerpt(mention.chunk.content),
+            }
+        )
+    return grouped
+
+
+def _node_evidence(node_ids: tuple[int, ...]):
+    grouped = defaultdict(list)
+    if not node_ids:
+        return grouped
+    links = list(
+        CollectionEntityDocumentLink.objects.current()
+        .filter(collection_entity_id__in=node_ids)
+        .order_by("collection_entity_id", "pk")
+        .values("collection_entity_id", "document_entity_id")[: NODE_LIMIT * 20]
+    )
+    document_nodes = defaultdict(list)
+    for link in links:
+        document_nodes[link["document_entity_id"]].append(link["collection_entity_id"])
+    if not document_nodes:
+        return grouped
+    rows = (
+        DocumentEntityMention.objects.filter(
+            document_entity_id__in=document_nodes,
+            status=DocumentEntityMention.Status.ACTIVE,
+        )
+        .select_related("mention__chunk")
+        .order_by("document_entity_id", "mention_id")
+    )
+    scanned = 0
+    for row in rows.iterator(chunk_size=500):
+        scanned += 1
+        if scanned > NODE_LIMIT * EVIDENCE_PER_NODE_LIMIT * 10:
+            break
+        mention = row.mention
+        descriptor = {
+            "document_id": str(mention.document_id),
+            "chunk_id": mention.chunk_id,
+            "start": mention.start,
+            "end": mention.end,
+            "excerpt": _bounded_excerpt(mention.chunk.content),
+        }
+        for node_id in document_nodes[row.document_entity_id]:
+            evidence = grouped[node_id]
+            if len(evidence) < EVIDENCE_PER_NODE_LIMIT:
+                evidence.append(descriptor)
+    return grouped
+
+
+def collection_graph_envelope(collection, user, *, query: str = "") -> dict:
+    active_artifact = _active_artifact(collection)
+    request = _latest_request(collection)
+    progress = document_graph_progress(collection.pk)
+    attempt = (
+        _current_collection_attempt(collection, progress)
+        if active_artifact is None
+        else None
+    )
+    base = {
+        "collection_id": str(collection.pk),
+        "artifact_id": str(active_artifact.pk) if active_artifact is not None else None,
+        "status": _status(active_artifact, request, progress, attempt),
+        "progress": progress,
+        "permissions": {"can_rebuild": collection.user_can_edit(user)},
+        "nodes": [],
+        "edges": [],
+        "truncated": {"nodes": False, "edges": False},
+    }
+    if active_artifact is None:
+        return base
+
+    node_query = CollectionEntity.objects.current().filter(
+        collection=collection,
+        artifact=active_artifact,
+    )
+    if query:
+        node_query = node_query.filter(
+            Q(label__icontains=query) | Q(entity_type__icontains=query)
+        )
+    node_fields = (
+        "pk",
+        "label",
+        "entity_type",
+        "resolution_confidence",
+        "retrieval_utility",
+    )
+    eligible_node_ids = node_query.values("pk")
+    edge_candidates = list(
+        CollectionRelation.objects.current()
+        .filter(
+            artifact=active_artifact,
+            source_id__in=eligible_node_ids,
+            target_id__in=eligible_node_ids,
+        )
+        .order_by("-support_count", "-confidence", "pk")
+        .values(
+            "pk",
+            "source_id",
+            "target_id",
+            "relation_type",
+            "confidence",
+            "support_count",
+        )[: EDGE_LIMIT + 1]
+    )
+    base["truncated"]["edges"] = len(edge_candidates) > EDGE_LIMIT
+    edge_rows = []
+    connected_node_ids = []
+    connected_node_id_set = set()
+    for edge in edge_candidates[:EDGE_LIMIT]:
+        additions = tuple(
+            node_id
+            for node_id in (edge["source_id"], edge["target_id"])
+            if node_id not in connected_node_id_set
+        )
+        if len(connected_node_id_set) + len(additions) > NODE_LIMIT:
+            base["truncated"]["edges"] = True
+            continue
+        edge_rows.append(edge)
+        connected_node_ids.extend(additions)
+        connected_node_id_set.update(additions)
+
+    connected_by_id = {
+        row["pk"]: row
+        for row in node_query.filter(pk__in=connected_node_ids).values(*node_fields)
+    }
+    connected_rows = [
+        connected_by_id[node_id]
+        for node_id in connected_node_ids
+        if node_id in connected_by_id
+    ]
+    remaining = NODE_LIMIT - len(connected_rows)
+    other_rows = list(
+        node_query.exclude(pk__in=connected_node_id_set)
+        .order_by("-retrieval_utility", "normalized_label", "pk")
+        .values(*node_fields)[: remaining + 1]
+    )
+    base["truncated"]["nodes"] = len(other_rows) > remaining
+    node_rows = connected_rows + other_rows[:remaining]
+    node_ids = tuple(row["pk"] for row in node_rows)
+    node_evidence = _node_evidence(node_ids)
+
+    evidence = _edge_evidence(tuple(row["pk"] for row in edge_rows))
+
+    base["nodes"] = [
+        {
+            "id": f"entity:{row['pk']}",
+            "label": row["label"],
+            "entity_type": row["entity_type"],
+            "confidence": row["resolution_confidence"],
+            "retrieval_utility": row["retrieval_utility"],
+            "evidence": node_evidence[row["pk"]],
+        }
+        for row in node_rows
+    ]
+    base["edges"] = [
+        {
+            "id": f"relation:{row['pk']}",
+            "source": f"entity:{row['source_id']}",
+            "target": f"entity:{row['target_id']}",
+            "relation_type": row["relation_type"],
+            "confidence": row["confidence"],
+            "support_count": row["support_count"],
+            "evidence": evidence[row["pk"]],
+        }
+        for row in edge_rows
+    ]
+    return base
+
+
+__all__ = ["collection_graph_envelope"]
+
+from .graph_visualization_status import (
+    _active_artifact,
+    _current_collection_attempt,
+    _latest_request,
+    _status,
+)

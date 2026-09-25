@@ -1,7 +1,23 @@
 """Environment-driven rerank HTTP client settings."""
+
 from __future__ import annotations
 
 from os import getenv
+
+
+def rerank_provider() -> str:
+    return (getenv("APP_RERANK_PROVIDER") or "auto").strip().lower()
+
+
+def rerank_text_mode() -> str:
+    value = getenv("RAG_RERANK_TEXT_MODE", "legacy").strip().lower()
+    return value if value in ("legacy", "windowed", "shadow") else "legacy"
+
+
+def rerank_shadow_scoring() -> bool:
+    return rerank_text_mode() == "shadow" and getenv(
+        "RAG_RERANK_SHADOW_SCORING_ENABLED", "0"
+    ).strip().lower() in ("1", "true", "yes", "on")
 
 
 def rerank_base_url() -> str:
@@ -25,12 +41,72 @@ def rerank_api_key() -> str:
     )
 
 
+def rerank_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    api_key = rerank_api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
 def rerank_model() -> str:
     return (
         getenv("APP_RERANK_MODEL")
         or getenv("VLLM_RERANK_MODEL")
         or "Qwen/Qwen3-Reranker-4B"
     )
+
+
+def rerank_model_revision() -> str:
+    return (getenv("APP_RERANK_MODEL_REVISION") or "").strip()
+
+
+def rerank_vllm_model() -> str:
+    return (getenv("APP_RERANK_VLLM_MODEL") or "").strip()
+
+
+def rerank_tokenizer() -> str:
+    return (getenv("APP_RERANK_TOKENIZER") or "").strip()
+
+
+def rerank_tokenizer_revision() -> str:
+    return (getenv("APP_RERANK_TOKENIZER_REVISION") or "").strip()
+
+
+def rerank_code_revision() -> str:
+    return (getenv("APP_RERANK_CODE_REVISION") or "").strip()
+
+
+def rerank_extra_args() -> str:
+    return getenv("APP_RERANK_VLLM_EXTRA_ARGS") or ""
+
+
+def rerank_trust_remote_code() -> str:
+    return (getenv("APP_RERANK_VLLM_TRUST_REMOTE_CODE") or "").strip()
+
+
+def rerank_runner() -> str:
+    return (getenv("APP_RERANK_VLLM_RUNNER") or "").strip()
+
+
+def rerank_task() -> str:
+    return (getenv("APP_RERANK_VLLM_TASK") or "").strip()
+
+
+def rerank_dtype() -> str:
+    return (getenv("APP_RERANK_VLLM_DTYPE") or "").strip()
+
+
+def rerank_tensor_parallel_size() -> str:
+    return (getenv("APP_RERANK_TENSOR_PARALLEL_SIZE") or "").strip()
+
+
+def rerank_gpu_memory_utilization() -> str:
+    return (getenv("APP_RERANK_GPU_MEMORY_UTILIZATION") or "").strip()
+
+
+def rerank_max_model_len() -> str:
+    return (getenv("APP_RERANK_MAX_MODEL_LEN") or "").strip()
 
 
 def rerank_timeout_seconds() -> int:
@@ -88,11 +164,25 @@ def rerank_score_concurrency() -> int:
 __all__ = [
     "rerank_api_key",
     "rerank_base_url",
+    "rerank_code_revision",
     "rerank_doc_char_limit",
+    "rerank_dtype",
+    "rerank_extra_args",
+    "rerank_gpu_memory_utilization",
     "rerank_model",
     "rerank_model_is_qwen3_vl",
+    "rerank_model_revision",
+    "rerank_max_model_len",
     "rerank_pair_token_limit",
+    "rerank_provider",
+    "rerank_runner",
+    "rerank_task",
+    "rerank_tokenizer",
+    "rerank_tokenizer_revision",
+    "rerank_timeout_seconds",
     "rerank_score_concurrency",
     "rerank_template_reserve_tokens",
-    "rerank_timeout_seconds",
+    "rerank_tensor_parallel_size",
+    "rerank_trust_remote_code",
+    "rerank_vllm_model",
 ]

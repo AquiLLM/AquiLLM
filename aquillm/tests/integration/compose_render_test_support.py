@@ -17,7 +17,11 @@ def render_compose_with_reviewed_env(
     profile: str,
     environment_overrides: dict[str, str] | None = None,
 ) -> dict:
-    if type(compose_files) is not tuple or not compose_files:
+    if (
+        type(compose_files) is not tuple
+        or not compose_files
+        or any(not isinstance(path, Path) for path in compose_files)
+    ):
         raise TypeError("compose_files must be a nonempty exact tuple of Paths")
     docker = shutil.which("docker")
     if docker is None:

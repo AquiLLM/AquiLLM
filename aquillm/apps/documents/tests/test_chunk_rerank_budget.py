@@ -98,7 +98,7 @@ def test_single_score_retries_context_overflow_with_tighter_pair(monkeypatch):
         post,
     )
     monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_score.parse_single_score",
+        "apps.documents.services.chunk_rerank_local_vllm.parse_single_score",
         lambda payload: payload["score"],
     )
 

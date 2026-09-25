@@ -1,10 +1,11 @@
 """Provider-agnostic preflight history trimming using OpenAI-shaped token estimates."""
+
 from __future__ import annotations
 
-import structlog
 from os import getenv
 from typing import Any
 
+import structlog
 from tiktoken import encoding_for_model
 
 from lib.llm.providers.openai_tokens import (
@@ -92,13 +93,17 @@ def maybe_pack_message_dicts_for_context(
     max_tokens: int,
 ) -> tuple[bool, int]:
     """
-    Run salience-aware packing when CONTEXT_PACKER_ENABLED. Mutates message_dicts in place.
+    Run salience-aware packing when CONTEXT_PACKER_ENABLED. Mutates message_dicts in
+    place.
     Returns (changed?, effective_max_tokens).
     """
     if context_limit <= 0 or not context_packer_enabled():
         return (False, max_tokens)
     try:
-        from lib.llm.utils.context_packer import load_context_packer_config, pack_messages_for_budget
+        from lib.llm.utils.context_packer import (
+            load_context_packer_config,
+            pack_messages_for_budget,
+        )
 
         cfg = load_context_packer_config()
         mt = cap_completion_tokens(max_tokens)
@@ -134,6 +139,10 @@ def apply_preflight_trim_to_message_dicts(
     Trim `message_dicts` in place (roles preserved) when over budget.
     Returns (trimmed?, effective_max_tokens).
     """
+    from lib.llm.evidence_guard import current_protection
+
+    if current_protection() is not None:
+        return (False, max_tokens)
     limit = prompt_budget_context_limit()
     if limit <= 0:
         return (False, max_tokens)
@@ -174,7 +183,9 @@ def apply_preflight_trim_to_message_dicts(
         "max_tokens": mt,
     }
     before = estimate_prompt_tokens(arguments["messages"], _ENC)
-    preflight_trim_for_context(_Estimator, arguments, limit, prompt_budget_slack_tokens())
+    preflight_trim_for_context(
+        _Estimator, arguments, limit, prompt_budget_slack_tokens()
+    )
     new_messages = arguments.get("messages")
     new_max = int(arguments.get("max_tokens", mt))
     if not isinstance(new_messages, list) or len(new_messages) < 2:
@@ -202,7 +213,10 @@ def sync_trimmed_dicts_into_pydantic_messages(
     messages_pydantic: list[Any] | None,
     trimmed_dicts: list[dict[str, Any]],
 ) -> None:
-    """Copy string `content` from trimmed dicts onto parallel pydantic messages (best-effort)."""
+    """
+    Copy string `content` from trimmed dicts onto parallel pydantic messages
+    (best-effort).
+    """
     if not messages_pydantic:
         return
     for i, p in enumerate(messages_pydantic):

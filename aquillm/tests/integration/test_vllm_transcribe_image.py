@@ -159,3 +159,105 @@ def test_operator_contract_documents_optional_activation_and_rollback():
         "disabled",
     ):
         assert required in guide
+
+
+def test_operator_guide_documents_the_nemotron_contract():
+    readme = (_repo_root() / "deploy/NEMOTRON_ASR.md").read_text(encoding="utf-8")
+    section = " ".join(
+        _markdown_section(readme, "Local GPU ASR (Nemotron 3.5)").split()
+    )
+
+    for required in (
+        "nvidia/nemotron-3.5-asr-streaming-0.6b",
+        "served as `nemotron-3.5-asr-streaming-0.6b`",
+        "pinned at revision `f3d333391852ba876df169dcc9ba902d25b6ab0b`",
+        "POST /v1/audio/transcriptions",
+        ".text",
+        "batch/offline only",
+        "390 seconds",
+        "--max-num-seqs 1",
+        "no concurrency promise",
+        "dtype float32",
+        "FP32",
+        "VLLM_USE_V2_MODEL_RUNNER=0",
+        "--enforce-eager",
+        "INGEST_TRANSCRIBE_LANGUAGE",
+        "automatic language detection",
+        "en-US",
+        "NEMOTRON_ASR_ALLOW_ADAPTATION_LANGUAGES=1",
+        "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/"
+        "blob/f3d333391852ba876df169dcc9ba902d25b6ab0b/README.md",
+        "https://openmdw.ai/license/1-1/",
+        "distinct from the AquiLLM source license",
+        "does not redistribute them",
+        "--env-file .env -f deploy/compose/production.yml",
+        "--profile vllm",
+        "--no-deps --wait --wait-timeout 900",
+        "http://localhost:8000/health",
+        "http://127.0.0.1:8005/v1/models",
+        "http://127.0.0.1:8005/v1/audio/transcriptions",
+        "tests/fixtures/audio/librispeech_1272-128104-0000.flac",
+        "0.20",
+        "features, activations, and runtime overhead",
+        "no_gpu_dev",
+        "whisper-1",
+        "development",
+        "does not publish host port 8005",
+    ):
+        assert required in section
+
+    for outside_release in (
+        "translations",
+        "diarization",
+        "word timestamps",
+        "verbose",
+        "realtime WebSockets",
+    ):
+        assert outside_release.lower() in section.lower()
+
+
+def test_whisperx_docs_use_the_configurable_asr_baseline():
+    root = _repo_root()
+    paths = (
+        root / "docs/specs/2026-03-30-whisperx-transcription-design.md",
+        root / "docs/roadmap/plans/pending/"
+        "2026-03-30-whisperx-transcription-implementation.md",
+    )
+    stale_phrases = (
+        "serving a whisper-family model",
+        "existing whisper (vllm) deployment",
+        "vllm_transcribe serves whisper",
+        "vllm whisper (v1)",
+        "existing **vllm whisper**",
+        "enhancer for the existing whisper (vllm) stack",
+    )
+
+    for path in paths:
+        contents = path.read_text(encoding="utf-8").lower()
+        assert "configured openai-compatible asr" in contents
+        assert "nemotron" in contents and "default" in contents
+        assert "whisper" in contents and "optional nemotron" in contents
+        assert "ingest_transcribe_provider=openai" in contents
+        for stale in stale_phrases:
+            assert stale not in contents
+
+
+def test_roadmap_tracks_the_optional_whisperx_enhancement():
+    roadmap = (_repo_root() / "docs/roadmap/roadmap-status.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(
+        line
+        for line in roadmap.splitlines()
+        if line.startswith("| Optional WhisperX enhancement ")
+    )
+
+    assert "docs/specs/2026-03-30-whisperx-transcription-design.md" in row
+    assert (
+        "docs/roadmap/plans/pending/2026-03-30-whisperx-transcription-implementation.md"
+        in row
+    )
+    assert "**Not started**" in row
+    assert "Whisper default" in row
+    assert "optional Nemotron" in row
+    assert "without changing the baseline contract" in row

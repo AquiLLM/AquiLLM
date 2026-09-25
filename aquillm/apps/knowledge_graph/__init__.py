@@ -1,0 +1,1 @@
+"""Versioned knowledge-graph persistence."""

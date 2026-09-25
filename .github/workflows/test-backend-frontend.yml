@@ -41,6 +41,32 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt -r deploy/vllm_plugins/nemotron_asr/requirements-test.txt
+      - name: Provision projection roles required by migrations
+        run: |
+          python - <<'PY'
+          import os
+
+          import psycopg2
+          from psycopg2 import sql
+
+          connection = psycopg2.connect(
+              host=os.environ["POSTGRES_HOST"],
+              dbname=os.environ["POSTGRES_NAME"],
+              user=os.environ["POSTGRES_USER"],
+              password=os.environ["POSTGRES_PASSWORD"],
+          )
+          connection.autocommit = True
+          try:
+              with connection.cursor() as cursor:
+                  for role in ("aquillm_projection_source", "aquillm_projection_state"):
+                      cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+                      if cursor.fetchone() is None:
+                          cursor.execute(
+                              sql.SQL("CREATE ROLE {} NOLOGIN").format(sql.Identifier(role))
+                          )
+          finally:
+              connection.close()
+          PY
       - name: Django system check
         working-directory: aquillm
         run: python manage.py check
@@ -51,6 +77,230 @@ jobs:
           aquillm/tests/integration/test_context_processors_urls.py
           aquillm/tests/integration/test_document_image_view.py
           -q --tb=short
+      - name: Hybrid graph runtime static contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_projection_database_routing.py
+          aquillm/tests/integration/test_knowledge_graph_compose.py
+          aquillm/tests/integration/test_knowledge_graph_query_extractor_compose.py
+          aquillm/tests/integration/test_task21_knowledge_graph_eval_compose.py
+          -q --tb=short
+      - name: Adaptive evidence and score contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/chat/tests/test_rag_selection_config.py
+          aquillm/apps/chat/tests/test_rag_selection_policy.py
+          aquillm/apps/chat/tests/test_rag_selection.py
+          aquillm/apps/chat/tests/test_rag_selection_scoring.py
+          aquillm/apps/chat/tests/test_rag_selection_scoring_edges.py
+          aquillm/apps/chat/tests/test_rag_selection_hydration.py
+          aquillm/apps/chat/tests/test_rag_selection_pipeline.py
+          aquillm/apps/chat/tests/test_rag_selected_evidence.py
+          aquillm/apps/chat/tests/test_rag_selection_metrics.py
+          aquillm/apps/chat/tests/test_rag_retrieval.py
+          aquillm/apps/chat/tests/test_evidence_selection_eval.py
+          aquillm/apps/chat/tests/test_rag_evidence_handoff.py
+          aquillm/apps/chat/tests/test_direct_rag_pipeline.py
+          aquillm/apps/documents/tests/test_rerank_scores.py
+          aquillm/apps/documents/tests/test_rerank_score_providers.py
+          aquillm/apps/documents/tests/test_rerank_model_identity.py
+          aquillm/apps/documents/tests/test_rerank_scoring_deadline.py
+          aquillm/apps/documents/tests/test_rerank_selection_provider.py
+          aquillm/apps/documents/tests/test_chunk_search_score_transport.py
+          aquillm/apps/documents/tests/test_chunk_search_graph_overlay.py
+          aquillm/apps/documents/tests/test_hybrid_graph_reranker_authority.py
+          aquillm/apps/documents/tests/test_retrieval_log_redaction.py
+          aquillm/tests/integration/test_retrieval_authorization_propagation.py
+          aquillm/tests/integration/test_production_retrieval_authorization_reachability.py
+          -q --tb=short
+      - name: Graph retrieval latency contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_topology_manifest_batch.py
+          aquillm/apps/knowledge_graph/tests/test_projected_topology_adapter.py
+          aquillm/apps/knowledge_graph/tests/test_projected_topology_adapter_caps.py
+          aquillm/apps/knowledge_graph/tests/test_topology_gateway_contracts.py
+          aquillm/apps/knowledge_graph/tests/test_topology_gateway_client.py
+          aquillm/apps/knowledge_graph/tests/test_topology_gateway_service.py
+          aquillm/apps/knowledge_graph/tests/test_topology_gateway_concurrency.py
+          aquillm/apps/knowledge_graph/tests/test_projection_concurrent_reads.py
+          aquillm/apps/knowledge_graph/tests/test_retrieval_scheduler_lifecycle.py
+          aquillm/apps/knowledge_graph/tests/test_retrieval_overlap.py
+          aquillm/apps/knowledge_graph/tests/test_retrieval_overlap_failures.py
+          aquillm/apps/documents/tests/test_hybrid_graph_orchestration.py
+          aquillm/apps/documents/tests/test_hybrid_graph_diagnostics.py
+          -q --tb=short
+      - name: Projected PPR restart contracts
+        run: >-
+          python -m pytest
+          aquillm/lib/knowledge_graph/tests/test_ppr_restart_config.py
+          aquillm/apps/knowledge_graph/tests/test_ppr_policy.py
+          aquillm/apps/knowledge_graph/tests/test_ppr_seed_support.py
+          aquillm/apps/knowledge_graph/tests/test_production_ppr_dispatch.py
+          aquillm/apps/knowledge_graph/tests/test_production_ppr_branch_failures.py
+          aquillm/apps/knowledge_graph/tests/test_retrieval_branch_scheduler.py
+          aquillm/apps/knowledge_graph/tests/test_projected_ppr_execution.py
+          aquillm/apps/knowledge_graph/tests/test_projected_ppr_caps.py
+          aquillm/apps/knowledge_graph/tests/test_ppr_restart_eval.py
+          -q --tb=short
+      - name: Refactored subsystem regression contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/chat/tests/test_direct_rag_graph_observability.py
+          aquillm/apps/chat/tests/test_direct_rag_retries.py
+          aquillm/apps/chat/tests/test_llm_complete_retry.py
+          aquillm/apps/chat/tests/test_llm_streaming_continuation.py
+          aquillm/apps/collections/tests/test_graph_visualization_api.py
+          aquillm/apps/collections/tests/test_graph_visualization_edges.py
+          aquillm/apps/collections/tests/test_schema_api.py
+          aquillm/apps/collections/tests/test_schema_api_editor.py
+          aquillm/apps/collections/tests/test_schema_api_generation.py
+          aquillm/apps/collections/tests/test_schema_api_history.py
+          aquillm/apps/collections/tests/test_schema_api_publication.py
+          aquillm/apps/collections/tests/test_schema_api_restore_inputs.py
+          aquillm/apps/collections/tests/test_schema_api_validation.py
+          aquillm/apps/collections/tests/test_schema_audit_inputs.py
+          aquillm/apps/collections/tests/test_schema_audit_regressions.py
+          aquillm/apps/collections/tests/test_schema_generation.py
+          aquillm/apps/collections/tests/test_schema_generation_models.py
+          aquillm/apps/collections/tests/test_schema_generation_transport_evidence.py
+          aquillm/apps/collections/tests/test_schema_models.py
+          aquillm/apps/documents/tests/test_rerank_http_cache.py
+          aquillm/apps/documents/tests/test_rerank_pointwise_cache.py
+          aquillm/apps/knowledge_graph/tests/test_canonical_embedding_audit.py
+          aquillm/apps/knowledge_graph/tests/test_canonical_resolution.py
+          aquillm/apps/knowledge_graph/tests/test_collection_embedding_adapter.py
+          aquillm/apps/knowledge_graph/tests/test_collection_embedding_session.py
+          aquillm/apps/knowledge_graph/tests/test_collection_resolution.py
+          aquillm/apps/knowledge_graph/tests/test_collection_resolution_schema.py
+          aquillm/apps/knowledge_graph/tests/test_coreference.py
+          aquillm/apps/knowledge_graph/tests/test_coreference_chunk_coordinates.py
+          aquillm/apps/knowledge_graph/tests/test_coreference_document_coordinates.py
+          aquillm/apps/knowledge_graph/tests/test_coreference_sparse_partition.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_repository.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_scoped_lookup.py
+          aquillm/apps/knowledge_graph/tests/test_extraction_commit_marker.py
+          aquillm/apps/knowledge_graph/tests/test_graph_activation_evaluation.py
+          aquillm/apps/knowledge_graph/tests/test_graph_assembly.py
+          aquillm/apps/knowledge_graph/tests/test_graph_assembly_limits.py
+          aquillm/apps/knowledge_graph/tests/test_graph_assembly_lineage_config.py
+          aquillm/apps/knowledge_graph/tests/test_graph_maintenance_tasks.py
+          aquillm/apps/knowledge_graph/tests/test_graph_recovery.py
+          aquillm/apps/knowledge_graph/tests/test_graph_recovery_publication.py
+          aquillm/apps/knowledge_graph/tests/test_memgraph_projection_repository.py
+          aquillm/apps/knowledge_graph/tests/test_memgraph_projection_validation_and_deletion.py
+          aquillm/apps/knowledge_graph/tests/test_mention_extraction.py
+          aquillm/apps/knowledge_graph/tests/test_extraction_entity_labels.py
+          aquillm/apps/knowledge_graph/tests/test_mention_relation_provenance.py
+          aquillm/apps/knowledge_graph/tests/test_projection_document_provenance.py
+          aquillm/apps/knowledge_graph/tests/test_projection_reconcile_drift.py
+          aquillm/apps/knowledge_graph/tests/test_projection_reconciler.py
+          aquillm/apps/knowledge_graph/tests/test_projection_reconciliation_control.py
+          aquillm/apps/knowledge_graph/tests/test_projection_reconciliation_orphans.py
+          aquillm/apps/knowledge_graph/tests/test_projection_records.py
+          aquillm/apps/knowledge_graph/tests/test_projection_runtime.py
+          aquillm/apps/knowledge_graph/tests/test_projection_runtime_dispatch.py
+          aquillm/apps/knowledge_graph/tests/test_projection_worker_heartbeat.py
+          aquillm/apps/knowledge_graph/tests/test_projection_worker_lease_failures.py
+          aquillm/apps/knowledge_graph/tests/test_tasks.py
+          aquillm/lib/knowledge_graph/tests/test_gliner2_local.py
+          aquillm/lib/knowledge_graph/tests/test_gliner2_relation_orientation.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_client.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_service.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_service_client_parity.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_service_dynamic.py
+          aquillm/lib/knowledge_graph/tests/test_query_extractor_transport.py
+          aquillm/lib/llm/tests/test_rag_citation_validation.py
+          aquillm/lib/llm/tests/test_rag_citations.py
+          aquillm/lib/llm/tests/test_spin_tool_budget.py
+          aquillm/tests/integration/test_knowledge_graph_packaging.py
+          aquillm/tests/integration/test_vllm_extra_args_parser.py
+          aquillm/tests/integration/test_vllm_profiles.py
+          -q --tb=short
+
+      - name: Evidence preservation and quality contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/chat/tests/test_conversation_persistence.py
+          aquillm/apps/chat/tests/test_message_adapters.py
+          aquillm/lib/llm/tests/test_visibility.py
+          aquillm/lib/llm/tests/test_context_packer.py
+          aquillm/tests/integration/test_production_retrieval_authorization_reachability.py
+          aquillm/apps/chat/tests/test_evidence_operational.py
+          aquillm/apps/chat/tests/test_evidence_bounded_partial.py
+          aquillm/apps/chat/tests/test_evidence_loss_causes.py
+          aquillm/apps/chat/tests/test_evidence_completion_controls.py
+          aquillm/apps/chat/tests/test_evidence_sdk_normalization.py
+          aquillm/apps/chat/tests/test_evidence_effective_config.py
+          aquillm/apps/chat/tests/test_evidence_operational_profiles.py
+          aquillm/apps/chat/tests/test_evidence_review_subject.py
+          aquillm/apps/chat/tests/test_short_final_completion.py
+          aquillm/apps/chat/tests/test_evidence_quality_delivery.py
+          aquillm/apps/chat/tests/test_evidence_quality_eval.py
+          aquillm/apps/chat/tests/test_evidence_quality_gates.py
+          aquillm/apps/chat/tests/test_evidence_quality_live.py
+          aquillm/apps/chat/tests/test_evidence_quality_review.py
+          aquillm/apps/chat/tests/test_evidence_git_portability.py
+          aquillm/apps/chat/tests/test_evidence_quality_seed.py
+          aquillm/apps/chat/tests/test_rag_acquisition.py
+          aquillm/apps/chat/tests/test_rag_budget_boundaries.py
+          aquillm/apps/chat/tests/test_rag_commit_fence.py
+          aquillm/apps/chat/tests/test_rag_context_budget.py
+          aquillm/apps/chat/tests/test_rag_coverage.py
+          aquillm/apps/chat/tests/test_rag_delayed_provider.py
+          aquillm/apps/chat/tests/test_rag_evidence_handoff.py
+          aquillm/apps/chat/tests/test_rag_fix_asgi.py
+          aquillm/apps/chat/tests/test_rag_fix_cache.py
+          aquillm/apps/chat/tests/test_rag_fix_continuity.py
+          aquillm/apps/chat/tests/test_rag_fix_coverage.py
+          aquillm/apps/chat/tests/test_rag_fix_handoff.py
+          aquillm/apps/chat/tests/test_rag_fix_tool_deadlines.py
+          aquillm/apps/chat/tests/test_rag_fix_window_cache.py
+          aquillm/apps/chat/tests/test_rag_normal_handoff.py
+          aquillm/apps/chat/tests/test_rag_preservation_routes.py
+          aquillm/apps/chat/tests/test_rag_provider_evidence_guard.py
+          aquillm/apps/chat/tests/test_rag_query.py
+          aquillm/apps/chat/tests/test_rag_refinement_routes.py
+          aquillm/apps/chat/tests/test_rag_source_continuity.py
+          aquillm/apps/chat/tests/test_rag_source_continuity_integration.py
+          aquillm/apps/chat/tests/test_rag_source_document_tools.py
+          aquillm/apps/chat/tests/test_rag_source_figures.py
+          aquillm/apps/chat/tests/test_rag_source_loading.py
+          aquillm/apps/chat/tests/test_rag_source_pipeline.py
+          aquillm/apps/chat/tests/test_rag_source_preparation.py
+          aquillm/apps/chat/tests/test_rag_source_selection.py
+          aquillm/apps/chat/tests/test_rag_scoring_timeout_fallback.py
+          aquillm/apps/chat/tests/test_rag_source_singular.py
+          aquillm/apps/chat/tests/test_rag_source_synthesis.py
+          aquillm/apps/chat/tests/test_rag_source_types.py
+          aquillm/apps/chat/tests/test_rag_synthesis_lifecycle.py
+          aquillm/apps/chat/tests/test_rag_turn_budget.py
+          aquillm/apps/chat/tests/test_rag_turn_lifecycle.py
+          aquillm/apps/chat/tests/test_rag_websocket_lifecycle.py
+          aquillm/apps/chat/tests/test_tool_payload_compaction.py
+          aquillm/apps/collections/tests/test_django_retrieval_authorization.py
+          aquillm/apps/documents/tests/test_chunk_rerank_pair_capability.py
+          aquillm/apps/documents/tests/test_chunk_rerank_window_fences.py
+          aquillm/apps/documents/tests/test_chunk_rerank_window_scores.py
+          aquillm/apps/documents/tests/test_chunk_rerank_windows.py
+          aquillm/apps/documents/tests/test_pair_worker_lifecycle.py
+          aquillm/apps/documents/tests/test_rerank_http_cache.py
+          aquillm/apps/documents/tests/test_retrieval_log_redaction.py
+          aquillm/lib/llm/tests/test_budget_observation.py
+          aquillm/lib/llm/tests/test_direct_synthesis_grounding.py
+          aquillm/lib/llm/tests/test_evidence_observation.py
+          --ds=aquillm.settings_projection_test -q --tb=short
+
+      - name: PostgreSQL seed identity and permission contracts
+        env:
+          KG_REQUIRE_POSTGRES_TESTS: "1"
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_seed_lookup_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_extended_seed_batch.py
+          aquillm/apps/knowledge_graph/tests/test_extended_seed_lookup.py
+          --ds=aquillm.settings_projection_test -q --tb=short
+
       - name: Chat, retrieval, document, and deployment regressions
         run: >-
           python -m pytest
@@ -96,5 +346,5 @@ jobs:
           cache: npm
           cache-dependency-path: react/package-lock.json
       - run: npm ci
-      - run: npm test
       - run: npm run build
+      - run: npm test

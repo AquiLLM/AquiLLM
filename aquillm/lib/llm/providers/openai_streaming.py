@@ -50,13 +50,16 @@ async def consume_streaming_completion(
     stage = safe_stage(stage)
     text_parts: list[str] = []
     tool_call_parts: dict[int, dict[str, Any]] = {}
-    finish_reason = "stop"
+    finish_reason = "unknown"
     input_usage = 0
     output_usage = 0
     reasoning_usage: int | None = None
     first_signal_at: float | None = None
 
     async for chunk in stream:
+        from lib.llm.synthesis_dispatch import check_synthesis_active
+
+        check_synthesis_active()
         choices = getattr(chunk, "choices", None) or []
         if choices:
             choice = choices[0]
@@ -149,6 +152,7 @@ async def consume_streaming_completion(
         raw_tools=raw_tools,
         done=True,
         tool_call_payload=tool_call_payload,
+        stop_reason=finish_reason,
     )
     if visible_done_content:
         await stream_callback(

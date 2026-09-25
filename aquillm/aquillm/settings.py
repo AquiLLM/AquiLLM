@@ -10,41 +10,29 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.0/ref/settings/
 """
 
-from pathlib import Path
 import os
+import sys
+from pathlib import Path
+
+from aquillm.celery_schedules import knowledge_graph_maintenance_schedule
+from aquillm.projection_database_settings import projection_databases
+from aquillm.settings_env import (
+    env_bool,
+    env_csv,
+    env_float,
+    env_int,
+    env_kg_float,
+    env_kg_int,
+)
+from lib.knowledge_graph.config import (
+    INVALID_EXTRACTION_QUEUE,
+    KnowledgeGraphConfigError,
+    load_extraction_queue,
+)
+from lib.knowledge_graph.retrieval_config import load_django_hybrid_retrieval_settings
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-
-def env_bool(key: str, default: bool = False) -> bool:
-    value = os.environ.get(key)
-    if value is None:
-        return default
-    return value.strip().lower() in ("1", "true", "yes", "on")
-
-
-def env_csv(key: str) -> list[str]:
-    value = os.environ.get(key, "")
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def env_int(key: str, default: int) -> int:
-    try:
-        raw = (os.environ.get(key) or str(default)).strip()
-        value = int(raw)
-    except Exception:
-        return default
-    return value if value >= 0 else default
-
-
-def env_float(key: str, default: float) -> float:
-    try:
-        raw = (os.environ.get(key) or str(default)).strip()
-        value = float(raw)
-    except Exception:
-        return default
-    return value if value >= 0 else default
 
 
 # RAG retrieval caches (fail-open; disabled unless RAG_CACHE_ENABLED=1)
@@ -64,6 +52,64 @@ RAG_QUERY_SHORT_LEN = env_int("RAG_QUERY_SHORT_LEN", 48)
 RAG_QUERY_LONG_LEN = env_int("RAG_QUERY_LONG_LEN", 160)
 RAG_SHORT_QUERY_CANDIDATE_SCALE = env_float("RAG_SHORT_QUERY_CANDIDATE_SCALE", 0.9)
 RAG_LONG_QUERY_CANDIDATE_SCALE = env_float("RAG_LONG_QUERY_CANDIDATE_SCALE", 1.1)
+
+# Knowledge-graph operations. All mutation/build controls are off by default.
+KG_EVAL_BYPASS_ALLOWED = env_bool("KG_EVAL_BYPASS_ALLOWED", False)
+KG_MAINTENANCE_SCHEDULER_ENABLED = env_bool(
+    "KG_MAINTENANCE_SCHEDULER_ENABLED", False
+)
+KG_GRAPH_RECOVERY_PAGE_SIZE = min(
+    max(env_int("KG_GRAPH_RECOVERY_PAGE_SIZE", 50), 1), 500
+)
+KG_MAINTENANCE_INTERVAL_SECONDS = max(
+    env_int("KG_MAINTENANCE_INTERVAL_SECONDS", 300), 60
+)
+KG_ARTIFACT_RETENTION_DAYS = env_int("KG_ARTIFACT_RETENTION_DAYS", 30) or 30
+KG_ARTIFACT_KEEP_SUPERSEDED = env_int("KG_ARTIFACT_KEEP_SUPERSEDED", 2)
+try:
+    KG_EXTRACTION_QUEUE = load_extraction_queue(os.environ)
+except KnowledgeGraphConfigError:
+    KG_EXTRACTION_QUEUE = INVALID_EXTRACTION_QUEUE
+    KG_EXTRACTION_QUEUE_VALID = False
+else:
+    KG_EXTRACTION_QUEUE_VALID = True
+KG_OVERLAY_ENABLED = env_bool("KG_OVERLAY_ENABLED", False)
+KG_OVERLAY_ALGORITHM = os.environ.get("KG_OVERLAY_ALGORITHM", "ppr_v1").strip()
+KG_OVERLAY_RRF_K = env_kg_int("KG_OVERLAY_RRF_K", 60)
+KG_OVERLAY_MAX_SEEDS = env_kg_int("KG_OVERLAY_MAX_SEEDS", 64)
+KG_OVERLAY_MAX_SCOPE_DOCUMENTS = env_kg_int(
+    "KG_OVERLAY_MAX_SCOPE_DOCUMENTS",
+    10_000,
+)
+KG_OVERLAY_MAX_SCOPE_COLLECTIONS = env_kg_int(
+    "KG_OVERLAY_MAX_SCOPE_COLLECTIONS",
+    128,
+)
+KG_OVERLAY_MAX_HOPS = env_kg_int("KG_OVERLAY_MAX_HOPS", 2)
+KG_OVERLAY_MAX_FANOUT = env_kg_int("KG_OVERLAY_MAX_FANOUT", 10)
+KG_OVERLAY_MAX_NODES = env_kg_int("KG_OVERLAY_MAX_NODES", 200)
+KG_OVERLAY_MAX_EDGES = env_kg_int("KG_OVERLAY_MAX_EDGES", 1_000)
+KG_OVERLAY_MAX_EVIDENCE_ROWS = env_kg_int("KG_OVERLAY_MAX_EVIDENCE_ROWS", 3_000)
+KG_OVERLAY_MAX_EVIDENCE_PER_EDGE = env_kg_int(
+    "KG_OVERLAY_MAX_EVIDENCE_PER_EDGE",
+    3,
+)
+KG_OVERLAY_MAX_MENTIONS_PER_ENTITY = env_kg_int(
+    "KG_OVERLAY_MAX_MENTIONS_PER_ENTITY",
+    2,
+)
+KG_OVERLAY_PPR_RESTART = env_kg_float("KG_OVERLAY_PPR_RESTART", 0.20)
+KG_OVERLAY_PPR_ITERATIONS = env_kg_int("KG_OVERLAY_PPR_ITERATIONS", 8)
+KG_OVERLAY_MAX_CANDIDATES = env_kg_int("KG_OVERLAY_MAX_CANDIDATES", 20)
+KG_OVERLAY_MAX_PER_DOCUMENT = env_kg_int("KG_OVERLAY_MAX_PER_DOCUMENT", 3)
+KG_OVERLAY_TIMEOUT_MS = env_kg_int("KG_OVERLAY_TIMEOUT_MS", 150)
+globals().update(load_django_hybrid_retrieval_settings(os.environ))
+TESTING = (
+    env_bool("DJANGO_TESTING", False)
+    or "pytest" in sys.modules
+    or Path(sys.argv[0]).stem.lower() in {"pytest", "py.test"}
+    or (len(sys.argv) > 1 and sys.argv[1] == "test")
+)
 
 # Cross-provider prompt token efficiency (Claude/Gemini mirror OpenAI-style preflight trim)
 TOKEN_EFFICIENCY_ENABLED = env_bool("TOKEN_EFFICIENCY_ENABLED", False)
@@ -163,6 +209,7 @@ INSTALLED_APPS = [
     "apps.core",
     "apps.integrations.zotero",
     "apps.bug_reports",
+    "apps.knowledge_graph",
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -221,8 +268,7 @@ TEMPLATES = [
 WSGI_APPLICATION = "aquillm.wsgi.application"
 
 
-# Database
-# https://docs.djangoproject.com/en/5.0/ref/settings/#databases
+# Database: https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
 POSTGRES_USER = os.environ.get("POSTGRES_USER", "aquillm")
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "db")
@@ -240,12 +286,12 @@ DATABASES = {
         "PASSWORD": POSTGRES_PASSWORD,
         "HOST": POSTGRES_HOST,
         "PORT": str(POSTGRES_PORT),
-        "TEST": {
-            'NAME': 'test'
-        }
+        "TEST": {"NAME": "test"},
     }
 }
-
+DATABASES.update(projection_databases())
+DATABASE_ROUTERS = ["apps.knowledge_graph.projection.database_router."
+                    "ProjectionDatabaseRouter"]
 
 # Password validation
 # https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
@@ -380,6 +426,7 @@ CELERY_RESULT_BACKEND = "redis://redis:6379"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+CELERY_TASK_QUEUE_MAX_PRIORITY = 10
 CELERY_TASK_PUBLISH_RETRY = True
 CELERY_TASK_PUBLISH_RETRY_POLICY = {
     "max_retries": 3,
@@ -387,6 +434,28 @@ CELERY_TASK_PUBLISH_RETRY_POLICY = {
     "interval_step": 0.5,
     "interval_max": 5,
 }
+CELERY_TASK_ROUTES = {
+    "apps.knowledge_graph.tasks.build_document_graph_task": {
+        "queue": KG_EXTRACTION_QUEUE,
+    },
+    "apps.knowledge_graph.tasks.refresh_collection_graph_task": {
+        "queue": KG_EXTRACTION_QUEUE,
+    },
+    "apps.knowledge_graph.tasks.prune_graph_artifacts_task": {
+        "queue": KG_EXTRACTION_QUEUE,
+        "priority": 9,
+    },
+    "apps.knowledge_graph.tasks.recover_missing_graph_builds_task": {
+        "queue": KG_EXTRACTION_QUEUE,
+        "priority": 9,
+    },
+}
+CELERY_BEAT_SCHEDULE = knowledge_graph_maintenance_schedule(
+    enabled=KG_MAINTENANCE_SCHEDULER_ENABLED,
+    extraction_queue=KG_EXTRACTION_QUEUE,
+    projection_queue=globals()["KG_PROJECTION_QUEUE"],
+    interval_seconds=KG_MAINTENANCE_INTERVAL_SECONDS,
+)
 
 # Zotero Integration Settings
 # OAuth credentials should be set in environment variables:

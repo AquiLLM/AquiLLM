@@ -1,4 +1,4 @@
-> Historical development reference imported with the nongraph parity backport. See [the parity audit](../../backports/2026-09-22-non-graph-parity.md) for shipped behavior; graph references and unfinished plan items are outside this release.
+> Historical development reference. The [September 22 nongraph parity backport](../../backports/2026-09-22-non-graph-parity.md) imported this document but excluded graph work and unfinished plan items from that backport. That historical scope does not describe the later full development promotion.
 
 # Chat Retrieval Reliability and Latency Hardening Design
 

@@ -13,7 +13,7 @@
 
 **AquiLLM is an open-source open-weight RAG (Retrieval-Augmented Generation) application designed specifically for researchers and research groups.**  It helps users manage, search, and interact with research documents through a natural-language interface to their data, supporting literature review, onboarding, collaboration, and knowledge discovery workflows. Users can upload and organize documents into collections across a variety of file formats. AquiLLM is designed for local or pseudo-local deployment, giving research groups greater control over their data, models, and infrastructure.
 
-More info can be found at [https://aquillm.org](https://aquillm.org). For a brief video tutorial using MRI data, visit [youtube](https://www.youtube.com/watch?v=7B3V2a0Xzaw). 
+More info can be found at [https://aquillm.org](https://aquillm.org). For a brief video tutorial using MRI data, visit [youtube](https://www.youtube.com/watch?v=7B3V2a0Xzaw).
 See also our paper ["AquiLLM: a RAG Tool for Capturing Tacit Knowledge in Research Groups"](https://arxiv.org/abs/2508.05648) by Chandler Campbell, Bernie Boscoe, and Tuan Do
 
 <!-- ![AquiLLM Screenshot](path/to/screenshot.gif) -->
@@ -50,13 +50,13 @@ The unified upload endpoint supports:
    - Go to the collection you created
    - Choose the document type you want to upload using the buttons, the buttons are as follows, in order from left to right:
      - PDF: Upload PDF files
-     - ArXiv Paper: Enter an arXiv ID to import 
+     - ArXiv Paper: Enter an arXiv ID to import
      - VTT File: Upload VTT transcript files
-     - Webpage: Enter the URL of a site 
+     - Webpage: Enter the URL of a site
      - Handwritten Notes: Upload images of handwritten notes, select the Convert to LaTeX box if they contain formulas
      - All documents will appear in your collection, if they don't show up automatically, refresh the page
    - The documents will be ingested in the background. The ingestion monitor will show its progress. Images that are part of the document will be ingested into a subcollection. Support for image search is very experimental.
-     
+
 3. **View Your Documents**
    - If you leave your collection page, do the following
    - Select Collections button from the sidebar and choose which collection you want to view
@@ -129,7 +129,7 @@ This assumes you have Docker and Docker Compose installed.
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/AquiLLM/AquiLLM.git 
+    git clone https://github.com/AquiLLM/AquiLLM.git
     cd AquiLLM
     ```
 2.  **Copy the environment template:**
@@ -192,6 +192,103 @@ This assumes you have Docker and Docker Compose installed.
     docker compose down
     ```
 
+## Local GPU ASR (Nemotron 3.5)
+
+The local GPU/vLLM transcription default is
+[`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/blob/f3d333391852ba876df169dcc9ba902d25b6ab0b/README.md),
+pinned at revision `f3d333391852ba876df169dcc9ba902d25b6ab0b` and served as
+`nemotron-3.5-asr-streaming-0.6b`. The `no_gpu_dev` Compose configuration is
+unchanged: it uses the hosted `whisper-1` service instead of this local model.
+
+AquiLLM keeps the existing OpenAI-compatible contract: uploads go to
+`POST /v1/audio/transcriptions`, and the OpenAI SDK result is read through its
+`.text` property. This integration is **batch/offline only**, despite
+"streaming" in the upstream checkpoint name. It accepts clips of at most 390
+seconds and is deliberately restricted to one active sequence with
+`--max-num-seqs 1`; it makes no concurrency promise. The checkpoint runs in
+FP32 via explicit `dtype float32`, with the vLLM V1 runner
+(`VLLM_USE_V2_MODEL_RUNNER=0`) and eager execution (`--enforce-eager`).
+Translations, diarization, word timestamps, verbose responses, and realtime
+WebSockets are outside this release.
+
+Leave `INGEST_TRANSCRIBE_LANGUAGE` blank or unset for automatic language
+detection. An explicit locale such as `INGEST_TRANSCRIBE_LANGUAGE=en-US` is an
+opt-in hint. Language coverage and quality vary by locale and acoustic domain;
+review the pinned model card before relying on a locale in production.
+Adaptation-ready locales are disabled unless the operator explicitly sets
+`NEMOTRON_ASR_ALLOW_ADAPTATION_LANGUAGES=1`.
+
+The downloaded model weights use
+[OpenMDW 1.1](https://openmdw.ai/license/1-1/), which is distinct from the
+AquiLLM source license. AquiLLM downloads the pinned weights at deployment time
+and does not redistribute them.
+
+Build, start, and inspect only the transcription service from the repository
+root:
+
+```bash
+docker compose --env-file .env -f deploy/compose/base.yml --profile vllm build vllm_transcribe
+docker compose --env-file .env -f deploy/compose/base.yml --profile vllm up -d --no-deps --wait --wait-timeout 900 vllm_transcribe
+
+# Health from inside the container, where vLLM listens on port 8000.
+docker compose --env-file .env -f deploy/compose/base.yml --profile vllm exec -T vllm_transcribe curl -fsS http://localhost:8000/health
+
+# Model discovery and a host-side fixture transcription.
+curl -fsS http://127.0.0.1:8005/v1/models
+curl -fsS http://127.0.0.1:8005/v1/audio/transcriptions \
+  -F model=nemotron-3.5-asr-streaming-0.6b \
+  -F file=@tests/fixtures/audio/librispeech_1272-128104-0000.flac
+```
+
+The base Compose file publishes host port 8005. The development overlay does
+not publish host port 8005; use the in-container health check or the Compose
+network from another service there.
+
+`TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION=0.20` is an initial vLLM allocation,
+not a whole-service memory measurement. Actual GPU memory also includes
+features, activations, and runtime overhead. Size the complete inference
+profile on the target GPU before production use.
+
+### Whisper rollback
+
+The rollback configuration reuses the same transcription image and endpoint;
+verify it on the target GPU after recreating the service. Replace the active
+Nemotron values in `.env` with this complete block; do not merely uncomment a
+second set of duplicate keys:
+
+```dotenv
+TRANSCRIBE_VLLM_MODEL=openai/whisper-large-v3-turbo
+TRANSCRIBE_VLLM_REVISION=
+TRANSCRIBE_VLLM_SERVED_MODEL_NAME=whisper-large-v3-turbo
+TRANSCRIBE_VLLM_TOKENIZER=openai/whisper-large-v3-turbo
+TRANSCRIBE_VLLM_TENSOR_PARALLEL_SIZE=1
+TRANSCRIBE_VLLM_GPU_MEMORY_UTILIZATION=0.08
+TRANSCRIBE_VLLM_MAX_MODEL_LEN=448
+TRANSCRIBE_VLLM_DTYPE=float16
+TRANSCRIBE_VLLM_ALLOW_LONG_MAX_MODEL_LEN=0
+TRANSCRIBE_VLLM_TRUST_REMOTE_CODE=1
+TRANSCRIBE_VLLM_EXTRA_ARGS="--max-num-seqs 1 --max-num-batched-tokens 1500 --limit-mm-per-prompt '{\"audio\":{\"count\":1,\"length\":30}}'"
+INGEST_TRANSCRIBE_MODEL=whisper-large-v3-turbo
+```
+
+Keep the decoder model length at 448, but do not lower the batch-token limit
+below 1,500: vLLM 0.21 accounts a 30-second Whisper audio item as 1,500 encoder
+tokens. This rollback deliberately uses plain FP16 weights. vLLM 0.21 routes
+this unquantized checkpoint through its incompatible 4-bit fused-QKV path even
+when bitsandbytes loader extras request 8-bit.
+
+Apply the environment change by recreating the transcription process without
+rebuilding, then recreate the application processes so they receive the new
+served model name:
+
+```bash
+docker compose --env-file .env -f deploy/compose/base.yml --profile vllm up -d --no-deps --force-recreate vllm_transcribe
+docker compose --env-file .env -f deploy/compose/base.yml --profile vllm up -d --no-deps --force-recreate web worker
+```
+
+This is an operational rollback, not automatic fallback and not a second
+resident model. Only one ASR configuration is intended to be active at a time.
+
 ## Updating (development)
 
 Pull the latest changes and rebuild. Migrations run automatically on startup.
@@ -229,7 +326,7 @@ docker compose -f deploy/compose/production.yml --profile vllm up -d --force-rec
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/AquiLLM/AquiLLM.git 
+    git clone https://github.com/AquiLLM/AquiLLM.git
     cd AquiLLM
     ```
 2.  **Copy the environment template:**
@@ -262,7 +359,7 @@ docker compose -f deploy/compose/production.yml --profile vllm up -d --force-rec
     docker compose -f deploy/compose/production.yml --profile certbot up --build get_certs
 
     # Default: hosted LLMs (OpenAI, Claude, Gemini, etc.)
-    docker compose -f deploy/compose/production.yml up -d 
+    docker compose -f deploy/compose/production.yml up -d
 
     # Optional: with local vLLM-backed models
     docker compose -f deploy/compose/production.yml --profile vllm up -d

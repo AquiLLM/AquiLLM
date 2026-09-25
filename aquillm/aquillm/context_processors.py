@@ -1,4 +1,5 @@
 """Template context processors: navigation, URLs exposed to the client, theme."""
+
 from __future__ import annotations
 
 import os
@@ -15,6 +16,7 @@ from .models import UserSettings, WSConversation
 logger = structlog.stdlib.get_logger(__name__)
 
 _PLACEHOLDER_DOC_ID = UUID("00000000-0000-0000-0000-000000000001")
+_PLACEHOLDER_SCHEMA_RUN_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
 
 def _safe_reverse(name: str, kwargs: dict[str, Any] | None = None) -> str | None:
@@ -36,7 +38,25 @@ def _safe_reverse(name: str, kwargs: dict[str, Any] | None = None) -> str | None
         return None
 
 
-def _url_map_from_specs(specs: list[tuple[str, str, dict[str, Any] | None]]) -> dict[str, str]:
+def _strict_reverse(name: str, kwargs: dict[str, Any] | None = None) -> str:
+    if kwargs:
+        url = reverse(name, kwargs=kwargs)
+        for k, v in kwargs.items():
+            url = url.replace(str(v), f"%({k})s")
+        return url
+    return reverse(name)
+
+
+def _schema_api_urls() -> dict[str, str]:
+    return {
+        key: _strict_reverse(name, kwargs)
+        for key, name, kwargs in _REQUIRED_SCHEMA_API_URL_SPECS
+    }
+
+
+def _url_map_from_specs(
+    specs: list[tuple[str, str, dict[str, Any] | None]],
+) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, name, kwargs in specs:
         url = _safe_reverse(name, kwargs)
@@ -58,7 +78,11 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_move_document", "api_move_document", {"doc_id": _PLACEHOLDER_DOC_ID}),
     ("api_delete_document", "api_delete_document", {"doc_id": _PLACEHOLDER_DOC_ID}),
     ("api_search_users", "api_search_users", None),
-    ("api_whitelist_email", "api_whitelist_email", {"email": "placeholder@example.com"}),
+    (
+        "api_whitelist_email",
+        "api_whitelist_email",
+        {"email": "placeholder@example.com"},
+    ),
     ("api_whitelist_emails", "api_whitelist_emails", None),
     ("api_feedback_ratings_csv", "api_feedback_ratings_csv", None),
     ("api_ingest_vtt", "api_ingest_vtt", None),
@@ -76,6 +100,57 @@ _API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
     ("api_bug_reports_list", "api_bug_reports_list", None),
     ("api_bug_report_detail", "api_bug_report_detail", {"report_id": 0}),
     ("api_bug_report_delete", "api_bug_report_delete", {"report_id": 0}),
+]
+
+_REQUIRED_SCHEMA_API_URL_SPECS: list[tuple[str, str, dict[str, Any] | None]] = [
+    (
+        "api_collection_graph_visualization",
+        "api_collection_graph_visualization",
+        {"col_id": 0},
+    ),
+    ("api_collection_graph_rebuild", "api_collection_graph_rebuild", {"col_id": 0}),
+    (
+        "api_collection_schema_workspace",
+        "api_collection_schema_workspace",
+        {"col_id": 0},
+    ),
+    ("api_collection_schema_draft", "api_collection_schema_draft", {"col_id": 0}),
+    ("api_collection_schema_generate", "api_collection_schema_generate", {"col_id": 0}),
+    (
+        "api_collection_schema_generation_status",
+        "api_collection_schema_generation_status",
+        {"col_id": 7, "run_id": _PLACEHOLDER_SCHEMA_RUN_ID},
+    ),
+    (
+        "api_collection_schema_entity",
+        "api_collection_schema_entity",
+        {"col_id": 0, "entity_key": "placeholder"},
+    ),
+    (
+        "api_collection_schema_relation",
+        "api_collection_schema_relation",
+        {"col_id": 0, "relation_key": "placeholder"},
+    ),
+    ("api_collection_schema_validate", "api_collection_schema_validate", {"col_id": 0}),
+    ("api_collection_schema_diff", "api_collection_schema_diff", {"col_id": 0}),
+    ("api_collection_schema_publish", "api_collection_schema_publish", {"col_id": 0}),
+    ("api_collection_schema_discard", "api_collection_schema_discard", {"col_id": 0}),
+    ("api_collection_schema_versions", "api_collection_schema_versions", {"col_id": 0}),
+    (
+        "api_collection_schema_version_diff",
+        "api_collection_schema_version_diff",
+        {"col_id": 0, "version_id": 1},
+    ),
+    (
+        "api_collection_schema_restore",
+        "api_collection_schema_restore",
+        {"col_id": 0, "version_id": 1},
+    ),
+    (
+        "api_collection_schema_restore_replace",
+        "api_collection_schema_restore_replace",
+        {"col_id": 0},
+    ),
 ]
 
 # Named page routes for window.pageUrls (non-API aquillm pages).
@@ -123,7 +198,7 @@ def nav_links(request):
 
 
 def api_urls(request):
-    return {"api_urls": _url_map_from_specs(_API_URL_SPECS)}
+    return {"api_urls": {**_url_map_from_specs(_API_URL_SPECS), **_schema_api_urls()}}
 
 
 def page_urls(request):
@@ -132,7 +207,9 @@ def page_urls(request):
 
 def user_conversations(request):
     if request.user.is_authenticated:
-        convos = WSConversation.objects.filter(owner=request.user).order_by("-created_at")
+        convos = WSConversation.objects.filter(owner=request.user).order_by(
+            "-created_at"
+        )
         return {"conversations": convos}
     return {}
 

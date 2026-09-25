@@ -1,5 +1,7 @@
 """LLM tool types and utilities."""
-from typing import Any, Callable, Literal, Optional
+
+from collections.abc import Callable
+from typing import Any, Literal
 
 from pydantic import BaseModel, model_validator
 
@@ -16,18 +18,21 @@ type ToolResultValue = (
 )
 type ToolResultDict = dict[
     Literal[
-        'exception',
-        'result',
-        'files',
-        '_images',
-        '_image_instruction',
-        '_retrieval_diagnostics',
-        'retrieval_status',
-        'retrieval_message',
-        'retrieval_diagnostics',
-        'retrieved_count',
-        'retrieved_documents',
-        'citation_chunks',
+        "exception",
+        "result",
+        "files",
+        "_images",
+        "_image_instruction",
+        "_retrieval_diagnostics",
+        "_retrieval_scores",
+        "_source_provenance",
+        "_figure_provenance",
+        "retrieval_status",
+        "retrieval_message",
+        "retrieval_diagnostics",
+        "retrieved_count",
+        "retrieved_documents",
+        "citation_chunks",
     ],
     ToolResultValue,
 ]
@@ -35,33 +40,35 @@ type ToolResultDict = dict[
 
 class LLMTool(BaseModel):
     """Represents a tool that can be called by an LLM."""
+
     llm_definition: dict
-    for_whom: Literal['user', 'assistant']
+    for_whom: Literal["user", "assistant"]
     _function: Callable[..., ToolResultDict]
-    
+
     def __init__(self, **data):
         super().__init__(**data)
         self._function = data.get("_function")
 
     def __call__(self, *args, **kwargs):
         return self._function(*args, **kwargs)
-    
+
     @property
     def name(self) -> str:
-        return self.llm_definition['name']
+        return self.llm_definition["name"]
 
 
 class ToolChoice(BaseModel):
     """Specifies how the LLM should choose tools."""
-    type: Literal['auto', 'any', 'tool']
-    name: Optional[str] = None
 
-    @model_validator(mode='after')
+    type: Literal["auto", "any", "tool"]
+    name: str | None = None
+
+    @model_validator(mode="after")
     @classmethod
     def validate_name(cls, data: Any) -> Any:
-        if data.type == 'tool' and data.name is None:
+        if data.type == "tool" and data.name is None:
             raise ValueError("name is required when type is 'tool'")
-        if data.type != 'tool' and data.name is not None:
+        if data.type != "tool" and data.name is not None:
             raise ValueError("name should only be set when type is 'tool'")
         return data
 
@@ -79,4 +86,4 @@ def dump_tool_choice(tool_choice: Any) -> dict:
     raise TypeError(f"Unsupported tool_choice type: {type(tool_choice)!r}")
 
 
-__all__ = ['ToolResultDict', 'LLMTool', 'ToolChoice', 'dump_tool_choice']
+__all__ = ["ToolResultDict", "LLMTool", "ToolChoice", "dump_tool_choice"]

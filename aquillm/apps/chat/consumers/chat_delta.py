@@ -1,4 +1,5 @@
 """Build and send WebSocket conversation deltas after LLM turns."""
+
 from __future__ import annotations
 
 from json import dumps
@@ -11,6 +12,7 @@ from channels.db import aclose_old_connections
 from apps.chat.consumers.chat_transport import best_effort_send
 from aquillm.llm import Conversation
 from aquillm.message_adapters import pydantic_message_to_frontend_dict
+from lib.llm.turn_context import check_turn_active
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -24,10 +26,12 @@ async def send_conversation_delta(
 ) -> None:
     if close_db:
         await aclose_old_connections()
+    check_turn_active()
     logger.debug("obs.chat.delta_start")
     consumer.convo = convo
     save_start = perf_counter()
     await consumer._save_conversation(create_memories=create_memories)
+    check_turn_active()
     new_messages = convo.messages[consumer.last_sent_sequence + 1 :]
     if not new_messages:
         logger.debug("obs.chat.delta_skipped")
@@ -49,6 +53,7 @@ async def send_conversation_delta(
         consumer,
         text_data=dumps({"delta": delta}),
     )
+    check_turn_active()
     if sent:
         consumer.last_sent_sequence = len(convo) - 1
     logger.info(

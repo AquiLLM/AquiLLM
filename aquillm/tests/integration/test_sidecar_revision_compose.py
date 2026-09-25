@@ -49,9 +49,9 @@ def test_shipping_sidecars_forward_their_own_model_tokenizer_and_code_revisions(
         assert environment["VLLM_DTYPE"] == "float16"
         assert environment["VLLM_TRUST_REMOTE_CODE"] == "1"
         assert environment["VLLM_EXTRA_ARGS"] == extra
-        # Strict argument enforcement remains an explicit launcher opt-in;
-        # shipping Compose must not override the operator's existing arguments.
-        assert environment.get("VLLM_STRICT_PROTECTED_ARGS", "0") == "0"
+        # Shipping sidecars reject extra arguments that could override the
+        # independently pinned runner, dtype, or checkpoint identity.
+        assert environment["VLLM_STRICT_PROTECTED_ARGS"] == "1"
     assert services["vllm_rerank"]["environment"]["VLLM_TASK"] == ""
 
 

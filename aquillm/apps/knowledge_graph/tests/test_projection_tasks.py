@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+
+from apps.knowledge_graph.projection import tasks
+from apps.knowledge_graph.projection.memgraph_driver import MemgraphDriverError
+
+
+def test_projection_task_uses_canonical_uuid_and_returns_redacted_summary(monkeypatch):
+    projection_id = uuid4()
+    monkeypatch.setattr(
+        tasks,
+        "project_generation",
+        lambda **_kwargs: SimpleNamespace(ready=True, failure_code=None),
+    )
+
+    result = tasks.project_knowledge_graph_projection.run(str(projection_id))
+
+    assert result == {"ready": True, "failure_code": None}
+    assert (
+        tasks.project_knowledge_graph_projection.queue == "knowledge_graph_projection"
+    )
+    assert tasks.project_knowledge_graph_projection.max_retries == (
+        tasks.load_projection_runtime_settings().projection_max_attempts - 1
+    )
+
+
+def test_projection_task_rejects_noncanonical_payload_without_echoing_it():
+    with pytest.raises(ValueError, match="canonical") as captured:
+        tasks.project_knowledge_graph_projection.run("SECRET-NOT-A-UUID")
+    assert "SECRET" not in repr(captured.value)
+
+
+def test_reconcile_and_prune_tasks_are_registered_thin_wrappers(monkeypatch):
+    projection_id = uuid4()
+    calls = {}
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_graph_projections",
+        lambda **kwargs: (
+            calls.update(reconcile=kwargs)
+            or SimpleNamespace(examined_count=2, enqueued_count=1)
+        ),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "prune_graph_projection_generations",
+        lambda **kwargs: (
+            calls.update(prune=kwargs)
+            or SimpleNamespace(candidate_count=3, deleted_count=2)
+        ),
+    )
+    published = []
+    publications = iter((2, 0))
+
+    def publish(**kwargs):
+        published.append(kwargs)
+        count = next(publications)
+        return SimpleNamespace(
+            attempted_count=count, published_count=count, failed_count=0
+        )
+
+    monkeypatch.setattr(
+        tasks,
+        "publish_projection_outbox",
+        publish,
+        raising=False,
+    )
+
+    reconciled = tasks.reconcile_knowledge_graph_projections.run(10, False, 17)
+    pruned = tasks.prune_knowledge_graph_projection.run(
+        str(projection_id), None, 10, 2, True
+    )
+
+    assert reconciled == {
+        "examined_count": 2,
+        "enqueued_count": 1,
+        "published_count": 2,
+    }
+    assert pruned == {"candidate_count": 3, "deleted_count": 2}
+    assert calls["reconcile"]["collection_id"] == 17
+    assert calls["prune"]["projection_id"] == projection_id
+    assert calls["prune"]["collection_id"] is None
+    assert len(published) == 2
+
+
+def test_projection_module_registers_exactly_three_production_task_wrappers() -> None:
+    source = Path(tasks.__file__).read_text(encoding="utf-8")
+
+    assert source.count("@shared_task(") == 3
+    assert "def publish_knowledge_graph_projection_outbox" not in source
+
+
+def test_reconcile_task_retries_failed_outbox_then_publishes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_graph_projections",
+        lambda **_kwargs: SimpleNamespace(examined_count=0, enqueued_count=0),
+    )
+    summaries = [
+        SimpleNamespace(attempted_count=1, published_count=0, failed_count=1),
+        SimpleNamespace(attempted_count=1, published_count=1, failed_count=0),
+        SimpleNamespace(attempted_count=0, published_count=0, failed_count=0),
+    ]
+    observed = []
+    monkeypatch.setattr(
+        tasks,
+        "publish_projection_outbox",
+        lambda **kwargs: observed.append(kwargs) or summaries.pop(0),
+    )
+
+    with pytest.raises(RuntimeError, match="projection_task_transient"):
+        tasks.reconcile_knowledge_graph_projections.run(10, False, None)
+    recovered = tasks.reconcile_knowledge_graph_projections.run(10, False, None)
+
+    assert recovered["published_count"] == 1
+    assert [call["using"] for call in observed] == [
+        "projection_state",
+        "projection_state",
+        "projection_state",
+    ]
+
+
+def test_reconcile_attempts_due_outbox_before_graph_maintenance(monkeypatch) -> None:
+    order = []
+    monkeypatch.setattr(
+        tasks,
+        "publish_projection_outbox",
+        lambda **_kwargs: (
+            order.append("publish")
+            or SimpleNamespace(attempted_count=0, published_count=0, failed_count=0)
+        ),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_graph_projections",
+        lambda **_kwargs: (
+            order.append("reconcile")
+            or (_ for _ in ()).throw(TimeoutError("backend detail"))
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="projection_task_transient"):
+        tasks.reconcile_knowledge_graph_projections.run(10, False, None)
+
+    assert order == ["publish", "reconcile"]
+
+
+def test_task_boundary_retries_fixed_redacted_memgraph_failures():
+    retried = []
+    task = SimpleNamespace(
+        retry=lambda **kwargs: retried.append(kwargs) or RuntimeError("retry")
+    )
+
+    with pytest.raises(RuntimeError, match="retry"):
+        tasks._run_redacted(
+            task,
+            lambda: (_ for _ in ()).throw(MemgraphDriverError("memgraph_read_failed")),
+        )
+
+    assert type(retried[0]["exc"]) is RuntimeError
+    assert str(retried[0]["exc"]) == "projection_task_transient"
+
+
+def test_maintenance_task_defaults_come_from_frozen_projection_config(monkeypatch):
+    observed = {}
+    monkeypatch.setattr(
+        tasks,
+        "_TASK_SETTINGS",
+        SimpleNamespace(projection_batch_size=17, projection_retention=9),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "prune_graph_projection_generations",
+        lambda **kwargs: (
+            observed.update(kwargs)
+            or SimpleNamespace(candidate_count=0, deleted_count=0)
+        ),
+    )
+
+    tasks.prune_knowledge_graph_projection.run()
+
+    assert observed["page_size"] == 17
+    assert observed["retain"] == 9

@@ -1,0 +1,254 @@
+# ruff: noqa: F401
+# ruff: noqa: E501,E701,E702
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from io import BytesIO
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+
+import pytest
+
+from lib.knowledge_graph.query_extractor import client as client_module
+from lib.knowledge_graph.query_extractor.client import (
+    QueryExtractorClient,
+    QueryExtractorClientError,
+    QueryExtractorHTTPResponse,
+    reconstruct_entity_texts,
+)
+from lib.knowledge_graph.query_extractor.config import (
+    QueryExtractorConfigError,
+    load_query_extractor_settings,
+)
+from lib.knowledge_graph.query_extractor.contracts import (
+    QUERY_EXTRACTION_RESPONSE_SCHEMA_CHECKSUM,
+    QUERY_EXTRACTION_RESPONSE_SCHEMA_VERSION,
+    QueryEntitySpanV1,
+    QueryExtractionResponseV1,
+    QueryExtractorFailureReason,
+    QueryExtractorProvenanceV1,
+    canonical_query_extraction_response_bytes,
+)
+
+DIGEST = "a" * 64
+REVISION = "8437ba583a733d87f56ae902f3b197934eedd58e"
+BUILD = "b" * 64
+EMOJI = chr(0x1F600)
+
+
+@dataclass(frozen=True)
+class Ontology: checksum: str = DIGEST; entity_types: tuple[str, ...] = ("model",)  # fmt: skip
+
+
+def _environment(**overrides: str) -> dict[str, str]:
+    values = {
+        "KG_QUERY_EXTRACTOR_URL": "https://extractor.internal/v1/extract",
+        "KG_QUERY_EXTRACTOR_BEARER_TOKEN": "private-token",
+        "KG_QUERY_EXTRACTOR_MODEL": "fastino/gliner2-base-v1",
+        "KG_QUERY_EXTRACTOR_MODEL_REVISION": REVISION,
+        "KG_QUERY_EXTRACTOR_BUILD_HASH": BUILD,
+        "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION": (
+            QUERY_EXTRACTION_RESPONSE_SCHEMA_VERSION
+        ),
+        "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": (
+            QUERY_EXTRACTION_RESPONSE_SCHEMA_CHECKSUM
+        ),
+        "KG_QUERY_EXTRACTOR_ONTOLOGY_PATH": str(Path("ontology.yaml")),
+        "KG_QUERY_EXTRACTOR_ONTOLOGY_CHECKSUM": DIGEST,
+        "KG_QUERY_EXTRACTOR_TIMEOUT_MS": "75",
+        "KG_QUERY_MAX_BYTES": "64",
+        "KG_QUERY_MAX_CODEPOINTS": "32",
+        "KG_QUERY_MAX_SPANS": "4",
+    }
+    values.update(overrides)
+    return values
+
+
+def _response(query: str, *, provenance_checksum: str = DIGEST) -> bytes:
+    return canonical_query_extraction_response_bytes(
+        QueryExtractionResponseV1(
+            provenance=QueryExtractorProvenanceV1(
+                model_identifier="fastino/gliner2-base-v1",
+                model_revision=REVISION,
+                schema_version=QUERY_EXTRACTION_RESPONSE_SCHEMA_VERSION,
+                schema_checksum=QUERY_EXTRACTION_RESPONSE_SCHEMA_CHECKSUM,
+                ontology_checksum=provenance_checksum,
+                build_hash=BUILD,
+            ),
+            query_utf8_bytes=len(query.encode()),
+            query_code_points=len(query),
+            spans=(QueryEntitySpanV1("model", 1, 2, 0.75),),
+        )
+    )
+
+
+def test_settings_are_strict_and_keep_bearer_out_of_repr() -> None:
+    settings = load_query_extractor_settings(_environment())
+    assert settings.timeout_ms == 75
+    assert settings.max_query_utf8_bytes == 64
+    assert "private-token" not in repr(settings)
+    assert "private-token" not in repr(settings.bearer_token)
+
+    for key, value in (
+        ("KG_QUERY_EXTRACTOR_URL", "https://EXTRACTOR/v1/extract"),
+        ("KG_QUERY_EXTRACTOR_BEARER_TOKEN", ""),
+        ("KG_QUERY_EXTRACTOR_MODEL_REVISION", REVISION.upper()),
+        ("KG_QUERY_EXTRACTOR_BUILD_HASH", "c" * 63),
+        ("KG_QUERY_MAX_SPANS", "05"),
+    ):
+        with pytest.raises(QueryExtractorConfigError, match=key):
+            load_query_extractor_settings(_environment(**{key: value}))
+
+
+def test_client_posts_one_canonical_body_and_reconstructs_code_point_spans() -> None:
+    calls: list[dict[str, object]] = []
+    query = f"A{EMOJI}B"
+
+    def request_once(**kwargs: object) -> QueryExtractorHTTPResponse:
+        calls.append(kwargs)
+        return QueryExtractorHTTPResponse(200, _response(query))
+
+    client = QueryExtractorClient(
+        load_query_extractor_settings(_environment()),
+        request_once=request_once,
+        monotonic=lambda: 10.0,
+    )
+    response = client.extract(query=query, ontology=Ontology(), deadline=10.05)
+
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://extractor.internal/v1/extract"
+    assert calls[0]["headers"] == {
+        "Authorization": "Bearer private-token",
+        "Content-Type": "application/json",
+    }
+    assert calls[0]["body"] == (
+        b'{"max_query_code_points":32,"max_query_utf8_bytes":64,'
+        b'"max_spans":4,"ontology_checksum":"'
+        + DIGEST.encode()
+        + b'","query":"A'
+        + EMOJI.encode()
+        + b'B","schema_version":"query-request-v1"}'
+    )
+    assert calls[0]["timeout_seconds"] == pytest.approx(0.05)
+    assert reconstruct_entity_texts(query=query, response=response) == (EMOJI,)
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        ("https://extractor.internal", "https://extractor.internal/v1/extract"),
+        ("https://extractor.internal/", "https://extractor.internal/v1/extract"),
+        (
+            "https://extractor.internal/custom/extract",
+            "https://extractor.internal/custom/extract",
+        ),
+    ],
+)
+def test_client_resolves_service_origin_but_preserves_explicit_endpoint(
+    configured, expected
+):
+    calls = []
+    client = QueryExtractorClient(
+        load_query_extractor_settings(_environment(KG_QUERY_EXTRACTOR_URL=configured)),
+        request_once=lambda **kwargs: (
+            calls.append(kwargs) or QueryExtractorHTTPResponse(200, _response("ABC"))
+        ),
+        monotonic=lambda: 1.0,
+    )
+    client.extract(query="ABC", ontology=Ontology(), deadline=2.0)
+    assert calls[0]["url"] == expected
+
+
+def test_client_sends_selected_canonical_definition_with_bound_checksum():
+    from apps.knowledge_graph.services.ontology import load_ontology
+
+    ontology = load_ontology(
+        Path(__file__).resolve().parents[3]
+        / "apps/knowledge_graph/ontologies/research-v1.yaml"
+    )
+    calls = []
+    client = QueryExtractorClient(
+        load_query_extractor_settings(
+            _environment(KG_QUERY_EXTRACTOR_ONTOLOGY_CHECKSUM=ontology.checksum)
+        ),
+        request_once=lambda **kwargs: (
+            calls.append(kwargs)
+            or QueryExtractorHTTPResponse(
+                200, _response("ABC", provenance_checksum=ontology.checksum)
+            )
+        ),
+        monotonic=lambda: 1.0,
+    )
+    client.extract(query="ABC", ontology=ontology, deadline=2.0)
+    payload = json.loads(calls[0]["body"])
+    assert payload["ontology_checksum"] == ontology.checksum
+    assert payload["ontology_definition"]["version"] == ontology.version
+    assert {
+        row["name"] for row in payload["ontology_definition"]["entity_types"]
+    } == set(ontology.entity_types)
+
+
+def test_client_enforces_local_caps_before_io() -> None:
+    calls = 0
+
+    def request_once(**_kwargs: object) -> QueryExtractorHTTPResponse:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("I/O reached")
+
+    client = QueryExtractorClient(
+        load_query_extractor_settings(_environment()),
+        request_once=request_once,
+        monotonic=lambda: 1.0,
+    )
+    for query in ("x" * 33, EMOJI * 17):
+        with pytest.raises(ValueError):
+            client.extract(query=query, ontology=Ontology(), deadline=2.0)
+    assert calls == 0
+
+
+def test_client_rejects_caller_ontology_that_differs_from_configured_identity() -> None:
+    calls = 0
+    query = "model"
+
+    def request_once(**_kwargs: object) -> QueryExtractorHTTPResponse:
+        nonlocal calls
+        calls += 1
+        return QueryExtractorHTTPResponse(
+            200, _response(query, provenance_checksum="c" * 64)
+        )
+
+    client = QueryExtractorClient(
+        load_query_extractor_settings(_environment()),
+        request_once=request_once,
+        monotonic=lambda: 1.0,
+    )
+    with pytest.raises(QueryExtractorClientError) as exc_info:
+        client.extract(
+            query=query,
+            ontology=Ontology(checksum="c" * 64),
+            deadline=2.0,
+        )
+    assert exc_info.value.reason is QueryExtractorFailureReason.EXTRACTOR_PROVENANCE
+    assert calls == 0
+
+
+def test_client_requires_an_exact_runtime_ontology_checksum_type() -> None:
+    class Checksum(str):
+        pass
+
+    client = QueryExtractorClient(
+        load_query_extractor_settings(_environment()),
+        request_once=lambda **_kwargs: QueryExtractorHTTPResponse(
+            200, _response("model")
+        ),
+        monotonic=lambda: 1.0,
+    )
+    with pytest.raises(QueryExtractorClientError) as exc_info:
+        client.extract(
+            query="model",
+            ontology=Ontology(checksum=Checksum(DIGEST)),
+            deadline=2.0,
+        )
+    assert exc_info.value.reason is QueryExtractorFailureReason.EXTRACTOR_PROVENANCE

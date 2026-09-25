@@ -1,0 +1,157 @@
+"""Default-off production assembly for projected hybrid graph retrieval."""
+
+from __future__ import annotations
+
+from dataclasses import fields
+from functools import lru_cache
+
+from apps.collections.services.retrieval_authorization import (
+    revalidate_retrieval_authorization_context,
+)
+from apps.documents.services.hybrid_graph_authorization import (
+    HybridGraphRetrievalDependencies,
+    is_exact_authorization_context,
+)
+from lib.knowledge_graph.retrieval_config import HybridRetrievalSettings
+from lib.knowledge_graph.topology_gateway_config import (
+    TopologyGatewayClientSettings,
+)
+
+
+def django_hybrid_retrieval_settings() -> HybridRetrievalSettings:
+    from django.conf import settings as django_settings
+
+    return HybridRetrievalSettings(
+        **{
+            field.name: getattr(django_settings, f"KG_{field.name.upper()}")
+            for field in fields(HybridRetrievalSettings)
+        }
+    )
+
+
+@lru_cache(maxsize=4)
+def _topology_loader(gateway: TopologyGatewayClientSettings):
+    from apps.knowledge_graph.retrieval.topology.gateway_client import (
+        TopologyGatewayClient,
+    )
+    from apps.knowledge_graph.retrieval.topology.memgraph import (
+        MemgraphProjectedTopologyLoader,
+    )
+
+    driver = TopologyGatewayClient(
+        gateway.url,
+        gateway.bearer_token.get_secret_value(),
+        gateway.timeout_ms / 1000.0,
+    )
+    return MemgraphProjectedTopologyLoader(driver)
+
+
+def django_topology_gateway_client_settings() -> TopologyGatewayClientSettings:
+    from django.conf import settings as django_settings
+
+    return TopologyGatewayClientSettings(
+        url=django_settings.KG_TOPOLOGY_GATEWAY_URL,
+        bearer_token=django_settings.KG_TOPOLOGY_GATEWAY_BEARER_TOKEN,
+        timeout_ms=django_settings.KG_TOPOLOGY_GATEWAY_TIMEOUT_MS,
+        max_request_bytes=django_settings.KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES,
+        max_response_bytes=django_settings.KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES,
+    )
+
+
+@lru_cache(maxsize=4)
+def _provider_components(
+    settings: HybridRetrievalSettings, gateway: TopologyGatewayClientSettings
+):
+    from apps.knowledge_graph.projection.runtime import projection_identifier_codec
+
+    return _topology_loader(gateway), projection_identifier_codec(settings)
+
+
+def _production_runtime(*, authorization, settings):
+    from apps.knowledge_graph.retrieval.production_runtime import (
+        ProductionHybridBranchRuntime,
+    )
+
+    gateway = django_topology_gateway_client_settings()
+    topology, codec = _provider_components(settings, gateway)
+    return ProductionHybridBranchRuntime(
+        authorization=authorization,
+        settings=settings,
+        topology_loader=topology,
+        codec=codec,
+    )
+
+
+def build_hybrid_graph_dependencies(
+    *, authorization, settings=None, runtime_factory=_production_runtime
+) -> HybridGraphRetrievalDependencies | None:
+    """Create one request-bound runtime only for an exact enabled capability."""
+
+    if not is_exact_authorization_context(authorization):
+        return None
+    selected_settings = (
+        django_hybrid_retrieval_settings() if settings is None else settings
+    )
+    traversal = getattr(selected_settings, "memgraph_traversal_enabled", None)
+    direct = getattr(selected_settings, "graph_direct_enabled", None)
+    extended = getattr(selected_settings, "graph_extended_enabled", None)
+    if (
+        traversal is not True
+        or type(direct) is not bool
+        or type(extended) is not bool
+        or not (direct or extended)
+    ):
+        return None
+    try:
+        current = revalidate_retrieval_authorization_context(context=authorization)
+        if (
+            frozenset(current.collection_ids) != authorization.selected_collection_ids
+            or frozenset(current.document_ids) != authorization.selected_document_ids
+        ):
+            return None
+        runtime = runtime_factory(
+            authorization=authorization,
+            settings=selected_settings,
+        )
+        return HybridGraphRetrievalDependencies(
+            runtime=runtime,
+            settings=selected_settings,
+            materialize=runtime.materialize,
+        )
+    except Exception:
+        return None
+
+
+def resolve(overlay_enabled, authorization, provided):
+    """Resolve automatic shipping dependencies and whether hybrid owns the path."""
+
+    from django.conf import settings as django_settings
+
+    configured = bool(
+        getattr(django_settings, "KG_MEMGRAPH_TRAVERSAL_ENABLED", False)
+        and (
+            getattr(django_settings, "KG_GRAPH_DIRECT_ENABLED", False)
+            or getattr(django_settings, "KG_GRAPH_EXTENDED_ENABLED", False)
+        )
+    )
+    dependencies = provided
+    if (
+        overlay_enabled
+        and configured
+        and dependencies is None
+        and is_exact_authorization_context(authorization)
+    ):
+        try:
+            dependencies = build_hybrid_graph_dependencies(authorization=authorization)
+        except Exception:
+            dependencies = None
+    requested = overlay_enabled and (configured or dependencies is not None)
+    return dependencies, requested
+
+
+__all__ = [
+    "build_hybrid_graph_dependencies",
+    "django_hybrid_retrieval_settings",
+    "django_topology_gateway_client_settings",
+    "resolve",
+]

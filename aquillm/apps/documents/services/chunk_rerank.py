@@ -2,19 +2,33 @@
 
 from __future__ import annotations
 
-import structlog
-from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
-from os import getenv
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING
 
+import structlog
 from django.apps import apps
 
-from apps.documents.services.chunk_rerank_local_vllm import rerank_via_local_vllm
+from apps.documents.services.chunk_rerank_config import rerank_provider
+from apps.documents.services.chunk_rerank_local_scored import (
+    rerank_via_local_vllm_scored,
+)
+from apps.documents.services.chunk_rerank_local_vllm import (
+    _STRICT_COMPLETE_SCORING,
+    rerank_via_local_vllm,
+)
 from apps.documents.services.chunk_rerank_parse import (
     fallback_rerank,
     ordered_queryset_from_ids,
 )
 from apps.documents.services.chunk_rerank_payload import rerank_document_payload
+from apps.documents.services.chunk_rerank_results import (
+    PassageScore,
+    RerankScoreSet,
+    ScoredRerankResult,
+    fingerprint_pair,
+    fingerprint_pool,
+    fingerprint_text,
+)
+from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 # chunk_search and legacy imports expect this name
 _fallback_rerank = fallback_rerank
@@ -25,15 +39,84 @@ if TYPE_CHECKING:
 logger = structlog.stdlib.get_logger(__name__)
 
 
-def rerank_chunks(model_cls: Type[TextChunk], query: str, chunks, top_k: int):
+class StrictRerankUnavailable(RuntimeError):
+    """The eval-only local reranker did not return a measured ranking."""
+
+
+class _StrictEvaluationRerankCapability:
+    __slots__ = ()
+
+
+_STRICT_EVALUATION_RERANK = _StrictEvaluationRerankCapability()
+
+
+def _strict_local_rerank_chunks(
+    model_cls: type[TextChunk],
+    query: str,
+    chunks,
+    top_k: int,
+    *,
+    _capability: object,
+) -> tuple[TextChunk, ...]:
+    """Run the shipping local adapter, but never use production fail-open output."""
+
+    if _capability is not _STRICT_EVALUATION_RERANK:
+        raise PermissionError("strict eval reranking requires its private capability")
+    if rerank_provider() != "local":
+        raise StrictRerankUnavailable(
+            "strict eval reranking requires the exact local provider"
+        )
     chunks_list = list(chunks)
-    provider = (getenv("APP_RERANK_PROVIDER") or "auto").strip().lower()
+    if not chunks_list:
+        raise StrictRerankUnavailable("strict eval reranking candidate pool is empty")
+    candidate_ids = tuple(getattr(row, "pk", None) for row in chunks_list)
+    if any(
+        type(identifier) is not int or identifier <= 0 for identifier in candidate_ids
+    ):
+        raise StrictRerankUnavailable(
+            "strict eval reranking requires positive candidate IDs"
+        )
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise StrictRerankUnavailable(
+            "strict eval reranking requires a unique candidate pool"
+        )
+    ranked = tuple(
+        rerank_via_local_vllm(
+            model_cls,
+            query,
+            chunks_list,
+            top_k,
+            _complete_scoring_capability=_STRICT_COMPLETE_SCORING,
+        )
+    )
+    if not ranked:
+        raise StrictRerankUnavailable("strict local reranker returned an empty result")
+    expected_count = min(top_k, len(chunks_list))
+    if len(ranked) != expected_count:
+        raise StrictRerankUnavailable(
+            "strict local reranker did not return a complete ranking"
+        )
+    ranked_ids = tuple(getattr(row, "pk", None) for row in ranked)
+    if len(set(ranked_ids)) != len(ranked_ids):
+        raise StrictRerankUnavailable(
+            "strict local reranker did not return unique rows"
+        )
+    if any(identifier not in set(candidate_ids) for identifier in ranked_ids):
+        raise StrictRerankUnavailable(
+            "strict local reranker returned a row outside the candidate pool"
+        )
+    return ranked
+
+
+def rerank_chunks(model_cls: type[TextChunk], query: str, chunks, top_k: int):
+    chunks_list = list(chunks)
+    provider = rerank_provider()
     if provider in ("auto", "local", "vllm"):
         try:
             local_results = rerank_via_local_vllm(model_cls, query, chunks_list, top_k)
             if local_results.exists():
                 return local_results
-        except Exception as exc:
+        except Exception:
             logger.warning(
                 "obs.rag.local_rerank_failed",
                 **retrieval_log_fields(
@@ -63,7 +146,7 @@ def rerank_chunks(model_cls: Type[TextChunk], query: str, chunks, top_k: int):
         if not ranked_list:
             return fallback_rerank(model_cls, chunks_list, top_k)
         return ordered_queryset_from_ids(model_cls, ranked_list)
-    except Exception as exc:
+    except Exception:
         logger.warning(
             "obs.rag.cohere_rerank_failed",
             **retrieval_log_fields(
@@ -73,4 +156,145 @@ def rerank_chunks(model_cls: Type[TextChunk], query: str, chunks, top_k: int):
         return fallback_rerank(model_cls, chunks_list, top_k)
 
 
-__all__ = ["_fallback_rerank", "rerank_chunks", "rerank_document_payload"]
+def rerank_chunks_scored(
+    model_cls: type[TextChunk],
+    query: str,
+    chunks,
+    top_k: int,
+    *,
+    turn_budget=None,
+    window_scorer=None,
+) -> ScoredRerankResult:
+    """Capture provider scores from the ranking call, without replaying inference."""
+    chunks_list = list(chunks)
+    from .chunk_rerank_window_acquisition import dispatch_windowed
+
+    windowed = dispatch_windowed(
+        query, chunks_list, top_k, turn_budget, window_scorer, shadow=True
+    )
+    if windowed is not None:
+        return windowed
+    candidate_ids = tuple(chunk.pk for chunk in chunks_list)
+    pool = fingerprint_pool(
+        tuple(
+            (
+                chunk.pk,
+                fingerprint_text(chunk.content),
+                fingerprint_pair(query, chunk.content),
+            )
+            for chunk in chunks_list
+        )
+    )
+    query_fp = fingerprint_text(query)
+
+    def unavailable(ranked_ids=()):
+        return ScoredRerankResult(
+            tuple(ranked_ids)[:top_k],
+            RerankScoreSet(
+                "v2",
+                query_fp,
+                "",
+                pool,
+                "rank_only",
+                "unavailable",
+                candidate_ids,
+                (),
+            ),
+        )
+
+    provider = rerank_provider()
+    if provider in ("auto", "local", "vllm"):
+        try:
+            local = rerank_via_local_vllm_scored(model_cls, query, chunks_list, top_k)
+            if local.ranked_ids:
+                return local
+        except Exception:
+            logger.warning(
+                "obs.rag.local_rerank_failed",
+                **retrieval_log_fields(
+                    reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
+                    count=0,
+                    elapsed_ms=0.0,
+                ),
+            )
+        if provider in ("local", "vllm"):
+            return unavailable(candidate_ids[:top_k])
+
+    cohere = apps.get_app_config("aquillm").cohere_client  # type: ignore
+    if cohere is None:
+        return unavailable(candidate_ids[:top_k])
+    try:
+        response = cohere.rerank(
+            model="rerank-english-v3.0",
+            query=query,
+            documents=[
+                {"content": chunk.content, "id": chunk.pk} for chunk in chunks_list
+            ],
+            rank_fields=["content"],
+            top_n=len(chunks_list),
+            return_documents=True,
+        )
+        ranked_ids = tuple(result.document.id for result in response.results)
+        if not ranked_ids:
+            return unavailable(candidate_ids[:top_k])
+        by_id = {chunk.pk: chunk for chunk in chunks_list}
+        if (
+            len(ranked_ids) != len(candidate_ids)
+            or len(set(ranked_ids)) != len(candidate_ids)
+            or set(ranked_ids) != set(candidate_ids)
+        ):
+            return unavailable(ranked_ids)
+        scores_by_id = {}
+        for result in response.results:
+            value = getattr(result, "relevance_score", None)
+            if type(value) not in (int, float):
+                return unavailable(ranked_ids)
+            chunk = by_id[result.document.id]
+            scores_by_id[chunk.pk] = PassageScore(
+                chunk.pk,
+                chunk.doc_id,
+                chunk.chunk_number,
+                fingerprint_text(chunk.content),
+                fingerprint_pair(query, chunk.content),
+                float(value),
+            )
+        from math import isfinite
+
+        if not all(isfinite(score.value) for score in scores_by_id.values()):
+            return unavailable(ranked_ids)
+        scores = tuple(scores_by_id[pk] for pk in candidate_ids)
+        stable_ranked = tuple(
+            sorted(
+                candidate_ids,
+                key=lambda pk: (-scores_by_id[pk].value, candidate_ids.index(pk)),
+            )
+        )
+        return ScoredRerankResult(
+            stable_ranked[:top_k],
+            RerankScoreSet(
+                "v2",
+                query_fp,
+                fingerprint_text("cohere:rerank-english-v3.0"),
+                pool,
+                "listwise",
+                "complete",
+                candidate_ids,
+                scores,
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "obs.rag.cohere_rerank_failed",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE, count=0, elapsed_ms=0.0
+            ),
+        )
+        return unavailable(candidate_ids[:top_k])
+
+
+__all__ = [
+    "_fallback_rerank",
+    "rerank_chunks",
+    "rerank_chunks_scored",
+    "rerank_document_payload",
+]

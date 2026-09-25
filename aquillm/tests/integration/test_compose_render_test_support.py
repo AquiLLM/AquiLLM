@@ -102,3 +102,22 @@ def test_older_compose_env_file_validation_uses_only_disposable_environment(
         assert operator_env.read_text(encoding="utf-8") == secret
     else:
         assert not operator_env.exists()
+
+
+def test_graph_compose_uses_disposable_env_when_repository_env_is_absent(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "checkout"
+    compose_file = checkout / "deploy" / "compose" / "development.yml"
+    compose_file.parent.mkdir(parents=True)
+    compose_file.write_bytes(
+        (REPOSITORY_ROOT / "deploy" / "compose" / "development.yml").read_bytes()
+    )
+    assert not (checkout / ".env").exists()
+
+    rendered = render_compose_with_reviewed_env(
+        (compose_file,),
+        profile="knowledge-graph",
+    )
+
+    assert "worker_knowledge_graph" in rendered["services"]

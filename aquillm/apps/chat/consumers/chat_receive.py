@@ -1,20 +1,24 @@
 """WebSocket receive handler for chat append / rate / feedback actions."""
+
 from __future__ import annotations
 
 import re
-import structlog
 from base64 import b64decode
 from json import loads
 from time import perf_counter
-from typing import Any, Optional
+from typing import Any
 
+import structlog
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 
-from aquillm.llm import ToolChoice, UserMessage
-from aquillm.memory import augment_conversation_with_memory_async
 from apps.chat.consumers.chat_delta import send_conversation_delta
+from apps.chat.consumers.chat_intent import (
+    _looks_like_explicit_document_search_request,
+    _looks_like_local_tool_request,
+    _looks_like_retry_request,
+)
 from apps.chat.consumers.chat_publish import run_llm_spin
 from apps.chat.consumers.chat_ws_errors import (
     send_receive_error,
@@ -22,11 +26,17 @@ from apps.chat.consumers.chat_ws_errors import (
 )
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import ConversationFile
-from apps.chat.services.feedback import apply_message_feedback_text, apply_message_rating
+from apps.chat.services.feedback import (
+    apply_message_feedback_text,
+    apply_message_rating,
+)
 from apps.chat.services.rag_config import attach_tools_when_collections_selected
 from apps.chat.services.rag_intent import classify_chat_message
 from apps.chat.services.rag_pipeline import run_direct_rag_turn
+from apps.chat.services.rag_turn import preservation_turn
 from apps.chat.services.skills_runtime import effective_base_system_for_memory_async
+from aquillm.llm import ToolChoice, UserMessage
+from aquillm.memory import augment_conversation_with_memory_async
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -46,27 +56,6 @@ _CHAT_HISTORY_PHRASE_RE = re.compile(
     r"\bremind\s+me\s+what\s+we\b",
     flags=re.IGNORECASE,
 )
-_CURRENT_CHAT_TARGET_RE = re.compile(
-    r"\b(?:this|current|present|ongoing)\s+"
-    r"(?:chat|conversation|thread|discussion|session)\b",
-    flags=re.IGNORECASE,
-)
-
-
-def _looks_like_explicit_document_search_request(message_content: str) -> bool:
-    """True when the user explicitly asks the assistant to retrieve from documents."""
-    intent = classify_chat_message(message_content or "", selected_collection_ids=[])
-    return intent.requires_rag and not intent.requires_local_tools and not intent.is_retry
-
-
-def _looks_like_local_tool_request(message_content: str) -> bool:
-    """True for app-local non-document tools such as FITS processing."""
-    return classify_chat_message(message_content or "", selected_collection_ids=[]).requires_local_tools
-
-
-def _looks_like_retry_request(message_content: str) -> bool:
-    """True when the user asks to rerun the previous failed/unsatisfying turn."""
-    return classify_chat_message(message_content or "", selected_collection_ids=[]).is_retry
 
 
 def _looks_like_chat_history_search_request(message_content: str) -> bool:
@@ -74,13 +63,14 @@ def _looks_like_chat_history_search_request(message_content: str) -> bool:
     text = message_content or ""
     if _CHAT_HISTORY_TARGET_RE.search(text):
         return True
-    # search_past_chats deliberately excludes the current conversation.
-    if _CURRENT_CHAT_TARGET_RE.search(text):
+    if re.search(r"\b(?:this|current|present|ongoing)\s+(?:chat|conversation|thread|discussion|session)\b", text, re.IGNORECASE):
         return False
     return bool(_CHAT_HISTORY_PHRASE_RE.search(text))
 
 
-def _latest_prior_user_tool_intent(messages: list) -> tuple[list | None, Optional[ToolChoice]]:
+def _latest_prior_user_tool_intent(
+    messages: list,
+) -> tuple[list | None, ToolChoice | None]:
     for msg in reversed(messages):
         if isinstance(msg, UserMessage) and msg.tools and msg.tool_choice:
             return msg.tools, msg.tool_choice
@@ -92,11 +82,11 @@ def _configure_append_tools(
     message_content: str,
     all_tools: list,
     document_tools: list,
-    selected_collection_ids: Optional[list] = None,
-    memory_tools: Optional[list] = None,
-    prior_user_tools: Optional[list] = None,
-    prior_user_tool_choice: Optional[ToolChoice] = None,
-) -> tuple[list, Optional[ToolChoice]]:
+    selected_collection_ids: list | None = None,
+    memory_tools: list | None = None,
+    prior_user_tools: list | None = None,
+    prior_user_tool_choice: ToolChoice | None = None,
+) -> tuple[list, ToolChoice | None]:
     """Choose tool availability and choice strength for an appended user message."""
     if prior_user_tools and _looks_like_retry_request(message_content):
         return prior_user_tools, prior_user_tool_choice or ToolChoice(type="auto")
@@ -105,11 +95,7 @@ def _configure_append_tools(
     if document_tools and _looks_like_explicit_document_search_request(message_content):
         return document_tools, ToolChoice(type="any")
     collection_ids = list(selected_collection_ids or [])
-    if (
-        document_tools
-        and collection_ids
-        and attach_tools_when_collections_selected()
-    ):
+    if document_tools and collection_ids and attach_tools_when_collections_selected():
         intent = classify_chat_message(
             message_content or "", selected_collection_ids=collection_ids
         )
@@ -244,36 +230,42 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                     phase="receive",
                     duration_ms=(perf_counter() - augment_start) * 1000,
                 )
-                direct_outcome = await run_direct_rag_turn(
-                    consumer,
-                    consumer.llm_if,
-                    consumer.convo,
-                    stream_func=consumer._send_stream_payload,
-                )
-                if direct_outcome == "handled":
-                    await send_conversation_delta(
-                        consumer, consumer.convo, create_memories=False, close_db=True
-                    )
-                else:
-                    logger.debug("obs.chat.spin_starting", phase="receive")
-                    llm_start = perf_counter()
-                    await run_llm_spin(
+                async with preservation_turn(
+                    consumer, max_func_calls=CHAT_MAX_FUNC_CALLS
+                ):
+                    direct_outcome = await run_direct_rag_turn(
                         consumer,
                         consumer.llm_if,
                         consumer.convo,
-                        max_func_calls=CHAT_MAX_FUNC_CALLS,
-                        max_tokens=CHAT_MAX_TOKENS,
-                        send_func=lambda c: send_conversation_delta(
-                            consumer, c, create_memories=False, close_db=True
-                        ),
                         stream_func=consumer._send_stream_payload,
                     )
-                    logger.info(
-                        "obs.chat.spin_completed",
-                        phase="receive",
-                        duration_ms=(perf_counter() - llm_start) * 1000,
-                    )
-                await consumer._save_conversation(create_memories=True)
+                    if direct_outcome == "handled":
+                        await send_conversation_delta(
+                            consumer,
+                            consumer.convo,
+                            create_memories=False,
+                            close_db=True,
+                        )
+                    else:
+                        logger.debug("obs.chat.spin_starting", phase="receive")
+                        llm_start = perf_counter()
+                        await run_llm_spin(
+                            consumer,
+                            consumer.llm_if,
+                            consumer.convo,
+                            max_func_calls=CHAT_MAX_FUNC_CALLS,
+                            max_tokens=CHAT_MAX_TOKENS,
+                            send_func=lambda c: send_conversation_delta(
+                                consumer, c, create_memories=False, close_db=True
+                            ),
+                            stream_func=consumer._send_stream_payload,
+                        )
+                        logger.info(
+                            "obs.chat.spin_completed",
+                            phase="receive",
+                            duration_ms=(perf_counter() - llm_start) * 1000,
+                        )
+                    await consumer._save_conversation(create_memories=True)
             elif action == "select_collections":
                 await update_selected_collections(data)
             elif action == "rate":

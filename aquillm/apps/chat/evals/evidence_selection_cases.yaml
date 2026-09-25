@@ -1,0 +1,367 @@
+version: 1
+fixture_kind: synthetic_regression
+cases:
+- id: complementary-evidence
+  split: regression
+  family: factual
+  question: What did the trial find?
+  profile: focused
+  limits:
+    max_passages: 2
+    max_per_document: 3
+    token_budget: 1000
+  candidates:
+  - chunk_id: 1
+    doc_id: a
+    text: Trial outcome was positive.
+    relevance: 0.95
+    fused_rank: 1
+  - chunk_id: 2
+    doc_id: a
+    text: An independent validation cohort confirmed it.
+    relevance: 0.92
+    fused_rank: 2
+  - chunk_id: 3
+    doc_id: b
+    text: Unrelated introductory context.
+    relevance: 0.25
+    fused_rank: 3
+  grades:
+    '1': 3
+    '2': 3
+    '3': 0
+  required_chunks: &id001
+  - 1
+  - 2
+  required_pairs:
+  - *id001
+  forbidden_chunks:
+  - 3
+  expected_adaptive: *id001
+  aspects:
+    outcome:
+    - 1
+    validation:
+    - 2
+- id: near-tie-source-diversity
+  split: regression
+  family: comparison
+  question: Compare the papers
+  profile: breadth
+  limits:
+    max_passages: 2
+    max_per_document: 3
+    token_budget: 1000
+  candidates:
+  - chunk_id: 1
+    doc_id: a
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.95
+    fused_rank: 1
+  - chunk_id: 2
+    doc_id: a
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.94
+    fused_rank: 2
+  - chunk_id: 3
+    doc_id: b
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.93
+    fused_rank: 3
+  grades:
+    '1': 3
+    '2': 0
+    '3': 3
+  required_chunks: &id002
+  - 1
+  - 3
+  required_pairs:
+  - *id002
+  forbidden_chunks: []
+  expected_adaptive: *id002
+- id: contradictory-findings
+  split: regression
+  family: comparison
+  question: Compare contradictory findings
+  profile: breadth
+  limits:
+    max_passages: 2
+    max_per_document: 3
+    token_budget: 1000
+  candidates:
+  - chunk_id: 1
+    doc_id: a
+    text: Treatment improved response by 20 percent in young adults.
+    relevance: 0.95
+    fused_rank: 1
+  - chunk_id: 2
+    doc_id: b
+    text: Treatment did not improve response in older adults.
+    relevance: 0.94
+    fused_rank: 2
+  - chunk_id: 3
+    doc_id: c
+    text: Background description of the trial.
+    relevance: 0.2
+    fused_rank: 3
+  grades:
+    '1': 3
+    '2': 3
+    '3': 0
+  required_chunks: &id003
+  - 1
+  - 2
+  required_pairs:
+  - *id003
+  forbidden_chunks: []
+  expected_adaptive: *id003
+- id: exact-text-duplicates
+  split: regression
+  family: factual
+  question: What did the trial find?
+  profile: balanced
+  limits:
+    max_passages: 2
+    max_per_document: 3
+    token_budget: 1000
+  candidates:
+  - chunk_id: 1
+    doc_id: a
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.95
+    fused_rank: 1
+  - chunk_id: 2
+    doc_id: a
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.94
+    fused_rank: 2
+  - chunk_id: 3
+    doc_id: a
+    text: Independent assay confirmed survival gains at 12 weeks.
+    relevance: 0.93
+    fused_rank: 3
+  grades:
+    '1': 3
+    '2': 0
+    '3': 3
+  required_chunks: &id004
+  - 1
+  - 3
+  required_pairs:
+  - *id004
+  forbidden_chunks: []
+  expected_adaptive: *id004
+  redundancy_groups:
+  - - 1
+    - 2
+- id: multipart-coverage
+  split: regression
+  family: multipart
+  question: What improved and what were the limitations?
+  profile: breadth
+  limits:
+    max_passages: 2
+    max_per_document: 3
+    token_budget: 1000
+  candidates:
+  - chunk_id: 1
+    doc_id: a
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.95
+    fused_rank: 1
+  - chunk_id: 2
+    doc_id: a
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.94
+    fused_rank: 2
+  - chunk_id: 3
+    doc_id: b
+    text: The main limitation was small sample size in the validation cohort.
+    relevance: 0.93
+    fused_rank: 3
+  grades:
+    '1': 3
+    '2': 0
+    '3': 3
+  required_chunks: &id005
+  - 1
+  - 3
+  required_pairs:
+  - *id005
+  forbidden_chunks: []
+  expected_adaptive: *id005
+  aspects:
+    outcome:
+    - 1
+    - 2
+    limitations:
+    - 3
+- id: very-long-passages
+  split: regression
+  family: factual
+  question: What did the trial find?
+  profile: focused
+  limits:
+    max_passages: 2
+    max_per_document: 3
+    token_budget: 10
+  candidates:
+  - chunk_id: 1
+    doc_id: a
+    text: 'Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. Long background paragraph.
+      Long background paragraph. Long background paragraph. '
+    relevance: 0.99
+    fused_rank: 1
+  - chunk_id: 2
+    doc_id: b
+    text: Trial improved.
+    relevance: 0.9
+    fused_rank: 2
+  - chunk_id: 3
+    doc_id: c
+    text: N=42.
+    relevance: 0.85
+    fused_rank: 3
+  grades:
+    '1': 0
+    '2': 3
+    '3': 3
+  required_chunks: &id006
+  - 2
+  - 3
+  required_pairs:
+  - *id006
+  forbidden_chunks: []
+  expected_adaptive: *id006
+- id: all-equal-scores
+  split: regression
+  family: literature_review
+  question: Survey the literature
+  profile: breadth
+  limits:
+    max_passages: 2
+    max_per_document: 3
+    token_budget: 1000
+  candidates:
+  - chunk_id: 1
+    doc_id: a
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.5
+    fused_rank: 1
+  - chunk_id: 2
+    doc_id: a
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.5
+    fused_rank: 2
+  - chunk_id: 3
+    doc_id: b
+    text: The measured treatment response increased under the controlled trial conditions.
+    relevance: 0.5
+    fused_rank: 3
+  grades:
+    '1': 3
+    '2': 0
+    '3': 3
+  required_chunks: &id007
+  - 1
+  - 3
+  required_pairs:
+  - *id007
+  forbidden_chunks: []
+  expected_adaptive: *id007
+- id: mixed-provider-rank-fallback
+  split: regression
+  family: factual
+  question: What did the trial find?
+  profile: focused
+  limits:
+    max_passages: 2
+    max_per_document: 3
+    token_budget: 1000
+  candidates:
+  - chunk_id: 1
+    doc_id: a
+    text: Primary finding supports the hypothesis.
+    relevance: 1.0
+    fused_rank: 1
+  - chunk_id: 2
+    doc_id: a
+    text: Separate validation confirms the result.
+    relevance: 0.9
+    fused_rank: 2
+  - chunk_id: 3
+    doc_id: b
+    text: Weak background context.
+    relevance: 0.0
+    fused_rank: 3
+  grades:
+    '1': 3
+    '2': 3
+    '3': 0
+  required_chunks: &id008
+  - 1
+  - 2
+  required_pairs:
+  - *id008
+  forbidden_chunks: []
+  expected_adaptive: *id008
+  score_status: rank_fallback
+- id: missing-upstream-support
+  split: regression
+  family: factual
+  question: What did the trial find?
+  profile: focused
+  limits:
+    max_passages: 2
+    max_per_document: 3
+    token_budget: 1000
+  candidates:
+  - chunk_id: 1
+    doc_id: a
+    text: Initial study reports the finding.
+    relevance: 0.95
+    fused_rank: 1
+  - chunk_id: 2
+    doc_id: b
+    text: Replication study reports the result.
+    relevance: 0.9
+    fused_rank: 2
+  grades:
+    '1': 3
+    '2': 3
+    '99': 3
+  required_chunks: &id009
+  - 1
+  - 2
+  - 99
+  required_pairs:
+  - *id009
+  forbidden_chunks: []
+  expected_adaptive:
+  - 1
+  - 2

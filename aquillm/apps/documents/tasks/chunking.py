@@ -1,5 +1,4 @@
 """Celery task: build embeddings and TextChunk rows for a document."""
-
 from __future__ import annotations
 
 import structlog
@@ -27,11 +26,7 @@ from apps.documents.services.document_meta import (
     document_provider_model,
     document_provider_name,
 )
-from apps.documents.services.image_payloads import (
-    _env_bool,
-    _env_int,
-    doc_image_data_url,
-)
+from apps.documents.services.image_payloads import _env_bool, _env_int, doc_image_data_url
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -60,18 +55,20 @@ def _exact_document(
     if document_id.version is None:
         raise ObjectDoesNotExist("Document id is not an RFC 4122 UUID")
     if (concrete_model_label is None) != (document_pkid is None):
-        raise ValueError(
-            "concrete model label and document pkid must be supplied together"
-        )
+        raise ValueError("concrete model label and document pkid must be supplied together")
 
     hinted_model = None
     if concrete_model_label is not None:
         if (
             type(concrete_model_label) is not str
-            or re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", concrete_model_label) is None
+            or re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", concrete_model_label)
+            is None
         ):
             raise ValueError("concrete model label must be canonical")
-        if type(document_pkid) is not int or not 0 < document_pkid < 2**63:
+        if (
+            type(document_pkid) is not int
+            or not 0 < document_pkid < 2**63
+        ):
             raise ValueError("document pkid must be a positive signed-bigint integer")
         try:
             hinted_model = django_apps.get_model(concrete_model_label)
@@ -156,8 +153,7 @@ def _prepared_chunks(document) -> tuple[list[TextChunk], Optional[TextChunk]]:
     chunks = [
         TextChunk(
             content=document.full_text[
-                chunk_pitch
-                * index : min(
+                chunk_pitch * index : min(
                     (chunk_pitch * index) + config.chunk_size,
                     last_character + 1,
                 )
@@ -280,25 +276,57 @@ def _commit_chunks(
     expected_source_hash: str,
     using: str,
 ) -> str:
-    with transaction.atomic(using=using):
-        locked = (
-            type(document)
-            ._base_manager.using(using)
-            .select_for_update()
-            .filter(pkid=document.pkid, id=document.id)
-            .first()
-        )
-        if locked is None or locked.full_text_hash != expected_source_hash:
-            return "stale"
-        if locked.ingestion_complete:
-            return "already_committed"
-        TextChunk.objects.using(using).filter(doc_id=document.id).delete()
-        TextChunk.objects.using(using).bulk_create(chunks)
-        locked.ingestion_complete = True
-        locked.save(
-            dont_rechunk=True, update_fields=["ingestion_complete"], using=using
-        )
-    return "committed"
+    from apps.knowledge_graph.graph.invalidation import (
+        DocumentLifecycleRef,
+        prepare_document_chunk_replacement,
+        schedule_post_chunk_graph_build,
+    )
+
+    reference = DocumentLifecycleRef(
+        concrete_model_label=type(document)._meta.label_lower,
+        document_pkid=int(document.pkid),
+        document_id=document.id,
+    )
+    try:
+        with transaction.atomic(using=using):
+            affected = prepare_document_chunk_replacement(
+                reference,
+                (document.collection_id,),
+                expected_source_hash=expected_source_hash,
+                using=using,
+            )
+            if affected is None:
+                schedule_post_chunk_graph_build(
+                    document.id,
+                    expected_source_hash,
+                    using=using,
+                )
+                return "already_committed"
+            if not affected:
+                raise _StaleChunkReplacement
+            locked = (
+                type(document)._base_manager.using(using)
+                .select_for_update()
+                .filter(pkid=document.pkid, id=document.id)
+                .first()
+            )
+            if locked is None or locked.full_text_hash != expected_source_hash:
+                raise _StaleChunkReplacement
+            TextChunk.objects.using(using).bulk_create(chunks)
+            locked.ingestion_complete = True
+            locked.save(
+                dont_rechunk=True,
+                update_fields=["ingestion_complete"],
+                using=using,
+            )
+            schedule_post_chunk_graph_build(
+                document.id,
+                expected_source_hash,
+                using=using,
+            )
+        return "committed"
+    except _StaleChunkReplacement:
+        return "stale"
 
 
 @app.task(serializer="json", bind=True, track_started=True)
@@ -324,7 +352,32 @@ def create_chunks(
     if document.full_text_hash != source_hash:
         return "stale"
     try:
-        if document.ingestion_complete:
+        from apps.knowledge_graph.graph.invalidation import (
+            DocumentChunkState,
+            DocumentLifecycleRef,
+            inspect_document_chunk_state,
+            schedule_post_chunk_graph_build,
+        )
+
+        reference = DocumentLifecycleRef(
+            concrete_model_label=type(document)._meta.label_lower,
+            document_pkid=int(document.pkid),
+            document_id=document.id,
+        )
+        chunk_state = inspect_document_chunk_state(
+            reference,
+            (document.collection_id,),
+            expected_source_hash=source_hash,
+            using=database_alias,
+        )
+        if chunk_state == DocumentChunkState.STALE:
+            return "stale"
+        if chunk_state == DocumentChunkState.COMMITTED:
+            schedule_post_chunk_graph_build(
+                document.id,
+                source_hash,
+                using=database_alias,
+            )
             notify_ingest_monitor_complete(document.id)
             return "already_committed"
         async_to_sync(get_channel_layer().group_send)(
