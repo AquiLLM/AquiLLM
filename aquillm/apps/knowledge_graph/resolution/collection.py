@@ -32,6 +32,7 @@ from .embedding_session import (
     embedding_text_hash,
 )
 from .normalization import normalize_entity_label
+from .relation_evidence import relation_participation
 from .scoring import (
     EMBEDDING_DIMENSIONS,
     ResolutionOutcome,
@@ -3000,7 +3001,6 @@ def _filter_inputs_for_resolution(result, source_entity_rows, *, for_update: boo
                 "raw mention belongs to multiple active document entities"
             )
         mention_ids.add(membership.mention_id)
-    participation = {mention_id: 0 for mention_id in mention_ids}
 
     def relation_query(mention_id_batch):
         query = RelationMention.objects.filter(
@@ -3018,11 +3018,10 @@ def _filter_inputs_for_resolution(result, source_entity_rows, *, for_update: boo
         row_key=lambda row: row[0],
         sort_key=lambda row: row[0],
     )
-    for _relation_id, head_id, tail_id in relation_rows:
-        if head_id in participation:
-            participation[head_id] += 1
-        if tail_id in participation:
-            participation[tail_id] += 1
+    participation = relation_participation(
+        mention_ids, relation_rows, (row.artifact_id for row in source_entity_rows),
+        result.config,
+    )
     projected = []
     for cluster in result.clusters:
         cluster_memberships = tuple(

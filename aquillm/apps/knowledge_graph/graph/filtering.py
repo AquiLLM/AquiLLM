@@ -11,6 +11,8 @@ from hashlib import sha256
 from itertools import islice
 from math import isfinite, log1p
 
+from ..resolution.relation_evidence import relation_participation
+
 _HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
@@ -703,7 +705,6 @@ def _filter_inputs_from_artifact(artifact, config=None):
             membership.document_entity_id, []
         ).append(membership)
         all_mention_ids.add(membership.mention_id)
-    participation: dict[int, int] = {mention_id: 0 for mention_id in all_mention_ids}
 
     def relation_query(mention_id_batch):
         return (
@@ -721,11 +722,10 @@ def _filter_inputs_from_artifact(artifact, config=None):
         row_key=lambda row: row[0],
         sort_key=lambda row: row[0],
     )
-    for _relation_id, head_id, tail_id in relation_rows:
-        if head_id in participation:
-            participation[head_id] += 1
-        if tail_id in participation:
-            participation[tail_id] += 1
+    participation = relation_participation(
+        all_mention_ids, relation_rows,
+        (link.document_entity.artifact_id for link in automatic_links), config,
+    )
     projected: list[EntityFilterInput] = []
     for entity in entities:
         entity_memberships = tuple(

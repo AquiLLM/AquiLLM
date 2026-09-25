@@ -224,6 +224,8 @@ jobs:
         run: >-
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_coreference_capacity.py
+          aquillm/apps/knowledge_graph/tests/test_legacy_resolution_exclusions.py
+          aquillm/apps/knowledge_graph/tests/test_legacy_relation_support.py
           aquillm/apps/knowledge_graph/tests/test_collection_capacity.py
           aquillm/apps/knowledge_graph/tests/test_collection_context_policy.py
           aquillm/apps/knowledge_graph/tests/test_collection_context_failures.py
