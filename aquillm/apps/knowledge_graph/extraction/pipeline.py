@@ -29,6 +29,7 @@ from .evidence import (
     _resolvable_entities,
     serialize_entity_observations,
 )
+from .limits import DOCUMENT_SOURCE_MAX_CHARACTERS
 from .windows import (
     ExtractionWindow,
     MappedEntityEvidence,
@@ -48,7 +49,7 @@ _FATAL_STRUCTURAL_DIAGNOSTICS = frozenset(
     {"missing_entity_output", "missing_relation_output"}
 )
 DOCUMENT_EXTRACTION_V1_MAX_CHUNKS = 10_000
-DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS = 10_000_000
+DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS = DOCUMENT_SOURCE_MAX_CHARACTERS
 DOCUMENT_EXTRACTION_V1_MAX_ENTITIES = 65_536
 DOCUMENT_EXTRACTION_V1_MAX_RELATIONS = 131_072
 DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS = 524_288
@@ -75,8 +76,6 @@ class DocumentResolutionError(LookupError):
 
 class ExtractionInProgressError(RuntimeError):
     """Raised when the same immutable build identity is already in progress."""
-
-
 
 
 def collect_document_evidence(

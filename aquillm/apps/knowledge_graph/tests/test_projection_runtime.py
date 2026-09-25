@@ -94,9 +94,7 @@ def test_postgres_factory_rejects_missing_function_state_repository_before_io(
         constructed.append("direct-store")
         raise AssertionError("direct projection-state ORM store was constructed")
 
-    monkeypatch.setattr(
-        runtime, "DjangoChunkReferenceStore", forbidden, raising=False
-    )
+    monkeypatch.setattr(runtime, "DjangoChunkReferenceStore", forbidden, raising=False)
     monkeypatch.setattr(runtime, "DjangoProjectionRowSource", forbidden)
 
     with pytest.raises(RuntimeError, match="function state repository is required"):
@@ -216,3 +214,45 @@ def test_enabled_activation_injects_frozen_membership_hmac_on_web_alias(
     assert enabled is True
     assert observed["using"] == "default"
     assert observed["codec"].key_version == "key-v7"
+
+
+def test_membership_hook_enqueues_without_projection_worker_credentials(monkeypatch):
+    from apps.knowledge_graph.projection import lifecycle
+
+    observed = {}
+    monkeypatch.setattr(
+        lifecycle,
+        "enqueue_automatic_membership_changes_locked",
+        lambda **kwargs: observed.update(kwargs),
+    )
+
+    assert (
+        runtime.enqueue_automatic_membership_projections(
+            (7, 9), using="default", source=_projection_hook_environment()
+        )
+        is True
+    )
+    assert observed["collection_ids"] == (7, 9)
+    assert observed["using"] == "default"
+    assert observed["codec"].key_version == "key-v7"
+
+
+@pytest.mark.parametrize("hook_flag", [None, "0", "invalid"])
+def test_membership_hook_requires_explicit_valid_hook_flag(monkeypatch, hook_flag):
+    from apps.knowledge_graph.projection import lifecycle
+
+    def forbidden(**_kwargs):
+        pytest.fail("disabled membership hook accessed projection state")
+
+    monkeypatch.setattr(
+        lifecycle, "enqueue_automatic_membership_changes_locked", forbidden
+    )
+    source = _projection_environment()
+    if hook_flag is not None:
+        source["KG_MEMGRAPH_PROJECTION_HOOK_ENABLED"] = hook_flag
+    assert (
+        runtime.enqueue_automatic_membership_projections(
+            (7, 9), using="default", source=source
+        )
+        is False
+    )

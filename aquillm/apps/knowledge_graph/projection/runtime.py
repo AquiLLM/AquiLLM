@@ -195,8 +195,9 @@ def enqueue_automatic_membership_projections(
     """Best-effort optional membership hook inside the canonical transaction."""
 
     try:
-        settings = load_projection_runtime_settings(source)
-        if not settings.memgraph_projection_enabled:
+        values = os.environ if source is None else source
+        settings = load_projection_runtime_settings(values)
+        if not _projection_hook_enabled(values):
             return False
         from .lifecycle import enqueue_automatic_membership_changes_locked
 
