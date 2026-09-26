@@ -230,6 +230,7 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_collection_context_policy.py
           aquillm/apps/knowledge_graph/tests/test_collection_context_failures.py
           aquillm/apps/knowledge_graph/tests/test_canonical_capacity.py
+          aquillm/apps/knowledge_graph/tests/test_canonical_query_planning.py
           aquillm/apps/knowledge_graph/tests/test_inspection_progress.py
           aquillm/apps/knowledge_graph/tests/test_build_idempotency.py
           aquillm/apps/knowledge_graph/tests/test_bulk_build_failures.py

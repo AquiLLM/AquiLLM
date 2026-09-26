@@ -20,6 +20,7 @@ from apps.knowledge_graph.resolution.normalization import (
     parse_stable_identifier,
 )
 
+from .canonical_query_planning import canonical_provenance_scan
 from .canonical_validation import (
     _bounded_text,
     _hash_canonical_resolution,
@@ -59,7 +60,6 @@ _METHOD_PRIORITY = {
     "defined_acronym": 2,
     "embedding_similarity": 3,
 }
-
 
 
 class CanonicalOutcome(StrEnum):
@@ -1715,6 +1715,7 @@ def _bounded_locked_rows(
     return tuple(values)
 
 
+@canonical_provenance_scan
 def _load_locked_canonical_inputs(
     *,
     entity_rows: tuple[object, ...],
@@ -2020,9 +2021,8 @@ def _derive_locked_embedding_candidates(
             continue
         eligible.append((row, vector / norm))
 
-    # A fixed signed projection gives an input-order-independent locality
-    # window.  At most four later neighbors are compared for each entity, so
-    # the intermediate pair set is O(N) and remains below the decision cap.
+    # A signed projection fixes input-independent order; four later neighbors
+    # per entity keep the review set O(N) and below the decision cap.
     weights = np.fromiter(
         (
             1.0 if (((index * 1_103_515_245 + 12_345) >> 16) & 1) else -1.0
