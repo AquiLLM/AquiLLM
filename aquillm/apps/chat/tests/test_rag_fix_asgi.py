@@ -1,6 +1,7 @@
 """Real Channels dispatch must deliver disconnect during an owned turn."""
 
 import asyncio
+from json import loads
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -29,7 +30,7 @@ async def test_asgi_disconnect_cancels_blocked_sdk_before_late_save(
         "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
     }
     user, doc, chunks, _ = docs
-    started, released, cancelled, initial_saved = (asyncio.Event() for _ in range(4))
+    started, released, cancelled = (asyncio.Event() for _ in range(3))
 
     async def create(**kwargs):
         started.set()
@@ -66,11 +67,8 @@ async def test_asgi_disconnect_cancels_blocked_sdk_before_late_save(
         name="existing",
     )
     db.save = lambda **kwargs: None
-    consumer._ChatConsumer__get_all_user_collections = AsyncMock()
     consumer._ChatConsumer__get_convo = AsyncMock(return_value=db)
-    consumer._save_conversation = AsyncMock(
-        side_effect=lambda **kw: initial_saved.set()
-    )
+    consumer._save_conversation = AsyncMock()
     pending = Conversation(
         system="sys",
         messages=[
@@ -104,7 +102,8 @@ async def test_asgi_disconnect_cancels_blocked_sdk_before_late_save(
         await app.send_input({"type": "websocket.connect"})
         assert (await app.receive_output(2))["type"] == "websocket.accept"
         if entry == "append":
-            await asyncio.wait_for(initial_saved.wait(), 2)
+            snapshot = await app.receive_output(2)
+            assert "conversation" in loads(snapshot["text"])
             await app.send_input(
                 {
                     "type": "websocket.receive",

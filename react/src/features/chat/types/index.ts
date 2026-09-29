@@ -40,6 +40,7 @@ export interface StreamDelta {
 
 export interface WebSocketMessage {
   exception?: string;
+  fatal?: boolean;
   debug_html?: string;
   conversation?: Conversation;
   delta?: ConversationDelta;

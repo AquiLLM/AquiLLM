@@ -29,16 +29,39 @@ class Conversation(BaseModel):
 
     def rebind_tools(self, tools: list[LLMTool]) -> None:
         """Rebind tool functions to messages that reference them."""
-        def deprecated_func(*args, **kwargs):
-            return "This tool has been deprecated."
         tool_dict = {tool.name: tool for tool in tools}
         for message in self.messages:
             if message.tools:
-                for tool in message.tools:
-                    if tool.name in tool_dict.keys():
-                        tool._function = tool_dict[tool.name]._function
-                    else:
-                        tool._function = deprecated_func
+                message.tools = [
+                    tool_dict[tool.name]
+                    for tool in message.tools
+                    if tool.name in tool_dict
+                ]
+                if not message.tools:
+                    message.tool_choice = None
+
+        if not self.messages:
+            return
+        last = self.messages[-1]
+        if not isinstance(last, AssistantMessage) or not last.tool_call_id:
+            return
+        authorized_tool = tool_dict.get(last.tool_call_name or "")
+        if authorized_tool is not None:
+            last.tools = [authorized_tool]
+            return
+
+        # A saved tool call can outlive its permission or implementation. Record a
+        # result so the assistant can finish the turn instead of waiting forever.
+        name = last.tool_call_name or "unavailable_tool"
+        self.messages.append(
+            ToolMessage(
+                tool_name=name,
+                for_whom="assistant",
+                content=f"Tool {name} is no longer available for this conversation.",
+                arguments=last.tool_call_input or {},
+                result_dict={"exception": "Tool is no longer available"},
+            )
+        )
 
     @classmethod
     def get_empty_conversation(cls):

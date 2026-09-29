@@ -21,6 +21,7 @@ from apps.chat.consumers.chat_intent import (
 )
 from apps.chat.consumers.chat_publish import run_llm_spin
 from apps.chat.consumers.chat_ws_errors import (
+    send_connect_error,
     send_receive_error,
     send_receive_validation_error,
 )
@@ -37,6 +38,7 @@ from apps.chat.services.rag_turn import preservation_turn
 from apps.chat.services.skills_runtime import effective_base_system_for_memory_async
 from aquillm.llm import ToolChoice, UserMessage
 from aquillm.memory import augment_conversation_with_memory_async
+from aquillm.message_adapters import ConversationConflictError
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -104,6 +106,40 @@ def _configure_append_tools(
     if all_tools and _looks_like_local_tool_request(message_content):
         return all_tools, ToolChoice(type="auto")
     return [], None
+
+
+def restore_pending_user_tool_intent(
+    convo: Any,
+    *,
+    all_tools: list,
+    document_tools: list,
+    selected_collection_ids: list | None = None,
+    memory_tools: list | None = None,
+) -> None:
+    """Apply the append policy to a saved user turn using current permissions."""
+    if not convo or not isinstance(convo[-1], UserMessage):
+        return
+
+    prior_user_tools: list | None = None
+    prior_user_tool_choice: ToolChoice | None = None
+    for message in convo.messages:
+        if not isinstance(message, UserMessage):
+            continue
+        active_tools, tool_choice = _configure_append_tools(
+            message_content=message.content,
+            all_tools=all_tools,
+            document_tools=document_tools,
+            selected_collection_ids=selected_collection_ids,
+            memory_tools=memory_tools,
+            prior_user_tools=prior_user_tools,
+            prior_user_tool_choice=prior_user_tool_choice,
+        )
+        if message is convo[-1]:
+            message.tools = active_tools
+            message.tool_choice = tool_choice
+            return
+        if active_tools and tool_choice:
+            prior_user_tools, prior_user_tool_choice = active_tools, tool_choice
 
 
 def _validated_collection_ids(raw_collections: Any) -> list[Any]:
@@ -198,7 +234,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         uuid_str = data["uuid"]
         feedback_text = data["feedback_text"]
 
-        await database_sync_to_async(apply_message_feedback_text)(
+        persisted_text = await database_sync_to_async(apply_message_feedback_text)(
             consumer.db_convo.id,
             uuid_str,
             feedback_text,
@@ -206,8 +242,7 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
 
         for msg in consumer.convo:
             if str(msg.message_uuid) == uuid_str:
-                raw = "" if feedback_text is None else str(feedback_text)
-                msg.feedback_text = raw.strip() or None
+                msg.feedback_text = persisted_text
                 break
 
     if not consumer.dead:
@@ -275,6 +310,17 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             else:
                 raise ValueError(f'Invalid action "{action}"')
             logger.debug("obs.chat.action_completed", action=action)
+        except ConversationConflictError as e:
+            logger.warning("obs.chat.conversation_conflict", error=str(e))
+            await send_connect_error(
+                consumer,
+                e,
+                code=4409,
+                message=(
+                    "This chat changed in another connection. Refresh the page "
+                    "and resend your message if needed."
+                ),
+            )
         except ValidationError as e:
             msg = e.messages[0] if getattr(e, "messages", None) else str(e)
             logger.warning("obs.chat.validation_error", error=msg)

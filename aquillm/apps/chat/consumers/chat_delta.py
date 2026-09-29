@@ -29,13 +29,13 @@ async def send_conversation_delta(
     check_turn_active()
     logger.debug("obs.chat.delta_start")
     consumer.convo = convo
-    save_start = perf_counter()
-    await consumer._save_conversation(create_memories=create_memories)
-    check_turn_active()
     new_messages = convo.messages[consumer.last_sent_sequence + 1 :]
     if not new_messages:
         logger.debug("obs.chat.delta_skipped")
         return
+    save_start = perf_counter()
+    await consumer._save_conversation(create_memories=create_memories)
+    check_turn_active()
     usage = next(
         (
             msg.usage

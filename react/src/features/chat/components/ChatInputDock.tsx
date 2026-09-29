@@ -17,6 +17,7 @@ export interface ChatInputDockProps {
   onSend: () => void;
   inputDisabled: boolean;
   onOpenCollections: () => void;
+  collectionsDisabled: boolean;
   selectedCount: number;
 }
 
@@ -35,6 +36,7 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
   onSend,
   inputDisabled,
   onOpenCollections,
+  collectionsDisabled,
   selectedCount,
 }) => (
   <div className="sticky bottom-0 w-full bg-scheme-shade_2 border-t border-border-mid_contrast mt-[8px]">
@@ -103,7 +105,8 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
         <div className="">
           <button
             onClick={onOpenCollections}
-            className="flex h-[56px] w-[max-content] cursor-pointer items-center rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] py-0 text-text-normal transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5"
+            disabled={collectionsDisabled}
+            className="flex h-[56px] w-[max-content] cursor-pointer items-center rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] py-0 text-text-normal transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5 disabled:cursor-not-allowed"
             type="button"
           >
             <span className="text-text-normal">Collections</span>

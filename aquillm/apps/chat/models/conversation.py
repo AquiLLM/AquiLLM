@@ -117,4 +117,4 @@ class WSConversation(models.Model):
             self.name = self._fallback_title_from_user_message(first_user_message)
         else:
             self.name = title_text
-        self.save()
+        self.save(update_fields=["name", "updated_at"])

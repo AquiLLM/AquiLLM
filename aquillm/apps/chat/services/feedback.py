@@ -37,18 +37,22 @@ def apply_message_rating(conversation_id: int, message_uuid: Any, rating: Any) -
     ).update(rating=r, feedback_submitted_at=timezone.now())
 
 
-def apply_message_feedback_text(conversation_id: int, message_uuid: Any, feedback_text: Any) -> None:
-    """Set assistant message feedback text (truncated) and record submission time."""
+def apply_message_feedback_text(
+    conversation_id: int, message_uuid: Any, feedback_text: Any
+) -> str | None:
+    """Persist feedback and return the canonical text stored in the row."""
     raw = "" if feedback_text is None else str(feedback_text)
     text = raw.strip()
     if len(text) > FEEDBACK_TEXT_MAX_LEN:
         text = text[:FEEDBACK_TEXT_MAX_LEN]
     uid = _parse_message_uuid(message_uuid)
+    canonical_text = text or None
     Message.objects.filter(
         conversation_id=conversation_id,
         message_uuid=uid,
         role="assistant",
-    ).update(feedback_text=text or None, feedback_submitted_at=timezone.now())
+    ).update(feedback_text=canonical_text, feedback_submitted_at=timezone.now())
+    return canonical_text
 
 
 __all__ = [

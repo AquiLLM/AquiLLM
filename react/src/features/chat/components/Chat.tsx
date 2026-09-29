@@ -37,7 +37,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const fallbackContextLimit = 200000;
   const contextLimitTokens = contextLimit && contextLimit > 0 ? contextLimit : fallbackContextLimit;
 
-  const { wsRef, terminalError, beginTurn } = useChatWebSocket({
+  const { wsRef, terminalError, connectionStatus, beginTurn } = useChatWebSocket({
     convoId,
     setConversation,
     setException,
@@ -45,6 +45,11 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     setInputDisabled,
     setSelectedCollections,
   });
+  const collectionsReady = connectionStatus === 'ready';
+
+  useEffect(() => {
+    if (!collectionsReady) setShowCollections(false);
+  }, [collectionsReady]);
   useEffect(() => {
     if (conversationEndRef.current) {
       conversationEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -144,7 +149,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   };
 
   const sendMessage = () => {
-    if (!messageInput.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (connectionStatus !== 'ready' || inputDisabled || !messageInput.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     beginTurn();
     setInputDisabled(true);
@@ -212,15 +217,16 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   };
 
   const persistSelectedCollections = useCallback((collectionIds: Set<string>) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!collectionsReady || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     wsRef.current.send(JSON.stringify({
       action: 'select_collections',
       collections: Array.from(collectionIds).map(toPayloadCollectionId),
     }));
-  }, [wsRef]);
+  }, [collectionsReady, wsRef]);
 
   const handleCollectionToggle = (collectionId: string) => {
+    if (!collectionsReady || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     const normalizedCollectionId = normalizeCollectionId(collectionId);
     const nextSelected = new Set(selectedCollections);
 
@@ -258,6 +264,17 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
 
   return (
     <div className="flex flex-col h-full">
+      {!visibleException && (connectionStatus === 'connecting' || connectionStatus === 'hydrating' || connectionStatus === 'reconnecting') && (
+        <div
+          className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-scheme-shade_3 rounded"
+          role="status"
+          aria-label={connectionStatus === 'connecting' ? 'Connecting to chat' :
+            connectionStatus === 'hydrating' ? 'Loading conversation' : 'Reconnecting to chat'}
+        >
+          {connectionStatus === 'connecting' ? 'Connecting to chat…' :
+            connectionStatus === 'hydrating' ? 'Loading conversation…' : 'Reconnecting to chat…'}
+        </div>
+      )}
       {visibleException && (
         <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded flex items-center justify-between">
           <span>{visibleException}</span>
@@ -350,13 +367,14 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
         onMessageInputChange={setMessageInput}
         onAutoResize={autoResizeTextarea}
         onSend={sendMessage}
-        inputDisabled={inputDisabled}
-        onOpenCollections={() => setShowCollections(true)}
+        inputDisabled={inputDisabled || connectionStatus !== 'ready'}
+        onOpenCollections={() => { if (collectionsReady) setShowCollections(true); }}
+        collectionsDisabled={!collectionsReady}
         selectedCount={selectedCollections.size}
       />
 
       <ChatCollectionsModal
-        open={showCollections}
+        open={showCollections && collectionsReady}
         onClose={() => setShowCollections(false)}
         searchTerm={searchTerm}
         onSearchTermChange={setSearchTerm}

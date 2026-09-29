@@ -8,6 +8,12 @@ This file keeps conversion logic in one place so consumers.py need not know
 about database column mapping — it just calls save/load/build.
 """
 
+from hashlib import sha256
+from json import dumps
+
+from django.core.serializers.json import DjangoJSONEncoder
+from django.db import transaction
+
 from lib.llm.providers.visibility import (
     assistant_content_for_frontend,
     sanitize_assistant_text,
@@ -21,6 +27,39 @@ from .llm import (
     UserMessage,
 )
 from .models import Message, WSConversation
+
+
+class ConversationConflictError(RuntimeError):
+    """The loaded transcript changed; reload before attempting another save."""
+
+
+def _message_revisions(rows: list[Message]) -> tuple[str, str]:
+    """Content revisions include row identity, ordering and database-only metadata."""
+    values = [
+        {field.attname: getattr(row, field.attname) for field in Message._meta.fields}
+        for row in rows
+    ]
+    feedback_fields = {"rating", "feedback_text", "feedback_submitted_at"}
+    transcript = [
+        {key: value for key, value in row.items() if key not in feedback_fields}
+        for row in values
+    ]
+    full_revision, transcript_revision = (
+        sha256(dumps(value, cls=DjangoJSONEncoder, sort_keys=True).encode()).hexdigest()
+        for value in (values, transcript)
+    )
+    return full_revision, transcript_revision
+
+
+def _feedback_matches(convo: Conversation, rows: list[Message]) -> bool:
+    """Accept own feedback writes only when the proposed snapshot agrees with DB."""
+    incoming = {message.message_uuid: message for message in convo.messages}
+    return all(
+        row.message_uuid in incoming
+        and incoming[row.message_uuid].rating == row.rating
+        and incoming[row.message_uuid].feedback_text == row.feedback_text
+        for row in rows
+    )
 
 
 def _frontend_message_content(msg: LLM_Message) -> str:
@@ -124,38 +163,54 @@ def django_message_to_pydantic(msg: Message) -> LLM_Message:
 
 
 def load_conversation_from_db(db_convo: WSConversation) -> Conversation:
-    """Load a full Conversation from the Message table.
+    """Load messages and capture their content revision on this writer's handle.
 
-    Queries all Message rows for this conversation, converts each to a
-    Pydantic message, and returns a Conversation object ready for runtime use.
-    Called when a user reconnects to an existing conversation via WebSocket.
+    Keep one WSConversation handle per writer and reuse it for sequential saves.
+    Locking the parent makes the message snapshot coherent with transcript saves.
     """
-    messages = [
-        django_message_to_pydantic(msg)
-        for msg in db_convo.db_messages.order_by(
-            "sequence_number"
-        )  # ordered by position in conversation
-    ]
-    return Conversation(system=db_convo.system_prompt, messages=messages)
+    with transaction.atomic():
+        locked = WSConversation.objects.select_for_update().get(pk=db_convo.pk)
+        rows = list(locked.db_messages.order_by("sequence_number", "pk"))
+        convo = Conversation(
+            system=locked.system_prompt,
+            messages=[django_message_to_pydantic(msg) for msg in rows],
+        )
+        db_convo._transcript_revision = (db_convo.pk, _message_revisions(rows))
+    return convo
 
 
 def save_conversation_to_db(convo: Conversation, db_convo: WSConversation) -> None:
-    """Save a Conversation to the Message table, replacing all existing messages.
+    """Replace the transcript only if this writer's loaded revision is current.
 
-    Deletes all existing Message rows for this conversation and re-creates them.
-    Runs inside a transaction so either all messages are saved or none are
-    (prevents partial writes if something fails mid-save).
-
-    Called after each assistant response via __save() in consumers.py.
+    Existing populated conversations require load_conversation_from_db first.
+    Fresh empty conversations can save directly. A successful save advances the
+    handle's revision, allowing repeated appends and explicit shorter replacements.
+    Conflicts never merge transcripts or write metadata; callers must reload.
     """
-    from django.db import transaction
-
     with transaction.atomic():
+        locked = WSConversation.objects.select_for_update().get(pk=db_convo.pk)
+        # Feedback writes update Message directly, so lock those rows as well.
+        existing_rows = list(
+            locked.db_messages.select_for_update().order_by("sequence_number", "pk")
+        )
+        revisions = _message_revisions(existing_rows)
+        expected_pk, expected = getattr(
+            db_convo, "_transcript_revision", (db_convo.pk, _message_revisions([]))
+        )
+        own_feedback_only = expected[1] == revisions[1] and _feedback_matches(
+            convo, existing_rows
+        )
+        if expected_pk != db_convo.pk or (
+            expected != revisions and not own_feedback_only
+        ):
+            raise ConversationConflictError(
+                "This conversation changed in another session. Refresh and resend."
+            )
+
         # Keep system_prompt separate: convo.system may be augmented
         # with user memory (profile facts + episodic). Only messages are persisted here.
         db_convo.save(update_fields=["updated_at"])
 
-        existing_rows = list(db_convo.db_messages.all())
         existing_by_uuid = {row.message_uuid: row for row in existing_rows}
         incoming_uuids = []
         rows_to_create = []
@@ -212,6 +267,14 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation) -> No
 
         # Keep DB in sync when callers pass a shorter conversation than what's stored.
         db_convo.db_messages.exclude(message_uuid__in=incoming_uuids).delete()
+        saved_revision = _message_revisions(
+            list(locked.db_messages.order_by("sequence_number", "pk"))
+        )
+
+    # Advance immediately for sequential writes within an outer transaction. If
+    # that transaction later rolls back (e.g. publication cancellation), this
+    # handle must reload; the next attempted save safely reports a conflict.
+    db_convo._transcript_revision = (db_convo.pk, saved_revision)
 
 
 def build_frontend_conversation_json(db_convo: WSConversation) -> dict:

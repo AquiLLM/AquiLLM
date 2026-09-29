@@ -32,6 +32,9 @@ export interface UseChatWebSocketParams {
 
 const MAX_RECONNECTION_ATTEMPTS = 5;
 const CONNECTION_TIMEOUT = 5000;
+const RETRY_DELAY = 2000;
+
+export type ChatConnectionStatus = 'connecting' | 'hydrating' | 'reconnecting' | 'ready' | 'failed';
 
 export function useChatWebSocket({
   convoId,
@@ -42,8 +45,7 @@ export function useChatWebSocket({
   setSelectedCollections,
 }: UseChatWebSocketParams) {
   const wsRef = useRef<WebSocket | null>(null);
-  const [_isConnected, setIsConnected] = useState(false);
-  const [connectionAttempts, setConnectionAttempts] = useState(0);
+  const [connectionStatus, setConnectionStatus] = useState<ChatConnectionStatus>('connecting');
   const [terminalError, setTerminalError] = useState('');
 
   const beginTurn = useCallback(() => {
@@ -53,157 +55,197 @@ export function useChatWebSocket({
   }, [setDebugHtml, setException]);
 
   useEffect(() => {
-    setTerminalError('');
-  }, [convoId]);
+    let active = true;
+    let attempt = 0;
+    let currentSocket: WebSocket | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let retryId: ReturnType<typeof setTimeout> | undefined;
+    let fatalMessage = '';
+    let connectionReady = false;
+    let hadHydrated = false;
 
-  useEffect(() => {
-    let connectTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    const clearTimers = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (retryId) clearTimeout(retryId);
+      timeoutId = undefined;
+      retryId = undefined;
+    };
 
-    if (connectionAttempts >= MAX_RECONNECTION_ATTEMPTS) {
-      setException('Maximum reconnection attempts reached. Please refresh the page.');
-      return undefined;
-    }
+    const hasSettledTurn = (messages: Message[]) => {
+      if (!messages.length) return true;
+      const lastMessage = messages[messages.length - 1];
+      return (
+        (lastMessage.role === 'assistant' && !lastMessage.tool_call_name) ||
+        (lastMessage.role === 'tool' && lastMessage.for_whom === 'user')
+      );
+    };
 
-    setException(`Attempting to connect... (Attempt ${connectionAttempts + 1} of ${MAX_RECONNECTION_ATTEMPTS})`);
+    const applyInputState = (messages: Message[]) => {
+      setInputDisabled(!hasSettledTurn(messages));
+    };
 
-    try {
-      const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-      const ws = new WebSocket(`${protocol}${window.location.host}/ws/convo/${convoId}/`);
-      wsRef.current = ws;
+    const connect = () => {
+      if (!active) return;
+      attempt += 1;
+      connectionReady = false;
+      fatalMessage = '';
+      setConnectionStatus(attempt === 1 && !hadHydrated ? 'connecting' : 'reconnecting');
+      setInputDisabled(true);
+      setTerminalError('');
+      setException('');
+      setDebugHtml(null);
 
-      connectTimeoutId = setTimeout(() => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          ws.close();
-          setException('Connection timeout. Retrying...');
-          setConnectionAttempts((prev) => prev + 1);
-        }
-      }, CONNECTION_TIMEOUT);
+      const fail = (socket: WebSocket | null, code?: number) => {
+        if (!active || (socket && currentSocket !== socket)) return;
+        clearTimers();
+        currentSocket = null;
+        wsRef.current = null;
+        setInputDisabled(true);
+        if (socket && socket.readyState !== WebSocket.CLOSED) socket.close();
 
-      const applyInputState = (messages: Message[]) => {
-        if (!messages.length) {
-          setInputDisabled(false);
+        if (code === 4401 || code === 4404 || code === 4409) {
+          setConnectionStatus('failed');
+          const fallback = code === 4401 ? 'Authentication required.' :
+            code === 4404 ? 'Conversation unavailable.' : 'Conversation changed elsewhere.';
+          setException(fatalMessage || `${fallback} Please refresh the page.`);
           return;
         }
-        const lastMessage = messages[messages.length - 1];
-        const shouldEnableInput =
-          (lastMessage.role === 'assistant' && !lastMessage.tool_call_input) ||
-          (lastMessage.role === 'tool' && lastMessage.for_whom === 'user');
-        setInputDisabled(!shouldEnableInput);
-      };
-
-      ws.onopen = () => {
-        console.log('Connected to chat server');
-        if (connectTimeoutId) clearTimeout(connectTimeoutId);
-        setConnectionAttempts(0);
-        setInputDisabled(false);
-        setIsConnected(true);
-        setException('');
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data: WebSocketMessage = JSON.parse(event.data);
-
-          if (data.exception) {
-            console.error('Server error:', data.exception);
-            setTerminalError(data.exception);
-            setException(data.exception);
-            setDebugHtml(data.debug_html || null);
-            setInputDisabled(false);
-            return;
-          }
-
-          setException('');
-
-          if (data.conversation) {
-            const updatedConversation = data.conversation;
-            setTerminalError('');
-            if (Array.isArray(updatedConversation.selected_collections) && setSelectedCollections) {
-              setSelectedCollections(new Set(updatedConversation.selected_collections.map(String)));
-            }
-            const lastAssistantMessage = updatedConversation.messages
-              .slice()
-              .reverse()
-              .find((msg) => msg.role === 'assistant' && msg.usage !== undefined);
-            if (lastAssistantMessage && lastAssistantMessage.usage !== undefined) {
-              updatedConversation.usage = lastAssistantMessage.usage;
-            }
-            setConversation(updatedConversation);
-            applyInputState(updatedConversation.messages);
-            return;
-          }
-
-          if (data.stream && data.stream.message_uuid) {
-            const streamMsg: Message = {
-              role: 'assistant',
-              content: data.stream.content || '',
-              message_uuid: data.stream.message_uuid,
-              usage: data.stream.usage,
-            };
-
-            setConversation((prev) => {
-              const mergedMessages = mergeMessages(prev.messages, [streamMsg]);
-              return {
-                ...prev,
-                messages: mergedMessages,
-                usage: data.stream!.usage ?? prev.usage,
-              };
-            });
-            return;
-          }
-
-          if (data.delta && data.delta.messages && data.delta.messages.length) {
-            setConversation((prev) => {
-              const mergedMessages = mergeMessages(prev.messages, data.delta!.messages);
-              const merged = {
-                ...prev,
-                messages: mergedMessages,
-                usage: data.delta!.usage ?? prev.usage,
-              };
-              applyInputState(merged.messages);
-              return merged;
-            });
-          }
-        } catch (error) {
-          setException(`Error processing message: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        if (attempt >= MAX_RECONNECTION_ATTEMPTS) {
+          setConnectionStatus('failed');
+          setException('Maximum reconnection attempts reached. Please refresh the page.');
+          return;
         }
+        setConnectionStatus('reconnecting');
+        retryId = setTimeout(connect, RETRY_DELAY);
       };
 
-      ws.onclose = (event) => {
-        if (connectTimeoutId) clearTimeout(connectTimeoutId);
-        console.log('Disconnected from chat server', event.code, event.reason);
-        setInputDisabled(true);
-        setIsConnected(false);
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const ws = new WebSocket(`${protocol}${window.location.host}/ws/convo/${convoId}/`);
+        currentSocket = ws;
+        wsRef.current = ws;
+        timeoutId = setTimeout(() => fail(ws), CONNECTION_TIMEOUT);
 
-        let message = 'Disconnected from server. ';
-        if (event.code === 1006) {
-          message += 'Abnormal closure. ';
-        } else if (event.code === 1015) {
-          message += 'TLS handshake failed. ';
-        }
-        message += 'Attempting to reconnect...';
+        const isCurrent = () => active && currentSocket === ws;
 
-        setException(message);
-        setTimeout(() => setConnectionAttempts((prev) => prev + 1), 2000);
-      };
+        ws.onopen = () => {
+          if (!isCurrent() || fatalMessage) return;
+          setConnectionStatus('hydrating');
+        };
 
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setException('Connection error occurred. Retrying...');
-      };
-    } catch (error) {
-      console.error('Error creating WebSocket:', error);
-      setException(`Failed to create connection: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      setTimeout(() => setConnectionAttempts((prev) => prev + 1), 2000);
-    }
+        ws.onmessage = (event) => {
+          if (!isCurrent() || fatalMessage) return;
+          try {
+            const data: WebSocketMessage = JSON.parse(event.data);
 
-    return () => {
-      if (connectTimeoutId) clearTimeout(connectTimeoutId);
-      if (wsRef.current) {
-        wsRef.current.close();
+            if (data.exception) {
+              console.error('Server error:', data.exception);
+              setTerminalError(data.exception);
+              setException(data.exception);
+              setDebugHtml(data.debug_html || null);
+              if (data.fatal) {
+                fatalMessage = data.exception;
+                setInputDisabled(true);
+                setConnectionStatus('failed');
+              } else if (connectionReady) {
+                setInputDisabled(false);
+              }
+              return;
+            }
+
+            setException('');
+
+            if (data.conversation) {
+              const updatedConversation = data.conversation;
+              if (!Array.isArray(updatedConversation.selected_collections)) return;
+              connectionReady = true;
+              hadHydrated = true;
+              if (timeoutId) clearTimeout(timeoutId);
+              timeoutId = undefined;
+              if (hasSettledTurn(updatedConversation.messages)) attempt = 0;
+              setConnectionStatus('ready');
+              setTerminalError('');
+              if (setSelectedCollections) {
+                setSelectedCollections(new Set(updatedConversation.selected_collections.map(String)));
+              }
+              const lastAssistantMessage = updatedConversation.messages
+                .slice()
+                .reverse()
+                .find((msg) => msg.role === 'assistant' && msg.usage !== undefined);
+              if (lastAssistantMessage && lastAssistantMessage.usage !== undefined) {
+                updatedConversation.usage = lastAssistantMessage.usage;
+              }
+              setConversation(updatedConversation);
+              applyInputState(updatedConversation.messages);
+              return;
+            }
+
+            if (data.stream && data.stream.message_uuid) {
+              const streamMsg: Message = {
+                role: 'assistant',
+                content: data.stream.content || '',
+                message_uuid: data.stream.message_uuid,
+                usage: data.stream.usage,
+              };
+
+              setConversation((prev) => {
+                const mergedMessages = mergeMessages(prev.messages, [streamMsg]);
+                return {
+                  ...prev,
+                  messages: mergedMessages,
+                  usage: data.stream!.usage ?? prev.usage,
+                };
+              });
+              return;
+            }
+
+            if (data.delta && data.delta.messages && data.delta.messages.length) {
+              if (connectionReady && hasSettledTurn(data.delta.messages)) attempt = 0;
+              setConversation((prev) => {
+                const mergedMessages = mergeMessages(prev.messages, data.delta!.messages);
+                const merged = {
+                  ...prev,
+                  messages: mergedMessages,
+                  usage: data.delta!.usage ?? prev.usage,
+                };
+                if (connectionReady) applyInputState(merged.messages);
+                return merged;
+              });
+            }
+          } catch (error) {
+            setException(`Error processing message: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          }
+        };
+
+        ws.onclose = (event) => {
+          if (!isCurrent()) return;
+          fail(ws, event.code);
+        };
+
+        ws.onerror = () => {
+          if (!isCurrent()) return;
+          setInputDisabled(true);
+          if (!fatalMessage) setConnectionStatus('reconnecting');
+          // The close event carries the server's permanent/retryable code.
+          // Keep a deadline in case the browser never delivers that event.
+          if (!timeoutId) timeoutId = setTimeout(() => fail(ws), CONNECTION_TIMEOUT);
+        };
+      } catch (error) {
+        console.error('Error creating WebSocket:', error);
+        fail(null);
       }
     };
-  }, [connectionAttempts, convoId, setConversation, setException, setDebugHtml, setInputDisabled, setSelectedCollections]);
 
-  return { wsRef, terminalError, beginTurn };
+    setTerminalError('');
+    connect();
+
+    return () => {
+      active = false;
+      clearTimers();
+      if (currentSocket) currentSocket.close();
+      wsRef.current = null;
+    };
+  }, [convoId, setConversation, setException, setDebugHtml, setInputDisabled, setSelectedCollections]);
+
+  return { wsRef, terminalError, connectionStatus, beginTurn };
 }
