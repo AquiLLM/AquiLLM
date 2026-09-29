@@ -16,6 +16,8 @@ export interface ChatInputDockProps {
   onAutoResize: () => void;
   onSend: () => void;
   inputDisabled: boolean;
+  sendDisabled: boolean;
+  connectionMessage: string | null;
   onOpenCollections: () => void;
   collectionsDisabled: boolean;
   selectedCount: number;
@@ -35,6 +37,8 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
   onAutoResize,
   onSend,
   inputDisabled,
+  sendDisabled,
+  connectionMessage,
   onOpenCollections,
   collectionsDisabled,
   selectedCount,
@@ -84,7 +88,7 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  onSend();
+                  if (!sendDisabled) onSend();
                 }
               }}
               disabled={inputDisabled}
@@ -95,7 +99,7 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
               className="mr-[-4px] flex h-[44px] w-[44px] items-center justify-center rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 p-0 text-text-normal transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5 disabled:cursor-not-allowed"
               title="Send Message"
               type="button"
-              disabled={inputDisabled}
+              disabled={sendDisabled}
             >
               <Send size={16} className="text-text-normal" />
             </button>
@@ -116,9 +120,17 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
           </button>
         </div>
       </div>
-      <p className="mt-2 text-center text-xs text-text-low_contrast">
-        Search commands: <code>/search [document] question</code> or <code>/collection question</code>
-      </p>
+      <div className="mt-2 grid text-center text-xs text-text-low_contrast">
+        <p
+          className={`col-start-1 row-start-1 ${connectionMessage ? 'invisible' : ''}`}
+          aria-hidden={connectionMessage ? true : undefined}
+        >
+          Search commands: <code>/search [document] question</code> or <code>/collection question</code>
+        </p>
+        {connectionMessage && (
+          <p className="col-start-1 row-start-1" role="status">{connectionMessage}</p>
+        )}
+      </div>
     </div>
   </div>
 );

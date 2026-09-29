@@ -30,6 +30,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaMinHeight, setTextareaMinHeight] = useState(0);
   const [contentOverflowing, setContentOverflowing] = useState(false);
+  const [delayedConnectionConvoId, setDelayedConnectionConvoId] = useState<string | null>(null);
   const isDragging = useRef(false);
   const dragStartY = useRef(0);
   const dragStartHeight = useRef(0);
@@ -46,6 +47,16 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     setSelectedCollections,
   });
   const collectionsReady = connectionStatus === 'ready';
+  const waitingForConnection = connectionStatus === 'connecting' ||
+    connectionStatus === 'hydrating' || connectionStatus === 'reconnecting';
+
+  useEffect(() => {
+    setDelayedConnectionConvoId(null);
+    if (!waitingForConnection) return;
+
+    const timer = setTimeout(() => setDelayedConnectionConvoId(convoId), 1200);
+    return () => clearTimeout(timer);
+  }, [convoId, waitingForConnection]);
 
   useEffect(() => {
     if (!collectionsReady) setShowCollections(false);
@@ -261,20 +272,12 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const clampedUsageValue = Math.min(usageValue, contextLimitTokens);
   const usageRatio = contextLimitTokens > 0 ? clampedUsageValue / contextLimitTokens : 0;
   const visibleException = terminalError || exception;
+  const connectionMessage = !visibleException && waitingForConnection && delayedConnectionConvoId === convoId
+    ? connectionStatus === 'reconnecting' ? 'Reconnecting…' : 'Getting your chat ready…'
+    : null;
 
   return (
     <div className="flex flex-col h-full">
-      {!visibleException && (connectionStatus === 'connecting' || connectionStatus === 'hydrating' || connectionStatus === 'reconnecting') && (
-        <div
-          className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-scheme-shade_3 rounded"
-          role="status"
-          aria-label={connectionStatus === 'connecting' ? 'Connecting to chat' :
-            connectionStatus === 'hydrating' ? 'Loading conversation' : 'Reconnecting to chat'}
-        >
-          {connectionStatus === 'connecting' ? 'Connecting to chat…' :
-            connectionStatus === 'hydrating' ? 'Loading conversation…' : 'Reconnecting to chat…'}
-        </div>
-      )}
       {visibleException && (
         <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded flex items-center justify-between">
           <span>{visibleException}</span>
@@ -367,7 +370,9 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
         onMessageInputChange={setMessageInput}
         onAutoResize={autoResizeTextarea}
         onSend={sendMessage}
-        inputDisabled={inputDisabled || connectionStatus !== 'ready'}
+        inputDisabled={connectionStatus === 'failed' || (connectionStatus === 'ready' && inputDisabled)}
+        sendDisabled={inputDisabled || connectionStatus !== 'ready'}
+        connectionMessage={connectionMessage}
         onOpenCollections={() => { if (collectionsReady) setShowCollections(true); }}
         collectionsDisabled={!collectionsReady}
         selectedCount={selectedCollections.size}

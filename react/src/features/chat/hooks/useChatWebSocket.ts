@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useEffect, type Dispatch, type SetStateAction } from 'react';
 import type { Message, Conversation, WebSocketMessage } from '../types';
+import type { ChatSocketHandoff } from './chatSocketBootstrap';
 
 function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
   const existingByUuid = new Map<string, Message>();
@@ -63,6 +64,8 @@ export function useChatWebSocket({
     let fatalMessage = '';
     let connectionReady = false;
     let hadHydrated = false;
+    // Claim once per effect; retries always create fresh sockets.
+    let bootstrap: ChatSocketHandoff | null = window.aquiChatSocketBootstrap?.take(String(convoId)) ?? null;
 
     const clearTimers = () => {
       if (timeoutId) clearTimeout(timeoutId);
@@ -121,10 +124,16 @@ export function useChatWebSocket({
 
       try {
         const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-        const ws = new WebSocket(`${protocol}${window.location.host}/ws/convo/${convoId}/`);
+        const adopted = bootstrap;
+        bootstrap = null;
+        const ws = adopted?.socket ?? new WebSocket(`${protocol}${window.location.host}/ws/convo/${convoId}/`);
         currentSocket = ws;
         wsRef.current = ws;
-        timeoutId = setTimeout(() => fail(ws), CONNECTION_TIMEOUT);
+        // An expired bootstrap can still be waiting for the browser's close event.
+        // Give that event a bounded window to deliver its permanent/retryable code.
+        const elapsed = adopted && ws.readyState !== WebSocket.CLOSING
+          ? Math.max(0, Date.now() - adopted.startedAt) : 0;
+        timeoutId = setTimeout(() => fail(ws), Math.max(0, CONNECTION_TIMEOUT - elapsed));
 
         const isCurrent = () => active && currentSocket === ws;
 
@@ -230,6 +239,17 @@ export function useChatWebSocket({
           // Keep a deadline in case the browser never delivers that event.
           if (!timeoutId) timeoutId = setTimeout(() => fail(ws), CONNECTION_TIMEOUT);
         };
+
+        // Claiming detaches the buffer synchronously. Install live handlers first,
+        // then replay every recorded event in order, including a close before mount.
+        for (const buffered of adopted?.events ?? []) {
+          switch (buffered.type) {
+            case 'open': ws.onopen?.(buffered.event); break;
+            case 'message': ws.onmessage?.(buffered.event); break;
+            case 'error': ws.onerror?.(buffered.event); break;
+            case 'close': ws.onclose?.(buffered.event); break;
+          }
+        }
       } catch (error) {
         console.error('Error creating WebSocket:', error);
         fail(null);

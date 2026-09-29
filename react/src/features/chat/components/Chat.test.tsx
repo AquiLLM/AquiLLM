@@ -34,7 +34,7 @@ class FakeWebSocket {
   }
 }
 
-describe('Chat terminal tool errors', () => {
+describe('Chat readiness and terminal errors', () => {
   beforeEach(() => {
     FakeWebSocket.latest = null;
     vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -47,11 +47,13 @@ describe('Chat terminal tool errors', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   it('hides the spinner and leaves the retry input usable after a terminal tool error', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     render(<Chat convoId="314" />);
     await waitFor(() => expect(FakeWebSocket.latest).not.toBeNull());
     const socket = FakeWebSocket.latest!;
@@ -97,25 +99,153 @@ describe('Chat terminal tool errors', () => {
     }));
   });
 
-  it('uses neutral startup status and waits for saved selection before sending', async () => {
+  it('preserves a draft through startup and waits for saved selections before sending', async () => {
     render(<Chat convoId="314" />);
     await waitFor(() => expect(FakeWebSocket.latest).not.toBeNull());
     const socket = FakeWebSocket.latest!;
     const input = screen.getByRole('textbox') as HTMLTextAreaElement;
-    expect(input.disabled).toBe(true);
-    expect(screen.getByRole('status', { name: /connecting to chat/i }).className).not.toContain('bg-red-dark');
+    const sendButton = screen.getByTitle('Send Message') as HTMLButtonElement;
+    expect(input.disabled).toBe(false);
+    expect(sendButton.disabled).toBe(true);
+    fireEvent.change(input, { target: { value: 'hello' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(input.value).toBe('hello');
+    expect(socket.send).not.toHaveBeenCalled();
 
     act(() => socket.onopen?.(new Event('open')));
-    expect(input.disabled).toBe(true);
-    expect(screen.getByRole('status', { name: /loading conversation/i })).toBeTruthy();
+    expect(input.disabled).toBe(false);
+    expect(sendButton.disabled).toBe(true);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(sendButton);
+    expect(input.value).toBe('hello');
+    expect(socket.send).not.toHaveBeenCalled();
 
     act(() => socket.emit({ conversation: { messages: [], selected_collections: [7] } }));
     expect(input.disabled).toBe(false);
-    fireEvent.change(input, { target: { value: 'hello' } });
-    fireEvent.click(screen.getByTitle('Send Message'));
+    expect(input.value).toBe('hello');
+    expect(sendButton.disabled).toBe(false);
+    expect(socket.send).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
     expect(socket.send).toHaveBeenCalledWith(JSON.stringify({
       action: 'append', message: { role: 'user', content: 'hello' }, collections: [7], files: [],
     }));
+    expect(input.value).toBe('');
+  });
+
+  describe('quiet connection status', () => {
+    beforeEach(() => vi.useFakeTimers());
+
+    it('never shows a connection status for fast startup', async () => {
+      await act(async () => { render(<Chat convoId="314" />); });
+      const socket = FakeWebSocket.latest!;
+      expect(screen.queryByRole('status')).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(400);
+        socket.onopen?.(new Event('open'));
+      });
+      expect(screen.queryByRole('status')).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(400);
+        socket.emit({ conversation: { messages: [], selected_collections: [] } });
+      });
+      act(() => vi.advanceTimersByTime(2000));
+      expect(screen.queryByRole('status')).toBeNull();
+    });
+
+    it('shows a small neutral composer status only after startup remains slow', async () => {
+      await act(async () => { render(<Chat convoId="314" />); });
+      expect(screen.queryByRole('status')).toBeNull();
+      act(() => vi.advanceTimersByTime(1199));
+      expect(screen.queryByRole('status')).toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+      const status = screen.getByRole('status');
+      expect(status.textContent).toBe('Getting your chat ready…');
+      expect(status.closest('.sticky')?.contains(screen.getByRole('textbox'))).toBe(true);
+      expect(status.className).not.toContain('bg-red-dark');
+    });
+
+    it('keeps the total grace period when connecting changes to hydrating', async () => {
+      await act(async () => { render(<Chat convoId="314" />); });
+      const socket = FakeWebSocket.latest!;
+      act(() => vi.advanceTimersByTime(900));
+      act(() => socket.onopen?.(new Event('open')));
+      act(() => vi.advanceTimersByTime(299));
+      expect(screen.queryByRole('status')).toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByRole('status').textContent).toBe('Getting your chat ready…');
+      act(() => socket.emit({ conversation: { messages: [], selected_collections: [] } }));
+      expect(screen.queryByRole('status')).toBeNull();
+    });
+
+    it('gives a later reconnect its own grace period while retaining an editable draft', async () => {
+      await act(async () => { render(<Chat convoId="314" />); });
+      const socket = FakeWebSocket.latest!;
+      act(() => vi.advanceTimersByTime(1200));
+      expect(screen.getByRole('status').textContent).toBe('Getting your chat ready…');
+      act(() => {
+        socket.onopen?.(new Event('open'));
+        socket.emit({ conversation: { messages: [], selected_collections: [7] } });
+      });
+      act(() => vi.advanceTimersByTime(2000));
+      const input = screen.getByRole('textbox') as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: 'keep this draft' } });
+      act(() => socket.disconnect());
+      expect(screen.queryByRole('status')).toBeNull();
+      expect(input.disabled).toBe(false);
+      expect((screen.getByTitle('Send Message') as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(input.value).toBe('keep this draft');
+      act(() => vi.advanceTimersByTime(1199));
+      expect(screen.queryByRole('status')).toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByRole('status').textContent).toBe('Reconnecting…');
+      act(() => vi.advanceTimersByTime(800));
+      const replacement = FakeWebSocket.latest!;
+      act(() => {
+        replacement.onopen?.(new Event('open'));
+        replacement.emit({ conversation: { messages: [], selected_collections: [7] } });
+      });
+      expect(screen.queryByRole('status')).toBeNull();
+      expect(input.value).toBe('keep this draft');
+      expect(replacement.send).not.toHaveBeenCalled();
+    });
+
+    it('starts a fresh grace period when the conversation changes', async () => {
+      let view: ReturnType<typeof render>;
+      await act(async () => { view = render(<Chat convoId="314" />); });
+      act(() => vi.advanceTimersByTime(900));
+      view!.rerender(<Chat convoId="315" />);
+      act(() => vi.advanceTimersByTime(300));
+      expect(screen.queryByRole('status')).toBeNull();
+      act(() => vi.advanceTimersByTime(899));
+      expect(screen.queryByRole('status')).toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByRole('status').textContent).toBe('Getting your chat ready…');
+    });
+
+    it('cleans up pending connection timers on unmount', async () => {
+      let view: ReturnType<typeof render>;
+      await act(async () => { view = render(<Chat convoId="314" />); });
+      act(() => vi.advanceTimersByTime(900));
+      view!.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => vi.advanceTimersByTime(5000));
+      expect(screen.queryByRole('status')).toBeNull();
+    });
+
+    it('shows fatal errors immediately without waiting for the neutral status grace period', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      await act(async () => { render(<Chat convoId="314" />); });
+      const socket = FakeWebSocket.latest!;
+      act(() => socket.emit({ exception: 'Conversation unavailable.', fatal: true }));
+      expect(screen.getByText('Conversation unavailable.')).toBeTruthy();
+      expect((screen.getByTitle('Send Message') as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.queryByRole('status')).toBeNull();
+      act(() => vi.advanceTimersByTime(1200));
+      expect(screen.queryByRole('status')).toBeNull();
+    });
   });
 
   it('blocks collection edits while an open socket is still hydrating', async () => {
