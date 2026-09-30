@@ -1,6 +1,7 @@
 """Exact-input acquisition score reuse, shared by both text modes."""
 
 from collections.abc import Mapping
+from math import isfinite
 
 from apps.chat.services.rag_retrieval import FusedRetrievalPool
 from apps.chat.services.rag_selection_inputs import FinalEvidenceInput
@@ -16,6 +17,33 @@ from apps.documents.services.chunk_rerank_window_adapter import (
     compatible_window_score,
     expected_score_fingerprint,
 )
+
+
+def retained_scores_match(
+    retained,
+    scores: Mapping[int, PassageScore],
+    final_inputs: Mapping[int, FinalEvidenceInput],
+) -> bool:
+    """Check that every retained passage still has its exact scored input."""
+    return all(
+        item.chunk.pk in scores
+        and scores[item.chunk.pk].document_id == item.chunk.doc_id
+        and scores[item.chunk.pk].chunk_number == item.chunk.chunk_number
+        and scores[item.chunk.pk].source_fingerprint
+        == (
+            final_inputs[item.chunk.pk].source_fingerprint
+            if final_inputs
+            else fingerprint_text(item.chunk.content)
+        )
+        and (
+            scores[item.chunk.pk].effective_pair_fingerprint
+            == final_inputs[item.chunk.pk].pair_fingerprint
+            if final_inputs
+            else True
+        )
+        and isfinite(scores[item.chunk.pk].value)
+        for item in retained
+    )
 
 
 def _reused_scores(

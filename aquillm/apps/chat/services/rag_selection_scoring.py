@@ -6,13 +6,12 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from copy import copy
 from dataclasses import dataclass
-from math import isfinite
 from time import monotonic
 
 from apps.chat.services.rag_retrieval import FusedRetrievalPool
 from apps.chat.services.rag_selection_hydration import hydrate_pool_rows
 from apps.chat.services.rag_selection_inputs import prepare_final_input
-from apps.chat.services.rag_selection_reuse import _reused_scores
+from apps.chat.services.rag_selection_reuse import _reused_scores, retained_scores_match
 from apps.chat.services.rag_selection_types import SelectionCandidate
 from apps.collections.services.retrieval_authorization import (
     RetrievalAuthorizationContext,
@@ -246,25 +245,7 @@ def prepare_selection_candidates(
     model_complete = (
         bool(retained)
         and used_scorer is not None
-        and all(
-            item.chunk.pk in scores
-            and scores[item.chunk.pk].document_id == item.chunk.doc_id
-            and scores[item.chunk.pk].chunk_number == item.chunk.chunk_number
-            and scores[item.chunk.pk].source_fingerprint
-            == (
-                final_inputs[item.chunk.pk].source_fingerprint
-                if final_inputs
-                else fingerprint_text(item.chunk.content)
-            )
-            and (
-                scores[item.chunk.pk].effective_pair_fingerprint
-                == final_inputs[item.chunk.pk].pair_fingerprint
-                if final_inputs
-                else True
-            )
-            and isfinite(scores[item.chunk.pk].value)
-            for item in retained
-        )
+        and retained_scores_match(retained, scores, final_inputs)
         and clock() < deadline
         and (turn_budget is None or turn_budget.can_publish())
     )

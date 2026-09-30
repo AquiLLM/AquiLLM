@@ -27,6 +27,7 @@ from apps.chat.services.rag_pipeline_messages import (
     _has_prior_vector_search,
     _latest_user_message,
 )
+from apps.chat.services.rag_pipeline_retrieval import successful_search_results
 from apps.chat.services.rag_query import build_retrieval_queries
 from apps.chat.services.rag_retrieval import merge_ranked_tool_results
 from apps.chat.services.rag_selection_coordinator import (
@@ -188,26 +189,7 @@ async def run_direct_rag_turn(
             return_exceptions=True,
         )
         observe_search_outcomes(queries, search_outcomes)
-        search_results = [
-            outcome for outcome in search_outcomes if isinstance(outcome, dict)
-        ]
-        failed_query_count = len(search_outcomes) - len(search_results)
-        if not search_results:
-            first_error = next(
-                (
-                    outcome
-                    for outcome in search_outcomes
-                    if isinstance(outcome, BaseException)
-                ),
-                RuntimeError("all direct-RAG retrieval queries failed"),
-            )
-            raise first_error
-        if failed_query_count:
-            logger.warning(
-                "obs.rag.partial_retrieval_failure",
-                failed_count=failed_query_count,
-                total_count=len(search_outcomes),
-            )
+        search_results = successful_search_results(search_outcomes, logger)
         raw_result = (
             {}
             if preservation.active
