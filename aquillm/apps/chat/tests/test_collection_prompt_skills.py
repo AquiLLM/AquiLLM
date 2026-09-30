@@ -1,4 +1,5 @@
 """Collection-backed Markdown prompt skill loading."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -7,10 +8,15 @@ from unittest.mock import PropertyMock, patch
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 
 from apps.chat.consumers.chat import CollectionsRef
-from apps.chat.services.collection_prompt_skills import load_collection_prompt_skills
+from apps.chat.services.collection_prompt_skills import (
+    load_collection_prompt_skills,
+    validate_skill_overrides,
+)
 from apps.chat.services.skills_runtime import (
     effective_base_system_for_memory,
     effective_base_system_for_memory_async,
@@ -22,7 +28,9 @@ from aquillm.models import WSConversation
 User = get_user_model()
 
 
-def _raw_text_doc(collection: Collection, user, *, title: str, text: str) -> RawTextDocument:
+def _raw_text_doc(
+    collection: Collection, user, *, title: str, text: str
+) -> RawTextDocument:
     doc = RawTextDocument(
         title=title,
         full_text=text,
@@ -53,7 +61,9 @@ def _consumer_for(user, db_convo: WSConversation, collection_ids: list[int]):
 def test_effective_system_includes_marked_markdown_skill_from_selected_collection():
     user = User.objects.create_user(username="skill-user", password="pass")
     collection = Collection.objects.create(name="Astro Project")
-    CollectionPermission.objects.create(user=user, collection=collection, permission="VIEW")
+    CollectionPermission.objects.create(
+        user=user, collection=collection, permission="VIEW"
+    )
     db_convo = WSConversation.objects.create(owner=user, system_prompt="Base system.")
     _raw_text_doc(
         collection,
@@ -70,10 +80,16 @@ def test_effective_system_includes_marked_markdown_skill_from_selected_collectio
         ),
     )
 
-    system = effective_base_system_for_memory(_consumer_for(user, db_convo, [collection.id]))
+    system = effective_base_system_for_memory(
+        _consumer_for(user, db_convo, [collection.id])
+    )
 
     assert "## Collection Skill: astro-python-scripts" in system
-    assert "Description:\nGenerate astrophysics Python scripts. Prefer this skill for FITS and spectra work." in system
+    assert (
+        "Description:\nGenerate astrophysics Python scripts. "
+        "Prefer this skill for FITS and spectra work."
+        in system
+    )
     assert "Use astropy units and never overwrite data." in system
 
 
@@ -120,7 +136,9 @@ def test_effective_system_includes_markdown_docs_from_skill_pack_subcollection()
 def test_effective_system_ignores_unmarked_markdown_docs_in_regular_collection():
     user = User.objects.create_user(username="ignore-user", password="pass")
     collection = Collection.objects.create(name="Regular Notes")
-    CollectionPermission.objects.create(user=user, collection=collection, permission="VIEW")
+    CollectionPermission.objects.create(
+        user=user, collection=collection, permission="VIEW"
+    )
     db_convo = WSConversation.objects.create(owner=user, system_prompt="Base system.")
     _raw_text_doc(
         collection,
@@ -129,7 +147,9 @@ def test_effective_system_ignores_unmarked_markdown_docs_in_regular_collection()
         text="Do not treat this research note as system instructions.",
     )
 
-    system = effective_base_system_for_memory(_consumer_for(user, db_convo, [collection.id]))
+    system = effective_base_system_for_memory(
+        _consumer_for(user, db_convo, [collection.id])
+    )
 
     assert "Do not treat this research note as system instructions." not in system
 
@@ -190,7 +210,9 @@ def test_collection_skill_loading_does_not_materialize_every_collection_document
 def test_effective_system_async_wrapper_loads_collection_skills():
     user = User.objects.create_user(username="async-skill-user", password="pass")
     collection = Collection.objects.create(name="Async Skills")
-    CollectionPermission.objects.create(user=user, collection=collection, permission="VIEW")
+    CollectionPermission.objects.create(
+        user=user, collection=collection, permission="VIEW"
+    )
     db_convo = WSConversation.objects.create(owner=user, system_prompt="Base system.")
     _raw_text_doc(
         collection,
@@ -219,9 +241,15 @@ def test_parent_and_selected_pack_include_each_skill_once_with_overrides():
     root = Collection.objects.create(name="Observatory")
     pack = Collection.objects.create(name="skill_pack", parent=root)
     CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
-    inherited = _raw_text_doc(pack, user, title="inherited.md", text="Unique instruction body")
-    disabled = _raw_text_doc(pack, user, title="disabled.md", text="Disabled instruction body")
-    independent = _raw_text_doc(pack, user, title="independent.md", text="Explicit independent skill")
+    inherited = _raw_text_doc(
+        pack, user, title="inherited.md", text="Unique instruction body"
+    )
+    disabled = _raw_text_doc(
+        pack, user, title="disabled.md", text="Disabled instruction body"
+    )
+    independent = _raw_text_doc(
+        pack, user, title="independent.md", text="Explicit independent skill"
+    )
 
     def skill_id(doc):
         return f"{doc._meta.label_lower}:{doc.pk}"
@@ -242,7 +270,9 @@ def test_parent_and_selected_pack_include_each_skill_once_with_overrides():
     assert "Explicit independent skill" in prompt
     assert "Unique instruction body" not in prompt
 
-    prompt = load_collection_prompt_skills(user, [root.id], {skill_id(inherited): False})
+    prompt = load_collection_prompt_skills(
+        user, [root.id], {skill_id(inherited): False}
+    )
     assert "Unique instruction body" not in prompt
 
 
@@ -255,8 +285,13 @@ def test_chat_context_catalog_lists_readable_descendants_and_skill_metadata(clie
     hidden = Collection.objects.create(name="Private")
     CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
     doc = _raw_text_doc(
-        pack, user, title="spectra.md",
-        text="---\nname: Spectra Guide\ndescription: Handle spectra.\n---\n\nUse wavelength units.",
+        pack,
+        user,
+        title="spectra.md",
+        text=(
+            "---\nname: Spectra Guide\ndescription: Handle spectra.\n"
+            "---\n\nUse wavelength units."
+        ),
     )
     _raw_text_doc(hidden, user, title="private_skill.md", text="Secret instruction")
     client.force_login(user)
@@ -267,31 +302,49 @@ def test_chat_context_catalog_lists_readable_descendants_and_skill_metadata(clie
     payload = response.json()
     assert payload["skills_enabled"] is True
     assert payload["collections"] == [
-        {"id": root.id, "name": "Observatory", "parent": None, "path": "Observatory", "is_skill_pack": False},
-        {"id": pack.id, "name": "skill_pack", "parent": root.id, "path": "Observatory/skill_pack", "is_skill_pack": True},
+        {
+            "id": root.id,
+            "name": "Observatory",
+            "parent": None,
+            "path": "Observatory",
+            "is_skill_pack": False,
+        },
+        {
+            "id": pack.id,
+            "name": "skill_pack",
+            "parent": root.id,
+            "path": "Observatory/skill_pack",
+            "is_skill_pack": True,
+        },
     ]
-    assert payload["skills"] == [{
-        "id": f"{doc._meta.label_lower}:{doc.pk}",
-        "name": "Spectra Guide",
-        "description": "Handle spectra.",
-        "instructions": "Use wavelength units.",
-        "collection_id": str(pack.id),
-        "collection_name": "skill_pack",
-        "collection_path": "Observatory/skill_pack",
-        "source_path": "Observatory/skill_pack/spectra.md",
-        "pack_id": str(pack.id),
-        "pack_name": "skill_pack",
-        "default_collection_ids": [str(pack.id), str(root.id)],
-    }]
+    assert payload["skills"] == [
+        {
+            "id": f"{doc._meta.label_lower}:{doc.pk}",
+            "name": "Spectra Guide",
+            "description": "Handle spectra.",
+            "instructions": "Use wavelength units.",
+            "collection_id": str(pack.id),
+            "collection_name": "skill_pack",
+            "collection_path": "Observatory/skill_pack",
+            "source_path": "Observatory/skill_pack/spectra.md",
+            "pack_id": str(pack.id),
+            "pack_name": "skill_pack",
+            "default_collection_ids": [str(pack.id), str(root.id)],
+        }
+    ]
 
 
 @pytest.mark.django_db
-@override_settings(SKILLS_ENABLED=True, AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=False)
+@override_settings(
+    SKILLS_ENABLED=True, AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=False
+)
 def test_chat_context_catalog_hides_skills_when_feature_disabled(client):
     user = User.objects.create_user(username="skill-disabled", password="pass")
     root = Collection.objects.create(name="Research")
     CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
-    _raw_text_doc(root, user, title="research_skill.md", text="Disabled feature instruction")
+    _raw_text_doc(
+        root, user, title="research_skill.md", text="Disabled feature instruction"
+    )
     client.force_login(user)
 
     payload = client.get("/api/collections/chat-context/").json()
@@ -306,16 +359,24 @@ def test_chat_context_catalog_hides_skills_when_feature_disabled(client):
 def test_explicit_skill_rechecks_access_and_document_existence_at_runtime():
     user = User.objects.create_user(username="revoked-skill", password="pass")
     root = Collection.objects.create(name="Research")
-    permission = CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
-    doc = _raw_text_doc(root, user, title="research_skill.md", text="Restricted instruction")
+    permission = CollectionPermission.objects.create(
+        user=user, collection=root, permission="VIEW"
+    )
+    doc = _raw_text_doc(
+        root, user, title="research_skill.md", text="Restricted instruction"
+    )
     override = {f"{doc._meta.label_lower}:{doc.pk}": True}
 
     assert "Restricted instruction" in load_collection_prompt_skills(user, [], override)
     permission.delete()
-    assert "Restricted instruction" not in load_collection_prompt_skills(user, [], override)
+    assert "Restricted instruction" not in load_collection_prompt_skills(
+        user, [], override
+    )
     CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
     doc.delete()
-    assert "Restricted instruction" not in load_collection_prompt_skills(user, [], override)
+    assert "Restricted instruction" not in load_collection_prompt_skills(
+        user, [], override
+    )
 
 
 @pytest.mark.django_db
@@ -325,8 +386,12 @@ def test_catalog_excludes_unreadable_ancestor_from_paths_and_parent_ids(client):
     hidden = Collection.objects.create(name="Private Division")
     visible = Collection.objects.create(name="Shared Project", parent=hidden)
     pack = Collection.objects.create(name="skill_pack", parent=visible)
-    CollectionPermission.objects.create(user=user, collection=visible, permission="VIEW")
-    direct = _raw_text_doc(visible, user, title="direct_skill.md", text="Direct instructions")
+    CollectionPermission.objects.create(
+        user=user, collection=visible, permission="VIEW"
+    )
+    direct = _raw_text_doc(
+        visible, user, title="direct_skill.md", text="Direct instructions"
+    )
     packed = _raw_text_doc(pack, user, title="packed.md", text="Packed instructions")
     client.force_login(user)
 
@@ -351,8 +416,106 @@ def test_catalog_excludes_unreadable_ancestor_from_paths_and_parent_ids(client):
         },
     ]
     skills = {skill["id"]: skill for skill in payload["skills"]}
-    assert skills[f"{direct._meta.label_lower}:{direct.pk}"]["collection_path"] == "Shared Project"
-    assert skills[f"{direct._meta.label_lower}:{direct.pk}"]["source_path"] == "Shared Project/direct_skill.md"
-    assert skills[f"{packed._meta.label_lower}:{packed.pk}"]["collection_path"] == "Shared Project/skill_pack"
-    assert skills[f"{packed._meta.label_lower}:{packed.pk}"]["source_path"] == "Shared Project/skill_pack/packed.md"
+    assert (
+        skills[f"{direct._meta.label_lower}:{direct.pk}"]["collection_path"]
+        == "Shared Project"
+    )
+    assert (
+        skills[f"{direct._meta.label_lower}:{direct.pk}"]["source_path"]
+        == "Shared Project/direct_skill.md"
+    )
+    assert (
+        skills[f"{packed._meta.label_lower}:{packed.pk}"]["collection_path"]
+        == "Shared Project/skill_pack"
+    )
+    assert (
+        skills[f"{packed._meta.label_lower}:{packed.pk}"]["source_path"]
+        == "Shared Project/skill_pack/packed.md"
+    )
     assert "Private Division" not in response.content.decode()
+
+
+def _document_read_queries(captured):
+    from apps.collections.models.collection import _get_document_types
+
+    tables = tuple(f'FROM "{model._meta.db_table}"' for model in _get_document_types())
+    return [
+        query["sql"]
+        for query in captured
+        if query["sql"].lstrip().upper().startswith("SELECT")
+        and any(table in query["sql"] for table in tables)
+    ]
+
+
+@pytest.mark.django_db
+@override_settings(AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True)
+def test_prompt_candidate_reads_do_not_grow_with_unrelated_readable_collections():
+    user = User.objects.create_user(username="bounded-runtime", password="pass")
+    selected = Collection.objects.create(name="Selected")
+    CollectionPermission.objects.create(
+        user=user, collection=selected, permission="VIEW"
+    )
+    _raw_text_doc(
+        selected, user, title="selected_skill.md", text="Selected instructions"
+    )
+
+    with CaptureQueriesContext(connection) as baseline_queries:
+        baseline_prompt = load_collection_prompt_skills(user, [selected.pk])
+
+    unrelated = Collection.objects.create(name="Unrelated")
+    CollectionPermission.objects.create(
+        user=user, collection=unrelated, permission="VIEW"
+    )
+    _raw_text_doc(
+        unrelated, user, title="unrelated_skill.md", text="Unrelated instructions"
+    )
+    with CaptureQueriesContext(connection) as expanded_queries:
+        expanded_prompt = load_collection_prompt_skills(user, [selected.pk])
+
+    assert "Selected instructions" in baseline_prompt == expanded_prompt
+    assert "Unrelated instructions" not in expanded_prompt
+    baseline_reads = _document_read_queries(baseline_queries.captured_queries)
+    expanded_reads = _document_read_queries(expanded_queries.captured_queries)
+    assert baseline_reads
+    assert len(expanded_reads) == len(baseline_reads)
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True, AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True)
+def test_override_validation_reads_only_referenced_document_models():
+    user = User.objects.create_user(username="bounded-validation", password="pass")
+    target = Collection.objects.create(name="Target")
+    unrelated = Collection.objects.create(name="Unrelated")
+    CollectionPermission.objects.create(user=user, collection=target, permission="VIEW")
+    CollectionPermission.objects.create(
+        user=user, collection=unrelated, permission="VIEW"
+    )
+    doc = _raw_text_doc(
+        target, user, title="target_skill.md", text="Target instructions"
+    )
+    _raw_text_doc(unrelated, user, title="other_skill.md", text="Other instructions")
+    overrides = {f"{doc._meta.label_lower}:{doc.pk}": True}
+
+    with CaptureQueriesContext(connection) as queries:
+        validated = validate_skill_overrides(user, overrides)
+
+    assert validated == overrides
+    assert len(_document_read_queries(queries.captured_queries)) == 1
+
+
+@pytest.mark.django_db
+@override_settings(AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True)
+def test_scoped_prompt_keeps_catalog_order_across_readable_ancestors():
+    user = User.objects.create_user(username="scoped-order", password="pass")
+    alpha = Collection.objects.create(name="Alpha Root")
+    zulu = Collection.objects.create(name="Zulu Root")
+    alpha_child = Collection.objects.create(name="Zulu Child", parent=alpha)
+    zulu_child = Collection.objects.create(name="Alpha Child", parent=zulu)
+    CollectionPermission.objects.create(user=user, collection=alpha, permission="VIEW")
+    CollectionPermission.objects.create(user=user, collection=zulu, permission="VIEW")
+    _raw_text_doc(alpha_child, user, title="first_skill.md", text="First ordered body")
+    _raw_text_doc(zulu_child, user, title="second_skill.md", text="Second ordered body")
+
+    prompt = load_collection_prompt_skills(user, [alpha_child.pk, zulu_child.pk])
+
+    assert prompt.index("First ordered body") < prompt.index("Second ordered body")
