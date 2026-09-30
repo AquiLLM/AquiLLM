@@ -121,6 +121,24 @@ def accessible_collections(user: Any) -> list[Collection]:
     ]
 
 
+def readable_collection_paths(collections: list[Collection]) -> dict[int, str]:
+    """Build paths without traversing ancestors absent from the readable set."""
+    by_id = {collection.pk: collection for collection in collections}
+    paths: dict[int, str] = {}
+
+    def path_for(collection: Collection) -> str:
+        if collection.pk not in paths:
+            parent = by_id.get(collection.parent_id)
+            paths[collection.pk] = (
+                f"{path_for(parent)}/{collection.name}" if parent else collection.name
+            )
+        return paths[collection.pk]
+
+    for collection in collections:
+        path_for(collection)
+    return paths
+
+
 def discover_collection_skills(
     user: Any, collections: list[Collection] | None = None
 ) -> list[dict[str, Any]]:
@@ -129,6 +147,7 @@ def discover_collection_skills(
         return []
     collections = accessible_collections(user) if collections is None else collections
     readable_ids = {collection.pk for collection in collections}
+    readable_paths = readable_collection_paths(collections)
     skills: list[dict[str, Any]] = []
     for collection in collections:
         is_pack = _name_key(collection.name) in _SKILL_PACK_COLLECTION_NAMES
@@ -141,7 +160,7 @@ def discover_collection_skills(
             meta, body = _skill_body(doc)
             if not body:
                 continue
-            path = collection.get_path()
+            path = readable_paths[collection.pk]
             defaults = [str(collection.pk)]
             if is_pack and collection.parent_id in readable_ids:
                 defaults.append(str(collection.parent_id))
@@ -247,5 +266,6 @@ __all__ = [
     "accessible_collections",
     "discover_collection_skills",
     "load_collection_prompt_skills",
+    "readable_collection_paths",
     "validate_skill_overrides",
 ]

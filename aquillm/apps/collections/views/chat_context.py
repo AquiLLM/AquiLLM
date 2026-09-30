@@ -13,6 +13,7 @@ from apps.chat.services.collection_prompt_skills import (
     _setting_enabled,
     accessible_collections,
     discover_collection_skills,
+    readable_collection_paths,
 )
 
 
@@ -20,6 +21,7 @@ from apps.chat.services.collection_prompt_skills import (
 @require_GET
 def chat_context(request):
     collections = accessible_collections(request.user)
+    readable_paths = readable_collection_paths(collections)
     skills_enabled = bool(
         getattr(settings, "SKILLS_ENABLED", False)
     ) and _setting_enabled("AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED")
@@ -29,13 +31,16 @@ def chat_context(request):
                 {
                     "id": collection.pk,
                     "name": collection.name,
-                    "parent": collection.parent_id,
-                    "path": collection.get_path(),
+                    "parent": collection.parent_id
+                    if collection.parent_id in readable_paths
+                    else None,
+                    "path": readable_paths[collection.pk],
                     "is_skill_pack": _name_key(collection.name)
                     in _SKILL_PACK_COLLECTION_NAMES,
                 }
                 for collection in sorted(
-                    collections, key=lambda item: (item.get_path().casefold(), item.pk)
+                    collections,
+                    key=lambda item: (readable_paths[item.pk].casefold(), item.pk),
                 )
             ],
             "skills_enabled": skills_enabled,

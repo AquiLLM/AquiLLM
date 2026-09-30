@@ -178,6 +178,7 @@ def load_conversation_from_db(db_convo: WSConversation) -> Conversation:
         db_convo._transcript_revision = (db_convo.pk, _message_revisions(rows))
         db_convo.system_prompt = locked.system_prompt
         db_convo.selected_collection_ids = list(locked.selected_collection_ids or [])
+        db_convo.skill_overrides = dict(locked.skill_overrides or {})
     return convo
 
 

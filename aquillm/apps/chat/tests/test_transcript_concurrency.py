@@ -133,6 +133,26 @@ class TranscriptConcurrencyTests(TestCase):
         self.assertEqual(self.db.name, "Renamed elsewhere")
         self.assertEqual(self.contents(), ["Question", "Answer"])
 
+    def test_load_refreshes_selection_and_overrides_on_a_stale_handle(self):
+        stale_handle = WSConversation.objects.get(pk=self.db.pk)
+        other_connection = WSConversation.objects.get(pk=self.db.pk)
+        other_connection.selected_collection_ids = [42]
+        other_connection.skill_overrides = {
+            "apps_documents.rawtextdocument:123": False
+        }
+        other_connection.save(
+            update_fields=["selected_collection_ids", "skill_overrides", "updated_at"]
+        )
+
+        loaded = message_adapters.load_conversation_from_db(stale_handle)
+
+        self.assertEqual([message.content for message in loaded], ["Question"])
+        self.assertEqual(stale_handle.selected_collection_ids, [42])
+        self.assertEqual(
+            stale_handle.skill_overrides,
+            {"apps_documents.rawtextdocument:123": False},
+        )
+
     def test_auto_title_does_not_overwrite_newer_collection_selection(self):
         handle, _ = self.load_writer()
         self.db.selected_collection_ids = [42]

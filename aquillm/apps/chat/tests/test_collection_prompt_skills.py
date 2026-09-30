@@ -316,3 +316,43 @@ def test_explicit_skill_rechecks_access_and_document_existence_at_runtime():
     CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
     doc.delete()
     assert "Restricted instruction" not in load_collection_prompt_skills(user, [], override)
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True, AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True)
+def test_catalog_excludes_unreadable_ancestor_from_paths_and_parent_ids(client):
+    user = User.objects.create_user(username="child-only-reader", password="pass")
+    hidden = Collection.objects.create(name="Private Division")
+    visible = Collection.objects.create(name="Shared Project", parent=hidden)
+    pack = Collection.objects.create(name="skill_pack", parent=visible)
+    CollectionPermission.objects.create(user=user, collection=visible, permission="VIEW")
+    direct = _raw_text_doc(visible, user, title="direct_skill.md", text="Direct instructions")
+    packed = _raw_text_doc(pack, user, title="packed.md", text="Packed instructions")
+    client.force_login(user)
+
+    response = client.get("/api/collections/chat-context/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["collections"] == [
+        {
+            "id": visible.id,
+            "name": "Shared Project",
+            "parent": None,
+            "path": "Shared Project",
+            "is_skill_pack": False,
+        },
+        {
+            "id": pack.id,
+            "name": "skill_pack",
+            "parent": visible.id,
+            "path": "Shared Project/skill_pack",
+            "is_skill_pack": True,
+        },
+    ]
+    skills = {skill["id"]: skill for skill in payload["skills"]}
+    assert skills[f"{direct._meta.label_lower}:{direct.pk}"]["collection_path"] == "Shared Project"
+    assert skills[f"{direct._meta.label_lower}:{direct.pk}"]["source_path"] == "Shared Project/direct_skill.md"
+    assert skills[f"{packed._meta.label_lower}:{packed.pk}"]["collection_path"] == "Shared Project/skill_pack"
+    assert skills[f"{packed._meta.label_lower}:{packed.pk}"]["source_path"] == "Shared Project/skill_pack/packed.md"
+    assert "Private Division" not in response.content.decode()

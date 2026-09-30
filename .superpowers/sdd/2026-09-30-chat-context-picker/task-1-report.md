@@ -17,3 +17,10 @@ The route is registered in both `apps/collections/urls.py` and the mounted compa
 ## Remaining validation limit
 
 `makemigrations --check --dry-run` exits 1 because Django detects unrelated pre-existing drift in chat index/app_version/system_prompt and document model options/constraints/fields. It proposes no change to `skill_overrides`. The combined append suite was interrupted after existing append cases entered slow provider work; focused selection and append-before-prompt cases passed separately.
+
+## Review round 1
+
+- Catalog collection paths, parent IDs, skill collection paths, and source paths now stop at the first unreadable ancestor. Sorting uses these readable-only paths. A directly readable child under a private parent appears as a visible root, while its readable descendants retain their local hierarchy.
+- `load_conversation_from_db()` now refreshes both `selected_collection_ids` and `skill_overrides` from the same locked conversation row before the consumer hydrates its snapshot and pending turn.
+- Red regressions: the catalog exposed `Private Division` and its parent ID; a stale conversation handle kept `{}` after another handle saved a nonempty override map.
+- Green command: `python -m pytest aquillm/apps/chat/tests/test_collection_prompt_skills.py aquillm/apps/chat/tests/test_transcript_concurrency.py -q --reuse-db --tb=short` with the disposable PostgreSQL environment described above — 23 passed, 9 existing warnings. The two new regressions were also run alone before the fix (2 failed) and after (2 passed).
