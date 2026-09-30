@@ -24,6 +24,27 @@ def prepared_queries(queries, requested_top_k, candidate_top_k):
     )
 
 
+def search_outcomes(queries, outcomes):
+    def data():
+        return {
+            "queries": [
+                {
+                    "query": query,
+                    "status": (
+                        "ok"
+                        if isinstance(outcome, dict)
+                        else "timeout"
+                        if isinstance(outcome, TimeoutError)
+                        else "error"
+                    ),
+                }
+                for query, outcome in zip(queries, outcomes, strict=True)
+            ]
+        }
+
+    _emit("rag_search_outcomes", data)
+
+
 def final_selection(packet, max_passages, token_budget):
     _emit(
         "rag_final_selection",
@@ -78,6 +99,20 @@ def retrieval_stages(
                 graph_rows = [row for row in hybrid_pool if row.pk not in baseline_ids]
             else:
                 graph_rows = ranking.graph_candidates
+        branch_statuses = {
+            branch: diagnostics[f"graph_{branch}_status"]
+            for branch in ("direct", "extended")
+            if diagnostics.get(f"graph_{branch}_status")
+            in (
+                "not_run",
+                "failed",
+                "succeeded_new",
+                "succeeded_duplicates",
+                "succeeded_empty",
+                "succeeded_unmaterialized",
+            )
+        }
+        graph_status = diagnostics.get("graph_status")
         limits = getattr(snapshot, "effective_limits", None)
         return {
             "query": query,
@@ -99,7 +134,18 @@ def retrieval_stages(
             },
             "graph": {
                 "ready": None,
+                "status": (
+                    graph_status if graph_status in ("hit", "miss", "error") else None
+                ),
                 "reasons": reasons if reasons else None,
+                "branch_statuses": branch_statuses or None,
+                "candidate_provenance": (
+                    "novel_fused"
+                    if hybrid_pool is not None
+                    else "materialized_novel"
+                    if graph_rows is not None
+                    else None
+                ),
                 "seeds": (
                     [
                         {"chunk_id": seed.chunk_id, "rank": seed.rank}

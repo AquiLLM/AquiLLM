@@ -12,6 +12,7 @@ from apps.documents.tests.test_chunk_search_graph_overlay import (
     _snapshot,
 )
 from lib.evidence_observation import observe
+from lib.replay_observation import retrieval_stages
 
 
 @override_settings(KG_OVERLAY_ENABLED=False, RAG_CACHE_ENABLED=False)
@@ -131,3 +132,27 @@ def test_failed_sink_and_unreadable_observation_leave_search_result_intact(monke
         )
     assert result[2] == [unreadable]
     assert state.failed.is_set()
+
+
+def test_duplicate_only_graph_observation_identifies_fused_provenance():
+    row = SimpleNamespace(pk=16, doc_id=_DOC_A, content="baseline passage")
+    snapshot = _snapshot(baseline=(row,))
+    ranking = SimpleNamespace(combined_candidates=(row,), graph_candidates=())
+    events = []
+    with observe(lambda name, data: events.append((name, data))):
+        retrieval_stages(
+            "test query",
+            1,
+            snapshot,
+            ranking,
+            (row,),
+            {"graph_status": "miss", "graph_direct_status": "succeeded_duplicates"},
+            overlay_enabled=True,
+            hybrid_pool=(row,),
+            graph_seed_attempted=True,
+        )
+    graph = [data["graph"] for name, data in events if name == "retrieval_stages"][0]
+    assert graph["status"] == "miss"
+    assert graph["candidate_provenance"] == "novel_fused"
+    assert graph["candidates"] == []
+    assert graph["branch_statuses"] == {"direct": "succeeded_duplicates"}

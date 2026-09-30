@@ -52,7 +52,13 @@ from lib.llm.providers.request_observability import (
 )
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage
-from lib.replay_observation import final_selection, prepared_queries
+from lib.replay_observation import (
+    final_selection,
+    prepared_queries,
+)
+from lib.replay_observation import (
+    search_outcomes as observe_search_outcomes,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 _SEARCH_SCOPE = "selected documents"
@@ -181,6 +187,7 @@ async def run_direct_rag_turn(
             ),
             return_exceptions=True,
         )
+        observe_search_outcomes(queries, search_outcomes)
         search_results = [
             outcome for outcome in search_outcomes if isinstance(outcome, dict)
         ]
