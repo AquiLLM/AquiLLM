@@ -14,7 +14,10 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.apps import apps
 from django.contrib.auth.models import User
 
-from apps.chat.consumers.chat_delta import send_conversation_delta
+from apps.chat.consumers.chat_delta import (
+    send_conversation_delta,
+    send_conversation_snapshot,
+)
 from apps.chat.consumers.chat_publish import run_llm_spin
 from apps.chat.consumers.chat_receive import (
     handle_chat_receive,
@@ -25,6 +28,7 @@ from apps.chat.consumers.chat_ws_errors import send_connect_error
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import WSConversation
 from apps.chat.refs import ChatRef, CollectionsRef
+from apps.chat.services.execution import execution_turn
 from apps.chat.services.rag_pipeline import run_direct_rag_turn
 from apps.chat.services.rag_turn import preservation_turn
 from apps.chat.services.skills_runtime import (
@@ -42,7 +46,6 @@ from aquillm.memory import augment_conversation_with_memory_async
 from aquillm.message_adapters import (
     ConversationConflictError,
     load_conversation_from_db,
-    pydantic_message_to_frontend_dict,
 )
 from aquillm.settings import DEBUG, SKILLS_ENABLED
 from aquillm.tasks import enqueue_conversation_memories_task
@@ -95,40 +98,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
         cancel_active_turn(self)
         self.transport_connected = False
 
-    @database_sync_to_async
-    def _save_conversation(self, create_memories: bool = False):
-        from apps.chat.services.rag_turn_publication import conversation_publication
-        from aquillm.message_adapters import save_conversation_to_db
+    async def _save_conversation(
+        self, create_memories=False, *, selected_collections=None
+    ):
+        from apps.chat.consumers.chat_persistence import save_chat_conversation
 
-        assert self.db_convo is not None
-        with conversation_publication():
-            save_conversation_to_db(self.convo, self.db_convo)
-        if create_memories:
-            try:
-                enqueue_conversation_memories_task(
-                    conversation_id=self.db_convo.id,
-                    queued_updated_at=self.db_convo.updated_at.isoformat(),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "obs.chat.memory_enqueue_failed",
-                    conversation_id=self.db_convo.id,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                )
-            try:
-                enqueue_index_conversation_task(
-                    conversation_id=self.db_convo.id,
-                    queued_updated_at=self.db_convo.updated_at.isoformat(),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to queue conversation indexing task for convo %s: %s",
-                    self.db_convo.id,
-                    exc,
-                )
-        if len(self.convo) >= 2 and not self.db_convo.name:
-            self.db_convo.set_name()
+        await save_chat_conversation(
+            self,
+            create_memories=create_memories,
+            selected_collections=selected_collections,
+            enqueue_functions=(
+                enqueue_conversation_memories_task,
+                enqueue_index_conversation_task,
+            ),
+        )
 
     @database_sync_to_async
     def __get_convo(self, convo_id: int, user: User):
@@ -154,8 +137,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.user = self.scope.get("user")
             if self.user is None or not self.user.is_authenticated:
                 await send_connect_error(
-                    self, PermissionError("Authentication required"),
-                    code=4401, message="Authentication required",
+                    self,
+                    PermissionError("Authentication required"),
+                    code=4401,
+                    message="Authentication required",
                 )
                 return
             logger.debug(
@@ -167,8 +152,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if self.db_convo is None:
                 logger.error("obs.chat.invalid_conversation", conversation_id=convo_id)
                 await send_connect_error(
-                    self, LookupError("Invalid chat_id"),
-                    code=4404, message="Invalid chat_id",
+                    self,
+                    LookupError("Invalid chat_id"),
+                    code=4404,
+                    message="Invalid chat_id",
                 )
                 return
 
@@ -192,86 +179,80 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.convo = await database_sync_to_async(load_conversation_from_db)(
                 self.db_convo
             )
-            loaded_len = len(self.convo)
-            self.last_sent_sequence = len(self.convo) - 1
-            await self.send(
-                text_data=dumps(
-                    {
-                        "conversation": {
-                            "system": self.db_convo.system_prompt,
-                            "selected_collections": (
-                                self.db_convo.selected_collection_ids or []
-                            ),
-                            "messages": [
-                                pydantic_message_to_frontend_dict(msg)
-                                for msg in self.convo
-                            ],
-                        }
-                    }
-                )
-            )
+            self._apply_saved_collection_selection()
+            await send_conversation_snapshot(self)
             self.convo.rebind_tools(self.tools)
             if not self._has_pending_turn():
                 return
-            restore_pending_user_tool_intent(
-                self.convo,
-                all_tools=self.tools,
-                document_tools=self.doc_tools,
-                selected_collection_ids=self.col_ref.collections,
-                memory_tools=self.memory_tools,
-            )
-            augment_start = perf_counter()
-            await augment_conversation_with_memory_async(
-                self.convo,
-                self.user,
-                await effective_base_system_for_memory_async(self),
-                self.db_convo.id,
-                include_episodic=not bool(self.col_ref.collections),
-            )
-            logger.info(
-                "obs.chat.memory_augmented",
-                phase="connect",
-                duration_ms=(perf_counter() - augment_start) * 1000,
-            )
-            logger.debug("obs.chat.spin_starting", phase="connect")
-            llm_start = perf_counter()
-            async with preservation_turn(self, max_func_calls=CHAT_MAX_FUNC_CALLS):
-                direct_outcome = "skipped"
-                if self.convo[-1].role == "user":
-                    direct_outcome = await run_direct_rag_turn(
-                        self,
-                        self.llm_if,
-                        self.convo,
-                        stream_func=self._send_stream_payload,
-                    )
-                if direct_outcome == "handled":
-                    await send_conversation_delta(
-                        self,
-                        self.convo,
-                        create_memories=False,
-                        close_db=False,
-                    )
-                else:
-                    await run_llm_spin(
-                        self,
-                        self.llm_if,
-                        self.convo,
-                        max_func_calls=CHAT_MAX_FUNC_CALLS,
-                        max_tokens=CHAT_MAX_TOKENS,
-                        send_func=lambda c: send_conversation_delta(
-                            self, c, create_memories=False, close_db=False
-                        ),
-                        stream_func=self._send_stream_payload,
-                    )
-                logger.info(
-                    "obs.chat.spin_completed",
-                    phase="connect",
-                    duration_ms=(perf_counter() - llm_start) * 1000,
+            async with execution_turn(self, wait=True):
+                # Another socket may have finished while this viewer waited.
+                self.convo = await database_sync_to_async(load_conversation_from_db)(
+                    self.db_convo
                 )
-                if len(self.convo) > loaded_len:
-                    await self._save_conversation(create_memories=True)
-            logger.debug("obs.chat.spin_done", phase="connect")
-            return
+                self._apply_saved_collection_selection()
+                loaded_len = len(self.convo)
+                await send_conversation_snapshot(self)
+                self.convo.rebind_tools(self.tools)
+                if not self._has_pending_turn():
+                    return
+                restore_pending_user_tool_intent(
+                    self.convo,
+                    all_tools=self.tools,
+                    document_tools=self.doc_tools,
+                    selected_collection_ids=self.col_ref.collections,
+                    memory_tools=self.memory_tools,
+                )
+                augment_start = perf_counter()
+                await augment_conversation_with_memory_async(
+                    self.convo,
+                    self.user,
+                    await effective_base_system_for_memory_async(self),
+                    self.db_convo.id,
+                    include_episodic=not bool(self.col_ref.collections),
+                )
+                logger.info(
+                    "obs.chat.memory_augmented",
+                    phase="connect",
+                    duration_ms=(perf_counter() - augment_start) * 1000,
+                )
+                logger.debug("obs.chat.spin_starting", phase="connect")
+                llm_start = perf_counter()
+                async with preservation_turn(self, max_func_calls=CHAT_MAX_FUNC_CALLS):
+                    direct_outcome = "skipped"
+                    if self.convo[-1].role == "user":
+                        direct_outcome = await run_direct_rag_turn(
+                            self,
+                            self.llm_if,
+                            self.convo,
+                            stream_func=self._send_stream_payload,
+                        )
+                    if direct_outcome == "handled":
+                        await send_conversation_delta(
+                            self,
+                            self.convo,
+                            create_memories=False,
+                            close_db=False,
+                        )
+                    else:
+                        await run_llm_spin(
+                            self,
+                            self.llm_if,
+                            self.convo,
+                            max_func_calls=CHAT_MAX_FUNC_CALLS,
+                            max_tokens=CHAT_MAX_TOKENS,
+                            send_func=lambda c: send_conversation_delta(
+                                self, c, create_memories=False, close_db=False
+                            ),
+                            stream_func=self._send_stream_payload,
+                        )
+                    logger.info(
+                        "obs.chat.spin_completed",
+                        phase="connect",
+                        duration_ms=(perf_counter() - llm_start) * 1000,
+                    )
+                    if len(self.convo) > loaded_len:
+                        await self._save_conversation(create_memories=True)
+                logger.debug("obs.chat.spin_done", phase="connect")
         except ConversationConflictError as e:
             logger.warning("obs.chat.conversation_conflict", error=str(e))
             await send_connect_error(
@@ -283,16 +264,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     "and resend your message if needed."
                 ),
             )
-            return
         except OverloadedError as e:
             logger.error(
                 "obs.chat.llm_overloaded", error=str(e), error_type=type(e).__name__
             )
             await send_connect_error(
-                self, e, code=1013,
+                self,
+                e,
+                code=1013,
                 message="LLM provider is currently overloaded. Try again later.",
             )
-            return
         except Exception as e:
             logger.error(
                 "obs.chat.connect_error",
@@ -301,7 +282,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 exc_info=True,
             )
             await send_connect_error(self, e, code=1011)
-            return
 
     def _has_pending_turn(self) -> bool:
         if not self.convo:

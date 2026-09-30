@@ -15,7 +15,8 @@ server {
 	listen [::]:80;
 	server_name ${HOST_NAME};
 	location /health {
-		resolver 127.0.0.11;
+		resolver 127.0.0.11 valid=5s ipv6=off;
+		resolver_timeout 2s;
 		set $backend "web:8080";
 		proxy_pass http://$backend;
 		proxy_set_header Host $host;
@@ -38,7 +39,8 @@ server {
 	ssl_certificate_key /etc/letsencrypt/live/${HOST_NAME}/privkey.pem;
 	location / {
 		client_max_body_size 200M;
-		resolver 127.0.0.11;
+		resolver 127.0.0.11 valid=5s ipv6=off;
+		resolver_timeout 2s;
 		set $backend "web:8080";
 		proxy_pass http://$backend;
 		proxy_set_header Host $host;

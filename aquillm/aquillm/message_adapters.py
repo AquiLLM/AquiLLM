@@ -176,10 +176,12 @@ def load_conversation_from_db(db_convo: WSConversation) -> Conversation:
             messages=[django_message_to_pydantic(msg) for msg in rows],
         )
         db_convo._transcript_revision = (db_convo.pk, _message_revisions(rows))
+        db_convo.system_prompt = locked.system_prompt
+        db_convo.selected_collection_ids = list(locked.selected_collection_ids or [])
     return convo
 
 
-def save_conversation_to_db(convo: Conversation, db_convo: WSConversation) -> None:
+def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, selected_collections=None) -> None:
     """Replace the transcript only if this writer's loaded revision is current.
 
     Existing populated conversations require load_conversation_from_db first.
@@ -189,6 +191,10 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation) -> No
     """
     with transaction.atomic():
         locked = WSConversation.objects.select_for_update().get(pk=db_convo.pk)
+        if execution_token := getattr(db_convo, "_execution_token", None):
+            from apps.chat.services.execution import verify_execution
+
+            verify_execution(locked, execution_token)
         # Feedback writes update Message directly, so lock those rows as well.
         existing_rows = list(
             locked.db_messages.select_for_update().order_by("sequence_number", "pk")
@@ -209,7 +215,11 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation) -> No
 
         # Keep system_prompt separate: convo.system may be augmented
         # with user memory (profile facts + episodic). Only messages are persisted here.
-        db_convo.save(update_fields=["updated_at"])
+        update_fields = ["updated_at"]
+        if selected_collections is not None:
+            db_convo.selected_collection_ids = list(selected_collections)
+            update_fields.append("selected_collection_ids")
+        db_convo.save(update_fields=update_fields)
 
         existing_by_uuid = {row.message_uuid: row for row in existing_rows}
         incoming_uuids = []

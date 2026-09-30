@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Collection } from '../../../components/CollectionsTree';
 import { mapCollectionFromApi } from '../../../components/collectionsPageMap';
 import formatUrl from '../../../utils/formatUrl';
@@ -37,14 +37,24 @@ export function useCollectionViewData(collectionId: string): UseCollectionViewDa
   const [allCollections, setAllCollections] = useState<Collection[]>([]);
   const [initialCanEdit, setInitialCanEdit] = useState(false);
   const [initialCanManage, setInitialCanManage] = useState(false);
+  const requestGeneration = useRef(0);
+  const activeRequest = useRef<AbortController | null>(null);
 
   const fetchCollectionData = useCallback(() => {
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    const generation = ++requestGeneration.current;
+    const current = () => generation === requestGeneration.current && !controller.signal.aborted;
     setLoading(true);
     setError(null);
+    let responseStatus = 0;
     fetch(formatUrl(window.apiUrls.api_collection, { col_id: collectionId }), {
       headers: { Accept: 'application/json' },
+      signal: controller.signal,
     })
       .then((res) => {
+        responseStatus = res.status || (res.ok ? 200 : 400);
         if (!res.ok) {
           return res.json().then((err) => {
             throw new Error(err.error || 'Failed to fetch collection');
@@ -53,6 +63,7 @@ export function useCollectionViewData(collectionId: string): UseCollectionViewDa
         return res.json();
       })
       .then((data) => {
+        if (!current()) return;
         if (!data.collection) throw new Error('Invalid response format');
         if (data.permission_source) setPermissionSource(data.permission_source);
         else setPermissionSource(null);
@@ -78,13 +89,18 @@ export function useCollectionViewData(collectionId: string): UseCollectionViewDa
         setLoading(false);
       })
       .catch((err: Error) => {
+        if (!current()) return;
         console.error('Error refetching collection:', err);
         setError(err.message);
-        setCollection(null);
-        setContents([]);
-        setPermissionSource(null);
-        setInitialCanEdit(false);
-        setInitialCanManage(false);
+        // Keep the workspace/drafts during temporary refresh failures. A rejected
+        // permission or missing resource still clears access and stale contents.
+        if (responseStatus > 0 && responseStatus < 500) {
+          setCollection(null);
+          setContents([]);
+          setPermissionSource(null);
+          setInitialCanEdit(false);
+          setInitialCanManage(false);
+        }
         setLoading(false);
       });
   }, [collectionId]);
@@ -113,6 +129,10 @@ export function useCollectionViewData(collectionId: string): UseCollectionViewDa
     setInitialCanManage(false);
     setError(null);
     fetchCollectionData();
+    return () => {
+      activeRequest.current?.abort();
+      requestGeneration.current += 1;
+    };
   }, [fetchCollectionData]);
 
   useEffect(() => {

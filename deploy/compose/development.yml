@@ -72,11 +72,33 @@ services:
       - ${WEB_HF_CACHE_HOST_PATH:-../../data/hf_web}:/root/.cache/huggingface
     networks: [default, knowledge_graph_api]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/health/"]
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8080}/ready/"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  scheduler_application_maintenance:
+    build: {context: ../.., dockerfile: deploy/docker/web/Dockerfile.prod}
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: scheduler-only
+      DJANGO_DEBUG: "0"
+      GOOGLE_OAUTH2_CLIENT_ID: disabled
+      GOOGLE_OAUTH2_CLIENT_SECRET: disabled
+      OPENAI_API_KEY: disabled
+      ANTHROPIC_API_KEY: disabled
+      GEMINI_API_KEY: disabled
+      AWS_EC2_METADATA_DISABLED: "true"
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "1"
+      APPLICATION_MAINTENANCE_SCHEDULER_ENABLED: "1"
+      KG_MAINTENANCE_SCHEDULER_ENABLED: "0"
+      C_FORCE_ROOT: "1"
+      RUN_CELERY_IN_WEB: "0"
+    depends_on:
+      redis: {condition: service_healthy}
+    command: /bin/sh -c 'exec /opt/venv/bin/celery -A aquillm beat --loglevel=info --schedule=/tmp/celerybeat-application'
 
   worker:
     build:
@@ -149,6 +171,7 @@ services:
       POSTGRES_HOST: db
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
       KG_BUILD_ENABLED: ${KG_BUILD_ENABLED:-0}
+      APPLICATION_MAINTENANCE_SCHEDULER_ENABLED: "0"
       KG_MAINTENANCE_SCHEDULER_ENABLED: ${KG_MAINTENANCE_SCHEDULER_ENABLED:-0}
       KG_OVERLAY_ENABLED: ${KG_OVERLAY_ENABLED:-0}
       KG_EVAL_BYPASS_ALLOWED: ${KG_EVAL_BYPASS_ALLOWED:-0}
@@ -208,6 +231,7 @@ services:
       AWS_EC2_METADATA_DISABLED: "true"
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "1"
+      APPLICATION_MAINTENANCE_SCHEDULER_ENABLED: "0"
       KG_MAINTENANCE_SCHEDULER_ENABLED: ${KG_MAINTENANCE_SCHEDULER_ENABLED:-0}
       KG_MAINTENANCE_INTERVAL_SECONDS: ${KG_MAINTENANCE_INTERVAL_SECONDS:-300}
       KG_GRAPH_RECOVERY_PAGE_SIZE: ${KG_GRAPH_RECOVERY_PAGE_SIZE:-50}

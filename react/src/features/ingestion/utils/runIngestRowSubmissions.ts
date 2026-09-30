@@ -5,7 +5,9 @@ import {
   type IngestRowData,
   type IngestRowsContainerProps,
   type SubmissionStatus,
+  type UploadBatch,
 } from '../types';
+import { readUploadBatch, rejectionMessage } from './uploadBatch';
 
 type Urls = Pick<
   IngestRowsContainerProps,
@@ -20,7 +22,7 @@ type Urls = Pick<
 export interface RunIngestRowSubmissionsActions {
   setErrorMessages: Dispatch<SetStateAction<{ [key: number]: string }>>;
   setSubmissionStatus: Dispatch<SetStateAction<{ [key: number]: SubmissionStatus }>>;
-  setUploadBatchIds: Dispatch<SetStateAction<{ [key: number]: number }>>;
+  setUploadBatches: Dispatch<SetStateAction<Record<number, UploadBatch>>>;
   setUploadSummaries: Dispatch<SetStateAction<{ [key: number]: import('../types').UploadSummary }>>;
   updateRow: (id: number, updates: Partial<IngestRowData>) => void;
   onUploadSuccess?: () => void;
@@ -35,7 +37,7 @@ export async function runIngestRowSubmissions(
   const {
     setErrorMessages,
     setSubmissionStatus,
-    setUploadBatchIds,
+    setUploadBatches,
     setUploadSummaries,
     updateRow,
     onUploadSuccess,
@@ -50,9 +52,8 @@ export async function runIngestRowSubmissions(
   } = urls;
 
   const csrfToken = getCsrfCookie();
-  setErrorMessages({});
-
   for (const row of rows) {
+    setErrorMessages(prev => { const next = { ...prev }; delete next[row.id]; return next; });
     setSubmissionStatus((prev) => ({ ...prev, [row.id]: 'submitting' }));
     let url: string;
     let body: FormData | FormData[] | string;
@@ -179,11 +180,11 @@ export async function runIngestRowSubmissions(
       if (response.ok) {
         if (row.docType === DocType.UPLOADS && response.status === 202) {
           const payload = await response.json();
-          const batchId = Number(payload?.batch_id);
-          if (!Number.isFinite(batchId)) {
-            throw new Error('Upload batch was queued but no batch_id was returned.');
+          const batch = readUploadBatch(payload, row.uploadFiles);
+          if (batch.rejected.length) {
+            setErrorMessages(prev => ({ ...prev, [row.id]: rejectionMessage(batch.rejected) }));
           }
-          setUploadBatchIds((prev) => ({ ...prev, [row.id]: batchId }));
+          setUploadBatches((prev) => ({ ...prev, [row.id]: batch }));
           setSubmissionStatus((prev) => ({ ...prev, [row.id]: 'initiated' }));
         } else if (row.docType === DocType.WEBPAGE && response.status === 202) {
           setSubmissionStatus((prev) => ({ ...prev, [row.id]: 'initiated' }));
@@ -204,13 +205,13 @@ export async function runIngestRowSubmissions(
           });
         }
       } else {
-        let errorData: { error?: string };
+        let errorData: { error?: string; rejected?: { filename: string; error: string }[] };
         try {
           errorData = await response.json();
         } catch {
           errorData = { error: `HTTP error! status: ${response.status}` };
         }
-        throw new Error(errorData.error || `Request failed with status ${response.status}`);
+        throw new Error(errorData.error || errorData.rejected?.map(item => `${item.filename}: ${item.error}`).join(' ') || `Request failed with status ${response.status}`);
       }
     } catch (error: unknown) {
       console.error('Submission error for row', row.id, ':', error);

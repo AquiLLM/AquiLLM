@@ -276,4 +276,24 @@ describe('Chat readiness and terminal errors', () => {
     expect((screen.getByRole('button', { name: /Collections/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(socket.send).not.toHaveBeenCalled();
   });
+
+  it('keeps collection fetch errors through hydration and retries without losing saved selection', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fetchMock = vi.fn().mockRejectedValueOnce(new Error('temporary outage'))
+      .mockResolvedValue({ ok: true, json: async () => ({ collections: [{ id: 7, name: 'Research', parent: null }] }) });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Chat convoId="314" />);
+    await screen.findByText(/Failed to load collections/);
+    const socket = FakeWebSocket.latest!;
+    act(() => socket.emit({ conversation: { messages: [], selected_collections: [7] } }));
+    expect(screen.getByText(/Failed to load collections/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Collections/ }));
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry collections' }));
+    await waitFor(() => expect(screen.queryByText(/Failed to load collections/)).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: /Collections/ }));
+    expect((await screen.findByRole('checkbox', { name: 'Research' }) as HTMLInputElement).checked).toBe(true);
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

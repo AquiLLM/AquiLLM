@@ -27,15 +27,16 @@ def enqueue_upload_batch_files(
     queued_items: list[dict[str, object]] = []
     rejected_items: list[dict[str, object]] = []
 
-    for upload in files:
+    for source_index, upload in enumerate(files):
         size = int(getattr(upload, "size", 0) or 0)
         if size <= 0:
-            rejected_items.append({"filename": upload.name, "error": "Empty file."})
+            rejected_items.append({"filename": upload.name, "source_index": source_index, "error": "Empty file."})
             continue
         if size > max_file_bytes:
             rejected_items.append(
                 {
                     "filename": upload.name,
+                    "source_index": source_index,
                     "error": f"File exceeds INGEST_MAX_FILE_BYTES ({max_file_bytes}).",
                 }
             )
@@ -50,7 +51,7 @@ def enqueue_upload_batch_files(
             status=IngestionBatchItem.Status.QUEUED,
         )
         ingest_uploaded_file_task.delay(item.id)
-        queued_items.append({"id": item.id, "filename": item.original_filename, "status": item.status})
+        queued_items.append({"id": item.id, "filename": item.original_filename, "source_index": source_index, "status": item.status})
 
     if not queued_items:
         batch.delete()

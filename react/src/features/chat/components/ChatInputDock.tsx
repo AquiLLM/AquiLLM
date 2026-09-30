@@ -20,6 +20,7 @@ export interface ChatInputDockProps {
   connectionMessage: string | null;
   onOpenCollections: () => void;
   collectionsDisabled: boolean;
+  collectionsLoading?: boolean;
   selectedCount: number;
 }
 
@@ -41,6 +42,7 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
   connectionMessage,
   onOpenCollections,
   collectionsDisabled,
+  collectionsLoading = false,
   selectedCount,
 }) => (
   <div className="sticky bottom-0 w-full bg-scheme-shade_2 border-t border-border-mid_contrast mt-[8px]">
@@ -110,6 +112,8 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
           <button
             onClick={onOpenCollections}
             disabled={collectionsDisabled}
+            aria-busy={collectionsLoading}
+            title={collectionsLoading ? 'Loading collections…' : undefined}
             className="flex h-[56px] w-[max-content] cursor-pointer items-center rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] py-0 text-text-normal transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5 disabled:cursor-not-allowed"
             type="button"
           >

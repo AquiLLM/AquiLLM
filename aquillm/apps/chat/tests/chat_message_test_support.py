@@ -1,7 +1,21 @@
 """Shared fakes and llm_tool stubs for chat message / LLM tests (not collected as tests)."""
 from types import SimpleNamespace
+from contextlib import asynccontextmanager
+
+import pytest
 
 from aquillm.llm import LLMInterface, llm_tool
+
+
+@pytest.fixture(autouse=True)
+def stub_execution_ownership(monkeypatch):
+    """Used only by suites replacing conversation persistence with fake handles."""
+    @asynccontextmanager
+    async def turn(*args, **kwargs):
+        yield
+
+    monkeypatch.setattr("apps.chat.consumers.chat.execution_turn", turn)
+    monkeypatch.setattr("apps.chat.consumers.chat_receive.execution_turn", turn)
 
 
 @llm_tool(

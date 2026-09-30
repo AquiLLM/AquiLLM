@@ -14,7 +14,7 @@
     <link rel="icon" type="image/png" href="{% static 'images/aquila-small-dark.ico' %}" media="(prefers-color-scheme: light)"/>
 
     <link rel="stylesheet" href="https://lalten.github.io/lmweb/style/latinmodern-mono.css" type="text/css" charset="utf-8" />
-    <link rel="stylesheet" href="{% static 'index.css' %}" type="text/css" charset="utf-8" />
+    <link rel="stylesheet" href="{% static 'index.css' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}" type="text/css" charset="utf-8" />
 {% block head %}
     <link rel="stylesheet" href="{% static 'scrollbar.css' %}" type="text/css" charset="utf-8" />
     <link rel="stylesheet" href="{% static 'search_styling.css' %}" type="text/css" charset="utf-8" />

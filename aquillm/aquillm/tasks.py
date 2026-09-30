@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import timedelta, timezone as dt_timezone
+from datetime import timedelta
+import hashlib
+import json
 from os import getenv
 
 from celery import shared_task
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
 
 
 def _mem0_infer_idle_seconds() -> int:
@@ -20,15 +21,11 @@ def _utcnow():
     return timezone.now()
 
 
-def _parse_queued_updated_at(value: str | None):
-    if not value:
-        return None
-    parsed = parse_datetime(value)
-    if parsed is None:
-        return None
-    if timezone.is_naive(parsed):
-        return timezone.make_aware(parsed, dt_timezone.utc)
-    return parsed
+def _memory_transcript_hash(convo) -> str:
+    rows = list(convo.db_messages.order_by("sequence_number").values_list(
+        "sequence_number", "role", "content", "message_uuid"
+    ))
+    return hashlib.sha256(json.dumps(rows, default=str).encode()).hexdigest()
 
 
 def _run_conversation_memory_creation(convo) -> None:
@@ -39,22 +36,10 @@ def _run_conversation_memory_creation(convo) -> None:
 
 def enqueue_conversation_memories_task(
     conversation_id: int,
-    queued_updated_at: str | None,
+    queued_updated_at: str | None = None,
 ) -> None:
-    create_conversation_memories_task.apply_async(
-        kwargs={
-            "conversation_id": conversation_id,
-            "queued_updated_at": queued_updated_at,
-        },
-        countdown=_mem0_infer_idle_seconds(),
-    )
-
-
-def _conversation_still_matches_snapshot(convo, queued_updated_at: str | None) -> bool:
-    expected = _parse_queued_updated_at(queued_updated_at)
-    if expected is None:
-        return True
-    return convo.updated_at == expected
+    from apps.memory.jobs import request_memory_job
+    request_memory_job(conversation_id)
 
 
 def _user_is_globally_idle(user_id: int, *, now, idle_seconds: int) -> bool:
@@ -75,25 +60,17 @@ def _user_is_globally_idle(user_id: int, *, now, idle_seconds: int) -> bool:
 def create_conversation_memories_task(
     conversation_id: int,
     queued_updated_at: str | None = None,
+    queued_transcript_hash: str | None = None,
+    queued_job_token: str | None = None,
 ) -> None:
-    from .models import WSConversation
+    from apps.memory.jobs import execute_memory_job
+    execute_memory_job(conversation_id, queued_job_token)
 
-    convo = WSConversation.objects.filter(id=conversation_id).first()
-    if convo is None:
-        return
-    if not _conversation_still_matches_snapshot(convo, queued_updated_at):
-        return
 
-    now = _utcnow()
-    idle_seconds = _mem0_infer_idle_seconds()
-    if not _user_is_globally_idle(convo.owner_id, now=now, idle_seconds=idle_seconds):
-        enqueue_conversation_memories_task(
-            conversation_id=conversation_id,
-            queued_updated_at=convo.updated_at.isoformat(),
-        )
-        return
-
-    _run_conversation_memory_creation(convo)
+@shared_task(serializer="json", ignore_result=True)
+def recover_conversation_memory_jobs(limit=25):
+    from apps.memory.jobs import recover_memory_jobs
+    return recover_memory_jobs(limit=limit)
 
 
 @shared_task(serializer="json", queue="memory-promotion")

@@ -22,6 +22,9 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const [exception, setException] = useState('');
   const [debugHtml, setDebugHtml] = useState<string | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
+  const [collectionsError, setCollectionsError] = useState('');
+  const [collectionsLoading, setCollectionsLoading] = useState(true);
+  const collectionsRequest = useRef<AbortController | null>(null);
   const [selectedCollections, setSelectedCollections] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [showCollections, setShowCollections] = useState(false);
@@ -47,6 +50,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     setSelectedCollections,
   });
   const collectionsReady = connectionStatus === 'ready';
+  const collectionsEditable = collectionsReady && !collectionsLoading && !collectionsError;
   const waitingForConnection = connectionStatus === 'connecting' ||
     connectionStatus === 'hydrating' || connectionStatus === 'reconnecting';
 
@@ -67,22 +71,33 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     }
   }, [conversation]);
 
-  useEffect(() => {
-    const fetchCollections = async () => {
-      try {
-        const response = await fetch('/api/collections/');
-        if (!response.ok) {
-          throw new Error(`HTTP error: ${response.status}`);
-        }
-        const data = await response.json();
-        setCollections(data.collections);
-      } catch (error) {
-        console.error('Error fetching collections:', error);
-        setException('Failed to load collections. Please refresh the page.');
+  const fetchCollections = useCallback(async () => {
+    collectionsRequest.current?.abort();
+    const controller = new AbortController();
+    collectionsRequest.current = controller;
+    setCollectionsLoading(true);
+    try {
+      const response = await fetch('/api/collections/', { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`);
       }
-    };
-    fetchCollections();
+      const data = await response.json();
+      if (!Array.isArray(data.collections)) throw new Error('Invalid collections response');
+      if (controller.signal.aborted) return;
+      setCollections(data.collections);
+      setCollectionsError('');
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      console.error('Error fetching collections:', error);
+      setCollectionsError('Failed to load collections. Retry to choose collections.');
+    } finally {
+      if (!controller.signal.aborted) setCollectionsLoading(false);
+    }
   }, []);
+  useEffect(() => {
+    void fetchCollections();
+    return () => collectionsRequest.current?.abort();
+  }, [fetchCollections]);
 
   const childrenByParentCollectionId = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -228,16 +243,16 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   };
 
   const persistSelectedCollections = useCallback((collectionIds: Set<string>) => {
-    if (!collectionsReady || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!collectionsEditable || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     wsRef.current.send(JSON.stringify({
       action: 'select_collections',
       collections: Array.from(collectionIds).map(toPayloadCollectionId),
     }));
-  }, [collectionsReady, wsRef]);
+  }, [collectionsEditable, wsRef]);
 
   const handleCollectionToggle = (collectionId: string) => {
-    if (!collectionsReady || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!collectionsEditable || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     const normalizedCollectionId = normalizeCollectionId(collectionId);
     const nextSelected = new Set(selectedCollections);
 
@@ -278,6 +293,14 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
 
   return (
     <div className="flex flex-col h-full">
+      {collectionsError && (
+        <div role="alert" className="p-3 text-text-normal bg-scheme-shade_3 flex items-center justify-between gap-3">
+          <span>{collectionsError}</span>
+          <button type="button" onClick={() => void fetchCollections()} disabled={collectionsLoading} className="underline whitespace-nowrap">
+            {collectionsLoading ? 'Loading collections…' : 'Retry collections'}
+          </button>
+        </div>
+      )}
       {visibleException && (
         <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded flex items-center justify-between">
           <span>{visibleException}</span>
@@ -373,13 +396,14 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
         inputDisabled={connectionStatus === 'failed' || (connectionStatus === 'ready' && inputDisabled)}
         sendDisabled={inputDisabled || connectionStatus !== 'ready'}
         connectionMessage={connectionMessage}
-        onOpenCollections={() => { if (collectionsReady) setShowCollections(true); }}
-        collectionsDisabled={!collectionsReady}
+        onOpenCollections={() => { if (collectionsEditable) setShowCollections(true); }}
+        collectionsDisabled={!collectionsEditable}
+        collectionsLoading={collectionsLoading}
         selectedCount={selectedCollections.size}
       />
 
       <ChatCollectionsModal
-        open={showCollections && collectionsReady}
+        open={showCollections && collectionsEditable}
         onClose={() => setShowCollections(false)}
         searchTerm={searchTerm}
         onSearchTermChange={setSearchTerm}

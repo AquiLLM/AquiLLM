@@ -27,6 +27,7 @@ from apps.chat.consumers.chat_ws_errors import (
 )
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
 from apps.chat.models import ConversationFile
+from apps.chat.services.execution import execution_turn
 from apps.chat.services.feedback import (
     apply_message_feedback_text,
     apply_message_rating,
@@ -65,7 +66,11 @@ def _looks_like_chat_history_search_request(message_content: str) -> bool:
     text = message_content or ""
     if _CHAT_HISTORY_TARGET_RE.search(text):
         return True
-    if re.search(r"\b(?:this|current|present|ongoing)\s+(?:chat|conversation|thread|discussion|session)\b", text, re.IGNORECASE):
+    if re.search(
+        r"\b(?:this|current|present|ongoing)\s+(?:chat|conversation|thread|discussion|session)\b",
+        text,
+        re.IGNORECASE,
+    ):
         return False
     return bool(_CHAT_HISTORY_PHRASE_RE.search(text))
 
@@ -180,7 +185,6 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
 
         selected_collections = _validated_collection_ids(data.get("collections", []))
         consumer.col_ref.collections = selected_collections
-        await _save_selected_collections(selected_collections)
         consumer.convo += UserMessage.model_validate(data["message"])
         files: list[ConversationFile] = []
         if "files" in data:
@@ -209,7 +213,9 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         consumer.convo[-1].tools = active_tools
         consumer.convo[-1].files = [(file.name, file.id) for file in files]
         consumer.convo[-1].tool_choice = tool_choice
-        await consumer._save_conversation(create_memories=False)
+        await consumer._save_conversation(
+            create_memories=False, selected_collections=selected_collections
+        )
         consumer.last_sent_sequence = len(consumer.convo) - 1
         logger.debug("obs.chat.append_completed")
 
@@ -251,56 +257,57 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             action = data.pop("action", None)
             logger.debug("obs.chat.action", action=action)
             if action == "append":
-                await append(data)
-                augment_start = perf_counter()
-                await augment_conversation_with_memory_async(
-                    consumer.convo,
-                    consumer.user,
-                    await effective_base_system_for_memory_async(consumer),
-                    consumer.db_convo.id,
-                    include_episodic=not bool(consumer.col_ref.collections),
-                )
-                logger.info(
-                    "obs.chat.memory_augmented",
-                    phase="receive",
-                    duration_ms=(perf_counter() - augment_start) * 1000,
-                )
-                async with preservation_turn(
-                    consumer, max_func_calls=CHAT_MAX_FUNC_CALLS
-                ):
-                    direct_outcome = await run_direct_rag_turn(
-                        consumer,
-                        consumer.llm_if,
+                async with execution_turn(consumer):
+                    await append(data)
+                    augment_start = perf_counter()
+                    await augment_conversation_with_memory_async(
                         consumer.convo,
-                        stream_func=consumer._send_stream_payload,
+                        consumer.user,
+                        await effective_base_system_for_memory_async(consumer),
+                        consumer.db_convo.id,
+                        include_episodic=not bool(consumer.col_ref.collections),
                     )
-                    if direct_outcome == "handled":
-                        await send_conversation_delta(
-                            consumer,
-                            consumer.convo,
-                            create_memories=False,
-                            close_db=True,
-                        )
-                    else:
-                        logger.debug("obs.chat.spin_starting", phase="receive")
-                        llm_start = perf_counter()
-                        await run_llm_spin(
+                    logger.info(
+                        "obs.chat.memory_augmented",
+                        phase="receive",
+                        duration_ms=(perf_counter() - augment_start) * 1000,
+                    )
+                    async with preservation_turn(
+                        consumer, max_func_calls=CHAT_MAX_FUNC_CALLS
+                    ):
+                        direct_outcome = await run_direct_rag_turn(
                             consumer,
                             consumer.llm_if,
                             consumer.convo,
-                            max_func_calls=CHAT_MAX_FUNC_CALLS,
-                            max_tokens=CHAT_MAX_TOKENS,
-                            send_func=lambda c: send_conversation_delta(
-                                consumer, c, create_memories=False, close_db=True
-                            ),
                             stream_func=consumer._send_stream_payload,
                         )
-                        logger.info(
-                            "obs.chat.spin_completed",
-                            phase="receive",
-                            duration_ms=(perf_counter() - llm_start) * 1000,
-                        )
-                    await consumer._save_conversation(create_memories=True)
+                        if direct_outcome == "handled":
+                            await send_conversation_delta(
+                                consumer,
+                                consumer.convo,
+                                create_memories=False,
+                                close_db=True,
+                            )
+                        else:
+                            logger.debug("obs.chat.spin_starting", phase="receive")
+                            llm_start = perf_counter()
+                            await run_llm_spin(
+                                consumer,
+                                consumer.llm_if,
+                                consumer.convo,
+                                max_func_calls=CHAT_MAX_FUNC_CALLS,
+                                max_tokens=CHAT_MAX_TOKENS,
+                                send_func=lambda c: send_conversation_delta(
+                                    consumer, c, create_memories=False, close_db=True
+                                ),
+                                stream_func=consumer._send_stream_payload,
+                            )
+                            logger.info(
+                                "obs.chat.spin_completed",
+                                phase="receive",
+                                duration_ms=(perf_counter() - llm_start) * 1000,
+                            )
+                        await consumer._save_conversation(create_memories=True)
             elif action == "select_collections":
                 await update_selected_collections(data)
             elif action == "rate":

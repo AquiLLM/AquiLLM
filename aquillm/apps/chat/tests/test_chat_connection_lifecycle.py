@@ -34,6 +34,14 @@ async def _turn(*args, **kwargs):
     yield
 
 
+@pytest.fixture(autouse=True)
+def stub_execution_ownership_for_transport_unit_tests(monkeypatch):
+    # These tests stub database loading/persistence; ownership has real database
+    # and concurrent-tool coverage in test_chat_execution_stability.
+    monkeypatch.setattr("apps.chat.consumers.chat.execution_turn", _turn)
+    monkeypatch.setattr("apps.chat.consumers.chat_receive.execution_turn", _turn)
+
+
 def _consumer(*, user_authenticated=True, db_convo=None):
     consumer = ChatConsumer()
     consumer.scope = {

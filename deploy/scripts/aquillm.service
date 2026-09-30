@@ -5,10 +5,13 @@ Requires=docker.service
 
 [Service]
 Type=simple
+WorkingDirectory=${PROJECT_ROOT}
+EnvironmentFile=${PROJECT_ROOT}/.env
 ExecStartPre=/usr/bin/docker compose -f ${PROJECT_ROOT}/deploy/compose/production.yml up -d --remove-orphans
 ExecStart=${PROJECT_ROOT}/deploy/scripts/healthcheck.sh
-ExecStopPost=/usr/bin/docker compose -f ${PROJECT_ROOT}/deploy/compose/production.yml stop
-Restart=always
+ExecStop=/usr/bin/docker compose -f ${PROJECT_ROOT}/deploy/compose/production.yml stop
+Restart=on-failure
+RestartSec=15
 
 [Install]
 WantedBy=multi-user.target

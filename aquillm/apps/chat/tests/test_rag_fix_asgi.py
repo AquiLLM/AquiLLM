@@ -60,8 +60,9 @@ async def test_asgi_disconnect_cancels_blocked_sdk_before_late_save(
         ),
         "test",
     )
-    db = SimpleNamespace(
-        id=1,
+    from apps.chat.models import WSConversation
+    db = await WSConversation.objects.acreate(
+        owner=user,
         selected_collection_ids=[doc.collection_id],
         system_prompt="sys",
         name="existing",
@@ -188,7 +189,7 @@ async def test_actual_dispatch_serializes_turns_and_keeps_context_isolated(
             assert all(not ledger.can_publish() for ledger in ledgers)
         else:
             assert ledgers == [None, None]
-            assert getattr(consumer, "_chat_event_owner", None) is None
+            assert getattr(consumer, "_chat_event_owner", None) is not None
     finally:
         release.set()
         await app.send_input({"type": "websocket.disconnect", "code": 1000})

@@ -29,6 +29,8 @@ class WSConversation(models.Model):
     # db_default so inserts that omit this column (e.g. a stale process mid-deploy)
     # don't violate the NOT NULL constraint on this table.
     index_complete = models.BooleanField(default=False, db_default=False)
+    execution_token = models.UUIDField(null=True, blank=True)
+    execution_expires_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         app_label = 'apps_chat'

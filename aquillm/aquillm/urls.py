@@ -21,6 +21,7 @@ from django.contrib.auth import views as auth_views
 
 from apps.chat.urls import urlpatterns as chat_urlpatterns
 from apps.chat.views.pages import new_ws_convo
+from apps.core.views.health import capabilities, readiness_check
 from . import views, api_views
 from .views import urlpatterns as page_urlpatterns
 from .settings import DEBUG
@@ -41,9 +42,10 @@ urlpatterns = [
     path("", include("django_prometheus.urls")),
 
     path("health/", views.health_check, name="health"),
-    path("ready/", views.health_check, name="ready"),
+    path("ready/", readiness_check, name="ready"),
     path("health", views.health_check),
-    path("ready", views.health_check),
+    path("ready", readiness_check),
+    path("api/capabilities/", capabilities, name="capabilities"),
 
     path('user-settings/', UserSettingsPageView.as_view(), name='user-settings-page'),
 

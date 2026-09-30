@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from django.urls import NoReverseMatch, reverse
+from django.contrib.staticfiles import finders
 
 from .app_version import APP_VERSION
 from .models import UserSettings, WSConversation
@@ -249,9 +250,9 @@ def app_flags(request):
 
 
 def react_bundle_version(request):
-    bundle_path = Path(__file__).resolve().parent / "static" / "js" / "dist" / "main.js"
+    bundle_path = finders.find("js/dist/main.js")
     try:
-        version = str(bundle_path.stat().st_mtime_ns)
+        version = str(Path(bundle_path).stat().st_mtime_ns) if bundle_path else ""
     except OSError:
         version = ""
     return {"react_bundle_version": version}

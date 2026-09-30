@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 
 import {
   DocType,
@@ -6,6 +6,7 @@ import {
   IngestRowData,
   UploadSummary,
   SubmissionStatus,
+  UploadBatch,
 } from '../types';
 import { IngestRow } from './IngestRow';
 import { useIngestUploadBatchPolling } from '../hooks/useIngestUploadBatchPolling';
@@ -46,7 +47,8 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
     [key: number]: SubmissionStatus;
   }>({});
   const [errorMessages, setErrorMessages] = useState<{ [key: number]: string }>({});
-  const [uploadBatchIds, setUploadBatchIds] = useState<{ [key: number]: number }>({});
+  const [uploadBatches, setUploadBatches] = useState<Record<number, UploadBatch>>({});
+  const submitting = useRef(false);
   const [uploadSummaries, setUploadSummaries] = useState<{ [key: number]: UploadSummary }>({});
 
   const updateRow = useCallback((id: number, updates: Partial<IngestRowData>) => {
@@ -55,9 +57,9 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
     );
   }, []);
 
-  useIngestUploadBatchPolling({
-    uploadBatchIds,
-    setUploadBatchIds,
+  const retryStatus = useIngestUploadBatchPolling({
+    uploadBatches,
+    setUploadBatches,
     setUploadSummaries,
     setErrorMessages,
     setSubmissionStatus,
@@ -123,26 +125,36 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
   };
 
   const handleSubmit = async () => {
-    await runIngestRowSubmissions(
-      rows,
-      collectionId,
-      {
-        ingestUploadsUrl,
-        ingestArxivUrl,
-        ingestPdfUrl,
-        ingestVttUrl,
-        ingestWebpageUrl,
-        ingestHandwrittenUrl,
-      },
-      {
-        setErrorMessages,
-        setSubmissionStatus,
-        setUploadBatchIds,
-        setUploadSummaries,
-        updateRow,
-        onUploadSuccess,
-      }
-    );
+    if (submitting.current) return;
+    const eligibleRows = rows.filter(row => !uploadBatches[row.id] &&
+      submissionStatus[row.id] !== 'submitting' && submissionStatus[row.id] !== 'initiated' &&
+      submissionStatus[row.id] !== 'success');
+    if (!eligibleRows.length) return;
+    submitting.current = true;
+    try {
+      await runIngestRowSubmissions(
+        eligibleRows,
+        collectionId,
+        {
+          ingestUploadsUrl,
+          ingestArxivUrl,
+          ingestPdfUrl,
+          ingestVttUrl,
+          ingestWebpageUrl,
+          ingestHandwrittenUrl,
+        },
+        {
+          setErrorMessages,
+          setSubmissionStatus,
+          setUploadBatches,
+          setUploadSummaries,
+          updateRow,
+          onUploadSuccess,
+        }
+      );
+    } finally {
+      submitting.current = false;
+    }
   };
 
   const actionButtons = (
@@ -156,7 +168,8 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
       </button>
       <button
         onClick={handleSubmit}
-        disabled={Object.values(submissionStatus).some((s) => s === 'submitting')}
+        disabled={Object.values(submissionStatus).some((s) => s === 'submitting') ||
+          rows.every(row => uploadBatches[row.id] || submissionStatus[row.id] === 'initiated' || submissionStatus[row.id] === 'success')}
         className="h-[40px] px-4 rounded-[20px] bg-accent text-text-normal border border-border-high_contrast hover:bg-accent-dark transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         type="button"
       >
@@ -178,8 +191,16 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
         >
           <IngestRow
             row={row}
-            onDocTypeChange={updateRowDocType}
-            onRowChange={updateRow}
+            onDocTypeChange={(id, type) => {
+              if (uploadBatches[id] || submissionStatus[id] === 'submitting') return;
+              updateRowDocType(id, type);
+              setSubmissionStatus(prev => ({ ...prev, [id]: 'idle' }));
+            }}
+            onRowChange={(id, changes) => {
+              if (uploadBatches[id] || submissionStatus[id] === 'submitting') return;
+              updateRow(id, changes);
+              setSubmissionStatus(prev => ({ ...prev, [id]: 'idle' }));
+            }}
             layout={layout}
             actions={layout === 'compact' && index === 0 ? actionButtons : undefined}
           />
@@ -189,6 +210,9 @@ const IngestRowsContainer: React.FC<IngestRowsContainerProps> = ({
             errorMessage={errorMessages[row.id]}
             uploadSummary={uploadSummaries[row.id]}
           />
+          {submissionStatus[row.id] === 'status-error' && (
+            <button type="button" onClick={() => retryStatus(row.id)} className="mt-2 underline text-accent">Retry status</button>
+          )}
         </div>
       ))}
       {layout !== 'compact' && <div className="flex items-center gap-3 pt-1">{actionButtons}</div>}

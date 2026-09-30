@@ -24,6 +24,9 @@ def current_turn():
 
 
 def check_turn_active():
+    from lib.llm.execution_context import check_execution_active
+
+    check_execution_active()
     state = current_turn()
     if state is not None:
         state.budget.check_active()
@@ -99,8 +102,11 @@ async def call_tool_async(llm, message):
             state.budget.close("cancelled")
         raise
     except TimeoutError:
+        from lib.llm.execution_context import execution_is_bound, uncertain_tool_message
         from lib.llm.types.messages import ToolMessage
 
+        if execution_is_bound():
+            return uncertain_tool_message(message)
         return ToolMessage(
             tool_name=message.tool_call_name or "invalid_tool",
             for_whom="assistant",

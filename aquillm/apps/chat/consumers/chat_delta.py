@@ -17,6 +17,24 @@ from lib.llm.turn_context import check_turn_active
 logger = structlog.stdlib.get_logger(__name__)
 
 
+async def send_conversation_snapshot(consumer: Any) -> None:
+    consumer.last_sent_sequence = len(consumer.convo) - 1
+    await consumer.send(
+        text_data=dumps(
+            {
+                "conversation": {
+                    "system": consumer.db_convo.system_prompt,
+                    "selected_collections": consumer.db_convo.selected_collection_ids
+                    or [],
+                    "messages": [
+                        pydantic_message_to_frontend_dict(msg) for msg in consumer.convo
+                    ],
+                }
+            }
+        )
+    )
+
+
 async def send_conversation_delta(
     consumer: Any,
     convo: Conversation,

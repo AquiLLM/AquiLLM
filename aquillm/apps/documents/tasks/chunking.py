@@ -337,6 +337,7 @@ def create_chunks(
     concrete_model_label: str | None = None,
     document_pkid: int | None = None,
 ):
+    from apps.documents.services.chunk_publication import acknowledge_chunk_publication
     database_alias = DEFAULT_DB_ALIAS
     document = _exact_document(
         doc_id,
@@ -379,6 +380,7 @@ def create_chunks(
                 using=database_alias,
             )
             notify_ingest_monitor_complete(document.id)
+            acknowledge_chunk_publication(document, source_hash, using=database_alias)
             return "already_committed"
         async_to_sync(get_channel_layer().group_send)(
             f"ingestion-dashboard-{document.ingested_by.id}",
@@ -412,6 +414,7 @@ def create_chunks(
             using=database_alias,
         )
         if outcome != "stale":
+            acknowledge_chunk_publication(document, source_hash, using=database_alias)
             notify_ingest_monitor_complete(document.id)
         return outcome
     except Exception as exc:

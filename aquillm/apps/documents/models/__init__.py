@@ -19,6 +19,7 @@ from .document_types import (
 )
 from .chunks import TextChunk, TextChunkQuerySet
 from .exceptions import DuplicateDocumentError
+from .chunk_publication import ChunkPublication
 
 
 def document_modality(doc) -> str:
@@ -69,6 +70,7 @@ __all__ = [
     # Chunks
     'TextChunk',
     'TextChunkQuerySet',
+    'ChunkPublication',
     # Constants
     'IMAGE_UPLOAD_EXTENSIONS',
     'MEDIA_UPLOAD_EXTENSIONS',

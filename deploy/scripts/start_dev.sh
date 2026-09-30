@@ -142,7 +142,7 @@ if [ "$USE_KNOWLEDGE_GRAPH" = "1" ]; then
   fi
 fi
 
-compose_up web worker
+compose_up web worker scheduler_application_maintenance
 
 if [ "$USE_EDGE" = "1" ]; then
   if [ "$RUN_CERTBOT" = "1" ]; then

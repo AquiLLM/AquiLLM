@@ -4,7 +4,6 @@ import asyncio
 
 import structlog
 
-from apps.chat.services.rag_config import rag_preservation_config
 from apps.chat.services.rag_turn import cancel_active_turn
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -12,6 +11,9 @@ logger = structlog.stdlib.get_logger(__name__)
 
 async def stop_chat_work(consumer):
     consumer.transport_connected = False
+    execution = getattr(consumer, "_active_chat_execution", None)
+    if execution is not None:
+        execution.cancel()
     cancel_active_turn(consumer)
     owner = getattr(consumer, "_chat_event_owner", None)
     if owner and not owner.done():
@@ -22,8 +24,6 @@ async def stop_chat_work(consumer):
 
 async def dispatch_chat_event(consumer, message, dispatch):
     owner = getattr(consumer, "_chat_event_owner", None)
-    if owner is None and not rag_preservation_config().active:
-        return await dispatch(message)
     if message["type"] == "websocket.disconnect":
         await stop_chat_work(consumer)
         return await dispatch(message)

@@ -45,6 +45,7 @@ class Command(BaseCommand):
                 enqueue_index_conversation_task(
                     conversation_id=convo.id,
                     queued_updated_at=convo.updated_at.isoformat(),
+                    force=options["force"],
                 )
                 processed += 1
                 continue

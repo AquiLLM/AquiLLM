@@ -29,4 +29,23 @@ def knowledge_graph_maintenance_schedule(
     }
 
 
-__all__ = ["knowledge_graph_maintenance_schedule"]
+def application_maintenance_schedule(*, enabled: bool) -> dict[str, dict[str, object]]:
+    if enabled is not True:
+        return {}
+    return {
+        "document-chunk-publication-recovery": {
+            "task": "apps.documents.tasks.chunk_recovery.recover_chunk_publications",
+            "schedule": 60,
+            "kwargs": {"limit": 25},
+            "options": {"queue": "celery"},
+        },
+        "conversation-memory-recovery": {
+            "task": "aquillm.tasks.recover_conversation_memory_jobs",
+            "schedule": 60,
+            "kwargs": {"limit": 25},
+            "options": {"queue": "celery"},
+        },
+    }
+
+
+__all__ = ["knowledge_graph_maintenance_schedule", "application_maintenance_schedule"]
