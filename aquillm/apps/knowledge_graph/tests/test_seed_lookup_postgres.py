@@ -117,6 +117,17 @@ def test_direct_alias_uses_document_resolver_and_rejects_stale_mention_link(seed
     ) == name_matches
 
 
+@pytest.mark.parametrize(
+    "seeds",
+    (
+        None,
+        {
+            "collection_resolver": "collection-resolution-v1",
+            "canonical_resolver": "canonical-resolution-v1",
+        },
+    ),
+    indirect=True,
+)
 def test_real_seed_rows_match_projection_for_representative_and_observation(seeds):
     loader = DjangoProjectionOrmLoader(using="projection_source")
     snapshot = {
@@ -198,6 +209,85 @@ def test_real_seed_rows_match_projection_for_representative_and_observation(seed
         assert matches[0].component_key == expected[keys[entity.pk]]
     with pytest.raises(ValueError, match="hard cap"):
         _lookup(seeds, seeds.chunks[:2], max_rows=2)
+
+
+@pytest.mark.parametrize(
+    "seeds",
+    (
+        {
+            "collection_resolver": "collection-resolution-v1",
+            "canonical_resolver": "canonical-resolution-v1",
+        },
+    ),
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    ("table", "column", "value"),
+    (
+        ("link", "resolver_version", "stale-canonical-resolution-v1"),
+        ("canonical", "entity_type", "different-type"),
+        ("canonical", "version_signature", "different-version"),
+    ),
+)
+def test_seed_lookup_omits_stale_canonical_identity(seeds, table, column, value):
+    target = (
+        seeds.canonical
+        if table == "canonical"
+        else CanonicalEntityLink.objects.get(collection_entity=seeds.entities[0])
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"UPDATE {target._meta.db_table} SET {column}=%s WHERE id=%s",
+            [value, target.pk],
+        )
+    expected = seeds.codec.encode(
+        Domain.ENTITY,
+        generation=seeds.projection.generation_key,
+        source=seeds.entities[0].pk,
+    ).value
+    direct = seeds.direct.canonical_name_matches(
+        span=seeds.spans[0], ready=seeds.scope.ready, limit=2
+    )
+    assert len(direct) == 1
+    assert direct[0].component_key == expected
+    assert _lookup(seeds, seeds.chunks[1:2], max_rows=2) == {
+        seeds.chunks[1].pk: (expected,)
+    }
+
+
+@pytest.mark.parametrize(
+    "seeds",
+    (
+        {
+            "collection_resolver": "collection-resolution-v1",
+            "canonical_resolver": "canonical-resolution-v1",
+        },
+    ),
+    indirect=True,
+)
+def test_seed_lookup_rejects_ambiguous_active_canonical_links(seeds):
+    other = CanonicalEntity.objects.create(
+        identity_key="f" * 64,
+        label="Alpha",
+        normalized_label="alpha",
+        entity_type="model",
+        resolver_version="canonical-resolution-v2",
+    )
+    CanonicalEntityLink.objects.create(
+        canonical_entity=other,
+        collection_entity=seeds.entities[0],
+        score=0.9,
+        method="exact_name_or_alias",
+        reason="synthetic second resolver",
+        outcome="automatic",
+        resolver_version=other.resolver_version,
+    )
+    with pytest.raises(ValueError, match="automatic membership is not unique"):
+        seeds.direct.canonical_name_matches(
+            span=seeds.spans[0], ready=seeds.scope.ready, limit=2
+        )
+    with pytest.raises(ValueError, match="automatic membership is not unique"):
+        _lookup(seeds, seeds.chunks[1:2], max_rows=2)
 
 
 @pytest.mark.parametrize("invalid", ("revoked", "stale"))

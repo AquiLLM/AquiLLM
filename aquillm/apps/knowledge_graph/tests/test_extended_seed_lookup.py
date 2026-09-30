@@ -71,7 +71,9 @@ def test_seed_lookup_rejects_stale_unauthorized_or_unbounded_rows(monkeypatch, i
         source,
         "_seed_rows",
         lambda **_: (
-            ((1, 7, None), (1, 9, 42)) if invalid == "over_cap" else ((1, 7, None),)
+            ((1, 7, None, None), (1, 9, 42, 1))
+            if invalid == "over_cap"
+            else ((1, 7, None, None),)
         ),
     )
     repository = source.ExtendedSeedRepository()
@@ -96,7 +98,9 @@ def test_seed_lookup_matches_projection_identifiers(monkeypatch):
     codec = HmacSha256ProjectionIdentifierCodec(b"secret", key_version="key-v1")
     monkeypatch.setattr(source, "_authority_is_current", lambda **_: True)
     monkeypatch.setattr(source, "_chunk_documents", lambda **_: {1: _DOC_A})
-    monkeypatch.setattr(source, "_seed_rows", lambda **_: ((1, 7, None), (1, 9, 42)))
+    monkeypatch.setattr(
+        source, "_seed_rows", lambda **_: ((1, 7, None, None), (1, 9, 42, 1))
+    )
     result = source.ExtendedSeedRepository().load_seed_identities(
         authority=authority,
         chunks=((1, _DOC_A),),
@@ -190,7 +194,7 @@ def test_many_seed_chunks_have_independent_complete_source_budget(
     def read_rows(*, chunks, limit, **kwargs):
         reads.append(chunks)
         # Match the SQL boundary's limit+1 overflow sentinel.
-        return tuple((pk, *row) for pk, _ in chunks for row in by_chunk[pk])[
+        return tuple((pk, *row, None) for pk, _ in chunks for row in by_chunk[pk])[
             : limit + 1
         ]
 

@@ -47,7 +47,9 @@ class ExtendedSeedRepository:
         if len(rows) > max_rows:
             raise ValueError("extended seed result exceeds its hard cap")
         result = {chunk_id: set() for chunk_id in requested}
-        for chunk_id, entity_id, canonical_id in rows:
+        for chunk_id, entity_id, canonical_id, automatic_link_count in rows:
+            if (automatic_link_count or 0) > 1:
+                raise ValueError("automatic membership is not unique")
             if (
                 type(chunk_id) is not int
                 or chunk_id not in requested
@@ -124,22 +126,34 @@ def _chunk_documents(*, chunk_ids, using):
 
 
 def _seed_query(*, authority, chunk_id, document_id, document_artifact_id, using):
-    from django.db.models import F, OuterRef, Q, Subquery
+    from django.db.models import Count, F, OuterRef, Q, Subquery
 
     from apps.knowledge_graph.models import (
         CanonicalEntityLink,
         CollectionEntityDocumentLink,
     )
 
+    active_count = (
+        CanonicalEntityLink.objects.using(using)
+        .filter(
+            collection_entity_id=OuterRef("collection_entity_id"),
+            status="active",
+            outcome="automatic",
+            canonical_entity__status="active",
+        )
+        .order_by()
+        .values("collection_entity_id")
+        .annotate(total=Count("pk"))
+        .values("total")[:1]
+    )
     canonical = (
         CanonicalEntityLink.objects.using(using)
         .filter(
             collection_entity_id=OuterRef("collection_entity_id"),
             status="active",
             outcome="automatic",
-            resolver_version=authority.resolver_version,
             canonical_entity__status="active",
-            canonical_entity__resolver_version=authority.resolver_version,
+            canonical_entity__resolver_version=F("resolver_version"),
             canonical_entity__entity_type=OuterRef("collection_entity__entity_type"),
             canonical_entity__version_signature=OuterRef(
                 "collection_entity__version_signature"
@@ -192,9 +206,12 @@ def _seed_query(*, authority, chunk_id, document_id, document_artifact_id, using
                 mention + "document_id": document_id,
             },
         )
-        .annotate(canonical_id=Subquery(canonical))
+        .annotate(
+            canonical_id=Subquery(canonical),
+            automatic_link_count=Subquery(active_count),
+        )
         .order_by("collection_entity_id", "canonical_id")
-        .values_list("collection_entity_id", "canonical_id")
+        .values_list("collection_entity_id", "canonical_id", "automatic_link_count")
         .distinct()
     )
 
@@ -216,7 +233,12 @@ def _seed_rows(*, authority, chunks, documents, using, limit):
         .annotate(
             seed_chunk_id=Value(chunk_id, output_field=BigIntegerField()),
         )
-        .values_list("seed_chunk_id", "collection_entity_id", "canonical_id")
+        .values_list(
+            "seed_chunk_id",
+            "collection_entity_id",
+            "canonical_id",
+            "automatic_link_count",
+        )
         for chunk_id, document_id in chunks
     )
     combined = (
