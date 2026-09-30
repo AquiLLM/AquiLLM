@@ -66,6 +66,7 @@ from apps.documents.services.source_loading import (
     current_source_runtime,
     source_mode_enabled,
 )
+from lib.replay_observation import retrieval_stages
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 if TYPE_CHECKING:
@@ -467,6 +468,19 @@ def text_chunk_search(
                     elapsed_ms=total_ms,
                 ),
             )
+        retrieval_stages(
+            query,
+            top_k,
+            snapshot,
+            ranking,
+            reranked_results,
+            graph_diagnostics,
+            overlay_enabled=overlay_enabled,
+            hybrid_pool=hybrid_pool,
+            graph_seed_attempted=(
+                graph_config is not None and graph_preflight_status is None
+            ),
+        )
         return (
             authorized_rows(snapshot.vector_results),
             authorized_rows(snapshot.trigram_results),

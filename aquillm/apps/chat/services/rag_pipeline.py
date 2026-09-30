@@ -15,6 +15,7 @@ from apps.chat.services.rag_config import (
     direct_rag_max_queries,
     direct_rag_top_k,
     evidence_selection_config,
+    evidence_token_budget,
     is_direct_rag_enabled,
     rag_preservation_config,
 )
@@ -51,6 +52,7 @@ from lib.llm.providers.request_observability import (
 )
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage
+from lib.replay_observation import final_selection, prepared_queries
 
 logger = structlog.stdlib.get_logger(__name__)
 _SEARCH_SCOPE = "selected documents"
@@ -60,6 +62,7 @@ _SELECT_COLLECTIONS_MESSAGE = (
 )
 
 DirectRagOutcome = Literal["handled", "skipped"]
+
 
 def _run_vector_search(consumer: Any, query: str, top_k: int) -> dict:
     """Execute vector_search synchronously via the existing tool factory.
@@ -164,6 +167,7 @@ async def run_direct_rag_turn(
         top_k = direct_rag_top_k()
         candidate_top_k = direct_rag_candidate_top_k()
         selection_config = evidence_selection_config()
+        prepared_queries(queries, top_k, candidate_top_k)
 
         t_retrieval_start = time.perf_counter()
         search_async = database_sync_to_async(
@@ -236,6 +240,7 @@ async def run_direct_rag_turn(
             if selected_packet is not None:
                 packet, raw_result = selected_packet, selected_result
         t_evidence_end = time.perf_counter()
+        final_selection(packet, top_k, evidence_token_budget)
 
         working_convo = _append_retrieval_messages(convo, query, raw_result, top_k)
 
