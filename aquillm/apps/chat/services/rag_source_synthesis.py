@@ -168,6 +168,8 @@ async def finalize_source_support(packet):
         payload = fresh.get("result")
         if isinstance(payload, dict):
             packet.auxiliary_figures = tuple(payload.get("figures", ()))
+            if payload.get("type") == "image_document" and payload.get("image_url"):
+                packet.auxiliary_figures = ({**payload, "type": "image"},)
             packet.image_urls.extend(
                 f["image_url"] for f in packet.auxiliary_figures if f.get("image_url")
             )

@@ -116,6 +116,7 @@ class PackChunkSearchTests(SimpleTestCase):
             },
             truncate=lambda s: s,
             image_modality="image",
+            include_images=True,
             compact_items=False,
         )
         row = out["result"][0]
@@ -138,6 +139,7 @@ class PackChunkSearchTests(SimpleTestCase):
             docs_by_doc_id={did: SimpleNamespace(image_file=None)},
             truncate=lambda s: s,
             image_modality="image",
+            include_images=True,
             compact_items=False,
         )
         row = out["result"][0]

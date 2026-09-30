@@ -21,6 +21,7 @@ from apps.documents.services.source_loading import (
     current_source_runtime,
     source_runtime_scope,
 )
+from lib.llm.providers.image_policy import requests_visuals
 from lib.llm.turn_context import bounded_retrieval, check_turn_active
 from lib.llm.types.messages import AssistantMessage
 
@@ -39,7 +40,9 @@ def _manual_acquire(consumer, command, query, history):
             )
         raw = dict(
             vector_search_tool(consumer.user, consumer.col_ref)(
-                search_string=query, top_k=direct_rag_candidate_top_k()
+                search_string=query,
+                top_k=direct_rag_candidate_top_k(),
+                include_images=requests_visuals(query),
             )
         )
         return raw, current_source_runtime()
@@ -53,6 +56,7 @@ def _manual_acquire(consumer, command, query, history):
                 doc_id=document_id,
                 search_string=query,
                 top_k=direct_rag_candidate_top_k(),
+                include_images=requests_visuals(query),
             )
         )
         return raw, child
@@ -82,7 +86,11 @@ async def run_manual_preservation(consumer, llm, convo, command, *, stream_func)
             user=consumer.user, col_ref=SimpleNamespace(collections=list(selected))
         )
         working = _append_retrieval_messages(
-            convo, query, raw, direct_rag_candidate_top_k()
+            convo,
+            query,
+            raw,
+            direct_rag_candidate_top_k(),
+            include_images=requests_visuals(query),
         )
         with source_runtime_scope(scope):
             result = await finish_preservation(

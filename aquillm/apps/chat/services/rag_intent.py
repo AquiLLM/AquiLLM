@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from lib.llm.providers.image_policy import requests_visuals
+
 _DOCUMENT_TARGET_RE = re.compile(
     r"\b(documents?|docs?|papers?|files?|selected collections?|sources?)\b",
     flags=re.IGNORECASE,
@@ -16,14 +18,6 @@ _DOCUMENT_SEARCH_ACTION_RE = re.compile(
 )
 _DOCUMENT_SYNTHESIS_ACTION_RE = re.compile(
     r"\b(summari[sz]e|synthesi[sz]e|analy[sz]e|compare|review|describe|explain)\b",
-    flags=re.IGNORECASE,
-)
-_DOCUMENT_FIGURE_TARGET_RE = re.compile(
-    r"\b(figures?|figs?\.?|images?|visuals?|plots?|graphs?|charts?|diagrams?)\b",
-    flags=re.IGNORECASE,
-)
-_DOCUMENT_FIGURE_ACTION_RE = re.compile(
-    r"\b(show|display|render|include|explain|find|get|pull|open)\b",
     flags=re.IGNORECASE,
 )
 _LOCAL_TOOL_ACTION_RE = re.compile(
@@ -130,16 +124,12 @@ def classify_chat_message(
             reason="local_tool_request",
         )
 
-    wants_figures = bool(
-        _DOCUMENT_FIGURE_TARGET_RE.search(text)
-        and _DOCUMENT_FIGURE_ACTION_RE.search(text)
-    )
+    wants_figures = requests_visuals(text)
     explicit_search_action = bool(
         _DOCUMENT_TARGET_RE.search(text) and _DOCUMENT_SEARCH_ACTION_RE.search(text)
     )
     explicit_synthesis = bool(
-        _DOCUMENT_TARGET_RE.search(text)
-        and _DOCUMENT_SYNTHESIS_ACTION_RE.search(text)
+        _DOCUMENT_TARGET_RE.search(text) and _DOCUMENT_SYNTHESIS_ACTION_RE.search(text)
     )
     explicit_search = explicit_search_action or explicit_synthesis
     collection_backed = _collection_backed_document_question(

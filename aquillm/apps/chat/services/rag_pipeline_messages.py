@@ -6,12 +6,21 @@ from lib.llm.providers import image_context as imgctx
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
+from .rag_intent import classify_chat_message
+
 
 def _append_retrieval_messages(
-    convo: Conversation, query: str, raw_result: dict, top_k: int
+    convo: Conversation,
+    query: str,
+    raw_result: dict,
+    top_k: int,
+    *,
+    include_images: bool = False,
 ) -> Conversation:
     """Append a synthetic tool-call + tool-result so synthesis sees a post-tool turn."""
     arguments = {"search_string": query, "top_k": top_k}
+    if include_images:
+        arguments["include_images"] = True
     assistant_tool_call = AssistantMessage(
         content="",
         stop_reason="tool_use",
@@ -44,3 +53,21 @@ def _has_prior_vector_search(convo: Conversation) -> bool:
         and bool(message.tool_call_input.get("search_string"))
         for message in convo.messages[:-1]
     )
+
+
+def _retry_needs_visual_tools(convo: Conversation) -> bool:
+    """Keep retries of a visual turn in the model's deliberate tool loop."""
+    selected_visual = False
+    for message in reversed(convo.messages[:-1]):
+        if isinstance(message, UserMessage):
+            intent = classify_chat_message(message.content, selected_collection_ids=[])
+            if not intent.is_retry:
+                return selected_visual or intent.wants_figures
+        arguments = (
+            message.arguments
+            if isinstance(message, ToolMessage)
+            else getattr(message, "tool_call_input", None)
+        )
+        if isinstance(arguments, dict) and arguments.get("include_images") is True:
+            selected_visual = True
+    return selected_visual

@@ -91,16 +91,10 @@ from .complete_turn_sources import (
     _build_sources_block as _build_sources_block,
 )
 from .complete_turn_sources import (
-    _collect_doc_refs_from_embedded_images as _collect_doc_refs_from_embedded_images,
-)
-from .complete_turn_sources import (
     _collect_source_refs_from_tool_message as _collect_source_refs_from_tool_message,
 )
 from .complete_turn_sources import (
     _doc_ref as _doc_ref,
-)
-from .complete_turn_sources import (
-    _extract_doc_ref_from_image_url as _extract_doc_ref_from_image_url,
 )
 from .complete_turn_sources import (
     _latest_user_requested_image as _latest_user_requested_image,
@@ -108,6 +102,7 @@ from .complete_turn_sources import (
 from .complete_turn_sources import (
     _select_source_refs_for_response as _select_source_refs_for_response,
 )
+from .image_policy import CONDITIONAL_IMAGE_INSTRUCTION
 from .request_observability import (
     current_correlation_id,
     current_stage,
@@ -522,6 +517,8 @@ async def complete_conversation_turn(
                 "to retrieve later."
             )
         request_system_prompt = f"{request_system_prompt}\n\n{synthesis_instruction}"
+    if CONDITIONAL_IMAGE_INSTRUCTION not in request_system_prompt:
+        request_system_prompt += f"\n\n{CONDITIONAL_IMAGE_INSTRUCTION}"
     source_allowlist = set(citation_allowlist)
     if is_post_tool_result_turn and not source_allowlist:
         source_allowlist = _collect_source_refs_from_tool_message(last_message)
@@ -1048,30 +1045,6 @@ async def complete_conversation_turn(
             if cited_extract:
                 response_text = cited_extract
                 response_tool_call = {}
-    if (
-        (
-            is_post_tool_result_turn
-            or (
-                isinstance(last_message, UserMessage)
-                and imgctx.looks_like_image_display_request(last_message.content)
-            )
-        )
-        and (not response_tool_call)
-        and response_text.strip()
-    ):
-        markdown_images = imgctx.recent_tool_image_markdown(conversation, max_images=3)
-        if markdown_images:
-            existing_image_refs = _collect_doc_refs_from_embedded_images(response_text)
-            missing_markdown_images: list[str] = []
-            for line in markdown_images:
-                image_ref = _extract_doc_ref_from_image_url(line)
-                if image_ref and image_ref in existing_image_refs:
-                    continue
-                missing_markdown_images.append(line)
-            if missing_markdown_images:
-                response_text = (
-                    response_text.rstrip() + "\n\n" + "\n".join(missing_markdown_images)
-                )
     should_append_final_sources = bool(
         (use_live_citation_stream or defer_stream_until_final)
         and source_allowlist

@@ -26,6 +26,7 @@ from apps.chat.services.rag_pipeline_messages import (
     _append_retrieval_messages,
     _has_prior_vector_search,
     _latest_user_message,
+    _retry_needs_visual_tools,
 )
 from apps.chat.services.rag_pipeline_retrieval import successful_search_results
 from apps.chat.services.rag_query import build_retrieval_queries
@@ -139,6 +140,11 @@ async def run_direct_rag_turn(
             )
         ]
         return "handled"
+
+    # Visual questions need a deliberate image-tool choice. The automatic text
+    # search does not know which figure supports the answer.
+    if intent.wants_figures or (intent.is_retry and _retry_needs_visual_tools(convo)):
+        return "skipped"
 
     preservation = rag_preservation_config()
     if preservation.error or (

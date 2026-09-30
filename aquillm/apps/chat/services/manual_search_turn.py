@@ -24,6 +24,7 @@ from apps.chat.services.tool_wiring.documents import (
 from apps.collections.models import Collection
 from apps.collections.models import collection as collection_models
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
+from lib.llm.providers.image_policy import requests_visuals
 from lib.llm.providers.request_observability import (
     new_correlation_id,
     observability_scope,
@@ -46,7 +47,11 @@ def load_search_documents(consumer):
 
 
 def _retrieve(consumer, command, query, prior_messages):
-    arguments = {"search_string": query, "top_k": direct_rag_top_k()}
+    arguments = {
+        "search_string": query,
+        "top_k": direct_rag_top_k(),
+        "include_images": requests_visuals(query),
+    }
     if command.command == "collection":
         if not consumer.col_ref.collections:
             raise ManualSearchError(

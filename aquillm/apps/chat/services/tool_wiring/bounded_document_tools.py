@@ -20,6 +20,7 @@ from lib.tools.documents.whole_document import (
     image_document_instruction,
     image_document_tool_payload,
 )
+from lib.tools.search.vector_search import IMAGE_MARKDOWN_INSTRUCTION
 
 from .source_figure_payloads import bounded_figure_payloads, revalidate_figure_payloads
 
@@ -72,23 +73,25 @@ def bounded_document_result(doc, query, *, chat_ref=None, adjacent=False):
     }
 
 
-def bounded_whole_document(doc, chat_ref, *, user):
+def bounded_whole_document(doc, chat_ref, *, user, include_images=False):
     from .source_tool_revalidation import revalidate_source_tool_result
 
     return revalidate_source_tool_result(
-        _bounded_whole_document(doc, chat_ref, user=user),
+        _bounded_whole_document(
+            doc, chat_ref, user=user, include_images=include_images
+        ),
         user=user,
     )
 
 
-def _bounded_whole_document(doc, chat_ref, *, user):
+def _bounded_whole_document(doc, chat_ref, *, user, include_images=False):
     query = (
         TextChunk.objects.using(required_source_runtime().authorization.database_alias)
         .filter(doc_id=doc.id)
         .order_by("chunk_number", "pk")
     )
     result = bounded_document_result(doc, query, chat_ref=chat_ref)
-    if result.get("retrieval_status") == "context_limited":
+    if result.get("retrieval_status") == "context_limited" or not include_images:
         return result
     text = result["result"]
     ceiling = synthesis_evidence_budget(chat_ref.chat.convo, chat_ref.chat.llm_if, [])
@@ -134,10 +137,7 @@ def _bounded_whole_document(doc, chat_ref, *, user):
             "figures": accepted,
         }
         result["_figure_provenance"] = retained
-        result["_image_instruction"] = (
-            "Related figures include image_url fields. Include relevant figures "
-            "in markdown with ![description](image_url)."
-        )
+        result["_image_instruction"] = IMAGE_MARKDOWN_INSTRUCTION
     if omitted:
         _mark_figure_omission(result)
     return result

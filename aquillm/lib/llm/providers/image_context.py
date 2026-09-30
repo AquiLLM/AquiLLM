@@ -1,4 +1,5 @@
 """Image / markdown helpers for LLM message and tool-result context."""
+
 from __future__ import annotations
 
 import re
@@ -6,7 +7,8 @@ from json import dumps
 from typing import Any
 
 from ..types.conversation import Conversation
-from ..types.messages import ToolMessage
+from ..types.messages import ToolMessage, UserMessage
+from .image_policy import refers_to_previous_visual, requests_visuals
 
 
 def sanitize_data_urls_for_llm_text(text: str) -> str:
@@ -43,27 +45,11 @@ def has_unterminated_markdown_image(text: str) -> bool:
 
 
 def looks_like_image_display_request(text: str) -> bool:
-    normalized = (text or "").strip().lower()
-    if not normalized:
-        return False
-    cues = (
-        "show me",
-        "display",
-        "render",
-        "show it",
-        "display it",
-        "in chat",
-        "show image",
-        "display image",
-        "figure",
-        "plot",
-        "graph",
-    )
-    return any(cue in normalized for cue in cues)
+    return requests_visuals(text)
 
 
 def _result_row_image_url(value: dict) -> str | None:
-    """Resolve image URL from verbose (`image_url`) or compact (`u` + `ty`) vector_search rows."""
+    """Resolve an image URL from verbose or compact vector_search rows."""
     url = value.get("image_url")
     if isinstance(url, str):
         u = url.strip()
@@ -108,16 +94,28 @@ def _result_row_image_caption(value: dict, key_fallback: str | None = None) -> s
     return "Image"
 
 
-def recent_tool_image_markdown(conversation: Conversation, max_images: int = 3) -> list[str]:
+def recent_tool_image_markdown(
+    conversation: Conversation, max_images: int = 3
+) -> list[str]:
     lines: list[str] = []
     seen_urls: set[str] = set()
+    user_indices = [
+        i for i, msg in enumerate(conversation.messages) if isinstance(msg, UserMessage)
+    ]
+    start = user_indices[-1] if user_indices else 0
+    if len(user_indices) >= 2 and refers_to_previous_visual(
+        conversation.messages[start].content
+    ):
+        start = user_indices[-2]
     tool_messages = [
         msg
-        for msg in reversed(conversation.messages)
+        for msg in reversed(conversation.messages[start:])
         if isinstance(msg, ToolMessage) and msg.for_whom == "assistant"
     ]
     for tool_msg in tool_messages[:4]:
-        result_dict = tool_msg.result_dict if isinstance(tool_msg.result_dict, dict) else {}
+        result_dict = (
+            tool_msg.result_dict if isinstance(tool_msg.result_dict, dict) else {}
+        )
         payload = result_dict.get("result")
         candidates: list[tuple[str, str]] = []
 
@@ -138,7 +136,12 @@ def recent_tool_image_markdown(conversation: Conversation, max_images: int = 3) 
                 if isinstance(value, dict):
                     url = _result_row_image_url(value)
                     if url:
-                        candidates.append((_result_row_image_caption(value, key_fallback=str(key)), url))
+                        candidates.append(
+                            (
+                                _result_row_image_caption(value, key_fallback=str(key)),
+                                url,
+                            )
+                        )
                 elif isinstance(value, list):
                     for nested in value:
                         if not isinstance(nested, dict):
@@ -146,7 +149,12 @@ def recent_tool_image_markdown(conversation: Conversation, max_images: int = 3) 
                         url = _result_row_image_url(nested)
                         if url:
                             candidates.append(
-                                (_result_row_image_caption(nested, key_fallback=str(key)), url)
+                                (
+                                    _result_row_image_caption(
+                                        nested, key_fallback=str(key)
+                                    ),
+                                    url,
+                                )
                             )
 
         for caption, url in candidates:
