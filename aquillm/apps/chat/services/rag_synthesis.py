@@ -225,9 +225,25 @@ async def synthesize_from_evidence(
                 llm_if, request_convo, budget, stream_func, packet=packet
             )
         else:
-            completed_request, _ = await llm_if.complete(
-                request_convo, budget, stream_func=stream_func
+            from lib.llm.evidence_guard import EvidenceProtection, protect_evidence
+
+            from .rag_context_budget import provider_context_capacity
+
+            context, margin = provider_context_capacity(llm_if)
+            protection = EvidenceProtection(
+                request_convo[-1].content,
+                context,
+                budget,
+                margin,
+                require_context=False,
+                allow_history_trim=True,
             )
+            with protect_evidence(protection):
+                completed_request, _ = await llm_if.complete(
+                    request_convo, budget, stream_func=stream_func
+                )
+                if protection.limited_reason:
+                    raise ContextLimited(protection.limited_reason)
     except ContextLimited:
         return convo + [
             AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
