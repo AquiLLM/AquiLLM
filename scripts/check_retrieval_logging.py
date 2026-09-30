@@ -12,7 +12,7 @@ from typing import NamedTuple
 
 REPO = Path(__file__).resolve().parents[1]
 LANE_PATHS = tuple(
-    "aquillm/lib/knowledge_graph/query_extractor/client.py aquillm/lib/knowledge_graph/query_extractor/service.py aquillm/apps/knowledge_graph/retrieval/direct_seed_repository.py aquillm/apps/knowledge_graph/retrieval/direct_seed_resolution.py aquillm/apps/knowledge_graph/retrieval/query_embedding.py aquillm/apps/knowledge_graph/retrieval/topology/gateway_client.py aquillm/apps/documents/services/chunk_search_candidates.py aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/apps/documents/services/chunk_rerank.py aquillm/aquillm/utils.py aquillm/lib/embeddings/local.py aquillm/aquillm/settings_logging.py".split()
+    "aquillm/lib/knowledge_graph/query_extractor/client.py aquillm/lib/knowledge_graph/query_extractor/service.py aquillm/apps/knowledge_graph/retrieval/direct_seed_repository.py aquillm/apps/knowledge_graph/retrieval/direct_seed_resolution.py aquillm/apps/knowledge_graph/retrieval/query_embedding.py aquillm/apps/knowledge_graph/retrieval/topology/gateway_client.py aquillm/apps/knowledge_graph/retrieval/readiness_diagnostics.py aquillm/apps/documents/services/chunk_search_candidates.py aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/apps/documents/services/chunk_rerank.py aquillm/aquillm/utils.py aquillm/lib/embeddings/local.py aquillm/aquillm/settings_logging.py".split()
 )
 
 _EVENT = re.compile(r"^obs\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
@@ -25,7 +25,7 @@ _LOGGER_FACTORIES = frozenset({"getLogger", "get_logger", "LoggerAdapter"})
 _FIELDS = frozenset({"reason", "count", "elapsed_ms"})
 _VALUE_ASSIGNMENTS = (ast.AnnAssign, ast.NamedExpr)
 # fmt: off
-_REASONS = frozenset({"completed", "invalid_request", "authentication_failed", "payload_too_large", "upstream_unavailable", "provenance_mismatch", "mixed_ontology", "embedding_unavailable", "no_seeds", "ambiguous", "internal_failure"})
+_REASONS = frozenset({"completed", "invalid_request", "authentication_failed", "payload_too_large", "upstream_unavailable", "provenance_mismatch", "mixed_ontology", "embedding_unavailable", "no_seeds", "ambiguous", "internal_failure", "readiness_collection_coverage", "readiness_document_coverage", "readiness_identifier_key", "readiness_membership_missing", "readiness_artifact_missing", "readiness_membership_stale", "readiness_artifact_binding", "readiness_artifact_collection", "readiness_manifest"})
 # fmt: on
 
 
@@ -119,7 +119,7 @@ def _fixed_reason(node: ast.AST) -> bool:
         isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
         and node.value.id == "RetrievalLogReason"
-        and node.attr.isupper()
+        and node.attr.lower() in _REASONS
     )
 
 
@@ -200,7 +200,7 @@ def _safe_elapsed(node: ast.AST, tainted: frozenset[str]) -> bool:
 
 
 # fmt: off
-def _safe_fields(keywords: list[ast.keyword], tainted: frozenset[str], helpers: frozenset[str], assignments: tuple[tuple[str, ast.AST], ...], call: ast.Call, parents: dict[ast.AST, ast.AST]) -> bool:
+def _safe_fields(keywords: list[ast.keyword], tainted: frozenset[str], helpers: frozenset[str], assignments: tuple[tuple[str, ast.AST], ...], call: ast.Call, parents: dict[ast.AST, ast.AST], path: Path) -> bool:
 # fmt: on
     if len(keywords) != 1 or keywords[0].arg is not None:
         return False
@@ -218,7 +218,16 @@ def _safe_fields(keywords: list[ast.keyword], tainted: frozenset[str], helpers: 
     return (
         len(values) == len(keywords)
         and values.keys() == _FIELDS
-        and _fixed_reason(values["reason"])
+        and (
+            _fixed_reason(values["reason"])
+            or (
+                path.name == "readiness_diagnostics.py"
+                and isinstance(values["reason"], ast.Name)
+                and values["reason"].id == "reason"
+                and isinstance(_scope(call, parents), ast.FunctionDef)
+                and _scope(call, parents).name == "record_readiness_failure"
+            )
+        )
         and _safe_count(values["count"], tainted, assignments, call, parents)
         and _safe_elapsed(values["elapsed_ms"], tainted)
     )
@@ -253,7 +262,7 @@ def scan_source(*, path: Path, source: str) -> tuple[LoggingViolation, ...]:
         ):
             reason = "dynamic_or_invalid_event"
         elif not _safe_fields(
-            node.keywords, tainted, helpers, assignments, node, parents
+            node.keywords, tainted, helpers, assignments, node, parents, path
         ):
             reason = "unknown_or_payload_field_shape"
         else:

@@ -39,6 +39,15 @@ def test_retrieval_log_reason_is_a_closed_fixed_enum() -> None:
         "no_seeds",
         "ambiguous",
         "internal_failure",
+        "readiness_collection_coverage",
+        "readiness_document_coverage",
+        "readiness_identifier_key",
+        "readiness_membership_missing",
+        "readiness_artifact_missing",
+        "readiness_membership_stale",
+        "readiness_artifact_binding",
+        "readiness_artifact_collection",
+        "readiness_manifest",
     }
     with pytest.raises(ValueError):
         RetrievalLogReason("unique-user-span")

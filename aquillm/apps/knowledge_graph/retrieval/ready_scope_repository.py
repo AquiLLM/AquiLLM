@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from time import monotonic_ns
 from uuid import UUID
 
+from lib.retrieval_redaction import MAX_RETRIEVAL_LOG_ELAPSED_MS, RetrievalLogReason
+
+from .readiness_diagnostics import record_readiness_failure
 from .ready_scope import (
     ReadyProjectionAuthorityV1,
     ReadyScopeError,
@@ -14,6 +18,7 @@ from .ready_scope import (
 
 
 def _load_authorities(*, authorization, settings, source_using: str):
+    started_ns = monotonic_ns()
     from apps.knowledge_graph.models import (
         CollectionArtifactInput,
         CollectionGraphMembershipState,
@@ -101,24 +106,60 @@ def _load_authorities(*, authorization, settings, source_using: str):
     for row in projection_rows:
         state = states.get(row["collection_id"])
         artifact = artifacts.get(row["artifact_id"])
+        if state is None:
+            record_readiness_failure(
+                reason=RetrievalLogReason.READINESS_MEMBERSHIP_MISSING,
+                elapsed_ms=min(
+                    (monotonic_ns() - started_ns) / 1_000_000,
+                    MAX_RETRIEVAL_LOG_ELAPSED_MS,
+                ),
+            )
+            raise ReadyScopeError(ReadyScopeFailureReason.READINESS_MISMATCH)
+        if artifact is None:
+            record_readiness_failure(
+                reason=RetrievalLogReason.READINESS_ARTIFACT_MISSING,
+                elapsed_ms=min(
+                    (monotonic_ns() - started_ns) / 1_000_000,
+                    MAX_RETRIEVAL_LOG_ELAPSED_MS,
+                ),
+            )
+            raise ReadyScopeError(ReadyScopeFailureReason.READINESS_MISMATCH)
         if (
-            state is None
-            or artifact is None
-            or (
-                row["collection_id"],
-                row["artifact_id"],
-                row["membership_epoch"],
-                row["membership_checksum"],
-            )
-            != (
-                row["collection_pk_snapshot"],
-                row["artifact_pk_snapshot"],
-                state["registry_epoch"],
-                state["membership_checksum"],
-            )
-            or state["active_artifact_id"] != row["artifact_id"]
-            or artifact["collection_scope_id"] != row["collection_id"]
+            row["collection_id"],
+            row["artifact_id"],
+            row["membership_epoch"],
+            row["membership_checksum"],
+        ) != (
+            row["collection_pk_snapshot"],
+            row["artifact_pk_snapshot"],
+            state["registry_epoch"],
+            state["membership_checksum"],
         ):
+            record_readiness_failure(
+                reason=RetrievalLogReason.READINESS_MEMBERSHIP_STALE,
+                elapsed_ms=min(
+                    (monotonic_ns() - started_ns) / 1_000_000,
+                    MAX_RETRIEVAL_LOG_ELAPSED_MS,
+                ),
+            )
+            raise ReadyScopeError(ReadyScopeFailureReason.READINESS_MISMATCH)
+        if state["active_artifact_id"] != row["artifact_id"]:
+            record_readiness_failure(
+                reason=RetrievalLogReason.READINESS_ARTIFACT_BINDING,
+                elapsed_ms=min(
+                    (monotonic_ns() - started_ns) / 1_000_000,
+                    MAX_RETRIEVAL_LOG_ELAPSED_MS,
+                ),
+            )
+            raise ReadyScopeError(ReadyScopeFailureReason.READINESS_MISMATCH)
+        if artifact["collection_scope_id"] != row["collection_id"]:
+            record_readiness_failure(
+                reason=RetrievalLogReason.READINESS_ARTIFACT_COLLECTION,
+                elapsed_ms=min(
+                    (monotonic_ns() - started_ns) / 1_000_000,
+                    MAX_RETRIEVAL_LOG_ELAPSED_MS,
+                ),
+            )
             raise ReadyScopeError(ReadyScopeFailureReason.READINESS_MISMATCH)
         result.append(
             ReadyProjectionAuthorityV1(
