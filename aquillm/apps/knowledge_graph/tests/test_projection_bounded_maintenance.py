@@ -179,11 +179,11 @@ def test_pass_stops_before_next_artifact_at_overall_deadline(monkeypatch):
 
     monkeypatch.setattr(reconciler, "_generation_audit", audit)
     result = reconciler.reconcile_projection_batch(
-        after_id=0, page_size=10, deadline=30, clock=lambda: now[0]
+        after_id=0, page_size=10, deadline=90, clock=lambda: now[0]
     )
-    assert result.examined_count == 3
-    assert result.next_cursor == 3
-    assert len(enqueued) <= 3
+    assert result.examined_count == 9
+    assert result.next_cursor == 9
+    assert len(enqueued) <= 9
 
 
 def test_coordination_failure_returns_fixed_result_without_retry_or_outbox(monkeypatch):
@@ -253,7 +253,7 @@ def test_real_isolated_redis_admission_contract():
     first = tasks.maintenance.admit(client, scope=scope, interval=300)
     try:
         assert first is not None
-        assert 30 < client.ttl(first.lock_key) <= 300
+        assert 90 < client.ttl(first.lock_key) <= 300
         assert first.save_cursor(14)
         assert tasks.maintenance.admit(client, scope=scope, interval=300) is None
         # Expire only this uniquely namespaced test key, never flush the broker.

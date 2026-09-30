@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from celery import current_app
 
-PASS_SECONDS = 30
+PASS_SECONDS = 90
 MAX_ARTIFACTS = 10
 _SAVE_CURSOR = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
