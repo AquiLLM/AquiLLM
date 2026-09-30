@@ -14,7 +14,7 @@ Deployment hardening separates liveness from bounded database/broker readiness, 
 
 Pre-deployment verification: 252 backend tests plus 11 subtests and 167 frontend tests passed. A further 27 focused runtime tests include real PostgreSQL cold-connection isolation. Independent review verified memory provider-failure recovery, successful no-add responses, and ownership through slow writes (19 focused tests passed). Existing TypeScript diagnostics and schema drift remain baseline limitations.
 
-The preview image exposed 19 incidental Python package differences from the existing unpinned supplemental install. Exact live versions are now constrained and independently reviewed; the final image must match the live package set before rollout. Current-image checks and public development smoke checks are deployment acceptance requirements, including proof that `.env` and unrelated service identities remain unchanged and transcription stays stopped.
+The preview image exposed 19 incidental Python package differences from the existing unpinned supplemental install. Exact live versions are now constrained and independently reviewed; the rebuilt image matched the live package set. A network-disabled image check then exposed a tokenizer download during Django import. Both used tokenizer vocabularies are now cached at build time outside the source bind mount. Current-image checks and public development smoke checks are deployment acceptance requirements, including proof that `.env` and unrelated service identities remain unchanged and transcription stays stopped.
 
 ## Prioritized findings
 

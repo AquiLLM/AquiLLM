@@ -28,6 +28,10 @@ ARG CRAWL_CAPTURE_PDF=false
 RUN if [ "$CRAWL_CAPTURE_PDF" = "true" ] || [ "$CRAWL_CAPTURE_PDF" = "1" ]; then \
         apt update && apt install -y chromium chromium-driver fonts-liberation; \
     fi
+# Tokenizers are imported during Django startup; cache their data outside /app
+# so restarting a bind-mounted deployment does not require an external download.
+ENV TIKTOKEN_CACHE_DIR=/opt/aquillm-tokenizers
+RUN /opt/venv/bin/python -c "import tiktoken; tiktoken.get_encoding('o200k_base'); tiktoken.get_encoding('cl100k_base')"
 COPY . .
 COPY --from=frontend /build/aquillm/aquillm/static/js/dist/ /opt/aquillm-static/js/dist/
 COPY --from=frontend /build/aquillm/aquillm/static/index.css /opt/aquillm-static/index.css
