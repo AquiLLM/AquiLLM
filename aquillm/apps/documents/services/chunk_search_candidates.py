@@ -73,6 +73,7 @@ class HybridCandidateSnapshot:
     exact_ms: float
     pre_dedupe_count: int
     graph_seed_error: bool
+    effective_limits: object | None = None
 
 
 def _salient_exact_terms(query: str, *, max_terms: int = 8) -> list[str]:
@@ -283,6 +284,7 @@ def collect_hybrid_candidate_snapshot(
         exact_ms=exact_ms,
         pre_dedupe_count=len(all_rows),
         graph_seed_error=graph_seed_error,
+        effective_limits=limits,
     )
 
 

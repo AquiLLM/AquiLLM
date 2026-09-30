@@ -26,6 +26,8 @@ class SelectionScorer(Protocol):
 
     def prepare_pair(self, query: str, chunk: object) -> Pair: ...
 
+    def prepare_emitted_pair(self, query: str, emitted_text: str) -> Pair | None: ...
+
     def score_pair(self, pair: Pair, timeout_seconds: float) -> ScoredPair | None: ...
 
     def score_pool(
@@ -44,12 +46,15 @@ def score_missing_pairs(
     clock: Callable[[], float] = monotonic,
     on_submit: Callable[[int], None] | None = None,
     turn_budget=None,
+    prepared_pairs: tuple[Pair, ...] | None = None,
 ) -> RerankScoreSet:
     """Score at most one bounded pool; late futures cannot publish a result."""
     rows = tuple(chunks)
     from .chunk_rerank_window_adapter import WindowSelectionScorer
 
     if isinstance(scorer, WindowSelectionScorer):
+        if prepared_pairs is not None:
+            raise ValueError("window scoring owns its verified prepared spans")
         if turn_budget is not scorer.budget:
             raise ValueError("window scoring must share the turn ledger")
         scorer.deadline = min(scorer.deadline, deadline)
@@ -67,7 +72,23 @@ def score_missing_pairs(
     kind = getattr(scorer, "scoring_kind", "rank_only")
     scorer_fp = getattr(scorer, "scorer_fingerprint", "")
     try:
-        pairs = tuple(scorer.prepare_pair(query, row) for row in rows)
+        pairs = (
+            tuple(scorer.prepare_pair(query, row) for row in rows)
+            if prepared_pairs is None
+            else tuple(prepared_pairs)
+        )
+        if prepared_pairs is not None and (
+            len(pairs) != len(rows)
+            or any(
+                not isinstance(pair, tuple)
+                or len(pair) != 2
+                or type(pair[0]) is not str
+                or type(pair[1]) is not str
+                or pair[0] != query
+                for pair in pairs
+            )
+        ):
+            raise ValueError("prepared final pairs differ from ordered score rows")
     except Exception:
         pairs = ()
         oversized = True

@@ -1,4 +1,5 @@
 """OpenAI-compatible prompt token estimation and preflight context trimming."""
+
 from __future__ import annotations
 
 from os import getenv
@@ -20,7 +21,9 @@ def env_float(name: str, default: float) -> float:
 
 
 def context_reserve_tokens(context_limit: int) -> tuple[int, int]:
-    mode = str(getenv("OPENAI_CONTEXT_RESERVE_MODE", "ratio") or "ratio").strip().lower()
+    mode = (
+        str(getenv("OPENAI_CONTEXT_RESERVE_MODE", "ratio") or "ratio").strip().lower()
+    )
     if mode == "fixed":
         guard_tokens = max(64, env_int("OPENAI_CONTEXT_GUARD_TOKENS", 256))
         estimator_pad_tokens = max(0, env_int("OPENAI_ESTIMATOR_PAD_TOKENS", 256))
@@ -42,24 +45,36 @@ def context_reserve_tokens(context_limit: int) -> tuple[int, int]:
 
 
 def trim_messages_for_overflow(arguments: dict, overflow_tokens: int) -> bool:
+    from lib.llm.evidence_guard import contains_selected_evidence
+
     messages = arguments.get("messages")
     if not isinstance(messages, list) or len(messages) <= 1:
         return False
 
     if len(messages) >= 3:
-        del messages[1]
-        return True
+        for index in range(1, len(messages)):
+            message = messages[index]
+            if not isinstance(message, dict) or not contains_selected_evidence(
+                message.get("content")
+            ):
+                del messages[index]
+                return True
+        return False
 
     candidate_indices = [
         i
         for i in range(1, len(messages) - 1)
-        if isinstance(messages[i], dict) and isinstance(messages[i].get("content"), str)
+        if isinstance(messages[i], dict)
+        and isinstance(messages[i].get("content"), str)
+        and not contains_selected_evidence(messages[i]["content"])
     ]
     if not candidate_indices:
         candidate_indices = [
             i
             for i in range(1, len(messages))
-            if isinstance(messages[i], dict) and isinstance(messages[i].get("content"), str)
+            if isinstance(messages[i], dict)
+            and isinstance(messages[i].get("content"), str)
+            and not contains_selected_evidence(messages[i]["content"])
         ]
     if not candidate_indices:
         return False

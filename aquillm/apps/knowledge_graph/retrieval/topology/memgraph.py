@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from math import isfinite
+from time import monotonic_ns
+
+from lib.retrieval_redaction import MAX_RETRIEVAL_LOG_ELAPSED_MS, RetrievalLogReason
 
 from .. import projected_types as t
+from ..readiness_diagnostics import record_readiness_failure
 from . import contracts as c
 from .failures import TopologyLoadError, TopologyResultCapError
 from .gateway_client import TopologyGatewayRequestError
@@ -135,6 +139,7 @@ class MemgraphProjectedTopologyLoader:
         responses = {}
         try:
             query, maximum = limits[0]
+            manifest_started_ns = monotonic_ns()
             responses[query] = self.driver.execute_read(
                 query=query,
                 parameters=parameters,
@@ -142,6 +147,13 @@ class MemgraphProjectedTopologyLoader:
                 max_records=maximum,
             )
             if not _manifest_matches(responses[query], ready):
+                record_readiness_failure(
+                    reason=RetrievalLogReason.READINESS_MANIFEST,
+                    elapsed_ms=min(
+                        (monotonic_ns() - manifest_started_ns) / 1_000_000,
+                        MAX_RETRIEVAL_LOG_ELAPSED_MS,
+                    ),
+                )
                 raise TopologyLoadError(c.TopologyFailureReason.READINESS_MISMATCH)
             for query, maximum in limits[1:]:
                 responses[query] = self.driver.execute_read(

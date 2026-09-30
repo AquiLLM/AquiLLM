@@ -21,6 +21,8 @@ class EvidenceProtection:
     limited_reason: str | None = None
     turn_budget: object | None = None
     synthesis_lease: object | None = None
+    require_context: bool = True
+    allow_history_trim: bool = False
 
 
 _PROTECTION = ContextVar("selected_evidence_protection", default=None)
@@ -69,6 +71,17 @@ def _strings(value):
             yield from _strings(item)
 
 
+def contains_selected_evidence(value):
+    """Whether a shaped message still carries the protected tool payload."""
+    state = current_protection()
+    if state is None:
+        return False
+    return any(
+        text == state.payload or text.endswith("\n" + state.payload)
+        for text in _strings(_plain(value))
+    )
+
+
 def estimate_request_tokens(payload, *, turn_budget=None):
     """Estimate the whole shaped payload, including schema and image overhead.
 
@@ -111,13 +124,12 @@ def validate_request(payload, *, output_reserve):
     if state is None:
         return
     plain = _plain(payload)
-    if state.model_context <= 0:
+    if state.model_context <= 0 and state.require_context:
         context_limited("unknown_model_context")
-    if not any(
-        value == state.payload or value.endswith("\n" + state.payload)
-        for value in _strings(plain)
-    ):
+    if not contains_selected_evidence(plain):
         context_limited("selected_evidence_changed")
+    if state.model_context <= 0:
+        return
     try:
         estimated = estimate_request_tokens(
             plain, turn_budget=state.synthesis_lease or state.turn_budget

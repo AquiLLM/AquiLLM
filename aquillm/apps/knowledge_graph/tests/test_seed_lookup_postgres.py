@@ -21,8 +21,6 @@ from apps.collections.services.retrieval_authorization import (
 )
 from apps.documents.models import RawTextDocument, TextChunk
 from apps.knowledge_graph.models import (
-    CanonicalEntity,
-    CanonicalEntityLink,
     CollectionArtifactInput,
     CollectionEntity,
     CollectionEntityDocumentLink,
@@ -74,8 +72,6 @@ pytestmark = [
 ]
 
 
-
-
 def _lookup(fixture, chunks, max_rows):
     return ExtendedSeedRepository().load_seed_identities(
         authority=fixture.authority,
@@ -109,12 +105,14 @@ def test_direct_alias_uses_document_resolver_and_rejects_stale_mention_link(seed
             "SET resolver_version=%s WHERE id=%s",
             [seeds.artifact.resolver_version, link.pk],
         )
-    assert seeds.direct.indexed_alias_matches(
-        span=span, ready=seeds.scope.ready, limit=2
-    ) == ()
-    assert seeds.direct.canonical_name_matches(
-        span=span, ready=seeds.scope.ready, limit=2
-    ) == name_matches
+    assert (
+        seeds.direct.indexed_alias_matches(span=span, ready=seeds.scope.ready, limit=2)
+        == ()
+    )
+    assert (
+        seeds.direct.canonical_name_matches(span=span, ready=seeds.scope.ready, limit=2)
+        == name_matches
+    )
 
 
 def test_real_seed_rows_match_projection_for_representative_and_observation(seeds):

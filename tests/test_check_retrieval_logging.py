@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from lib.retrieval_redaction import RetrievalLogReason
+
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "check_retrieval_logging.py"
 EXPECTED_LANE_PATHS = tuple(
-    "aquillm/lib/knowledge_graph/query_extractor/client.py aquillm/lib/knowledge_graph/query_extractor/service.py aquillm/apps/knowledge_graph/retrieval/direct_seed_repository.py aquillm/apps/knowledge_graph/retrieval/direct_seed_resolution.py aquillm/apps/knowledge_graph/retrieval/query_embedding.py aquillm/apps/knowledge_graph/retrieval/topology/gateway_client.py aquillm/apps/documents/services/chunk_search_candidates.py aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/apps/documents/services/chunk_rerank.py aquillm/aquillm/utils.py aquillm/lib/embeddings/local.py aquillm/aquillm/settings_logging.py".split()
+    "aquillm/lib/knowledge_graph/query_extractor/client.py aquillm/lib/knowledge_graph/query_extractor/service.py aquillm/apps/knowledge_graph/retrieval/direct_seed_repository.py aquillm/apps/knowledge_graph/retrieval/direct_seed_resolution.py aquillm/apps/knowledge_graph/retrieval/query_embedding.py aquillm/apps/knowledge_graph/retrieval/topology/gateway_client.py aquillm/apps/knowledge_graph/retrieval/readiness_diagnostics.py aquillm/apps/documents/services/chunk_search_candidates.py aquillm/apps/documents/services/chunk_search.py aquillm/apps/documents/services/chunk_search_logging.py aquillm/apps/documents/services/chunk_rerank_local_vllm.py aquillm/apps/documents/services/chunk_rerank.py aquillm/aquillm/utils.py aquillm/lib/embeddings/local.py aquillm/aquillm/settings_logging.py".split()
 )
 
 
@@ -28,6 +30,7 @@ def _scan(source: str):
 def test_checker_has_an_explicit_lane_allowlist_and_current_lane_is_clean() -> None:
     module = _module()
     assert module.LANE_PATHS == EXPECTED_LANE_PATHS
+    assert module._REASONS == {reason.value for reason in RetrievalLogReason}
     assert module.find_violations(REPO) == ()
 
 
@@ -55,6 +58,16 @@ logger.info(
 )
 """
     assert _scan(source) == ()
+
+
+def test_checker_allows_readiness_literals_and_rejects_unknown_enum_member() -> None:
+    source = """from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+logger.info("obs.rag.graph_readiness_failed", **retrieval_log_fields(
+    reason=RetrievalLogReason.READINESS_MANIFEST, count=1, elapsed_ms=1.0))"""
+    assert _scan(source) == ()
+    assert (
+        len(_scan(source.replace("READINESS_MANIFEST", "READINESS_PRIVATE_TEXT"))) == 1
+    )
 
 
 @pytest.mark.parametrize(

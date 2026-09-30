@@ -55,6 +55,11 @@ from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 @pytest.fixture
 def seeds(request):
     assert connection.vendor == "postgresql"
+    versions = (
+        request.param if isinstance(getattr(request, "param", None), dict) else {}
+    )
+    collection_resolver = versions.get("collection_resolver", "resolver-v1")
+    canonical_resolver = versions.get("canonical_resolver", collection_resolver)
     user = User.objects.create_user(username=f"seed-{uuid4()}")
     collection = Collection.objects.create(name="seed integration")
     permission = CollectionPermission.objects.create(
@@ -81,11 +86,17 @@ def seeds(request):
         for number, (start, end) in enumerate(((0, 10), (0, 5), (11, 16)))
     )
     artifact = _artifact(
-        scope_type="collection", scope_id=collection.pk, ontology_checksum="7" * 64
+        scope_type="collection",
+        scope_id=collection.pk,
+        ontology_checksum="7" * 64,
+        resolver_version=collection_resolver,
     )
     artifact.save()
+    document_version = versions.get("document_resolver")
+    if document_version is None and isinstance(getattr(request, "param", None), str):
+        document_version = request.param
     document_options = (
-        {"resolver_version": request.param} if hasattr(request, "param") else {}
+        {"resolver_version": document_version} if document_version else {}
     )
     document_artifact = _artifact(
         scope_id=document.id, ontology_checksum="7" * 64, **document_options
@@ -166,7 +177,7 @@ def seeds(request):
         label="Alpha",
         normalized_label="alpha",
         entity_type="model",
-        resolver_version=artifact.resolver_version,
+        resolver_version=canonical_resolver,
     )
     CanonicalEntityLink.objects.create(
         canonical_entity=canonical,
@@ -175,7 +186,7 @@ def seeds(request):
         method="exact_name_or_alias",
         reason="exact",
         outcome="automatic",
-        resolver_version=artifact.resolver_version,
+        resolver_version=canonical_resolver,
     )
     artifact.status = "active"
     artifact.save(update_fields=["status"])

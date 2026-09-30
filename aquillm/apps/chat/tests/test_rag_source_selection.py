@@ -11,7 +11,10 @@ from apps.chat.tests.test_rag_selection_scoring import (
     _pool,
 )
 from apps.documents.services.chunk_rerank_results import (
+    PassageScore,
+    RerankScoreSet,
     fingerprint_pair,
+    fingerprint_pool,
     fingerprint_text,
 )
 from lib.retrieval.evidence import SourceSpan
@@ -27,6 +30,9 @@ class ExactScorer:
 
     def prepare_pair(self, query, chunk):
         return query, chunk.content
+
+    def prepare_emitted_pair(self, query, emitted_text):
+        return query, emitted_text
 
     def score_pair(self, pair, timeout_seconds):
         self.seen.append(pair)
@@ -109,6 +115,49 @@ def test_prepared_spans_rescore_exact_rendering_and_revalidation_drops_changes()
         )
         == ()
     )
+
+
+def test_prepared_span_score_reuse_keeps_full_source_revision():
+    text = "background " * 2000 + "Exception: retain only with consent."
+    chunk = _chunk(1, text)
+    source_fp = fingerprint_text(text)
+    span = SourceSpan(
+        1,
+        source_fp,
+        text.index("Exception:"),
+        len(text),
+        text[text.index("Exception:") :],
+    )
+    pair_fp = fingerprint_pair("consent", span.text)
+    score_set = RerankScoreSet(
+        "v2",
+        fingerprint_text("consent"),
+        "exact-v1",
+        fingerprint_pool(((1, source_fp, pair_fp),)),
+        "pointwise",
+        "complete",
+        (1,),
+        (PassageScore(1, chunk.doc_id, chunk.chunk_number, source_fp, pair_fp, 0.8),),
+    )
+    scorer = ExactScorer()
+    result = prepare_selection_candidates(
+        pool=_pool((chunk,), (score_set,)),
+        primary_query="consent",
+        authorization=_authorization(Policy()),
+        deadline=monotonic() + 3,
+        allow_new_scores=False,
+        scorer=scorer,
+        chunk_loader=lambda *_: (chunk,),
+        turn_budget=TurnBudget(TurnLimits()),
+        source_mode=True,
+        token_ceiling=100,
+        source_windows={1: (span,)},
+    )
+    assert result.score_status == "model"
+    assert result.reused_pairs == 1 and result.new_pairs == 0
+    assert result.candidates[0].text == span.text
+    assert result.candidates[0].source_fingerprint == source_fp
+    assert scorer.seen == []
 
 
 def test_source_mode_legacy_clipping_scorer_falls_back_without_false_coverage():

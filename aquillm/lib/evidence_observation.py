@@ -45,3 +45,10 @@ def publish(event, data):
 
 def active():
     return _sink.get() is not None
+
+
+def mark_failed():
+    """Tell the observer owner that an optional event could not be captured."""
+    state = _sink.get()
+    if state is not None:
+        state.failed.set()

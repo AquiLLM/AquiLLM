@@ -82,12 +82,13 @@ async def prepare_request(
 
     context_limit = configured_limit()
     should_compress = True
-    if context_limit > 0 and current_protection() is None:
+    protection = current_protection()
+    if context_limit > 0 and protection is None:
         prompt_tokens = provider._estimate_prompt_tokens(arguments["messages"])
         available_prompt_tokens = max(1, context_limit - max(0, int(max_tokens)))
         compression_trigger_tokens = max(1, int(available_prompt_tokens * 0.8))
         should_compress = prompt_tokens >= compression_trigger_tokens
-    if should_compress and current_protection() is None:
+    if should_compress and protection is None:
         await asyncio.to_thread(
             compress_messages,
             message_list,
@@ -103,7 +104,7 @@ async def prepare_request(
         pack_limit = (
             context_limit if context_limit > 0 else prompt_budget_context_limit()
         )
-        if pack_limit > 0 and context_packer_enabled() and current_protection() is None:
+        if pack_limit > 0 and context_packer_enabled() and protection is None:
             sys_row = arguments["messages"][0]
             tail = arguments["messages"][1:]
             mt0 = cap_completion_tokens(arguments["max_tokens"])
@@ -116,7 +117,7 @@ async def prepare_request(
             arguments["max_tokens"] = mt1
     except Exception:
         pass
-    if context_limit > 0 and current_protection() is None:
+    if context_limit > 0 and (protection is None or protection.allow_history_trim):
         if is_local_compatible_endpoint:
             prompt_slack = provider._env_int("OPENAI_COMPAT_PROMPT_SLACK_TOKENS", 256)
         else:

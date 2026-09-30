@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from time import monotonic_ns
 from uuid import UUID
 
 from apps.collections.services.retrieval_authorization import (
@@ -15,11 +16,18 @@ from apps.knowledge_graph.projection.identifiers import (
     ProjectionIdentifierCodec,
     ProjectionIdentifierDomain,
 )
+from apps.knowledge_graph.retrieval.readiness_diagnostics import (
+    record_readiness_failure,
+)
 from apps.knowledge_graph.retrieval.topology.contracts import (
     AuthorizedProjectedDocumentV1,
     ReadyGenerationBundleV1,
     SelectedCollectionGenerationV1,
     ready_generation_bundle_checksum,
+)
+from lib.retrieval_redaction import (
+    MAX_RETRIEVAL_LOG_ELAPSED_MS,
+    RetrievalLogReason,
 )
 
 _CHECKSUM = re.compile(r"[0-9a-f]{64}")
@@ -187,6 +195,7 @@ def assemble_selected_ready_scope(
 ) -> SelectedReadyScopeV1:
     """Bind exact current selected scope to one ready projection per collection."""
 
+    started_ns = monotonic_ns()
     if type(authorization) is not RetrievalAuthorizationContext:
         raise TypeError("authorization must be an exact retrieval context")
     current = revalidate_retrieval_authorization_context(context=authorization)
@@ -205,6 +214,12 @@ def assemble_selected_ready_scope(
     ) != selected_collections or len({row.collection_id for row in authorities}) != len(
         authorities
     ):
+        record_readiness_failure(
+            reason=RetrievalLogReason.READINESS_COLLECTION_COVERAGE,
+            elapsed_ms=min(
+                (monotonic_ns() - started_ns) / 1_000_000, MAX_RETRIEVAL_LOG_ELAPSED_MS
+            ),
+        )
         raise ReadyScopeError(ReadyScopeFailureReason.READINESS_MISMATCH)
     ordered_authorities = tuple(sorted(authorities, key=lambda row: row.collection_id))
     covered_documents = tuple(
@@ -217,11 +232,23 @@ def assemble_selected_ready_scope(
     if covered_documents != selected_documents or len(set(covered_documents)) != len(
         covered_documents
     ):
+        record_readiness_failure(
+            reason=RetrievalLogReason.READINESS_DOCUMENT_COVERAGE,
+            elapsed_ms=min(
+                (monotonic_ns() - started_ns) / 1_000_000, MAX_RETRIEVAL_LOG_ELAPSED_MS
+            ),
+        )
         raise ReadyScopeError(ReadyScopeFailureReason.READINESS_MISMATCH)
     if (
         len({row.identifier_key_version for row in ordered_authorities}) != 1
         or codec.key_version != ordered_authorities[0].identifier_key_version
     ):
+        record_readiness_failure(
+            reason=RetrievalLogReason.READINESS_IDENTIFIER_KEY,
+            elapsed_ms=min(
+                (monotonic_ns() - started_ns) / 1_000_000, MAX_RETRIEVAL_LOG_ELAPSED_MS
+            ),
+        )
         raise ReadyScopeError(ReadyScopeFailureReason.READINESS_MISMATCH)
     encoded = tuple(_encoded(row, codec) for row in ordered_authorities)
     generations = tuple(

@@ -82,9 +82,7 @@ class DjangoProjectionOrmLoader:
             batch_size,
             maximum=MAX_ARTIFACT_ROWS,
         )
-        collection_artifact = next(
-            row for row in artifacts if row["id"] == artifact_id
-        )
+        collection_artifact = next(row for row in artifacts if row["id"] == artifact_id)
         chunk_coordinates = {
             row["id"]: (row["doc_id"], row["chunk_number"]) for row in chunks
         }
@@ -242,7 +240,6 @@ class DjangoProjectionOrmLoader:
                 collection_entity__status="active",
                 collection_entity__artifact__status="active",
                 collection_entity__artifact__evaluation_only=False,
-                resolver_version=F("collection_entity__artifact__resolver_version"),
                 canonical_entity__status="active",
                 canonical_entity__resolver_version=F("resolver_version"),
                 canonical_entity__entity_type=F("collection_entity__entity_type"),
