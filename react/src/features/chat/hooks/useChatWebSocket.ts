@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, useEffect, type Dispatch, type SetStateAction } from 'react';
-import type { Message, Conversation, WebSocketMessage } from '../types';
+import type { Message, Conversation, WebSocketMessage, SkillOverrides, ContextSelectionAcknowledgment } from '../types';
 import type { ChatSocketHandoff } from './chatSocketBootstrap';
+import { payloadCollectionId } from '../utils/contextSelection';
 
 function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
   const existingByUuid = new Map<string, Message>();
@@ -29,6 +30,7 @@ export interface UseChatWebSocketParams {
   setDebugHtml: (html: string | null) => void;
   setInputDisabled: (disabled: boolean) => void;
   setSelectedCollections?: (collectionIds: Set<string>) => void;
+  setSkillOverrides?: (overrides: SkillOverrides) => void;
 }
 
 const MAX_RECONNECTION_ATTEMPTS = 5;
@@ -44,10 +46,44 @@ export function useChatWebSocket({
   setDebugHtml,
   setInputDisabled,
   setSelectedCollections,
+  setSkillOverrides,
 }: UseChatWebSocketParams) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ChatConnectionStatus>('connecting');
   const [terminalError, setTerminalError] = useState('');
+  const [contextSaving, setContextSaving] = useState(false);
+  const requestSequence = useRef(0);
+  const pendingContext = useRef<{
+    id: string;
+    timer: ReturnType<typeof setTimeout>;
+    resolve: (selection: ContextSelectionAcknowledgment) => void;
+    reject: (error: Error) => void;
+  } | null>(null);
+  const rejectContext = useCallback((message: string) => {
+    const pending = pendingContext.current;
+    if (!pending) return;
+    pendingContext.current = null;
+    clearTimeout(pending.timer);
+    setContextSaving(false);
+    pending.reject(new Error(message));
+  }, []);
+  const saveContext = useCallback((collections: Set<string>, overrides?: SkillOverrides): Promise<ContextSelectionAcknowledgment> => {
+    if (pendingContext.current) return Promise.reject(new Error('A context save is already pending.'));
+    const socket = wsRef.current;
+    if (connectionStatus !== 'ready' || !socket || socket.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('The chat connection is not ready. Please try again once connected.'));
+    }
+    const requestId = `context-${Date.now()}-${++requestSequence.current}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => rejectContext('Saving context timed out. Please try again.'), 10000);
+      pendingContext.current = { id: requestId, timer, resolve, reject };
+      setContextSaving(true);
+      try {
+        socket.send(JSON.stringify({ action: 'select_collections', collections: [...collections].map(payloadCollectionId),
+          ...(overrides === undefined ? {} : { skill_overrides: overrides }), request_id: requestId }));
+      } catch { rejectContext('Could not send context changes. Please try again once connected.'); }
+    });
+  }, [connectionStatus, rejectContext]);
 
   const beginTurn = useCallback(() => {
     setTerminalError('');
@@ -101,6 +137,7 @@ export function useChatWebSocket({
       const fail = (socket: WebSocket | null, code?: number) => {
         if (!active || (socket && currentSocket !== socket)) return;
         clearTimers();
+        rejectContext('The connection was interrupted before context changes were confirmed. Please try again.');
         currentSocket = null;
         wsRef.current = null;
         setInputDisabled(true);
@@ -147,7 +184,26 @@ export function useChatWebSocket({
           try {
             const data: WebSocketMessage = JSON.parse(event.data);
 
+            if (data.context_selection_error) {
+              if (pendingContext.current?.id === data.context_selection_error.request_id) rejectContext(data.context_selection_error.message);
+              return;
+            }
+            if (data.context_selection) {
+              const pending = pendingContext.current;
+              if (!pending || pending.id !== data.context_selection.request_id) return;
+              const selection = data.context_selection;
+              pendingContext.current = null;
+              clearTimeout(pending.timer);
+              setContextSaving(false);
+              setSelectedCollections?.(new Set(selection.selected_collections.map(String)));
+              setSkillOverrides?.(selection.skill_overrides);
+              setConversation(previous => ({ ...previous, selected_collections: selection.selected_collections, skill_overrides: selection.skill_overrides }));
+              pending.resolve(selection);
+              return;
+            }
+
             if (data.exception) {
+              if (pendingContext.current && !data.fatal) { rejectContext(data.exception); return; }
               console.error('Server error:', data.exception);
               setTerminalError(data.exception);
               setException(data.exception);
@@ -177,6 +233,7 @@ export function useChatWebSocket({
               if (setSelectedCollections) {
                 setSelectedCollections(new Set(updatedConversation.selected_collections.map(String)));
               }
+              setSkillOverrides?.(updatedConversation.skill_overrides ?? {});
               const lastAssistantMessage = updatedConversation.messages
                 .slice()
                 .reverse()
@@ -233,6 +290,7 @@ export function useChatWebSocket({
 
         ws.onerror = () => {
           if (!isCurrent()) return;
+          rejectContext('The connection was interrupted before context changes were confirmed. Please try again.');
           setInputDisabled(true);
           if (!fatalMessage) setConnectionStatus('reconnecting');
           // The close event carries the server's permanent/retryable code.
@@ -262,10 +320,11 @@ export function useChatWebSocket({
     return () => {
       active = false;
       clearTimers();
+      rejectContext('The chat changed before context changes were confirmed.');
       if (currentSocket) currentSocket.close();
       wsRef.current = null;
     };
-  }, [convoId, setConversation, setException, setDebugHtml, setInputDisabled, setSelectedCollections]);
+  }, [convoId, setConversation, setException, setDebugHtml, setInputDisabled, setSelectedCollections, setSkillOverrides, rejectContext]);
 
-  return { wsRef, terminalError, connectionStatus, beginTurn };
+  return { wsRef, terminalError, connectionStatus, beginTurn, saveContext, contextSaving };
 }

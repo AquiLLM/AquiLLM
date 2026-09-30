@@ -24,11 +24,28 @@ Steps
      suffix marks it as a prompt skill), **or**
    - Put multiple ``.md`` files inside a **subcollection** named ``skills`` or
      ``skill_pack`` under your project collection.
-3. **Attach that collection to your chat** (see :doc:`../collections/using`).
-4. Start chatting — the skill text is merged into the system prompt for that session.
+3. Open **Collections and skills** in your chat, then choose **Skills**. You can also
+   select a collection on the **Collections** tab to inherit its associated skills.
+4. Search skill names, descriptions, or source paths. Expand a skill to read its plain-text
+   instructions and source. Use its checkbox, or **Enable all** / **Disable all** for a
+   source, to choose what applies.
+5. Choose **Apply to chat** and wait for confirmation. The skill text is used for subsequent
+   replies in that conversation, and your choices survive a refresh.
 
-Only Markdown/raw-text documents are used. Regular PDFs in the same collection are ignored
-for skills unless they follow the naming rules above.
+A skill selected by itself does not attach its source collection for document retrieval.
+An explicit **off** choice takes precedence even when its collection is selected.
+**Follow collection selection**, inside the instruction preview, removes an override.
+Removing a collection removes its inherited skills while keeping explicitly enabled skills.
+**Clear all** clears selected collections and disables all available collection skills.
+
+The picker edits a draft: Cancel, Escape, and clicking outside discard unsaved changes.
+A failed save leaves the draft open for retry. Available skills and their counts reflect
+current read access and server settings; deleted or inaccessible skills are not loaded.
+If collection skills are disabled, saved preferences are preserved and no collection skills
+are active. Server-wide skills below are outside this picker.
+
+Eligible Markdown or raw-text documents provide collection skill instructions. Regular
+PDFs in the same collection are not collection skills.
 
 Optional front matter
 ---------------------

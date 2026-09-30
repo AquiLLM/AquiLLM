@@ -1,0 +1,66 @@
+import { test, expect } from '@playwright/test';
+
+const fixture = '/static/js/dist/tests/fixtures/chat-context.html';
+test('desktop keyboard, source controls, acknowledged save and reload', async ({ page }) => {
+  await page.goto(fixture);
+  const opener = page.getByRole('button', { name: /Collections and skills/ });
+  await opener.click();
+  await expect(page.getByRole('searchbox')).toBeFocused();
+  await expect(page.getByRole('tab', { name: /Collections/ })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('button', { name: 'Apply to chat' }).focus();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Close picker' })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.getByRole('button', { name: 'Apply to chat' })).toBeFocused();
+  await page.getByRole('tab', { name: /Collections/ }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: /Skills/ })).toBeFocused();
+  await page.getByRole('button', { name: 'Enable all from Test 2 / skill_pack' }).click();
+  await expect(page.getByRole('checkbox', { name: 'Compare sources' })).toBeChecked();
+  await page.getByRole('button', { name: 'Read Compare sources instructions' }).click();
+  await expect(page.getByText('Test 2 / skill_pack / compare.md')).toBeVisible();
+  await page.getByRole('button', { name: 'Apply to chat' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await expect(opener).toHaveAccessibleName(/2 collections, 4 skills/);
+  await page.reload();
+  await expect(opener).toHaveAccessibleName(/2 collections, 4 skills/);
+  await opener.click();
+  await page.getByRole('checkbox', { name: 'Test 2', exact: true }).uncheck();
+  await page.keyboard.press('Escape');
+  await expect(opener).toHaveAccessibleName(/2 collections, 4 skills/);
+  await expect(opener).toBeFocused();
+});
+
+for (const dark of [false, true]) test(`320px ${dark ? 'dark' : 'light'} layout, hierarchy, source filtering and backdrop cancel`, async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 760 });
+  await page.goto(fixture + (dark ? '?dark' : ''));
+  const opener = page.getByRole('button', { name: /Collections and skills/ });
+  await opener.click();
+  const dialog = page.getByRole('dialog');
+  const rect = await dialog.boundingBox();
+  expect(rect!.x).toBeGreaterThanOrEqual(0);
+  expect(rect!.x + rect!.width).toBeLessThanOrEqual(320);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+  await page.getByRole('button', { name: 'Collapse Test 2' }).click();
+  await expect(page.getByRole('checkbox', { name: 'skill_pack', exact: true })).toHaveCount(0);
+  await page.getByRole('searchbox').fill('skill_pack');
+  await expect(page.getByRole('checkbox', { name: 'skill_pack', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Show skill_pack skills', exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: 'Cite sources' })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: 'Concise answers' })).toBeVisible();
+  await page.getByRole('button', { name: 'Enable all from Test 2 / skill_pack' }).click();
+  await expect(page.getByRole('checkbox', { name: 'Compare sources' })).toBeChecked();
+  await page.getByRole('button', { name: 'Read Compare sources instructions' }).click();
+  await expect(page.getByText('Test 2 / skill_pack / compare.md')).toBeVisible();
+  const body = await page.locator('fieldset').evaluate(element => {
+    const scroller = element.parentElement!;
+    scroller.scrollTop = scroller.scrollHeight;
+    return { scrollTop: scroller.scrollTop, bottom: scroller.getBoundingClientRect().bottom };
+  });
+  expect(body.scrollTop).toBeGreaterThan(0);
+  expect(body.bottom).toBeLessThanOrEqual((await page.locator('footer').boundingBox())!.y + 1);
+  await page.mouse.click(2, 2);
+  await expect(dialog).toHaveCount(0);
+  await expect(opener).toHaveAccessibleName(/2 collections, 3 skills/);
+});

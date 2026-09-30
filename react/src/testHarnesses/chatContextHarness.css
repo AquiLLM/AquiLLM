@@ -1,0 +1,6 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #chat-context-root { height: 100%; }
+body { margin: 0; font-family: Helvetica, Arial, sans-serif; background: var(--color-scheme-shade-1); color: var(--color-text-normal); }

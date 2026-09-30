@@ -19,10 +19,44 @@ export interface Collection {
   parent?: string | number | null;
 }
 
+export type SkillOverrides = Record<string, boolean>;
+export interface ContextCollection extends Collection {
+  path: string;
+  is_skill_pack: boolean;
+}
+export interface ContextSkill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  collection_id: string;
+  collection_name: string;
+  collection_path: string;
+  source_path: string;
+  pack_id: string | null;
+  pack_name: string | null;
+  default_collection_ids: string[];
+}
+export interface ChatContextCatalog {
+  collections: ContextCollection[];
+  skills_enabled: boolean;
+  skills: ContextSkill[];
+}
+export interface ContextSelection {
+  selectedCollections: Set<string>;
+  skillOverrides: SkillOverrides;
+}
+export interface ContextSelectionAcknowledgment {
+  request_id?: string;
+  selected_collections: (string | number)[];
+  skill_overrides: SkillOverrides;
+}
+
 export interface Conversation {
   messages: Message[];
   usage?: number;
   selected_collections?: (string | number)[];
+  skill_overrides?: SkillOverrides;
 }
 
 export interface ConversationDelta {
@@ -39,6 +73,8 @@ export interface StreamDelta {
 }
 
 export interface WebSocketMessage {
+  context_selection?: ContextSelectionAcknowledgment;
+  context_selection_error?: { request_id: string; message: string };
   exception?: string;
   fatal?: boolean;
   debug_html?: string;

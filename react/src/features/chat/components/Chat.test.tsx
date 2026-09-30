@@ -40,7 +40,7 @@ describe('Chat readiness and terminal errors', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ collections: [{ id: 7, name: 'Research', parent: null }] }),
+      json: async () => ({ collections: [{ id: 7, name: 'Research', parent: null, path: 'Research', is_skill_pack: false }], skills: [], skills_enabled: false }),
     }));
     Element.prototype.scrollIntoView = vi.fn();
   });
@@ -253,14 +253,14 @@ describe('Chat readiness and terminal errors', () => {
     await waitFor(() => expect(FakeWebSocket.latest).not.toBeNull());
     const socket = FakeWebSocket.latest!;
     act(() => socket.onopen?.(new Event('open')));
-    const collectionsButton = screen.getByRole('button', { name: 'Collections' }) as HTMLButtonElement;
+    const collectionsButton = screen.getByRole('button', { name: /Collections and skills/ }) as HTMLButtonElement;
     expect(collectionsButton.disabled).toBe(true);
     fireEvent.click(collectionsButton);
     expect(screen.queryByText('Select Collections')).toBeNull();
     expect(socket.send).not.toHaveBeenCalled();
   });
 
-  it('closes an open collection editor on disconnect without persisting a stale selection', async () => {
+  it('keeps a disconnected draft visible without persisting it and disables Apply', async () => {
     render(<Chat convoId="314" />);
     await waitFor(() => expect(FakeWebSocket.latest).not.toBeNull());
     const socket = FakeWebSocket.latest!;
@@ -272,7 +272,8 @@ describe('Chat readiness and terminal errors', () => {
     expect(await screen.findByRole('checkbox', { name: 'Research' })).toBeTruthy();
 
     act(() => socket.disconnect());
-    expect(screen.queryByRole('checkbox', { name: 'Research' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Research' })).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Apply to chat' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: /Collections/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(socket.send).not.toHaveBeenCalled();
   });
@@ -280,7 +281,7 @@ describe('Chat readiness and terminal errors', () => {
   it('keeps collection fetch errors through hydration and retries without losing saved selection', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const fetchMock = vi.fn().mockRejectedValueOnce(new Error('temporary outage'))
-      .mockResolvedValue({ ok: true, json: async () => ({ collections: [{ id: 7, name: 'Research', parent: null }] }) });
+      .mockResolvedValue({ ok: true, json: async () => ({ collections: [{ id: 7, name: 'Research', parent: null, path: 'Research', is_skill_pack: false }], skills: [], skills_enabled: false }) });
     vi.stubGlobal('fetch', fetchMock);
     render(<Chat convoId="314" />);
     await screen.findByText(/Failed to load collections/);
