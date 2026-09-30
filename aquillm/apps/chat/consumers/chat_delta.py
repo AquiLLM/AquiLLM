@@ -26,6 +26,7 @@ async def send_conversation_snapshot(consumer: Any) -> None:
                     "system": consumer.db_convo.system_prompt,
                     "selected_collections": consumer.db_convo.selected_collection_ids
                     or [],
+                    "skill_overrides": consumer.db_convo.skill_overrides or {},
                     "messages": [
                         pydantic_message_to_frontend_dict(msg) for msg in consumer.convo
                     ],

@@ -21,6 +21,7 @@ class WSConversation(models.Model):
     system_prompt = models.TextField(default=get_default_system_prompt, blank=True)
     name = models.TextField(blank=True, null=True)
     selected_collection_ids = models.JSONField(default=list, blank=True)
+    skill_overrides = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(editable=False)
     updated_at = models.DateTimeField()
     # Re-index guard for ConversationChunk: SHA256 of the ordered transcript that was

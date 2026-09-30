@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from base64 import b64decode
-from json import loads
+from json import dumps, loads
 from time import perf_counter
 from typing import Any
 
@@ -12,6 +12,7 @@ import structlog
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
+from django.db import transaction
 
 from apps.chat.consumers.chat_delta import send_conversation_delta
 from apps.chat.consumers.chat_intent import (
@@ -26,7 +27,8 @@ from apps.chat.consumers.chat_ws_errors import (
     send_receive_validation_error,
 )
 from apps.chat.consumers.utils import CHAT_MAX_FUNC_CALLS, CHAT_MAX_TOKENS
-from apps.chat.models import ConversationFile
+from apps.chat.models import ConversationFile, WSConversation
+from apps.chat.services.collection_prompt_skills import validate_skill_overrides
 from apps.chat.services.execution import execution_turn
 from apps.chat.services.feedback import (
     apply_message_feedback_text,
@@ -169,14 +171,59 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         return files
 
     @database_sync_to_async
-    def _save_selected_collections(selected_collections: list[Any]) -> None:
+    def _save_context_selection(
+        selected_collections: list[Any], skill_overrides: dict[str, bool] | None
+    ) -> dict[str, bool]:
+        with transaction.atomic():
+            db_convo = WSConversation.objects.select_for_update().get(
+                pk=consumer.db_convo.pk
+            )
+            db_convo.selected_collection_ids = selected_collections
+            update_fields = ["selected_collection_ids", "updated_at"]
+            if skill_overrides is not None:
+                db_convo.skill_overrides = skill_overrides
+                update_fields.append("skill_overrides")
+            db_convo.save(update_fields=update_fields)
+            return dict(db_convo.skill_overrides or {})
+
+    async def _apply_context_selection(
+        selected_collections: list[Any], skill_overrides: dict[str, bool] | None
+    ) -> dict[str, bool]:
+        saved_overrides = await _save_context_selection(
+            selected_collections, skill_overrides
+        )
         consumer.db_convo.selected_collection_ids = selected_collections
-        consumer.db_convo.save(update_fields=["selected_collection_ids", "updated_at"])
+        consumer.db_convo.skill_overrides = saved_overrides
+        consumer.col_ref.collections = selected_collections
+        consumer.skill_overrides = saved_overrides
+        return saved_overrides
 
     async def update_selected_collections(data: dict) -> None:
         selected_collections = _validated_collection_ids(data.get("collections", []))
-        consumer.col_ref.collections = selected_collections
-        await _save_selected_collections(selected_collections)
+        overrides = (
+            await database_sync_to_async(validate_skill_overrides)(
+                consumer.user, data["skill_overrides"]
+            )
+            if "skill_overrides" in data
+            else None
+        )
+        request_id = data.get("request_id")
+        if "request_id" in data and (
+            not isinstance(request_id, str) or not request_id or len(request_id) > 128
+        ):
+            raise ValidationError(
+                "request_id must be a nonempty string of at most 128 characters"
+            )
+        saved_overrides = await _apply_context_selection(
+            selected_collections, overrides
+        )
+        acknowledgement = {
+            "selected_collections": selected_collections,
+            "skill_overrides": saved_overrides,
+        }
+        if request_id is not None:
+            acknowledgement["request_id"] = request_id
+        await consumer.send(text_data=dumps({"context_selection": acknowledgement}))
 
     async def append(data: dict):
         logger.debug("obs.chat.append", collections=data.get("collections", []))
@@ -184,8 +231,19 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         assert consumer.convo is not None
 
         selected_collections = _validated_collection_ids(data.get("collections", []))
-        consumer.col_ref.collections = selected_collections
-        consumer.convo += UserMessage.model_validate(data["message"])
+        overrides = (
+            await database_sync_to_async(validate_skill_overrides)(
+                consumer.user, data["skill_overrides"]
+            )
+            if "skill_overrides" in data
+            else None
+        )
+        message = UserMessage.model_validate(data["message"])
+        if overrides is not None:
+            await _apply_context_selection(selected_collections, overrides)
+        else:
+            consumer.col_ref.collections = selected_collections
+        consumer.convo += message
         files: list[ConversationFile] = []
         if "files" in data:
             files = [
@@ -252,6 +310,8 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 break
 
     if not consumer.dead:
+        data: Any = None
+        action: Any = None
         try:
             data = loads(text_data)
             action = data.pop("action", None)
@@ -331,7 +391,24 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         except ValidationError as e:
             msg = e.messages[0] if getattr(e, "messages", None) else str(e)
             logger.warning("obs.chat.validation_error", error=msg)
-            await send_receive_validation_error(consumer, msg)
+            request_id = data.get("request_id") if isinstance(data, dict) else None
+            if (
+                action == "select_collections"
+                and isinstance(request_id, str)
+                and 0 < len(request_id) <= 128
+            ):
+                await consumer.send(
+                    text_data=dumps(
+                        {
+                            "context_selection_error": {
+                                "request_id": request_id,
+                                "message": msg,
+                            }
+                        }
+                    )
+                )
+            else:
+                await send_receive_validation_error(consumer, msg)
         except Exception as e:
             logger.error(
                 "obs.chat.receive_error",
@@ -339,7 +416,24 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
                 error_type=type(e).__name__,
                 exc_info=True,
             )
-            await send_receive_error(consumer, e)
+            request_id = data.get("request_id") if isinstance(data, dict) else None
+            if (
+                action == "select_collections"
+                and isinstance(request_id, str)
+                and 0 < len(request_id) <= 128
+            ):
+                await consumer.send(
+                    text_data=dumps(
+                        {
+                            "context_selection_error": {
+                                "request_id": request_id,
+                                "message": "Unable to save chat context. Try again.",
+                            }
+                        }
+                    )
+                )
+            else:
+                await send_receive_error(consumer, e)
 
 
 __all__ = ["handle_chat_receive"]

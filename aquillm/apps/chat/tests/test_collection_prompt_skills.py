@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.test import override_settings
 
 from apps.chat.consumers.chat import CollectionsRef
+from apps.chat.services.collection_prompt_skills import load_collection_prompt_skills
 from apps.chat.services.skills_runtime import (
     effective_base_system_for_memory,
     effective_base_system_for_memory_async,
@@ -209,3 +210,109 @@ def test_effective_system_async_wrapper_loads_collection_skills():
 
     assert "## Collection Skill: async-safe-skill" in system
     assert "safe to load from async consumers" in system
+
+
+@pytest.mark.django_db
+@override_settings(AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True)
+def test_parent_and_selected_pack_include_each_skill_once_with_overrides():
+    user = User.objects.create_user(username="skill-overrides", password="pass")
+    root = Collection.objects.create(name="Observatory")
+    pack = Collection.objects.create(name="skill_pack", parent=root)
+    CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
+    inherited = _raw_text_doc(pack, user, title="inherited.md", text="Unique instruction body")
+    disabled = _raw_text_doc(pack, user, title="disabled.md", text="Disabled instruction body")
+    independent = _raw_text_doc(pack, user, title="independent.md", text="Explicit independent skill")
+
+    def skill_id(doc):
+        return f"{doc._meta.label_lower}:{doc.pk}"
+
+    prompt = load_collection_prompt_skills(
+        user,
+        [root.id, pack.id],
+        {skill_id(disabled): False},
+    )
+    assert prompt.count("Unique instruction body") == 1
+    assert "Disabled instruction body" not in prompt
+
+    prompt = load_collection_prompt_skills(
+        user,
+        [],
+        {skill_id(independent): True},
+    )
+    assert "Explicit independent skill" in prompt
+    assert "Unique instruction body" not in prompt
+
+    prompt = load_collection_prompt_skills(user, [root.id], {skill_id(inherited): False})
+    assert "Unique instruction body" not in prompt
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True, AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True)
+def test_chat_context_catalog_lists_readable_descendants_and_skill_metadata(client):
+    user = User.objects.create_user(username="skill-catalog", password="pass")
+    root = Collection.objects.create(name="Observatory")
+    pack = Collection.objects.create(name="skill_pack", parent=root)
+    hidden = Collection.objects.create(name="Private")
+    CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
+    doc = _raw_text_doc(
+        pack, user, title="spectra.md",
+        text="---\nname: Spectra Guide\ndescription: Handle spectra.\n---\n\nUse wavelength units.",
+    )
+    _raw_text_doc(hidden, user, title="private_skill.md", text="Secret instruction")
+    client.force_login(user)
+
+    response = client.get("/api/collections/chat-context/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["skills_enabled"] is True
+    assert payload["collections"] == [
+        {"id": root.id, "name": "Observatory", "parent": None, "path": "Observatory", "is_skill_pack": False},
+        {"id": pack.id, "name": "skill_pack", "parent": root.id, "path": "Observatory/skill_pack", "is_skill_pack": True},
+    ]
+    assert payload["skills"] == [{
+        "id": f"{doc._meta.label_lower}:{doc.pk}",
+        "name": "Spectra Guide",
+        "description": "Handle spectra.",
+        "instructions": "Use wavelength units.",
+        "collection_id": str(pack.id),
+        "collection_name": "skill_pack",
+        "collection_path": "Observatory/skill_pack",
+        "source_path": "Observatory/skill_pack/spectra.md",
+        "pack_id": str(pack.id),
+        "pack_name": "skill_pack",
+        "default_collection_ids": [str(pack.id), str(root.id)],
+    }]
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True, AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=False)
+def test_chat_context_catalog_hides_skills_when_feature_disabled(client):
+    user = User.objects.create_user(username="skill-disabled", password="pass")
+    root = Collection.objects.create(name="Research")
+    CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
+    _raw_text_doc(root, user, title="research_skill.md", text="Disabled feature instruction")
+    client.force_login(user)
+
+    payload = client.get("/api/collections/chat-context/").json()
+
+    assert payload["skills_enabled"] is False
+    assert payload["skills"] == []
+    assert payload["collections"][0]["id"] == root.id
+
+
+@pytest.mark.django_db
+@override_settings(AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True)
+def test_explicit_skill_rechecks_access_and_document_existence_at_runtime():
+    user = User.objects.create_user(username="revoked-skill", password="pass")
+    root = Collection.objects.create(name="Research")
+    permission = CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
+    doc = _raw_text_doc(root, user, title="research_skill.md", text="Restricted instruction")
+    override = {f"{doc._meta.label_lower}:{doc.pk}": True}
+
+    assert "Restricted instruction" in load_collection_prompt_skills(user, [], override)
+    permission.delete()
+    assert "Restricted instruction" not in load_collection_prompt_skills(user, [], override)
+    CollectionPermission.objects.create(user=user, collection=root, permission="VIEW")
+    doc.delete()
+    assert "Restricted instruction" not in load_collection_prompt_skills(user, [], override)

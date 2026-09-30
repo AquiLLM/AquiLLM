@@ -79,7 +79,12 @@ def effective_base_system_for_memory(consumer: Any) -> str:
     py_extra = collect_system_prompt_extras(_resolved_modules(), ctx).strip()
     md_extra = load_markdown_prompt_bodies(_markdown_skills_root()).strip()
     selected_collections = getattr(getattr(consumer, "col_ref", None), "collections", [])
-    collection_extra = load_collection_prompt_skills(consumer.user, selected_collections).strip()
+    skill_overrides = getattr(
+        consumer, "skill_overrides", getattr(consumer.db_convo, "skill_overrides", {})
+    )
+    collection_extra = load_collection_prompt_skills(
+        consumer.user, selected_collections, skill_overrides
+    ).strip()
     extra_parts = [s for s in (py_extra, md_extra, collection_extra) if s]
     if not extra_parts:
         return base

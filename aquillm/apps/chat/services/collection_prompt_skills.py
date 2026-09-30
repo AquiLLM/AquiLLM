@@ -1,4 +1,5 @@
 """Session-scoped prompt skills loaded from selected collections."""
+
 from __future__ import annotations
 
 import re
@@ -8,6 +9,7 @@ from typing import Any
 
 import structlog
 from django.conf import settings
+from django.core.exceptions import ValidationError
 
 from apps.collections.models import Collection
 from apps.documents.models import RawTextDocument
@@ -81,21 +83,14 @@ def _skill_title(meta: dict[str, str], fallback: str) -> str:
     return key.replace("_", " ").title() or "Collection Skill"
 
 
-def _render_skill_doc(doc: Any) -> str:
+def _skill_body(doc: Any) -> tuple[dict[str, str], str]:
     raw = (getattr(doc, "full_text", "") or "").strip()
-    if not raw:
-        return ""
-    title = str(getattr(doc, "title", "") or "")
     meta, body = _parse_simple_front_matter_block(raw)
-    body_text = (body if meta else raw).strip()
-    if not body_text:
-        return ""
-    parts = [f"## Collection Skill: {_skill_title(meta, title)}"]
-    description = (meta.get("description") or "").strip()
-    if description:
-        parts.append(f"Description:\n{description}")
-    parts.append(body_text)
-    return "\n\n".join(parts)
+    return meta, (body if meta else raw).strip()
+
+
+def _skill_id(doc: Any) -> str:
+    return f"{doc._meta.label_lower}:{doc.pk}"
 
 
 def _candidate_collection_docs(
@@ -117,49 +112,113 @@ def _candidate_collection_docs(
     return candidates
 
 
-def _append_collection_docs(parts: list[str], collection: Collection, *, marked_only: bool) -> None:
-    for doc in sorted(
-        _candidate_collection_docs(collection, marked_only=marked_only),
-        key=lambda item: str(getattr(item, "title", "") or ""),
+def accessible_collections(user: Any) -> list[Collection]:
+    """Include descendants whose read access is inherited from an ancestor."""
+    return [
+        collection
+        for collection in Collection.objects.select_related("parent").all()
+        if collection.user_can_view(user)
+    ]
+
+
+def discover_collection_skills(
+    user: Any, collections: list[Collection] | None = None
+) -> list[dict[str, Any]]:
+    """One permission-checked candidate stream for catalog and prompt loading."""
+    if not _setting_enabled("AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED"):
+        return []
+    collections = accessible_collections(user) if collections is None else collections
+    readable_ids = {collection.pk for collection in collections}
+    skills: list[dict[str, Any]] = []
+    for collection in collections:
+        is_pack = _name_key(collection.name) in _SKILL_PACK_COLLECTION_NAMES
+        for doc in _candidate_collection_docs(collection, marked_only=not is_pack):
+            title = str(getattr(doc, "title", "") or "")
+            if is_pack and not _is_markdown_doc(doc):
+                continue
+            if not is_pack and not _is_direct_skill_doc(title):
+                continue
+            meta, body = _skill_body(doc)
+            if not body:
+                continue
+            path = collection.get_path()
+            defaults = [str(collection.pk)]
+            if is_pack and collection.parent_id in readable_ids:
+                defaults.append(str(collection.parent_id))
+            skills.append(
+                {
+                    "id": _skill_id(doc),
+                    "name": _skill_title(meta, title),
+                    "description": (meta.get("description") or "").strip(),
+                    "instructions": body,
+                    "collection_id": str(collection.pk),
+                    "collection_name": collection.name,
+                    "collection_path": path,
+                    "source_path": f"{path}/{title}",
+                    "pack_id": str(collection.pk) if is_pack else None,
+                    "pack_name": collection.name if is_pack else None,
+                    "default_collection_ids": defaults,
+                }
+            )
+    return sorted(
+        skills,
+        key=lambda item: (
+            item["collection_path"].casefold(),
+            item["source_path"].casefold(),
+            item["id"],
+        ),
+    )
+
+
+def validate_skill_overrides(user: Any, raw: Any) -> dict[str, bool]:
+    if not isinstance(raw, dict) or any(
+        not isinstance(key, str) or type(value) is not bool
+        for key, value in raw.items()
     ):
-        title = str(getattr(doc, "title", "") or "")
-        if marked_only and not _is_direct_skill_doc(title):
-            continue
-        if not marked_only and not _is_markdown_doc(doc):
-            continue
-        rendered = _render_skill_doc(doc)
-        if rendered:
-            parts.append(rendered)
+        raise ValidationError("skill_overrides must map skill IDs to booleans")
+    if raw:
+        if not getattr(settings, "SKILLS_ENABLED", False):
+            raise ValidationError("collection skills are disabled")
+        available = {skill["id"] for skill in discover_collection_skills(user)}
+        if not set(raw).issubset(available):
+            raise ValidationError(
+                "skill_overrides contains an unknown or inaccessible skill"
+            )
+    return dict(raw)
 
 
-def load_collection_prompt_skills(user: Any, selected_collection_ids: Iterable[Any]) -> str:
+def load_collection_prompt_skills(
+    user: Any,
+    selected_collection_ids: Iterable[Any],
+    skill_overrides: dict[str, bool] | None = None,
+) -> str:
     """Return prompt-skill text from selected collections, or an empty string."""
     if not _setting_enabled("AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED"):
         return ""
-    ids = _selected_ids(selected_collection_ids)
-    if not ids:
+    selected_ids = {str(value) for value in _selected_ids(selected_collection_ids)}
+    overrides = skill_overrides or {}
+    if not selected_ids and not any(value is True for value in overrides.values()):
         return ""
-    selected = [
-        collection
-        for collection in Collection.objects.filter(id__in=ids).order_by("name", "id")
-        if collection.user_can_view(user)
+    skills = [
+        skill
+        for skill in discover_collection_skills(user)
+        if overrides.get(
+            skill["id"],
+            bool(selected_ids.intersection(skill["default_collection_ids"])),
+        )
     ]
-    if not selected:
-        return ""
-
-    parts: list[str] = []
-    selected_ids = [collection.id for collection in selected]
-    for collection in selected:
-        pack_selected = _name_key(collection.name) in _SKILL_PACK_COLLECTION_NAMES
-        _append_collection_docs(parts, collection, marked_only=not pack_selected)
-
-    pack_children = []
-    for collection in Collection.objects.filter(parent_id__in=selected_ids).order_by("name", "id"):
-        is_skill_pack = _name_key(collection.name) in _SKILL_PACK_COLLECTION_NAMES
-        if is_skill_pack and collection.user_can_view(user):
-            pack_children.append(collection)
-    for collection in pack_children:
-        _append_collection_docs(parts, collection, marked_only=False)
+    parts = [
+        "\n\n".join(
+            value
+            for value in (
+                f"## Collection Skill: {skill['name']}",
+                f"Description:\n{skill['description']}" if skill["description"] else "",
+                skill["instructions"],
+            )
+            if value
+        )
+        for skill in skills
+    ]
 
     prompt = "\n\n---\n\n".join(parts).strip()
     limit = _max_chars()
@@ -167,7 +226,7 @@ def load_collection_prompt_skills(user: Any, selected_collection_ids: Iterable[A
         logger.info(
             "obs.chat.collection_prompt_skills_truncated",
             user_id=getattr(user, "id", None),
-            selected_collection_count=len(selected),
+            selected_collection_count=len(selected_ids),
             skill_block_count=len(parts),
             original_chars=len(prompt),
             max_chars=limit,
@@ -177,11 +236,16 @@ def load_collection_prompt_skills(user: Any, selected_collection_ids: Iterable[A
         logger.info(
             "obs.chat.collection_prompt_skills_loaded",
             user_id=getattr(user, "id", None),
-            selected_collection_count=len(selected),
+            selected_collection_count=len(selected_ids),
             skill_block_count=len(parts),
             chars=len(prompt),
         )
     return prompt
 
 
-__all__ = ["load_collection_prompt_skills"]
+__all__ = [
+    "accessible_collections",
+    "discover_collection_skills",
+    "load_collection_prompt_skills",
+    "validate_skill_overrides",
+]

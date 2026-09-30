@@ -126,6 +126,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if self.db_convo is None:
             return
         self.col_ref.collections = list(self.db_convo.selected_collection_ids or [])
+        self.skill_overrides = dict(self.db_convo.skill_overrides or {})
 
     async def connect(self):
         logger.debug("obs.chat.connect")

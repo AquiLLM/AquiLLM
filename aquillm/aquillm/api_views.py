@@ -21,6 +21,7 @@ from apps.collections.views.api import (
     collection_permissions,
     collection_detail as collection,
 )
+from apps.collections.views.chat_context import chat_context
 from apps.collections.views.schema_api import (
     schema_create_draft,
     schema_diff,
@@ -88,6 +89,7 @@ from apps.bug_reports.views.api import (
 
 # Backward compatibility URL patterns
 urlpatterns = [
+    path("collections/chat-context/", chat_context, name="api_chat_context"),
     path("collections/", collections, name="api_collections"),
     path("collection/<int:col_id>/", collection, name="api_collection"),
     path(
