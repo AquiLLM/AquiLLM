@@ -79,6 +79,30 @@ def test_driver_uses_transaction_function_timeout_not_a_cypher_parameter() -> No
     assert client.sessions[0].callbacks[0].timeout == 0.5
 
 
+def test_driver_configures_explicit_managed_retry_bound_on_lazy_connection(monkeypatch):
+    from neo4j import GraphDatabase
+
+    observed = []
+    monkeypatch.setattr(
+        GraphDatabase,
+        "driver",
+        lambda uri, **kwargs: observed.append((uri, kwargs)) or _Neo4jClient(),
+    )
+    driver = Neo4jMemgraphDriver(
+        "bolt://memgraph:7687", "reader", "secret", database="memgraph",
+        max_transaction_retry_time=0.0,
+    )
+    assert observed == []
+
+    driver.execute_read("RETURN 1 AS ok", {}, timeout_seconds=1.0, max_records=1)
+    assert observed == [
+        (
+            "bolt://memgraph:7687",
+            {"auth": ("reader", "secret"), "max_transaction_retry_time": 0.0},
+        )
+    ]
+
+
 def test_driver_errors_are_fixed_and_do_not_expose_credentials_or_cypher() -> None:
     class Broken:
         def session(self, **_kwargs):
@@ -184,6 +208,11 @@ def test_schema_bootstrap_uses_only_fixed_indexes_in_bounded_implicit_transactio
         "CREATE EDGE INDEX ON :PROJECTED_RELATION",
         "CREATE EDGE INDEX ON :RELATION_EVIDENCE",
         "CREATE EDGE INDEX ON :ENTITY_MENTION",
+        "CREATE EDGE INDEX ON :ENTITY_MEMBERSHIP(generation_key)",
+        "CREATE EDGE INDEX ON :DOCUMENT_CHUNK(generation_key)",
+        "CREATE EDGE INDEX ON :PROJECTED_RELATION(generation_key)",
+        "CREATE EDGE INDEX ON :RELATION_EVIDENCE(generation_key)",
+        "CREATE EDGE INDEX ON :ENTITY_MENTION(generation_key)",
     ]
     assert all(timeout == 0.5 for _, timeout in calls)
     assert client.transaction.calls == []

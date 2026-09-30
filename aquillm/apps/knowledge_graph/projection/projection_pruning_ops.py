@@ -68,7 +68,7 @@ def _delete_projection_generation(*, row, graph, settings, codec) -> bool | None
     )
     return graph.delete_generation(
         generation_key=generation_key,
-        timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
+        timeout_seconds=settings.projection_timeout_ms / 1_000.0,
     )
 
 

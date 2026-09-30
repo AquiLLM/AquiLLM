@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -116,3 +117,16 @@ def test_extraction_worker_receives_the_maintenance_runtime_gate():
         assert worker["environment"]["KG_MAINTENANCE_SCHEDULER_ENABLED"].endswith(
             ":-0}"
         )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ("base.yml", "development.yml", "test.yml", "production.yml", "no_gpu_dev.yml"),
+)
+def test_projection_worker_uses_same_configured_maintenance_interval(name):
+    environment = _compose(name)["services"]["worker_knowledge_graph_projection"][
+        "environment"
+    ]
+    assert environment["KG_MAINTENANCE_INTERVAL_SECONDS"] == (
+        "${KG_MAINTENANCE_INTERVAL_SECONDS:-300}"
+    )

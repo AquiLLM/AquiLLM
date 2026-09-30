@@ -15,6 +15,7 @@ def _settings():
     return SimpleNamespace(
         projection_batch_size=25,
         graph_overall_timeout_ms=500,
+        projection_timeout_ms=12000,
     )
 
 
@@ -49,7 +50,7 @@ def test_prune_honors_projection_id_and_uses_immutable_generation_key(monkeypatc
         "_memgraph_repository",
         lambda: SimpleNamespace(
             delete_generation=lambda **kwargs: deleted.append(
-                kwargs["generation_key"].value
+                (kwargs["generation_key"].value, kwargs["timeout_seconds"])
             )
         ),
     )
@@ -66,7 +67,7 @@ def test_prune_honors_projection_id_and_uses_immutable_generation_key(monkeypatc
     )
 
     assert observed["filters"]["projection_id"] == row.id
-    assert deleted == [expected]
+    assert deleted == [(expected, 12.0)]
     assert summary.deleted_count == 1
 
 
@@ -153,6 +154,7 @@ def test_attested_missing_generation_is_not_counted_as_deleted(monkeypatch):
 
 def test_attested_missing_orphan_is_not_counted_as_deleted(monkeypatch):
     orphan = OpaqueProjectionKey(ProjectionIdentifierDomain.COLLECTION, "a" * 64)
+    timeouts = []
     monkeypatch.setattr(reconciler, "_prune_candidates", lambda **_kwargs: ())
     monkeypatch.setattr(
         reconciler, "_orphan_generation_keys", lambda **_kwargs: (orphan,)
@@ -161,7 +163,12 @@ def test_attested_missing_orphan_is_not_counted_as_deleted(monkeypatch):
     monkeypatch.setattr(
         reconciler,
         "_memgraph_repository",
-        lambda: SimpleNamespace(delete_generation=lambda **_kwargs: False),
+        lambda: SimpleNamespace(
+            delete_generation=lambda **kwargs: timeouts.append(
+                kwargs["timeout_seconds"]
+            )
+            or False
+        ),
     )
     monkeypatch.setattr(reconciler, "_projection_settings", _settings)
 
@@ -173,6 +180,7 @@ def test_attested_missing_orphan_is_not_counted_as_deleted(monkeypatch):
 
     assert summary.orphan_count == summary.candidate_count == 1
     assert summary.deleted_count == 0
+    assert timeouts == [12.0]
 
 
 def test_inspection_reports_manifest_drift_and_orphans_not_failed_alias(monkeypatch):

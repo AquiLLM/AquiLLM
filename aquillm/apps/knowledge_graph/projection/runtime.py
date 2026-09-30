@@ -32,6 +32,7 @@ _PROJECTION_SETTING_NAMES = frozenset(
         "KG_PROJECTION_LEASE_SECONDS",
         "KG_PROJECTION_MAX_ATTEMPTS",
         "KG_PROJECTION_MAX_LAG_SECONDS",
+        "KG_PROJECTION_TIMEOUT_MS",
         "KG_PROJECTION_POSTGRES_SOURCE_DSN",
         "KG_PROJECTION_POSTGRES_STATE_DSN",
         "KG_PROJECTION_QUEUE",
@@ -90,6 +91,7 @@ def memgraph_projection_repository(
         settings.memgraph_projection_username,
         settings.memgraph_projection_password.get_secret_value(),
         database=settings.memgraph_database,
+        max_transaction_retry_time=0.0,
     )
     return MemgraphProjectionRepository(driver)
 

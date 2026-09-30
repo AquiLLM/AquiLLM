@@ -165,7 +165,7 @@ def project_generation(
                 using=using,
             )
             graph = _memgraph_repository()
-            timeout = settings.graph_overall_timeout_ms / 1_000.0
+            timeout = settings.projection_timeout_ms / 1_000.0
             graph.write_staging_generation(
                 bundle=bundle,
                 private_mapping_checksum=private_checksum,

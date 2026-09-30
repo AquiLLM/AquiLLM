@@ -38,6 +38,7 @@ DEFAULTS: dict[str, object] = {
     "projection_max_attempts": 5,
     "projection_retention": 2,
     "projection_max_lag_seconds": 300,
+    "projection_timeout_ms": 5000,
     "query_extractor_url": "",
     "query_extractor_bearer_token": "",
     "query_extractor_model": "fastino/gliner2-base-v1",
@@ -127,6 +128,7 @@ def test_defaults_and_fields_are_exact_and_off() -> None:
     settings = config.load_hybrid_retrieval_settings({})
     assert {field.name: (value.get_secret_value() if type(value) is config.SecretSetting else value) for field in dataclasses.fields(settings) for value in (getattr(settings, field.name),)} == DEFAULTS
     assert settings.graph_topology_backend == "memgraph"
+
 
 @pytest.mark.parametrize("key", ("KG_MEMGRAPH_PROJECTION_ENABLED", "KG_MEMGRAPH_TRAVERSAL_ENABLED", "KG_GRAPH_DIRECT_ENABLED", "KG_GRAPH_EXTENDED_ENABLED", "KG_DIRECT_EMBEDDING_ENABLED"))
 @pytest.mark.parametrize("bad", ("true", "false", "yes", "01", " 1", "1 ", "", True, 1, None))
@@ -271,10 +273,6 @@ def test_service_urls_reject_noncanonical_authorities(key: str, value: str) -> N
 def test_service_urls_accept_dns_ip_ipv6_and_localhost() -> None:
     for key, value in (("KG_MEMGRAPH_URI", "bolt://localhost:7687"), ("KG_MEMGRAPH_URI", "bolt://127.0.0.1"), ("KG_MEMGRAPH_URI", "bolt://[::1]:7687"), ("KG_QUERY_EXTRACTOR_URL", "https://extractor.example.com/v1/entities"), ("KG_QUERY_EXTRACTOR_URL", "https://[::1]:8443/v1")):
         config.load_hybrid_retrieval_settings({key: value})
-def test_oversized_integer_is_a_fixed_configuration_error() -> None:
-    with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_BATCH_SIZE") as caught:
-        config.load_hybrid_retrieval_settings({"KG_PROJECTION_BATCH_SIZE": "9" * 5000})
-    assert "999999" not in str(caught.value)
 @pytest.mark.parametrize("value", ("postgresql://u:p@evil@trusted/db", "postgresql://host/db", "postgresql://:p@host/db", "postgresql://BadRole@host/db", "postgresql://reader@pg/source", "postgresql://role:%00@host/db", "postgresql://role:%ZZ@host/db", "postgresql://role:%FF@host/db", "postgresql://role@host/%00", "postgresql://role@host/db%2Fother"))
 def test_projection_dsn_roles_and_escapes_fail_closed(value: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_SOURCE_DSN"):

@@ -44,7 +44,11 @@ def _projection_hook_environment() -> dict[str, str]:
 
 
 def test_runtime_consumes_only_frozen_projection_configuration_names() -> None:
-    source = {**_projection_environment(), "KG_BUILD_ENABLED": "1"}
+    source = {
+        **_projection_environment(),
+        "KG_BUILD_ENABLED": "1",
+        "KG_PROJECTION_TIMEOUT_MS": "12000",
+    }
 
     settings = runtime.load_projection_runtime_settings(source)
 
@@ -54,6 +58,8 @@ def test_runtime_consumes_only_frozen_projection_configuration_names() -> None:
     assert settings.projection_batch_size == 37
     assert settings.projection_lease_seconds == 41
     assert settings.projection_queue == "projection-control"
+    assert settings.projection_timeout_ms == 12000
+    assert settings.graph_overall_timeout_ms == 300
 
 
 def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
@@ -62,12 +68,13 @@ def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
     settings = runtime.load_projection_runtime_settings(_projection_environment())
     observed: dict[str, object] = {}
 
-    def driver(uri, username, password, *, database):
+    def driver(uri, username, password, *, database, max_transaction_retry_time):
         observed.update(
             uri=uri,
             username=username,
             password=password,
             database=database,
+            max_transaction_retry_time=max_transaction_retry_time,
         )
         return SimpleNamespace(execute_read=lambda *_a, **_k: ())
 
@@ -81,6 +88,7 @@ def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
         "username": "writer",
         "password": "writer-secret",
         "database": "projection",
+        "max_transaction_retry_time": 0.0,
     }
 
 

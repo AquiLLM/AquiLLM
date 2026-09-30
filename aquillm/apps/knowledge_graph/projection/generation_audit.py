@@ -118,7 +118,7 @@ def audit_projection_generation(*, row, postgres, graph, settings) -> Generation
     try:
         manifest = graph.read_generation_manifest(
             generation_key=_opaque_generation(bundle.generation.generation_key),
-            timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
+            timeout_seconds=settings.projection_timeout_ms / 1_000.0,
         )
     except ValueError:
         return GenerationAuditV1("missing_generation", bundle.generation.collection_key)
@@ -139,7 +139,7 @@ def audit_projection_generation(*, row, postgres, graph, settings) -> Generation
     )
     validation = graph.validate_generation(
         expected=expected,
-        timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
+        timeout_seconds=settings.projection_timeout_ms / 1_000.0,
     )
     if not validation.valid:
         return GenerationAuditV1("checksum_drift", bundle.generation.collection_key)
@@ -201,7 +201,7 @@ def orphan_generation_keys(
             collection_key=collection_key,
             after_generation_key=after,
             limit=min(settings.projection_batch_size, limit),
-            timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
+            timeout_seconds=settings.projection_timeout_ms / 1_000.0,
         )
         if not page:
             break

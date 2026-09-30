@@ -47,6 +47,8 @@ class _FakeDriver:
 
     def execute_read(self, cypher, parameters, *, timeout_seconds, max_records):
         self.reads.append((cypher, parameters, timeout_seconds, max_records))
+        if "AS invalid_incident_edge" in cypher:
+            return ()
         if not self.read_results and "RETURN g AS marker" in cypher and self.writes:
             return ({"marker": dict(self.writes[0][1])},)
         return self.read_results.pop(0) if self.read_results else ()

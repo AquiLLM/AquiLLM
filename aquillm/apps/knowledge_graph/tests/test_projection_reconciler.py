@@ -40,6 +40,7 @@ def test_project_generation_replays_partial_staging_and_ready_cas(monkeypatch):
     lease = _lease(projection_id)
     generation_key = "a" * 64
     private_checksum = "c" * 64
+    graph_timeouts = []
     bundle = SimpleNamespace(generation=SimpleNamespace(generation_key=generation_key))
     private_rows = (SimpleNamespace(projection_chunk_key="d" * 64),)
     validation = SimpleNamespace(
@@ -66,12 +67,19 @@ def test_project_generation_replays_partial_staging_and_ready_cas(monkeypatch):
 
     def stage(**kwargs):
         assert kwargs["private_mapping_checksum"] == private_checksum
+        graph_timeouts.append(kwargs["timeout_seconds"])
         calls.append("stage")
 
     graph = SimpleNamespace(
         write_staging_generation=stage,
-        validate_generation=lambda **_kwargs: validation,
-        mark_generation_ready=lambda **_kwargs: calls.append("graph_ready"),
+        validate_generation=lambda **kwargs: graph_timeouts.append(
+            kwargs["timeout_seconds"]
+        )
+        or validation,
+        mark_generation_ready=lambda **kwargs: graph_timeouts.append(
+            kwargs["timeout_seconds"]
+        )
+        or calls.append("graph_ready"),
     )
     monkeypatch.setattr(worker, "claim_projection_lease", lambda **_kwargs: lease)
     monkeypatch.setattr(worker, "_postgres_repository", lambda: source)
@@ -83,6 +91,7 @@ def test_project_generation_replays_partial_staging_and_ready_cas(monkeypatch):
             projection_batch_size=37,
             projection_lease_seconds=41,
             graph_overall_timeout_ms=250,
+            projection_timeout_ms=12000,
         ),
     )
     monkeypatch.setattr(
@@ -117,6 +126,7 @@ def test_project_generation_replays_partial_staging_and_ready_cas(monkeypatch):
     )
 
     assert outcome.ready is True
+    assert graph_timeouts == [12.0, 12.0, 12.0]
     assert calls == [
         "load_bundle",
         "load_private",
@@ -170,6 +180,7 @@ def test_project_generation_propagates_redacted_transient_for_celery_retry(
             projection_batch_size=10,
             projection_lease_seconds=30,
             graph_overall_timeout_ms=250,
+            projection_timeout_ms=12000,
         ),
     )
     monkeypatch.setattr(
@@ -205,6 +216,7 @@ def test_project_generation_retries_redacted_memgraph_driver_failures(monkeypatc
             projection_batch_size=10,
             projection_lease_seconds=30,
             graph_overall_timeout_ms=250,
+            projection_timeout_ms=12000,
         ),
     )
     monkeypatch.setattr(
