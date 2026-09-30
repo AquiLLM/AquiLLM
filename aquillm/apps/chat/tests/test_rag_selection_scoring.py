@@ -35,6 +35,10 @@ class PointwiseScorer:
     def prepare_pair(self, query, chunk):
         return query[:12], chunk.content[:20]
 
+    def prepare_emitted_pair(self, query, emitted_text):
+        pair = query[:12], emitted_text[:20]
+        return pair if pair == (query, emitted_text) else None
+
     def score_pair(self, pair, timeout_seconds):
         self.calls.append((pair, timeout_seconds))
         return float(len(pair[1])), pair
