@@ -156,3 +156,25 @@ def test_duplicate_only_graph_observation_identifies_fused_provenance():
     assert graph["candidate_provenance"] == "novel_fused"
     assert graph["candidates"] == []
     assert graph["branch_statuses"] == {"direct": "succeeded_duplicates"}
+
+
+def test_non_readiness_graph_failure_does_not_claim_zero_readiness_failures():
+    row = SimpleNamespace(pk=17, doc_id=_DOC_A, content="baseline passage")
+    snapshot = _snapshot(baseline=(row,))
+    ranking = SimpleNamespace(combined_candidates=(row,), graph_candidates=())
+    events = []
+    with observe(lambda name, data: events.append((name, data))):
+        retrieval_stages(
+            "test query",
+            1,
+            snapshot,
+            ranking,
+            (row,),
+            {"graph_status": "error", "graph_direct_reason": "backend_unavailable"},
+            overlay_enabled=True,
+            hybrid_pool=(row,),
+            graph_seed_attempted=True,
+        )
+    trace = [data for name, data in events if name == "retrieval_stages"][0]
+    assert trace["graph"]["reasons"] == ["backend_unavailable"]
+    assert trace["readiness_failure_count"] is None

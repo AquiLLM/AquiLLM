@@ -87,11 +87,7 @@ def retrieval_stages(
             for key in ("graph_direct_reason", "graph_extended_reason")
             if key in diagnostics and diagnostics[key] not in (None, "none", "not_run")
         ]
-        readiness_failures = (
-            sum(reason == "readiness_mismatch" for reason in reasons)
-            if reasons
-            else None
-        )
+        readiness_failures = reasons.count("readiness_mismatch") or None
         graph_rows = None
         if overlay_enabled:
             if hybrid_pool is not None:
