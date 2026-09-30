@@ -1,0 +1,57 @@
+flowchart TB
+    subgraph BUILD["BACKGROUND · build reusable indexes when sources or schemas change"]
+        SOURCE["1 · Commit source and chunk-publication intent<br/>Exact document and content identity"]
+        INGEST["2 · Dispatch, chunk and embed<br/>Overlapping TextChunks; acknowledge intent"]
+        RECOVER["Application maintenance<br/>Retry due chunk-publication intents"]
+        EXTRACT["3 · When graph building is enabled<br/>Active ontology + GLiNER2<br/>→ typed mentions and relations"]
+        ARTIFACT["4 · Resolve and activate graph artifacts<br/>Document → collection → canonical identities"]
+        PROJECT["5 · When the projection hook is enabled<br/>Separate graph outbox → Memgraph → READY"]
+        SOURCE --> INGEST --> EXTRACT --> ARTIFACT --> PROJECT
+        RECOVER --> INGEST
+    end
+
+    subgraph QUERY["QUESTION TIME · retrieve evidence inside the user's authorized scope"]
+        QUESTION["Question + selected collections"]
+        OWNER["Claim renewable conversation owner<br/>Append transcript and scope atomically"]
+        AUTH["Resolve authorized documents<br/>and classify the request"]
+        QUERIES["Prepare up to 3 search queries<br/>Execute searches concurrently"]
+        BASE["Ordinary passage retrieval<br/>Embedding + trigram + exact terms"]
+        DIRECT["Direct graph seeds · when enabled<br/>Extract question entities → resolve identities"]
+        EXTENDED["Extended graph seeds · when enabled<br/>Baseline passages → their mentioned entities"]
+        DIRECT_PPR["Direct Personalized PageRank<br/>Authorized ready topology + query seeds<br/>→ supporting source-chunk candidates"]
+        EXTENDED_PPR["Extended Personalized PageRank<br/>Authorized ready topology + passage seeds<br/>→ supporting source-chunk candidates"]
+        RERANK["Per query: combine authorized candidates<br/>Baseline + successful graph branches<br/>Deduplicate and rerank passage relevance"]
+        FUSE["Merge query result lists<br/>Reciprocal Rank Fusion → up to 45 candidates"]
+        SELECT["Choose the final evidence<br/>Adaptive: comparable relevance + novelty<br/>Within passage, document and token limits"]
+        PACKET["Freeze the evidence packet<br/>Selected passages + citation IDs<br/>Recheck access and isolate the model request"]
+        ANSWER["Generate and persist answer<br/>Check citations; repair when required<br/>Publish delta to the UI"]
+        ASYNC["After publication: background chat work<br/>Coalesced memory jobs and retryable index"]
+        QUESTION --> OWNER --> AUTH --> QUERIES
+        QUERIES --> BASE
+        QUERIES --> DIRECT
+        BASE -->|"passages must exist first"| EXTENDED
+        DIRECT --> DIRECT_PPR
+        EXTENDED --> EXTENDED_PPR
+        BASE --> RERANK
+        DIRECT_PPR -->|"if successful"| RERANK
+        EXTENDED_PPR -->|"if successful"| RERANK
+        RERANK --> FUSE --> SELECT --> PACKET --> ANSWER
+        ANSWER -. "not a prerequisite for delivery" .-> ASYNC
+    end
+
+    INGEST -. "stored chunks and embeddings" .-> BASE
+    EXTRACT -. "reuse the ontology" .-> DIRECT
+    ARTIFACT -. "mention and identity provenance" .-> EXTENDED
+    PROJECT -. "ready generations" .-> DIRECT_PPR
+    PROJECT -. "ready generations" .-> EXTENDED_PPR
+
+    classDef build fill:#eaf2ff,stroke:#3569a8,color:#15304f,stroke-width:1.4px
+    classDef scope fill:#eef2f6,stroke:#687c91,color:#1c3044,stroke-width:1.4px
+    classDef graphStage fill:#e8f6f0,stroke:#328366,color:#123f31,stroke-width:1.4px
+    classDef evidence fill:#fff4df,stroke:#b98124,color:#503613,stroke-width:1.4px
+    classDef answer fill:#eceafe,stroke:#7864b5,color:#322953,stroke-width:1.4px
+    class SOURCE,INGEST,RECOVER,EXTRACT,ARTIFACT,PROJECT build
+    class QUESTION,OWNER,AUTH,QUERIES scope
+    class DIRECT,EXTENDED,DIRECT_PPR,EXTENDED_PPR graphStage
+    class BASE,RERANK,FUSE,SELECT,PACKET evidence
+    class ANSWER,ASYNC answer

@@ -1,10 +1,12 @@
 # Documents Index
 
-Last updated: 2026-08-18
+Last updated: 2026-09-29
 
 ## Architecture
 
-- `docs/documents/architecture/aquillm-current-architecture-mermaid.md`
+- [Current runtime architecture](architecture/aquillm-current-architecture-mermaid.md)
+- [Knowledge graph and retrieval path](architecture/2026-09-28-knowledge-graph-and-retrieval-pipeline.md) — source-aligned description, with [rendered diagram](architecture/2026-09-28-knowledge-graph-and-retrieval-pipeline.svg) and [editable Mermaid source](architecture/2026-09-28-knowledge-graph-and-retrieval-pipeline.mmd).
+- [Retrieval audit and research recommendations](architecture/2026-09-29-retrieval-system-audit.md) — historical quality assessment, reconciled with the stability release; proposed experiments remain separate from implemented behavior.
 - `docs/documents/architecture/aquillm-current-architecture.drawio`
 - `docs/documents/architecture/aquillm-architecture-paper-simplified.md`
 - `docs/documents/architecture/aquillm-architecture-paper-simplified.drawio`

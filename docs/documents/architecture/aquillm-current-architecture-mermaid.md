@@ -1,297 +1,145 @@
-# AquiLLM Current Architecture (Code-Aligned)
+# AquiLLM current architecture
 
-Last updated: 2026-03-25
+Last updated: 2026-09-29. Source baseline: development revision [9518c6d51b74d163d594de29ec3a8764a63f56c3](https://github.com/AquiLLM/AquiLLM/tree/9518c6d51b74d163d594de29ec3a8764a63f56c3).
 
-This document captures the architecture currently implemented in this repository (`main`-style runtime), including active compatibility layers and known limitations.
+AquiLLM combines Django-rendered pages and React components with an ASGI chat service, permission-scoped document retrieval, background graph construction, and conversation memory. PostgreSQL owns application state; Redis carries WebSocket events and task delivery. Optional model and graph services contribute capabilities without defining whether the core web process is ready.
 
-## 1) Runtime Boundary Map
+The [retrieval-path guide](2026-09-28-knowledge-graph-and-retrieval-pipeline.md) explains query preparation, dense/trigram/exact search, direct and extended graph seeds, Personalized PageRank, reranking, evidence selection and citations. Its [rendered diagram](2026-09-28-knowledge-graph-and-retrieval-pipeline.svg) and [Mermaid source](2026-09-28-knowledge-graph-and-retrieval-pipeline.mmd) accompany this runtime overview. The [retrieval audit](2026-09-29-retrieval-system-audit.md) preserves historical quality findings and proposed experiments; those proposals are not implemented features.
 
-```mermaid
-flowchart LR
-  User[Browser User]
-  Edge[Edge: nginx and certbot profile optional]
-  Django[Django ASGI Runtime: Uvicorn + Channels]
-  Router[Route Layer: aquillm.urls + aquillm.api_views + aquillm.views compatibility shims]
-  Domain[Domain Apps: apps.chat, apps.ingestion, apps.documents, apps.collections, apps.memory, apps.platform_admin, apps.core, apps.integrations.zotero]
-  Lib[Shared Libraries: lib.llm, lib.tools, lib.parsers, lib.ocr, lib.embeddings, lib.memory]
-  Worker[Celery Worker]
-
-  Postgres[PostgreSQL + pgvector]
-  Redis[Redis: Channels + Celery broker/result]
-  MinIO[MinIO Object Storage]
-  Qdrant[Qdrant service]
-
-  Hosted[Hosted LLM APIs: OpenAI, Anthropic, Gemini]
-  VLLM[vLLM Profile: chat, ocr, transcribe, embed, rerank optional]
-  Zotero[Zotero OAuth + API]
-  WebTargets[Web targets for crawl ingestion]
-
-  React[React bundle mounted into Django templates]
-
-  User --> Edge
-  User -. dev direct .-> Django
-  Edge --> Django
-  Django --> Router
-  Router --> Domain
-  Domain --> Lib
-  Domain --> Worker
-
-  Django --> Postgres
-  Django --> Redis
-  Django --> MinIO
-  Django -. mem0 mode .-> Qdrant
-
-  Worker --> Postgres
-  Worker --> Redis
-  Worker --> MinIO
-  Worker -. mem0 mode .-> Qdrant
-
-  Lib --> Hosted
-  Lib -. local model mode .-> VLLM
-  Domain --> Zotero
-  Domain --> WebTargets
-  React --> Django
-```
-
-## 2) Chat Runtime Flow (WebSocket + Tool Loop)
-
-```mermaid
-flowchart TD
-  Start["Client connects on chat websocket"] --> Consumer["apps.chat.consumers.ChatConsumer"]
-  Consumer --> LoadState["Load conversation state and tool wiring"]
-  LoadState --> MemInject["Inject memory context"]
-  MemInject --> Spin["Run model and tool loop"]
-
-  Spin --> Provider{"Provider selected by LLM_CHOICE"}
-  Provider --> OpenAI["OpenAIInterface"]
-  Provider --> Claude["ClaudeInterface"]
-  Provider --> Gemini["GeminiInterface"]
-  Provider --> LocalOpenAICompat["OpenAI-compatible local endpoint"]
-
-  OpenAI --> Resp["Assistant or tool-call response"]
-  Claude --> Resp
-  Gemini --> Resp
-  LocalOpenAICompat --> Resp
-
-  Resp --> ToolCall{"Tool call emitted"}
-  ToolCall -->|Yes| Tools["Tool wiring to lib.tools"]
-  Tools --> ToolResult["Append ToolMessage"]
-  ToolResult --> Spin
-  ToolCall -->|No| Persist["Persist messages and delta payload"]
-
-  Persist --> MemoryTask["Queue memory extraction task"]
-  MemoryTask --> MemoryWrite{"Memory backend mode"}
-  MemoryWrite --> LocalMem["Local EpisodicMemory tables"]
-  MemoryWrite --> Mem0["Mem0 path with optional dual-write"]
-  LocalMem --> Done["Send final delta to client"]
-  Mem0 --> Done
-```
-
-## 3) Unified Ingestion Flow (Batch + Parser + Chunking)
-
-```mermaid
-flowchart TD
-  Upload["Upload ingest request"] --> Batch["Create batch and batch-item rows"]
-  Batch --> Queue["Queue upload processing task"]
-  Queue --> IngestTask["Run batch-item ingestion task"]
-
-  IngestTask --> Parse["Extract parser payloads"]
-  Parse --> Kind{"Payload modality"}
-  Kind --> TextDoc["Create text-document rows"]
-  Kind --> ImageDoc["Create image or figure document rows"]
-  Kind --> MediaDoc["Create media document rows"]
-
-  ImageDoc --> OCR["OCR provider path"]
-  MediaDoc --> Transcribe["Transcription provider path"]
-  OCR --> SaveDocs
-  Transcribe --> SaveDocs
-  TextDoc --> SaveDocs["Save document rows"]
-
-  SaveDocs --> ChunkTask["Queue document chunking task"]
-  ChunkTask --> Embed["Build embeddings and optional image chunk"]
-  Embed --> Storage["Persist TextChunk and document status"]
-  Storage --> WS["Broadcast progress and completion"]
-  WS --> UI["Update ingestion monitor and dashboard"]
-
-  WebIngest["Web crawl ingest request"] --> CrawlTask["Run crawl and ingest task"]
-  CrawlTask --> SaveDocs
-
-  Arxiv["arXiv ingest request"] --> SaveDocs
-```
-
-## 4) Deployment Composition (Current Compose Files)
+## Runtime boundaries
 
 ```mermaid
 flowchart LR
-  BaseFile[deploy/compose/base.yml]
-  DevFile[deploy/compose/development.yml]
-  ProdFile[deploy/compose/production.yml]
-
-  BaseSvc[base services: web worker db storage redis createbuckets]
-  VllmProf[vllm profile services: vllm vllm_ocr vllm_transcribe vllm_embed vllm_rerank]
-  DevProdSvc[dev/prod add: qdrant nginx get_certs profile]
-  StartDev[start_dev.sh serial startup for vllm profile]
-
-  BaseFile --> BaseSvc
-  BaseFile -. optional .-> VllmProf
-  DevFile --> DevProdSvc
-  ProdFile --> DevProdSvc
-  StartDev --> VllmProf
-  StartDev --> BaseSvc
+  Browser["Browser: Django pages + React islands"] --> Edge["nginx / TLS"]
+  Edge --> Web["Django ASGI + Channels"]
+  Web --> Domains["Domain apps and shared libraries"]
+  Domains --> PG["PostgreSQL + pgvector<br/>State, evidence, ownership and outboxes"]
+  Domains --> Objects["Object storage<br/>Original files and artifacts"]
+  Web <--> Redis["Redis<br/>Channels + Celery broker/results"]
+  Beat["Application maintenance beat"] --> Redis
+  Redis --> Worker["Application workers<br/>Ingestion, chunking, titles, indexes and memory"]
+  Worker --> PG
+  Worker --> Objects
+  Redis --> KG["Graph workers and projection gateway<br/>Separately enabled graph queues"]
+  KG --> PG
+  KG -. "ready projections" .-> Memgraph["Memgraph"]
+  Domains -. "configured provider calls" .-> Models["Hosted APIs / local model services"]
+  Worker -. "configured provider calls" .-> Models
+  KG -. "extraction / graph embeddings" .-> Models
+  Domains -. "Mem0 mode" .-> MemoryStore["Configured Mem0 stores<br/>Qdrant / optional graph storage"]
+  Worker -. "Mem0 mode" .-> MemoryStore
 ```
 
-## 5) Architecture Write-up (What It Includes)
+- `apps.chat` owns chat transport, transcript persistence, execution ownership, retrieval orchestration and conversation indexing.
+- `apps.ingestion` owns upload batches, web/arXiv ingestion and progress reporting. `apps.documents` owns source documents, chunks, search/reranking and recoverable chunk publication.
+- `apps.collections` owns hierarchy, access control and collection schema workflows. `apps.knowledge_graph` owns versioned graph artifacts, canonical identity, projection readiness and graph retrieval.
+- `apps.memory` owns local memory models and durable conversation-memory jobs. `apps.core`, `apps.platform_admin`, and integrations provide common pages, health/capabilities, administration and external integrations.
+- `lib.llm`, `lib.tools`, `lib.parsers`, `lib.ocr`, `lib.embeddings`, and `lib.memory` contain reusable provider and processing logic. Compatibility exports in `aquillm.models`, views and API modules remain active; older `chat` and `ingest` registrations still coexist with domain apps.
 
-### 5.1 Application Layering
+Source entry points: [ASGI](../../../aquillm/aquillm/asgi.py), [routes](../../../aquillm/aquillm/urls.py), [Celery](../../../aquillm/aquillm/celery.py), [settings](../../../aquillm/aquillm/settings.py), [development Compose](../../../deploy/compose/development.yml).
 
-- Django/Channels ASGI runtime handles HTTP pages, JSON APIs, and WebSockets in one process (`aquillm/asgi.py`, `aquillm/urls.py`).
-- Domain ownership is in `aquillm/apps/*`.
-  - `apps.chat`: WebSocket chat consumer, message persistence, tool wiring, feedback/rating writes.
-  - `apps.ingestion`: upload/web/arXiv ingestion APIs, ingestion monitors, batch queue orchestration.
-  - `apps.documents`: document polymorphic models, chunk model/search/rerank services, chunking Celery task.
-  - `apps.collections`: hierarchy + permission model and APIs.
-  - `apps.memory`: local user profile/episodic memory models.
-  - `apps.platform_admin`: whitelist and feedback export APIs.
-  - `apps.core`: common pages, health endpoint, user settings page.
-  - `apps.integrations.zotero`: Zotero sync service/task.
-- Shared non-Django logic is in `aquillm/lib/*`.
-  - `lib.llm`: provider adapters, tool loop orchestration, prompt-budget logic.
-  - `lib.tools`: reusable tool implementations (document search, astronomy, debug tools).
-  - `lib.parsers`: multi-format extraction primitives.
-  - `lib.ocr`, `lib.embeddings`, `lib.memory`: provider abstractions and fallbacks.
+## Chat startup and turn execution
 
-### 5.2 Compatibility Surface (Still Active)
+```mermaid
+flowchart TD
+  Page["Open new or existing chat page"] --> Early["Start socket before main bundle"]
+  Early --> Auth["Authenticate and authorize conversation"]
+  Auth --> Snapshot["Send authoritative transcript and selected scope"]
+  Snapshot --> Adopt["React adopts socket and buffered snapshot"]
+  Adopt --> Ready["Allow submission after hydration"]
+  Ready --> Append["Receive question and selected collections"]
+  Append --> Owner["Claim renewable conversation execution token"]
+  Owner --> Save["Revision-checked append and scope in one transaction"]
+  Save --> Context["Prepare memory context and tool availability"]
+  Context --> Route{"Direct RAG handles this request?"}
+  Route -->|Yes| RAG["Authorized retrieval → selected evidence → synthesis"]
+  Route -->|No| Spin["Provider and tool loop"]
+  Spin --> Receipt["Record tool receipt before invocation<br/>Reuse completed results; stop uncertain replay"]
+  Receipt --> Spin
+  RAG --> Persist["Persist generated messages with owner/revision checks"]
+  Spin --> Persist
+  Persist --> Delta["Publish answer delta to browser"]
+  Delta -. "schedule after completed turn" .-> Background["Memory and conversation-index work"]
+  Persist -. "fallback title first" .-> Title["Bounded asynchronous title refinement"]
+```
 
-- Compatibility barrels/shims remain runtime-active:
-  - `aquillm/api_views.py` and `aquillm/views.py` still aggregate and expose route functions.
-  - `aquillm/models.py` re-exports app models for legacy call sites.
-  - legacy app names (`chat`, `ingest`) are still listed in `INSTALLED_APPS` alongside `apps.*`.
-- Import-boundary safeguards exist (`scripts/check_import_boundaries.py`, integration tests), but the compatibility layer is still part of current architecture.
+The initial snapshot does not wait for memory retrieval or model work. An additional viewer can hydrate while another owns the turn; pending-turn recovery waits cancellably, then reloads the latest transcript and saved scope before deciding whether work remains. Drafting works during startup, while Send and Enter are gated until hydration. Routine startup status is delayed; persistent failures, permanent close codes and explicit retry remain visible. The browser uses a bounded reconnect policy and one adopted chat socket.
 
-### 5.3 Data and Async Processing
+Every generation path uses a cancellable ASGI task independently of the evidence-preservation switches. A PostgreSQL execution token has a 60-second lease renewed every 20 seconds. Durable per-call receipts and transcript publication checks prevent automatic duplicate execution in the covered reconnect cases. A synchronous tool may outlive cancellation; an uncertain call is surfaced for user-directed recovery. These mechanisms do not guarantee exactly-once effects in an external system after a process or database failure.
 
-- Primary data: PostgreSQL + pgvector; object/file blobs in MinIO.
-- Real-time and async: Redis backs both Channels and Celery.
-- Ingestion and memory writes are task-driven:
-  - document chunking (`apps.documents.tasks.chunking.create_chunks`).
-  - upload-batch processing (`aquillm.task_ingest_uploaded.run_ingest_uploaded_file`).
-  - episodic memory creation (`create_conversation_memories_task`).
-- Qdrant is present in dev/prod compose stacks and used when Mem0 backend mode is active.
+Scope changes submitted with a message commit with that transcript revision. Standalone selection updates remain a separate action. Permissions are rechecked by document tools and source materialization. Chat collection-list loading and retry state are separate from WebSocket state, preserving saved scope when the collection request fails.
 
-### 5.4 Frontend Integration Model
+Provider selection comes from `LLM_CHOICE`; direct RAG, explicit manual search and the ordinary tool loop have distinct routing rules. Current tool wiring can include document, past-chat/memory, astronomy and enabled skill/debug tools. Provider adapters and request budgets govern generation and tool limits.
 
-- React is built to `aquillm/aquillm/static/js/dist/main.js` and loaded from Django templates.
-- Templates expose URL maps via `window.apiUrls` and `window.pageUrls` (`aquillm/context_processors.py`).
-- `window.mountReactComponent(...)` mounts feature components into template-defined mount points.
+Sources: [early socket bootstrap](../../../aquillm/templates/aquillm/includes/chat_socket_bootstrap.js), [React socket lifecycle](../../../react/src/features/chat/hooks/useChatWebSocket.ts), [consumer](../../../aquillm/apps/chat/consumers/chat.py), [append handling](../../../aquillm/apps/chat/consumers/chat_receive.py), [execution ownership](../../../aquillm/apps/chat/services/execution.py), [tool receipts](../../../aquillm/lib/llm/providers/tool_execution.py), [persistence](../../../aquillm/aquillm/message_adapters.py).
 
-### 5.5 Chat Subsystem (Detailed)
+## Ingestion and graph preparation
 
-- Transport and session model:
-  - Primary chat transport is WebSocket at `/ws/convo/{id}/` routed to `apps.chat.consumers.ChatConsumer`.
-  - Conversation ownership is enforced on connect (`WSConversation.owner` must match the authenticated user).
-  - On successful connect, server sends a normalized conversation payload, then emits incremental `delta` or `stream` updates.
-- Chat actions handled over the same socket:
-  - `append`: add a user message, bind selected collection scope, optionally persist uploaded conversation files, then run LLM/tool loop.
-  - `rate`: write 1-5 assistant rating against a message UUID.
-  - `feedback`: write free-text feedback against a message UUID.
-- Tool execution behavior:
-  - Tools are composed at connect time from `apps.chat.services.tool_wiring`:
-    - document/search tools (collection-scoped retrieval and document access),
-    - astronomy file tools (FITS processing),
-    - optional debug weather tool in `DEBUG`,
-    - optional `message_to_user` tool for `LLM_CHOICE=GEMMA3`.
-  - Tool call execution happens in `LLMInterface.call_tool` with timeout and argument normalization safeguards.
-  - Tool results are appended as `ToolMessage` and can loop back into subsequent model turns.
-- LLM orchestration:
-  - `LLMInterface.spin` iterates assistant/tool turns up to configured guardrails (`CHAT_MAX_FUNC_CALLS`, per-tool repetition limits, timeout handling).
-  - Provider dispatch is set at app startup (`AquillmConfig.ready`) based on `LLM_CHOICE`.
-  - OpenAI-compatible path supports streaming callbacks; Claude/Gemini paths currently operate non-streaming.
-- Persistence and naming:
-  - Messages are persisted to `apps_chat.Message` rows (`sequence_number`, usage, tool-call metadata, ratings/feedback).
-  - If a conversation has no name after early turns, the system attempts auto-titling via an LLM call with fallback to first-user-message heuristic.
+```mermaid
+flowchart TD
+  Upload["Upload request"] --> Accepted["Batch and accepted item rows<br/>Per-file acceptance/rejection with source index"]
+  Accepted --> Ingest["Queued parser/OCR/transcription work"]
+  Other["Web / arXiv ingestion"] --> Source
+  Ingest --> Source["Commit source document and ChunkPublication intent together"]
+  Source --> Dispatch["Post-commit chunk dispatch"]
+  Recovery["Application beat: due intents every 60 seconds"] --> Dispatch
+  Dispatch --> Chunk["Source-checked chunking and embedding"]
+  Chunk --> Commit["Atomically replace chunks<br/>Then acknowledge matching intent"]
+  Commit --> UI["Progress and completion events"]
+  Commit -. "graph build enabled" .-> Graph["Ontology + GLiNER2<br/>Document and collection artifacts"]
+  Graph --> Canonical["Canonical identity and provenance"]
+  Canonical -. "projection hook enabled" .-> Outbox["Separate graph projection outbox"]
+  Outbox --> Ready["Validate staged Memgraph generation<br/>Publish projection readiness"]
+```
 
-### 5.6 Memory Subsystem (Detailed)
+Chunk publication records exact source identity and survives a failed broker publish. Recovery normally processes up to 25 due intents per minute, with capped backoff and a publication lease. Chunk commit checks source/lifecycle identity and acknowledges the matching intent. Redelivery is possible; the publication lease is not exclusive ownership of long-running embedding work. The graph projection outbox is a separate lifecycle, and an active graph artifact is not necessarily a ready query projection.
 
-- Data model split:
-  - `UserMemoryFact`: stable user preferences/facts categorized by type (tone/goals/project/preference/general).
-  - `EpisodicMemory`: semantic memory rows with 1024-d embeddings and one-memory-per-assistant-message dedupe constraint.
-- Injection lifecycle:
-  - Before model generation (on connect and each append), `augment_conversation_with_memory` rebuilds system context:
-    - base system prompt,
-    - profile facts,
-    - top-k retrieved episodic memories for latest user message.
-  - Retrieved memory text is compacted/truncated before system injection to reduce token pressure.
-- Write lifecycle:
-  - After assistant turns persist, `create_conversation_memories_task` runs asynchronously.
-  - Task extracts user/assistant excerpts and writes episodic memory entries.
-  - Tool-only assistant placeholders are skipped.
-- Backend modes:
-  - `MEMORY_BACKEND=local`: retrieval/write from local pgvector-backed `EpisodicMemory`.
-  - `MEMORY_BACKEND=mem0`: Mem0 retrieval/write path with OSS SDK first, cloud client fallback when configured.
-  - `MEM0_DUAL_WRITE_LOCAL` optionally keeps local episodic rows even when Mem0 mode is active.
-- Retrieval semantics:
-  - Retrieval excludes the current conversation ID when provided to avoid immediate self-echo.
-  - Mem0 retrieval failures fail-open to local retrieval (or empty result) rather than failing the chat turn.
+Upload state retains both initial rejections and later processing failures. Queued rows are excluded from resubmission, same-name files are mapped using their source indices, and polling retries do not submit another batch. Collection refresh preserves the upload workspace and fences superseded responses. The ingestion dashboard uses a stable socket callback, deduplicates document replay, and respects dismissal for already-seen work.
 
-### 5.7 UI Architecture (Detailed)
+Sources: [batch acceptance](../../../aquillm/apps/ingestion/services/upload_batches.py), [document lifecycle](../../../aquillm/apps/documents/models/document.py), [publication recovery](../../../aquillm/apps/documents/services/chunk_publication.py), [chunk task](../../../aquillm/apps/documents/tasks/chunking.py), [graph projection](../../../aquillm/apps/knowledge_graph/projection/worker.py), [upload polling](../../../react/src/features/ingestion/hooks/useIngestUploadBatchPolling.ts).
 
-- Rendering model:
-  - Hybrid server-rendered Django templates plus React feature islands mounted via `mountReactComponent`.
-  - URL routing data is injected from Django context processors into `window.apiUrls` and `window.pageUrls` for client use.
-- Chat UI:
-  - `ChatShell -> Chat` owns in-browser conversation state and delegates socket lifecycle to `useChatWebSocket`.
-  - Socket hook handles reconnect attempts, connection timeout, incremental stream/delta merge by `message_uuid`, and input-enable state.
-  - Chat message renderer supports:
-    - markdown (including GFM),
-    - tool call/result panels,
-    - inline images with click-to-open behavior,
-    - per-message rating and free-text feedback controls.
-  - Input dock includes context-usage gauge (`usage / contextLimit`) and collection-selection modal integration.
-- Collections and document workspace UI:
-  - Collection detail page hydrates from a single API payload (`collection`, `documents`, `children`, permissions).
-  - Move/delete batch actions and collaborator management flow through API endpoints exposed in `window.apiUrls`.
-  - Navigation to documents/collections is page-based (URL transitions), not full SPA routing.
-- Ingestion UI:
-  - Multi-row ingestion form lets users queue heterogeneous submissions (uploads/arXiv/pdf/vtt/web/handwritten) in one screen.
-  - Unified upload rows poll `ingest_uploads/{batch_id}` for status and per-item parser metadata (modalities/providers/errors).
-  - Ingestion monitor/dashboard also receives live progression over Channels WebSockets.
+## Conversation memory and past-chat search
 
-## 6) Current Limitations and Constraints
+Document retrieval, conversation indexing and memory are distinct paths. Document/graph search supplies authorized collection evidence. `ConversationChunk` stores searchable past-chat passages. `UserMemoryFact` and `EpisodicMemory`, or the configured Mem0 stores, support user-context memory.
 
-1. Ongoing migration complexity.
-- Runtime still mixes compatibility modules (`aquillm.*`) with new `apps.*` structure, increasing cognitive overhead and import-surface size.
+Before a pending or newly appended turn runs, memory augmentation rebuilds the model context from the base system prompt and profile facts. Episodic lookup can be skipped for collection-scoped turns. Hydrating an idle chat does not perform this generation-time lookup.
 
-2. Legacy app registration remains.
-- `chat` and `ingest` are still in `INSTALLED_APPS` even though active logic is in `apps.chat` and `apps.ingestion`, which keeps dual paths alive.
+After the answer is published, indexing and memory enqueue run outside the shared thread-sensitive database lane with bounded waits. Title generation is also separate: persistence assigns a deterministic fallback, and a bounded Celery refinement changes it only while that fallback still matches, without changing conversation activity time.
 
-3. Streaming behavior is provider-asymmetric.
-- OpenAI path supports incremental stream callbacks; Claude/Gemini adapters currently drop `stream_callback`, so UX/latency characteristics differ by provider.
+| Background path | Completion and recovery contract |
+|---|---|
+| Conversation index | Debounced transcript hash rather than general metadata time. Missing embeddings leave the index incomplete and keyword chunks available. Up to five retries use 60–900 second backoff; normal enqueue or `index_conversations` can repair an exhausted or legacy incomplete index. |
+| Conversation memory | One durable row per conversation coalesces desired transcript hashes. User-idle checks defer work without creating a retry chain. Periodic recovery retries due work; a PostgreSQL session advisory lock prevents concurrent live inference even after its row lease expires. |
+| Mem0 write completion | Strict worker calls wait for the provider call to finish and propagate failure. A successful response with no additions completes normally. Profile promotion and optional local dual-write follow success, so local dedupe cannot hide a newly failed remote write. |
 
-4. Polymorphic document lookups scale through table fan-out.
-- Several document operations iterate across all concrete document tables (`Document.get_by_id`, `Collection.documents`, permission-scoped document resolution), which can increase query cost as corpus size grows.
+The memory owner holds a separate database session, not an open transaction, during provider inference. Worker death releases the session lock and leaves durable work recoverable after the lease. Remote acceptance followed by process failure can still be ambiguous; retries are not an exactly-once guarantee. Memory remains eventually consistent. Local episodic rows retain per-assistant-message deduplication; existing rows are not globally replayed by this release.
 
-5. Web runtime performs frontend build steps on container start.
-- `deploy/scripts/run.sh` runs `npm ci` and frontend/tailwind builds during web startup, increasing cold-start time and coupling web boot to Node toolchain availability.
+Sources: [chat persistence and enqueue](../../../aquillm/apps/chat/consumers/chat_persistence.py), [title task](../../../aquillm/apps/chat/tasks/title.py), [conversation index](../../../aquillm/apps/chat/tasks/conversation_indexing.py), [memory jobs](../../../aquillm/apps/memory/jobs.py), [memory creation](../../../aquillm/aquillm/memory.py), [Mem0 operations](../../../aquillm/lib/memory/mem0/operations.py).
 
-6. Qdrant is always provisioned in dev/prod compose.
-- Even when local memory backend is used, dev/prod service graphs include `qdrant` and web/worker `depends_on` entries, adding operational footprint.
+## Build, deployment and readiness
 
-7. Web crawl ingestion is heavyweight and environment-sensitive.
-- Crawl task includes Selenium + webdriver-manager flow inside worker runtime; this can be brittle under restricted networking or driver/runtime mismatch.
+The production image builds Vite/Tailwind assets and stores them in `/opt/aquillm-static`, ahead of source-tree assets in Django's static lookup. It caches `o200k_base` and `cl100k_base` tokenizers under `/opt/aquillm-tokenizers`. Both survive the `/app` source bind mount. Startup applies migrations, collects static files and starts ASGI; frontend installation/build and tokenizer downloads are no longer startup requirements. Supplemental Python packages are constrained to the reviewed runtime versions after the frozen `uv` installation.
 
-8. Transcription provider path is narrow.
-- Media transcription path currently accepts only an OpenAI-compatible provider mode (`INGEST_TRANSCRIBE_PROVIDER=openai`), limiting provider flexibility without code changes.
+Nginx uses five-second backend DNS caching. The deployment reload script re-renders templates, validates the configuration and reloads routing after backend replacement. The provided systemd health supervisor uses the configured Host header and finite probe timeouts; a failed probe logs the outage instead of stopping the entire Compose stack.
 
-9. Memory writes are eventually consistent by design.
-- Episodic memory persistence runs asynchronously after chat persistence, so newest turns may not be immediately retrievable on the next request if worker execution lags.
+| Endpoint or service | What it establishes |
+|---|---|
+| `/health/` | The HTTP process is alive. |
+| `/ready/` | Bounded PostgreSQL and Redis probes pass; optional provider availability and worker backlog are not checked. |
+| Authenticated `/api/capabilities/` | Optional transcription availability through a bounded model-list probe. |
+| `scheduler_application_maintenance` | Publishes capped document and memory recovery tasks on the application queue every minute. Its graph schedule is disabled. |
+| Graph maintenance scheduler | Separate graph recovery/projection lifecycle; application maintenance is disabled there. |
 
-10. Chat reconnect strategy is simple and bounded.
-- Client-side reconnect logic uses a fixed attempt cap and basic retry timing without advanced backoff/jitter tuning, which can degrade resilience under prolonged network instability.
+The September 29 development rollout used explicit application services with `--no-deps`, applied the chat/document/memory migrations, and verified public HTTP/readiness, WebSocket hydration, new/existing-chat startup, asset identity and recovery-task execution. The live `.env`, unrelated service identities and model resource settings were preserved. Transcription is intentionally stopped for development capacity constraints. Generic full-stack startup scripts still describe optional model services; they are not an instruction to re-enable transcription for an application-only rollout.
 
-11. UI routing is intentionally hybrid, not a unified SPA router.
-- Many user flows are still page transitions between Django-rendered routes with React islands, which simplifies integration but limits single-app navigation/state continuity.
+The checked-in development retrieval profile is described separately in the [retrieval guide](2026-09-28-knowledge-graph-and-retrieval-pipeline.md#configuration-and-the-development-profile). Source defaults, recorded rollout flags and benchmark results must not be treated as interchangeable.
 
-## Notes
+Sources: [Dockerfile](../../../deploy/docker/web/Dockerfile.prod), [runtime constraints](../../../deploy/docker/web/runtime-constraints.txt), [startup](../../../deploy/scripts/run.sh), [static configuration](../../../aquillm/aquillm/settings.py), [health probes](../../../aquillm/apps/core/views/health.py), [application schedules](../../../aquillm/aquillm/celery_schedules.py), [proxy reload](../../../deploy/scripts/reload_proxy.sh), [stability audit](../../audits/2026-09-29-application-stability.md).
 
-- Dashed edges in diagrams represent optional/profile-based paths.
-- This document is intentionally descriptive of current implementation, not target-state architecture.
+## Limits and interpretation
+
+- Retrieval features remain gated. Direct RAG, graph traversal, adaptive selection and source-preservation modes have their own controls and validated dependencies.
+- Graph PageRank discovers candidate evidence; reranking, query-list fusion and final selection decide what is delivered. A syntactically valid citation does not prove entailment or complete answer support.
+- The stability release does not establish retrieval-quality improvements, embedding-model compatibility across an existing corpus, or current end-to-end model latency. The [historical retrieval audit](2026-09-29-retrieval-system-audit.md) separates verified code paths from experiments still requiring evidence.
+- External effects can survive cancellation or a lost connection. Durable ownership, receipts and outboxes limit replay and preserve recovery state; their documented failure boundaries still apply.
+- UI navigation remains page-based with React islands, provider streaming differs by adapter, and ingestion costs depend on parser/model availability. Optional capabilities can be unavailable while core readiness remains healthy.
