@@ -130,7 +130,5 @@ def test_cancelled_child_search_is_reported_as_error_without_stringifying_it():
         replay_observation.search_outcomes(
             ["synthetic query"], [asyncio.CancelledError("private detail")]
         )
-    assert events[0][1]["queries"] == [
-        {"query": "synthetic query", "status": "error"}
-    ]
+    assert events[0][1]["queries"] == [{"query": "synthetic query", "status": "error"}]
     assert "private detail" not in repr(events)

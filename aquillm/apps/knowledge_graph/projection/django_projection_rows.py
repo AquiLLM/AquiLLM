@@ -82,9 +82,7 @@ class DjangoProjectionOrmLoader:
             batch_size,
             maximum=MAX_ARTIFACT_ROWS,
         )
-        collection_artifact = next(
-            row for row in artifacts if row["id"] == artifact_id
-        )
+        collection_artifact = next(row for row in artifacts if row["id"] == artifact_id)
         chunk_coordinates = {
             row["id"]: (row["doc_id"], row["chunk_number"]) for row in chunks
         }
