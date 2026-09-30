@@ -53,10 +53,12 @@ def test_tombstoned_prune_derives_exact_hmac_generation_without_source(monkeypat
         ),
         graph=SimpleNamespace(
             delete_generation=lambda **kwargs: deleted.append(
-                kwargs["generation_key"].value
+                (kwargs["generation_key"].value, kwargs["timeout_seconds"])
             )
         ),
-        settings=SimpleNamespace(graph_overall_timeout_ms=500),
+        settings=SimpleNamespace(
+            graph_overall_timeout_ms=500, projection_timeout_ms=12000
+        ),
     )
 
-    assert deleted == [expected]
+    assert deleted == [(expected, 12.0)]

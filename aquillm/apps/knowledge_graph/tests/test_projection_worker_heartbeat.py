@@ -95,6 +95,7 @@ def run_projection(monkeypatch):
         projection_batch_size=128,
         projection_lease_seconds=1,
         graph_overall_timeout_ms=300,
+        projection_timeout_ms=12000,
         projection_schema_version=bundle.generation.schema_version,
         projection_format_version=bundle.generation.projection_version,
         projection_identifier_key_version=bundle.generation.identifier_key_version,

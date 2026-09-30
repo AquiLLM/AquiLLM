@@ -14,9 +14,7 @@ _EDGE_LIMITS = (50_000, 250_000, 250_000, 250_000, 250_000)
 _MARKER_QUERY = (
     "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
     "RETURN g.topology_checksum AS topology_checksum, "
-    + ", ".join(
-        f"g.{family}_count AS {family}_count" for family in EDGE_FAMILIES
-    )
+    + ", ".join(f"g.{family}_count AS {family}_count" for family in EDGE_FAMILIES)
 )
 
 
@@ -24,9 +22,7 @@ def _query(source_label, relationship, target_label, cursor, returned):
     del source_label, target_label
     return (
         f"MATCH (source)-[edge:{relationship}]->(target) "
-        "WHERE (source.generation_key = $generation_key"
-        " OR target.generation_key = $generation_key"
-        " OR edge.generation_key = $generation_key) "
+        "WHERE edge.generation_key = $generation_key "
         f"AND (NOT $has_cursor OR {cursor} > $cursor_key "
         f"OR ({cursor} = $cursor_key AND id(edge) > $cursor_id)) "
         # Materialize wide evidence properties only for the bounded page. Keep
@@ -50,8 +46,7 @@ _EDGE_QUERIES = (
         "ENTITY_MEMBERSHIP",
         "AutomaticMembership",
         "coalesce(source.opaque_key, '')",
-        _COMMON
-        + "source.opaque_key AS entity_key, "
+        _COMMON + "source.opaque_key AS entity_key, "
         "target.automatic_membership_key AS automatic_membership_key",
     ),
     _query(
@@ -59,8 +54,7 @@ _EDGE_QUERIES = (
         "DOCUMENT_CHUNK",
         "ProjectedChunk",
         "coalesce(target.opaque_key, '')",
-        _COMMON
-        + "source.opaque_key AS document_key, target.opaque_key AS chunk_key, "
+        _COMMON + "source.opaque_key AS document_key, target.opaque_key AS chunk_key, "
         "edge.chunk_number AS chunk_number",
     ),
     _query(
@@ -102,6 +96,18 @@ _EDGE_QUERIES = (
 )
 
 
+_INCIDENT_GUARDS = {
+    query: (
+        f"MATCH (source)-[edge:{family.upper()}]->(target) "
+        "WHERE (source.generation_key = $generation_key "
+        "OR target.generation_key = $generation_key) "
+        "AND (edge.generation_key IS NULL OR edge.generation_key <> $generation_key) "
+        "RETURN true AS invalid_incident_edge LIMIT 1"
+    )
+    for query, family in zip(_EDGE_QUERIES, EDGE_FAMILIES, strict=True)
+}
+
+
 def _mapping(row):
     if type(row) is not dict:
         raise ValueError("Memgraph topology edge row is invalid")
@@ -130,6 +136,18 @@ def _stream_edge_family(
 ):
     if type(expected_count) is not int or not 0 <= expected_count <= maximum:
         raise ValueError("Memgraph topology edge count is invalid")
+    # Check the endpoint arms of the original incident-edge predicate once,
+    # without label restrictions. The remaining edge-generation arm can then
+    # use the property index on every page. Errors propagate: no attestation
+    # may succeed if this guard could not be evaluated.
+    incident = driver.execute_read(
+        _INCIDENT_GUARDS[query],
+        {"generation_key": generation_key},
+        timeout_seconds=timeout_seconds,
+        max_records=1,
+    )
+    if type(incident) is not tuple or incident:
+        raise ValueError("Memgraph topology incident edge generation is invalid")
     count, cursor_key, cursor_id = 0, "", -1
     has_cursor = False
     while True:

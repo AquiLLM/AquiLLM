@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from apps.knowledge_graph.projection import generation_audit, reconciler, tasks
+from apps.knowledge_graph.tests.test_projection_bounded_maintenance import RedisBoundary
 
 
 @pytest.mark.parametrize("present", [True, False])
@@ -59,7 +60,9 @@ def test_prune_does_not_delete_a_failed_generation_reclaimed_by_worker(monkeypat
     assert deleted == []
 
 
-def test_full_recovery_page_schedules_followup(monkeypatch):
+def test_full_recovery_page_does_not_schedule_another_audit(monkeypatch):
+    client = RedisBoundary()
+    monkeypatch.setattr(tasks.maintenance, "broker_client", lambda: client)
     deliveries, scheduled = [], []
     counts = iter((0, 2))
 
@@ -73,8 +76,10 @@ def test_full_recovery_page_schedules_followup(monkeypatch):
     monkeypatch.setattr(tasks, "publish_projection_outbox", publish)
     monkeypatch.setattr(
         tasks,
-        "reconcile_graph_projections",
-        lambda **kwargs: SimpleNamespace(examined_count=0, enqueued_count=2),
+        "reconcile_projection_batch",
+        lambda **kwargs: SimpleNamespace(
+            examined_count=0, enqueued_count=2, failure_count=0
+        ),
     )
     monkeypatch.setattr(
         tasks.reconcile_knowledge_graph_projections,
@@ -83,12 +88,12 @@ def test_full_recovery_page_schedules_followup(monkeypatch):
     )
     result = tasks.reconcile_knowledge_graph_projections.run(2, False, 7)
     assert result["published_count"] == 2
-    assert scheduled == [
-        {"kwargs": {"page_size": 2, "collection_id": 7}, "countdown": 1}
-    ]
+    assert scheduled == []
 
 
 def test_reconcile_publishes_work_created_during_its_run(monkeypatch):
+    client = RedisBoundary()
+    monkeypatch.setattr(tasks.maintenance, "broker_client", lambda: client)
     pending, delivered = [], []
 
     def publish(**kwargs):
@@ -103,10 +108,10 @@ def test_reconcile_publishes_work_created_during_its_run(monkeypatch):
 
     def reconcile(**kwargs):
         pending.append("recovered-generation")
-        return SimpleNamespace(examined_count=1, enqueued_count=1)
+        return SimpleNamespace(examined_count=1, enqueued_count=1, failure_count=0)
 
     monkeypatch.setattr(tasks, "publish_projection_outbox", publish)
-    monkeypatch.setattr(tasks, "reconcile_graph_projections", reconcile)
+    monkeypatch.setattr(tasks, "reconcile_projection_batch", reconcile)
     result = tasks.reconcile_knowledge_graph_projections.run(10, False, 7)
     assert delivered == ["recovered-generation"]
     assert pending == []

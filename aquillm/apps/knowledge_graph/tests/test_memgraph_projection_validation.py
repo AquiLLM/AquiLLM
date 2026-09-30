@@ -6,6 +6,7 @@ import pytest
 
 from apps.knowledge_graph.projection.memgraph_edge_validation import (
     _EDGE_QUERIES,
+    _INCIDENT_GUARDS,
     validate_topology_marker,
 )
 from apps.knowledge_graph.projection.memgraph_edges import (
@@ -172,16 +173,17 @@ def test_ready_fails_closed_when_publication_compare_and_set_is_lost() -> None:
 def test_edge_attestation_reads_foreign_and_missing_generation_relationships() -> None:
     assert _EDGE_QUERIES
     assert all(
-        "edge.generation_key:$generation_key" not in query for query in _EDGE_QUERIES
+        "WHERE edge.generation_key = $generation_key AND" in query
+        for query in _EDGE_QUERIES
     )
     assert all(
         "source.generation_key = $generation_key"
         " OR target.generation_key = $generation_key" in query
-        for query in _EDGE_QUERIES
+        for query in _INCIDENT_GUARDS.values()
     )
     assert all(
-        "OR edge.generation_key = $generation_key" in query
-        for query in _EDGE_QUERIES
+        "edge.generation_key IS NULL OR edge.generation_key <> $generation_key" in query
+        for query in _INCIDENT_GUARDS.values()
     )
 
 
