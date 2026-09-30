@@ -69,7 +69,7 @@ def _is_direct_skill_doc(title: str) -> bool:
 
 def _is_markdown_doc(doc: Any) -> bool:
     title = str(getattr(doc, "title", "") or "")
-    return isinstance(doc, RawTextDocument) or title.lower().strip().endswith(".md")
+    return isinstance(doc, RawTextDocument) or title.lower().endswith(".md")
 
 
 def _skill_title(meta: dict[str, str], fallback: str) -> str:

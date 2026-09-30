@@ -8,6 +8,7 @@ from unittest.mock import PropertyMock, patch
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
@@ -22,7 +23,7 @@ from apps.chat.services.skills_runtime import (
     effective_base_system_for_memory_async,
 )
 from apps.collections.models import Collection, CollectionPermission
-from apps.documents.models import RawTextDocument
+from apps.documents.models import RawTextDocument, TeXDocument
 from aquillm.models import WSConversation
 
 User = get_user_model()
@@ -519,3 +520,42 @@ def test_scoped_prompt_keeps_catalog_order_across_readable_ancestors():
     prompt = load_collection_prompt_skills(user, [alpha_child.pk, zulu_child.pk])
 
     assert prompt.index("First ordered body") < prompt.index("Second ordered body")
+
+
+@pytest.mark.django_db
+@override_settings(SKILLS_ENABLED=True, AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True)
+def test_non_raw_pack_suffix_eligibility_matches_catalog_validation_and_runtime(client):
+    user = User.objects.create_user(username="pack-suffix-reader", password="pass")
+    pack = Collection.objects.create(name="skill_pack")
+    CollectionPermission.objects.create(user=user, collection=pack, permission="VIEW")
+    good = TeXDocument(
+        title="good.md",
+        full_text="Allowed TeX instruction",
+        full_text_hash=TeXDocument.hash_fn("Allowed TeX instruction"),
+        collection=pack,
+        ingested_by=user,
+    )
+    good.save(dont_rechunk=True)
+    trailing = TeXDocument(
+        title="trailing.md ",
+        full_text="Trailing TeX instruction",
+        full_text_hash=TeXDocument.hash_fn("Trailing TeX instruction"),
+        collection=pack,
+        ingested_by=user,
+    )
+    trailing.save(dont_rechunk=True)
+    good_id = f"{good._meta.label_lower}:{good.pk}"
+    trailing_id = f"{trailing._meta.label_lower}:{trailing.pk}"
+    client.force_login(user)
+
+    catalog = client.get("/api/collections/chat-context/").json()
+    assert {skill["id"] for skill in catalog["skills"]} == {good_id}
+    assert validate_skill_overrides(user, {good_id: True}) == {good_id: True}
+    with pytest.raises(ValidationError):
+        validate_skill_overrides(user, {trailing_id: True})
+    assert "Trailing TeX instruction" not in load_collection_prompt_skills(
+        user, [], {trailing_id: True}
+    )
+    assert "Allowed TeX instruction" in load_collection_prompt_skills(
+        user, [], {good_id: True}
+    )
