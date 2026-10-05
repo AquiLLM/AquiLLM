@@ -20,6 +20,7 @@ class WSConversation(models.Model):
     owner = models.ForeignKey(User, related_name='ws_conversations', on_delete=models.CASCADE)
     system_prompt = models.TextField(default=get_default_system_prompt, blank=True)
     name = models.TextField(blank=True, null=True)
+    name_is_manual = models.BooleanField(default=False, db_default=False)
     selected_collection_ids = models.JSONField(default=list, blank=True)
     skill_overrides = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(editable=False)
@@ -79,6 +80,11 @@ class WSConversation(models.Model):
     def set_name(self):
         from asgiref.sync import async_to_sync
 
+        original = type(self).objects.values("name", "name_is_manual").get(pk=self.pk)
+        if original["name_is_manual"]:
+            self.name = original["name"]
+            return
+
         system_prompt = """
         This is a conversation between a large langauge model and a user.
         Come up with a brief, roughly 3 to 10 word title for the conversation capturing what the user asked.
@@ -117,7 +123,9 @@ class WSConversation(models.Model):
 
         title_text = self._clean_generated_title(title_text)
         if self._is_generic_title(title_text):
-            self.name = self._fallback_title_from_user_message(first_user_message)
-        else:
-            self.name = title_text
-        self.save(update_fields=["name", "updated_at"])
+            title_text = self._fallback_title_from_user_message(first_user_message)
+        # A manual rename can happen while the provider is generating a title.
+        type(self).objects.filter(
+            pk=self.pk, name=original["name"], name_is_manual=False
+        ).update(name=title_text)
+        self.refresh_from_db(fields=["name", "name_is_manual"])

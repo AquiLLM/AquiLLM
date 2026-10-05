@@ -63,7 +63,7 @@ def _persist_conversation(
         from django.db.models import Q
 
         changed = (
-            WSConversation.objects.filter(pk=consumer.db_convo.pk)
+            WSConversation.objects.filter(pk=consumer.db_convo.pk, name_is_manual=False)
             .filter(Q(name__isnull=True) | Q(name=""))
             .update(name=fallback)
         )

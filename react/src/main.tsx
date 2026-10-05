@@ -11,6 +11,7 @@ import IngestionDashboardLauncher from './components/IngestionDashboardLauncher'
 import IngestRowContainer from './features/ingestion/components/IngestRowsContainer';
 import WhitelistEmails from './components/WhitelistEmails';
 import ChatComponent from './features/chat/components/ChatShell';
+import ChatRenameDialog from './features/chat/components/ChatRenameDialog';
 import UserSettings from './components/UserSettings';
 import ChatFileUpload from './components/ChatFileUpload';
 import BugReportButton from './components/BugReportButton';
@@ -45,6 +46,7 @@ window.mountReactComponent = (
     IngestRowContainer: IngestRowContainer,
     WhitelistEmails: WhitelistEmails,
     ChatComponent: ChatComponent,
+    ChatRenameDialog: ChatRenameDialog,
     UserSettings: UserSettings,
     ChatFileUpload: ChatFileUpload,
     BugReportButton: BugReportButton,

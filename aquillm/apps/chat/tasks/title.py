@@ -38,7 +38,9 @@ def schedule_title(conversation_id, fallback):
 def refine_conversation_title(conversation_id, fallback):
     from apps.chat.models import WSConversation
 
-    row = WSConversation.objects.filter(pk=conversation_id, name=fallback).first()
+    row = WSConversation.objects.filter(
+        pk=conversation_id, name=fallback, name_is_manual=False
+    ).first()
     if row is None:
         return
     prompt = (
@@ -74,6 +76,8 @@ def refine_conversation_title(conversation_id, fallback):
         if not row._is_generic_title(title):
             # Compare-and-set preserves newer/manual titles; metadata refinement
             # deliberately leaves activity/transcript identity unchanged.
-            WSConversation.objects.filter(pk=row.pk, name=fallback).update(name=title)
+            WSConversation.objects.filter(
+                pk=row.pk, name=fallback, name_is_manual=False
+            ).update(name=title)
     except Exception:
         logger.warning("obs.chat.auto_title_failed", conversation_id=conversation_id)

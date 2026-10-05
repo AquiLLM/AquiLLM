@@ -14,7 +14,7 @@
             {% for conversation in conversations %}
                 <tr id="convo-{{ conversation.id }}">
                     <td class="py-4">
-                        <a href="{% url 'ws_convo' convo_id=conversation.pk %}" class="font-black">
+                        <a data-conversation-title="{{ conversation.id }}" href="{% url 'ws_convo' convo_id=conversation.pk %}" class="font-black">
                             {% if conversation.name %}
                                 {{ conversation.name }}
                             {% else %}
