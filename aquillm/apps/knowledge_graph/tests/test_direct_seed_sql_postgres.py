@@ -91,6 +91,23 @@ def test_expired_deadline_executes_no_database_statements():
     assert observed == []
 
 
+def test_submillisecond_budget_starts_no_read_or_zero_timeout():
+    observed = []
+
+    def observe(execute, sql, params, many, context):
+        observed.append(sql)
+        return execute(sql, params, many, context)
+
+    before = _settings()
+    with connection.execute_wrapper(observe), pytest.raises(DirectSeedReadTimeout):
+        with bounded_seed_read(using="default", deadline=0.0005, clock=lambda: 0.0):
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 42")
+    assert "SELECT 42" not in observed
+    assert not any("set_config" in sql for sql in observed)
+    assert _settings() == before
+
+
 @pytest.mark.django_db(transaction=True)
 def test_sql_cancellation_releases_all_worker_slots_for_following_request():
     from threading import Event
@@ -127,7 +144,7 @@ def test_sql_cancellation_releases_all_worker_slots_for_following_request():
 
 
 @pytest.fixture
-def scoped_aliases():
+def scoped_aliases(monkeypatch):
     from django.contrib.auth.models import User
 
     from apps.collections.models import Collection
@@ -147,6 +164,11 @@ def scoped_aliases():
         _embedding_signature,
     )
 
+    monkeypatch.setattr(
+        TextChunk,
+        "get_chunk_embedding",
+        lambda *_args, **_kwargs: pytest.fail("SQL fixture called embedding provider"),
+    )
     collection = Collection.objects.create(name="bounded aliases")
     user = User.objects.create_user(username="bounded-alias-fixture")
     document = RawTextDocument(
@@ -193,6 +215,7 @@ def scoped_aliases():
         chunk_number=0,
         start_position=0,
         end_position=17,
+        embedding=[0.0] * 1024,
     )
     entities = []
     assignments = []
