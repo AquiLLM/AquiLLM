@@ -270,6 +270,10 @@ def scoped_aliases(monkeypatch):
             method="singleton",
             resolver_version=artifact.resolver_version,
             outcome="candidate" if index == 2 else "automatic",
+            status="suppressed" if index == 2 else "active",
+            reason="fixture candidate"
+            if index == 2
+            else "fixture automatic assignment",
             candidate_rank=1 if index == 2 else None,
             decision_checksum=f"{index + 1:064x}",
         )
