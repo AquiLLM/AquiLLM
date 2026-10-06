@@ -121,7 +121,7 @@ def test_extended_seed_loading_fails_closed_before_database_io_after_deadline():
         deadline=1.0,
     )
 
-    assert outcome is ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
+    assert outcome is ExtendedBranchFailureReason.EXTENDED_BRANCH_TIMEOUT
 
 
 def test_direct_ontology_source_exception_is_an_exact_branch_local_failure(
@@ -222,3 +222,163 @@ def test_extended_projection_source_alias_failure_is_branch_local(state_alias):
 
     assert raised.value.kind is HybridBranchKind.EXTENDED
     assert raised.value.reason is ExtendedBranchFailureReason.EXTENDED_SEED_INVALID
+
+
+@pytest.mark.parametrize("expired_before", (True, False))
+def test_ontology_deadline_is_not_an_extractor_timeout(monkeypatch, expired_before):
+    from apps.knowledge_graph.retrieval import query_ontology
+
+    now = [2.0 if expired_before else 0.0]
+    runtime = ProductionHybridBranchRuntime(
+        authorization=authorization(Policy()),
+        settings=object(),
+        topology_loader=object(),
+        codec=object(),
+        clock=lambda: now[0],
+    )
+
+    def load(**kwargs):
+        now[0] = 2.0
+        return SimpleNamespace(ontology=None)
+
+    monkeypatch.setattr(query_ontology, "load_query_ontology", load)
+    reason = runtime._direct_seeds(
+        query="private query", scope=_ready_scope(), deadline=1.0
+    )
+    assert reason.value == "direct_branch_timeout"
+
+
+def test_ontology_timing_is_bounded_and_redacts_exception(monkeypatch):
+    import structlog.testing
+
+    from apps.knowledge_graph.retrieval import query_ontology
+
+    now = [0.0]
+    runtime = ProductionHybridBranchRuntime(
+        authorization=authorization(Policy()),
+        settings=object(),
+        topology_loader=object(),
+        codec=object(),
+        clock=lambda: now[0],
+    )
+
+    def load(**kwargs):
+        now[0] = 90.0
+        raise RuntimeError("private source passage and credential")
+
+    monkeypatch.setattr(query_ontology, "load_query_ontology", load)
+    with structlog.testing.capture_logs() as events:
+        with pytest.raises(LocalBranchSchedulerFailure):
+            runtime._direct_seeds(
+                query="private source passage", scope=_ready_scope(), deadline=1.0
+            )
+    timings = [row for row in events if row["event"] == "obs.rag.graph_stage"]
+    assert timings == [
+        {
+            "branch": "direct",
+            "stage": "ontology",
+            "elapsed_ms": 5000,
+            "event": "obs.rag.graph_stage",
+            "log_level": "info",
+        }
+    ]
+
+
+def test_real_extractor_timeout_keeps_extractor_reason(monkeypatch):
+    from apps.knowledge_graph.retrieval import query_ontology
+    from lib.knowledge_graph.query_extractor.client import QueryExtractorClientError
+    from lib.knowledge_graph.query_extractor.contracts import (
+        QueryExtractorFailureReason,
+    )
+
+    scope = _ready_scope()
+    ontology = SimpleNamespace(
+        version=scope.projections[0].ontology_version,
+        checksum=scope.projections[0].ontology_checksum,
+    )
+    monkeypatch.setattr(
+        query_ontology,
+        "load_query_ontology",
+        lambda **kwargs: SimpleNamespace(ontology=ontology),
+    )
+
+    class Extractor:
+        def extract(self, **kwargs):
+            raise QueryExtractorClientError(
+                QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
+            )
+
+    runtime = ProductionHybridBranchRuntime(
+        authorization=authorization(Policy()),
+        settings=object(),
+        topology_loader=object(),
+        codec=object(),
+        clock=lambda: 0.0,
+        extractor_factory=lambda **kwargs: Extractor(),
+    )
+    assert runtime._direct_seeds(query="q", scope=scope, deadline=1.0) is (
+        DirectBranchFailureReason.EXTRACTOR_TIMEOUT
+    )
+
+
+def test_scheduler_expiry_after_extraction_does_not_blame_extractor(monkeypatch):
+    from threading import Event
+    from time import monotonic
+
+    from apps.knowledge_graph.retrieval import production_direct, query_ontology
+    from apps.knowledge_graph.retrieval.scheduler import HybridGraphBranchScheduler
+    from lib.knowledge_graph.query_extractor.contracts import QueryExtractionResponseV1
+    from lib.knowledge_graph.tests.test_query_extractor_contracts import _provenance
+
+    scope = _ready_scope()
+    ontology = SimpleNamespace(
+        version=scope.projections[0].ontology_version,
+        checksum=scope.projections[0].ontology_checksum,
+    )
+    release, extracted, resolving = Event(), Event(), Event()
+
+    class Extractor:
+        def extract(self, **kwargs):
+            extracted.set()
+            return QueryExtractionResponseV1(_provenance(), 1, 1, ())
+
+    def resolve(**kwargs):
+        assert extracted.is_set()
+        resolving.set()
+        assert release.wait(1)
+        return SimpleNamespace(failure_reason=SimpleNamespace(value="direct_no_seeds"))
+
+    monkeypatch.setattr(
+        query_ontology,
+        "load_query_ontology",
+        lambda **kwargs: SimpleNamespace(ontology=ontology),
+    )
+    monkeypatch.setattr(production_direct, "resolve_direct_seed_components", resolve)
+    settings = SimpleNamespace(
+        graph_direct_enabled=True,
+        graph_extended_enabled=False,
+        graph_direct_timeout_ms=100,
+        graph_extended_timeout_ms=100,
+    )
+    runtime = ProductionHybridBranchRuntime(
+        authorization=authorization(Policy()),
+        settings=settings,
+        topology_loader=object(),
+        codec=object(),
+        scope_loader=lambda **kwargs: scope,
+        extractor_factory=lambda **kwargs: Extractor(),
+    )
+    with HybridGraphBranchScheduler(runtime).start(
+        query="q",
+        authorization=runtime.authorization,
+        settings=settings,
+        deadline=monotonic() + 1,
+    ) as handle:
+        try:
+            assert resolving.wait(1)
+            outcome = handle.finish(baseline=object(), deadline=monotonic() + 1)
+            assert outcome.direct.failure_reason.value == "direct_branch_timeout"
+            assert outcome.extended.failure_reason.value == "extended_no_seeds"
+        finally:
+            release.set()
+            handle._early.result(timeout=1)

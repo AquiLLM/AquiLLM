@@ -42,6 +42,7 @@ from apps.knowledge_graph.retrieval.scheduler_support import (
     SharedSchedulerFailure,
     failed_branch,
 )
+from apps.knowledge_graph.retrieval.stage_diagnostics import graph_stage
 from lib.knowledge_graph.query_extractor.client import QueryExtractorClient
 from lib.knowledge_graph.query_extractor.config import QueryExtractorSettings
 
@@ -156,9 +157,10 @@ class ProductionHybridBranchRuntime:
             )
         seeds = prepared if mode == "fixed" else prepared.seeds
         caps = topology_caps(settings, HybridBranchKind.DIRECT)
-        snapshot = self.topology_loader.load(
-            ready=scope.ready, seeds=seeds, caps=caps, deadline=deadline
-        )
+        with graph_stage(branch="direct", stage="topology", clock=self.clock):
+            snapshot = self.topology_loader.load(
+                ready=scope.ready, seeds=seeds, caps=caps, deadline=deadline
+            )
         try:
             result, execution_signature = rank_projected_for_mode(
                 snapshot=snapshot,
@@ -177,7 +179,7 @@ class ProductionHybridBranchRuntime:
         except TimeoutError:
             return failed_branch(
                 HybridBranchKind.DIRECT,
-                DirectBranchFailureReason.EXTRACTOR_TIMEOUT,
+                DirectBranchFailureReason.DIRECT_BRANCH_TIMEOUT,
                 elapsed_ms=settings.graph_direct_timeout_ms,
             )
         except (TypeError, ValueError):
@@ -258,9 +260,12 @@ class ProductionHybridBranchRuntime:
             for row in successful
         ):
             raise ValueError("materialization provenance differs from ready scope")
-        return materialize_selected_ready_chunks(
-            scope=self._shared.scope, chunk_keys=chunk_keys, authorization=authorization
-        )
+        with graph_stage(branch="shared", stage="materialization", clock=self.clock):
+            return materialize_selected_ready_chunks(
+                scope=self._shared.scope,
+                chunk_keys=chunk_keys,
+                authorization=authorization,
+            )
 
 
 __all__ = ["ProductionHybridBranchRuntime", "graph_candidates"]

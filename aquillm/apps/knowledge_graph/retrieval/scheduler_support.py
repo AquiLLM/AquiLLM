@@ -122,21 +122,12 @@ def timeout_branch(
     if kind is HybridBranchKind.DIRECT:
         return failed_branch(
             kind,
-            DirectBranchFailureReason.EXTRACTOR_TIMEOUT,
-            elapsed_ms=elapsed_ms,
-        )
-    raw_seeds = getattr(baseline, "graph_seeds", ())
-    seed_count = min(len(raw_seeds), 64) if type(raw_seeds) is tuple else 0
-    if not seed_count:
-        return failed_branch(
-            kind,
-            ExtendedBranchFailureReason.EXTENDED_NO_SEEDS,
+            DirectBranchFailureReason.DIRECT_BRANCH_TIMEOUT,
             elapsed_ms=elapsed_ms,
         )
     return failed_branch(
         kind,
-        ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT,
-        seed_count=seed_count,
+        ExtendedBranchFailureReason.EXTENDED_BRANCH_TIMEOUT,
         elapsed_ms=elapsed_ms,
     )
 

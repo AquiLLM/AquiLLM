@@ -34,6 +34,7 @@ class SharedBranchFailureReason(StrEnum):
     OVERALL_DEADLINE = "overall_deadline"
     FUSION_INVALID = "fusion_invalid"
 class DirectBranchFailureReason(StrEnum):
+    DIRECT_BRANCH_TIMEOUT = "direct_branch_timeout"
     EXTRACTOR_TIMEOUT = "extractor_timeout"
     EXTRACTOR_AUTH = "extractor_auth"
     EXTRACTOR_PROVENANCE = "extractor_provenance"
@@ -45,6 +46,7 @@ class DirectBranchFailureReason(StrEnum):
     DIRECT_TOPOLOGY_INVALID = "direct_topology_invalid"
     DIRECT_PPR_INVALID = "direct_ppr_invalid"
 class ExtendedBranchFailureReason(StrEnum):
+    EXTENDED_BRANCH_TIMEOUT = "extended_branch_timeout"
     EXTENDED_SEED_INVALID = "extended_seed_invalid"
     EXTENDED_NO_SEEDS = "extended_no_seeds"
     EXTENDED_TOPOLOGY_TIMEOUT = "extended_topology_timeout"

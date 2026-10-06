@@ -52,6 +52,22 @@ and newly selected graph candidates. A successful duplicate-only branch is
 therefore distinguishable from an empty result or a timeout. These events contain
 no query text, source passages, graph identifiers, or raw exception messages.
 
+Whole-branch scheduler expiry uses `direct_branch_timeout` or
+`extended_branch_timeout`. `extractor_timeout` is reserved for an extractor call;
+ontology, extended seed-source, and PageRank deadline checks use the branch timeout reason.
+Topology loader failures retain their existing topology-specific reasons. Branch
+expiry carries zero counts because the scheduler cannot know the completed stage.
+
+The `obs.rag.graph_stage` event emits fixed `branch` and `stage` labels plus
+`elapsed_ms` in 0..5000. Stages cover ontology, extraction, entity resolution,
+topology loading, and final materialization. Extended entity resolution emits one
+event per selected projection read. Materialization uses the `shared` branch
+label. These completion events include failed stages but omit exception details.
+They do not extend deadlines or interrupt synchronous reads: an abandoned read
+can finish and emit its timing after the branch timeout, while retaining its
+worker slot until it actually finishes. A missing completion event can indicate
+blocked work. Timings are capped telemetry, not a change to execution budgets.
+
 ## Development rollout
 
 1. Merge the tested revision to `development`, then fast-forward the development

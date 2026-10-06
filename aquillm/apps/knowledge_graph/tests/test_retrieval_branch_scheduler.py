@@ -197,7 +197,7 @@ def test_independent_budget_times_out_one_branch_and_keeps_completed_peer() -> N
     finally:
         release.set()
     assert time.monotonic() - started < 0.15
-    assert outcome.direct.failure_reason is DirectBranchFailureReason.EXTRACTOR_TIMEOUT
+    assert outcome.direct.failure_reason.value == "direct_branch_timeout"
     assert outcome.extended.status is BranchStatusV1.SUCCEEDED
     assert outcome.shared_failure_reason is None
 
@@ -221,7 +221,7 @@ def test_overall_deadline_preserves_completed_sibling_and_cancels_unfinished() -
         release.set()
     assert outcome.direct.status is BranchStatusV1.SUCCEEDED
     reason = outcome.extended.failure_reason
-    assert reason is ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
+    assert reason.value == "extended_branch_timeout"
     assert outcome.shared_failure_reason is None
 
 
