@@ -4,7 +4,12 @@ from aquillm.settings_logging import LOGGING
 
 
 def test_rag_observability_logger_names_emit_info_events():
-    for logger_name in ("apps.chat", "apps.documents", "lib.llm.providers"):
+    for logger_name in (
+        "apps.chat",
+        "apps.documents",
+        "lib.llm.providers",
+        "apps.knowledge_graph.retrieval.stage_diagnostics",
+    ):
         config = LOGGING["loggers"][logger_name]
         assert config["level"] == "INFO"
         assert config["handlers"] == ["console"]
