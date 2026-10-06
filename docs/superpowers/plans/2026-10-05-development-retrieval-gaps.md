@@ -53,8 +53,8 @@
 - [x] Add scheduling configuration without changing retention thresholds or deleting active records.
 - [x] Run graph retention/projection tests and a development dry run; execute only eligible bounded cleanup and verify active counts/readiness.
 - [x] Run authorization, graph, replay, and evidence regression suites and independent whole-branch review.
-- [ ] Commit, merge/push development while preserving drafts, deploy affected services using the existing Compose configuration; preserve rollback images.
-- [ ] Verify running revision, health, retention scheduling, and repeated retrieval smoke; publish an audit with measurements, limitations, and exact rollback procedure.
+- [x] Commit, merge/push development while preserving drafts, deploy affected services using the existing Compose configuration; preserve rollback images.
+- [x] Verify running revision, health, retention scheduling, and repeated retrieval smoke; publish an audit with measurements, limitations, and exact rollback procedure.
 
 ## Task 3 measured correction: direct alias SQL (2026-10-05)
 Execute this correction after Task 1 and before the repeated Task 2 live runs.

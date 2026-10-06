@@ -1,6 +1,6 @@
 # Development retrieval gaps — investigation and rollout audit
 
-Status: implementation and scoped validation complete; development rollout pending.
+Status: deployed and verified on development. Known recall and broad-scope latency gaps remain documented below.
 
 ## Scope and reference
 Development only: `149.165.150.254`, `aquillm-dev2.cis260251.projects.jetstream-cloud.org`.
@@ -85,4 +85,50 @@ Completed scoped checks (counts overlap; they are not a total suite count): grap
 
 All four implementation tasks passed independent spec/code review. The final combined regression set passed 381 tests on an isolated PostgreSQL instance and two Git-dependent fixture tests in the local checkout (383 distinct tests across 42 files). The first archive run exposed harness omissions and inherited production environment flags; adding the missing deployment files and clearing inherited environment fixed those test failures without application changes.
 
-The final whole-branch review found no critical or important issues. Its minor stale pruning-task docstring was corrected. Pending: deployed revision/images, post-deployment replay, and exact rollback verification.
+The final whole-branch review found no critical or important issues. Its minor stale pruning-task docstring was corrected. Deployment and post-deployment details follow.
+
+## Development deployment
+Application revision: `7a2e145c6a0f06794bf8b92085b9e78972d6cf22`, merged and pushed to development. All 18 unrelated local draft files were verified unchanged by SHA-256 before and after the fast-forward. The subsequent audit-only commit records rollout results; the server checkout and application images remain at the verified application revision above.
+
+All ten application services were rebuilt and recreated from this revision: web, main/memory/graph/schema/projection workers, both maintenance schedulers, query extractor, and topology gateway. Each running image's OCI revision label was verified. Web, extractor and gateway health checks passed; all five Celery workers returned ping responses. Public root and `/ready/` returned HTTP 200.
+
+The proxy retained the previous web container address after recreation; validating and reloading nginx restored public access. Future recreations and rollback must include this reload. An initial deployment-helper read encountered a non-UTF-8 comment in the existing environment file; no file write occurred, and a byte-preserving update changed only the two pruning keys. A replay startup check hit Git's repository ownership guard; the invocation then scoped `safe.directory=/app` to that process after verifying the host revision, without changing global Git configuration.
+
+Development pruning is enabled at 86,400 seconds only on the graph beat service, using the extraction queue at priority 9. Existing 300-second graph recovery/reconciliation and 60-second application maintenance remain present. Application beat explicitly has both graph/pruning gates off. Retention stays 30 days/keep 2. The temporary PostgreSQL test container was removed; it had no persistent volume.
+
+The image build retained an existing frontend chunk-size warning. This change adds no migration or model/index replacement.
+
+## Post-deployment retrieval verification
+The maintained CLI ran all ten exact decoded questions twice per scope: 40 total retrieval-only turns, all completed, generation blocked, with `git_verified` revision `7a2e145c6a0f06794bf8b92085b9e78972d6cf22`. Cache was disabled only in the replay processes; deployed adaptive selection and both graph branches were preserved.
+
+| Scope | Turns | Mean / maximum (ms) | Graph hits | Supporting spans covered |
+|---|---:|---:|---:|---:|
+| Parent | 20 | 4691.5 / 5504.7 | 20/20 | 0 |
+| Parent + figures | 20 | 7473.5 / 8231.7 | 10/20 | 0 |
+
+There were **zero backend_unavailable** reasons across all forty turns. Parent diagnostics included one extractor_timeout and two extractor_provenance failures on the first three turns after restart; none recurred in the second pass, and the extended sibling supplied graph results. This observation does not establish the exact startup failure cause.
+
+Figures produced eight direct_branch_timeout and sixteen extended_branch_timeout reasons (a turn may have both), plus six direct_no_seeds. Fallback kept the retrieval turns handled; these branch failures remain real. All seven provisional target passages stayed out of the final packets. Completed turns are not a study-answer quality pass, and these sequential runs are not a load test or a controlled cold-start benchmark.
+
+Configured INFO output contained 360 graph-stage events with only fixed branch/stage labels, bounded timing and standard logging fields. The CLI correctly leaves request-correlated graph substage timing unavailable; ordinary late completion logs are not attributed to a later request.
+
+## Rollback
+Protected rollback directory on 254:
+`/home/exouser/.local/state/aquillm-rollbacks/retrieval-gaps-20261005`.
+
+It contains a mode-600 environment backup, exact pre-deploy image IDs and preserved image tags for all ten services, a Compose image override, and a guarded rollback script. Image-tag identities and script syntax were verified; rollback was not executed.
+
+To restore application code/config/images, run as exouser on 254:
+
+```sh
+python3 /home/exouser/.local/state/aquillm-rollbacks/retrieval-gaps-20261005/rollback.py
+```
+
+The script requires a clean checkout at the recorded application revision (or original base), checks preserved image identities, checks out base `9136d3b70c09a34748e32b0d20527bc89f463e73` detached, restores the environment file, recreates only the ten application services with preserved images and no build, waits for health, and validates/reloads nginx. It does not restore the deliberately pruned eligible terminal records or alter database/model volumes.
+
+## Remaining test and research work
+- **Missing support:** establish independently reviewed development gold, then isolate Q1 candidate retrieval and Q3/Q4 reranker demotion. Larger pools alone did not deliver the supporting text.
+- **Broad-scope graph timeouts:** profile and reduce repeated projection resolution/topology work on the 530-document scope, retaining the current authorization and deadline bounds. Do not interpret successful vector fallback as successful graph retrieval.
+- **Extractor startup:** distinguish service warm-up/overload from provenance failures and test readiness after restart. Initial post-restart diagnostic failures must remain visible.
+- **Embedding/reranker contracts:** compare validated input formats, token overflow and normalization against a compatible index before changing model-facing requests.
+- **Evidence-mode activation:** obtain the required live attestations, frozen development/held-out and operational runs, and independent review before enabling source/windowed/iterative modes.
