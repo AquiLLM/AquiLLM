@@ -20,6 +20,7 @@ def test_base_and_development_define_one_gated_maintenance_scheduler():
             service
             for service in services.values()
             if "celery -A aquillm beat" in service.get("command", "")
+            and service.get("environment", {}).get("KG_MAINTENANCE_SCHEDULER_ENABLED") != "0"
         ]
         assert len(schedulers) == 1
         scheduler = schedulers[0]
@@ -45,7 +46,8 @@ def test_base_and_development_define_one_gated_maintenance_scheduler():
         )
 
 
-def test_maintenance_scheduler_boots_from_its_allowlisted_environment():
+@pytest.mark.parametrize("pruning_enabled", ["0", "1"])
+def test_maintenance_scheduler_boots_from_its_allowlisted_environment(pruning_enabled):
     scheduler = _compose("development.yml")["services"][
         "scheduler_knowledge_graph_maintenance"
     ]
@@ -66,6 +68,8 @@ def test_maintenance_scheduler_boots_from_its_allowlisted_environment():
             "POSTGRES_PORT": "1",
             "KG_MAINTENANCE_SCHEDULER_ENABLED": "1",
             "KG_MAINTENANCE_INTERVAL_SECONDS": "300",
+            "KG_ARTIFACT_PRUNING_ENABLED": pruning_enabled,
+            "KG_ARTIFACT_PRUNING_INTERVAL_SECONDS": "172800",
             "KG_GRAPH_RECOVERY_PAGE_SIZE": "2",
             "KG_EXTRACTION_QUEUE": "test-extraction",
             "KG_PROJECTION_QUEUE": "test-projection",
@@ -81,6 +85,9 @@ def test_maintenance_scheduler_boots_from_its_allowlisted_environment():
         "GEMINI_API_KEY",
     ):
         environment[key] = declared[key]
+    if pruning_enabled == "0":
+        environment.pop("KG_ARTIFACT_PRUNING_ENABLED")
+        environment.pop("KG_ARTIFACT_PRUNING_INTERVAL_SECONDS")
 
     completed = subprocess.run(
         [
@@ -92,6 +99,12 @@ def test_maintenance_scheduler_boots_from_its_allowlisted_environment():
                 "assert set(app.conf.beat_schedule) == "
                 "{'knowledge-graph-build-recovery', "
                 "'knowledge-graph-projection-reconcile'}"
+                + (" | {'knowledge-graph-artifact-pruning'}; "
+                   "assert app.conf.beat_schedule['knowledge-graph-artifact-pruning']"
+                   "['schedule'] == 172800" if pruning_enabled == "1" else
+                   "; from django.conf import settings; "
+                   "assert settings.KG_ARTIFACT_PRUNING_ENABLED is False; "
+                   "assert settings.KG_ARTIFACT_PRUNING_INTERVAL_SECONDS == 86400")
             ),
         ],
         cwd=ROOT / "aquillm",
@@ -103,6 +116,19 @@ def test_maintenance_scheduler_boots_from_its_allowlisted_environment():
     )
 
     assert completed.returncode == 0, completed.stderr[-2000:]
+
+
+def test_development_pruning_is_explicitly_opt_in_and_application_beat_is_isolated():
+    services = _compose("development.yml")["services"]
+    environment = services["scheduler_knowledge_graph_maintenance"]["environment"]
+    assert environment["KG_ARTIFACT_PRUNING_ENABLED"] == "${KG_ARTIFACT_PRUNING_ENABLED:-0}"
+    assert environment["KG_ARTIFACT_PRUNING_INTERVAL_SECONDS"] == "${KG_ARTIFACT_PRUNING_INTERVAL_SECONDS:-86400}"
+    application = services["scheduler_application_maintenance"]["environment"]
+    assert application["KG_MAINTENANCE_SCHEDULER_ENABLED"] == "0"
+    assert application["KG_ARTIFACT_PRUNING_ENABLED"] == "0"
+    for name, service in services.items():
+        if name == "web" or name.startswith("worker"):
+            assert "celery -A aquillm beat" not in service.get("command", "")
 
 
 def test_broker_restarts_after_host_or_container_runtime_restart():
