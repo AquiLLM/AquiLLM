@@ -469,7 +469,7 @@ def refresh_collection_graph_task(
     ignore_result=True,
 )
 def prune_graph_artifacts_task():
-    """Run Task 18's pruning service; intentionally absent from beat schedules."""
+    """Run bounded artifact pruning; beat scheduling requires explicit opt-in."""
 
     if not _task_extraction_queue_is_valid():
         return None
