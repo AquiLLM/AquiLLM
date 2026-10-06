@@ -166,7 +166,7 @@ def scoped_aliases():
     )
     source = GraphArtifact.objects.create(
         scope_type="document",
-        scope_id=document.pk,
+        scope_id=document.id,
         status="active",
         resolver_version="document-v1",
         **common,
@@ -182,14 +182,14 @@ def scoped_aliases():
     manifest = CollectionArtifactInput.objects.create(
         artifact=artifact,
         collection=collection,
-        document_id=document.pk,
+        document_id=document.id,
         document_artifact=source,
         source_signature="c" * 64,
         membership_signature="d" * 64,
     )
     chunk = TextChunk.objects.create(
         content=document.full_text,
-        doc_id=document.pk,
+        doc_id=document.id,
         chunk_number=0,
         start_position=0,
         end_position=17,
@@ -211,7 +211,7 @@ def scoped_aliases():
         )
         local = DocumentEntity.objects.create(
             artifact=source,
-            document_id=document.pk,
+            document_id=document.id,
             cluster_key=f"{index + 1:064x}",
             label="Atlas",
             normalized_label="atlas",
@@ -220,7 +220,7 @@ def scoped_aliases():
         )
         mention = EntityMention.objects.create(
             artifact=source,
-            document_id=document.pk,
+            document_id=document.id,
             chunk=chunk,
             start=index * 6,
             end=index * 6 + 5,
@@ -266,7 +266,7 @@ def scoped_aliases():
         "1" * 64,
         (collection.pk,),
         (artifact.pk,),
-        (document.pk,),
+        (document.id,),
         (source.pk,),
         ((artifact.pk, "2" * 64),),
         ((artifact.pk, uuid4()),),
