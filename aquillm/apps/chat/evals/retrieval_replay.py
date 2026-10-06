@@ -236,6 +236,30 @@ def _text(row):
     return row.get("text") or row.get("x") or row.get("content") or ""
 
 
+def _safe_graph_reasons(reasons):
+    from apps.knowledge_graph.retrieval.branch_contracts import (
+        DirectBranchFailureReason,
+        ExtendedBranchFailureReason,
+        SharedBranchFailureReason,
+    )
+
+    if type(reasons) not in (list, tuple):
+        return None
+    allowed = {
+        reason.value
+        for enum in (
+            DirectBranchFailureReason,
+            ExtendedBranchFailureReason,
+            SharedBranchFailureReason,
+        )
+        for reason in enum
+    }
+    # Exact strings only: never stringify arbitrary diagnostics or exceptions.
+    return [
+        reason for reason in reasons if type(reason) is str and reason in allowed
+    ] or None
+
+
 def summarize(events, packet, targets):
     stages = [data for name, data in events if name == "retrieval_stages"]
     result = {
@@ -264,6 +288,7 @@ def summarize(events, packet, targets):
                     for key, rows in stage.get("baseline_branches", {}).items()
                 },
                 "graph": {
+                    "reasons": _safe_graph_reasons(graph.get("reasons")),
                     "ready": graph.get("ready"),
                     "status": graph.get("status"),
                     "branch_statuses": graph.get("branch_statuses"),

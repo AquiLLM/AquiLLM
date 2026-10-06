@@ -314,7 +314,7 @@ def test_real_pipeline_search_error_dict_is_not_success(monkeypatch):
     assert "secret backend failure" not in json.dumps(result)
 
 
-def test_revision_override_is_validated_and_not_git_verified():
+def test_revision_override_is_validated_and_not_git_verified(monkeypatch):
     import importlib.util
     from pathlib import Path
 
@@ -338,7 +338,73 @@ def test_revision_override_is_validated_and_not_git_verified():
         "git_revision": "a" * 40,
         "revision_provenance": "operator_supplied",
     }
-    assert cli.revision_metadata(None)["revision_provenance"] == "git_verified"
+
+    def git_success(command, **kwargs):
+        assert command == ["git", "rev-parse", "HEAD"]
+        assert kwargs["check"] is True
+        return SimpleNamespace(stdout="b" * 40 + "\n")
+
+    monkeypatch.setattr(cli.subprocess, "run", git_success)
+    assert cli.revision_metadata(None) == {
+        "git_revision": "b" * 40,
+        "revision_provenance": "git_verified",
+    }
+
+    def git_failure(*args, **kwargs):
+        raise cli.subprocess.CalledProcessError(128, args[0])
+
+    monkeypatch.setattr(cli.subprocess, "run", git_failure)
+    with pytest.raises(cli.subprocess.CalledProcessError):
+        cli.revision_metadata(None)
     for invalid in ("HEAD", "a" * 39, "z" * 40):
         with pytest.raises(SystemExit):
             cli.parse_args(valid + ["--revision", invalid])
+
+
+def test_graph_reasons_keep_canonical_labels_and_reject_untrusted_values():
+    from apps.knowledge_graph.retrieval.branch_contracts import (
+        DirectBranchFailureReason,
+        ExtendedBranchFailureReason,
+        SharedBranchFailureReason,
+    )
+
+    labels = [
+        DirectBranchFailureReason.DIRECT_BRANCH_TIMEOUT.value,
+        ExtendedBranchFailureReason.EXTENDED_BRANCH_TIMEOUT.value,
+        DirectBranchFailureReason.EXTRACTOR_TIMEOUT.value,
+        SharedBranchFailureReason.BACKEND_UNAVAILABLE.value,
+    ]
+
+    class Untrusted:
+        def __str__(self):
+            raise AssertionError("untrusted reason stringified")
+
+    result = replay.summarize(
+        [
+            (
+                "retrieval_stages",
+                {
+                    "graph": {
+                        "reasons": [
+                            *labels,
+                            "secret source and exception message",
+                            {"secret": "text"},
+                            Untrusted(),
+                        ]
+                    }
+                },
+            )
+        ],
+        [],
+        [],
+    )
+    assert result["stages"][0]["graph"]["reasons"] == labels
+    assert "secret" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("reasons", [None, "extractor_timeout", {"secret": "text"}, 1])
+def test_invalid_graph_reason_container_is_not_copied(reasons):
+    result = replay.summarize(
+        [("retrieval_stages", {"graph": {"reasons": reasons}})], [], []
+    )
+    assert result["stages"][0]["graph"]["reasons"] is None
