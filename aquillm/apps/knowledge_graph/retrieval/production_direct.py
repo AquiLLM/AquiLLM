@@ -15,6 +15,7 @@ from apps.knowledge_graph.retrieval.direct_seed_repository import (
 from apps.knowledge_graph.retrieval.direct_seed_resolution import (
     resolve_direct_seed_components,
 )
+from apps.knowledge_graph.retrieval.direct_seed_sql import DirectSeedReadTimeout
 from apps.knowledge_graph.retrieval.ppr_policy import classify_ppr_intent
 from apps.knowledge_graph.retrieval.ppr_seed_support import (
     PreparedPPRSeedsV1,
@@ -119,6 +120,8 @@ def _prepare_direct(runtime, *, query, scope, deadline, with_policy):
                 scope=direct_scope,
                 codec=runtime.codec,
                 span_inputs=span_inputs,
+                deadline=deadline,
+                clock=runtime.clock,
                 using=runtime.authorization.database_alias,
             )
             outcome = resolve_direct_seed_components(
@@ -127,7 +130,10 @@ def _prepare_direct(runtime, *, query, scope, deadline, with_policy):
                 ready=scope.ready,
                 settings=runtime.settings,
                 deadline=deadline,
+                clock=runtime.clock,
             )
+    except DirectSeedReadTimeout:
+        return DirectBranchFailureReason.DIRECT_BRANCH_TIMEOUT
     except Exception as error:
         _local(DirectBranchFailureReason.DIRECT_SEED_INVALID, error)
     if outcome.failure_reason is not None:

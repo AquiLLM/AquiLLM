@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from math import fsum
+from time import monotonic
 
 from apps.knowledge_graph.resolution.normalization import normalize_entity_label
 from apps.knowledge_graph.retrieval.direct_seed_contracts import (
@@ -14,6 +15,10 @@ from apps.knowledge_graph.retrieval.direct_seed_contracts import (
     DirectSeedDiagnosticsV1,
     DirectSeedOutcomeV1,
     ResolvedDirectSeedV1,
+)
+from apps.knowledge_graph.retrieval.direct_seed_sql import (
+    DirectSeedReadTimeout,
+    check_seed_deadline,
 )
 from apps.knowledge_graph.retrieval.query_embedding import embed_unresolved_query_span
 from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
@@ -143,6 +148,7 @@ def resolve_direct_seed_components(
     ready,
     settings,
     deadline: float,
+    clock=monotonic,
 ) -> DirectSeedOutcomeV1:
     if type(spans) is not tuple or any(
         type(row) is not QueryEntitySpanV1 for row in spans
@@ -150,6 +156,7 @@ def resolve_direct_seed_components(
         raise TypeError("spans must contain exact QueryEntitySpanV1 values")
     if len(spans) > 128:
         raise ValueError("spans exceed the hard cap")
+    check_seed_deadline(deadline, clock=clock)
     deduplicated = _deduplicate(spans, repository)
     matches: list[DirectEntityMatchV1] = []
     ambiguities: list[DirectSeedAmbiguityV1] = []
@@ -163,11 +170,13 @@ def resolve_direct_seed_components(
         (DirectResolutionTier.ALIAS, repository.indexed_alias_matches),
     )
     for span_index, span in enumerate(deduplicated):
+        check_seed_deadline(deadline, clock=clock)
         if span.confidence == 0.0:
             continue
         selected: DirectEntityMatchV1 | None = None
         ambiguity: DirectSeedAmbiguityV1 | None = None
         for _tier, lookup in exact_tiers:
+            check_seed_deadline(deadline, clock=clock)
             rows = lookup(span=span, ready=ready, limit=_CANDIDATE_HARD_CAP)
             if rows:
                 selected, ambiguity = _best_exact(rows, span_index)
@@ -180,6 +189,7 @@ def resolve_direct_seed_components(
         ):
             embedding_attempts += 1
             try:
+                check_seed_deadline(deadline, clock=clock)
                 signature = ready.selected_generations[0].embedding_model_signature
                 if any(
                     row.embedding_model_signature != signature
@@ -191,6 +201,7 @@ def resolve_direct_seed_components(
                     expected_signature=signature,
                     deadline=deadline,
                 )
+                check_seed_deadline(deadline, clock=clock)
                 rows = repository.embedding_matches(
                     embedding=embedding,
                     span=span,
@@ -200,6 +211,8 @@ def resolve_direct_seed_components(
                     limit=_CANDIDATE_HARD_CAP,
                     minimum_similarity=settings.direct_min_similarity,
                 )
+            except DirectSeedReadTimeout:
+                raise
             except (RuntimeError, TimeoutError, TypeError, ValueError):
                 embedding_available = False
                 embedding_failed = True
@@ -216,6 +229,7 @@ def resolve_direct_seed_components(
             matches.append(selected)
         elif ambiguity is not None:
             ambiguities.append(ambiguity)
+    check_seed_deadline(deadline, clock=clock)
     matches.sort(
         key=lambda row: (
             row.span_index,

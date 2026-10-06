@@ -68,6 +68,10 @@ def test_identifier_name_and_indexed_alias_use_bounded_scoped_predicates() -> No
 
 
 def test_alias_query_binds_scope_provenance_and_text_to_one_join(monkeypatch) -> None:
+    from contextlib import nullcontext
+
+    from apps.knowledge_graph.retrieval import direct_seed_queries
+    monkeypatch.setattr(direct_seed_queries, "bounded_seed_read", lambda **_: nullcontext())
     from django.db import models
 
     from apps.knowledge_graph.models import CanonicalEntityLink, CollectionEntity
