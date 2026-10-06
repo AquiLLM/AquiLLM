@@ -55,3 +55,14 @@
 - [ ] Run authorization, graph, replay, and evidence regression suites and independent whole-branch review.
 - [ ] Commit, merge/push development while preserving drafts, deploy affected services using the existing Compose configuration; preserve rollback images.
 - [ ] Verify running revision, health, retention scheduling, and repeated retrieval smoke; publish an audit with measurements, limitations, and exact rollback procedure.
+
+## Task 3 measured correction: direct alias SQL (2026-10-05)
+Execute this correction after Task 1 and before the repeated Task 2 live runs.
+Evidence: baseline direct alias SQL outlived the4500ms branch deadline by tens of seconds, exhausting the process worker pool. A process-local2500ms DB timeout reproduces the alias stall while name lookup takes94ms. Applying join_collapse_limit=1 only to alias lookup preserves identical predicates and finishes in85-118ms (two Q4 runs); changing enable_nestloop slowed name queries and is rejected.
+
+**Files:** retrieval/direct_seed_queries.py, direct_seed_repository.py, direct_seed_resolution.py, production_direct.py, a focused bounded SQL helper, direct-seed and PostgreSQL tests.
+- [ ] Add a PostgreSQL regression validating scoped alias rows, ambiguity/cap behavior, and identical results with the current predicates.
+- [ ] Add deadline tests: expired budget executes no lookup; SQL cancellation reports a fixed direct_seed_timeout; after cancellation the connection is usable and the worker lease becomes available; transaction-local settings restore on success and failure.
+- [ ] Apply join_collapse_limit=1 only to fully consumed ALIAS tier queries; explicitly restore successful nested-transaction settings. Preserve all permission, artifact, document, ontology, membership, and canonical-link predicates.
+- [ ] Propagate the existing absolute branch deadline into direct seed repository calls. Use remaining monotonic budget for PostgreSQL statement_timeout; check between tiers/spans, and stop immediately after expiry. Do not change pool size or branch budget.
+- [ ] Run current direct-seed repository/resolution tests plus isolated PostgreSQL tests and the repeated twenty-turn development replay before declaring the worker starvation resolved.
