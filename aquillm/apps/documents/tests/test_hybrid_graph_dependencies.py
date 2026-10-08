@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from apps.documents.services.hybrid_graph_dependencies import (
     _topology_loader,
     build_hybrid_graph_dependencies,
@@ -111,7 +113,8 @@ def test_factory_reauthorizes_before_constructing_provider_runtime():
     assert observed == []
 
 
-def test_shipping_topology_loader_is_http_only_and_redacted() -> None:
+@pytest.mark.parametrize("enabled", [True, False])
+def test_shipping_topology_loader_is_http_only_and_redacted(enabled) -> None:
     gateway = load_topology_gateway_client_settings(
         {
             "KG_TOPOLOGY_GATEWAY_URL": "http://knowledge_graph_query_gateway:8092",
@@ -119,12 +122,14 @@ def test_shipping_topology_loader_is_http_only_and_redacted() -> None:
             "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS": "300",
             "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": "4194304",
             "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": "1048576",
+            "KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED": "true" if enabled else "false",
         },
         required=True,
     )
     loader = _topology_loader(gateway)
     assert type(loader) is MemgraphProjectedTopologyLoader
     assert type(loader.driver) is TopologyGatewayClient
+    assert loader.driver.snapshot_enabled is enabled
     assert "gateway-secret" not in repr(loader.driver)
     source = __import__(
         "apps.documents.services.hybrid_graph_dependencies", fromlist=["x"]

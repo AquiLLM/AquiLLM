@@ -21,7 +21,6 @@ from .gateway_contracts import (
     SCHEMA_VERSION,
     GatewayFailureReason,
     GatewayRequestSizeError,
-    TopologyGatewayFailureV1,
     TopologyGatewayRequestV1,
     TopologyGatewaySuccessV1,
     decode_response,
@@ -126,9 +125,12 @@ class TopologyGatewayClient:
     origin: str = field(repr=False)
     bearer_token: str = field(repr=False)
     timeout_ceiling: float
+    snapshot_enabled: bool = False
     _endpoint: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if type(self.snapshot_enabled) is not bool:
+            raise ValueError("snapshot_enabled must be an exact bool")
         if (
             type(self.bearer_token) is not str
             or not self.bearer_token
@@ -160,16 +162,41 @@ class TopologyGatewayClient:
             body = encode_request(request_dto)
         except GatewayRequestSizeError:
             raise TopologyGatewayRequestError(GatewayFailureReason.RESULT_CAP) from None
+        decoded = self._exchange(body, deadline=deadline)
+        if type(decoded) is TopologyGatewaySuccessV1:
+            return decoded.rows
+        _failure(decoded.reason)
+        raise AssertionError("unreachable")
+
+    def execute_snapshot(self, *, parameters, deadline):
+        from .gateway_snapshot_client import execute_snapshot
+
+        if not self.snapshot_enabled:
+            raise ValueError("snapshot transport is disabled")
+        return execute_snapshot(self, parameters=parameters, deadline=deadline)
+
+    def _exchange(self, body, *, deadline, snapshot=False):
+        from . import gateway_snapshot_contracts as v2
+
         remaining = deadline - time.monotonic()
         if not isfinite(remaining) or remaining <= 0.0:
             raise TopologyGatewayRequestError(GatewayFailureReason.DEADLINE)
         request = Request(
-            self._endpoint,
+            self._endpoint.replace(_PATH, v2.SNAPSHOT_PATH)
+            if snapshot
+            else self._endpoint,
             data=body,
             headers={
                 "Authorization": f"Bearer {self.bearer_token}",
                 "Content-Type": "application/json",
-                **_SCHEMA_HEADERS,
+                **(
+                    {
+                        "X-Topology-Schema-Version": v2.SCHEMA_VERSION,
+                        "X-Topology-Schema-Checksum": v2.SCHEMA_CHECKSUM,
+                    }
+                    if snapshot
+                    else _SCHEMA_HEADERS
+                ),
             },
             method="POST",
         )
@@ -199,7 +226,9 @@ class TopologyGatewayClient:
         except OSError:
             raise _unavailable() from None
         try:
-            decoded = self._decode(response)
+            decoded = self._decode(response, snapshot=snapshot)
+            if snapshot and deadline <= time.monotonic():
+                raise TopologyGatewayRequestError(GatewayFailureReason.DEADLINE)
         except (TopologyLoadError, TopologyGatewayRequestError):
             raise
         except TimeoutError:
@@ -213,18 +242,28 @@ class TopologyGatewayClient:
                 response.close()
             except OSError:
                 pass
-        if type(decoded) is TopologyGatewaySuccessV1:
-            return decoded.rows
-        _failure(decoded.reason)
-        raise AssertionError("unreachable")
+        return decoded
 
-    def _decode(self, response) -> TopologyGatewaySuccessV1 | TopologyGatewayFailureV1:
+    def _decode(self, response, *, snapshot=False):
+        from . import gateway_snapshot_contracts as v2
+
         headers = response.headers
+        if snapshot and hasattr(headers, "get_all"):
+            for name in (
+                "Content-Type",
+                "Content-Length",
+                "X-Topology-Schema-Version",
+                "X-Topology-Schema-Checksum",
+            ):
+                if len(headers.get_all(name, [])) != 1:
+                    raise _schema_failure()
         if (
             headers.get("Transfer-Encoding") is not None
             or headers.get("Content-Type") != "application/json"
-            or headers.get("X-Topology-Schema-Version") != SCHEMA_VERSION
-            or headers.get("X-Topology-Schema-Checksum") != SCHEMA_CHECKSUM
+            or headers.get("X-Topology-Schema-Version")
+            != (v2.SCHEMA_VERSION if snapshot else SCHEMA_VERSION)
+            or headers.get("X-Topology-Schema-Checksum")
+            != (v2.SCHEMA_CHECKSUM if snapshot else SCHEMA_CHECKSUM)
         ):
             raise _schema_failure()
         length_text = headers.get("Content-Length")
@@ -240,10 +279,14 @@ class TopologyGatewayClient:
         body = response.read(length + 1)
         if type(body) is not bytes or len(body) != length:
             raise _schema_failure()
-        decoded = decode_response(body)
+        decoded = v2.decode_response(body) if snapshot else decode_response(body)
         if type(response.status) is not int:
             raise _schema_failure()
-        if type(decoded) is TopologyGatewaySuccessV1:
+        if type(decoded) in {
+            TopologyGatewaySuccessV1,
+            v2.TopologyGatewaySnapshotV2,
+            v2.TopologyGatewayFamilyTransportV2,
+        }:
             if response.status != 200:
                 raise _schema_failure()
         elif response.status != decoded.status:

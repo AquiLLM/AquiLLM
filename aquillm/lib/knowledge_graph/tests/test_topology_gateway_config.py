@@ -73,6 +73,33 @@ def test_django_export_contains_only_exact_gateway_values() -> None:
     exported = django_topology_gateway_client_values(
         {**VALID, "KG_TOPOLOGY_GATEWAY_URL_TYPO": object(), "UNRELATED": object()}
     )
-    assert set(exported) == set(VALID)
+    assert set(exported) == set(VALID) | {"KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED"}
     assert exported["KG_TOPOLOGY_GATEWAY_URL"] == VALID["KG_TOPOLOGY_GATEWAY_URL"]
     assert "gateway-secret" not in repr(exported)
+
+
+def test_snapshot_selection_is_default_disabled_and_exported_as_exact_bool():
+    assert load_topology_gateway_client_settings({}).snapshot_enabled is False
+    for value, expected in (("true", True), ("false", False)):
+        settings = load_topology_gateway_client_settings(
+            {**VALID, "KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED": value}
+        )
+        assert settings.snapshot_enabled is expected
+        assert (
+            django_topology_gateway_client_values(
+                {**VALID, "KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED": value}
+            )["KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED"]
+            is expected
+        )
+
+
+@pytest.mark.parametrize(
+    "value", ["TRUE", "False", "1", "0", "yes", " true", "", True, None]
+)
+def test_snapshot_selection_rejects_noncanonical_booleans(value):
+    with pytest.raises(
+        GatewayClientConfigError, match="KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED"
+    ):
+        load_topology_gateway_client_settings(
+            {**VALID, "KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED": value}
+        )

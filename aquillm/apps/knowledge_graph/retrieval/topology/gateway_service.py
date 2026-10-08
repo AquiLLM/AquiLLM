@@ -89,23 +89,30 @@ def _single_header(scope: dict[str, Any], name: bytes) -> bytes | None:
     return values[0] if len(values) == 1 else None
 
 
-def _response_headers(body: bytes) -> list[tuple[bytes, bytes]]:
+def _response_headers(
+    body: bytes, *, version=SCHEMA_VERSION, checksum=SCHEMA_CHECKSUM
+) -> list[tuple[bytes, bytes]]:
     return [
         (b"content-type", b"application/json"),
         (b"content-length", str(len(body)).encode()),
-        (b"x-topology-schema-version", SCHEMA_VERSION.encode()),
-        (b"x-topology-schema-checksum", SCHEMA_CHECKSUM.encode()),
+        (b"x-topology-schema-version", version.encode()),
+        (b"x-topology-schema-checksum", checksum.encode()),
     ]
 
 
 async def _respond(
-    send: Callable[..., Awaitable[None]], status: int, body: bytes
+    send: Callable[..., Awaitable[None]],
+    status: int,
+    body: bytes,
+    *,
+    version=SCHEMA_VERSION,
+    checksum=SCHEMA_CHECKSUM,
 ) -> None:
     await send(
         {
             "type": "http.response.start",
             "status": status,
-            "headers": _response_headers(body),
+            "headers": _response_headers(body, version=version, checksum=checksum),
         }
     )
     await send({"type": "http.response.body", "body": body})
@@ -139,13 +146,13 @@ async def _read_body(
             return body if len(body) == expected else None
 
 
-def _wire_valid(scope: dict[str, Any]) -> bool:
+def _wire_valid(
+    scope: dict[str, Any], *, version=SCHEMA_VERSION, checksum=SCHEMA_CHECKSUM
+) -> bool:
     return (
         _single_header(scope, b"content-type") == b"application/json"
-        and _single_header(scope, b"x-topology-schema-version")
-        == SCHEMA_VERSION.encode()
-        and _single_header(scope, b"x-topology-schema-checksum")
-        == SCHEMA_CHECKSUM.encode()
+        and _single_header(scope, b"x-topology-schema-version") == version.encode()
+        and _single_header(scope, b"x-topology-schema-checksum") == checksum.encode()
         and not _header_values(scope, b"transfer-encoding")
     )
 
@@ -290,6 +297,10 @@ async def app(scope, receive, send) -> None:
         await readyz(scope, receive, send)
     elif route == ("POST", "/v1/topology/read"):
         await topology_read(scope, receive, send)
+    elif route == ("POST", "/v2/topology/snapshot"):
+        from .gateway_snapshot_service import topology_snapshot
+
+        await topology_snapshot(scope, receive, send)
     else:
         await _respond(send, 404, b'{"reason":"not_found"}')
 

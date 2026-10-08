@@ -4,7 +4,7 @@
 
 **Goal:** Remove measured serialization and validation costs so cold combined-scope graph retrieval meets existing deadlines on development.
 
-**Architecture:** Keep topology queries and wire contracts unchanged. Use equivalent compiled validators and Neo4j's matching native PackStream extension in the KG runtime.
+**Architecture:** Preserve topology queries and the V1 wire contract. Use equivalent compiled validators and Neo4j's matching native PackStream extension in the KG runtime. Add a separately pinned, default-disabled V2 snapshot exchange with fresh attestation; select the existing three-family delivery only when a valid complete snapshot exceeds the unchanged wire ceiling.
 
 **Tech Stack:** Python 3.12+, Neo4j Python driver 5.28.4, Memgraph, pytest, uv, Docker Compose.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 - Development deployment only; do not contact or change production.
 - Direct/extended budgets stay 4500 ms, overall 5000 ms, extractor 3000 ms.
-- Preserve caps, authorization/readiness/provenance, canonical encoding, exact key/text accepted languages, exception precedence, protocol schema and checksum, retry0, graph-off behavior and bounded workers.
+- Preserve caps, authorization/readiness/provenance, canonical encoding, exact key/text accepted languages, exception precedence, V1 protocol schema and checksum, retry0, graph-off behavior and bounded workers.
 - Do not change Cypher, cache behavior, models, evidence/ranking, or the V1 wire contract. Task 3 adds an explicitly enabled V2 snapshot exchange.
 - No private questions, collection/user IDs, credentials, raw corpus data or private replay inputs in tracked files.
 - All shell commands begin with rtk. Work only in the isolated worktree; preserve primary drafts.

@@ -16,6 +16,7 @@ GATEWAY_SETTING_KEYS = frozenset(
         "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS",
         "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES",
         "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES",
+        "KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED",
     }
 )
 _DEFAULTS = {
@@ -24,6 +25,7 @@ _DEFAULTS = {
     "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS": "300",
     "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": str(MAX_REQUEST_BYTES),
     "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": str(MAX_RESPONSE_BYTES),
+    "KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED": "false",
 }
 
 
@@ -70,6 +72,11 @@ class TopologyGatewayClientSettings:
     timeout_ms: int
     max_request_bytes: int
     max_response_bytes: int
+    snapshot_enabled: bool = False
+
+    def __post_init__(self):
+        if type(self.snapshot_enabled) is not bool:
+            raise GatewayClientConfigError("snapshot_enabled must be an exact bool")
 
 
 def _error(key: str, reason: str) -> GatewayClientConfigError:
@@ -166,6 +173,9 @@ def load_topology_gateway_client_settings(
     response_cap = _integer(
         source, "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES", MAX_RESPONSE_BYTES
     )
+    snapshot_enabled = _raw(source, "KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED")
+    if snapshot_enabled not in {"true", "false"}:
+        raise _error("KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED", "must be true or false")
     if not 10 <= timeout <= 5_000:
         raise _error("KG_TOPOLOGY_GATEWAY_TIMEOUT_MS", "is outside the supported range")
     if request_cap != MAX_REQUEST_BYTES:
@@ -180,6 +190,7 @@ def load_topology_gateway_client_settings(
         timeout,
         request_cap,
         response_cap,
+        snapshot_enabled == "true",
     )
 
 
@@ -194,6 +205,7 @@ def django_topology_gateway_client_values(
         "KG_TOPOLOGY_GATEWAY_TIMEOUT_MS": settings.timeout_ms,
         "KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES": settings.max_request_bytes,
         "KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES": settings.max_response_bytes,
+        "KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED": settings.snapshot_enabled,
     }
 
 

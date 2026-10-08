@@ -9,6 +9,9 @@ from math import isfinite
 from threading import Lock
 from time import monotonic
 
+from apps.knowledge_graph.retrieval.projected_types import (
+    canonical_projected_snapshot_bytes,
+)
 from apps.knowledge_graph.retrieval.topology import contracts as c
 from apps.knowledge_graph.retrieval.topology.diagnostics import (
     TopologyDiagnosticPhase as Phase,
@@ -19,6 +22,9 @@ from apps.knowledge_graph.retrieval.topology.diagnostics import (
 from apps.knowledge_graph.retrieval.topology.failures import (
     TopologyLoadError,
     TopologyResultCapError,
+)
+from apps.knowledge_graph.retrieval.topology.gateway_snapshot_contracts import (
+    TopologyGatewaySnapshotV2,
 )
 
 from .memgraph_driver import MemgraphDriverError
@@ -275,6 +281,24 @@ class Neo4jProjectedTopologyQueryAdapter:
             if len(self._cache) > 8:
                 self._cache.popitem(last=False)
         return snapshot
+
+    def execute_snapshot(self, *, parameters, deadline):
+        """Attest once before any cache hit, then serialize the full immutable DTO."""
+        self._remaining(deadline)
+        ready, seeds, caps = self._decode(parameters)
+        manifests = self._manifests(
+            ready,
+            deadline=deadline,
+            max_records=len(ready.selected_generations),
+        )
+        snapshot = self._snapshot(ready, seeds, caps, parameters, deadline=deadline)
+        self._remaining(deadline)
+        result = TopologyGatewaySnapshotV2(
+            manifests,
+            canonical_projected_snapshot_bytes(snapshot).decode("utf-8"),
+        )
+        self._remaining(deadline)
+        return result
 
     def execute_read(
         self,

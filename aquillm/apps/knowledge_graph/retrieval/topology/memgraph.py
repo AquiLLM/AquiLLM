@@ -15,7 +15,14 @@ from .diagnostics import record_topology_failure
 from .failures import TopologyLoadError, TopologyResultCapError
 from .gateway_client import TopologyGatewayRequestError
 from .gateway_contracts import GatewayFailureReason
-from .projected_codec import compose_projected_snapshot_families
+from .gateway_snapshot_contracts import (
+    TopologyGatewayFamilyTransportV2,
+    TopologyGatewaySnapshotV2,
+)
+from .projected_codec import (
+    compose_projected_snapshot_families,
+    decode_projected_snapshot_json,
+)
 
 _GATEWAY_LOCAL = {
     (
@@ -139,15 +146,35 @@ class MemgraphProjectedTopologyLoader:
             (c.TopologyQueryName.EVIDENCE_MENTIONS, 3_000 + caps.max_nodes * 2),
         )
         responses = {}
+        snapshot_response = None
+        use_snapshot = getattr(self.driver, "snapshot_enabled", False) is True
         try:
             query, maximum = limits[0]
             manifest_started_ns = monotonic_ns()
-            responses[query] = self.driver.execute_read(
-                query=query,
-                parameters=parameters,
-                deadline=deadline,
-                max_records=maximum,
-            )
+            if use_snapshot:
+                if monotonic() >= deadline:
+                    raise TimeoutError
+                snapshot_response = self.driver.execute_snapshot(
+                    parameters=parameters,
+                    deadline=deadline,
+                )
+                if monotonic() >= deadline:
+                    raise TimeoutError
+                if type(snapshot_response) not in {
+                    TopologyGatewaySnapshotV2,
+                    TopologyGatewayFamilyTransportV2,
+                }:
+                    raise TopologyLoadError(
+                        c.TopologyFailureReason.BACKEND_SCHEMA_MISMATCH
+                    )
+                responses[query] = snapshot_response.manifests
+            else:
+                responses[query] = self.driver.execute_read(
+                    query=query,
+                    parameters=parameters,
+                    deadline=deadline,
+                    max_records=maximum,
+                )
             if not _manifest_matches(responses[query], ready):
                 record_readiness_failure(
                     reason=RetrievalLogReason.READINESS_MANIFEST,
@@ -157,7 +184,13 @@ class MemgraphProjectedTopologyLoader:
                     ),
                 )
                 raise TopologyLoadError(c.TopologyFailureReason.READINESS_MISMATCH)
-            for query, maximum in limits[1:]:
+            for query, maximum in (
+                ()
+                if type(snapshot_response) is TopologyGatewaySnapshotV2
+                else limits[1:]
+            ):
+                if use_snapshot and monotonic() >= deadline:
+                    raise TimeoutError
                 responses[query] = self.driver.execute_read(
                     query=query,
                     parameters=parameters,
@@ -195,10 +228,14 @@ class MemgraphProjectedTopologyLoader:
         )
         started = monotonic()
         try:
-            snapshot = compose_projected_snapshot_families(
-                memberships=responses[c.TopologyQueryName.AUTOMATIC_MEMBERSHIPS],
-                relations=responses[c.TopologyQueryName.RELATION_TOPOLOGY],
-                evidence=responses[c.TopologyQueryName.EVIDENCE_MENTIONS],
+            snapshot = (
+                decode_projected_snapshot_json(snapshot_response.snapshot_json)
+                if type(snapshot_response) is TopologyGatewaySnapshotV2
+                else compose_projected_snapshot_families(
+                    memberships=responses[c.TopologyQueryName.AUTOMATIC_MEMBERSHIPS],
+                    relations=responses[c.TopologyQueryName.RELATION_TOPOLOGY],
+                    evidence=responses[c.TopologyQueryName.EVIDENCE_MENTIONS],
+                )
             )
             expected_documents = tuple(
                 sorted(row.document_key for row in ready.authorized_documents)
@@ -214,6 +251,10 @@ class MemgraphProjectedTopologyLoader:
                 or snapshot.load_max_hops > caps.max_depth
             ):
                 raise ValueError("snapshot scope or caps disagree with request")
+            if use_snapshot and monotonic() >= deadline:
+                raise TopologyLoadError(
+                    _GATEWAY_LOCAL[(caps.branch_kind, GatewayFailureReason.DEADLINE)]
+                )
             return snapshot
         except (KeyError, TypeError, ValueError) as error:
             record_topology_failure(

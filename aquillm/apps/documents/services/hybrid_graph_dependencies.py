@@ -42,6 +42,7 @@ def _topology_loader(gateway: TopologyGatewayClientSettings):
         gateway.url,
         gateway.bearer_token.get_secret_value(),
         gateway.timeout_ms / 1000.0,
+        snapshot_enabled=gateway.snapshot_enabled,
     )
     return MemgraphProjectedTopologyLoader(driver)
 
@@ -55,6 +56,7 @@ def django_topology_gateway_client_settings() -> TopologyGatewayClientSettings:
         timeout_ms=django_settings.KG_TOPOLOGY_GATEWAY_TIMEOUT_MS,
         max_request_bytes=django_settings.KG_TOPOLOGY_GATEWAY_MAX_REQUEST_BYTES,
         max_response_bytes=django_settings.KG_TOPOLOGY_GATEWAY_MAX_RESPONSE_BYTES,
+        snapshot_enabled=django_settings.KG_TOPOLOGY_GATEWAY_SNAPSHOT_ENABLED,
     )
 
 
